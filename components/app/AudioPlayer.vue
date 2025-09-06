@@ -124,15 +124,15 @@
         <!-- Main Progress Track -->
         <div>
           <div class="flex pointer-events-none mb-2">
-            <p class="font-mono text-on-surface text-sm" ref="currentTimestamp">0:00</p>
+            <p class="font-mono text-on-surface text-sm" ref="currentTimestampFull">0:00</p>
             <div class="flex-grow" />
             <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
           </div>
-          <div ref="track" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
-            <div ref="readyTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
-            <div ref="bufferedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
-            <div ref="playedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300" />
-            <div ref="trackCursor" class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 hover:scale-110 active:scale-95" :style="{ top: '-8px' }" :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }" @touchstart="touchstartCursor">
+          <div ref="trackFull" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
+            <div ref="readyTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
+            <div ref="bufferedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
+            <div ref="playedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300" />
+            <div ref="trackCursorFull" class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 hover:scale-110 active:scale-95" :style="{ top: '-8px' }" :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }" @touchstart="touchstartCursor">
               <div class="rounded-full w-3 h-3 pointer-events-none bg-on-primary" />
             </div>
           </div>
@@ -189,10 +189,10 @@
 
       <!-- Progress Bar -->
       <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-0 left-0 w-full px-2">
-        <div ref="track" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
-          <div ref="readyTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
-          <div ref="bufferedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
-          <div ref="playedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300" />
+          <div ref="trackMini" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
+          <div ref="readyTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
+          <div ref="bufferedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
+          <div ref="playedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300" />
         </div>
       </div>
     </div>
@@ -658,18 +658,22 @@ export default {
       this.updateReadyTrack()
     },
     updateReadyTrack() {
+      // Update both full and mini ready tracks where present
       if (this.playerSettings.useChapterTrack) {
-        if (this.$refs.totalReadyTrack) {
-          this.$refs.totalReadyTrack.style.width = this.readyTrackWidth + 'px'
-        }
-        this.$refs.readyTrack.style.width = this.trackWidth + 'px'
+        if (this.$refs.totalReadyTrack) this.$refs.totalReadyTrack.style.width = this.readyTrackWidth + 'px'
+        if (this.$refs.readyTrackFull) this.$refs.readyTrackFull.style.width = this.trackWidth + 'px'
+        if (this.$refs.readyTrack) this.$refs.readyTrack.style.width = this.trackWidth + 'px'
+        if (this.$refs.readyTrackMini) this.$refs.readyTrackMini.style.width = this.trackWidth + 'px'
       } else {
-        this.$refs.readyTrack.style.width = this.readyTrackWidth + 'px'
+        if (this.$refs.readyTrackFull) this.$refs.readyTrackFull.style.width = this.readyTrackWidth + 'px'
+        if (this.$refs.readyTrack) this.$refs.readyTrack.style.width = this.readyTrackWidth + 'px'
+        if (this.$refs.readyTrackMini) this.$refs.readyTrackMini.style.width = this.readyTrackWidth + 'px'
       }
     },
     updateTimestamp() {
-      const ts = this.$refs.currentTimestamp
-      if (!ts) {
+      const tsFull = this.$refs.currentTimestampFull
+      const tsMini = this.$refs.currentTimestamp
+      if (!tsFull && !tsMini) {
         console.error('No timestamp el')
         return
       }
@@ -682,10 +686,13 @@ export default {
         currentTime = currentTime / this.currentPlaybackRate
       }
 
-      ts.innerText = this.$secondsToTimestamp(currentTime)
+  const rounded = this.$secondsToTimestamp(currentTime)
+  if (tsFull) tsFull.innerText = rounded
+  if (tsMini) tsMini.innerText = rounded
     },
     timeupdate() {
-      if (!this.$refs.playedTrack) {
+      // Ensure at least one played track exists
+      if (!this.$refs.playedTrackFull && !this.$refs.playedTrack && !this.$refs.playedTrackMini) {
         console.error('Invalid no played track ref')
         return
       }
@@ -699,11 +706,21 @@ export default {
         }
       }
 
-      this.updateTimestamp()
-      this.updateTrack()
+  this.updateTimestamp()
+  this.updateTrack()
     },
     updateTrack() {
       // Update progress track UI
+      // Ensure trackWidth is valid; attempt to re-measure if it's not set yet
+      if (!this.trackWidth || this.trackWidth === 0) {
+        const el = this.getTrackElement()
+        if (el) this.trackWidth = el.clientWidth
+        if (!this.trackWidth) {
+          // Can't compute widths yet; this may happen if DOM hasn't finished layout. Skip for now.
+          console.warn('[AudioPlayer] updateTrack skipped, trackWidth not ready')
+          return
+        }
+      }
       let currentTimeToUse = this.isDraggingCursor ? this.draggingCurrentTime : this.currentTime
       let percentDone = currentTimeToUse / this.totalDuration
       const totalPercentDone = percentDone
@@ -717,12 +734,23 @@ export default {
       }
 
       const ptWidth = Math.round(percentDone * this.trackWidth)
-      this.$refs.playedTrack.style.width = ptWidth + 'px'
-      this.$refs.bufferedTrack.style.width = Math.round(bufferedPercent * this.trackWidth) + 'px'
-
-      if (this.$refs.trackCursor) {
-        this.$refs.trackCursor.style.left = ptWidth - 14 + 'px'
+      // Log first timeupdate to help debug initial sizing issues
+      if (!this._firstTimeUpdateLogged) {
+        console.log('[AudioPlayer] timeupdate init', {
+          currentTime: this.currentTime,
+          trackWidth: this.trackWidth,
+          percentDone: percentDone,
+          ptWidth: ptWidth
+        })
+        this._firstTimeUpdateLogged = true
       }
+      // Full view
+      if (this.$refs.playedTrackFull) this.$refs.playedTrackFull.style.width = ptWidth + 'px'
+      if (this.$refs.bufferedTrackFull) this.$refs.bufferedTrackFull.style.width = Math.round(bufferedPercent * this.trackWidth) + 'px'
+      if (this.$refs.trackCursorFull) this.$refs.trackCursorFull.style.left = ptWidth - 14 + 'px'
+      // Mini view
+      if (this.$refs.playedTrackMini) this.$refs.playedTrackMini.style.width = ptWidth + 'px'
+      if (this.$refs.bufferedTrackMini) this.$refs.bufferedTrackMini.style.width = Math.round(bufferedPercent * this.trackWidth) + 'px'
 
       if (this.playerSettings.useChapterTrack) {
         if (this.$refs.totalPlayedTrack) this.$refs.totalPlayedTrack.style.width = Math.round(totalPercentDone * this.trackWidth) + 'px'
@@ -741,13 +769,17 @@ export default {
 
       AbsAudioPlayer.seek({ value: Math.floor(time) })
 
-      if (this.$refs.playedTrack) {
-        const perc = time / this.totalDuration
-        const ptWidth = Math.round(perc * this.trackWidth)
-        this.$refs.playedTrack.style.width = ptWidth + 'px'
-
-        this.$refs.playedTrack.classList.remove('bg-surface-container')
-        this.$refs.playedTrack.classList.add('bg-yellow-300')
+      const perc = time / this.totalDuration
+      const ptWidth = Math.round(perc * this.trackWidth)
+      if (this.$refs.playedTrackFull) {
+        this.$refs.playedTrackFull.style.width = ptWidth + 'px'
+        this.$refs.playedTrackFull.classList.remove('bg-surface-container')
+        this.$refs.playedTrackFull.classList.add('bg-yellow-300')
+      }
+      if (this.$refs.playedTrackMini) {
+        this.$refs.playedTrackMini.style.width = ptWidth + 'px'
+        this.$refs.playedTrackMini.classList.remove('bg-surface-container')
+        this.$refs.playedTrackMini.classList.add('bg-yellow-300')
       }
     },
     async touchstartCursor(e) {
@@ -900,6 +932,16 @@ export default {
         AbsAudioPlayer.setChapterTrack({ enabled: this.playerSettings.useChapterTrack })
       }
     },
+    // Return the currently-visible track DOM element (prefer fullscreen when active)
+    getTrackElement() {
+      if (this.showFullscreen && this.$refs.trackFull) return this.$refs.trackFull
+      if (!this.showFullscreen && this.$refs.trackMini) return this.$refs.trackMini
+      // fallbacks for older refs
+      if (this.$refs.track) return this.$refs.track
+      if (this.$refs.trackFull) return this.$refs.trackFull
+      if (this.$refs.trackMini) return this.$refs.trackMini
+      return null
+    },
     forceCloseDropdownMenu() {
       if (this.$refs.dropdownMenu && this.$refs.dropdownMenu.closeMenu) {
         this.$refs.dropdownMenu.closeMenu()
@@ -988,8 +1030,9 @@ export default {
         this.titleMarquee = new WrappingMarquee(this.$refs.titlewrapper)
         this.titleMarquee.init(this.title)
 
-        if (this.$refs.track) {
-          this.trackWidth = this.$refs.track.clientWidth
+        const el = this.getTrackElement()
+        if (el) {
+          this.trackWidth = el.clientWidth
         } else {
           console.error('Track not loaded', this.$refs)
         }
@@ -1080,10 +1123,12 @@ export default {
     },
     refreshUI() {
       this.updateScreenSize()
-      if (this.$refs.track) {
-        this.trackWidth = this.$refs.track.clientWidth
+      const el = this.getTrackElement()
+      if (el) {
+        this.trackWidth = el.clientWidth
         this.updateTrack()
         this.updateReadyTrack()
+        this.updateTimestamp()
       }
     },
     updateScreenSize() {

@@ -9,4 +9,6 @@
     <color name="colorPrimary">#6750A4</color>
     <color name="colorPrimaryDark">#4F378B</color>
     <color name="colorAccent">#6750A4</color>
+    <!-- Splash icon color: black in light theme -->
+    <color name="splash_icon_color">#000000</color>
 </resources>
