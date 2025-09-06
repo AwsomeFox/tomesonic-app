@@ -9,9 +9,9 @@
       <p class="pl-4">{{ $strings.MessageLoadingServerData }}</p>
     </div>
 
-    <div class="w-full" :class="{ 'py-6': altViewEnabled }">
+    <div class="w-full" :class="{ 'py-6': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }">
       <template v-for="(shelf, index) in shelves">
-        <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :style="{ zIndex: shelves.length - index }" />
+        <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :style="{ zIndex: shelves.length - index }" class="shelf-item" :class="`shelf-delay-${Math.min(index, 6)}`" />
       </template>
     </div>
 
@@ -342,3 +342,93 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+/* Material 3 Home Page Loading Animations */
+.content-loading {
+  opacity: 0.3;
+  transition: opacity 400ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.content-loaded {
+  opacity: 1;
+  animation: contentFadeIn 500ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+}
+
+@keyframes contentFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Staggered shelf animations */
+.shelf-item {
+  opacity: 0;
+  transform: translateY(20px);
+  animation: shelfSlideIn 600ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+}
+
+@keyframes shelfSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  70% {
+    opacity: 0.8;
+    transform: translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Shelf loading delays */
+.shelf-delay-0 {
+  animation-delay: 0ms;
+}
+.shelf-delay-1 {
+  animation-delay: 150ms;
+}
+.shelf-delay-2 {
+  animation-delay: 300ms;
+}
+.shelf-delay-3 {
+  animation-delay: 450ms;
+}
+.shelf-delay-4 {
+  animation-delay: 600ms;
+}
+.shelf-delay-5 {
+  animation-delay: 750ms;
+}
+.shelf-delay-6 {
+  animation-delay: 900ms;
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .content-loaded,
+  .shelf-item {
+    animation: simpleFadeIn 300ms ease-out forwards;
+  }
+
+  @keyframes simpleFadeIn {
+    0% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+
+  .content-loading {
+    transition: opacity 200ms ease-out;
+  }
+}
+</style>

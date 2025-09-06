@@ -1,16 +1,20 @@
 <template>
-  <div class="w-full h-16 bg-primary relative z-20">
-    <div id="appbar" class="absolute top-0 left-0 w-full h-full flex items-center px-2">
-      <nuxt-link v-show="!showBack" to="/" class="mr-3">
-        <img src="/Logo.png" class="h-10 w-10" />
+  <div class="w-full h-16 bg-surface-container shadow-elevation-2 relative z-20">
+    <div id="appbar" class="absolute top-0 left-0 w-full h-full flex items-center px-4">
+      <!-- Menu Button - hidden when back button is shown -->
+      <ui-icon-btn v-if="!showBack" icon="menu" variant="standard" color="on-surface" size="medium" class="mr-2" @click="clickShowSideDrawer" />
+
+      <!-- Logo/Back Navigation - back button takes menu button's position -->
+      <nuxt-link v-show="!showBack && !user" to="/" class="mr-4 state-layer rounded-lg p-2 -m-2">
+        <ui-audiobookshelf-logo :size="32" color="on-surface" />
       </nuxt-link>
-      <a v-if="showBack" @click="back" class="rounded-full h-10 w-10 flex items-center justify-center mr-2 cursor-pointer">
-        <span class="material-symbols text-3xl text-fg">arrow_back</span>
-      </a>
+      <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface" size="medium" class="mr-2" @click="back" />
+
+      <!-- Library Selector -->
       <div v-if="user && currentLibrary">
-        <div class="pl-1.5 pr-2.5 py-2 bg-bg bg-opacity-30 rounded-md flex items-center" @click="clickShowLibraryModal">
-          <ui-library-icon :icon="currentLibraryIcon" :size="4" font-size="base" />
-          <p class="text-sm leading-4 ml-2 mt-0.5 max-w-24 truncate">{{ currentLibraryName }}</p>
+        <div class="px-3 py-2 bg-primary-container rounded-full flex items-center cursor-pointer state-layer transition-all duration-200 ease-standard hover:shadow-elevation-1" @click="clickShowLibraryModal">
+          <ui-library-icon :icon="currentLibraryIcon" :size="4" font-size="base" color="on-primary-container" />
+          <p class="text-body-medium text-on-primary-container ml-2 max-w-24 truncate">{{ currentLibraryName }}</p>
         </div>
       </div>
 
@@ -20,20 +24,18 @@
 
       <widgets-download-progress-indicator />
 
-      <!-- Must be connected to a server to cast, only supports media items on server -->
-      <div v-show="isCastAvailable && user" class="mx-2 cursor-pointer flex items-center" @click="castClick">
-        <span class="material-symbols text-2xl leading-none">
-          {{ isCasting ? 'cast_connected' : 'cast' }}
-        </span>
-      </div>
+      <!-- Cast Button -->
+      <ui-icon-btn v-show="isCastAvailable && user" :icon="isCasting ? 'cast_connected' : 'cast'" variant="standard" color="on-surface" size="medium" class="mx-1" @click="castClick" />
 
-      <nuxt-link v-if="user" class="mx-1.5 flex items-center h-10" to="/search">
-        <span class="material-symbols text-2xl leading-none">search</span>
+      <!-- Search Button -->
+      <nuxt-link v-if="user" to="/search" class="mx-1 block w-12 h-12 rounded-full flex items-center justify-center state-layer transition-all duration-200 ease-standard">
+        <span class="material-symbols text-on-surface-variant fill" style="font-size: 1.5rem">search</span>
       </nuxt-link>
 
-      <div class="h-7 mx-1.5">
-        <span class="material-symbols" style="font-size: 1.75rem" @click="clickShowSideDrawer">menu</span>
-      </div>
+      <!-- Logo moved to right when user is logged in -->
+      <nuxt-link v-if="user" to="/" class="ml-2 state-layer rounded-lg p-2 -m-2">
+        <ui-audiobookshelf-logo :size="32" color="on-surface" />
+      </nuxt-link>
     </div>
   </div>
 </template>
@@ -67,7 +69,21 @@ export default {
     },
     showBack() {
       if (!this.$route.name) return true
-      return this.$route.name !== 'index' && !this.$route.name.startsWith('bookshelf')
+
+      // Main navigation pages that should show menu button, not back button
+      const mainNavRoutes = ['index', 'account', 'stats', 'settings', 'logs', 'connect', 'downloads', 'downloading']
+
+      // Check if current route starts with bookshelf (covers bookshelf and bookshelf-id)
+      if (this.$route.name.startsWith('bookshelf')) return false
+
+      // Check if current route starts with localMedia (covers localMedia-folders, etc)
+      if (this.$route.name.startsWith('localMedia')) return false
+
+      // Check if it's one of the main nav routes
+      if (mainNavRoutes.includes(this.$route.name)) return false
+
+      // All other routes should show back button
+      return true
     },
     user() {
       return this.$store.state.user.user
@@ -112,10 +128,48 @@ export default {
 }
 </script>
 
-<style>
+<style scoped>
+/* Material 3 Appbar Styles */
 #appbar {
-  box-shadow: 0px 5px 5px #11111155;
+  box-shadow: var(--md-sys-elevation-level2);
 }
+
+/* Library selector hover effect */
+.library-selector:hover {
+  background-color: rgba(var(--md-sys-color-on-surface), var(--md-sys-state-hover-opacity));
+}
+
+/* Search button hover effect */
+.state-layer {
+  position: relative;
+}
+
+.state-layer::before {
+  content: '';
+  position: absolute;
+  border-radius: inherit;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  transition: background-color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  pointer-events: none;
+}
+
+.state-layer:hover::before {
+  background-color: rgba(var(--md-sys-color-on-surface-variant), var(--md-sys-state-hover-opacity));
+}
+
+.state-layer:focus::before {
+  background-color: rgba(var(--md-sys-color-on-surface-variant), var(--md-sys-state-focus-opacity));
+}
+
+.state-layer:active::before {
+  background-color: rgba(var(--md-sys-color-on-surface-variant), var(--md-sys-state-pressed-opacity));
+}
+
+/* Custom animation keyframes remain the same */
 .loader-dots div {
   animation-timing-function: cubic-bezier(0, 1, 1, 0);
 }
@@ -153,10 +207,10 @@ export default {
 }
 @keyframes loader-dots2 {
   0% {
-    transform: translate(0, 0);
+    transform: translateX(0);
   }
   100% {
-    transform: translate(10px, 0);
+    transform: translateX(10px);
   }
 }
 </style>

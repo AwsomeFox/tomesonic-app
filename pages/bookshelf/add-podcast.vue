@@ -21,12 +21,12 @@
                 </div>
               </div>
               <div class="flex-grow pl-2">
-                <p class="text-xs text-fg whitespace-nowrap truncate">{{ podcast.artistName }}</p>
-                <p class="text-xxs text-fg leading-5">{{ podcast.trackCount }} {{ $strings.HeaderEpisodes }}</p>
+                <p class="text-xs text-on-surface whitespace-nowrap truncate">{{ podcast.artistName }}</p>
+                <p class="text-xxs text-on-surface leading-5">{{ podcast.trackCount }} {{ $strings.HeaderEpisodes }}</p>
               </div>
             </div>
 
-            <p class="text-sm text-fg mb-1">{{ podcast.title }}</p>
+            <p class="text-sm text-on-surface mb-1">{{ podcast.title }}</p>
             <p class="text-xs text-fg-muted leading-5">{{ podcast.genres.join(', ') }}</p>
           </div>
         </template>

@@ -220,6 +220,9 @@ class MediaProgressSyncer(
               "Received from server get media progress request while playback session open"
       )
       saveLocalProgress(it)
+
+      // Also update the device's last playback session for resume functionality
+      DeviceManager.setLastPlaybackSession(it)
     }
   }
 
@@ -250,7 +253,12 @@ class MediaProgressSyncer(
 
     // Save playback session to db (server linked sessions only)
     //   Sessions are removed once successfully synced with the server
-    currentPlaybackSession?.let { DeviceManager.dbManager.savePlaybackSession(it) }
+    currentPlaybackSession?.let {
+      DeviceManager.dbManager.savePlaybackSession(it)
+
+      // Also update the device's last playback session for resume functionality
+      DeviceManager.setLastPlaybackSession(it)
+    }
 
     if (currentIsLocal) {
       // Save local progress sync

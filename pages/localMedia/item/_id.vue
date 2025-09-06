@@ -6,20 +6,20 @@
         <div class="flex-grow" />
 
         <button v-if="audioTracks.length && !isPodcast" class="shadow-sm text-success flex items-center justify-center rounded-full mx-2" @click.stop="play">
-          <span class="material-symbols fill" style="font-size: 2rem">play_arrow</span>
+          <span class="material-symbols fill text-on-surface" style="font-size: 2rem">play_arrow</span>
         </button>
-        <span class="material-symbols text-2xl" @click="showItemDialog">more_vert</span>
+        <span class="material-symbols text-2xl text-on-surface" @click="showItemDialog">more_vert</span>
       </div>
 
-      <p v-if="!isIos" class="px-2 text-sm mb-0.5 text-fg-muted">{{ $strings.LabelFolder }}: {{ folderName }}</p>
+      <p v-if="!isIos" class="px-2 text-sm mb-0.5 text-on-surface-variant">{{ $strings.LabelFolder }}: {{ folderName }}</p>
 
-      <p class="px-2 mb-4 text-xs text-fg-muted">{{ libraryItemId ? 'Linked to item on server ' + liServerAddress : 'Not linked to server item' }}</p>
+      <p class="px-2 mb-4 text-xs text-on-surface-variant">{{ libraryItemId ? 'Linked to item on server ' + liServerAddress : 'Not linked to server item' }}</p>
 
       <div class="w-full max-w-full media-item-container overflow-y-auto overflow-x-hidden relative pb-4" :class="{ 'media-order-changed': orderChanged }">
         <div v-if="!isPodcast && audioTracksCopy.length" class="w-full py-2">
           <div class="flex justify-between items-center mb-2">
             <p class="text-base">Audio Tracks ({{ audioTracks.length }})</p>
-            <p class="text-xs text-fg-muted px-2">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalAudioSize) }}</p>
+            <p class="text-xs text-on-surface-variant px-2">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalAudioSize) }}</p>
           </div>
 
           <draggable v-model="audioTracksCopy" v-bind="dragOptions" handle=".drag-handle" draggable=".item" tag="div" @start="drag = true" @end="drag = false" @update="draggableUpdate" :disabled="isIos">
@@ -27,7 +27,7 @@
               <template v-for="track in audioTracksCopy">
                 <div :key="track.localFileId" class="flex items-center my-1 item">
                   <div v-if="!isIos" class="w-8 h-12 flex items-center justify-center" style="min-width: 32px">
-                    <span class="material-symbols drag-handle text-lg text-fg-muted">menu</span>
+                    <span class="material-symbols drag-handle text-lg text-on-surface-variant">menu</span>
                   </div>
                   <div class="w-8 h-12 flex items-center justify-center" style="min-width: 32px">
                     <p class="font-mono font-bold text-xl">{{ track.index }}</p>
@@ -35,12 +35,12 @@
                   <div class="flex-grow px-2">
                     <p class="text-xs">{{ track.title }}</p>
                   </div>
-                  <div class="w-20 text-center text-fg-muted" style="min-width: 80px">
+                  <div class="w-20 text-center text-on-surface-variant" style="min-width: 80px">
                     <p class="text-xs">{{ track.mimeType }}</p>
                     <p class="text-sm">{{ $elapsedPretty(track.duration) }}</p>
                   </div>
                   <div v-if="!isIos" class="w-12 h-12 flex items-center justify-center" style="min-width: 48px">
-                    <span class="material-symbols text-2xl" @click="showTrackDialog(track)">more_vert</span>
+                    <span class="material-symbols text-2xl text-on-surface" @click="showTrackDialog(track)">more_vert</span>
                   </div>
                 </div>
               </template>
@@ -51,7 +51,7 @@
         <div v-if="isPodcast" class="w-full py-2">
           <div class="flex justify-between items-center mb-2">
             <p class="text-base">Episodes ({{ episodes.length }})</p>
-            <p class="text-xs text-fg-muted px-2">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalEpisodesSize) }}</p>
+            <p class="text-xs text-on-surface-variant px-2">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalEpisodesSize) }}</p>
           </div>
           <template v-for="episode in episodes">
             <div :key="episode.id" class="flex items-center my-1">
@@ -61,12 +61,12 @@
               <div class="flex-grow px-2">
                 <p class="text-xs">{{ episode.title }}</p>
               </div>
-              <div class="w-20 text-center text-fg-muted" style="min-width: 80px">
+              <div class="w-20 text-center text-on-surface-variant" style="min-width: 80px">
                 <p class="text-xs">{{ episode.audioTrack.mimeType }}</p>
                 <p class="text-sm">{{ $elapsedPretty(episode.audioTrack.duration) }}</p>
               </div>
               <div class="w-12 h-12 flex items-center justify-center" style="min-width: 48px">
-                <span class="material-symbols text-2xl" @click="showTrackDialog(episode)">more_vert</span>
+                <span class="material-symbols text-2xl text-on-surface" @click="showTrackDialog(episode)">more_vert</span>
               </div>
             </div>
           </template>
@@ -82,7 +82,7 @@
             <div class="flex-grow px-2">
               <p class="text-xs">{{ localFileForEbook.filename }}</p>
             </div>
-            <div class="w-24 text-center text-fg-muted" style="min-width: 96px">
+            <div class="w-24 text-center text-on-surface-variant" style="min-width: 96px">
               <p class="text-xs">{{ localFileForEbook.mimeType }}</p>
               <p class="text-sm">{{ $bytesPretty(localFileForEbook.size) }}</p>
             </div>
@@ -92,18 +92,18 @@
         <div v-if="otherFiles.length">
           <div class="flex justify-between items-center py-2">
             <p class="text-lg">Other Files</p>
-            <p class="text-xs text-fg-muted px-2">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalOtherFilesSize) }}</p>
+            <p class="text-xs text-on-surface-variant px-2">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalOtherFilesSize) }}</p>
           </div>
           <template v-for="file in otherFiles">
             <div :key="file.id" class="flex items-center my-1">
               <div class="w-12 h-12 flex items-center justify-center">
                 <img v-if="(file.mimeType || '').startsWith('image')" :src="getCapImageSrc(file.contentUrl)" class="w-full h-full object-contain" />
-                <span v-else class="material-symbols">music_note</span>
+                <span v-else class="material-symbols text-on-surface-variant">music_note</span>
               </div>
               <div class="flex-grow px-2">
                 <p class="text-sm">{{ file.filename }}</p>
               </div>
-              <div class="w-24 text-center text-fg-muted" style="min-width: 96px">
+              <div class="w-24 text-center text-on-surface-variant" style="min-width: 96px">
                 <p class="text-xs">{{ file.mimeType }}</p>
                 <p class="text-sm">{{ $bytesPretty(file.size) }}</p>
               </div>
@@ -111,14 +111,14 @@
           </template>
         </div>
 
-        <div class="mt-4 text-sm text-fg-muted">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalLibraryItemSize) }}</div>
+        <div class="mt-4 text-sm text-on-surface-variant">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(totalLibraryItemSize) }}</div>
       </div>
     </div>
     <div v-else class="px-2 w-full h-full">
       <p class="text-lg text-center px-8">{{ failed ? 'Failed to get local library item ' + localLibraryItemId : 'Loading..' }}</p>
     </div>
 
-    <div v-if="orderChanged" class="fixed left-0 w-full py-4 px-4 bg-bg box-shadow-book flex items-center" :style="{ bottom: isPlayerOpen ? '120px' : '0px' }">
+    <div v-if="orderChanged" class="fixed left-0 w-full py-4 px-4 bg-surface-container box-shadow-book flex items-center" :style="{ bottom: '0px' }">
       <div class="flex-grow" />
       <ui-btn small color="success" @click="saveTrackOrder">{{ $strings.ButtonSaveOrder }}</ui-btn>
     </div>
@@ -165,9 +165,6 @@ export default {
     }
   },
   computed: {
-    isPlayerOpen() {
-      return this.$store.getters['getIsPlayerOpen']
-    },
     isIos() {
       return this.$platform === 'ios'
     },
@@ -454,12 +451,12 @@ export default {
   max-height: calc(100vh - 280px);
 }
 .playerOpen .media-item-container {
-  height: calc(100vh - 300px);
-  max-height: calc(100vh - 300px);
+  height: calc(100vh - 180px); /* No extra padding for player */
+  max-height: calc(100vh - 180px);
 }
 .playerOpen .media-item-container.media-order-changed {
-  height: calc(100vh - 380px);
-  max-height: calc(100vh - 380px);
+  height: calc(100vh - 260px); /* Same reduction for order changed state */
+  max-height: calc(100vh - 260px);
 }
 .sortable-ghost {
   opacity: 0.5;

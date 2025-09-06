@@ -1,7 +1,21 @@
 <template>
   <div class="w-full h-full">
     <div class="px-4 py-6">
-      <ui-text-input ref="input" v-model="search" @input="updateSearch" borderless :placeholder="$strings.ButtonSearch" bg="white bg-opacity-10" rounded="md" prepend-icon="search" text-size="base" clearable class="w-full text-lg" />
+      <!-- Material 3 Search Field -->
+      <div class="relative w-full">
+        <div class="relative w-full h-14 bg-surface-container-high rounded-full flex items-center px-4 shadow-elevation-1">
+          <!-- Search Icon -->
+          <span class="material-symbols text-on-surface-variant mr-3" style="font-size: 1.25rem">search</span>
+
+          <!-- Search Input -->
+          <input ref="input" v-model="search" @input="updateSearch($event.target.value)" type="text" :placeholder="$strings.ButtonSearch" class="flex-1 bg-transparent outline-none text-on-surface text-body-large placeholder:text-on-surface-variant" autocomplete="off" autocorrect="off" autocapitalize="none" />
+
+          <!-- Clear Button -->
+          <button v-if="search" @click="clearSearch" class="ml-2 w-6 h-6 rounded-full flex items-center justify-center state-layer hover:bg-on-surface hover:bg-opacity-8 focus:bg-on-surface focus:bg-opacity-12 transition-all duration-200 ease-standard">
+            <span class="material-symbols text-on-surface-variant" style="font-size: 1.125rem">close</span>
+          </button>
+        </div>
+      </div>
     </div>
     <div class="w-full overflow-x-hidden overflow-y-auto search-content px-4" @click.stop>
       <div v-show="isFetching" class="w-full py-8 flex justify-center">
@@ -21,7 +35,7 @@
 
       <p v-if="podcastResults.length" class="uppercase text-xs text-fg-muted my-1 px-1 font-semibold">{{ $strings.LabelPodcasts }}</p>
       <template v-for="item in podcastResults">
-        <div :key="item.libraryItem.id" class="text-fg select-none relative py-1">
+        <div :key="item.libraryItem.id" class="text-on-surface select-none relative py-1">
           <nuxt-link :to="`/item/${item.libraryItem.id}`">
             <cards-item-search-card :library-item="item.libraryItem" :match-key="item.matchKey" :match-text="item.matchText" :search="lastSearch" />
           </nuxt-link>
@@ -135,6 +149,10 @@ export default {
       this.searchTimeout = setTimeout(() => {
         this.runSearch(val)
       }, 500)
+    },
+    clearSearch() {
+      this.search = ''
+      this.updateSearch('')
     },
     setFocus() {
       setTimeout(() => {

@@ -1,31 +1,31 @@
 <template>
   <modals-modal v-model="show" @input="modalInput" :width="200" height="100%">
     <template #outer>
-      <div class="absolute top-8 left-4 z-40">
-        <p class="text-white text-2xl truncate">{{ $strings.LabelPlaybackSpeed }}</p>
+      <div class="absolute top-4 left-4 z-40 pt-1 px-4 py-2 rounded-full bg-surface backdrop-blur-md shadow-elevation-2 border border-outline-variant" style="max-width: 80%">
+        <p class="text-on-surface text-lg font-medium truncate">{{ $strings.LabelPlaybackSpeed }}</p>
       </div>
     </template>
 
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center">
-      <div class="w-full overflow-x-hidden overflow-y-auto bg-primary rounded-lg border border-border" style="max-height: 75%" @click.stop>
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
+      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%" @click.stop>
         <ul class="w-full" role="listbox" aria-labelledby="listbox-label">
           <template v-for="rate in rates">
-            <li :key="rate" class="text-fg select-none relative py-4" :class="rate === selected ? 'bg-bg-hover/50' : ''" role="option" @click="clickedOption(rate)">
+            <li :key="rate" class="text-on-surface select-none relative py-4 cursor-pointer hover:bg-surface-container transition-colors duration-200" :class="rate === selected ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(rate)">
               <div class="flex items-center justify-center">
                 <span class="font-normal block truncate text-lg">{{ rate }}x</span>
               </div>
             </li>
           </template>
         </ul>
-        <div class="flex items-center justify-center py-3 border-t border-fg/10">
-          <button :disabled="!canDecrement" @click="decrement" class="icon-num-btn w-8 h-8 text-fg-muted rounded border border-border flex items-center justify-center">
-            <span class="material-symbols">remove</span>
+        <div class="flex items-center justify-center py-3 border-t border-outline-variant">
+          <button :disabled="!canDecrement" @click="decrement" class="w-8 h-8 text-on-surface-variant rounded border border-outline-variant flex items-center justify-center hover:bg-surface-container transition-colors duration-200 disabled:opacity-50">
+            <span class="material-symbols text-on-surface">remove</span>
           </button>
           <div class="w-24 text-center">
-            <p class="text-xl">{{ playbackRate }}<span class="text-lg">⨯</span></p>
+            <p class="text-xl text-on-surface">{{ playbackRate }}<span class="text-lg">⨯</span></p>
           </div>
-          <button :disabled="!canIncrement" @click="increment" class="icon-num-btn w-8 h-8 text-fg-muted rounded border border-border flex items-center justify-center">
-            <span class="material-symbols">add</span>
+          <button :disabled="!canIncrement" @click="increment" class="w-8 h-8 text-on-surface-variant rounded border border-outline-variant flex items-center justify-center hover:bg-surface-container transition-colors duration-200 disabled:opacity-50">
+            <span class="material-symbols text-on-surface">add</span>
           </button>
         </div>
       </div>
@@ -113,9 +113,9 @@ button.icon-num-btn:disabled {
   cursor: not-allowed;
 }
 button.icon-num-btn:disabled::before {
-  background-color: rgba(0, 0, 0, 0.2);
+  background-color: rgb(var(--md-sys-color-surface-variant) / 0.3);
 }
 button.icon-num-btn:disabled span {
-  color: #777;
+  color: rgb(var(--md-sys-color-on-surface-variant));
 }
 </style>

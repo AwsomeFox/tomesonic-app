@@ -1,8 +1,19 @@
 <template>
-  <div class="w-full layout-wrapper bg-bg">
+  <div class="w-full layout-wrapper bg-transparent-safe">
     <app-appbar />
-    <div id="content" class="overflow-hidden relative" :class="isPlayerOpen ? 'playerOpen' : ''">
-      <Nuxt :key="currentLang" />
+    <div id="content" class="overflow-hidden relative bg-transparent-safe transition-all duration-300" :class="[isPlayerOpen ? 'playerOpen' : '', isInBookshelfContext ? 'has-bottom-nav' : '']">
+      <transition
+        name="page-transition"
+        mode="out-in"
+        enter-active-class="transition-all duration-500 ease-expressive"
+        leave-active-class="transition-all duration-300 ease-expressive"
+        enter-from-class="opacity-0 transform translate-x-8 scale-95"
+        enter-to-class="opacity-100 transform translate-x-0 scale-100"
+        leave-from-class="opacity-100 transform translate-x-0 scale-100"
+        leave-to-class="opacity-0 transform -translate-x-8 scale-95"
+      >
+        <Nuxt :key="currentLang" />
+      </transition>
     </div>
     <app-audio-player-container ref="streamContainer" />
     <modals-libraries-modal />
@@ -64,6 +75,10 @@ export default {
     routeName() {
       return this.$route.name
     },
+    isInBookshelfContext() {
+      // Check if current route is bookshelf-related which has bottom navigation
+      return this.$route && this.$route.name && this.$route.name.startsWith('bookshelf')
+    },
     networkConnected() {
       return this.$store.state.networkConnected
     },
@@ -98,6 +113,16 @@ export default {
       }
 
       await this.$store.dispatch('user/loadUserSettings')
+
+      // Initialize dynamic colors if enabled
+      if (this.$platform === 'android' && this.$store.state.user.settings.enableDynamicColors && this.$dynamicColor) {
+        try {
+          await this.$dynamicColor.loadSystemColors()
+          console.log('Dynamic colors initialized on app startup')
+        } catch (error) {
+          console.warn('Failed to initialize dynamic colors:', error)
+        }
+      }
     },
     async attemptConnection() {
       console.warn('[default] attemptConnection')
@@ -364,3 +389,63 @@ export default {
   }
 }
 </script>
+
+<style>
+#content.playerOpen {
+  padding-bottom: 0px; /* No padding - views fill to nav bar */
+}
+
+#content {
+  padding-bottom: 0px; /* No padding - views fill to nav bar */
+}
+
+/* Material 3 Expressive Page Transitions */
+.page-transition-enter-active {
+  transition: all 500ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
+}
+
+.page-transition-leave-active {
+  transition: all 300ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
+}
+
+.page-transition-enter-from {
+  opacity: 0;
+  transform: translateX(32px) scale(0.96);
+}
+
+.page-transition-enter-to {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+.page-transition-leave-from {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+.page-transition-leave-to {
+  opacity: 0;
+  transform: translateX(-32px) scale(0.96);
+}
+
+/* Prevent layout shift during transitions */
+.page-transition-enter-active,
+.page-transition-leave-active {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+}
+
+/* Ensure smooth transitions on different screen sizes */
+@media (max-width: 640px) {
+  .page-transition-enter-from {
+    transform: translateX(24px) scale(0.97);
+  }
+
+  .page-transition-leave-to {
+    transform: translateX(-24px) scale(0.97);
+  }
+}
+</style>

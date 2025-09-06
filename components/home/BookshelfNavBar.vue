@@ -1,10 +1,17 @@
 <template>
-  <div class="w-full h-9 bg-bg relative">
-    <div id="bookshelf-navbar" class="absolute z-10 top-0 left-0 w-full h-full flex bg-secondary">
-      <nuxt-link v-for="item in items" :key="item.to" :to="item.to" class="h-full flex-grow flex items-center justify-center" :class="routeName === item.routeName ? 'bg-primary' : 'text-fg-muted'">
-        <p v-if="routeName === item.routeName" class="text-sm font-semibold">{{ item.text }}</p>
-        <span v-else-if="item.iconPack === 'abs-icons'" class="abs-icons" :class="`icon-${item.icon} ${item.iconClass || ''}`"></span>
-        <span v-else :class="`${item.iconPack} ${item.iconClass || ''}`">{{ item.icon }}</span>
+  <div class="fixed bottom-0 left-0 right-0 w-full h-20 bg-surface-container shadow-elevation-3 z-60 border-t border-outline-variant border-opacity-20">
+    <div id="bookshelf-navbar" class="w-full h-full flex items-center justify-around px-2">
+      <nuxt-link v-for="item in items" :key="item.to" :to="item.to" class="flex flex-col items-center justify-center py-2 px-3 min-w-16 h-16 transition-all duration-200 ease-standard" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
+        <!-- Icon with Material 3 active state pill -->
+        <div class="relative flex items-center justify-center w-16 h-8 rounded-full transition-all duration-200 ease-standard" :class="routeName === item.routeName ? 'bg-secondary-container' : 'bg-transparent'">
+          <span v-if="item.iconPack === 'abs-icons'" class="abs-icons transition-colors duration-200" :class="[`icon-${item.icon} text-lg`, routeName === item.routeName ? 'text-on-secondary-container' : 'text-on-surface-variant']"></span>
+          <span v-else class="material-symbols text-lg transition-colors duration-200" :class="[item.iconClass || '', routeName === item.routeName ? 'text-on-secondary-container fill' : 'text-on-surface-variant']">{{ item.icon }}</span>
+        </div>
+
+        <!-- Label -->
+        <p class="text-label-small font-medium leading-none mt-1 transition-colors duration-200" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
+          {{ item.text }}
+        </p>
       </nuxt-link>
     </div>
   </div>
@@ -95,8 +102,8 @@ export default {
             text: this.$strings.ButtonSeries
           },
           {
-            to: '/bookshelf/collections',
-            routeName: 'bookshelf-collections',
+            to: '/bookshelf/collections-playlists',
+            routeName: 'bookshelf-collections-playlists',
             iconPack: 'material-symbols',
             icon: 'collections_bookmark',
             iconClass: 'text-xl',
@@ -111,17 +118,6 @@ export default {
             text: this.$strings.ButtonAuthors
           }
         ]
-      }
-
-      if (this.userHasPlaylists) {
-        items.push({
-          to: '/bookshelf/playlists',
-          routeName: 'bookshelf-playlists',
-          iconPack: 'material-symbols',
-          icon: 'queue_music',
-          iconClass: 'text-2xl',
-          text: this.$strings.ButtonPlaylists
-        })
       }
 
       return items
@@ -143,11 +139,96 @@ export default {
 }
 </script>
 
-<style>
+<style scoped>
+/* Material 3 Bottom Navigation Bar Styles */
 #bookshelf-navbar {
-  box-shadow: 0px 5px 5px #11111155;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
-#bookshelf-navbar a {
-  font-size: 0.9rem;
+
+.state-layer {
+  position: relative;
+  overflow: hidden;
+  transition: all 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.state-layer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background-color: transparent;
+  transition: background-color 200ms cubic-bezier(0.2, 0, 0, 1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.state-layer:hover::before {
+  background-color: rgba(var(--md-sys-color-on-surface-variant), 0.08);
+}
+
+.state-layer:focus::before {
+  background-color: rgba(var(--md-sys-color-on-surface-variant), 0.12);
+}
+
+.state-layer:active::before {
+  background-color: rgba(var(--md-sys-color-on-surface-variant), 0.16);
+}
+
+/* Active state specific styles */
+.state-layer.bg-secondary-container::before {
+  background-color: transparent;
+}
+
+.state-layer.bg-secondary-container:hover::before {
+  background-color: rgba(var(--md-sys-color-on-secondary-container), 0.08);
+}
+
+.state-layer.bg-secondary-container:focus::before {
+  background-color: rgba(var(--md-sys-color-on-secondary-container), 0.12);
+}
+
+.state-layer.bg-secondary-container:active::before {
+  background-color: rgba(var(--md-sys-color-on-secondary-container), 0.16);
+}
+
+/* Scale animations */
+.scale-105 {
+  transform: scale(1.05);
+}
+
+.hover\:scale-102:hover {
+  transform: scale(1.02);
+}
+
+/* Ensure content is above state layer */
+.state-layer > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* Material 3 expressive easing */
+.ease-expressive {
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Icon fill for active state */
+.material-symbols.fill {
+  font-variation-settings: 'FILL' 1;
+}
+
+/* Active indicator styling */
+.absolute {
+  position: absolute;
+}
+
+/* Smooth transitions for all elements */
+* {
+  transition-property: color, background-color, transform, box-shadow;
+  transition-duration: 300ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 </style>

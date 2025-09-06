@@ -1,100 +1,299 @@
 <template>
-  <div v-if="playbackSession" id="streamContainer" class="fixed top-0 left-0 layout-wrapper right-0 z-50 pointer-events-none" :class="{ fullscreen: showFullscreen, 'ios-player': $platform === 'ios', 'web-player': $platform === 'web' }">
-    <div v-if="showFullscreen" class="w-full h-full z-10 absolute top-0 left-0 pointer-events-auto" :style="{ backgroundColor: coverRgb }">
-      <div class="w-full h-full absolute top-0 left-0 pointer-events-none" style="background: var(--gradient-audio-player)" />
+  <div
+    v-if="playbackSession"
+    id="streamContainer"
+    :class="{
+      fullscreen: showFullscreen,
+      'ios-player': $platform === 'ios',
+      'web-player': $platform === 'web',
+      'fixed pointer-events-none': true,
+      'player-expanding': isExpanding,
+      'player-collapsing': isCollapsing
+    }"
+    :style="{
+      zIndex: showFullscreen ? 2147483647 : 70,
+      top: showFullscreen ? '0' : 'auto',
+      bottom: showFullscreen ? '0' : isInBookshelfContext ? '80px' : '0',
+      left: '0',
+      right: '0',
+      height: showFullscreen ? '100vh' : 'auto',
+      width: showFullscreen ? '100vw' : 'auto',
+      visibility: 'visible',
+      backgroundColor: 'transparent',
+      position: 'fixed'
+    }"
+  >
+    <!-- Full screen player -->
+    <div
+      class="w-screen h-screen fixed top-0 left-0 bg-surface-dynamic fullscreen-player"
+      :class="{
+        'fullscreen-entering': isExpanding,
+        'fullscreen-exiting': isCollapsing,
+        'no-transition': isSwipeActive
+      }"
+      :style="{
+        opacity: swipeOpacity,
+        transform: fullscreenTransform,
+        zIndex: 2147483646,
+        width: '100vw',
+        height: '100vh',
+        top: '0',
+        left: '0',
+        pointerEvents: isSwipeActive || showFullscreen ? 'auto' : 'none',
+        willChange: isSwipeActive ? 'transform, opacity' : 'auto'
+      }"
+    >
+      <!-- Additional background coverage to ensure nothing shows through -->
+      <div class="w-screen h-screen absolute top-0 left-0 pointer-events-none bg-surface-dynamic" style="width: 100vw; height: 100vh; z-index: 0" />
 
-      <div class="top-4 left-4 absolute cursor-pointer">
-        <span class="material-symbols text-5xl" :class="{ 'text-black text-opacity-75': coverBgIsLight && theme !== 'black' }" @click="collapseFullscreen">keyboard_arrow_down</span>
+      <div
+        class="top-4 left-4 absolute"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: showFullscreen ? 1 : 0,
+          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
+        }"
+      >
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" @click="collapseFullscreen">
+          <span class="material-symbols text-2xl text-on-surface">keyboard_arrow_down</span>
+        </button>
       </div>
-      <div v-show="showCastBtn" class="top-6 right-16 absolute cursor-pointer">
-        <span class="material-symbols text-3xl" :class="coverBgIsLight && theme !== 'black' ? 'text-black' : ''" @click="castClick">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
+      <div
+        v-show="showCastBtn"
+        class="top-4 right-36 absolute"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: showFullscreen ? 1 : 0,
+          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
+        }"
+      >
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" @click="castClick">
+          <span class="material-symbols text-xl text-on-surface">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
+        </button>
       </div>
-      <div class="top-6 right-4 absolute cursor-pointer">
-        <span class="material-symbols text-3xl" :class="{ 'text-black text-opacity-75': coverBgIsLight && theme !== 'black' }" @click="showMoreMenuDialog = true">more_vert</span>
+      <div
+        class="top-4 right-20 absolute"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: showFullscreen ? 1 : 0,
+          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
+        }"
+      >
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" :disabled="!chapters.length" @click="clickChaptersBtn">
+          <span class="material-symbols text-xl text-on-surface" :class="chapters.length ? '' : 'opacity-30'">format_list_bulleted</span>
+        </button>
       </div>
-      <p class="top-4 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-opacity-75" :class="{ 'text-black text-opacity-75': coverBgIsLight && theme !== 'black' }" style="font-size: 10px">{{ isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
-    </div>
+      <div
+        class="top-4 right-4 absolute"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: showFullscreen ? 1 : 0,
+          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
+        }"
+      >
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" @click="showMoreMenuDialog = true">
+          <span class="material-symbols text-xl text-on-surface">more_vert</span>
+        </button>
+      </div>
+      <p
+        class="top-16 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-on-surface-variant opacity-75 text-xs"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: fullscreenContentOpacity * 0.75,
+          transform: fullscreenContentTransform
+        }"
+      >
+        {{ isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}
+      </p>
 
-    <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack && showFullscreen" class="absolute total-track w-full z-30 px-6">
-      <div class="flex">
-        <p class="font-mono text-fg" style="font-size: 0.8rem">{{ currentTimePretty }}</p>
-        <div class="flex-grow" />
-        <p class="font-mono text-fg" style="font-size: 0.8rem">{{ totalTimeRemainingPretty }}</p>
-      </div>
-      <div class="w-full">
-        <div class="h-1 w-full bg-track/50 relative rounded-full">
-          <div ref="totalReadyTrack" class="h-full bg-track-buffered absolute top-0 left-0 pointer-events-none rounded-full" />
-          <div ref="totalBufferedTrack" class="h-full bg-track absolute top-0 left-0 pointer-events-none rounded-full" />
-          <div ref="totalPlayedTrack" class="h-full bg-track-cursor absolute top-0 left-0 pointer-events-none rounded-full" />
-        </div>
-      </div>
-    </div>
-
-    <div class="cover-wrapper absolute z-30 pointer-events-auto" @click="clickContainer">
-      <div class="w-full h-full flex justify-center">
+      <!-- Fullscreen Cover Image -->
+      <div
+        class="cover-wrapper-fullscreen absolute z-30 pointer-events-auto flex justify-center items-center"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          top: '0',
+          left: '0',
+          right: '0',
+          bottom: '200px',
+          opacity: fullscreenContentOpacity,
+          transform: fullscreenContentTransform
+        }"
+        @click="collapseFullscreen"
+      >
         <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
+
+        <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute top-0 left-0 w-full h-full flex items-center justify-center z-30" @click.stop="showSyncsFailedDialog">
+          <span class="material-symbols text-error text-3xl">error</span>
+        </div>
       </div>
 
-      <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute top-0 left-0 w-full h-full flex items-center justify-center z-30" @click.stop="showSyncsFailedDialog">
-        <span class="material-symbols text-error text-3xl">error</span>
+      <!-- Fullscreen Controls -->
+      <div
+        id="playerControls"
+        class="absolute left-6 right-6 bottom-6 mx-auto max-w-96"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: fullscreenContentOpacity,
+          transform: fullscreenContentTransform
+        }"
+      >
+        <!-- Main playback controls row -->
+        <div class="flex items-center max-w-full mb-4" :class="playerSettings.lockUi ? 'justify-center' : 'justify-between'">
+          <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="isLoading" @click.stop="jumpChapterStart">
+            <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">first_page</span>
+          </button>
+          <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="isLoading" @click.stop="jumpBackwards">
+            <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
+          </button>
+          <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 active:scale-95 mx-4 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+            <span v-if="!isLoading" class="material-symbols text-2xl text-on-surface">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+            <widgets-spinner-icon v-else class="h-6 w-6" />
+          </button>
+          <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="isLoading" @click.stop="jumpForward">
+            <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
+          </button>
+          <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="!nextChapter || isLoading" @click.stop="jumpNextChapter">
+            <span class="material-symbols text-xl text-on-surface" :class="nextChapter && !isLoading ? '' : 'opacity-30'">last_page</span>
+          </button>
+        </div>
+
+        <!-- Secondary controls row - Sleep Timer, Speed, and Bookmarks -->
+        <div v-show="showFullscreen && !playerSettings.lockUi" class="flex items-center justify-center space-x-8">
+          <!-- Sleep Timer Button (under and between back and play buttons) -->
+          <button v-if="!sleepTimerRunning" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click.stop="$emit('showSleepTimer')">
+            <span class="material-symbols text-xl text-on-surface">bedtime</span>
+          </button>
+          <button v-else class="px-3 py-2 rounded-full bg-tertiary-container text-on-tertiary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click.stop="$emit('showSleepTimer')">
+            <span class="text-sm font-mono font-medium">{{ sleepTimeRemainingPretty }}</span>
+          </button>
+
+          <!-- Speed Button (under and between play and forward buttons) -->
+          <button class="px-4 py-2 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click="$emit('selectPlaybackSpeed')">
+            <span class="font-mono text-sm font-medium">{{ currentPlaybackRate }}x</span>
+          </button>
+
+          <!-- Bookmarks Button -->
+          <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click="$emit('showBookmarks')">
+            <span class="material-symbols text-xl text-on-surface" :class="{ fill: bookmarks.length }">bookmark</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Progress Bars Container - manages both tracks -->
+      <div
+        id="progressBarsContainer"
+        class="absolute left-6 right-6 bottom-48"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: fullscreenContentOpacity,
+          transform: fullscreenContentTransform
+        }"
+      >
+        <!-- Total Progress Track (shown when both tracks enabled) -->
+        <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-6">
+          <div class="flex mb-1">
+            <p class="font-mono text-on-surface-variant text-xs">{{ currentTimePretty }}</p>
+            <div class="flex-grow" />
+            <p class="font-mono text-on-surface-variant text-xs">{{ totalTimeRemainingPretty }}</p>
+          </div>
+          <div class="w-full">
+            <div class="h-1 w-full bg-surface-variant/50 relative rounded-full">
+              <div ref="totalReadyTrack" class="h-full bg-outline/60 absolute top-0 left-0 pointer-events-none rounded-full" />
+              <div ref="totalBufferedTrack" class="h-full bg-on-surface-variant/60 absolute top-0 left-0 pointer-events-none rounded-full" />
+              <div ref="totalPlayedTrack" class="h-full bg-primary/80 absolute top-0 left-0 pointer-events-none rounded-full" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Main Progress Track -->
+        <div>
+          <div class="flex pointer-events-none mb-2">
+            <p class="font-mono text-on-surface text-sm" ref="currentTimestamp">0:00</p>
+            <div class="flex-grow" />
+            <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
+          </div>
+          <div ref="track" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
+            <div ref="readyTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
+            <div ref="bufferedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
+            <div ref="playedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300" />
+            <div ref="trackCursor" class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 hover:scale-110 active:scale-95" :style="{ top: '-8px' }" :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }" @touchstart="touchstartCursor">
+              <div class="rounded-full w-3 h-3 pointer-events-none bg-on-primary" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fullscreen Title and Author - positioned below progress bars -->
+      <div
+        class="title-author-texts absolute z-30 left-6 right-6 bottom-72 text-center overflow-hidden"
+        :class="{ 'no-transition': isSwipeActive }"
+        :style="{
+          opacity: fullscreenContentOpacity,
+          transform: fullscreenContentTransform
+        }"
+        @click="collapseFullscreen"
+      >
+        <div ref="titlewrapper" class="overflow-hidden relative">
+          <p class="title-text whitespace-nowrap text-on-surface text-lg font-medium">{{ title }}</p>
+        </div>
+        <p class="author-text text-on-surface-variant text-sm truncate">{{ authorName }}</p>
       </div>
     </div>
 
-    <div class="title-author-texts absolute z-30 left-0 right-0 overflow-hidden" @click="clickTitleAndAuthor">
-      <div ref="titlewrapper" class="overflow-hidden relative">
-        <p class="title-text whitespace-nowrap"></p>
-      </div>
-      <p class="author-text text-fg text-opacity-75 truncate">{{ authorName }}</p>
-    </div>
+    <div
+      v-show="!showFullscreen"
+      id="playerContent"
+      class="playerContainer w-full pointer-events-auto bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20 mini-player"
+      :class="{
+        'transition-all duration-500 ease-expressive': !isSwipeActive,
+        'mini-exiting': isExpanding,
+        'mini-entering': isCollapsing
+      }"
+      :style="{
+        transform: miniPlayerTransform,
+        opacity: miniPlayerOpacity,
+        zIndex: '2147483647'
+      }"
+      @touchstart="handleTouchStart"
+      @touchmove="handleTouchMove"
+      @touchend="handleTouchEnd"
+    >
+      <!-- Collapsed player layout: Cover → Text → Controls -->
+      <div v-if="!showFullscreen" class="flex items-center h-full px-2">
+        <!-- Cover Image -->
+        <div class="cover-wrapper-mini flex-shrink-0 mr-2" @click="expandFullscreen">
+          <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
+        </div>
 
-    <div id="playerContent" class="playerContainer w-full z-20 absolute bottom-0 left-0 right-0 p-2 pointer-events-auto transition-all" :style="{ backgroundColor: showFullscreen ? '' : coverRgb }" @click="clickContainer">
-      <div v-if="showFullscreen" class="absolute bottom-4 left-0 right-0 w-full pb-4 pt-2 mx-auto px-6" style="max-width: 414px">
-        <div class="flex items-center justify-between pointer-events-auto">
-          <span v-if="!isPodcast && serverLibraryItemId && socketConnected" class="material-symbols text-3xl text-fg-muted cursor-pointer" :class="{ fill: bookmarks.length }" @click="$emit('showBookmarks')">bookmark</span>
-          <!-- hidden for podcasts but still using this as a placeholder -->
-          <span v-else class="material-symbols text-3xl text-white text-opacity-0">bookmark</span>
-
-          <span class="font-mono text-fg-muted cursor-pointer" style="font-size: 1.35rem" @click="$emit('selectPlaybackSpeed')">{{ currentPlaybackRate }}x</span>
-          <svg v-if="!sleepTimerRunning" xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 text-fg-muted cursor-pointer" fill="none" viewBox="0 0 24 24" stroke="currentColor" @click.stop="$emit('showSleepTimer')">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-          </svg>
-          <div v-else class="h-7 w-7 flex items-center justify-around cursor-pointer" @click.stop="$emit('showSleepTimer')">
-            <p class="text-xl font-mono text-success">{{ sleepTimeRemainingPretty }}</p>
+        <!-- Text Content -->
+        <div class="flex-1 min-w-0 mr-2" @click="expandFullscreen">
+          <div ref="titlewrapper" class="overflow-hidden relative">
+            <p class="title-text whitespace-nowrap truncate text-on-surface text-sm font-medium">{{ title }}</p>
           </div>
+          <p class="author-text text-on-surface-variant text-xs truncate">{{ authorName }}</p>
+        </div>
 
-          <span class="material-symbols text-3xl text-fg cursor-pointer" :class="chapters.length ? 'text-opacity-75' : 'text-opacity-10'" @click="clickChaptersBtn">format_list_bulleted</span>
+        <!-- Controls -->
+        <div class="flex items-center flex-shrink-0">
+          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95 mr-1" :disabled="isLoading" @click.stop="jumpBackwards">
+            <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
+          </button>
+          <button class="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-2 active:scale-95 mx-2 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+            <span v-if="!isLoading" class="material-symbols text-xl text-on-surface">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+            <widgets-spinner-icon v-else class="h-5 w-5" />
+          </button>
+          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95 ml-1" :disabled="isLoading" @click.stop="jumpForward">
+            <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
+          </button>
         </div>
       </div>
-      <div v-else class="w-full h-full absolute top-0 left-0 pointer-events-none" style="background: var(--gradient-minimized-audio-player)" />
 
-      <div id="playerControls" class="absolute right-0 bottom-0 mx-auto" style="max-width: 414px">
-        <div class="flex items-center max-w-full" :class="playerSettings.lockUi ? 'justify-center' : 'justify-between'">
-          <span v-show="showFullscreen && !playerSettings.lockUi" class="material-symbols next-icon text-fg cursor-pointer" :class="isLoading ? 'text-opacity-10' : 'text-opacity-75'" @click.stop="jumpChapterStart">first_page</span>
-          <span v-show="!playerSettings.lockUi" class="material-symbols jump-icon text-fg cursor-pointer" :class="isLoading ? 'text-opacity-10' : 'text-opacity-75'" @click.stop="jumpBackwards">{{ jumpBackwardsIcon }}</span>
-          <div class="play-btn cursor-pointer shadow-sm flex items-center justify-center rounded-full text-primary mx-4 relative overflow-hidden" :style="{ backgroundColor: coverRgb }" :class="{ 'animate-spin': seekLoading }" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
-            <div v-if="!coverBgIsLight" class="absolute top-0 left-0 w-full h-full bg-white bg-opacity-20 pointer-events-none" />
-
-            <span v-if="!isLoading" class="material-symbols fill" :class="{ 'text-white': coverRgb && !coverBgIsLight }">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
-            <widgets-spinner-icon v-else class="h-8 w-8" />
-          </div>
-          <span v-show="!playerSettings.lockUi" class="material-symbols jump-icon text-fg cursor-pointer" :class="isLoading ? 'text-opacity-10' : 'text-opacity-75'" @click.stop="jumpForward">{{ jumpForwardIcon }}</span>
-          <span v-show="showFullscreen && !playerSettings.lockUi" class="material-symbols next-icon text-fg cursor-pointer" :class="nextChapter && !isLoading ? 'text-opacity-75' : 'text-opacity-10'" @click.stop="jumpNextChapter">last_page</span>
-        </div>
-      </div>
-
-      <div id="playerTrack" class="absolute left-0 w-full px-6">
-        <div class="flex pointer-events-none">
-          <p class="font-mono text-fg" style="font-size: 0.8rem" ref="currentTimestamp">0:00</p>
-          <div class="flex-grow" />
-          <p class="font-mono text-fg" style="font-size: 0.8rem">{{ timeRemainingPretty }}</p>
-        </div>
-        <div ref="track" class="h-1.5 w-full bg-track/50 relative rounded-full" :class="{ 'animate-pulse': isLoading }" @click.stop>
-          <div ref="readyTrack" class="h-full bg-track-buffered absolute top-0 left-0 rounded-full pointer-events-none" />
-          <div ref="bufferedTrack" class="h-full bg-track absolute top-0 left-0 rounded-full pointer-events-none" />
-          <div ref="playedTrack" class="h-full bg-track-cursor absolute top-0 left-0 rounded-full pointer-events-none" />
-          <div ref="trackCursor" class="h-7 w-7 rounded-full absolute pointer-events-auto flex items-center justify-center" :style="{ top: '-11px' }" :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }" @touchstart="touchstartCursor">
-            <div class="bg-track-cursor rounded-full w-3.5 h-3.5 pointer-events-none" />
-          </div>
+      <!-- Progress Bar -->
+      <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-2 left-0 w-full px-2">
+        <div ref="track" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
+          <div ref="readyTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
+          <div ref="bufferedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
+          <div ref="playedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-secondary transition-all duration-300" />
         </div>
       </div>
     </div>
@@ -108,7 +307,6 @@
 import { Capacitor } from '@capacitor/core'
 import { AbsAudioPlayer } from '@/plugins/capacitor'
 import { Dialog } from '@capacitor/dialog'
-import { FastAverageColor } from 'fast-average-color'
 import WrappingMarquee from '@/assets/WrappingMarquee.js'
 
 export default {
@@ -142,6 +340,11 @@ export default {
       seekLoading: false,
       touchStartY: 0,
       touchStartTime: 0,
+      swipeOffset: 0,
+      isSwipeActive: false,
+      swipeStartY: 0,
+      swipeStartTime: 0,
+      swipeThreshold: 30, // pixels to trigger fullscreen - reduced for better responsiveness
       playerSettings: {
         useChapterTrack: false,
         useTotalTrack: true,
@@ -155,17 +358,16 @@ export default {
       draggingCurrentTime: 0,
       syncStatus: 0,
       showMoreMenuDialog: false,
-      coverRgb: 'rgb(55, 56, 56)',
-      coverBgIsLight: false,
       titleMarquee: null,
-      isRefreshingUI: false
+      isRefreshingUI: false,
+      isExpanding: false,
+      isCollapsing: false
     }
   },
   watch: {
     showFullscreen(val) {
       this.updateScreenSize()
       this.$store.commit('setPlayerFullscreen', !!val)
-      document.querySelector('body').style.backgroundColor = this.showFullscreen ? this.coverRgb : ''
     },
     bookCoverAspectRatio() {
       this.updateScreenSize()
@@ -177,6 +379,88 @@ export default {
   computed: {
     theme() {
       return document.documentElement.dataset.theme || 'dark'
+    },
+    swipeProgress() {
+      if (!this.isSwipeActive || this.swipeOffset >= 0) return 0
+      const screenHeight = window.innerHeight || 800
+      const maxDistance = screenHeight * 0.25
+      return Math.min(Math.abs(this.swipeOffset) / maxDistance, 1)
+    },
+    swipeOpacity() {
+      // During a swipe, interpolate opacity from 0 to 1 as swipe offset increases
+      if (this.isSwipeActive && this.swipeOffset < 0) {
+        // Fullscreen should start appearing immediately and reach full opacity at about 25% of screen
+        const screenHeight = window.innerHeight || 800
+        const maxDistance = screenHeight * 0.25 // Reach full opacity at 25% of screen height
+        const progress = Math.min(Math.abs(this.swipeOffset) / maxDistance, 1)
+        // Use ease-out curve for immediate feedback that slows down
+        const easedProgress = 1 - Math.pow(1 - progress, 3)
+        return easedProgress
+      }
+      // When not swiping, show fullscreen state
+      return this.showFullscreen ? 1 : 0
+    },
+    miniPlayerOpacity() {
+      // During a swipe, interpolate opacity from 1 to 0 as swipe offset increases
+      if (this.isSwipeActive && this.swipeOffset < 0) {
+        // Mini player should only fully disappear when it reaches near the top of screen
+        // Assuming mini player height is about 80px, start fading when it's 70% up the screen
+        const screenHeight = window.innerHeight || 800
+        const fadeDistance = screenHeight * 0.7 // Start strong fade at 70% of screen height
+        const progress = Math.min(Math.abs(this.swipeOffset) / fadeDistance, 1)
+        // Use a gentler curve for slower initial fade
+        const easedProgress = Math.pow(progress, 0.8)
+        return 1 - easedProgress
+      }
+      // When not swiping, show based on fullscreen state
+      return this.showFullscreen ? 0 : 1
+    },
+    miniPlayerTranslateY() {
+      // During swipe, apply transform based on offset
+      return this.isSwipeActive ? this.swipeOffset : 0
+    },
+    miniPlayerTransform() {
+      // During swipe, add subtle scale effect to mini player
+      if (this.isSwipeActive && this.swipeOffset < 0) {
+        const screenHeight = window.innerHeight || 800
+        const progress = Math.min(Math.abs(this.swipeOffset) / (screenHeight * 0.3), 1)
+        const scale = 1 - progress * 0.05 // Slight scale down as it moves up
+        return `translateY(${this.swipeOffset}px) scale(${scale})`
+      }
+      return 'translateY(0) scale(1)'
+    },
+    fullscreenTransform() {
+      // During a swipe, animate the fullscreen player with Material 3 motion
+      if (this.isSwipeActive && this.swipeOffset < 0) {
+        const progress = this.swipeProgress
+
+        // More pronounced Material 3-style transform for better visual feedback
+        const translateY = (1 - progress) * 20 // Start 20px down, move to 0 (more visible)
+        const scale = 0.9 + progress * 0.1 // Start at 0.9, scale to 1.0 (even more pronounced)
+
+        return `translateY(${translateY}px) scale(${scale})`
+      }
+      return 'translateY(0px) scale(1)'
+    },
+    fullscreenContentOpacity() {
+      // Content elements should fade in during swipe
+      if (this.isSwipeActive && this.swipeOffset < 0) {
+        const progress = this.swipeProgress
+        // Use a steeper curve for content fade-in - starts later but reaches full opacity quickly
+        return Math.pow(progress, 0.6)
+      }
+      return this.showFullscreen ? 1 : 0
+    },
+    fullscreenContentTransform() {
+      // Content elements should move smoothly during swipe
+      if (this.isSwipeActive && this.swipeOffset < 0) {
+        const progress = this.swipeProgress
+        // Content moves up slightly as it fades in, using the same Material 3 curve
+        const translateY = (1 - progress) * 8 // Start 8px down, move to 0
+        return `translateY(${translateY}px)`
+      }
+      // When not swiping, position based on fullscreen state
+      return this.showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
     },
     menuItems() {
       const items = []
@@ -238,7 +522,7 @@ export default {
     },
     bookCoverWidth() {
       if (this.showFullscreen) return this.fullscreenBookCoverWidth
-      return 46 / this.bookCoverAspectRatio
+      return 48 / this.bookCoverAspectRatio
     },
     fullscreenBookCoverWidth() {
       if (this.windowWidth < this.windowHeight) {
@@ -384,9 +668,55 @@ export default {
       if (!localLibraryItem) return null
 
       return this.playbackSession.localEpisodeId ? `${localLibraryItem.id}-${this.playbackSession.localEpisodeId}` : localLibraryItem.id
+    },
+    isInBookshelfContext() {
+      // Check if current route is bookshelf-related which has bottom navigation
+      return this.$route && this.$route.name && this.$route.name.startsWith('bookshelf')
+    },
+    playerBottomOffset() {
+      // Add bottom padding when in bookshelf context to account for bottom navigation
+      return this.isInBookshelfContext && !this.showFullscreen ? '80px' : '0px'
     }
   },
   methods: {
+    handleTouchStart(event) {
+      if (this.showFullscreen) return
+
+      this.isSwipeActive = true
+      this.swipeStartY = event.touches[0].clientY
+      this.swipeStartTime = Date.now()
+      this.swipeOffset = 0
+    },
+    handleTouchMove(event) {
+      if (!this.isSwipeActive || this.showFullscreen) return
+
+      event.preventDefault()
+      const currentY = event.touches[0].clientY
+      const deltaY = this.swipeStartY - currentY // Negative for upward swipe
+
+      if (deltaY > 0) {
+        // Only allow upward swipes
+        this.swipeOffset = -Math.min(deltaY, window.innerHeight)
+      }
+    },
+    handleTouchEnd(event) {
+      if (!this.isSwipeActive) return
+
+      this.isSwipeActive = false
+      const deltaY = this.swipeOffset
+      const velocity = (Math.abs(deltaY) / (Date.now() - this.swipeStartTime)) * 1000 // pixels per second
+
+      // Determine if we should expand or snap back
+      const shouldExpand = Math.abs(deltaY) > this.swipeThreshold || velocity > 500
+
+      if (shouldExpand && deltaY < 0) {
+        // Expand to fullscreen
+        this.expandFullscreen()
+      } else {
+        // Snap back to mini player
+        this.swipeOffset = 0
+      }
+    },
     showSyncsFailedDialog() {
       Dialog.alert({
         title: this.$strings.HeaderProgressSyncFailed,
@@ -399,18 +729,7 @@ export default {
       this.showChapterModal = true
     },
     async coverImageLoaded(fullCoverUrl) {
-      if (!fullCoverUrl) return
-
-      const fac = new FastAverageColor()
-      fac
-        .getColorAsync(fullCoverUrl)
-        .then((color) => {
-          this.coverRgb = color.rgba
-          this.coverBgIsLight = color.isLight
-        })
-        .catch((e) => {
-          console.log(e)
-        })
+      // Image loaded, no color extraction needed for solid background
     },
     clickTitleAndAuthor() {
       if (!this.showFullscreen) return
@@ -436,9 +755,24 @@ export default {
     clickContainer() {
       this.expandToFullscreen()
     },
+    expandFullscreen() {
+      this.expandToFullscreen()
+    },
     expandToFullscreen() {
+      this.swipeOffset = 0
+      this.isSwipeActive = false
+
+      // Start slide and fade transition
+      this.isExpanding = true
+
+      // Show fullscreen immediately
       this.showFullscreen = true
       if (this.titleMarquee) this.titleMarquee.reset()
+
+      // End animation state after animation completes
+      setTimeout(() => {
+        this.isExpanding = false
+      }, 400) // Match fade animation duration
 
       // Update track for total time bar if useChapterTrack is set
       this.$nextTick(() => {
@@ -446,8 +780,18 @@ export default {
       })
     },
     collapseFullscreen() {
-      this.showFullscreen = false
-      if (this.titleMarquee) this.titleMarquee.reset()
+      this.swipeOffset = 0
+      this.isSwipeActive = false
+
+      // Start slide and fade transition
+      this.isCollapsing = true
+
+      // Wait for animation to complete before hiding fullscreen
+      setTimeout(() => {
+        this.showFullscreen = false
+        this.isCollapsing = false
+        if (this.titleMarquee) this.titleMarquee.reset()
+      }, 300) // Match fade animation duration
 
       this.forceCloseDropdownMenu()
     },
@@ -559,7 +903,7 @@ export default {
         this.seekLoading = false
         if (this.$refs.playedTrack) {
           this.$refs.playedTrack.classList.remove('bg-yellow-300')
-          this.$refs.playedTrack.classList.add('bg-gray-200')
+          this.$refs.playedTrack.classList.add('bg-surface-container')
         }
       }
 
@@ -610,7 +954,7 @@ export default {
         const ptWidth = Math.round(perc * this.trackWidth)
         this.$refs.playedTrack.style.width = ptWidth + 'px'
 
-        this.$refs.playedTrack.classList.remove('bg-gray-200')
+        this.$refs.playedTrack.classList.remove('bg-surface-container')
         this.$refs.playedTrack.classList.add('bg-yellow-300')
       }
     },
@@ -882,8 +1226,46 @@ export default {
       AbsAudioPlayer.addListener('onPlayingUpdate', this.onPlayingUpdate)
       AbsAudioPlayer.addListener('onMetadata', this.onMetadata)
       AbsAudioPlayer.addListener('onProgressSyncFailing', this.showProgressSyncIsFailing)
-      AbsAudioPlayer.addListener('onProgressSyncSuccess', this.showProgressSyncSuccess)
+      AbsAudioPlayer.addListener('onProgressSyncSuccess', this.hideProgressSyncIsFailing)
       AbsAudioPlayer.addListener('onPlaybackSpeedChanged', this.onPlaybackSpeedChanged)
+
+      // Check for last playback session on app start
+      await this.checkForLastPlaybackSession()
+    },
+    async checkForLastPlaybackSession() {
+      try {
+        // Only check on first app load and if no current session
+        if (!this.$store.state.isFirstAudioLoad || this.$store.state.currentPlaybackSession) {
+          return
+        }
+
+        console.log('[AudioPlayer] Checking for last playback session to resume')
+        const lastSession = await this.$store.dispatch('loadLastPlaybackSession')
+
+        if (lastSession) {
+          // Check if this session is worth resuming (not at the very beginning)
+          const progress = lastSession.currentTime / lastSession.duration
+          if (progress > 0.01) {
+            console.log(`[AudioPlayer] Found resumable session: ${lastSession.displayTitle} at ${Math.floor(progress * 100)}%`)
+
+            // For now, just log that we found a resumable session
+            // The native Android/iOS will handle the actual resume logic
+            // This gives us the foundation for future UI prompts like "Resume where you left off?"
+          }
+        }
+      } catch (error) {
+        console.error('[AudioPlayer] Failed to check for last playback session', error)
+      }
+    },
+    async resumeFromLastSession() {
+      try {
+        console.log('[AudioPlayer] Attempting to resume from last session')
+        await AbsAudioPlayer.resumeLastPlaybackSession()
+        console.log('[AudioPlayer] Successfully resumed from last session')
+      } catch (error) {
+        console.error('[AudioPlayer] Failed to resume from last session', error)
+        throw error
+      }
     },
     async screenOrientationChange() {
       if (this.isRefreshingUI) return
@@ -989,20 +1371,76 @@ export default {
 :root {
   --cover-image-width: 0px;
   --cover-image-height: 0px;
-  --cover-image-width-collapsed: 46px;
-  --cover-image-height-collapsed: 46px;
+  --cover-image-width-collapsed: 48px;
+  --cover-image-height-collapsed: 48px;
   --title-author-left-offset-collapsed: 80px;
   --title-author-width-collapsed: 40%;
 }
 
-.playerContainer {
-  height: 120px;
+/* Mini player components */
+.cover-wrapper-mini {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: var(--md-sys-elevation-surface-container-low);
+  flex-shrink: 0;
 }
+
+.play-btn-mini {
+  width: 40px;
+  height: 40px;
+  background: var(--md-sys-color-primary);
+  box-shadow: var(--md-sys-elevation-fab-primary);
+}
+
+.play-btn-mini .material-symbols {
+  font-size: 1.5rem;
+  color: var(--md-sys-color-on-primary);
+}
+
+/* Material 3 Expressive Player Transition System */
+#streamContainer {
+  transition: all 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+#streamContainer.player-expanding {
+  transition: all 700ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
+}
+
+#streamContainer.player-collapsing {
+  transition: all 500ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
+}
+
+.playerContainer {
+  height: 80px;
+  background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
+  backdrop-filter: blur(20px);
+  border-radius: 16px;
+  box-shadow: var(--md-sys-elevation-surface-container-high);
+  margin: 0;
+  transition: all 300ms cubic-bezier(0.2, 0, 0, 1);
+  transition-property: height, border-radius, background-color, backdrop-filter, transform;
+}
+
+.player-expanding .playerContainer {
+  transition: all 700ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
+}
+
+.player-collapsing .playerContainer {
+  transition: all 500ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
+}
+
 .fullscreen .playerContainer {
   height: 200px;
+  transform: scale(1);
 }
 #playerContent {
-  box-shadow: 0px -8px 8px #11111155;
+  box-shadow: var(--md-sys-elevation-surface-container-high);
+  border-radius: 16px;
+  background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
+  backdrop-filter: blur(20px);
+  margin: 0; /* Remove all margins - positioning handled by container */
 }
 .fullscreen #playerContent {
   box-shadow: none;
@@ -1011,28 +1449,32 @@ export default {
 #playerTrack {
   transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   transition-property: margin;
-  bottom: 35px;
+  bottom: 43px;
 }
-.fullscreen #playerTrack {
-  bottom: unset;
+#progressBarsContainer {
+  bottom: 260px; /* More space above the buttons that are now at the bottom */
+  left: 0;
+  right: 0;
+  z-index: 20;
 }
 
 .cover-wrapper {
-  bottom: 68px;
-  left: 24px;
+  bottom: 76px;
+  left: 16px;
   height: var(--cover-image-height-collapsed);
   width: var(--cover-image-width-collapsed);
   transition: all 0.25s cubic-bezier(0.39, 0.575, 0.565, 1);
   transition-property: left, bottom, width, height;
   transform-origin: left bottom;
-  border-radius: 3px;
+  border-radius: 8px;
   overflow: hidden;
+  box-shadow: var(--md-sys-elevation-surface-container-low);
 }
 
-.total-track {
-  bottom: 215px;
-  left: 0;
-  right: 0;
+.cover-wrapper-fullscreen {
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--md-sys-elevation-surface-container-low);
 }
 
 .title-author-texts {
@@ -1041,7 +1483,7 @@ export default {
   transform-origin: left bottom;
 
   width: var(--title-author-width-collapsed);
-  bottom: 76px;
+  bottom: 84px;
   left: var(--title-author-left-offset-collapsed);
   text-align: left;
 }
@@ -1050,35 +1492,23 @@ export default {
   transition-property: font-size;
   font-size: 0.85rem;
   line-height: 1.5;
+  color: var(--md-sys-color-on-surface);
+  font-weight: 500;
 }
 .title-author-texts .author-text {
   transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   transition-property: font-size;
   font-size: 0.75rem;
   line-height: 1.2;
-}
-
-.fullscreen .title-author-texts {
-  bottom: calc(50% - var(--cover-image-height) / 2 + 50px);
-  width: 80%;
-  left: 10%;
-  text-align: center;
-  padding-bottom: calc(((260px - var(--cover-image-height)) / 260) * 40);
-  pointer-events: auto;
-}
-.fullscreen .title-author-texts .title-text {
-  font-size: clamp(0.8rem, calc(var(--cover-image-height) / 260 * 20), 1.3rem);
-}
-.fullscreen .title-author-texts .author-text {
-  font-size: clamp(0.6rem, calc(var(--cover-image-height) / 260 * 16), 1rem);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 #playerControls {
   transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   transition-property: width, bottom;
   width: 128px;
-  padding-right: 24px;
-  bottom: 70px;
+  padding-right: 16px;
+  bottom: 78px;
 }
 #playerControls .jump-icon {
   transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
@@ -1086,54 +1516,206 @@ export default {
 
   margin: 0px 0px;
   font-size: 1.6rem;
+  color: var(--md-sys-color-on-surface-variant);
 }
 #playerControls .play-btn {
   transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   transition-property: padding, margin, height, width, min-width, min-height;
 
-  height: 40px;
-  width: 40px;
-  min-width: 40px;
-  min-height: 40px;
-  margin: 0px 7px;
+  height: 48px;
+  width: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  margin: 0px 8px;
+  background: var(--md-sys-color-primary) !important;
+  box-shadow: var(--md-sys-elevation-fab-primary);
 }
 #playerControls .play-btn .material-symbols {
   transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   transition-property: font-size;
 
-  font-size: 1.5rem;
+  font-size: 1.75rem;
+  color: var(--md-sys-color-on-primary);
+}
+
+/* Material 3 Expressive Cover Animation - Removed, now uses simple layout */
+
+/* Fullscreen player controls styling */
+.fullscreen #playerControls .w-16 {
+  width: 4rem !important;
+  height: 4rem !important;
+}
+
+.fullscreen #playerControls .w-12 {
+  width: 3rem !important;
+  height: 3rem !important;
+}
+
+.fullscreen {
+  background: rgb(var(--md-sys-color-surface));
+}
+
+/* Disable transitions during swipe for real-time animation */
+.fullscreen-player .cover-wrapper.no-transition {
+  transition: none !important;
+  transform: unset !important;
+  opacity: unset !important;
+}
+
+.player-expanding .cover-wrapper {
+  transition: all 700ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
+}
+
+.player-collapsing .cover-wrapper {
+  transition: all 500ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
 }
 
 .fullscreen .cover-wrapper {
-  margin: 0 auto;
-  height: var(--cover-image-height);
-  width: var(--cover-image-width);
-  left: calc(50% - (calc(var(--cover-image-width)) / 2));
-  bottom: calc(50% + 120px - (calc(var(--cover-image-height)) / 2));
-  border-radius: 16px;
-  overflow: hidden;
+  transform: scale(1) rotate(0deg) !important;
 }
 
-.fullscreen #playerControls {
-  width: 100%;
-  padding-left: 24px;
-  padding-right: 24px;
-  bottom: 78px;
-  left: 0;
+/* Material 3 Player Slide & Fade Transitions */
+
+/* Full Screen Player Animations */
+.fullscreen-player {
+  transition-property: opacity;
+  transition-duration: 400ms;
+  transition-timing-function: cubic-bezier(0.05, 0.7, 0.1, 1);
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
 }
-.fullscreen #playerControls .jump-icon {
-  font-size: 2.4rem;
+
+/* Disable transitions during swipe for immediate response */
+.fullscreen-player.no-transition {
+  transition: none !important;
+  animation: none !important;
 }
-.fullscreen #playerControls .next-icon {
-  font-size: 2rem;
+
+/* Disable all transitions and animations in fullscreen mode to prevent unwanted animations */
+.fullscreen-player * {
+  transition: none !important;
+  animation: none !important;
 }
-.fullscreen #playerControls .play-btn {
-  height: 65px;
-  width: 65px;
-  min-width: 65px;
-  min-height: 65px;
+
+.fullscreen-player button {
+  transition: none !important;
+  animation: none !important;
 }
-.fullscreen #playerControls .play-btn .material-symbols {
-  font-size: 2.1rem;
+
+/* Fullscreen player entrance/exit animations removed for cleaner transitions */
+
+@keyframes fullscreenSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.9);
+  }
+  60% {
+    opacity: 0.8;
+    transform: translateY(-2px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fullscreenSlideOut {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  40% {
+    opacity: 0.6;
+    transform: translateY(8px) scale(0.98);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.9);
+  }
+}
+
+/* Mini Player Animations */
+.mini-player {
+  opacity: 1;
+  transform: translateY(0);
+  transition: all 600ms cubic-bezier(0.05, 0.7, 0.1, 1);
+  transition-property: opacity;
+}
+
+.mini-player.mini-exiting {
+  animation: miniSlideOut 600ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+}
+
+.mini-player.mini-entering {
+  animation: miniSlideIn 400ms cubic-bezier(0.3, 0, 0.8, 0.15) forwards;
+}
+
+@keyframes miniSlideOut {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  70% {
+    opacity: 0.3;
+    transform: translateY(-30px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-50px);
+  }
+}
+
+@keyframes miniSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(-50px);
+  }
+  30% {
+    opacity: 0.3;
+    transform: translateY(-30px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Fullscreen States - Simplified (animations removed) */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Complex morphing animations removed for cleaner transitions */
+
+/* Ensure smooth interaction during transitions */
+.mini-exiting,
+.mini-entering,
+.fullscreen-entering,
+.fullscreen-exiting {
+  pointer-events: none;
+}
+
+/* Re-enable pointer events when animations complete */
+.mini-player:not(.mini-exiting):not(.mini-entering),
+.fullscreen-player:not(.fullscreen-entering):not(.fullscreen-exiting) {
+  pointer-events: auto;
 }
 </style>

@@ -665,4 +665,55 @@ class AbsAudioPlayer : Plugin() {
     syncCurrentPlaybackState()
     call.resolve()
   }
+
+  @PluginMethod
+  fun getLastPlaybackSession(call: PluginCall) {
+    val lastPlaybackSession = DeviceManager.deviceData.lastPlaybackSession
+    if (lastPlaybackSession != null) {
+      val jsObject = JSObject(jacksonMapper.writeValueAsString(lastPlaybackSession))
+      call.resolve(jsObject)
+    } else {
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun resumeLastPlaybackSession(call: PluginCall) {
+    val lastPlaybackSession = DeviceManager.deviceData.lastPlaybackSession
+    if (lastPlaybackSession != null) {
+      // Check if session has meaningful progress (not at the very beginning)
+      val progress = lastPlaybackSession.currentTime / lastPlaybackSession.duration
+      if (progress > 0.01) {
+        Log.d(tag, "Resuming last playback session: ${lastPlaybackSession.displayTitle}")
+
+        val savedPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
+        playerNotificationService.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+        call.resolve()
+      } else {
+        call.reject("Session not resumable", "PROGRESS_INVALID")
+      }
+    } else {
+      call.reject("No last session found", "NO_SESSION")
+    }
+  }
+
+  @PluginMethod
+  fun hasResumableSession(call: PluginCall) {
+    val lastPlaybackSession = DeviceManager.deviceData.lastPlaybackSession
+    val ret = JSObject()
+
+    if (lastPlaybackSession != null) {
+      val progress = lastPlaybackSession.currentTime / lastPlaybackSession.duration
+      val isResumable = progress > 0.01
+      ret.put("hasSession", true)
+      ret.put("isResumable", isResumable)
+      ret.put("progress", progress)
+      ret.put("title", lastPlaybackSession.displayTitle ?: "Unknown")
+    } else {
+      ret.put("hasSession", false)
+      ret.put("isResumable", false)
+    }
+
+    call.resolve(ret)
+  }
 }

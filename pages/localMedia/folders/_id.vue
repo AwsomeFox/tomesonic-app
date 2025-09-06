@@ -4,12 +4,12 @@
       <p class="text-base font-semibold">{{ $strings.LabelFolder }}: {{ folderName }}</p>
       <div class="flex-grow" />
 
-      <span v-if="dialogItems.length" class="material-symbols text-2xl" @click="showDialog = true">more_vert</span>
+      <span v-if="dialogItems.length" class="material-symbols text-2xl text-on-surface" @click="showDialog = true">more_vert</span>
     </div>
 
-    <p class="text-sm mb-4 text-fg-muted">{{ $strings.LabelMediaType }}: {{ mediaType }}</p>
+    <p class="text-sm mb-4 text-on-surface-variant">{{ $strings.LabelMediaType }}: {{ mediaType }}</p>
 
-    <p class="mb-2 text-base text-fg">{{ $strings.HeaderLocalLibraryItems }} ({{ localLibraryItems.length }})</p>
+    <p class="mb-2 text-base text-on-surface">{{ $strings.HeaderLocalLibraryItems }} ({{ localLibraryItems.length }})</p>
 
     <div class="w-full media-item-container overflow-y-auto">
       <template v-for="localLibraryItem in localLibraryItems">
@@ -19,10 +19,10 @@
           </div>
           <div class="flex-grow px-2">
             <p class="text-sm">{{ localLibraryItem.media.metadata.title }}</p>
-            <p class="text-xs text-fg-muted">{{ getLocalLibraryItemSubText(localLibraryItem) }}</p>
+            <p class="text-xs text-on-surface-variant">{{ getLocalLibraryItemSubText(localLibraryItem) }}</p>
           </div>
-          <div class="w-12 h-12 flex items-center justify-center">
-            <span class="material-symbols text-xl text-fg-muted">arrow_right</span>
+          <div class="w-8 h-8 flex items-center justify-center">
+            <span class="material-symbols text-xl text-on-surface-variant">arrow_right</span>
           </div>
         </nuxt-link>
       </template>
@@ -156,7 +156,7 @@ export default {
   max-height: calc(100vh - 210px);
 }
 .playerOpen .media-item-container {
-  height: calc(100vh - 310px);
-  max-height: calc(100vh - 310px);
+  height: calc(100vh - 210px); /* Same as regular container - no extra padding for player */
+  max-height: calc(100vh - 210px);
 }
 </style>

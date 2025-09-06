@@ -1,20 +1,20 @@
 <template>
   <modals-modal v-model="show" :width="400" height="100%">
     <template #outer>
-      <div class="absolute top-11 left-4 z-40">
-        <p class="text-white text-2xl truncate">{{ $strings.LabelYourBookmarks }}</p>
+      <div class="absolute top-4 left-4 z-40 pt-1 px-4 py-2 rounded-full bg-surface backdrop-blur-md shadow-elevation-2 border border-outline-variant" style="max-width: 80%">
+        <p class="text-on-surface text-lg font-medium truncate">{{ $strings.LabelYourBookmarks }}</p>
       </div>
     </template>
     <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
-      <div class="w-full rounded-lg bg-primary border border-border overflow-y-auto overflow-x-hidden relative mt-16" style="max-height: 80vh" @click.stop.prevent>
+      <div class="w-full rounded-2xl bg-surface border border-outline-variant shadow-elevation-4 backdrop-blur-md overflow-y-auto overflow-x-hidden relative mt-16" style="max-height: 80vh" @click.stop.prevent>
         <div class="w-full h-full p-4" v-if="showBookmarkTitleInput">
           <div class="flex mb-4 items-center">
-            <div class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white hover:bg-opacity-10 cursor-pointer" @click.stop="showBookmarkTitleInput = false">
-              <span class="material-symbols text-3xl">arrow_back</span>
+            <div class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-surface-container cursor-pointer transition-colors duration-200" @click.stop="showBookmarkTitleInput = false">
+              <span class="material-symbols text-3xl text-on-surface">arrow_back</span>
             </div>
-            <p class="text-xl pl-2">{{ selectedBookmark ? 'Edit Bookmark' : 'New Bookmark' }}</p>
+            <p class="text-xl pl-2 text-on-surface">{{ selectedBookmark ? 'Edit Bookmark' : 'New Bookmark' }}</p>
             <div class="flex-grow" />
-            <p class="text-xl font-mono">{{ this.$secondsToTimestamp(currentTime / _playbackRate) }}</p>
+            <p class="text-xl font-mono text-on-surface">{{ this.$secondsToTimestamp(currentTime / _playbackRate) }}</p>
           </div>
 
           <ui-text-input-with-label v-model="newBookmarkTitle" :placeholder="bookmarkPlaceholder()" :autofocus="false" ref="noteInput" label="Note" />
@@ -27,11 +27,11 @@
             <modals-bookmarks-bookmark-item :key="bookmark.id" :highlight="currentTime === bookmark.time" :bookmark="bookmark" :playback-rate="_playbackRate" @click="clickBookmark" @edit="editBookmark" @delete="deleteBookmark" />
           </template>
           <div v-if="!bookmarks.length" class="flex h-32 items-center justify-center">
-            <p class="text-xl">{{ $strings.MessageNoBookmarks }}</p>
+            <p class="text-xl text-on-surface">{{ $strings.MessageNoBookmarks }}</p>
           </div>
         </div>
-        <div v-if="canCreateBookmark && !showBookmarkTitleInput" class="flex px-4 py-2 items-center text-center justify-between border-b border-fg/10 bg-success cursor-pointer text-white text-opacity-80 sticky bottom-0 left-0 w-full" @click.stop="createBookmark">
-          <span class="material-symbols">add</span>
+        <div v-if="canCreateBookmark && !showBookmarkTitleInput" class="flex px-4 py-2 items-center text-center justify-between border-t border-outline-variant bg-primary-container cursor-pointer text-on-primary-container sticky bottom-0 left-0 w-full" @click.stop="createBookmark">
+          <span class="material-symbols text-on-surface">add</span>
           <p class="text-base pl-2">{{ $strings.ButtonCreateBookmark }}</p>
           <p class="text-sm font-mono">{{ this.$secondsToTimestamp(currentTime / _playbackRate) }}</p>
         </div>

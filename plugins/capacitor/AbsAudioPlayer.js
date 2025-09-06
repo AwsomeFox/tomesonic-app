@@ -285,6 +285,11 @@ const AbsAudioPlayer = registerPlugin('AbsAudioPlayer', {
   web: () => new AbsAudioPlayerWeb()
 })
 
+// Add session management methods
+AbsAudioPlayer.getLastPlaybackSession = AbsAudioPlayer.getLastPlaybackSession || (() => Promise.resolve(null))
+AbsAudioPlayer.resumeLastPlaybackSession = AbsAudioPlayer.resumeLastPlaybackSession || (() => Promise.reject('Not implemented'))
+AbsAudioPlayer.hasResumableSession = AbsAudioPlayer.hasResumableSession || (() => Promise.resolve({ hasSession: false, isResumable: false }))
+
 export { AbsAudioPlayer }
 
 export default ({ app, store }, inject) => {

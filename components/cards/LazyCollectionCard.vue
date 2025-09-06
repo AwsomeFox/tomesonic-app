@@ -1,13 +1,14 @@
 <template>
-  <div ref="card" :id="`collection-card-${index}`" :style="{ width: width + 'px', height: height + 'px' }" class="rounded-sm cursor-pointer z-30" @click="clickCard">
-    <div class="absolute top-0 left-0 w-full box-shadow-book shadow-height" />
-    <div class="w-full h-full bg-primary relative rounded overflow-hidden">
-      <covers-collection-cover ref="cover" :book-items="books" :width="width" :height="height" :book-cover-aspect-ratio="bookCoverAspectRatio" />
+  <div ref="card" :id="`collection-card-${index}`" :style="{ width: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl cursor-pointer z-30 bg-surface-container shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer overflow-hidden relative" @click="clickCard">
+    <!-- Collection cover container - fills entire card -->
+    <div class="absolute inset-0 rounded-2xl overflow-hidden z-0">
+      <covers-collection-cover ref="cover" :book-items="books" :width="width" :height="height" :book-cover-aspect-ratio="bookCoverAspectRatio" class="w-full h-full" />
     </div>
 
-    <div class="categoryPlacard absolute z-30 left-0 right-0 mx-auto -bottom-6 h-6 rounded-md text-center" :style="{ width: Math.min(240, width) + 'px' }">
-      <div class="w-full h-full flex items-center justify-center rounded-sm border" :class="isAltViewEnabled ? 'altBookshelfLabel' : 'shinyBlack'" :style="{ padding: `0rem ${0.5 * sizeMultiplier}rem` }">
-        <p class="truncate" :style="{ fontSize: labelFontSize + 'rem' }">{{ title }}</p>
+    <!-- Collection title placard with enhanced visibility -->
+    <div class="categoryPlacard absolute z-50 left-0 right-0 mx-auto -bottom-6 h-6 rounded-lg text-center shadow-elevation-3" :style="{ width: Math.min(240, width) + 'px' }">
+      <div class="w-full h-full flex items-center justify-center rounded-lg bg-surface-container bg-opacity-95 backdrop-blur-md border border-outline-variant border-opacity-20" :style="{ padding: `0rem ${0.5 * sizeMultiplier}rem` }">
+        <p class="truncate text-on-surface font-bold drop-shadow-sm" :style="{ fontSize: labelFontSize + 'rem' }">{{ title }}</p>
       </div>
     </div>
   </div>
@@ -78,3 +79,73 @@ export default {
   mounted() {}
 }
 </script>
+
+<style scoped>
+/* Material 3 Expressive Collection Card Styles */
+.material-3-card {
+  transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 300ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.material-3-card::before {
+  content: '';
+  position: absolute;
+  border-radius: inherit;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  transition: background-color 200ms cubic-bezier(0.2, 0, 0, 1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.material-3-card:hover {
+  transform: translateY(-2px);
+}
+
+.material-3-card:hover::before {
+  background-color: rgba(var(--md-sys-color-on-surface), 0.08);
+}
+
+.material-3-card:active {
+  transform: translateY(0px);
+}
+
+.material-3-card:active::before {
+  background-color: rgba(var(--md-sys-color-on-surface), 0.12);
+}
+
+/* Force square aspect ratio for collection covers */
+.material-3-card .covers-collection-cover,
+.material-3-card img {
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  object-position: center center;
+}
+
+/* Enhanced text visibility */
+.drop-shadow-sm {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+/* Ensure overlays are always visible */
+.bg-opacity-95 {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Expressive easing definition */
+.ease-expressive {
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Legacy class support */
+.categoryPlacard {
+  transition: transform 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.material-3-card:hover .categoryPlacard {
+  transform: scale(1.02);
+}
+</style>

@@ -1,37 +1,45 @@
 <template>
-  <div class="fixed top-0 left-0 right-0 layout-wrapper w-full z-50 overflow-hidden pointer-events-none">
-    <div class="absolute top-0 left-0 w-full h-full bg-black transition-opacity duration-200" :class="show ? 'bg-opacity-60 pointer-events-auto' : 'bg-opacity-0'" @click="clickBackground" />
-    <div class="absolute top-0 right-0 w-64 h-full bg-bg transform transition-transform py-6 pointer-events-auto" :class="show ? '' : 'translate-x-64'" @click.stop>
-      <div class="px-6 mb-4">
-        <p v-if="user" class="text-base">
-          Welcome,
-          <strong>{{ username }}</strong>
+  <div class="fixed top-0 left-0 right-0 layout-wrapper w-full overflow-hidden pointer-events-none" style="z-index: 80">
+    <!-- Material 3 Scrim -->
+    <div class="absolute top-0 left-0 w-full h-full bg-black transition-opacity duration-300 ease-standard" :class="show ? 'bg-opacity-32 pointer-events-auto' : 'bg-opacity-0'" @click="clickBackground" />
+
+    <!-- Material 3 Navigation Drawer -->
+    <div class="absolute top-0 left-0 w-80 h-full bg-surface-dynamic shadow-elevation-1 transform transition-transform duration-300 ease-emphasized pointer-events-auto" :class="show ? '' : '-translate-x-80'" @click.stop>
+      <!-- Header Section -->
+      <div class="px-6 py-6 border-b border-outline-variant">
+        <p v-if="user" class="text-title-medium text-on-surface">
+          {{ $strings.HeaderWelcome }},
+          <span class="text-primary font-medium">{{ username }}</span>
         </p>
+        <p v-else class="text-title-medium text-on-surface">{{ $strings.HeaderMenu }}</p>
       </div>
 
-      <div class="w-full overflow-y-auto">
+      <!-- Navigation Items -->
+      <div class="w-full overflow-y-auto flex-1 py-2">
         <template v-for="item in navItems">
-          <button v-if="item.action" :key="item.text" class="w-full hover:bg-bg/60 flex items-center py-3 px-6 text-fg-muted" @click="clickAction(item.action)">
-            <span class="material-symbols fill text-lg">{{ item.icon }}</span>
-            <p class="pl-4">{{ item.text }}</p>
+          <button v-if="item.action" :key="item.text" class="w-full state-layer flex items-center py-4 px-6 text-on-surface-variant hover:bg-on-surface/8 transition-colors duration-200 ease-standard" @click="clickAction(item.action)">
+            <span class="material-symbols text-2xl mr-3 text-on-surface-variant" :class="item.iconOutlined ? '' : 'fill'">{{ item.icon }}</span>
+            <p class="text-body-large">{{ item.text }}</p>
           </button>
-          <nuxt-link v-else :to="item.to" :key="item.text" class="w-full hover:bg-bg/60 flex items-center py-3 px-6 text-fg" :class="currentRoutePath.startsWith(item.to) ? 'bg-bg-hover/50' : 'text-fg-muted'">
-            <span class="material-symbols fill text-lg">{{ item.icon }}</span>
-            <p class="pl-4">{{ item.text }}</p>
+          <nuxt-link v-else :to="item.to" :key="item.text" class="w-full state-layer flex items-center py-4 px-6 transition-colors duration-200 ease-standard" :class="currentRoutePath.startsWith(item.to) ? 'bg-primary-container text-on-primary-container' : 'text-on-surface-variant hover:bg-on-surface/8'">
+            <span class="material-symbols text-2xl mr-3" :class="[item.iconOutlined ? '' : 'fill', currentRoutePath.startsWith(item.to) ? 'text-on-primary-container' : 'text-on-surface-variant']">{{ item.icon }}</span>
+            <p class="text-body-large">{{ item.text }}</p>
           </nuxt-link>
         </template>
       </div>
-      <div class="absolute bottom-0 left-0 w-full py-6 px-6 text-fg">
-        <div v-if="serverConnectionConfig" class="mb-4 flex justify-center">
-          <p class="text-xs text-fg-muted" style="word-break: break-word">{{ serverConnectionConfig.address }} (v{{ serverSettings.version }})</p>
+
+      <!-- Footer Section -->
+      <div class="border-t border-outline-variant px-6 py-4">
+        <div v-if="serverConnectionConfig" class="mb-3 text-center">
+          <p class="text-body-small text-on-surface-variant break-all">{{ serverConnectionConfig.address }}</p>
+          <p class="text-body-small text-on-surface-variant">v{{ serverSettings.version }}</p>
         </div>
-        <div class="flex items-center">
-          <p class="text-xs">{{ $config.version }}</p>
-          <div class="flex-grow" />
-          <div v-if="user" class="flex items-center" @click="disconnect">
-            <p class="text-xs pr-2">{{ $strings.ButtonDisconnect }}</p>
-            <i class="material-symbols text-sm -mb-0.5">cloud_off</i>
-          </div>
+        <div class="flex items-center justify-between">
+          <p class="text-body-small text-on-surface-variant">v{{ $config.version }}</p>
+          <ui-btn v-if="user" variant="text" color="error" small @click="disconnect">
+            {{ $strings.ButtonDisconnect }}
+            <span class="material-symbols text-sm ml-1 text-on-surface-variant">cloud_off</span>
+          </ui-btn>
         </div>
       </div>
     </div>
@@ -217,3 +225,54 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+/* Material 3 Navigation Drawer Styles */
+.state-layer {
+  position: relative;
+  overflow: hidden;
+}
+
+.state-layer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  transition: background-color var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  pointer-events: none;
+}
+
+.state-layer:hover::before {
+  background-color: rgba(var(--md-sys-color-on-surface), var(--md-sys-state-hover-opacity));
+}
+
+.state-layer:focus::before {
+  background-color: rgba(var(--md-sys-color-on-surface), var(--md-sys-state-focus-opacity));
+}
+
+.state-layer:active::before {
+  background-color: rgba(var(--md-sys-color-on-surface), var(--md-sys-state-pressed-opacity));
+}
+
+/* Active navigation item styling */
+.bg-secondary-container .state-layer:hover::before {
+  background-color: rgba(var(--md-sys-color-on-secondary-container), var(--md-sys-state-hover-opacity));
+}
+
+/* Custom opacity for scrim */
+.bg-opacity-32 {
+  background-opacity: 0.32;
+}
+
+/* Drawer width */
+.w-80 {
+  width: 20rem;
+}
+
+.translate-x-80 {
+  transform: translateX(20rem);
+}
+</style>

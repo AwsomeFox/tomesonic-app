@@ -274,10 +274,48 @@ export default ({ store, app }, inject) => {
 
   inject('isValidVersion', isValidVersion)
 
-  // Set theme
+  // Set theme with Material You integration for all themes
   app.$localStore?.getTheme()?.then((theme) => {
     if (theme) {
-      document.documentElement.dataset.theme = theme
+      if (theme === 'system') {
+        // Use system theme - detect and apply based on Android system preference
+        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.dataset.theme = prefersDark ? 'dark' : 'light'
+
+        // Listen for system theme changes
+        if (window.matchMedia) {
+          const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+          mediaQuery.addEventListener('change', (e) => {
+            // Only apply if we're still using system theme
+            app.$localStore?.getTheme()?.then((currentTheme) => {
+              if (currentTheme === 'system') {
+                document.documentElement.dataset.theme = e.matches ? 'dark' : 'light'
+                // Reapply Material You colors for the new theme
+                if (app.$dynamicColor) {
+                  app.$dynamicColor.initialize()
+                }
+              }
+            })
+          })
+        }
+      } else {
+        // Use explicit theme (dark or light) with Material You
+        document.documentElement.dataset.theme = theme
+      }
+
+      // Apply Material You colors for all themes if available
+      if (app.$dynamicColor) {
+        app.$dynamicColor.initialize()
+      }
+    } else {
+      // Default to system theme if no theme is stored
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      document.documentElement.dataset.theme = prefersDark ? 'dark' : 'light'
+
+      // Apply Material You colors for default theme
+      if (app.$dynamicColor) {
+        app.$dynamicColor.initialize()
+      }
     }
   })
 

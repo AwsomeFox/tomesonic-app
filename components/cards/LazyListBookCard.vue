@@ -1,47 +1,105 @@
 <template>
-  <div ref="card" :id="`book-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="rounded-sm z-10 cursor-pointer py-1" @click="clickCard">
-    <div class="h-full flex relative">
+  <!-- Loading state -->
+  <div
+    v-if="isLoading"
+    ref="card"
+    :id="`book-card-${index}`"
+    :style="{
+      minWidth: width + 'px',
+      maxWidth: width + 'px',
+      height: height + 'px',
+      animationDelay: animationDelay + 'ms'
+    }"
+    class="material-3-list-card rounded-2xl z-10 py-1 px-2 mx-0 bg-surface-container shadow-elevation-1 transition-all duration-300 ease-expressive loading-item"
+  >
+    <div class="h-full flex items-center relative">
+      <!-- Loading cover placeholder -->
+      <div class="list-card-cover relative">
+        <div class="w-full h-full bg-surface-variant animate-pulse" :class="squareAspectRatio ? 'rounded-lg' : 'rounded-xl'"></div>
+      </div>
+
+      <!-- Loading content placeholder -->
+      <div class="flex-grow pl-4 pr-4">
+        <div class="space-y-2">
+          <!-- Title placeholder -->
+          <div class="h-4 bg-surface-variant animate-pulse rounded-md w-3/4"></div>
+          <!-- Author placeholder -->
+          <div class="h-3 bg-surface-variant animate-pulse rounded-md w-1/2"></div>
+          <!-- Duration placeholder -->
+          <div class="h-3 bg-surface-variant animate-pulse rounded-md w-1/3"></div>
+        </div>
+      </div>
+
+      <!-- Play button placeholder -->
+      <div class="absolute top-2 right-4 z-20">
+        <div class="w-12 h-12 bg-surface-variant animate-pulse rounded-full"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Actual content -->
+  <div
+    v-else
+    ref="card"
+    :id="`book-card-${index}`"
+    :style="{
+      minWidth: width + 'px',
+      maxWidth: width + 'px',
+      height: height + 'px',
+      animationDelay: animationDelay + 'ms'
+    }"
+    class="material-3-list-card rounded-2xl z-10 cursor-pointer py-1 px-2 mx-0 bg-surface-container shadow-elevation-1 hover:shadow-elevation-2 transition-all duration-300 ease-expressive loaded-item"
+    @click="clickCard"
+  >
+    <div class="h-full flex items-center relative">
       <div class="list-card-cover relative">
         <!-- When cover image does not fill -->
-        <div v-show="showCoverBg" class="absolute top-0 left-0 w-full h-full overflow-hidden rounded-sm bg-primary">
+        <div v-show="showCoverBg" class="absolute top-0 left-0 w-full h-full overflow-hidden bg-primary" :class="squareAspectRatio ? 'rounded-lg' : 'rounded-xl'">
           <div class="absolute cover-bg" ref="coverBg" />
         </div>
 
         <div class="w-full h-full absolute top-0 left-0">
-          <img v-show="libraryItem" ref="cover" :src="bookCoverSrc" class="w-full h-full transition-opacity duration-300" :class="showCoverBg ? 'object-contain' : 'object-fill'" @load="imageLoaded" :style="{ opacity: imageReady ? 1 : 0 }" />
+          <img v-show="libraryItem" ref="cover" :src="bookCoverSrc" class="w-full h-full transition-opacity duration-300" :class="[showCoverBg ? 'object-contain' : 'object-fill', squareAspectRatio ? 'rounded-lg' : 'rounded-xl']" @load="imageLoaded" :style="{ opacity: imageReady ? 1 : 0 }" />
         </div>
 
-        <!-- No progress shown for collapsed series or podcasts in library -->
-        <div v-if="!isPodcast && !collapsedSeries" class="absolute bottom-0 left-0 h-1 shadow-sm max-w-full z-10 rounded-b" :class="itemIsFinished ? 'bg-success' : 'bg-yellow-400'" :style="{ width: coverWidth * userProgressPercent + 'px' }"></div>
+        <!-- Enhanced progress indicator -->
+        <div v-if="!isPodcast && !collapsedSeries" class="absolute bottom-0 left-0 h-1.5 shadow-elevation-2 max-w-full z-10" :class="[itemIsFinished ? 'bg-tertiary' : 'bg-primary', squareAspectRatio ? 'rounded-bl-lg rounded-br-lg' : 'rounded-bl-xl rounded-br-xl']" :style="{ width: coverWidth * userProgressPercent + 'px' }"></div>
       </div>
-      <div class="flex-grow pl-2" :class="showPlayButton ? 'pr-12' : 'pr-2'">
-        <p class="whitespace-normal line-clamp-2" :style="{ fontSize: 0.8 * sizeMultiplier + 'rem' }">
+      <div class="flex-grow pl-4" :class="showPlayButton ? (localLibraryItem || isLocal ? 'pr-28' : 'pr-20') : 'pr-4'">
+        <p class="whitespace-normal line-clamp-2 text-on-surface text-body-medium font-medium" :style="{ fontSize: 0.8 * sizeMultiplier + 'rem' }">
           <span v-if="seriesSequence">#{{ seriesSequence }}&nbsp;</span>{{ displayTitle }}
         </p>
-        <p class="truncate text-fg-muted" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displayAuthor }}</p>
-        <p v-if="displaySortLine" class="truncate text-fg-muted" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displaySortLine }}</p>
-        <p v-if="duration" class="truncate text-fg-muted" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ $elapsedPretty(duration) }}</p>
+        <p class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displayAuthor }}</p>
+        <p v-if="displaySortLine" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displaySortLine }}</p>
+        <p v-if="duration" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ $elapsedPretty(duration) }}</p>
 
-        <p v-if="numEpisodesIncomplete" class="truncate text-fg-muted" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
+        <p v-if="numEpisodesIncomplete" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
           {{ $getString('LabelNumEpisodesIncomplete', [numEpisodes, numEpisodesIncomplete]) }}
         </p>
-        <p v-else-if="numEpisodes" class="truncate text-fg-muted" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
+        <p v-else-if="numEpisodes" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
           {{ $getString('LabelNumEpisodes', [numEpisodes]) }}
         </p>
       </div>
-      <div v-if="showPlayButton" class="absolute top-0 bottom-0 right-0 h-full flex items-center justify-center z-20 pr-1">
-        <button type="button" class="relative rounded-full bg-fg-muted/50" :class="{ 'p-2': !playerIsStartingForThisMedia }" @click.stop.prevent="play">
-          <span v-if="!playerIsStartingForThisMedia" class="material-symbols text-2xl fill text-white">{{ playerIsPlaying ? 'pause' : 'play_arrow' }}</span>
-          <div v-else class="p-2 text-fg w-10 h-10 flex items-center justify-center bg-fg-muted/80 rounded-full overflow-hidden">
-            <svg class="animate-spin" style="width: 24px; height: 24px" viewBox="0 0 24 24">
+
+      <!-- Icon stack area - positioned to the left, stacking downward from top -->
+      <div v-if="localLibraryItem || isLocal" class="absolute top-2 right-20 z-20">
+        <div class="bg-success-container shadow-elevation-2 rounded-full p-1.5 border border-outline-variant border-opacity-30 w-6 h-6 flex items-center justify-center">
+          <span class="material-symbols text-xs text-on-success-container">download_done</span>
+        </div>
+      </div>
+
+      <!-- Add more icons here in the future, each with top-10, top-18, etc. for stacking -->
+
+      <!-- Play button - positioned to the right of icon stack -->
+      <div v-if="showPlayButton" class="absolute top-2 right-4 flex items-center justify-center z-20">
+        <button type="button" class="material-3-play-button rounded-full transition-all duration-200 ease-expressive shadow-elevation-2 hover:shadow-elevation-4" :class="{ 'w-12 h-12 bg-primary': !playerIsStartingForThisMedia, 'w-12 h-12 bg-surface-variant': playerIsStartingForThisMedia }" @click.stop.prevent="play">
+          <span v-if="!playerIsStartingForThisMedia" class="material-symbols text-2xl text-on-primary">{{ playerIsPlaying ? 'pause' : 'play_arrow' }}</span>
+          <div v-else class="flex items-center justify-center">
+            <svg class="animate-spin w-6 h-6 text-on-surface-variant" viewBox="0 0 24 24">
               <path fill="currentColor" d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z" />
             </svg>
           </div>
         </button>
-      </div>
-
-      <div v-if="localLibraryItem || isLocal" class="absolute top-0 right-0 z-20" :style="{ top: 0.375 * sizeMultiplier + 'rem', right: 0.375 * sizeMultiplier + 'rem', padding: `${0.1 * sizeMultiplier}rem ${0.25 * sizeMultiplier}rem` }">
-        <span class="material-symbols text-2xl text-success">download_done</span>
       </div>
     </div>
   </div>
@@ -81,7 +139,9 @@ export default {
       selected: false,
       isSelectionMode: false,
       showCoverBg: false,
-      localLibraryItem: null
+      localLibraryItem: null,
+      isLoading: true,
+      animationDelay: 0
     }
   },
   watch: {
@@ -279,6 +339,10 @@ export default {
     },
     setEntity(libraryItem) {
       this.libraryItem = libraryItem
+      // If entity is set after initial loading, stop loading state
+      if (this.isLoading && libraryItem) {
+        this.isLoading = false
+      }
     },
     setLocalLibraryItem(localLibraryItem) {
       // Server books may have a local library item
@@ -390,13 +454,22 @@ export default {
   },
   mounted() {
     this.setCSSProperties()
-    if (this.bookMount) {
-      this.setEntity(this.bookMount)
 
-      if (this.bookMount.localLibraryItem) {
-        this.setLocalLibraryItem(this.bookMount.localLibraryItem)
+    // Set animation delay based on index for staggered loading
+    this.animationDelay = (this.index % 10) * 80 // 80ms delay between items, reset every 10 items
+
+    // Simulate loading with realistic delay
+    setTimeout(() => {
+      this.isLoading = false
+
+      if (this.bookMount) {
+        this.setEntity(this.bookMount)
+
+        if (this.bookMount.localLibraryItem) {
+          this.setLocalLibraryItem(this.bookMount.localLibraryItem)
+        }
       }
-    }
+    }, 200 + this.animationDelay) // Base delay + staggered delay
   }
 }
 </script>
@@ -412,5 +485,119 @@ export default {
   width: var(--list-card-cover-width);
   min-width: var(--list-card-cover-width);
   max-width: var(--list-card-cover-width);
+  border-radius: 12px; /* Add consistent rounded corners */
+  overflow: hidden; /* Ensure images respect border radius */
+}
+
+/* Material 3 List Card Styles */
+.material-3-list-card {
+  transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1);
+  position: relative;
+  margin-bottom: 8px; /* Add spacing between list items */
+  width: calc(100% - 32px); /* Account for margins and ensure proper width */
+}
+
+.material-3-list-card::before {
+  content: '';
+  position: absolute;
+  border-radius: inherit;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  transition: background-color 200ms cubic-bezier(0.2, 0, 0, 1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.material-3-list-card:hover {
+  transform: translateY(-1px);
+}
+
+.material-3-list-card:hover::before {
+  background-color: rgba(var(--md-sys-color-on-surface), 0.08);
+}
+
+.material-3-list-card:active {
+  transform: translateY(0px);
+}
+
+.material-3-list-card:active::before {
+  background-color: rgba(var(--md-sys-color-on-surface), 0.12);
+}
+
+/* Ensure content stays above state layer */
+.material-3-list-card > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* Material 3 Play Button */
+.material-3-play-button {
+  transition: all 200ms cubic-bezier(0.2, 0, 0, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.material-3-play-button:hover {
+  transform: scale(1.05);
+}
+
+.material-3-play-button:active {
+  transform: scale(0.95);
+}
+
+/* Expressive easing definition */
+.ease-expressive {
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Line clamp utility */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Loading animations */
+.loading-item {
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+  animation: slideInLoading 600ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.loaded-item {
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+  animation: slideInLoaded 500ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+}
+
+@keyframes slideInLoading {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes slideInLoaded {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  60% {
+    opacity: 0.8;
+    transform: translateY(-2px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 </style>

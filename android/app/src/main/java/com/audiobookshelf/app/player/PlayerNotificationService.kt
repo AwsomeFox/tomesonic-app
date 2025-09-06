@@ -1002,6 +1002,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       Log.e(tag, "Exception clearing exoplayer $e")
     }
 
+    // Note: We don't clear DeviceManager.deviceData.lastPlaybackSession here
+    // because we want to preserve it for resume functionality
     currentPlaybackSession = null
     mediaProgressSyncer.reset()
     clientEventEmitter?.onPlaybackClosed()
@@ -1164,30 +1166,45 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       // First check for local playback session saved on device
       val lastPlaybackSession = DeviceManager.deviceData.lastPlaybackSession
       if (lastPlaybackSession != null) {
-        Log.d(tag, "Android Auto: Found local playback session, resuming: ${lastPlaybackSession.displayTitle}")
+        // Check if session has meaningful progress (not at the very beginning)
+        val progress = lastPlaybackSession.currentTime / lastPlaybackSession.duration
+        val isResumable = progress > 0.01
 
-        // Prepare the player in paused state with saved playback speed
-        val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
-        Handler(Looper.getMainLooper()).post {
-          if (mediaProgressSyncer.listeningTimerRunning) {
-            mediaProgressSyncer.stop {
-              preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+        if (isResumable) {
+          Log.d(tag, "Android Auto: Found local playback session, resuming: ${lastPlaybackSession.displayTitle} at ${(progress * 100).toInt()}%")
+
+          // If connected to server, check if server has newer progress for same media
+          if (DeviceManager.checkConnectivity(ctx)) {
+            Log.d(tag, "Android Auto: Checking server for potential newer session...")
+
+            checkServerSessionVsLocal(lastPlaybackSession) { shouldUseServer, serverSession ->
+              val sessionToUse = if (shouldUseServer && serverSession != null) {
+                Log.d(tag, "Android Auto: Server session is newer, using server session")
+                serverSession
+              } else {
+                Log.d(tag, "Android Auto: Using local session")
+                lastPlaybackSession
+              }
+
+              prepareSessionForAndroidAuto(sessionToUse, false)
             }
           } else {
-            mediaProgressSyncer.reset()
-            preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+            // No connectivity, use local session
+            prepareSessionForAndroidAuto(lastPlaybackSession, false)
           }
+          return
+        } else {
+          Log.d(tag, "Android Auto: Local session progress too low (${(progress * 100).toInt()}%), checking server instead")
         }
-        return
       }
 
-      // No local session found, check server for last session if connected
+      // No suitable local session found, check server for last session if connected
       if (!DeviceManager.checkConnectivity(ctx)) {
         Log.d(tag, "Android Auto: No connectivity, cannot check server for last session")
         return
       }
 
-      Log.d(tag, "Android Auto: No local session found, querying server for last session")
+      Log.d(tag, "Android Auto: No suitable local session found, querying server for last session")
 
       // Use getCurrentUser to get user data which should include session information
       apiHandler.getCurrentUser { user ->
@@ -1305,6 +1322,77 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       }
     } catch (e: Exception) {
       Log.e(tag, "Android Auto: Failed to resume from last session: ${e.message}")
+    }
+  }
+
+  // Helper function to check server session vs local session
+  private fun checkServerSessionVsLocal(localSession: PlaybackSession, callback: (Boolean, PlaybackSession?) -> Unit) {
+    apiHandler.getCurrentUser { user ->
+      if (user != null) {
+        try {
+          // Get the most recent media progress from user data
+          val mediaProgresses = user.mediaProgress ?: emptyList()
+          val latestProgress = mediaProgresses.maxByOrNull { it.lastUpdate }
+
+          if (latestProgress != null) {
+            // Check if it's the same media as local session
+            val isSameMedia = latestProgress.libraryItemId == localSession.libraryItemId &&
+                              latestProgress.episodeId == localSession.episodeId
+
+            if (isSameMedia) {
+              // Compare timestamps and progress
+              val serverTime = latestProgress.lastUpdate
+              val localTime = localSession.updatedAt
+              val serverProgress = latestProgress.currentTime
+              val localProgress = localSession.currentTime
+
+              Log.d(tag, "Session comparison - Server: time=$serverTime, progress=$serverProgress vs Local: time=$localTime, progress=$localProgress")
+
+              // Use server if it's newer and has progressed further
+              val shouldUseServer = serverTime > localTime && serverProgress > localProgress
+
+              if (shouldUseServer) {
+                // Get the library item to create server session
+                apiHandler.getLibraryItem(latestProgress.libraryItemId) { libraryItem ->
+                  if (libraryItem != null) {
+                    val playItemRequestPayload = getPlayItemRequestPayload(false)
+                    apiHandler.playLibraryItem(latestProgress.libraryItemId, latestProgress.episodeId, playItemRequestPayload) { serverSession ->
+                      if (serverSession != null) {
+                        serverSession.currentTime = latestProgress.currentTime
+                        callback(true, serverSession)
+                      } else {
+                        callback(false, null)
+                      }
+                    }
+                  } else {
+                    callback(false, null)
+                  }
+                }
+                return@getCurrentUser
+              }
+            }
+          }
+        } catch (e: Exception) {
+          Log.e(tag, "Error comparing server session: ${e.message}")
+        }
+      }
+      // Default to local session
+      callback(false, null)
+    }
+  }
+
+  // Helper function to prepare session for Android Auto
+  private fun prepareSessionForAndroidAuto(session: PlaybackSession, playWhenReady: Boolean) {
+    val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
+    Handler(Looper.getMainLooper()).post {
+      if (mediaProgressSyncer.listeningTimerRunning) {
+        mediaProgressSyncer.stop {
+          preparePlayer(session, playWhenReady, savedPlaybackSpeed)
+        }
+      } else {
+        mediaProgressSyncer.reset()
+        preparePlayer(session, playWhenReady, savedPlaybackSpeed)
+      }
     }
   }
 
@@ -1495,6 +1583,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           if (currentPlaybackSession == null) {
             Log.d(tag, "Android Auto: No active session found, attempting to resume from last session")
             resumeFromLastSessionForAndroidAuto()
+          } else {
+            Log.d(tag, "Android Auto: Active session found: ${currentPlaybackSession?.displayTitle}")
           }
 
           browseTree =
