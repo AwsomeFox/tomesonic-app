@@ -6,9 +6,7 @@
       fullscreen: showFullscreen,
       'ios-player': $platform === 'ios',
       'web-player': $platform === 'web',
-      'fixed pointer-events-none': true,
-      'player-expanding': isExpanding,
-      'player-collapsing': isCollapsing
+      'fixed pointer-events-none': true
     }"
     :style="{
       zIndex: showFullscreen ? 2147483647 : 70,
@@ -23,104 +21,38 @@
       position: 'fixed'
     }"
   >
-    <!-- Full screen player -->
-    <div
-      class="w-screen h-screen fixed top-0 left-0 bg-surface-dynamic fullscreen-player"
-      :class="{
-        'fullscreen-entering': isExpanding,
-        'fullscreen-exiting': isCollapsing,
-        'no-transition': isSwipeActive
-      }"
-      :style="{
-        opacity: swipeOpacity,
-        transform: fullscreenTransform,
-        zIndex: 2147483646,
-        width: '100vw',
-        height: '100vh',
-        top: '0',
-        left: '0',
-        pointerEvents: isSwipeActive || showFullscreen ? 'auto' : 'none',
-        willChange: isSwipeActive ? 'transform, opacity' : 'auto'
-      }"
-    >
+    <!-- Full screen player with complete background coverage using surface-container for distinction -->
+    <div v-if="showFullscreen" class="w-screen h-screen fixed top-0 left-0 pointer-events-auto bg-surface-dynamic" style="z-index: 2147483647; width: 100vw; height: 100vh">
       <!-- Additional background coverage to ensure nothing shows through -->
       <div class="w-screen h-screen absolute top-0 left-0 pointer-events-none bg-surface-dynamic" style="width: 100vw; height: 100vh; z-index: 0" />
 
-      <div
-        class="top-4 left-4 absolute"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: showFullscreen ? 1 : 0,
-          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
-        }"
-      >
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" @click="collapseFullscreen">
+      <div class="top-4 left-4 absolute">
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="collapseFullscreen">
           <span class="material-symbols text-2xl text-on-surface">keyboard_arrow_down</span>
         </button>
       </div>
-      <div
-        v-show="showCastBtn"
-        class="top-4 right-36 absolute"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: showFullscreen ? 1 : 0,
-          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
-        }"
-      >
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" @click="castClick">
+      <div v-show="showCastBtn" class="top-4 right-36 absolute">
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="castClick">
           <span class="material-symbols text-xl text-on-surface">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
         </button>
       </div>
-      <div
-        class="top-4 right-20 absolute"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: showFullscreen ? 1 : 0,
-          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
-        }"
-      >
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" :disabled="!chapters.length" @click="clickChaptersBtn">
+      <div class="top-4 right-20 absolute">
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" :disabled="!chapters.length" @click="clickChaptersBtn">
           <span class="material-symbols text-xl text-on-surface" :class="chapters.length ? '' : 'opacity-30'">format_list_bulleted</span>
         </button>
       </div>
-      <div
-        class="top-4 right-4 absolute"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: showFullscreen ? 1 : 0,
-          transform: showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
-        }"
-      >
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 active:scale-95" @click="showMoreMenuDialog = true">
+      <div class="top-4 right-4 absolute">
+        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="showMoreMenuDialog = true">
           <span class="material-symbols text-xl text-on-surface">more_vert</span>
         </button>
       </div>
-      <p
-        class="top-16 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-on-surface-variant opacity-75 text-xs"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: fullscreenContentOpacity * 0.75,
-          transform: fullscreenContentTransform
-        }"
-      >
-        {{ isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}
-      </p>
+      <p class="top-16 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-on-surface-variant opacity-75" style="font-size: 10px">{{ isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
 
       <!-- Fullscreen Cover Image -->
-      <div
-        class="cover-wrapper-fullscreen absolute z-30 pointer-events-auto flex justify-center items-center"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          top: '0',
-          left: '0',
-          right: '0',
-          bottom: '200px',
-          opacity: fullscreenContentOpacity,
-          transform: fullscreenContentTransform
-        }"
-        @click="collapseFullscreen"
-      >
-        <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
+      <div class="cover-wrapper absolute z-30 pointer-events-auto" @click="collapseFullscreen">
+        <div class="w-full h-full flex justify-center">
+          <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
+        </div>
 
         <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute top-0 left-0 w-full h-full flex items-center justify-center z-30" @click.stop="showSyncsFailedDialog">
           <span class="material-symbols text-error text-3xl">error</span>
@@ -128,31 +60,23 @@
       </div>
 
       <!-- Fullscreen Controls -->
-      <div
-        id="playerControls"
-        class="absolute left-6 right-6 bottom-6 mx-auto max-w-96"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: fullscreenContentOpacity,
-          transform: fullscreenContentTransform
-        }"
-      >
+      <div id="playerControls" class="absolute right-0 bottom-0 mx-auto" style="max-width: 414px">
         <!-- Main playback controls row -->
         <div class="flex items-center max-w-full mb-4" :class="playerSettings.lockUi ? 'justify-center' : 'justify-between'">
-          <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="isLoading" @click.stop="jumpChapterStart">
+          <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpChapterStart">
             <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">first_page</span>
           </button>
-          <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="isLoading" @click.stop="jumpBackwards">
+          <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpBackwards">
             <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
           </button>
-          <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 active:scale-95 mx-4 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+          <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-200 hover:shadow-elevation-4 active:scale-95 mx-4 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
             <span v-if="!isLoading" class="material-symbols text-2xl text-on-surface">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
             <widgets-spinner-icon v-else class="h-6 w-6" />
           </button>
-          <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="isLoading" @click.stop="jumpForward">
+          <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpForward">
             <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
           </button>
-          <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" :disabled="!nextChapter || isLoading" @click.stop="jumpNextChapter">
+          <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="!nextChapter || isLoading" @click.stop="jumpNextChapter">
             <span class="material-symbols text-xl text-on-surface" :class="nextChapter && !isLoading ? '' : 'opacity-30'">last_page</span>
           </button>
         </div>
@@ -160,35 +84,27 @@
         <!-- Secondary controls row - Sleep Timer, Speed, and Bookmarks -->
         <div v-show="showFullscreen && !playerSettings.lockUi" class="flex items-center justify-center space-x-8">
           <!-- Sleep Timer Button (under and between back and play buttons) -->
-          <button v-if="!sleepTimerRunning" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click.stop="$emit('showSleepTimer')">
+          <button v-if="!sleepTimerRunning" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
             <span class="material-symbols text-xl text-on-surface">bedtime</span>
           </button>
-          <button v-else class="px-3 py-2 rounded-full bg-tertiary-container text-on-tertiary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click.stop="$emit('showSleepTimer')">
+          <button v-else class="px-3 py-2 rounded-full bg-tertiary-container text-on-tertiary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
             <span class="text-sm font-mono font-medium">{{ sleepTimeRemainingPretty }}</span>
           </button>
 
           <!-- Speed Button (under and between play and forward buttons) -->
-          <button class="px-4 py-2 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click="$emit('selectPlaybackSpeed')">
+          <button class="px-4 py-2 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('selectPlaybackSpeed')">
             <span class="font-mono text-sm font-medium">{{ currentPlaybackRate }}x</span>
           </button>
 
           <!-- Bookmarks Button -->
-          <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95" @click="$emit('showBookmarks')">
+          <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('showBookmarks')">
             <span class="material-symbols text-xl text-on-surface" :class="{ fill: bookmarks.length }">bookmark</span>
           </button>
         </div>
       </div>
 
       <!-- Progress Bars Container - manages both tracks -->
-      <div
-        id="progressBarsContainer"
-        class="absolute left-6 right-6 bottom-48"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: fullscreenContentOpacity,
-          transform: fullscreenContentTransform
-        }"
-      >
+      <div v-if="showFullscreen" id="progressBarsContainer" class="absolute left-0 w-full px-6">
         <!-- Total Progress Track (shown when both tracks enabled) -->
         <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-6">
           <div class="flex mb-1">
@@ -224,15 +140,7 @@
       </div>
 
       <!-- Fullscreen Title and Author - positioned below progress bars -->
-      <div
-        class="title-author-texts absolute z-30 left-6 right-6 bottom-72 text-center overflow-hidden"
-        :class="{ 'no-transition': isSwipeActive }"
-        :style="{
-          opacity: fullscreenContentOpacity,
-          transform: fullscreenContentTransform
-        }"
-        @click="collapseFullscreen"
-      >
+      <div v-if="showFullscreen" class="title-author-texts absolute z-30 left-0 right-0 bottom-48 px-6 text-center overflow-hidden" @click="collapseFullscreen">
         <div ref="titlewrapper" class="overflow-hidden relative">
           <p class="title-text whitespace-nowrap text-on-surface text-lg font-medium">{{ title }}</p>
         </div>
@@ -241,19 +149,10 @@
     </div>
 
     <div
-      v-show="!showFullscreen"
       id="playerContent"
-      class="playerContainer w-full pointer-events-auto bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20 mini-player"
-      :class="{
-        'transition-all duration-500 ease-expressive': !isSwipeActive,
-        'mini-exiting': isExpanding,
-        'mini-entering': isCollapsing
-      }"
-      :style="{
-        transform: miniPlayerTransform,
-        opacity: miniPlayerOpacity,
-        zIndex: '2147483647'
-      }"
+      class="playerContainer w-full pointer-events-auto bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20"
+      :class="{ 'transition-all duration-500 ease-expressive': !isSwipeActive }"
+      :style="{ backgroundColor: showFullscreen ? '' : '', transform: showFullscreen ? 'translateY(-100vh)' : `translateY(${swipeOffset}px)`, zIndex: '2147483647' }"
       @touchstart="handleTouchStart"
       @touchmove="handleTouchMove"
       @touchend="handleTouchEnd"
@@ -275,25 +174,25 @@
 
         <!-- Controls -->
         <div class="flex items-center flex-shrink-0">
-          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95 mr-1" :disabled="isLoading" @click.stop="jumpBackwards">
+          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-1" :disabled="isLoading" @click.stop="jumpBackwards">
             <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
           </button>
-          <button class="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-2 active:scale-95 mx-2 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+          <button class="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95 mx-2 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
             <span v-if="!isLoading" class="material-symbols text-xl text-on-surface">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
             <widgets-spinner-icon v-else class="h-5 w-5" />
           </button>
-          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 active:scale-95 ml-1" :disabled="isLoading" @click.stop="jumpForward">
+          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-1" :disabled="isLoading" @click.stop="jumpForward">
             <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
           </button>
         </div>
       </div>
 
       <!-- Progress Bar -->
-      <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-2 left-0 w-full px-2">
+      <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-0 left-0 w-full px-2">
         <div ref="track" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
           <div ref="readyTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
           <div ref="bufferedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
-          <div ref="playedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-secondary transition-all duration-300" />
+          <div ref="playedTrack" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300" />
         </div>
       </div>
     </div>
@@ -343,8 +242,7 @@ export default {
       swipeOffset: 0,
       isSwipeActive: false,
       swipeStartY: 0,
-      swipeStartTime: 0,
-      swipeThreshold: 30, // pixels to trigger fullscreen - reduced for better responsiveness
+      swipeThreshold: 50, // pixels to trigger fullscreen
       playerSettings: {
         useChapterTrack: false,
         useTotalTrack: true,
@@ -359,9 +257,7 @@ export default {
       syncStatus: 0,
       showMoreMenuDialog: false,
       titleMarquee: null,
-      isRefreshingUI: false,
-      isExpanding: false,
-      isCollapsing: false
+      isRefreshingUI: false
     }
   },
   watch: {
@@ -379,88 +275,6 @@ export default {
   computed: {
     theme() {
       return document.documentElement.dataset.theme || 'dark'
-    },
-    swipeProgress() {
-      if (!this.isSwipeActive || this.swipeOffset >= 0) return 0
-      const screenHeight = window.innerHeight || 800
-      const maxDistance = screenHeight * 0.25
-      return Math.min(Math.abs(this.swipeOffset) / maxDistance, 1)
-    },
-    swipeOpacity() {
-      // During a swipe, interpolate opacity from 0 to 1 as swipe offset increases
-      if (this.isSwipeActive && this.swipeOffset < 0) {
-        // Fullscreen should start appearing immediately and reach full opacity at about 25% of screen
-        const screenHeight = window.innerHeight || 800
-        const maxDistance = screenHeight * 0.25 // Reach full opacity at 25% of screen height
-        const progress = Math.min(Math.abs(this.swipeOffset) / maxDistance, 1)
-        // Use ease-out curve for immediate feedback that slows down
-        const easedProgress = 1 - Math.pow(1 - progress, 3)
-        return easedProgress
-      }
-      // When not swiping, show fullscreen state
-      return this.showFullscreen ? 1 : 0
-    },
-    miniPlayerOpacity() {
-      // During a swipe, interpolate opacity from 1 to 0 as swipe offset increases
-      if (this.isSwipeActive && this.swipeOffset < 0) {
-        // Mini player should only fully disappear when it reaches near the top of screen
-        // Assuming mini player height is about 80px, start fading when it's 70% up the screen
-        const screenHeight = window.innerHeight || 800
-        const fadeDistance = screenHeight * 0.7 // Start strong fade at 70% of screen height
-        const progress = Math.min(Math.abs(this.swipeOffset) / fadeDistance, 1)
-        // Use a gentler curve for slower initial fade
-        const easedProgress = Math.pow(progress, 0.8)
-        return 1 - easedProgress
-      }
-      // When not swiping, show based on fullscreen state
-      return this.showFullscreen ? 0 : 1
-    },
-    miniPlayerTranslateY() {
-      // During swipe, apply transform based on offset
-      return this.isSwipeActive ? this.swipeOffset : 0
-    },
-    miniPlayerTransform() {
-      // During swipe, add subtle scale effect to mini player
-      if (this.isSwipeActive && this.swipeOffset < 0) {
-        const screenHeight = window.innerHeight || 800
-        const progress = Math.min(Math.abs(this.swipeOffset) / (screenHeight * 0.3), 1)
-        const scale = 1 - progress * 0.05 // Slight scale down as it moves up
-        return `translateY(${this.swipeOffset}px) scale(${scale})`
-      }
-      return 'translateY(0) scale(1)'
-    },
-    fullscreenTransform() {
-      // During a swipe, animate the fullscreen player with Material 3 motion
-      if (this.isSwipeActive && this.swipeOffset < 0) {
-        const progress = this.swipeProgress
-
-        // More pronounced Material 3-style transform for better visual feedback
-        const translateY = (1 - progress) * 20 // Start 20px down, move to 0 (more visible)
-        const scale = 0.9 + progress * 0.1 // Start at 0.9, scale to 1.0 (even more pronounced)
-
-        return `translateY(${translateY}px) scale(${scale})`
-      }
-      return 'translateY(0px) scale(1)'
-    },
-    fullscreenContentOpacity() {
-      // Content elements should fade in during swipe
-      if (this.isSwipeActive && this.swipeOffset < 0) {
-        const progress = this.swipeProgress
-        // Use a steeper curve for content fade-in - starts later but reaches full opacity quickly
-        return Math.pow(progress, 0.6)
-      }
-      return this.showFullscreen ? 1 : 0
-    },
-    fullscreenContentTransform() {
-      // Content elements should move smoothly during swipe
-      if (this.isSwipeActive && this.swipeOffset < 0) {
-        const progress = this.swipeProgress
-        // Content moves up slightly as it fades in, using the same Material 3 curve
-        const translateY = (1 - progress) * 8 // Start 8px down, move to 0
-        return `translateY(${translateY}px)`
-      }
-      // When not swiping, position based on fullscreen state
-      return this.showFullscreen ? 'translateY(0px)' : 'translateY(20px)'
     },
     menuItems() {
       const items = []
@@ -684,7 +498,6 @@ export default {
 
       this.isSwipeActive = true
       this.swipeStartY = event.touches[0].clientY
-      this.swipeStartTime = Date.now()
       this.swipeOffset = 0
     },
     handleTouchMove(event) {
@@ -700,17 +513,14 @@ export default {
       }
     },
     handleTouchEnd(event) {
-      if (!this.isSwipeActive) return
+      if (!this.isSwipeActive || this.showFullscreen) return
 
       this.isSwipeActive = false
-      const deltaY = this.swipeOffset
-      const velocity = (Math.abs(deltaY) / (Date.now() - this.swipeStartTime)) * 1000 // pixels per second
+      const currentY = event.changedTouches[0].clientY
+      const deltaY = this.swipeStartY - currentY
 
-      // Determine if we should expand or snap back
-      const shouldExpand = Math.abs(deltaY) > this.swipeThreshold || velocity > 500
-
-      if (shouldExpand && deltaY < 0) {
-        // Expand to fullscreen
+      if (deltaY > this.swipeThreshold) {
+        // Swipe was far enough, expand to fullscreen
         this.expandFullscreen()
       } else {
         // Snap back to mini player
@@ -761,18 +571,8 @@ export default {
     expandToFullscreen() {
       this.swipeOffset = 0
       this.isSwipeActive = false
-
-      // Start slide and fade transition
-      this.isExpanding = true
-
-      // Show fullscreen immediately
       this.showFullscreen = true
       if (this.titleMarquee) this.titleMarquee.reset()
-
-      // End animation state after animation completes
-      setTimeout(() => {
-        this.isExpanding = false
-      }, 400) // Match fade animation duration
 
       // Update track for total time bar if useChapterTrack is set
       this.$nextTick(() => {
@@ -782,16 +582,8 @@ export default {
     collapseFullscreen() {
       this.swipeOffset = 0
       this.isSwipeActive = false
-
-      // Start slide and fade transition
-      this.isCollapsing = true
-
-      // Wait for animation to complete before hiding fullscreen
-      setTimeout(() => {
-        this.showFullscreen = false
-        this.isCollapsing = false
-        if (this.titleMarquee) this.titleMarquee.reset()
-      }, 300) // Match fade animation duration
+      this.showFullscreen = false
+      if (this.titleMarquee) this.titleMarquee.reset()
 
       this.forceCloseDropdownMenu()
     },
@@ -1399,41 +1191,16 @@ export default {
   color: var(--md-sys-color-on-primary);
 }
 
-/* Material 3 Expressive Player Transition System */
-#streamContainer {
-  transition: all 300ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-#streamContainer.player-expanding {
-  transition: all 700ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
-}
-
-#streamContainer.player-collapsing {
-  transition: all 500ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
-}
-
 .playerContainer {
   height: 80px;
   background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
   backdrop-filter: blur(20px);
   border-radius: 16px;
   box-shadow: var(--md-sys-elevation-surface-container-high);
-  margin: 0;
-  transition: all 300ms cubic-bezier(0.2, 0, 0, 1);
-  transition-property: height, border-radius, background-color, backdrop-filter, transform;
+  margin: 0; /* Remove all margins - positioning handled by parent container */
 }
-
-.player-expanding .playerContainer {
-  transition: all 700ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
-}
-
-.player-collapsing .playerContainer {
-  transition: all 500ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
-}
-
 .fullscreen .playerContainer {
   height: 200px;
-  transform: scale(1);
 }
 #playerContent {
   box-shadow: var(--md-sys-elevation-surface-container-high);
@@ -1471,12 +1238,6 @@ export default {
   box-shadow: var(--md-sys-elevation-surface-container-low);
 }
 
-.cover-wrapper-fullscreen {
-  border-radius: 16px;
-  overflow: hidden;
-  box-shadow: var(--md-sys-elevation-surface-container-low);
-}
-
 .title-author-texts {
   transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   transition-property: left, bottom, width, height;
@@ -1501,6 +1262,21 @@ export default {
   font-size: 0.75rem;
   line-height: 1.2;
   color: var(--md-sys-color-on-surface-variant);
+}
+
+.fullscreen .title-author-texts {
+  bottom: 180px; /* Position below progress bars (260px) */
+  width: 80%;
+  left: 10%;
+  text-align: center;
+  padding-bottom: 0;
+  pointer-events: auto;
+}
+.fullscreen .title-author-texts .title-text {
+  font-size: clamp(0.8rem, calc(var(--cover-image-height) / 260 * 20), 1.3rem);
+}
+.fullscreen .title-author-texts .author-text {
+  font-size: clamp(0.6rem, calc(var(--cover-image-height) / 260 * 16), 1rem);
 }
 
 #playerControls {
@@ -1538,184 +1314,36 @@ export default {
   color: var(--md-sys-color-on-primary);
 }
 
-/* Material 3 Expressive Cover Animation - Removed, now uses simple layout */
-
-/* Fullscreen player controls styling */
-.fullscreen #playerControls .w-16 {
-  width: 4rem !important;
-  height: 4rem !important;
-}
-
-.fullscreen #playerControls .w-12 {
-  width: 3rem !important;
-  height: 3rem !important;
-}
-
-.fullscreen {
-  background: rgb(var(--md-sys-color-surface));
-}
-
-/* Disable transitions during swipe for real-time animation */
-.fullscreen-player .cover-wrapper.no-transition {
-  transition: none !important;
-  transform: unset !important;
-  opacity: unset !important;
-}
-
-.player-expanding .cover-wrapper {
-  transition: all 700ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
-}
-
-.player-collapsing .cover-wrapper {
-  transition: all 500ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
-}
-
 .fullscreen .cover-wrapper {
-  transform: scale(1) rotate(0deg) !important;
+  margin: 0 auto;
+  height: var(--cover-image-height);
+  width: var(--cover-image-width);
+  left: calc(50% - (calc(var(--cover-image-width)) / 2));
+  bottom: calc(50% + 120px - (calc(var(--cover-image-height)) / 2));
+  border-radius: 16px;
+  overflow: hidden;
 }
 
-/* Material 3 Player Slide & Fade Transitions */
-
-/* Full Screen Player Animations */
-.fullscreen-player {
-  transition-property: opacity;
-  transition-duration: 400ms;
-  transition-timing-function: cubic-bezier(0.05, 0.7, 0.1, 1);
-  position: fixed !important;
-  top: 0 !important;
-  left: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
+.fullscreen #playerControls {
+  width: 100%;
+  padding-left: 24px;
+  padding-right: 24px;
+  bottom: 24px; /* Move controls to very bottom with standard padding */
+  left: 0;
 }
-
-/* Disable transitions during swipe for immediate response */
-.fullscreen-player.no-transition {
-  transition: none !important;
-  animation: none !important;
+.fullscreen #playerControls .jump-icon {
+  font-size: 2.4rem;
 }
-
-/* Disable all transitions and animations in fullscreen mode to prevent unwanted animations */
-.fullscreen-player * {
-  transition: none !important;
-  animation: none !important;
+.fullscreen #playerControls .next-icon {
+  font-size: 2rem;
 }
-
-.fullscreen-player button {
-  transition: none !important;
-  animation: none !important;
+.fullscreen #playerControls .play-btn {
+  height: 65px;
+  width: 65px;
+  min-width: 65px;
+  min-height: 65px;
 }
-
-/* Fullscreen player entrance/exit animations removed for cleaner transitions */
-
-@keyframes fullscreenSlideIn {
-  0% {
-    opacity: 0;
-    transform: translateY(20px) scale(0.9);
-  }
-  60% {
-    opacity: 0.8;
-    transform: translateY(-2px) scale(1.01);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes fullscreenSlideOut {
-  0% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  40% {
-    opacity: 0.6;
-    transform: translateY(8px) scale(0.98);
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(20px) scale(0.9);
-  }
-}
-
-/* Mini Player Animations */
-.mini-player {
-  opacity: 1;
-  transform: translateY(0);
-  transition: all 600ms cubic-bezier(0.05, 0.7, 0.1, 1);
-  transition-property: opacity;
-}
-
-.mini-player.mini-exiting {
-  animation: miniSlideOut 600ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
-}
-
-.mini-player.mini-entering {
-  animation: miniSlideIn 400ms cubic-bezier(0.3, 0, 0.8, 0.15) forwards;
-}
-
-@keyframes miniSlideOut {
-  0% {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  70% {
-    opacity: 0.3;
-    transform: translateY(-30px);
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-50px);
-  }
-}
-
-@keyframes miniSlideIn {
-  0% {
-    opacity: 0;
-    transform: translateY(-50px);
-  }
-  30% {
-    opacity: 0.3;
-    transform: translateY(-30px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Fullscreen States - Simplified (animations removed) */
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes fadeOut {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-/* Complex morphing animations removed for cleaner transitions */
-
-/* Ensure smooth interaction during transitions */
-.mini-exiting,
-.mini-entering,
-.fullscreen-entering,
-.fullscreen-exiting {
-  pointer-events: none;
-}
-
-/* Re-enable pointer events when animations complete */
-.mini-player:not(.mini-exiting):not(.mini-entering),
-.fullscreen-player:not(.fullscreen-entering):not(.fullscreen-exiting) {
-  pointer-events: auto;
+.fullscreen #playerControls .play-btn .material-symbols {
+  font-size: 2.1rem;
 }
 </style>
