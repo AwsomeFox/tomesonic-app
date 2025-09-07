@@ -26,6 +26,36 @@ allprojects {
     }
 }
 
+// Ensure all Android subprojects use Java 17 toolchain/compile options so
+// third-party modules (for example in node_modules/@capacitor/*) don't
+// request a newer Java release than the project's jvmToolchain.
+subprojects {
+  afterEvaluate { proj ->
+    try {
+      if (proj.plugins.hasPlugin('com.android.library') || proj.plugins.hasPlugin('com.android.application')) {
+        proj.android.compileOptions {
+          sourceCompatibility JavaVersion.VERSION_17
+          targetCompatibility JavaVersion.VERSION_17
+        }
+                // Don't set JavaCompile.options.release because the Android Gradle
+                // plugin manages the bootclasspath; use sourceCompatibility/targetCompatibility
+                // and kotlin toolchain instead.
+      }
+
+      // If the module applies Kotlin Android plugin, force Kotlin JVM toolchain to 17
+      proj.plugins.withId('kotlin-android') {
+        try {
+          proj.kotlin.jvmToolchain(17)
+        } catch (e) {
+          // ignore if kotlin extension not available yet
+        }
+      }
+    } catch (ignored) {
+      // ignore evaluation issues for non-android projects
+    }
+  }
+}
+
 tasks.register('clean', Delete) {
   delete rootProject.layout.buildDirectory
 }
