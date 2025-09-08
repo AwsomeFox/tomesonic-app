@@ -58,12 +58,16 @@
 
     <!-- Material 3 Play button with enhanced visibility -->
     <div v-if="showPlayButton" class="absolute bottom-2 left-2 z-30">
-      <ui-icon-btn :icon="streamIsPlaying ? 'pause_circle' : 'play_circle'" variant="filled" color="primary" size="large" class="shadow-elevation-3 ring-2 ring-surface ring-opacity-20" @click.stop.prevent="play" />
+      <button type="button" class="material-3-play-button rounded-full transition-all duration-200 ease-expressive shadow-elevation-2 hover:shadow-elevation-4 w-12 h-12 bg-primary" @click.stop.prevent="play">
+        <span class="material-symbols text-2xl text-on-primary">{{ streamIsPlaying ? 'pause' : 'play_arrow' }}</span>
+      </button>
     </div>
 
     <!-- Play/pause button for podcast episode with enhanced visibility -->
     <div v-if="recentEpisode" class="absolute z-30 top-0 left-0 bottom-0 right-0 m-auto flex items-center justify-center" @click.stop="playEpisode">
-      <ui-icon-btn v-if="!playerIsStartingForThisMedia" :icon="streamIsPlaying ? 'pause_circle' : 'play_circle'" variant="filled" color="primary" size="large" class="shadow-elevation-4 ring-4 ring-surface ring-opacity-30" />
+      <button v-if="!playerIsStartingForThisMedia" type="button" class="material-3-play-button rounded-full transition-all duration-200 ease-expressive shadow-elevation-2 hover:shadow-elevation-4 w-12 h-12 bg-primary" @click.stop.prevent="playEpisode">
+        <span class="material-symbols text-2xl text-on-primary">{{ streamIsPlaying ? 'pause' : 'play_arrow' }}</span>
+      </button>
       <div v-else class="w-12 h-12 bg-surface-container rounded-full flex items-center justify-center shadow-elevation-3 ring-2 ring-surface ring-opacity-20">
         <svg class="animate-spin text-primary" style="width: 24px; height: 24px" viewBox="0 0 24 24">
           <path fill="currentColor" d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z" />

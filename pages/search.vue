@@ -3,12 +3,12 @@
     <div class="px-4 py-6">
       <!-- Material 3 Search Field -->
       <div class="relative w-full">
-        <div class="relative w-full h-14 bg-surface-container-high rounded-full flex items-center px-4 shadow-elevation-1">
+        <div class="relative w-full h-14 bg-transparent rounded-full flex items-center px-4 border-2 shadow-elevation-1" :class="searchBorderClass">
           <!-- Search Icon -->
-          <span class="material-symbols text-on-surface-variant mr-3" style="font-size: 1.25rem">search</span>
+          <button @click="setFocus" class="material-symbols text-on-surface-variant mr-3 cursor-pointer hover:text-on-surface transition-colors duration-200" style="font-size: 1.25rem; background: none; border: none; padding: 0">search</button>
 
           <!-- Search Input -->
-          <input ref="input" v-model="search" @input="updateSearch($event.target.value)" type="text" :placeholder="$strings.ButtonSearch" class="flex-1 bg-transparent outline-none text-on-surface text-body-large placeholder:text-on-surface-variant" autocomplete="off" autocorrect="off" autocapitalize="none" />
+          <input ref="input" v-model="search" @input="updateSearch($event.target.value)" @focus="onFocus" @blur="onBlur" type="text" :placeholder="$strings.ButtonSearch" class="flex-1 bg-transparent outline-none text-on-surface text-body-large placeholder:text-on-surface-variant" autocomplete="off" autocorrect="off" autocapitalize="none" />
 
           <!-- Clear Button -->
           <button v-if="search" @click="clearSearch" class="ml-2 w-6 h-6 rounded-full flex items-center justify-center state-layer hover:bg-on-surface hover:bg-opacity-8 focus:bg-on-surface focus:bg-opacity-12 transition-all duration-200 ease-standard">
@@ -89,6 +89,7 @@ export default {
       searchTimeout: null,
       lastSearch: null,
       isFetching: false,
+      focused: false,
       bookResults: [],
       podcastResults: [],
       seriesResults: [],
@@ -106,6 +107,13 @@ export default {
     },
     totalResults() {
       return this.bookResults.length + this.seriesResults.length + this.authorResults.length + this.podcastResults.length + this.narratorResults.length + this.tagResults.length
+    },
+    searchBorderClass() {
+      if (this.focused) {
+        return 'border-primary'
+      } else {
+        return 'border-outline'
+      }
     }
   },
   methods: {
@@ -160,6 +168,20 @@ export default {
           this.$refs.input.focus()
         }
       }, 100)
+    },
+    onFocus() {
+      this.focused = true
+    },
+    onBlur() {
+      this.focused = false
+    },
+    setFocus() {
+      this.$nextTick(() => {
+        if (this.$refs.input) {
+          this.$refs.input.focus()
+          this.$refs.input.click() // Additional click to ensure keyboard opens on mobile
+        }
+      })
     }
   },
   mounted() {
@@ -167,7 +189,7 @@ export default {
       this.search = this.$store.state.globals.lastSearch
       this.runSearch(this.search)
     } else {
-      this.$nextTick(this.setFocus())
+      this.$nextTick(() => this.setFocus())
     }
   }
 }

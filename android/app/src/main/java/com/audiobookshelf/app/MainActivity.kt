@@ -88,6 +88,8 @@ class MainActivity : BridgeActivity() {
        document.documentElement.style.setProperty('--safe-area-inset-bottom', '${bottom}px');
        document.documentElement.style.setProperty('--safe-area-inset-left', '${left}px');
        document.documentElement.style.setProperty('--safe-area-inset-right', '${right}px');
+       document.documentElement.setAttribute('data-safe-area-ready', 'true');
+       console.log('[Android] Set safe area insets - top: ${top}px, bottom: ${bottom}px');
       """.trimIndent()
       webView.evaluateJavascript(js, null)
 

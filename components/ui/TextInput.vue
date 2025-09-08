@@ -67,7 +67,7 @@ export default {
 
       // Material 3 input variants
       if (this.variant === 'filled') {
-        classes.push('bg-surface-container')
+        classes.push('bg-surface-container-highest')
         classes.push('rounded-t-md')
         classes.push('border-b-2')
         if (this.focused) {
@@ -78,12 +78,8 @@ export default {
           classes.push('border-outline-variant')
         }
       } else if (this.variant === 'outlined') {
-        // Use better background for all outlined inputs
-        if (this.readonly) {
-          classes.push('bg-dialog-button')
-        } else {
-          classes.push('bg-dialog-button') // Use same better background for regular inputs too
-        }
+        // Material 3 outlined inputs should have transparent background
+        classes.push('bg-transparent')
         classes.push('rounded-md')
         classes.push('border-2')
         if (this.focused) {

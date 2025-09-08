@@ -292,6 +292,69 @@ export default ({ store, app }, inject) => {
   // Expose helper so other parts of the app can toggle native status bar theme
   Vue.prototype.$updateStatusBarTheme = updateNativeStatusBarStyle
 
+  // Ensure safe-area CSS variables are present and notify the document when ready.
+  // Some WebView environments may not have them immediately available on first paint.
+  const ensureSafeAreaVars = () => {
+    const maxAttempts = 50 // Increased from 20 to 50 (5 seconds total)
+    let attempts = 0
+
+    function check() {
+      attempts++
+      const top = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top')
+      const bottom = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')
+
+      // Check if we have meaningful values (not empty, not "0px", not just whitespace)
+      const hasTop = top && top.trim() && top.trim() !== '0px'
+      const hasBottom = bottom && bottom.trim() && bottom.trim() !== '0px'
+
+      if (hasTop || hasBottom || attempts >= maxAttempts) {
+        // Mark that safe-area values are available (or we've given up)
+        document.documentElement.setAttribute('data-safe-area-ready', 'true')
+        console.log(`[SafeArea] Ready after ${attempts} attempts. Top: ${top}, Bottom: ${bottom}`)
+        return
+      }
+
+      // On Android, also try to trigger the inset listener by requesting layout
+      if (attempts % 5 === 0 && window.requestAnimationFrame) {
+        window.requestAnimationFrame(() => {
+          if (document.documentElement.style) {
+            document.documentElement.style.transform = 'translateZ(0)'
+            setTimeout(() => {
+              document.documentElement.style.transform = ''
+            }, 10)
+          }
+        })
+      }
+
+      setTimeout(check, 100)
+    }
+
+    if (typeof window !== 'undefined') check()
+  }
+
+  // Use different initialization strategies for different platforms
+  if (Capacitor.getPlatform() === 'android') {
+    // For Android, wait for the next tick to ensure the WebView is fully initialized
+    setTimeout(() => {
+      ensureSafeAreaVars()
+    }, 50)
+
+    // Also set fallback values immediately to prevent layout issues
+    if (typeof window !== 'undefined') {
+      // Set reasonable fallback values for Android devices
+      const docStyle = document.documentElement.style
+      if (!docStyle.getPropertyValue('--safe-area-inset-top')) {
+        docStyle.setProperty('--safe-area-inset-top', '24px') // Typical Android status bar
+      }
+      if (!docStyle.getPropertyValue('--safe-area-inset-bottom')) {
+        docStyle.setProperty('--safe-area-inset-bottom', '0px') // Will be updated by native
+      }
+    }
+  } else {
+    // For other platforms, initialize immediately
+    ensureSafeAreaVars()
+  }
+
   // Set theme with Material You integration for all themes
   app.$localStore?.getTheme()?.then((theme) => {
     if (theme) {
@@ -316,26 +379,8 @@ export default ({ store, app }, inject) => {
                 updateNativeStatusBarStyle(e.matches)
               }
 
-              // Ensure safe-area CSS variables are present and notify the document when ready.
-              // Some WebView environments may not have them immediately available on first paint.
-              ;(function ensureSafeAreaVars() {
-                const maxAttempts = 20
-                let attempts = 0
-
-                function check() {
-                  attempts++
-                  const top = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top')
-                  const bottom = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')
-                  if ((top && top.trim()) || (bottom && bottom.trim()) || attempts >= maxAttempts) {
-                    // Mark that safe-area values are available (or we've given up)
-                    document.documentElement.setAttribute('data-safe-area-ready', 'true')
-                    return
-                  }
-                  setTimeout(check, 100)
-                }
-
-                if (typeof window !== 'undefined') check()
-              })()
+              // Re-check safe area variables when theme changes (in case they weren't ready initially)
+              ensureSafeAreaVars()
             })
           })
         }

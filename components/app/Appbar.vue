@@ -131,6 +131,7 @@ export default {
         const px = parseFloat(raw.replace('px', '')) || 0
         const cap = Math.min(Math.max(px, 0), 64) // cap at 64px to avoid excessive spacing
         this.topPadding = `${cap}px`
+        console.log('[AppBar] Updated top padding to:', this.topPadding)
       } catch (e) {
         this.topPadding = '0px'
       }
@@ -138,6 +139,7 @@ export default {
 
     // Run immediately and when the safe-area-ready attribute toggles
     updateTopPadding()
+
     // Observe attribute set by plugin to know when CSS vars are injected
     this._safeAreaObserver = new MutationObserver((mutations) => {
       for (const m of mutations) {
@@ -147,6 +149,20 @@ export default {
       }
     })
     this._safeAreaObserver.observe(document.documentElement, { attributes: true })
+
+    // Also periodically check for changes in the first few seconds after mount
+    // This helps catch cases where the native code sets variables after component mount
+    let checkCount = 0
+    const periodicCheck = () => {
+      if (checkCount < 30) {
+        // Check for 3 seconds (30 * 100ms)
+        updateTopPadding()
+        checkCount++
+        setTimeout(periodicCheck, 100)
+      }
+    }
+    periodicCheck()
+
     window.addEventListener('resize', updateTopPadding)
   },
   beforeDestroy() {

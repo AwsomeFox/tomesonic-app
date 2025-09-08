@@ -169,6 +169,20 @@ export default {
     this.safeAreaObserver.observe(document.documentElement, { attributes: true })
 
     updateBottomNavHeight()
+
+    // Also periodically check for changes in the first few seconds after mount
+    // This helps catch cases where the native code sets variables after component mount
+    let checkCount = 0
+    const periodicCheck = () => {
+      if (checkCount < 30) {
+        // Check for 3 seconds (30 * 100ms)
+        updateBottomNavHeight()
+        checkCount++
+        setTimeout(periodicCheck, 100)
+      }
+    }
+    periodicCheck()
+
     window.addEventListener('resize', updateBottomNavHeight)
   },
   beforeDestroy() {

@@ -1,12 +1,5 @@
 <template>
-  <button
-    class="material-3-icon-btn state-layer rounded-full flex items-center justify-center relative transition-all duration-200 ease-standard"
-    :disabled="disabled || loading"
-    :class="className"
-    :type="type"
-    @mousedown.prevent
-    @click="clickBtn"
-  >
+  <button class="material-3-icon-btn state-layer rounded-full flex items-center justify-center relative transition-all duration-200 ease-standard" :disabled="disabled || loading" :class="className" :type="type" @mousedown.prevent @click="clickBtn">
     <div v-if="loading" class="text-on-surface absolute top-0 left-0 w-full h-full flex items-center justify-center">
       <svg class="animate-spin" style="width: 24px; height: 24px" viewBox="0 0 24 24">
         <path fill="currentColor" d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z" />
@@ -58,7 +51,7 @@ export default {
 
       // Material 3 icon button variants
       if (this.variant === 'filled') {
-        classes.push('bg-primary text-on-primary shadow-elevation-0 hover:shadow-elevation-1')
+        classes.push('bg-primary text-on-primary shadow-elevation-2 hover:shadow-elevation-4')
       } else if (this.variant === 'tonal') {
         classes.push('bg-secondary-container text-on-secondary-container')
       } else if (this.variant === 'outlined') {
@@ -78,8 +71,8 @@ export default {
     iconClass() {
       var classes = []
 
-      // Fill style
-      if (!this.outlined) {
+      // Fill style - only for outlined variant
+      if (this.outlined) {
         classes.push('fill')
       }
 
@@ -96,6 +89,8 @@ export default {
         // Standard variant
         if (this.color === 'primary') {
           classes.push('text-primary')
+        } else if (this.color === 'secondary') {
+          classes.push('text-secondary')
         } else if (this.color === 'error') {
           classes.push('text-error')
         } else {
@@ -114,7 +109,7 @@ export default {
 
       // Specific icon adjustments
       if (this.icon === 'edit') return '1.25rem'
-      return '1.5rem'
+      return '1.875rem' // Match text-2xl (1.875rem) used in list item
     }
   },
   methods: {
