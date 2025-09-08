@@ -38,7 +38,9 @@ html, body {
 }
 
 body {
-  @apply bg-transparent-safe text-on-surface;
+  /* @apply bg-transparent-safe text-on-surface; */
+  background-color: rgb(var(--md-sys-color-surface));
+  color: rgb(var(--md-sys-color-on-surface));
 }
 
 .layout-wrapper {
@@ -50,7 +52,8 @@ body {
 }
 
 #content {
-  @apply bg-transparent-safe;
+  background-color: rgb(var(--md-sys-color-surface));
+  color: rgb(var(--md-sys-color-on-surface));
   /* Subtract only the status bar / top safe inset so views can extend under
      the bottom navigation bar when present. */
   height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));

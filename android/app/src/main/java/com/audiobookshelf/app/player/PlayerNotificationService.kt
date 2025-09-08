@@ -405,150 +405,173 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           playWhenReady: Boolean,
           playbackRate: Float?
   ) {
-    if (!isStarted) {
-      Log.i(tag, "preparePlayer: foreground service not started - Starting service --")
-      Intent(ctx, PlayerNotificationService::class.java).also { intent ->
-        ContextCompat.startForegroundService(ctx, intent)
+    // If we are switching to a different playback session ensure the previous session is
+    // finalized and synced (or queued) before starting the new one. This guarantees progress
+    // for the previous item is saved remotely or queued if offline.
+    fun doPreparePlayer(
+            playbackSession: PlaybackSession,
+            playWhenReady: Boolean,
+            playbackRate: Float?
+    ) {
+      if (!isStarted) {
+        Log.i(tag, "preparePlayer: foreground service not started - Starting service --")
+        Intent(ctx, PlayerNotificationService::class.java).also { intent ->
+          ContextCompat.startForegroundService(ctx, intent)
+        }
+      }
+
+      // TODO: When an item isFinished the currentTime should be reset to 0
+      //        will reset the time if currentTime is within 5s of duration (for android auto)
+      Log.d(
+              tag,
+              "Prepare Player Session Current Time=${playbackSession.currentTime}, Duration=${playbackSession.duration}"
+      )
+      if (playbackSession.duration - playbackSession.currentTime < 5) {
+        Log.d(tag, "Prepare Player Session is finished, so restart it")
+        playbackSession.currentTime = 0.0
+      }
+
+      isClosed = false
+
+      val metadata = playbackSession.getMediaMetadataCompat(ctx)
+      mediaSession.setMetadata(metadata)
+      val mediaItems = playbackSession.getMediaItems(ctx)
+      val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: 1f
+      initialPlaybackRate = playbackRate
+
+      // Set actions on Android Auto like jump forward/backward
+      setMediaSessionConnectorCustomActions(playbackSession)
+
+      playbackSession.mediaPlayer = getMediaPlayer()
+
+      if (playbackSession.mediaPlayer == PLAYER_CAST && playbackSession.isLocal) {
+        Log.w(tag, "Cannot cast local media item - switching player")
+        currentPlaybackSession = null
+        switchToPlayer(false)
+        playbackSession.mediaPlayer = getMediaPlayer()
+      }
+
+      if (playbackSession.mediaPlayer == PLAYER_CAST) {
+        // If cast-player is the first player to be used
+        mediaSessionConnector.setPlayer(castPlayer)
+        playerNotificationManager.setPlayer(castPlayer)
+      }
+
+      currentPlaybackSession = playbackSession
+      DeviceManager.setLastPlaybackSession(
+              playbackSession
+      ) // Save playback session to use when app is closed
+
+      AbsLogger.info("PlayerNotificationService", "preparePlayer: Started playback session for item ${currentPlaybackSession?.mediaItemId}. MediaPlayer ${currentPlaybackSession?.mediaPlayer}")
+      // Notify client
+      clientEventEmitter?.onPlaybackSession(playbackSession)
+
+      // Update widget
+      DeviceManager.widgetUpdater?.onPlayerChanged(this)
+
+      if (mediaItems.isEmpty()) {
+        Log.e(tag, "Invalid playback session no media items to play")
+        currentPlaybackSession = null
+        return
+      }
+
+      if (mPlayer == currentPlayer) {
+        val mediaSource: MediaSource
+
+        if (playbackSession.isLocal) {
+          AbsLogger.info("PlayerNotificationService", "preparePlayer: Playing local item ${currentPlaybackSession?.mediaItemId}.")
+          val dataSourceFactory = DefaultDataSource.Factory(ctx)
+
+          val extractorsFactory = DefaultExtractorsFactory()
+          if (DeviceManager.deviceData.deviceSettings?.enableMp3IndexSeeking == true) {
+            // @see
+            // https://exoplayer.dev/troubleshooting.html#why-is-seeking-inaccurate-in-some-mp3-files
+            extractorsFactory.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
+          }
+
+          mediaSource =
+                  ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
+                          .createMediaSource(mediaItems[0])
+        } else if (!playbackSession.isHLS) {
+          AbsLogger.info("PlayerNotificationService", "preparePlayer: Direct playing item ${currentPlaybackSession?.mediaItemId}.")
+          val dataSourceFactory = DefaultHttpDataSource.Factory()
+
+          val extractorsFactory = DefaultExtractorsFactory()
+          if (DeviceManager.deviceData.deviceSettings?.enableMp3IndexSeeking == true) {
+            // @see
+            // https://exoplayer.dev/troubleshooting.html#why-is-seeking-inaccurate-in-some-mp3-files
+            extractorsFactory.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
+          }
+
+          dataSourceFactory.setUserAgent(channelId)
+          mediaSource =
+                  ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
+                          .createMediaSource(mediaItems[0])
+        } else {
+          AbsLogger.info("PlayerNotificationService", "preparePlayer: Playing HLS stream of item ${currentPlaybackSession?.mediaItemId}.")
+          val dataSourceFactory = DefaultHttpDataSource.Factory()
+          dataSourceFactory.setUserAgent(channelId)
+          dataSourceFactory.setDefaultRequestProperties(
+                  hashMapOf("Authorization" to "Bearer ${DeviceManager.token}")
+          )
+          mediaSource = HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItems[0])
+        }
+        mPlayer.setMediaSource(mediaSource)
+
+        // Add remaining media items if multi-track
+        if (mediaItems.size > 1) {
+          currentPlayer.addMediaItems(mediaItems.subList(1, mediaItems.size))
+          Log.d(tag, "currentPlayer total media items ${currentPlayer.mediaItemCount}")
+
+          val currentTrackIndex = playbackSession.getCurrentTrackIndex()
+          val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
+          Log.d(
+                tag,
+                "currentPlayer current track index $currentTrackIndex & current track time $currentTrackTime"
+          )
+          currentPlayer.seekTo(currentTrackIndex, currentTrackTime)
+        } else {
+          currentPlayer.seekTo(playbackSession.currentTimeMs)
+        }
+
+        Log.d(
+                tag,
+                "Prepare complete for session ${currentPlaybackSession?.displayTitle} | ${currentPlayer.mediaItemCount}"
+        )
+        currentPlayer.playWhenReady = playWhenReady
+        currentPlayer.setPlaybackSpeed(playbackRateToUse)
+
+        currentPlayer.prepare()
+      } else if (castPlayer != null) {
+        val currentTrackIndex = playbackSession.getCurrentTrackIndex()
+        val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
+        val mediaType = playbackSession.mediaType
+        Log.d(tag, "Loading cast player $currentTrackIndex $currentTrackTime $mediaType")
+
+        castPlayer?.load(
+                mediaItems,
+                currentTrackIndex,
+                currentTrackTime,
+                playWhenReady,
+                playbackRateToUse,
+                mediaType
+        )
       }
     }
 
-    // TODO: When an item isFinished the currentTime should be reset to 0
-    //        will reset the time if currentTime is within 5s of duration (for android auto)
-    Log.d(
-            tag,
-            "Prepare Player Session Current Time=${playbackSession.currentTime}, Duration=${playbackSession.duration}"
-    )
-    if (playbackSession.duration - playbackSession.currentTime < 5) {
-      Log.d(tag, "Prepare Player Session is finished, so restart it")
-      playbackSession.currentTime = 0.0
-    }
-
-    isClosed = false
-
-    val metadata = playbackSession.getMediaMetadataCompat(ctx)
-    mediaSession.setMetadata(metadata)
-    val mediaItems = playbackSession.getMediaItems(ctx)
-    val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: 1f
-    initialPlaybackRate = playbackRate
-
-    // Set actions on Android Auto like jump forward/backward
-    setMediaSessionConnectorCustomActions(playbackSession)
-
-    playbackSession.mediaPlayer = getMediaPlayer()
-
-    if (playbackSession.mediaPlayer == PLAYER_CAST && playbackSession.isLocal) {
-      Log.w(tag, "Cannot cast local media item - switching player")
-      currentPlaybackSession = null
-      switchToPlayer(false)
-      playbackSession.mediaPlayer = getMediaPlayer()
-    }
-
-    if (playbackSession.mediaPlayer == PLAYER_CAST) {
-      // If cast-player is the first player to be used
-      mediaSessionConnector.setPlayer(castPlayer)
-      playerNotificationManager.setPlayer(castPlayer)
-    }
-
-    currentPlaybackSession = playbackSession
-    DeviceManager.setLastPlaybackSession(
-            playbackSession
-    ) // Save playback session to use when app is closed
-
-    AbsLogger.info("PlayerNotificationService", "preparePlayer: Started playback session for item ${currentPlaybackSession?.mediaItemId}. MediaPlayer ${currentPlaybackSession?.mediaPlayer}")
-    // Notify client
-    clientEventEmitter?.onPlaybackSession(playbackSession)
-
-    // Update widget
-    DeviceManager.widgetUpdater?.onPlayerChanged(this)
-
-    if (mediaItems.isEmpty()) {
-      Log.e(tag, "Invalid playback session no media items to play")
-      currentPlaybackSession = null
+    // If there's an active session and it's different from the new one, finalize it first.
+    val previousSession = currentPlaybackSession
+    if (previousSession != null && previousSession.mediaItemId != playbackSession.mediaItemId) {
+      AbsLogger.info("PlayerNotificationService", "preparePlayer: Switching from ${previousSession.mediaItemId} to ${playbackSession.mediaItemId}. Finalizing previous session first.")
+      // Stop and force a sync/flush of the previous session. Once complete, proceed to prepare the new session.
+      mediaProgressSyncer.stop(true) {
+        doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+      }
       return
     }
 
-    if (mPlayer == currentPlayer) {
-      val mediaSource: MediaSource
-
-      if (playbackSession.isLocal) {
-        AbsLogger.info("PlayerNotificationService", "preparePlayer: Playing local item ${currentPlaybackSession?.mediaItemId}.")
-        val dataSourceFactory = DefaultDataSource.Factory(ctx)
-
-        val extractorsFactory = DefaultExtractorsFactory()
-        if (DeviceManager.deviceData.deviceSettings?.enableMp3IndexSeeking == true) {
-          // @see
-          // https://exoplayer.dev/troubleshooting.html#why-is-seeking-inaccurate-in-some-mp3-files
-          extractorsFactory.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
-        }
-
-        mediaSource =
-                ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
-                        .createMediaSource(mediaItems[0])
-      } else if (!playbackSession.isHLS) {
-        AbsLogger.info("PlayerNotificationService", "preparePlayer: Direct playing item ${currentPlaybackSession?.mediaItemId}.")
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-
-        val extractorsFactory = DefaultExtractorsFactory()
-        if (DeviceManager.deviceData.deviceSettings?.enableMp3IndexSeeking == true) {
-          // @see
-          // https://exoplayer.dev/troubleshooting.html#why-is-seeking-inaccurate-in-some-mp3-files
-          extractorsFactory.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
-        }
-
-        dataSourceFactory.setUserAgent(channelId)
-        mediaSource =
-                ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
-                        .createMediaSource(mediaItems[0])
-      } else {
-        AbsLogger.info("PlayerNotificationService", "preparePlayer: Playing HLS stream of item ${currentPlaybackSession?.mediaItemId}.")
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-        dataSourceFactory.setUserAgent(channelId)
-        dataSourceFactory.setDefaultRequestProperties(
-                hashMapOf("Authorization" to "Bearer ${DeviceManager.token}")
-        )
-        mediaSource = HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItems[0])
-      }
-      mPlayer.setMediaSource(mediaSource)
-
-      // Add remaining media items if multi-track
-      if (mediaItems.size > 1) {
-        currentPlayer.addMediaItems(mediaItems.subList(1, mediaItems.size))
-        Log.d(tag, "currentPlayer total media items ${currentPlayer.mediaItemCount}")
-
-        val currentTrackIndex = playbackSession.getCurrentTrackIndex()
-        val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
-        Log.d(
-                tag,
-                "currentPlayer current track index $currentTrackIndex & current track time $currentTrackTime"
-        )
-        currentPlayer.seekTo(currentTrackIndex, currentTrackTime)
-      } else {
-        currentPlayer.seekTo(playbackSession.currentTimeMs)
-      }
-
-      Log.d(
-              tag,
-              "Prepare complete for session ${currentPlaybackSession?.displayTitle} | ${currentPlayer.mediaItemCount}"
-      )
-      currentPlayer.playWhenReady = playWhenReady
-      currentPlayer.setPlaybackSpeed(playbackRateToUse)
-
-      currentPlayer.prepare()
-    } else if (castPlayer != null) {
-      val currentTrackIndex = playbackSession.getCurrentTrackIndex()
-      val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
-      val mediaType = playbackSession.mediaType
-      Log.d(tag, "Loading cast player $currentTrackIndex $currentTrackTime $mediaType")
-
-      castPlayer?.load(
-              mediaItems,
-              currentTrackIndex,
-              currentTrackTime,
-              playWhenReady,
-              playbackRateToUse,
-              mediaType
-      )
-    }
+    // No prior session or same item, proceed immediately.
+    doPreparePlayer(playbackSession, playWhenReady, playbackRate)
   }
 
   private fun setMediaSessionConnectorCustomActions(playbackSession: PlaybackSession) {
@@ -1153,6 +1176,26 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                 ) {
                   forceReloadingAndroidAuto = true
                   notifyChildrenChanged("/")
+                }
+                // Send any queued local progress syncs when network is restored
+                val unsyncedSessions = DeviceManager.dbManager.getPlaybackSessions()
+                if (unsyncedSessions.isNotEmpty()) {
+                  apiHandler.sendSyncLocalSessions(unsyncedSessions) { success: Boolean, error: String? ->
+                    if (success) {
+                      AbsLogger.info("PlayerNotificationService", "Network restored: Successfully synced ${unsyncedSessions.size} local sessions")
+                      // Clear synced sessions from local storage, but keep the most recent one for offline local playback
+                      val sortedSessions = unsyncedSessions.sortedByDescending { it.updatedAt }
+                      val sessionsToRemove = if (sortedSessions.size > 1) sortedSessions.drop(1) else emptyList()
+                      sessionsToRemove.forEach { session ->
+                        DeviceManager.dbManager.removePlaybackSession(session.id)
+                      }
+                      if (sessionsToRemove.isNotEmpty()) {
+                        AbsLogger.info("PlayerNotificationService", "Network restored: Kept most recent session (${sortedSessions.first().displayTitle}) for offline playback")
+                      }
+                    } else {
+                      AbsLogger.error("PlayerNotificationService", "Network restored: Failed to sync local sessions: $error")
+                    }
+                  }
                 }
               }
             }

@@ -53,10 +53,40 @@ class AbsAudioPlayer : Plugin() {
 
         override fun onPlaybackClosed() {
           emit("onPlaybackClosed", true)
+          // Ensure progress is saved and synced when playback is closed (native-only sessions)
+          try {
+            Handler(Looper.getMainLooper()).post {
+              try {
+                playerNotificationService.mediaProgressSyncer.stop(true) { /* finished */ }
+              } catch (e: Exception) {
+                Log.e(tag, "onPlaybackClosed: Failed to stop/sync mediaProgressSyncer: ${e.message}")
+              }
+            }
+          } catch (e: Exception) {
+            Log.e(tag, "onPlaybackClosed: Exception scheduling stop: ${e.message}")
+          }
         }
 
         override fun onPlayingUpdate(isPlaying: Boolean) {
           emit("onPlayingUpdate", isPlaying)
+          // When playback state changes, persist and try to sync immediately.
+          try {
+            Handler(Looper.getMainLooper()).post {
+              try {
+                if (isPlaying) {
+                  // Force an immediate sync attempt on start (will respect network/settings)
+                  playerNotificationService.mediaProgressSyncer.forceSyncNow(true) { /* result ignored */ }
+                } else {
+                  // On pause, ensure local progress is saved and attempt to push to server
+                  playerNotificationService.mediaProgressSyncer.pause { /* result ignored */ }
+                }
+              } catch (e: Exception) {
+                Log.e(tag, "onPlayingUpdate: Failed to trigger sync/pause: ${e.message}")
+              }
+            }
+          } catch (e: Exception) {
+            Log.e(tag, "onPlayingUpdate: Exception scheduling sync: ${e.message}")
+          }
         }
 
         override fun onMetadata(metadata: PlaybackMetadata) {
