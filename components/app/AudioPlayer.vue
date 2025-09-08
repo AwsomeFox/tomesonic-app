@@ -187,8 +187,8 @@
         </div>
       </div>
 
-      <!-- Progress Bar -->
-      <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-0 left-0 w-full px-2">
+  <!-- Progress Bar -->
+  <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-2 left-0 w-full px-2">
         <div ref="trackMini" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
           <div ref="readyTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
           <div ref="bufferedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
