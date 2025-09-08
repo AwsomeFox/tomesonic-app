@@ -11,11 +11,26 @@ import * as locale from 'date-fns/locale'
 
 Vue.directive('click-outside', vClickOutside.directive)
 
-if (Capacitor.getPlatform() != 'web') {
-  const setStatusBarStyleDark = async () => {
-    await StatusBar.setStyle({ style: Style.Dark })
+// Helper: map app theme -> native status bar content style.
+// We want dark app theme to use light status bar icons (light content),
+// and light app theme to use dark status bar icons (dark content).
+const updateNativeStatusBarStyle = async (themeOrBool) => {
+  if (Capacitor.getPlatform() === 'web') return
+  try {
+    let isDark = false
+    if (typeof themeOrBool === 'boolean') {
+      isDark = themeOrBool
+    } else if (themeOrBool === 'system') {
+      isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    } else {
+      isDark = themeOrBool === 'dark'
+    }
+    // When app is dark -> request Light status bar content (white icons)
+    // When app is light -> request Dark status bar content (dark icons)
+    await StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light })
+  } catch (e) {
+    console.error('Failed to update native status bar style', e)
   }
-  setStatusBarStyleDark()
 }
 
 Vue.prototype.$showHideStatusBar = async (show) => {
@@ -274,6 +289,9 @@ export default ({ store, app }, inject) => {
 
   inject('isValidVersion', isValidVersion)
 
+  // Expose helper so other parts of the app can toggle native status bar theme
+  Vue.prototype.$updateStatusBarTheme = updateNativeStatusBarStyle
+
   // Set theme with Material You integration for all themes
   app.$localStore?.getTheme()?.then((theme) => {
     if (theme) {
@@ -294,9 +312,38 @@ export default ({ store, app }, inject) => {
                 if (app.$dynamicColor) {
                   app.$dynamicColor.initialize()
                 }
+                // Update native status bar style to match the new effective theme
+                updateNativeStatusBarStyle(e.matches)
               }
+
+              // Ensure safe-area CSS variables are present and notify the document when ready.
+              // Some WebView environments may not have them immediately available on first paint.
+              ;(function ensureSafeAreaVars() {
+                const maxAttempts = 20
+                let attempts = 0
+
+                function check() {
+                  attempts++
+                  const top = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top')
+                  const bottom = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')
+                  if ((top && top.trim()) || (bottom && bottom.trim()) || attempts >= maxAttempts) {
+                    // Mark that safe-area values are available (or we've given up)
+                    document.documentElement.setAttribute('data-safe-area-ready', 'true')
+                    return
+                  }
+                  setTimeout(check, 100)
+                }
+
+                if (typeof window !== 'undefined') check()
+              })()
             })
           })
+        }
+        // If using system theme initially, set native status bar according to current system
+        if (theme === 'system') {
+          updateNativeStatusBarStyle('system')
+        } else {
+          updateNativeStatusBarStyle(theme)
         }
       } else {
         // Use explicit theme (dark or light) with Material You
@@ -316,6 +363,8 @@ export default ({ store, app }, inject) => {
       if (app.$dynamicColor) {
         app.$dynamicColor.initialize()
       }
+      // No stored theme -> defaulted to system effective theme above. Update native status bar to match.
+      updateNativeStatusBarStyle(prefersDark)
     }
   })
 

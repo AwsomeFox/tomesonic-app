@@ -1,7 +1,11 @@
 <template>
-  <div class="fixed bottom-0 left-0 right-0 w-full h-20 bg-surface-container shadow-elevation-3 z-60 border-t border-outline-variant border-opacity-20">
-    <div id="bookshelf-navbar" class="w-full h-full flex items-center justify-around px-2">
-      <nuxt-link v-for="item in items" :key="item.to" :to="item.to" class="flex flex-col items-center justify-center py-2 px-3 min-w-16 h-16 transition-all duration-200 ease-standard" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
+  <div class="fixed bottom-0 left-0 right-0 w-full bg-surface-container shadow-elevation-3 z-60 border-t border-outline-variant border-opacity-20" :style="{ paddingBottom: 'clamp(0px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 16px)', boxSizing: 'border-box', overflow: 'visible' }">
+    <!-- The inner navbar height includes the safe-area padding so the fixed bar
+      visually grows on devices with a bottom inset without requiring the
+      content area to subtract the inset separately. -->
+    <div id="bookshelf-navbar" class="w-full flex items-center justify-around px-2" :style="{ minHeight: `calc(var(--bottom-nav-height) + clamp(0px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 16px))` }">
+      <!-- allows padding to increase height without clipping -->
+      <nuxt-link v-for="item in items" :key="item.to" :to="item.to" class="flex flex-col items-center justify-center py-1.5 px-3 min-w-16 transition-all duration-200 ease-standard" :style="{ minHeight: '3.25rem' }" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
         <!-- Icon with Material 3 active state pill -->
         <div class="relative flex items-center justify-center w-16 h-8 rounded-full transition-all duration-200 ease-standard" :class="routeName === item.routeName ? 'bg-secondary-container' : 'bg-transparent'">
           <span v-if="item.iconPack === 'abs-icons'" class="abs-icons transition-colors duration-200" :class="[`icon-${item.icon} text-lg`, routeName === item.routeName ? 'text-on-secondary-container' : 'text-on-surface-variant']"></span>
@@ -135,7 +139,29 @@ export default {
   methods: {
     isSelected(item) {}
   },
-  mounted() {}
+  mounted() {
+    // Set the CSS variable for bottom navigation height to ensure proper calculations
+    const updateBottomNavHeight = () => {
+      try {
+        // Base height for the navigation bar (56px is Material 3 standard)
+        const baseHeight = 56
+        // Add safe area inset
+        const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
+        const totalHeight = Math.min(baseHeight + safeInset, 80) // Cap at 80px
+        document.documentElement.style.setProperty('--bottom-nav-height', `${baseHeight}px`)
+        console.log('[BookshelfNavBar] Set --bottom-nav-height to:', baseHeight, 'px')
+      } catch (e) {
+        console.warn('[BookshelfNavBar] Error setting bottom nav height:', e)
+        document.documentElement.style.setProperty('--bottom-nav-height', '56px')
+      }
+    }
+
+    updateBottomNavHeight()
+    window.addEventListener('resize', updateBottomNavHeight)
+  },
+  beforeDestroy() {
+    window.removeEventListener('resize', () => {})
+  }
 }
 </script>
 

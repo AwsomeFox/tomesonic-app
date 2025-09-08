@@ -51,33 +51,38 @@ body {
 
 #content {
   @apply bg-transparent-safe;
-  height: calc(100% - 64px); /* Subtract app bar (64px) - no bottom nav by default */
-  min-height: calc(100% - 64px);
-  max-height: calc(100% - 64px);
+  /* Subtract only the status bar / top safe inset so views can extend under
+     the bottom navigation bar when present. */
+  height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  min-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
 }
 
 #content.playerOpen {
-  height: calc(100% - 64px); /* Same calculation whether player is open or not */
-  min-height: calc(100% - 64px);
-  max-height: calc(100% - 64px);
+  /* Same: only account for status bar */
+  height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  min-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
 }
 
-/* Special class for bookshelf pages with bottom navigation */
+/* Special class for bookshelf pages with bottom navigation - still only
+   account for status bar offset so views render beneath the bottom nav. */
 #content.has-bottom-nav {
-  height: calc(100% - 64px - 80px); /* Subtract app bar (64px) and bottom nav (80px) */
-  min-height: calc(100% - 64px - 80px);
-  max-height: calc(100% - 64px - 80px);
+  height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  min-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
 }
 
 #content.has-bottom-nav.playerOpen {
-  height: calc(100% - 64px - 80px); /* Same calculation whether player is open or not */
-  min-height: calc(100% - 64px - 80px);
-  max-height: calc(100% - 64px - 80px);
+  height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  min-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
 }
 
 #bookshelf {
-  height: calc(100% - 48px);
-  min-height: calc(100% - 48px);
+  /* Fill the parent content area; parent now only subtracts top safe inset */
+  height: 100%;
+  min-height: 100%;
 }
 
 /* Update shadows to use Material 3 elevation system */

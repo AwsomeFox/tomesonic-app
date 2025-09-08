@@ -14,6 +14,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowInsets
+import androidx.core.view.WindowCompat
 import android.webkit.WebView
 import androidx.core.app.ActivityCompat
 import androidx.core.view.updateLayoutParams
@@ -60,9 +61,12 @@ class MainActivity : BridgeActivity() {
     super.onCreate(savedInstanceState)
     Log.d(tag, "onCreate")
 
-    // Update the margins to handle edge-to-edge enforced in SDK 35
-    // See: https://developer.android.com/develop/ui/views/layout/edge-to-edge
+  // Enable edge-to-edge so the webview can render behind the system bars.
+  // See: https://developer.android.com/develop/ui/views/layout/edge-to-edge
+  WindowCompat.setDecorFitsSystemWindows(window, false)
     val webView: WebView = findViewById(R.id.webview)
+    // Keep injecting CSS safe-area insets but DO NOT add margins so the webview
+    // content draws behind the system bars (transparent nav/status bar)
     webView.setOnApplyWindowInsetsListener { v, insets ->
       val (left, top, right, bottom) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         val sysInsets = insets.getInsets(WindowInsets.Type.systemBars())
@@ -77,9 +81,9 @@ class MainActivity : BridgeActivity() {
         )
       }
 
-      // Inject as CSS variables
-      // NOTE: Possibly able to use in the future to support edge-to-edge better.
-       val js = """
+      // Inject as CSS variables so Nuxt pages can use env(safe-area-inset-*) or
+      // the --safe-area-inset-* variables for layout while content stays full-bleed.
+      val js = """
        document.documentElement.style.setProperty('--safe-area-inset-top', '${top}px');
        document.documentElement.style.setProperty('--safe-area-inset-bottom', '${bottom}px');
        document.documentElement.style.setProperty('--safe-area-inset-left', '${left}px');
@@ -87,16 +91,9 @@ class MainActivity : BridgeActivity() {
       """.trimIndent()
       webView.evaluateJavascript(js, null)
 
-      // Set margins
-      v.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-        leftMargin = left
-        bottomMargin = bottom
-        rightMargin = right
-        topMargin = top
-      }
-
+      // Do not consume insets so underlying handling remains intact on older SDKs
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        WindowInsets.CONSUMED
+        insets
       } else {
         insets
       }

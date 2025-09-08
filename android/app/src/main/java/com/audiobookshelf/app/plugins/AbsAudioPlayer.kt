@@ -686,9 +686,17 @@ class AbsAudioPlayer : Plugin() {
       if (progress > 0.01) {
         Log.d(tag, "Resuming last playback session: ${lastPlaybackSession.displayTitle}")
 
-        val savedPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
-        playerNotificationService.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
-        call.resolve()
+        // Ensure this runs on the main thread since ExoPlayer operations require it
+        Handler(Looper.getMainLooper()).post {
+          try {
+            val savedPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
+            playerNotificationService.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+            call.resolve()
+          } catch (e: Exception) {
+            Log.e(tag, "Error resuming last playback session", e)
+            call.reject("Failed to resume session: ${e.message}", "RESUME_FAILED")
+          }
+        }
       } else {
         call.reject("Session not resumable", "PROGRESS_INVALID")
       }

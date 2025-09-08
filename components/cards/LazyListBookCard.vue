@@ -10,7 +10,7 @@
       height: height + 'px',
       animationDelay: animationDelay + 'ms'
     }"
-    class="material-3-list-card rounded-2xl z-10 py-1 px-2 mx-0 bg-surface-container shadow-elevation-1 transition-all duration-300 ease-expressive loading-item"
+    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'transition-all', 'duration-300', 'ease-expressive', 'loading-item', animationFromTop ? 'from-top' : 'from-bottom']"
   >
     <div class="h-full flex items-center relative">
       <!-- Loading cover placeholder -->
@@ -48,7 +48,7 @@
       height: height + 'px',
       animationDelay: animationDelay + 'ms'
     }"
-    class="material-3-list-card rounded-2xl z-10 cursor-pointer py-1 px-2 mx-0 bg-surface-container shadow-elevation-1 hover:shadow-elevation-2 transition-all duration-300 ease-expressive loaded-item"
+    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'cursor-pointer', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'hover:shadow-elevation-2', 'transition-all', 'duration-300', 'ease-expressive', 'loaded-item', animationFromTop ? 'from-top' : 'from-bottom']"
     @click="clickCard"
   >
     <div class="h-full flex items-center relative">
@@ -141,7 +141,10 @@ export default {
       showCoverBg: false,
       localLibraryItem: null,
       isLoading: true,
-      animationDelay: 0
+      animationDelay: 0,
+      // true when the item should animate as if entering from the top (user scrolled up)
+      animationFromTop: false,
+      _io: null
     }
   },
   watch: {
@@ -454,22 +457,92 @@ export default {
   },
   mounted() {
     this.setCSSProperties()
-
-    // Set animation delay based on index for staggered loading
-    this.animationDelay = (this.index % 10) * 80 // 80ms delay between items, reset every 10 items
-
-    // Simulate loading with realistic delay
-    setTimeout(() => {
-      this.isLoading = false
-
-      if (this.bookMount) {
-        this.setEntity(this.bookMount)
-
-        if (this.bookMount.localLibraryItem) {
-          this.setLocalLibraryItem(this.bookMount.localLibraryItem)
-        }
+    // Use IntersectionObserver to load items as they enter the viewport
+    // Also track global scroll direction so items animate from the correct side
+    if (typeof window !== 'undefined') {
+      // Install a single global scroll listener to track direction
+      if (!window.__abs_scrollListenerAdded) {
+        window.__abs_lastY = window.scrollY || window.pageYOffset || 0
+        window.__abs_scrollDir = 'down'
+        window.addEventListener(
+          'scroll',
+          () => {
+            const y = window.scrollY || window.pageYOffset || 0
+            window.__abs_scrollDir = y > window.__abs_lastY ? 'down' : y < window.__abs_lastY ? 'up' : window.__abs_scrollDir
+            window.__abs_lastY = y
+          },
+          { passive: true }
+        )
+        window.__abs_scrollListenerAdded = true
       }
-    }, 200 + this.animationDelay) // Base delay + staggered delay
+
+      // Observer options: preload a little before items are fully visible
+      const options = { root: null, rootMargin: '200px 0px', threshold: 0.05 }
+      this._io = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+
+          // Determine animation direction from the last known scroll direction
+          this.animationFromTop = window.__abs_scrollDir === 'up'
+
+          // Small, local stagger so nearby items animate in sequence but quickly
+          const stagger = Math.min(5, this.index % 6) * 28 // ~0-140ms
+
+          // Short base delay so items appear quickly
+          const base = 20
+
+          setTimeout(() => {
+            this.isLoading = false
+
+            if (this.bookMount) {
+              this.setEntity(this.bookMount)
+
+              if (this.bookMount.localLibraryItem) {
+                this.setLocalLibraryItem(this.bookMount.localLibraryItem)
+              }
+            }
+
+            // once loaded, stop observing
+            if (this._io) {
+              this._io.unobserve(this.$refs.card)
+              // disconnect later to avoid interrupting other observers
+            }
+          }, base + stagger)
+        }
+      }, options)
+
+      // Start observing the root element if present
+      this.$nextTick(() => {
+        if (this.$refs.card && this._io) {
+          this._io.observe(this.$refs.card)
+        }
+      })
+    } else {
+      // Fallback for SSR or environments without window
+      this.animationDelay = (this.index % 6) * 28
+      setTimeout(() => {
+        this.isLoading = false
+
+        if (this.bookMount) {
+          this.setEntity(this.bookMount)
+
+          if (this.bookMount.localLibraryItem) {
+            this.setLocalLibraryItem(this.bookMount.localLibraryItem)
+          }
+        }
+      }, 120 + this.animationDelay)
+    }
+  },
+
+  beforeDestroy() {
+    try {
+      if (this._io) {
+        this._io.disconnect()
+        this._io = null
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 }
 </script>
@@ -565,39 +638,55 @@ export default {
 /* Loading animations */
 .loading-item {
   opacity: 0;
-  transform: translateY(20px) scale(0.95);
-  animation: slideInLoading 600ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  /* initial state is handled by direction-specific keyframes below */
 }
 
 .loaded-item {
   opacity: 0;
-  transform: translateY(20px) scale(0.95);
-  animation: slideInLoaded 500ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+  /* final-state animation handled by direction-specific keyframes below */
 }
 
-@keyframes slideInLoading {
+/* Slide in from bottom */
+@keyframes slideInFromBottom {
   0% {
     opacity: 0;
-    transform: translateY(20px) scale(0.95);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes slideInLoaded {
-  0% {
-    opacity: 0;
-    transform: translateY(12px) scale(0.98);
+    transform: translateY(18px) scale(0.97);
   }
   60% {
-    opacity: 0.8;
+    opacity: 0.9;
     transform: translateY(-2px) scale(1.01);
   }
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+
+/* Slide in from top */
+@keyframes slideInFromTop {
+  0% {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.97);
+  }
+  60% {
+    opacity: 0.9;
+    transform: translateY(2px) scale(1.01);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* When item is loading and direction is bottom -> use slideInFromBottom */
+.loading-item.from-bottom,
+.loaded-item.from-bottom {
+  animation: slideInFromBottom 320ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+}
+
+/* When item is loading and direction is top -> use slideInFromTop */
+.loading-item.from-top,
+.loaded-item.from-top {
+  animation: slideInFromTop 320ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
 }
 </style>

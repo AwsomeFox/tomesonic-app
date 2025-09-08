@@ -1,6 +1,7 @@
 <template>
-  <div class="w-full h-16 bg-surface-container shadow-elevation-2 relative z-20">
-    <div id="appbar" class="absolute top-0 left-0 w-full h-full flex items-center px-4">
+  <div class="w-full bg-surface-container shadow-elevation-2 relative z-20" :style="{ paddingTop: topPadding, boxSizing: 'border-box' }">
+    <div id="appbar" class="w-full flex items-center px-4" style="min-height: 3.5rem">
+      <!-- keep ~h-14 / 56px height via min-height -->
       <!-- Menu Button - hidden when back button is shown -->
       <ui-icon-btn v-if="!showBack" icon="menu" variant="standard" color="on-surface" size="medium" class="mr-2" @click="clickShowSideDrawer" />
 
@@ -46,7 +47,9 @@ import { AbsAudioPlayer } from '@/plugins/capacitor'
 export default {
   data() {
     return {
-      onCastAvailableUpdateListener: null
+      onCastAvailableUpdateListener: null,
+      topPadding: '0px',
+      _safeAreaObserver: null
     }
   },
   computed: {
@@ -121,9 +124,35 @@ export default {
       this.isCastAvailable = data && data.value
     })
     this.onCastAvailableUpdateListener = await AbsAudioPlayer.addListener('onCastAvailableUpdate', this.onCastAvailableUpdate)
+    // Compute top padding from CSS variable (injected by Android MainActivity) and cap it.
+    const updateTopPadding = () => {
+      try {
+        const raw = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top') || ''
+        const px = parseFloat(raw.replace('px', '')) || 0
+        const cap = Math.min(Math.max(px, 0), 64) // cap at 64px to avoid excessive spacing
+        this.topPadding = `${cap}px`
+      } catch (e) {
+        this.topPadding = '0px'
+      }
+    }
+
+    // Run immediately and when the safe-area-ready attribute toggles
+    updateTopPadding()
+    // Observe attribute set by plugin to know when CSS vars are injected
+    this._safeAreaObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.attributeName === 'data-safe-area-ready') {
+          updateTopPadding()
+        }
+      }
+    })
+    this._safeAreaObserver.observe(document.documentElement, { attributes: true })
+    window.addEventListener('resize', updateTopPadding)
   },
   beforeDestroy() {
     this.onCastAvailableUpdateListener?.remove()
+    if (this._safeAreaObserver) this._safeAreaObserver.disconnect()
+    window.removeEventListener('resize', () => {})
   }
 }
 </script>
@@ -131,7 +160,10 @@ export default {
 <style scoped>
 /* Material 3 Appbar Styles */
 #appbar {
-  box-shadow: var(--md-sys-elevation-level2);
+  /* Use a downward-only shadow to separate the appbar from content below.
+     This avoids a visible shadow between the system status bar and the appbar
+     while keeping a Material-like elevation to the content. */
+  box-shadow: 0 6px 14px rgba(var(--md-sys-color-on-surface), 0.08);
 }
 
 /* Library selector hover effect */

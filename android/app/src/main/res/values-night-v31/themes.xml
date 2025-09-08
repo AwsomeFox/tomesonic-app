@@ -34,3 +34,4 @@
     <item name="appWidgetInnerRadius">@android:dimen/system_app_widget_inner_radius</item>
   </style>
 </resources>
+

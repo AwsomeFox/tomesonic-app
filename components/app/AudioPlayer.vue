@@ -1,6 +1,6 @@
 <template>
   <div
-    v-if="playbackSession"
+    v-show="playbackSession"
     id="streamContainer"
     :class="{
       fullscreen: showFullscreen,
@@ -11,7 +11,7 @@
     :style="{
       zIndex: showFullscreen ? 2147483647 : 70,
       top: showFullscreen ? '0' : 'auto',
-      bottom: showFullscreen ? '0' : isInBookshelfContext ? '80px' : '0',
+      bottom: showFullscreen ? '0' : playerBottomOffset,
       left: '0',
       right: '0',
       height: showFullscreen ? '100vh' : 'auto',
@@ -22,9 +22,9 @@
     }"
   >
     <!-- Full screen player with complete background coverage using surface-container for distinction -->
-    <div v-if="showFullscreen" class="w-screen h-screen fixed top-0 left-0 pointer-events-auto bg-surface-dynamic" style="z-index: 2147483647; width: 100vw; height: 100vh">
+    <div v-if="showFullscreen" class="w-screen h-screen fixed top-0 left-0 pointer-events-auto bg-surface-dynamic" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})` }" style="z-index: 2147483647; width: 100vw">
       <!-- Additional background coverage to ensure nothing shows through -->
-      <div class="w-screen h-screen absolute top-0 left-0 pointer-events-none bg-surface-dynamic" style="width: 100vw; height: 100vh; z-index: 0" />
+      <div class="w-screen h-screen absolute top-0 left-0 pointer-events-none bg-surface-dynamic" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})` }" style="width: 100vw; z-index: 0" />
 
       <div class="top-4 left-4 absolute">
         <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="collapseFullscreen">
@@ -189,7 +189,7 @@
 
       <!-- Progress Bar -->
       <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-0 left-0 w-full px-2">
-          <div ref="trackMini" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
+        <div ref="trackMini" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner" :class="{ 'animate-pulse': isLoading }" @click.stop>
           <div ref="readyTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-300" />
           <div ref="bufferedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-300" />
           <div ref="playedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300" />
@@ -257,7 +257,9 @@ export default {
       syncStatus: 0,
       showMoreMenuDialog: false,
       titleMarquee: null,
-      isRefreshingUI: false
+      isRefreshingUI: false,
+      fullscreenTopPadding: '0px',
+      _safeAreaObserver: null
     }
   },
   watch: {
@@ -488,8 +490,45 @@ export default {
       return this.$route && this.$route.name && this.$route.name.startsWith('bookshelf')
     },
     playerBottomOffset() {
-      // Add bottom padding when in bookshelf context to account for bottom navigation
-      return this.isInBookshelfContext && !this.showFullscreen ? '80px' : '0px'
+      // Add bottom padding when in bookshelf context to account for bottom navigation.
+      // Prefer the actual rendered navbar height (which already includes safe-area
+      // padding) so we don't double-count the safe inset. Fallback to the CSS
+      // variable + inset math for older devices.
+      if (!this.isInBookshelfContext || this.showFullscreen) return '0px'
+      try {
+        const navEl = document.getElementById('bookshelf-navbar')
+        if (navEl) {
+          const rect = navEl.getBoundingClientRect()
+          const height = Math.round(rect.height)
+          const extraOffset = 6 // extra gap in px so mini player doesn't overlap the tab bar
+          console.log('[AudioPlayer] Found navbar height:', height, 'px')
+          return `${height + extraOffset}px`
+        }
+
+        // Fallback to CSS variable approach
+        const raw = getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-height') || ''
+        const px = parseFloat(raw.replace('px', '')) || 0
+        const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
+        const extraOffset = 6
+        const totalHeight = px + safeInset + extraOffset
+        console.log('[AudioPlayer] Using CSS variable fallback:', totalHeight, 'px (nav:', px, 'px, safe:', safeInset, 'px, extra:', extraOffset, 'px)')
+        return `${totalHeight}px`
+      } catch (e) {
+        console.warn('[AudioPlayer] Error calculating bottom offset:', e)
+        return `${80 + 6}px` // Increased fallback for modern devices + small extra gap
+      }
+    },
+    fullscreenTopPadding() {
+      // Only apply status bar padding when in fullscreen mode
+      if (!this.showFullscreen) return '0px'
+      try {
+        const raw = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top') || ''
+        const px = parseFloat(raw.replace('px', '')) || 0
+        const cap = Math.min(Math.max(px, 0), 64) // cap at 64px to avoid excessive spacing
+        return `${cap}px`
+      } catch (e) {
+        return '0px'
+      }
     }
   },
   methods: {
@@ -686,9 +725,9 @@ export default {
         currentTime = currentTime / this.currentPlaybackRate
       }
 
-  const rounded = this.$secondsToTimestamp(currentTime)
-  if (tsFull) tsFull.innerText = rounded
-  if (tsMini) tsMini.innerText = rounded
+      const rounded = this.$secondsToTimestamp(currentTime)
+      if (tsFull) tsFull.innerText = rounded
+      if (tsMini) tsMini.innerText = rounded
     },
     timeupdate() {
       // Ensure at least one played track exists
@@ -706,8 +745,8 @@ export default {
         }
       }
 
-  this.updateTimestamp()
-  this.updateTrack()
+      this.updateTimestamp()
+      this.updateTrack()
     },
     updateTrack() {
       // Update progress track UI
@@ -1055,14 +1094,11 @@ export default {
     async init() {
       await this.loadPlayerSettings()
 
-      AbsAudioPlayer.addListener('onPlaybackSession', this.onPlaybackSession)
-      AbsAudioPlayer.addListener('onPlaybackClosed', this.onPlaybackClosed)
-      AbsAudioPlayer.addListener('onPlaybackFailed', this.onPlaybackFailed)
-      AbsAudioPlayer.addListener('onPlayingUpdate', this.onPlayingUpdate)
-      AbsAudioPlayer.addListener('onMetadata', this.onMetadata)
-      AbsAudioPlayer.addListener('onProgressSyncFailing', this.showProgressSyncIsFailing)
-      AbsAudioPlayer.addListener('onProgressSyncSuccess', this.hideProgressSyncIsFailing)
-      AbsAudioPlayer.addListener('onPlaybackSpeedChanged', this.onPlaybackSpeedChanged)
+      // Check if there's already a playback session in the store (from native sync)
+      if (this.$store.state.currentPlaybackSession && !this.playbackSession) {
+        console.log('[AudioPlayer] Found existing playback session in store, setting it')
+        this.onPlaybackSession(this.$store.state.currentPlaybackSession)
+      }
 
       // Check for last playback session on app start
       await this.checkForLastPlaybackSession()
@@ -1083,9 +1119,8 @@ export default {
           if (progress > 0.01) {
             console.log(`[AudioPlayer] Found resumable session: ${lastSession.displayTitle} at ${Math.floor(progress * 100)}%`)
 
-            // For now, just log that we found a resumable session
-            // The native Android/iOS will handle the actual resume logic
-            // This gives us the foundation for future UI prompts like "Resume where you left off?"
+            // Resume the session
+            await this.resumeFromLastSession()
           }
         }
       } catch (error) {
@@ -1160,6 +1195,17 @@ export default {
       this.syncStatus = this.$constants.SyncStatus.SUCCESS
     }
   },
+  created() {
+    // Add listeners early to ensure they're available when Android syncs playback state
+    AbsAudioPlayer.addListener('onPlaybackSession', this.onPlaybackSession)
+    AbsAudioPlayer.addListener('onPlaybackClosed', this.onPlaybackClosed)
+    AbsAudioPlayer.addListener('onPlaybackFailed', this.onPlaybackFailed)
+    AbsAudioPlayer.addListener('onPlayingUpdate', this.onPlayingUpdate)
+    AbsAudioPlayer.addListener('onMetadata', this.onMetadata)
+    AbsAudioPlayer.addListener('onProgressSyncFailing', this.showProgressSyncIsFailing)
+    AbsAudioPlayer.addListener('onProgressSyncSuccess', this.hideProgressSyncIsFailing)
+    AbsAudioPlayer.addListener('onPlaybackSpeedChanged', this.onPlaybackSpeedChanged)
+  },
   mounted() {
     this.updateScreenSize()
     if (screen.orientation) {
@@ -1174,6 +1220,32 @@ export default {
     document.body.addEventListener('touchstart', this.touchstart, { passive: false })
     document.body.addEventListener('touchend', this.touchend)
     document.body.addEventListener('touchmove', this.touchmove)
+
+    // Set up safe area observer for fullscreen status bar padding
+    const updateFullscreenTopPadding = () => {
+      try {
+        const raw = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top') || ''
+        const px = parseFloat(raw.replace('px', '')) || 0
+        const cap = Math.min(Math.max(px, 0), 64) // cap at 64px to avoid excessive spacing
+        this.fullscreenTopPadding = `${cap}px`
+      } catch (e) {
+        this.fullscreenTopPadding = '0px'
+      }
+    }
+
+    // Run immediately and when the safe-area-ready attribute toggles
+    updateFullscreenTopPadding()
+    // Observe attribute set by plugin to know when CSS vars are injected
+    this._safeAreaObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === 'attributes' && m.attributeName === 'data-safe-area-ready') {
+          updateFullscreenTopPadding()
+        }
+      }
+    })
+    this._safeAreaObserver.observe(document.documentElement, { attributes: true })
+    window.addEventListener('resize', updateFullscreenTopPadding)
+
     this.$nextTick(this.init)
   },
   beforeDestroy() {
@@ -1200,6 +1272,11 @@ export default {
       AbsAudioPlayer.removeAllListeners()
     }
     clearInterval(this.playInterval)
+
+    // Clean up safe area observer
+    if (this._safeAreaObserver) {
+      this._safeAreaObserver.disconnect()
+    }
   }
 }
 </script>
