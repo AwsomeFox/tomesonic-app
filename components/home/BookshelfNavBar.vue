@@ -24,7 +24,9 @@
 <script>
 export default {
   data() {
-    return {}
+    return {
+      safeAreaObserver: null
+    }
   },
   computed: {
     currentLibrary() {
@@ -156,10 +158,23 @@ export default {
       }
     }
 
+    // Listen for safe area changes
+    this.safeAreaObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-safe-area-ready') {
+          updateBottomNavHeight()
+        }
+      }
+    })
+    this.safeAreaObserver.observe(document.documentElement, { attributes: true })
+
     updateBottomNavHeight()
     window.addEventListener('resize', updateBottomNavHeight)
   },
   beforeDestroy() {
+    if (this.safeAreaObserver) {
+      this.safeAreaObserver.disconnect()
+    }
     window.removeEventListener('resize', () => {})
   }
 }

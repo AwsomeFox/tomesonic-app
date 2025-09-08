@@ -137,6 +137,38 @@ class MainActivity : BridgeActivity() {
         Log.e(tag, "Failed to sync playback state on resume: ${e.message}")
       }
     }
+
+    // Ensure safe area insets are set when app resumes
+    updateSafeAreaInsets()
+  }
+
+  private fun updateSafeAreaInsets() {
+    val webView: WebView = findViewById(R.id.webview)
+    val insets = webView.rootWindowInsets
+    if (insets != null) {
+      val (left, top, right, bottom) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val sysInsets = insets.getInsets(WindowInsets.Type.systemBars())
+        Log.d(tag, "updateSafeAreaInsets sysInsets: $sysInsets")
+        arrayOf(sysInsets.left, sysInsets.top, sysInsets.right, sysInsets.bottom)
+      } else {
+        arrayOf(
+          insets.systemWindowInsetLeft,
+          insets.systemWindowInsetTop,
+          insets.systemWindowInsetRight,
+          insets.systemWindowInsetBottom
+        )
+      }
+
+      // Inject as CSS variables so Nuxt pages can use env(safe-area-inset-*) or
+      // the --safe-area-inset-* variables for layout while content stays full-bleed.
+      val js = """
+       document.documentElement.style.setProperty('--safe-area-inset-top', '${top}px');
+       document.documentElement.style.setProperty('--safe-area-inset-bottom', '${bottom}px');
+       document.documentElement.style.setProperty('--safe-area-inset-left', '${left}px');
+       document.documentElement.style.setProperty('--safe-area-inset-right', '${right}px');
+      """.trimIndent()
+      webView.evaluateJavascript(js, null)
+    }
   }
 
   override fun onPostCreate(savedInstanceState: Bundle?) {
