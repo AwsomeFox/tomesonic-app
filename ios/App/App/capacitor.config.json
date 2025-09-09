@@ -20,6 +20,7 @@
 		"AppPlugin",
 		"CAPBrowserPlugin",
 		"ClipboardPlugin",
+		"DevicePlugin",
 		"DialogPlugin",
 		"HapticsPlugin",
 		"CAPNetworkPlugin",

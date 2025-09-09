@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full px-0 py-4 overflow-y-auto">
+  <div class="w-full h-full px-0 py-4 overflow-y-auto" :style="contentPaddingStyle">
     <!-- Year in review banner shown at the top in December and January -->
     <stats-year-in-review-banner v-if="showYearInReviewBanner" />
 
@@ -102,6 +102,9 @@ export default {
     totalDaysListened() {
       if (!this.listeningStats) return 0
       return Object.values(this.listeningStats.days).length
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

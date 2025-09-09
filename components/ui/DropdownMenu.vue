@@ -7,14 +7,14 @@
       <ul ref="menu" v-show="showMenu" class="absolute z-50 -mt-px bg-surface-container border border-outline-variant shadow-elevation-2 max-h-56 rounded-md py-1 text-base ring-1 ring-outline ring-opacity-5 overflow-auto focus:outline-none sm:text-sm backdrop-blur-md" role="listbox" style="width: 160px">
         <template v-for="item in items">
           <nuxt-link :key="item.value" v-if="item.to" :to="item.to">
-            <li :key="item.value" class="text-on-surface hover:bg-surface-container-high select-none relative py-2 cursor-pointer transition-colors duration-200" id="listbox-option-0" role="option" @click="clickedOption(item.value)">
+            <li :key="item.value" class="text-on-surface select-none relative py-2 cursor-pointer state-layer" id="listbox-option-0" role="option" @click="clickedOption(item.value)">
               <div class="flex items-center px-2">
                 <span v-if="item.icon" class="material-symbols text-lg mr-2" :class="item.iconClass ? item.iconClass : ''">{{ item.icon }}</span>
                 <span class="font-normal block truncate font-sans text-center">{{ item.text }}</span>
               </div>
             </li>
           </nuxt-link>
-          <li v-else :key="item.value" class="text-on-surface hover:bg-surface-container-high select-none relative py-2 cursor-pointer transition-colors duration-200" id="listbox-option-0" role="option" @click="clickedOption(item.value)">
+          <li v-else :key="item.value" class="text-on-surface select-none relative py-2 cursor-pointer state-layer" id="listbox-option-0" role="option" @click="clickedOption(item.value)">
             <div class="flex items-center px-2">
               <span v-if="item.icon" class="material-symbols text-lg mr-2" :class="item.iconClass ? item.iconClass : ''">{{ item.icon }}</span>
               <span class="font-normal block truncate font-sans text-center">{{ item.text }}</span>

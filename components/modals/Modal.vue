@@ -2,9 +2,6 @@
   <div ref="wrapper" class="modal modal-bg w-full h-full max-h-screen fixed top-0 left-0 bg-black bg-opacity-40 backdrop-blur-sm flex items-center justify-center opacity-0" style="z-index: 2147483648">
     <div class="absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-black to-transparent opacity-90 pointer-events-none" />
 
-    <div class="absolute z-40 top-4 right-4 h-12 w-12 flex items-center justify-center cursor-pointer rounded-full bg-surface-container text-on-surface hover:bg-surface-container-high shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="show = false">
-      <span class="material-symbols text-2xl text-on-surface">close</span>
-    </div>
     <slot name="outer" />
     <div ref="content" style="min-height: 200px" class="relative text-on-surface max-h-screen" :style="{ height: modalHeight, width: modalWidth, maxWidth: maxWidth }" v-click-outside="clickBg">
       <slot />

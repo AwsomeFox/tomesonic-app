@@ -1,7 +1,7 @@
 <template>
-  <div class="w-full layout-wrapper bg-transparent-safe">
+  <div class="w-full layout-wrapper" :class="{ 'full-height': isPlayerOpen && !isInBookshelfContext }">
     <app-appbar />
-    <div id="content" class="overflow-hidden relative bg-transparent-safe transition-all duration-300" :class="[isPlayerOpen ? 'playerOpen' : '', isInBookshelfContext ? 'has-bottom-nav' : '']">
+    <div id="content" class="relative transition-all duration-300" :class="[isPlayerOpen ? 'playerOpen' : '', isInBookshelfContext ? 'has-bottom-nav' : '', isPlayerOpen && !isInBookshelfContext ? 'content-scrollable' : 'overflow-hidden']" :style="contentStyle">
       <transition
         name="page-transition"
         mode="out-in"
@@ -16,6 +16,7 @@
       </transition>
     </div>
     <app-audio-player-container ref="streamContainer" />
+    <home-bookshelf-nav-bar v-if="isInBookshelfContext" />
     <modals-libraries-modal />
     <modals-playlists-add-create-modal />
     <modals-select-local-folder-modal />
@@ -28,8 +29,12 @@
 <script>
 import { CapacitorHttp } from '@capacitor/core'
 import { AbsLogger } from '@/plugins/capacitor'
+import HomeBookshelfNavBar from '~/components/home/BookshelfNavBar.vue'
 
 export default {
+  components: {
+    HomeBookshelfNavBar
+  },
   data() {
     return {
       inittingLibraries: false,
@@ -78,6 +83,10 @@ export default {
     isInBookshelfContext() {
       // Check if current route is bookshelf-related which has bottom navigation
       return this.$route && this.$route.name && this.$route.name.startsWith('bookshelf')
+    },
+    contentStyle() {
+      // Padding is now handled by individual page content
+      return {}
     },
     networkConnected() {
       return this.$store.state.networkConnected

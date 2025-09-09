@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full px-6 py-8 overflow-y-auto">
+  <div class="w-full h-full px-6 py-8 overflow-y-auto" :style="contentPaddingStyle">
     <!-- Display settings -->
     <p class="uppercase text-xs font-semibold text-fg-muted mb-2">{{ $strings.HeaderUserInterfaceSettings }}</p>
     <div class="flex items-center py-3">
@@ -447,6 +447,9 @@ export default {
       else if (this.moreMenuSetting === 'streamingUsingCellular') return this.streamingUsingCellularItems
       else if (this.moreMenuSetting === 'androidAutoBrowseSeriesSequenceOrder') return this.androidAutoBrowseSeriesSequenceOrderItems
       return []
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

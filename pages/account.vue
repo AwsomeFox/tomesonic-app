@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full p-4">
+  <div class="w-full h-full p-4" :style="contentPaddingStyle">
     <ui-text-input-with-label :value="serverAddress" :label="$strings.LabelHost" disabled class="my-2" />
 
     <ui-text-input-with-label :value="username" :label="$strings.LabelUsername" disabled class="my-2" />
@@ -51,6 +51,9 @@ export default {
     serverVersion() {
       // Saved in server connection config after 0.9.81
       return this.serverConnectionConfig.version
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

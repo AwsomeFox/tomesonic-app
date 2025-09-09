@@ -2,9 +2,6 @@
   <modals-fullscreen-modal v-model="show" :processing="processing">
     <div class="flex items-end justify-end h-24 pr-4 pb-2">
       <!-- <h1 class="text-lg">RSS Feed</h1> -->
-      <button class="flex" @click="show = false">
-        <span class="material-symbols text-on-surface">close</span>
-      </button>
     </div>
 
     <div class="w-full px-2 h-[calc(100%-176px)] overflow-y-auto">

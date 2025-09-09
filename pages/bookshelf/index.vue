@@ -3,15 +3,10 @@
     <!-- Card-shaped Material 3 skeleton in two columns to match book cards -->
     <div v-if="isLoading && !shelves.length" class="w-full px-4 py-4">
       <div class="grid grid-cols-2 gap-4">
-        <div
-          v-for="n in 8"
-          :key="`card-skel-${n}`"
-          :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', (n % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr') ]"
-          :style="{ '--shimmer-delay': (n * 90) + 'ms' }"
-        >
+        <div v-for="n in 8" :key="`card-skel-${n}`" :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', n % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']" :style="{ '--shimmer-delay': n * 90 + 'ms' }">
           <div class="p-3">
             <!-- Cover placeholder (tall) -->
-            <div class="w-full bg-surface-variant rounded-lg shimmer-block" style="padding-top: 140%;"></div>
+            <div class="w-full bg-surface-variant rounded-lg shimmer-block" style="padding-top: 140%"></div>
             <!-- Content placeholder -->
             <div class="mt-3 space-y-2">
               <div class="h-4 bg-surface-variant rounded-md w-3/4 shimmer-block"></div>
@@ -22,16 +17,9 @@
       </div>
     </div>
 
-    <div class="w-full" :class="{ 'py-6': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }">
+    <div class="w-full" :class="{ 'py-6': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }" :style="contentPaddingStyle">
       <template v-for="(shelf, index) in shelves">
-        <bookshelf-shelf
-          :key="shelf.id"
-          :label="getShelfLabel(shelf)"
-          :entities="shelf.entities"
-          :type="shelf.type"
-          :style="{ zIndex: shelves.length - index }"
-          :class="[{ 'shelf-updating': shelf._updating }, 'shelf-item', `shelf-delay-${Math.min(index, 6)}`]"
-        />
+        <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :style="{ zIndex: shelves.length - index }" :class="[{ 'shelf-updating': shelf._updating }, 'shelf-item', `shelf-delay-${Math.min(index, 6)}`]" />
       </template>
     </div>
   </div>
@@ -48,9 +36,9 @@ export default {
       lastServerFetchLibraryId: null,
       lastLocalFetch: 0,
       localLibraryItems: [],
-  isLoading: false,
-  isFetchingCategories: false,
-  firstLoad: true
+      isLoading: false,
+      isFetchingCategories: false,
+      firstLoad: true
     }
   },
   watch: {
@@ -108,6 +96,13 @@ export default {
     },
     attemptingConnection() {
       return this.$store.state.attemptingConnection
+    },
+    contentPaddingStyle() {
+      // Add bottom padding to content when player is open so end of content is visible above mini player
+      if (this.$store.getters['getIsPlayerOpen']) {
+        return { paddingBottom: '120px' }
+      }
+      return {}
     }
   },
   methods: {
@@ -212,130 +207,130 @@ export default {
       this.isFetchingCategories = true
 
       try {
-      // TODO: Find a better way to keep the shelf up-to-date with local vs server library because this is a disaster
-      const isConnectedToServerWithInternet = this.user && this.currentLibraryId && this.networkConnected
-      if (isConnectedToServerWithInternet) {
-        if (this.lastServerFetch && Date.now() - this.lastServerFetch < 5000 && this.lastServerFetchLibraryId == this.currentLibraryId) {
-          console.log(`[categories] fetchCategories server fetch was ${Date.now() - this.lastServerFetch}ms ago so not doing it.`)
-          return
-        } else {
-          console.log(`[categories] fetchCategories fetching from server. Last was ${this.lastServerFetch ? Date.now() - this.lastServerFetch + 'ms' : 'Never'} ago. lastServerFetchLibraryId=${this.lastServerFetchLibraryId} and currentLibraryId=${this.currentLibraryId}`)
-          this.lastServerFetchLibraryId = this.currentLibraryId
-          this.lastServerFetch = Date.now()
-          this.lastLocalFetch = 0
-        }
-      } else {
-        if (this.lastLocalFetch && Date.now() - this.lastLocalFetch < 5000) {
-          console.log(`[categories] fetchCategories local fetch was ${Date.now() - this.lastLocalFetch}ms ago so not doing it.`)
-          return
-        } else {
-          console.log(`[categories] fetchCategories fetching from local. Last was ${this.lastLocalFetch ? Date.now() - this.lastLocalFetch + 'ms' : 'Never'} ago`)
-          this.lastServerFetchLibraryId = null
-          this.lastServerFetch = 0
-          this.lastLocalFetch = Date.now()
-        }
-      }
-
-      this.isLoading = true
-
-  // Set local library items first. On first overall app load we keep the
-  // skeleton visible and defer immediately rendering local shelves until the
-  // server timeout; for subsequent loads, render local shelves immediately.
-  this.localLibraryItems = await this.$db.getLocalLibraryItems()
-  const localCategories = this.getLocalMediaItemCategories()
-  if (!this.firstLoad) {
-    this.shelves = localCategories
-    console.log('[categories] Local shelves set (subsequent render)', this.shelves.length, this.lastLocalFetch)
-  } else {
-    console.log('[categories] Local categories computed (first load)', localCategories.length, this.lastLocalFetch)
-  }
-
-      if (isConnectedToServerWithInternet) {
-        // Perform the server request but wait a short time before forcing a
-        // fallback so local shelves remain visible and we avoid a flash.
-        const serverTimeoutMs = 2500
-        const serverRequest = this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/personalized?minified=1&include=rssfeed,numEpisodesIncomplete`, { connectTimeout: 10000 }).catch((error) => {
-          console.error('[categories] Failed to fetch categories', error)
-          return []
-        })
-
-        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('__timeout__'), serverTimeoutMs))
-        const categoriesOrTimeout = await Promise.race([serverRequest, timeoutPromise])
-
-        // If timed out, categoriesOrTimeout === '__timeout__', otherwise it's the categories array
-        let categories = categoriesOrTimeout === '__timeout__' ? null : categoriesOrTimeout
-
-        // If server hasn't responded yet, keep local shelves visible; we'll await the final server result
-        if (categories === null) {
-          console.log('[categories] Server request timed out, keeping local shelves visible and waiting in background')
-          // Continue to await the actual server request in background
-          try {
-            categories = await serverRequest
-          } catch (err) {
-            categories = []
-          }
-        }
-
-        if (!categories || !categories.length) {
-          // Server returned no categories or request failed -> fall back to local shelves
-          console.warn(`[categories] Failed to get server categories so using local categories`)
-          this.lastServerFetch = 0
-          this.lastLocalFetch = Date.now()
-          this.shelves = localCategories
-          this.isLoading = false
-          console.log('[categories] Local shelves set from failure', this.shelves.length, this.lastLocalFetch)
-          return
-        }
-
-        // Map localLibraryItem to server entities
-        const serverCats = categories.map((cat) => {
-          if (cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') {
-            cat.entities = cat.entities.map((entity) => {
-              const localLibraryItem = this.localLibraryItems.find((lli) => {
-                return lli.libraryItemId == entity.id
-              })
-              if (localLibraryItem) {
-                entity.localLibraryItem = localLibraryItem
-              }
-              return entity
-            })
-          }
-          return cat
-        })
-
-        // Merge server results into the already-rendered local shelves to avoid flash.
-        const merged = []
-        serverCats.forEach((scat) => {
-          const existing = this.shelves.find((s) => s && s.id === scat.id)
-          if (existing) {
-            // Mutate existing shelf object so the DOM node is preserved.
-            existing.label = scat.label
-            existing.type = scat.type
-            // Mark as updating so CSS can animate the change
-            existing._updating = true
-            existing.entities = scat.entities
-            merged.push(existing)
+        // TODO: Find a better way to keep the shelf up-to-date with local vs server library because this is a disaster
+        const isConnectedToServerWithInternet = this.user && this.currentLibraryId && this.networkConnected
+        if (isConnectedToServerWithInternet) {
+          if (this.lastServerFetch && Date.now() - this.lastServerFetch < 5000 && this.lastServerFetchLibraryId == this.currentLibraryId) {
+            console.log(`[categories] fetchCategories server fetch was ${Date.now() - this.lastServerFetch}ms ago so not doing it.`)
+            return
           } else {
-            merged.push(scat)
+            console.log(`[categories] fetchCategories fetching from server. Last was ${this.lastServerFetch ? Date.now() - this.lastServerFetch + 'ms' : 'Never'} ago. lastServerFetchLibraryId=${this.lastServerFetchLibraryId} and currentLibraryId=${this.currentLibraryId}`)
+            this.lastServerFetchLibraryId = this.currentLibraryId
+            this.lastServerFetch = Date.now()
+            this.lastLocalFetch = 0
           }
-        })
+        } else {
+          if (this.lastLocalFetch && Date.now() - this.lastLocalFetch < 5000) {
+            console.log(`[categories] fetchCategories local fetch was ${Date.now() - this.lastLocalFetch}ms ago so not doing it.`)
+            return
+          } else {
+            console.log(`[categories] fetchCategories fetching from local. Last was ${this.lastLocalFetch ? Date.now() - this.lastLocalFetch + 'ms' : 'Never'} ago`)
+            this.lastServerFetchLibraryId = null
+            this.lastServerFetch = 0
+            this.lastLocalFetch = Date.now()
+          }
+        }
 
-        // Append any local-only shelves that the server didn't return (keep same media type)
-        const localShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType && !cat.localOnly)
-        merged.push(...localShelves)
+        this.isLoading = true
 
-        // Replace shelves with merged result (many objects are the same references so DOM won't flash)
-        this.shelves = merged
-        // Clear updating flags after the shelf animation finishes
-        setTimeout(() => {
-          this.shelves.forEach((s) => {
-            if (s && s._updating) s._updating = false
+        // Set local library items first. On first overall app load we keep the
+        // skeleton visible and defer immediately rendering local shelves until the
+        // server timeout; for subsequent loads, render local shelves immediately.
+        this.localLibraryItems = await this.$db.getLocalLibraryItems()
+        const localCategories = this.getLocalMediaItemCategories()
+        if (!this.firstLoad) {
+          this.shelves = localCategories
+          console.log('[categories] Local shelves set (subsequent render)', this.shelves.length, this.lastLocalFetch)
+        } else {
+          console.log('[categories] Local categories computed (first load)', localCategories.length, this.lastLocalFetch)
+        }
+
+        if (isConnectedToServerWithInternet) {
+          // Perform the server request but wait a short time before forcing a
+          // fallback so local shelves remain visible and we avoid a flash.
+          const serverTimeoutMs = 2500
+          const serverRequest = this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/personalized?minified=1&include=rssfeed,numEpisodesIncomplete`, { connectTimeout: 10000 }).catch((error) => {
+            console.error('[categories] Failed to fetch categories', error)
+            return []
           })
-        }, 700)
-        this.isLoading = false
-        this.firstLoad = false
-        console.log('[categories] Server shelves merged', this.shelves.length, this.lastServerFetch)
-      }
+
+          const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('__timeout__'), serverTimeoutMs))
+          const categoriesOrTimeout = await Promise.race([serverRequest, timeoutPromise])
+
+          // If timed out, categoriesOrTimeout === '__timeout__', otherwise it's the categories array
+          let categories = categoriesOrTimeout === '__timeout__' ? null : categoriesOrTimeout
+
+          // If server hasn't responded yet, keep local shelves visible; we'll await the final server result
+          if (categories === null) {
+            console.log('[categories] Server request timed out, keeping local shelves visible and waiting in background')
+            // Continue to await the actual server request in background
+            try {
+              categories = await serverRequest
+            } catch (err) {
+              categories = []
+            }
+          }
+
+          if (!categories || !categories.length) {
+            // Server returned no categories or request failed -> fall back to local shelves
+            console.warn(`[categories] Failed to get server categories so using local categories`)
+            this.lastServerFetch = 0
+            this.lastLocalFetch = Date.now()
+            this.shelves = localCategories
+            this.isLoading = false
+            console.log('[categories] Local shelves set from failure', this.shelves.length, this.lastLocalFetch)
+            return
+          }
+
+          // Map localLibraryItem to server entities
+          const serverCats = categories.map((cat) => {
+            if (cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') {
+              cat.entities = cat.entities.map((entity) => {
+                const localLibraryItem = this.localLibraryItems.find((lli) => {
+                  return lli.libraryItemId == entity.id
+                })
+                if (localLibraryItem) {
+                  entity.localLibraryItem = localLibraryItem
+                }
+                return entity
+              })
+            }
+            return cat
+          })
+
+          // Merge server results into the already-rendered local shelves to avoid flash.
+          const merged = []
+          serverCats.forEach((scat) => {
+            const existing = this.shelves.find((s) => s && s.id === scat.id)
+            if (existing) {
+              // Mutate existing shelf object so the DOM node is preserved.
+              existing.label = scat.label
+              existing.type = scat.type
+              // Mark as updating so CSS can animate the change
+              existing._updating = true
+              existing.entities = scat.entities
+              merged.push(existing)
+            } else {
+              merged.push(scat)
+            }
+          })
+
+          // Append any local-only shelves that the server didn't return (keep same media type)
+          const localShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType && !cat.localOnly)
+          merged.push(...localShelves)
+
+          // Replace shelves with merged result (many objects are the same references so DOM won't flash)
+          this.shelves = merged
+          // Clear updating flags after the shelf animation finishes
+          setTimeout(() => {
+            this.shelves.forEach((s) => {
+              if (s && s._updating) s._updating = false
+            })
+          }, 700)
+          this.isLoading = false
+          this.firstLoad = false
+          console.log('[categories] Server shelves merged', this.shelves.length, this.lastServerFetch)
+        }
       } finally {
         this.isFetchingCategories = false
       }
@@ -522,12 +517,20 @@ export default {
   animation-delay: var(--shimmer-delay, 0ms);
 }
 
-.shimmer-ltr .shimmer-block::after { animation-direction: normal; }
-.shimmer-rtl .shimmer-block::after { animation-direction: reverse; }
+.shimmer-ltr .shimmer-block::after {
+  animation-direction: normal;
+}
+.shimmer-rtl .shimmer-block::after {
+  animation-direction: reverse;
+}
 
 @keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 /* Reduce motion for accessibility */

@@ -1,16 +1,15 @@
 <template>
   <modals-modal v-model="show" :width="400" height="100%">
-    <template #outer>
-      <div v-if="currentChapter" class="absolute top-4 left-4 z-40 pt-1 px-4 py-2 rounded-full bg-surface backdrop-blur-md shadow-elevation-2 border border-outline-variant" style="max-width: 80%">
-        <p class="text-on-surface text-lg font-medium truncate">{{ chapters.length }} {{ $strings.LabelChapters }}</p>
-      </div>
-    </template>
-
     <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
       <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%" @click.stop>
+        <!-- Material 3 Modal Header -->
+        <div v-if="currentChapter" class="px-6 py-4 border-b border-outline-variant">
+          <h2 class="text-headline-small text-on-surface font-medium">{{ chapters.length }} {{ $strings.LabelChapters }}</h2>
+        </div>
+
         <ul class="h-full w-full" role="listbox" aria-labelledby="listbox-label">
           <template v-for="chapter in chapters">
-            <li :key="chapter.id" :id="`chapter-row-${chapter.id}`" class="text-on-surface select-none relative py-4 cursor-pointer hover:bg-surface-container transition-colors duration-200" :class="currentChapterId === chapter.id ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(chapter)">
+            <li :key="chapter.id" :id="`chapter-row-${chapter.id}`" class="text-on-surface select-none relative py-4 cursor-pointer state-layer" :class="currentChapterId === chapter.id ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(chapter)">
               <div class="relative flex items-center pl-3 pr-20">
                 <p class="font-normal block truncate text-sm">{{ chapter.title }}</p>
                 <div class="absolute top-0 right-3 -mt-0.5">

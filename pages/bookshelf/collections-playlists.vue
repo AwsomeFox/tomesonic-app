@@ -2,18 +2,18 @@
   <div class="w-full h-full flex flex-col">
     <!-- Tab switcher -->
     <div class="flex items-center justify-center px-4 pt-4 pb-2">
-      <div class="bg-surface-container-highest rounded-full p-1 flex items-center shadow-elevation-1">
+      <div class="bg-surface-container rounded-full p-1 flex items-center shadow-elevation-1">
         <button class="px-4 py-2 rounded-full text-label-medium font-medium transition-all duration-200 ease-expressive min-w-24" :class="currentView === 'collections' ? 'bg-primary text-on-primary shadow-elevation-2' : 'text-on-surface-variant hover:bg-on-surface/8'" @click="currentView = 'collections'">
           {{ $strings.ButtonCollections }}
         </button>
-        <button v-if="userHasPlaylists" class="px-4 py-2 rounded-full text-label-medium font-medium transition-all duration-200 ease-expressive min-w-24" :class="currentView === 'playlists' ? 'bg-primary text-on-primary shadow-elevation-2' : 'text-on-surface-variant hover:bg-on-surface/8'" @click="currentView = 'playlists'">
+        <button class="px-4 py-2 rounded-full text-label-medium font-medium transition-all duration-200 ease-expressive min-w-24" :class="currentView === 'playlists' ? 'bg-primary text-on-primary shadow-elevation-2' : 'text-on-surface-variant hover:bg-on-surface/8'" @click="currentView = 'playlists'">
           {{ $strings.ButtonPlaylists }}
         </button>
       </div>
     </div>
 
     <!-- Content area -->
-    <div class="flex-grow">
+    <div class="flex-grow" :style="contentPaddingStyle">
       <bookshelf-lazy-bookshelf :key="currentView" :page="currentView" />
     </div>
   </div>
@@ -50,6 +50,11 @@ export default {
           query: { ...this.$route.query, view: newView }
         })
       }
+    }
+  },
+  computed: {
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   }
 }

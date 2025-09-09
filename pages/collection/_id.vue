@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full">
+  <div class="w-full h-full" :style="contentPaddingStyle">
     <div class="w-full h-full overflow-y-auto px-2 py-6 md:p-8">
       <div class="w-full flex justify-center md:block sm:w-32 md:w-52" style="min-width: 240px">
         <div class="relative" style="height: fit-content">
@@ -107,6 +107,9 @@ export default {
     },
     showPlayButton() {
       return this.playableItems.length
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

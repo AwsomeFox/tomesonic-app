@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full">
+  <div class="w-full h-full" :style="contentPaddingStyle">
     <div class="w-full h-full overflow-y-auto py-6 md:p-8">
       <div class="w-full flex justify-center">
         <covers-playlist-cover :items="playlistItems" :width="180" :height="180" />
@@ -121,6 +121,9 @@ export default {
       if (!this.mediaIdStartingPlayback) return false
       const mediaId = this.$store.state.playerStartingPlaybackMediaId
       return mediaId === this.mediaIdStartingPlayback
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

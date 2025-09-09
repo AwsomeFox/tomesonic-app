@@ -9,7 +9,7 @@
       'fixed pointer-events-none': true
     }"
     :style="{
-      zIndex: showFullscreen ? 2147483647 : 70,
+      zIndex: showFullscreen ? 2147483647 : 50,
       top: showFullscreen ? '0' : 'auto',
       bottom: showFullscreen ? '0' : playerBottomOffset,
       left: '0',
@@ -18,7 +18,8 @@
       width: showFullscreen ? '100vw' : 'auto',
       visibility: 'visible',
       backgroundColor: 'transparent',
-      position: 'fixed'
+      position: 'fixed',
+      transition: showFullscreen ? 'none' : 'bottom 0.3s ease-in-out'
     }"
   >
     <!-- Full screen player with complete background coverage using surface-container for distinction -->
@@ -152,7 +153,7 @@
       id="playerContent"
       class="playerContainer w-full pointer-events-auto bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20"
       :class="{ 'transition-all duration-500 ease-expressive': !isSwipeActive }"
-      :style="{ backgroundColor: showFullscreen ? '' : '', transform: showFullscreen ? 'translateY(-100vh)' : `translateY(${swipeOffset}px)`, zIndex: '2147483647' }"
+      :style="{ backgroundColor: showFullscreen ? '' : '', transform: showFullscreen ? 'translateY(-100vh)' : `translateY(${swipeOffset}px) translateX(${swipeOffsetX}px)`, zIndex: showFullscreen ? '2147483647' : '50' }"
       @touchstart="handleTouchStart"
       @touchmove="handleTouchMove"
       @touchend="handleTouchEnd"
@@ -242,6 +243,15 @@ export default {
       swipeOffset: 0,
       isSwipeActive: false,
       swipeStartY: 0,
+      // Horizontal swipe state for closing mini player
+      swipeStartX: 0,
+      swipeOffsetX: 0,
+      isHorizontalSwipeActive: false,
+      horizontalSwipeThreshold: 80,
+      // Gesture axis locking: 'none' | 'vertical' | 'horizontal'
+      gestureAxis: 'none',
+      // Minimum move (px) before deciding axis
+      gestureDetectionThreshold: 8,
       swipeThreshold: 50, // pixels to trigger fullscreen
       playerSettings: {
         useChapterTrack: false,
@@ -490,32 +500,93 @@ export default {
       return this.$route && this.$route.name && this.$route.name.startsWith('bookshelf')
     },
     playerBottomOffset() {
-      // Add bottom padding when in bookshelf context to account for bottom navigation.
-      // Prefer the actual rendered navbar height (which already includes safe-area
-      // padding) so we don't double-count the safe inset. Fallback to the CSS
-      // variable + inset math for older devices.
-      if (!this.isInBookshelfContext || this.showFullscreen) return '0px'
-      try {
-        const navEl = document.getElementById('bookshelf-navbar')
-        if (navEl) {
-          const rect = navEl.getBoundingClientRect()
-          const height = Math.round(rect.height)
-          const extraOffset = 6 // extra gap in px so mini player doesn't overlap the tab bar
-          console.log('[AudioPlayer] Found navbar height:', height, 'px')
-          return `${height + extraOffset}px`
-        }
+      if (this.showFullscreen) return '0px'
 
-        // Fallback to CSS variable approach
-        const raw = getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-height') || ''
-        const px = parseFloat(raw.replace('px', '')) || 0
-        const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
-        const extraOffset = 6
-        const totalHeight = px + safeInset + extraOffset
-        console.log('[AudioPlayer] Using CSS variable fallback:', totalHeight, 'px (nav:', px, 'px, safe:', safeInset, 'px, extra:', extraOffset, 'px)')
-        return `${totalHeight}px`
-      } catch (e) {
-        console.warn('[AudioPlayer] Error calculating bottom offset:', e)
-        return `${80 + 6}px` // Increased fallback for modern devices + small extra gap
+      if (this.isInBookshelfContext) {
+        // When tab bar is visible, position above it
+        try {
+          const navEl = document.getElementById('bookshelf-navbar')
+          if (navEl) {
+            const rect = navEl.getBoundingClientRect()
+            const height = Math.round(rect.height)
+            const extraOffset = 0 // no extra gap; mini player should sit flush above the tab bar
+            console.log('[AudioPlayer] Found navbar height:', height, 'px')
+            return `${height + extraOffset}px`
+          }
+
+          // Fallback to CSS variable approach
+          const raw = getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-height') || ''
+          const px = parseFloat(raw.replace('px', '')) || 0
+          const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
+          const extraOffset = 0
+          const totalHeight = px + safeInset + extraOffset
+          console.log('[AudioPlayer] Using CSS variable fallback:', totalHeight, 'px (nav:', px, 'px, safe:', safeInset, 'px, extra:', extraOffset, 'px)')
+          return `${totalHeight}px`
+        } catch (e) {
+          console.warn('[AudioPlayer] Error calculating bottom offset:', e)
+          return `${80 + 6}px` // Increased fallback for modern devices + small extra gap
+        }
+      } else {
+        // When tab bar is NOT visible, position at: (tab position) - (tab bar height)
+        // This maintains the same visual position relative to the screen bottom
+        try {
+          // Get the tab bar height that would be used when visible
+          const navEl = document.getElementById('bookshelf-navbar')
+          let tabBarHeight = 0
+
+          if (navEl) {
+            const rect = navEl.getBoundingClientRect()
+            tabBarHeight = Math.round(rect.height)
+            console.log('[AudioPlayer] Tab bar height for adjustment:', tabBarHeight, 'px')
+          } else {
+            // Fallback: use CSS variable + safe area
+            const navHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-height')?.replace('px', '')) || 56
+            const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
+            tabBarHeight = navHeight + Math.min(safeInset, 16) // Clamp safe area like BookshelfNavBar does
+            console.log('[AudioPlayer] Fallback tab bar height:', tabBarHeight, 'px (nav:', navHeight, 'px, safe:', safeInset, 'px)')
+          }
+
+          // When tab bar is NOT visible, position at: (tab position) - (tab bar content area height)
+          // Content area height = base nav height (56px) without safe area padding
+          try {
+            // Get the actual tab bar height (includes safe area padding)
+            const navEl = document.getElementById('bookshelf-navbar')
+            let totalTabBarHeight = 0
+            let contentAreaHeight = 56 // Base content height without padding
+
+            if (navEl) {
+              const rect = navEl.getBoundingClientRect()
+              totalTabBarHeight = Math.round(rect.height)
+              console.log('[AudioPlayer] Total tab bar height:', totalTabBarHeight, 'px')
+            } else {
+              // Fallback: calculate from CSS variables
+              const baseHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-height')?.replace('px', '')) || 56
+              const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
+              totalTabBarHeight = baseHeight + Math.min(safeInset, 16) // Clamp like BookshelfNavBar
+              contentAreaHeight = baseHeight
+              console.log('[AudioPlayer] Fallback tab bar height:', totalTabBarHeight, 'px (base:', baseHeight, 'px, safe:', safeInset, 'px)')
+            }
+
+            // Calculate: (tab bar position) - (content area height)
+            const tabBarPosition = totalTabBarHeight + 6 // Position when tab bar is visible
+            const noTabPosition = tabBarPosition - contentAreaHeight // Subtract content area height
+
+            console.log('[AudioPlayer] No tab positioning:', {
+              totalTabBarHeight,
+              contentAreaHeight,
+              tabBarPosition: `${tabBarPosition}px`,
+              noTabPosition: `${noTabPosition}px`
+            })
+
+            return `${Math.max(noTabPosition, 6)}px` // Minimum 6px to avoid touching bottom
+          } catch (e) {
+            console.warn('[AudioPlayer] Error calculating no-tab offset:', e)
+            return '8px' // Safe fallback
+          }
+        } catch (e) {
+          console.warn('[AudioPlayer] Error calculating no-tab offset:', e)
+          return '8px' // Safe fallback
+        }
       }
     },
     fullscreenTopPadding() {
@@ -538,6 +609,11 @@ export default {
       this.isSwipeActive = true
       this.swipeStartY = event.touches[0].clientY
       this.swipeOffset = 0
+      // init horizontal swipe
+      this.swipeStartX = event.touches[0].clientX
+      this.swipeOffsetX = 0
+      this.isHorizontalSwipeActive = false
+      this.gestureAxis = 'none'
     },
     handleTouchMove(event) {
       if (!this.isSwipeActive || this.showFullscreen) return
@@ -545,26 +621,80 @@ export default {
       event.preventDefault()
       const currentY = event.touches[0].clientY
       const deltaY = this.swipeStartY - currentY // Negative for upward swipe
+      const currentX = event.touches[0].clientX
+      const deltaX = currentX - this.swipeStartX
 
-      if (deltaY > 0) {
-        // Only allow upward swipes
-        this.swipeOffset = -Math.min(deltaY, window.innerHeight)
+      // Decide gesture axis if not yet decided and movement exceeds threshold
+      if (this.gestureAxis === 'none') {
+        if (Math.abs(deltaX) > this.gestureDetectionThreshold || Math.abs(deltaY) > this.gestureDetectionThreshold) {
+          // pick the dominant axis
+          this.gestureAxis = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical'
+        }
+      }
+
+      // Only act on the locked axis
+      if (this.gestureAxis === 'vertical') {
+        // vertical gesture: ignore horizontal movement and update vertical offset
+        if (deltaY > 0) {
+          // Only allow upward swipes
+          this.swipeOffset = -Math.min(deltaY, window.innerHeight)
+        } else {
+          this.swipeOffset = 0
+        }
+        // ensure horizontal offset stays centered
+        this.swipeOffsetX = 0
+      } else if (this.gestureAxis === 'horizontal') {
+        // horizontal gesture: ignore vertical movement and update horizontal offset
+        this.swipeOffset = 0
+        this.isHorizontalSwipeActive = true
+        this.swipeOffsetX = Math.max(Math.min(deltaX, window.innerWidth), -window.innerWidth)
+      } else {
+        // No axis decided yet: don't move UI
+        this.swipeOffset = 0
+        this.swipeOffsetX = 0
       }
     },
     handleTouchEnd(event) {
       if (!this.isSwipeActive || this.showFullscreen) return
 
       this.isSwipeActive = false
+      this.isHorizontalSwipeActive = false
       const currentY = event.changedTouches[0].clientY
       const deltaY = this.swipeStartY - currentY
 
-      if (deltaY > this.swipeThreshold) {
-        // Swipe was far enough, expand to fullscreen
-        this.expandFullscreen()
+      // Act based on the decided axis
+      if (this.gestureAxis === 'horizontal') {
+        try {
+          const endX = event.changedTouches[0].clientX
+          const deltaX = endX - this.swipeStartX
+          if (Math.abs(deltaX) > this.horizontalSwipeThreshold) {
+            // Close playback and nudge UI
+            this.swipeOffsetX = deltaX > 0 ? window.innerWidth : -window.innerWidth
+            // Small delay so user sees the swipe animation before closing
+            setTimeout(() => {
+              this.closePlayback()
+            }, 120)
+            return
+          }
+        } catch (e) {}
+        // Not far enough: snap back
+        this.swipeOffsetX = 0
+      } else if (this.gestureAxis === 'vertical') {
+        if (deltaY > this.swipeThreshold) {
+          // Swipe was far enough, expand to fullscreen
+          this.expandFullscreen()
+        } else {
+          // Snap back to mini player
+          this.swipeOffset = 0
+        }
       } else {
-        // Snap back to mini player
+        // No decisive gesture: reset offsets
         this.swipeOffset = 0
+        this.swipeOffsetX = 0
       }
+
+      // reset axis
+      this.gestureAxis = 'none'
     },
     showSyncsFailedDialog() {
       Dialog.alert({
@@ -987,6 +1117,11 @@ export default {
       }
     },
     closePlayback() {
+      // Reset swipe offsets to avoid leaving UI translated
+      this.swipeOffset = 0
+      this.swipeOffsetX = 0
+      this.isSwipeActive = false
+      this.isHorizontalSwipeActive = false
       this.endPlayback()
       AbsAudioPlayer.closePlayback()
     },
@@ -1188,6 +1323,24 @@ export default {
     minimizePlayerEvt() {
       this.collapseFullscreen()
     },
+    onAbsUiReady() {
+      // Called when app layout/CSS variables are ready. Force a UI refresh so
+      // playerBottomOffset calculates against the correct navbar height.
+      console.log('[AudioPlayer] abs-ui-ready received, refreshing UI')
+      this.$nextTick(() => {
+        this.refreshUI()
+        // Also nudge DOM and recalc bottom offset
+        setTimeout(() => {
+          this.refreshUI()
+          // Force a rerender so computed styles depending on DOM measurements update
+          try {
+            this.$forceUpdate()
+          } catch (e) {
+            /* noop */
+          }
+        }, 50)
+      })
+    },
     showProgressSyncIsFailing() {
       this.syncStatus = this.$constants.SyncStatus.FAILED
     },
@@ -1217,6 +1370,8 @@ export default {
     window.addEventListener('resize', this.screenOrientationChange)
 
     this.$eventBus.$on('minimize-player', this.minimizePlayerEvt)
+    // Ensure we recalculate offsets after app UI is ready (CSS vars / nav mounted)
+    this.$eventBus.$on('abs-ui-ready', this.onAbsUiReady)
     document.body.addEventListener('touchstart', this.touchstart, { passive: false })
     document.body.addEventListener('touchend', this.touchend)
     document.body.addEventListener('touchmove', this.touchmove)
@@ -1256,6 +1411,7 @@ export default {
       document.removeEventListener('orientationchange', this.screenOrientationChange)
     }
     window.removeEventListener('resize', this.screenOrientationChange)
+    this.$eventBus.$off('abs-ui-ready', this.onAbsUiReady)
 
     if (this.playbackSession) {
       console.log('[AudioPlayer] Before destroy closing playback')

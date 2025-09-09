@@ -1,11 +1,11 @@
 <template>
-  <div class="w-full h-full">
+  <div class="w-full h-full" :style="contentPaddingStyle">
     <div class="px-4 py-6">
       <!-- Material 3 Search Field -->
       <div class="relative w-full">
         <div class="relative w-full h-14 bg-transparent rounded-full flex items-center px-4 border-2 shadow-elevation-1" :class="searchBorderClass">
           <!-- Search Icon -->
-          <button @click="setFocus" class="material-symbols text-on-surface-variant mr-3 cursor-pointer hover:text-on-surface transition-colors duration-200" style="font-size: 1.25rem; background: none; border: none; padding: 0">search</button>
+          <button @click="setFocus" class="material-symbols text-on-surface-variant mr-3 cursor-pointer state-layer" style="font-size: 1.25rem; background: none; border: none; padding: 0">search</button>
 
           <!-- Search Input -->
           <input ref="input" v-model="search" @input="updateSearch($event.target.value)" @focus="onFocus" @blur="onBlur" type="text" :placeholder="$strings.ButtonSearch" class="flex-1 bg-transparent outline-none text-on-surface text-body-large placeholder:text-on-surface-variant" autocomplete="off" autocorrect="off" autocapitalize="none" />
@@ -114,6 +114,9 @@ export default {
       } else {
         return 'border-outline'
       }
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

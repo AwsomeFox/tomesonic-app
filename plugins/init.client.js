@@ -432,7 +432,10 @@ export default ({ store, app }, inject) => {
 
   // Android only
   App.addListener('backButton', async ({ canGoBack }) => {
-    if (store.state.globals.isModalOpen) {
+    // Close any open modal immediately on Android back.
+    // Some modals (like the Add/Create playlist modal) may set a dedicated flag
+    // before the shared `isModalOpen` is committed, so check those as well.
+    if (store.state.globals.isModalOpen || store.state.globals.showPlaylistsAddCreateModal || store.state.globals.showSelectLocalFolderModal || store.state.globals.showRSSFeedOpenCloseModal) {
       eventBus.$emit('close-modal')
       return
     }

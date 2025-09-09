@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full px-3 py-4 overflow-y-auto relative bg-surface-dynamic">
+  <div class="w-full h-full px-3 py-4 overflow-y-auto relative bg-surface-dynamic" :style="contentPaddingStyle">
     <p class="mb-4 text-lg font-semibold">History for {{ displayTitle }}</p>
 
     <div v-if="!mediaEvents.length" class="text-center py-8">
@@ -126,6 +126,9 @@ export default {
     playerIsStartingPlayback() {
       // Play has been pressed and waiting for native play response
       return this.$store.state.playerIsStartingPlayback
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

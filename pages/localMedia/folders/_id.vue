@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full py-6 px-4">
+  <div class="w-full h-full py-6 px-4" :style="contentPaddingStyle">
     <div class="flex items-center mb-2">
       <p class="text-base font-semibold">{{ $strings.LabelFolder }}: {{ folderName }}</p>
       <div class="flex-grow" />
@@ -69,6 +69,9 @@ export default {
         value: 'remove'
       })
       return items
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

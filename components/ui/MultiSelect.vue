@@ -17,7 +17,7 @@
 
       <ul ref="menu" v-show="showMenu" class="absolute z-50 mt-1 w-full bg-surface-container border border-outline-variant shadow-elevation-2 max-h-56 rounded-md py-1 ring-1 ring-outline ring-opacity-5 overflow-auto focus:outline-none text-sm backdrop-blur-md" role="listbox" aria-labelledby="listbox-label">
         <template v-for="item in itemsToShow">
-          <li :key="item" class="text-on-surface hover:bg-surface-container-high select-none relative py-2 pr-9 cursor-pointer transition-colors duration-200" role="option" @click="clickedOption($event, item)" @mouseup.stop.prevent @mousedown.prevent>
+          <li :key="item" class="text-on-surface select-none relative py-2 pr-9 cursor-pointer state-layer" role="option" @click="clickedOption($event, item)" @mouseup.stop.prevent @mousedown.prevent>
             <div class="flex items-center">
               <span class="font-normal ml-3 block truncate">{{ item }}</span>
             </div>

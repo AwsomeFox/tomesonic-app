@@ -1,17 +1,16 @@
 <template>
   <modals-modal v-model="show" :width="width" height="100%">
-    <template #outer>
-      <div v-if="title" class="absolute top-4 left-4 z-40 pt-1 pb-1.5 px-4 py-2 rounded-full bg-surface backdrop-blur-md shadow-elevation-2 border border-outline-variant" style="max-width: 80%">
-        <p class="text-on-surface text-xl font-medium truncate">{{ title }}</p>
-      </div>
-    </template>
-
     <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
       <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 p-2 backdrop-blur-md" style="max-height: 75%" @click.stop>
+        <!-- Material 3 Modal Header -->
+        <div v-if="title" class="px-4 py-4 border-b border-outline-variant">
+          <h2 class="text-headline-small text-on-surface font-medium">{{ title }}</h2>
+        </div>
+
         <ul class="h-full w-full" role="listbox" aria-labelledby="listbox-label">
           <template v-for="item in itemsToShow">
             <slot :name="item.value" :item="item" :selected="item.value === selected">
-              <li :key="item.value" :ref="`item-${item.value}`" class="text-on-surface select-none relative cursor-pointer hover:bg-surface-container transition-colors duration-200" :class="selected === item.value ? 'bg-primary-container text-on-primary-container' : ''" :style="{ paddingTop: itemPaddingY, paddingBottom: itemPaddingY }" role="option" @click="clickedOption(item.value)">
+              <li :key="item.value" :ref="`item-${item.value}`" class="text-on-surface select-none relative cursor-pointer state-layer" :class="selected === item.value ? 'bg-primary-container text-on-primary-container' : ''" :style="{ paddingTop: itemPaddingY, paddingBottom: itemPaddingY }" role="option" @click="clickedOption(item.value)">
                 <div class="relative flex items-center px-3">
                   <span v-if="item.icon" class="material-symbols text-xl mr-2 text-on-surface-variant">{{ item.icon }}</span>
                   <p class="font-normal block truncate text-base">{{ item.text }}</p>

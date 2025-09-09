@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full py-6">
+  <div class="w-full h-full py-6" :style="contentPaddingStyle">
     <div class="flex items-center mb-2">
       <h1 class="text-base font-semibold px-2">
         {{ $strings.HeaderLocalFolders }}
@@ -64,6 +64,9 @@ export default {
   computed: {
     isIos() {
       return this.$platform === 'ios'
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

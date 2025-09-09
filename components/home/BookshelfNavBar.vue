@@ -1,9 +1,9 @@
 <template>
-  <div class="fixed bottom-0 left-0 right-0 w-full bg-surface-container shadow-elevation-3 z-60 border-t border-outline-variant border-opacity-20" :style="{ paddingBottom: 'clamp(0px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 16px)', boxSizing: 'border-box', overflow: 'visible' }">
+  <div id="bookshelf-navbar" class="fixed bottom-0 left-0 right-0 w-full bg-surface-container shadow-elevation-3 z-80 border-t border-outline-variant border-opacity-20" :style="{ paddingBottom: 'clamp(0px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 16px)', boxSizing: 'border-box', overflow: 'visible', zIndex: 2147483646 }">
     <!-- The inner navbar height includes the safe-area padding so the fixed bar
       visually grows on devices with a bottom inset without requiring the
       content area to subtract the inset separately. -->
-    <div id="bookshelf-navbar" class="w-full flex items-center justify-around px-2" :style="{ minHeight: `calc(var(--bottom-nav-height) + clamp(0px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 16px))` }">
+    <div id="bookshelf-navbar-inner" class="w-full flex items-center justify-around px-2" :style="{ minHeight: `var(--bottom-nav-height)` }">
       <!-- allows padding to increase height without clipping -->
       <nuxt-link v-for="item in items" :key="item.to" :to="item.to" class="flex flex-col items-center justify-center py-1.5 px-3 min-w-16 transition-all duration-200 ease-standard" :style="{ minHeight: '3.25rem' }" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
         <!-- Icon with Material 3 active state pill -->
@@ -197,8 +197,7 @@ export default {
 <style scoped>
 /* Material 3 Bottom Navigation Bar Styles */
 #bookshelf-navbar {
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background-color: rgb(var(--md-sys-color-surface));
 }
 
 .state-layer {

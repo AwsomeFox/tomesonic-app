@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full py-4">
+  <div class="w-full h-full py-4" :style="contentPaddingStyle">
     <div class="flex items-center mb-2 space-x-2 px-4">
       <p class="text-lg font-bold">{{ $strings.ButtonLogs }}</p>
       <ui-icon-btn outlined borderless :icon="isCopied ? 'check' : 'content_copy'" @click="copyToClipboard" />
@@ -57,6 +57,9 @@ export default {
           icon: 'delete'
         }
       ]
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {

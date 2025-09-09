@@ -1,5 +1,5 @@
 <template>
-  <div class="fixed left-0 right-0 layout-wrapper w-full overflow-hidden pointer-events-none safe-area-root" style="z-index: 80; top: min(var(--safe-area-inset-top, env(safe-area-inset-top, constant(safe-area-inset-top, 0px))), 64px)">
+  <div class="fixed left-0 right-0 layout-wrapper w-full overflow-hidden pointer-events-none safe-area-root" style="z-index: 2147483648; top: min(var(--safe-area-inset-top, env(safe-area-inset-top, constant(safe-area-inset-top, 0px))), 64px)">
     <!-- Material 3 Scrim (no opacity transition to avoid flash) -->
     <div class="absolute top-0 left-0 w-full h-full bg-black" :class="show ? 'bg-opacity-32 pointer-events-auto' : 'bg-opacity-0 pointer-events-none'" @click="clickBackground" />
 
@@ -10,7 +10,6 @@
       <!-- Header Section -->
       <div class="px-6 py-6 border-b border-outline-variant">
         <p v-if="user" class="text-title-medium text-on-surface">
-          {{ $strings.HeaderWelcome }},
           <span class="text-primary font-medium">{{ username }}</span>
         </p>
         <p v-else class="text-title-medium text-on-surface">{{ $strings.HeaderMenu }}</p>

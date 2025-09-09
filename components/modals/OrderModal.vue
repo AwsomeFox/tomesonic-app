@@ -3,7 +3,7 @@
     <div class="w-full h-full bg-surface rounded-lg border border-outline-variant shadow-elevation-4 backdrop-blur-md">
       <ul class="w-full rounded-lg text-base" role="listbox" aria-labelledby="listbox-label">
         <template v-for="item in items">
-          <li :key="item.value" class="text-on-surface select-none relative py-4 pr-9 cursor-pointer hover:bg-surface-container transition-colors duration-200" :class="item.value === selected ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(item.value)">
+          <li :key="item.value" class="text-on-surface select-none relative py-4 pr-9 cursor-pointer state-layer" :class="item.value === selected ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(item.value)">
             <div class="flex items-center">
               <span class="font-normal ml-3 block truncate text-lg">{{ item.text }}</span>
             </div>

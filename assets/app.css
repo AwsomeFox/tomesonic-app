@@ -28,27 +28,49 @@ textarea {
   user-select: auto;
 }
 
-/* Ensure body has proper Material 3 styling */
+/* Ensure body has proper Material 3 styling and full height */
 html, body {
   background-color: rgb(var(--md-sys-color-surface));
   color: rgb(var(--md-sys-color-on-surface));
   font-family: 'Roboto', 'system-ui', '-apple-system', 'sans-serif';
   margin: 0;
   padding: 0;
+  height: 100vh !important;
+  overflow: hidden !important;
 }
 
 body {
   /* @apply bg-transparent-safe text-on-surface; */
   background-color: rgb(var(--md-sys-color-surface));
   color: rgb(var(--md-sys-color-on-surface));
+  height: 100vh !important;
+  overflow: hidden !important;
 }
 
 .layout-wrapper {
-  @apply bg-transparent-safe;
+  background: transparent;
   height: calc(100vh - env(safe-area-inset-top));
   min-height: calc(100vh - env(safe-area-inset-top));
   max-height: calc(100vh - env(safe-area-inset-top));
-  margin-top: env(safe-area-inset-top);
+  /* Prevent the entire layout from scrolling */
+  overflow: hidden;
+  /* Use flexbox to properly contain content */
+  display: flex;
+  flex-direction: column;
+}
+
+/* When player is open but no bottom navigation, allow full viewport height including behind system nav */
+.layout-wrapper.full-height {
+  height: 100vh !important;
+  min-height: 100vh !important;
+  max-height: 100vh !important;
+  /* Ensure proper flexbox layout */
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  /* Ensure no bottom margin/padding interferes with mini player positioning */
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
 }
 
 #content {
@@ -61,6 +83,13 @@ body {
   max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
 }
 
+/* Override base content height when layout is full height */
+.layout-wrapper.full-height #content {
+  height: auto;
+  min-height: auto;
+  max-height: none;
+}
+
 #content.playerOpen {
   /* Same: only account for status bar */
   height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
@@ -68,18 +97,51 @@ body {
   max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
 }
 
+/* Override playerOpen height when layout is full height */
+.layout-wrapper.full-height #content.playerOpen {
+  height: auto;
+  min-height: auto;
+  max-height: none;
+}
+
+/* When player is open but no bottom navigation, allow content to fill available space */
+.layout-wrapper.full-height #content.playerOpen:not(.has-bottom-nav) {
+  /* With full height layout, content should fill remaining space after app bar */
+  flex: 1;
+  /* Ensure content scrolls within its container, not the entire page */
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Ensure no bottom margin/padding interferes with mini player */
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Additional class for scrollable content */
+.content-scrollable {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* When player is open but no bottom navigation, padding is now handled dynamically in default.vue */
+
 /* Special class for bookshelf pages with bottom navigation - still only
    account for status bar offset so views render beneath the bottom nav. */
 #content.has-bottom-nav {
-  height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
-  min-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
-  max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  height: calc(100% - var(--bottom-nav-height, 56px));
 }
 
 #content.has-bottom-nav.playerOpen {
   height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
   min-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
   max-height: calc(100% - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+}
+
+/* Override has-bottom-nav height when layout is full height (shouldn't happen but just in case) */
+.layout-wrapper.full-height #content.has-bottom-nav,
+.layout-wrapper.full-height #content.has-bottom-nav.playerOpen {
+  height: auto;
+  min-height: auto;
+  max-height: none;
 }
 
 #bookshelf {
@@ -228,3 +290,43 @@ Bookshelf Label
   -webkit-line-clamp: 4;
   line-clamp: 4;
 }
+
+/* NUCLEAR OPTION: Force everything to take full height */
+html, body, #__nuxt, #__layout {
+  height: 100vh !important;
+  min-height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+}
+
+/* ABSOLUTE NUCLEAR FORCE: Override everything for full screen content */
+.layout-wrapper.full-height #content:not(.has-bottom-nav),
+.layout-wrapper.full-height #content.playerOpen:not(.has-bottom-nav),
+.layout-wrapper.full-height #content.playerOpen:not(.has-bottom-nav).content-scrollable,
+.layout-wrapper.full-height div#content:not(.has-bottom-nav),
+.layout-wrapper.full-height div#content.playerOpen:not(.has-bottom-nav),
+.layout-wrapper.full-height div#content.playerOpen:not(.has-bottom-nav).content-scrollable {
+  flex: 1 !important;
+  height: auto !important;
+  min-height: auto !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* Ensure app bar doesn't shrink in full height layout */
+.layout-wrapper.full-height .app-appbar,
+.layout-wrapper.full-height [class*="app-appbar"] {
+  flex-shrink: 0 !important;
+}
+
+/* Ensure mini player stays above full-height content */
+.layout-wrapper.full-height #streamContainer,
+.layout-wrapper.full-height #streamContainer[id="streamContainer"],
+.layout-wrapper.full-height div#streamContainer,
+.layout-wrapper.full-height div#streamContainer[id="streamContainer"] {
+  z-index: 100 !important;
+  /* Let Vue component handle position and transitions */
+}
+
+

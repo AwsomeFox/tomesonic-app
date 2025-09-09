@@ -383,7 +383,11 @@
 
 /* STATIC CLASSES - Won't be affected by dynamic colors */
 .bg-player-overlay {
-  background-color: rgba(241, 236, 244, 0.85); /* surface-container with opacity */
+  /* Use a subtle tint based on the theme 'on-surface' color so the backdrop blur is visible
+     on very light backgrounds while remaining appropriate in dark mode. */
+  background-color: rgba(var(--md-sys-color-on-surface), 0.04);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .bg-card-title-overlay {

@@ -1,14 +1,14 @@
 <template>
   <modals-modal v-model="show" width="100%" height="100%" max-width="100%">
-    <template #outer>
-      <div class="absolute top-8 left-4 z-40">
-        <p class="text-on-surface text-2xl truncate">Feed Episodes</p>
-      </div>
-    </template>
     <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
       <div class="feed-content w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 backdrop-blur-md" @click.stop.prevent>
+        <!-- Material 3 Modal Header -->
+        <div class="px-6 py-4 border-b border-outline-variant">
+          <h2 class="text-headline-small text-on-surface font-medium">Feed Episodes</h2>
+        </div>
+
         <template v-for="(episode, index) in episodes">
-          <div :key="index" class="relative hover:bg-surface-container transition-colors duration-200" :class="itemEpisodeMap[episode.enclosure.url] ? 'bg-primary-container text-on-primary-container' : selectedEpisodes[String(index)] ? 'bg-success-container text-on-success-container' : index % 2 == 0 ? 'bg-surface-variant bg-opacity-25' : 'bg-surface'" @click="selectEpisode(episode, index)">
+          <div :key="index" class="relative state-layer" :class="itemEpisodeMap[episode.enclosure.url] ? 'bg-primary-container text-on-primary-container' : selectedEpisodes[String(index)] ? 'bg-success-container text-on-success-container' : index % 2 == 0 ? 'bg-surface-variant bg-opacity-25' : 'bg-surface'" @click="selectEpisode(episode, index)">
             <div class="absolute top-0 left-0 h-full flex items-center p-2">
               <span v-if="itemEpisodeMap[episode.enclosure.url]" class="material-symbols text-success text-xl">download_done</span>
               <ui-checkbox v-else v-model="selectedEpisodes[String(index)]" small checkbox-bg="primary" border-color="gray-600" />

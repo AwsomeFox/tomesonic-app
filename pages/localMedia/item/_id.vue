@@ -1,5 +1,5 @@
 <template>
-  <div class="w-full h-full py-6 px-2">
+  <div class="w-full h-full py-6 px-2" :style="contentPaddingStyle">
     <div v-if="localLibraryItem" class="w-full h-full">
       <div class="px-2 flex items-center mb-2">
         <p class="text-base font-semibold truncate">{{ mediaMetadata.title }}</p>
@@ -268,6 +268,9 @@ export default {
     },
     totalLibraryItemSize() {
       return this.localFiles.reduce((acc, item) => acc + item.size, 0)
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   methods: {
