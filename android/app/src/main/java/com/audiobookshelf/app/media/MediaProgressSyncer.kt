@@ -91,6 +91,9 @@ class MediaProgressSyncer(
                   // Set auto sleep timer if enabled and within start/end time
                   playerNotificationService.sleepTimerManager.checkAutoSleepTimer()
 
+                  // Update Android Auto queue position for chapter-based books
+                  playerNotificationService.updateQueuePositionForChapters()
+
                   // Only sync with server on unmetered connection every 15s OR sync with server if
                   // last sync time is >= 60s
                   val shouldSyncServer =

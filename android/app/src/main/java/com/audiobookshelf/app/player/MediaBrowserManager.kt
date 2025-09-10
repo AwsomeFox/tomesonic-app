@@ -1,7 +1,13 @@
 package com.audiobookshelf.app.player
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaDescriptionCompat
 import android.util.Log
@@ -24,6 +30,31 @@ class MediaBrowserManager(
     private val ctx: Context
 ) {
     private val tag = "MediaBrowserManager"
+
+    // Helper function to determine if a book should be browsable (has chapters)
+    private fun shouldBookBeBrowsable(libraryItem: LibraryItem): Boolean {
+        return libraryItem.mediaType == "book" && 
+               (libraryItem.media as? Book)?.chapters?.isNotEmpty() == true
+    }
+
+    // Helper function for local library items
+    private fun shouldLocalBookBeBrowsable(localLibraryItem: LocalLibraryItem): Boolean {
+        return localLibraryItem.mediaType == "book" && 
+               (localLibraryItem.media as? Book)?.chapters?.isNotEmpty() == true
+    }
+
+    // Helper function to format duration in seconds to readable format
+    private fun formatTime(seconds: Long): String {
+        val hours = seconds / 3600
+        val minutes = (seconds % 3600) / 60
+        val secs = seconds % 60
+        
+        return if (hours > 0) {
+            String.format("%d:%02d:%02d", hours, minutes, secs)
+        } else {
+            String.format("%d:%02d", minutes, secs)
+        }
+    }
 
     // Constants
     companion object {
@@ -86,6 +117,12 @@ class MediaBrowserManager(
                 forceReloadingAndroidAuto = true
                 firstLoadDone = false // Reset firstLoadDone when server items are reset
                 networkConnectivityManager.setFirstLoadDone(false) // Sync with NetworkConnectivityManager
+                
+                // Trigger refresh after a short delay to ensure service is ready
+                Handler(Looper.getMainLooper()).postDelayed({
+                    AbsLogger.info(tag, "onGetRoot: Triggering Android Auto refresh after cache reset")
+                    service.notifyChildrenChanged(AUTO_MEDIA_ROOT)
+                }, 1000)
             }
 
             service.isAndroidAuto = true
@@ -129,11 +166,20 @@ class MediaBrowserManager(
                     val progress = DeviceManager.dbManager.getLocalMediaProgress(localLibraryItem.id)
                     val description = localLibraryItem.getMediaDescription(progress, ctx)
 
-                    localBrowseItems +=
-                        MediaBrowserCompat.MediaItem(
-                            description,
-                            MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
-                        )
+                    // Make books with chapters browsable instead of playable
+                    if (shouldLocalBookBeBrowsable(localLibraryItem)) {
+                        localBrowseItems +=
+                            MediaBrowserCompat.MediaItem(
+                                description,
+                                MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                            )
+                    } else {
+                        localBrowseItems +=
+                            MediaBrowserCompat.MediaItem(
+                                description,
+                                MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+                            )
+                    }
                 }
             }
 
@@ -531,10 +577,19 @@ class MediaBrowserManager(
                                     libraryItem.localLibraryItemId = localLibraryItem?.id
                                     val description =
                                         libraryItem.getMediaDescription(progress, ctx, null, false)
-                                    MediaBrowserCompat.MediaItem(
-                                        description,
-                                        MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
-                                    )
+                                    
+                                    // Make books with chapters browsable instead of playable
+                                    if (shouldBookBeBrowsable(libraryItem)) {
+                                        MediaBrowserCompat.MediaItem(
+                                            description,
+                                            MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                        )
+                                    } else {
+                                        MediaBrowserCompat.MediaItem(
+                                            description,
+                                            MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+                                        )
+                                    }
                                 }?.toMutableList()
                             result.sendResult(children)
                         } else if (shelf.type == "episode") {
@@ -729,10 +784,19 @@ class MediaBrowserManager(
                                 DeviceManager.dbManager.getLocalLibraryItemByLId(libraryItem.id)
                             libraryItem.localLibraryItemId = localLibraryItem?.id
                             val description = libraryItem.getMediaDescription(progress, ctx, null, true)
-                            MediaBrowserCompat.MediaItem(
-                                description,
-                                MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
-                            )
+                            
+                            // Make books with chapters browsable instead of playable
+                            if (shouldBookBeBrowsable(libraryItem)) {
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                )
+                            } else {
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+                                )
+                            }
                         }
                     result.sendResult(children as MutableList<MediaBrowserCompat.MediaItem>?)
                 }
@@ -829,6 +893,12 @@ class MediaBrowserManager(
                                     description,
                                     MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
                                 )
+                            } else if (shouldBookBeBrowsable(libraryItem)) {
+                                val description = libraryItem.getMediaDescription(progress, ctx)
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                )
                             } else {
                                 val description = libraryItem.getMediaDescription(progress, ctx)
                                 MediaBrowserCompat.MediaItem(
@@ -862,6 +932,11 @@ class MediaBrowserManager(
                             libraryItem.localLibraryItemId = localLibraryItem?.id
                             val description = libraryItem.getMediaDescription(progress, ctx, null, true)
                             if (libraryItem.collapsedSeries != null) {
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                )
+                            } else if (shouldBookBeBrowsable(libraryItem)) {
                                 MediaBrowserCompat.MediaItem(
                                     description,
                                     MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
@@ -904,10 +979,19 @@ class MediaBrowserManager(
                                 DeviceManager.dbManager.getLocalLibraryItemByLId(libraryItem.id)
                             libraryItem.localLibraryItemId = localLibraryItem?.id
                             val description = libraryItem.getMediaDescription(progress, ctx)
-                            MediaBrowserCompat.MediaItem(
-                                description,
-                                MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
-                            )
+                            
+                            // Make books with chapters browsable instead of playable
+                            if (shouldBookBeBrowsable(libraryItem)) {
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                )
+                            } else {
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+                                )
+                            }
                         }
                     result.sendResult(children as MutableList<MediaBrowserCompat.MediaItem>?)
                 }
@@ -925,10 +1009,19 @@ class MediaBrowserManager(
                                 DeviceManager.dbManager.getLocalLibraryItemByLId(libraryItem.id)
                             libraryItem.localLibraryItemId = localLibraryItem?.id
                             val description = libraryItem.getMediaDescription(progress, ctx)
-                            MediaBrowserCompat.MediaItem(
-                                description,
-                                MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
-                            )
+                            
+                            // Make books with chapters browsable instead of playable
+                            if (shouldBookBeBrowsable(libraryItem)) {
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                )
+                            } else {
+                                MediaBrowserCompat.MediaItem(
+                                    description,
+                                    MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+                                )
+                            }
                         }
                     result.sendResult(children as MutableList<MediaBrowserCompat.MediaItem>?)
                 }
@@ -936,8 +1029,84 @@ class MediaBrowserManager(
                 result.sendResult(null)
             }
         } else {
-            Log.d(tag, "Loading podcast episodes for podcast $parentMediaId")
-            mediaManager.loadPodcastEpisodeMediaBrowserItems(parentMediaId, ctx) { result.sendResult(it) }
+            // Check if this is a book ID (for chapter browsing)
+            val libraryItem = mediaManager.getById(parentMediaId)
+            val localLibraryItem = DeviceManager.dbManager.getLocalLibraryItem(parentMediaId) as? LocalLibraryItem
+            
+            if (libraryItem != null && libraryItem is LibraryItem && shouldBookBeBrowsable(libraryItem)) {
+                Log.d(tag, "Loading chapters for book ${libraryItem.media.metadata.title}")
+                val book = libraryItem.media as Book
+                val chapters = book.chapters ?: emptyList()
+                
+                val children = chapters.mapIndexed { index, chapter ->
+                    val chapterMediaId = "${libraryItem.id}__CHAPTER__${index}"
+                    val chapterTitle = chapter.title ?: "Chapter ${index + 1}"
+                    val chapterSubtitle = "${formatTime((chapter.end - chapter.start).toLong())} • ${libraryItem.media.metadata.title}"
+                    
+                    val description = MediaDescriptionCompat.Builder()
+                        .setMediaId(chapterMediaId)
+                        .setTitle(chapterTitle)
+                        .setSubtitle(chapterSubtitle)
+                        .setIconUri(libraryItem.getCoverUri())
+                        .build()
+                        
+                    MediaBrowserCompat.MediaItem(
+                        description,
+                        MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+                    )
+                }.toMutableList()
+                
+                result.sendResult(children)
+            } else if (localLibraryItem != null && shouldLocalBookBeBrowsable(localLibraryItem)) {
+                Log.d(tag, "Loading chapters for local book ${localLibraryItem.media.metadata.title}")
+                val book = localLibraryItem.media as Book
+                val chapters = book.chapters ?: emptyList()
+                
+                // Cache bitmap for local books to avoid loading the same image multiple times
+                var cachedBitmap: Bitmap? = null
+                val coverUri = localLibraryItem.getCoverUri(ctx)
+                
+                // Load bitmap once for local books
+                if (localLibraryItem.coverContentUrl != null) {
+                    try {
+                        cachedBitmap = if (Build.VERSION.SDK_INT < 28) {
+                            MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
+                        } else {
+                            val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
+                            ImageDecoder.decodeBitmap(source)
+                        }
+                        Log.d(tag, "Cached bitmap loaded for local book browse chapters")
+                    } catch (e: Exception) {
+                        Log.w(tag, "Failed to load cached bitmap for browse chapters: ${e.message}")
+                    }
+                }
+                
+                val children = chapters.mapIndexed { index, chapter ->
+                    val chapterMediaId = "${localLibraryItem.id}__CHAPTER__${index}"
+                    val chapterTitle = chapter.title ?: "Chapter ${index + 1}"
+                    val chapterSubtitle = "${formatTime((chapter.end - chapter.start).toLong())} • ${localLibraryItem.media.metadata.title}"
+                    
+                    val description = MediaDescriptionCompat.Builder()
+                        .setMediaId(chapterMediaId)
+                        .setTitle(chapterTitle)
+                        .setSubtitle(chapterSubtitle)
+                        .setIconUri(coverUri)
+                        .apply {
+                            cachedBitmap?.let { setIconBitmap(it) }
+                        }
+                        .build()
+                        
+                    MediaBrowserCompat.MediaItem(
+                        description,
+                        MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+                    )
+                }.toMutableList()
+                
+                result.sendResult(children)
+            } else {
+                Log.d(tag, "Loading podcast episodes for podcast $parentMediaId")
+                mediaManager.loadPodcastEpisodeMediaBrowserItems(parentMediaId, ctx) { result.sendResult(it) }
+            }
         }
     }
 

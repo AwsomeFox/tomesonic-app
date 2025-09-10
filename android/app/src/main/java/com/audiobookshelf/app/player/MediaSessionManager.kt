@@ -7,6 +7,8 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
@@ -100,7 +102,7 @@ class MediaSessionManager(
     private fun initializeMediaSessionConnector() {
         mediaSessionConnector = MediaSessionConnector(mediaSession)
         
-        val queueNavigator: TimelineQueueNavigator = createQueueNavigator()
+        val queueNavigator: TimelineQueueNavigator? = createQueueNavigator()
         
         // Set up connector components
         service.setMediaSessionConnectorPlaybackActions()
@@ -111,98 +113,11 @@ class MediaSessionManager(
         mediaSession.setCallback(MediaSessionCallback(service))
     }
 
-    private fun createQueueNavigator(): TimelineQueueNavigator {
-        return object : TimelineQueueNavigator(mediaSession) {
-            override fun getSupportedQueueNavigatorActions(player: Player): Long {
-                return PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                        PlaybackStateCompat.ACTION_PLAY or
-                        PlaybackStateCompat.ACTION_PAUSE
-            }
-
-            override fun getMediaDescription(
-                player: Player,
-                windowIndex: Int
-            ): MediaDescriptionCompat {
-                val currentPlaybackSession = service.currentPlaybackSession
-                if (currentPlaybackSession == null) {
-                    Log.e(TAG, "Playback session is not set - returning blank MediaDescriptionCompat")
-                    return MediaDescriptionCompat.Builder().build()
-                }
-
-                val coverUri = currentPlaybackSession.getCoverUri(context)
-
-                var bitmap: Bitmap? = null
-                // Local covers get bitmap
-                // Note: In Android Auto for local cover images, setting the icon uri to a local path does not work (cover is blank)
-                // so we create and set the bitmap here instead of AbMediaDescriptionAdapter
-                if (currentPlaybackSession.localLibraryItem?.coverContentUrl != null) {
-                    bitmap = if (Build.VERSION.SDK_INT < 28) {
-                        MediaStore.Images.Media.getBitmap(context.contentResolver, coverUri)
-                    } else {
-                        val source: ImageDecoder.Source =
-                            ImageDecoder.createSource(context.contentResolver, coverUri)
-                        ImageDecoder.decodeBitmap(source)
-                    }
-                }
-
-                // Fix for local images crashing on Android 11 for specific devices
-                // https://stackoverflow.com/questions/64186578/android-11-mediastyle-notification-crash/64232958#64232958
-                try {
-                    context.grantUriPermission(
-                        "com.android.systemui",
-                        coverUri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                } catch (error: Exception) {
-                    Log.e(TAG, "Grant uri permission error $error")
-                }
-
-                val extra = Bundle()
-                extra.putString(
-                    MediaMetadataCompat.METADATA_KEY_ARTIST,
-                    currentPlaybackSession.displayAuthor
-                )
-
-                // Prefer MediaSession queue item title (chapter) if available
-                val queue = mediaSession.controller.getQueue()
-                val queueTitle: String? = try {
-                    if (queue != null && windowIndex >= 0 && windowIndex < queue.size) 
-                        queue[windowIndex].description.title.toString() 
-                    else null
-                } catch (e: Exception) { 
-                    null 
-                }
-
-                // Fallback to per-track title if queue title isn't set
-                val track: com.audiobookshelf.app.data.AudioTrack? = try {
-                    if (windowIndex >= 0 && windowIndex < currentPlaybackSession.audioTracks.size) 
-                        currentPlaybackSession.audioTracks[windowIndex] 
-                    else null
-                } catch (e: Exception) { 
-                    null 
-                }
-
-                val titleToShow = queueTitle ?: track?.title ?: currentPlaybackSession.displayTitle
-                val bookTitle = currentPlaybackSession.displayTitle
-
-                // Include chapter title in extras so Now Playing and other clients can show it
-                if (queueTitle != null) {
-                    extra.putString("chapter_title", queueTitle)
-                } else if (track?.title != null) {
-                    extra.putString("chapter_title", track.title)
-                }
-
-                val mediaDescriptionBuilder = MediaDescriptionCompat.Builder()
-                    .setExtras(extra)
-                    .setTitle(titleToShow)
-                    .setSubtitle(bookTitle)
-
-                bitmap?.let { mediaDescriptionBuilder.setIconBitmap(it) }
-                    ?: mediaDescriptionBuilder.setIconUri(coverUri)
-
-                return mediaDescriptionBuilder.build()
-            }
-        }
+    private fun createQueueNavigator(): TimelineQueueNavigator? {
+        // Always use manual queue management instead of TimelineQueueNavigator
+        // This provides consistent chapter-based navigation for all books
+        Log.d(TAG, "Using manual queue management for consistent chapter-based navigation")
+        return null
     }
 
     fun getSessionToken(): MediaSessionCompat.Token = mediaSession.sessionToken
@@ -225,13 +140,25 @@ class MediaSessionManager(
     }
 
     fun setCustomActions(playbackSession: PlaybackSession, context: Context, service: PlayerNotificationService) {
+        // Ensure we're on the main thread since this accesses MediaSessionConnector
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Log.w(TAG, "setCustomActions called on wrong thread, posting to main thread")
+            Handler(Looper.getMainLooper()).post {
+                setCustomActions(playbackSession, context, service)
+            }
+            return
+        }
+        
         val mediaItems = playbackSession.getMediaItems(context)
         val customActionProviders = mutableListOf<CustomActionProvider>(
             JumpBackwardCustomActionProvider(service),
             JumpForwardCustomActionProvider(service),
             ChangePlaybackSpeedCustomActionProvider(service) // Will be pushed to far left
         )
-        if (playbackSession.mediaPlayer != "cast-player" && mediaItems.size > 1) {
+        
+        // Show skip buttons if we have multiple chapters OR multiple tracks (but not for cast player)
+        val hasMultipleItems = playbackSession.chapters.size > 1 || mediaItems.size > 1
+        if (playbackSession.mediaPlayer != "cast-player" && hasMultipleItems) {
             customActionProviders.addAll(
                 listOf(
                     SkipBackwardCustomActionProvider(service),

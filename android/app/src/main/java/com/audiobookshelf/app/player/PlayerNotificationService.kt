@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.ImageDecoder
@@ -137,7 +138,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   private lateinit var mediaBrowserManager: MediaBrowserManager
 
   fun isBrowseTreeInitialized(): Boolean {
-    return mediaBrowserManager.isBrowseTreeInitialized()
+    return ::mediaBrowserManager.isInitialized && mediaBrowserManager.isBrowseTreeInitialized()
   }
 
   /*
@@ -163,6 +164,19 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     isStarted = true
     Log.d(tag, "onStartCommand $startId")
 
+    // Start foreground service immediately to prevent ANR
+    // This creates a basic notification that will be replaced by PlayerNotificationManager
+    if (!PlayerNotificationListener.isForegroundService) {
+      val notification = createBasicNotification()
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+      } else {
+        startForeground(notificationId, notification)
+      }
+      PlayerNotificationListener.isForegroundService = true
+      Log.d(tag, "Started foreground service with basic notification")
+    }
+
     return START_STICKY
   }
 
@@ -179,6 +193,20 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     val service = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     service.createNotificationChannel(chan)
     return channelId
+  }
+
+  private fun createBasicNotification(): Notification {
+    val channelId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      createNotificationChannel(this.channelId, this.channelName)
+    } else ""
+
+    return NotificationCompat.Builder(this, channelId)
+      .setSmallIcon(R.drawable.icon_monochrome)
+      .setContentTitle("Audiobookshelf")
+      .setContentText("Preparing playback...")
+      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+      .build()
   }
 
   // detach player
@@ -210,6 +238,15 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   override fun onTaskRemoved(rootIntent: Intent?) {
     super.onTaskRemoved(rootIntent)
     Log.d(tag, "onTaskRemoved")
+
+    // Keep the MediaBrowserService running for Android Auto even when app is closed
+    if (isAndroidAuto) {
+      Log.d(tag, "onTaskRemoved: Keeping MediaBrowserService alive for Android Auto")
+      // Don't call stopSelf() - let the service continue running for Android Auto
+    } else {
+      // If not being used by Android Auto, allow normal termination
+      Log.d(tag, "onTaskRemoved: Not in Android Auto mode, allowing normal termination")
+    }
   }
 
   override fun onCreate() {
@@ -312,6 +349,15 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             playWhenReady: Boolean,
             playbackRate: Float?
     ) {
+      // Ensure we're on the main thread
+      if (Looper.myLooper() != Looper.getMainLooper()) {
+        Log.w(tag, "doPreparePlayer called on wrong thread, posting to main thread")
+        Handler(Looper.getMainLooper()).post {
+          doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+        }
+        return
+      }
+
       try {
       if (!isStarted) {
         Log.i(tag, "preparePlayer: foreground service not started - Starting service --")
@@ -333,23 +379,197 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       isClosed = false
 
+      // First set the basic metadata
       val metadata = playbackSession.getMediaMetadataCompat(ctx)
       mediaSession.setMetadata(metadata)
-      // Build MediaSession queue from chapters so Android Auto shows actual chapter list
+
+      // Build MediaSession queue from chapters/tracks so Android Auto shows actual navigation list
       try {
         val chapterQueue: MutableList<android.support.v4.media.session.MediaSessionCompat.QueueItem> = mutableListOf()
-        for ((idx, chapter) in playbackSession.chapters.withIndex()) {
+
+        if (playbackSession.chapters.isNotEmpty()) {
+          Log.d(tag, "Android Auto: Building chapter queue. Number of chapters: ${playbackSession.chapters.size}")
+
+          // Cache bitmap for local books to avoid loading the same image multiple times
+          var cachedBitmap: Bitmap? = null
+          val coverUri = playbackSession.getCoverUri(ctx)
+
+          // Load bitmap once for local books
+          if (playbackSession.localLibraryItem?.coverContentUrl != null) {
+            try {
+              cachedBitmap = if (Build.VERSION.SDK_INT < 28) {
+                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
+              } else {
+                val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
+                ImageDecoder.decodeBitmap(source)
+              }
+              Log.d(tag, "Cached bitmap loaded for local book chapters")
+            } catch (e: Exception) {
+              Log.w(tag, "Failed to load cached bitmap for chapters: ${e.message}")
+            }
+          }
+
+          for ((idx, chapter) in playbackSession.chapters.withIndex()) {
+            Log.d(tag, "Android Auto: Adding chapter $idx: ${chapter.title ?: "Chapter ${idx + 1}"}")
+
+            val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
+              .setMediaId("chapter_$idx")
+              .setTitle(chapter.title ?: "Chapter ${idx + 1}")
+              .setSubtitle(playbackSession.displayTitle)
+              .setIconUri(coverUri)
+              .apply {
+                cachedBitmap?.let { setIconBitmap(it) }
+              }
+              .build()
+            val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
+            chapterQueue.add(queueItem)
+          }
+
+          // Update metadata to reflect current chapter
+          val currentChapterIndex = getCurrentChapterIndex()
+          if (currentChapterIndex >= 0 && currentChapterIndex < playbackSession.chapters.size) {
+            val currentChapter = playbackSession.chapters[currentChapterIndex]
+            val chapterMetadata = MediaMetadataCompat.Builder(metadata)
+              .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "chapter_$currentChapterIndex")
+              .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
+              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
+              // Preserve cover images
+              .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
+              .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI))
+              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI))
+              .apply {
+                // Preserve existing bitmaps
+                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
+                if (existingBitmap != null) {
+                  putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, existingBitmap)
+                  putBitmap(MediaMetadataCompat.METADATA_KEY_ART, existingBitmap)
+                }
+              }
+              .build()
+            Log.d(tag, "Android Auto: Setting chapter metadata for chapter $currentChapterIndex: ${currentChapter.title}")
+            mediaSession.setMetadata(chapterMetadata)
+          }
+        } else if (playbackSession.audioTracks.size > 1) {
+          Log.d(tag, "Android Auto: Building track queue. Number of tracks: ${playbackSession.audioTracks.size}")
+
+          // Cache bitmap for local books to avoid loading the same image multiple times
+          var cachedBitmap: Bitmap? = null
+          val coverUri = playbackSession.getCoverUri(ctx)
+
+          // Load bitmap once for local books
+          if (playbackSession.localLibraryItem?.coverContentUrl != null) {
+            try {
+              cachedBitmap = if (Build.VERSION.SDK_INT < 28) {
+                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
+              } else {
+                val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
+                ImageDecoder.decodeBitmap(source)
+              }
+              Log.d(tag, "Cached bitmap loaded for local book tracks")
+            } catch (e: Exception) {
+              Log.w(tag, "Failed to load cached bitmap for tracks: ${e.message}")
+            }
+          }
+
+          for ((idx, track) in playbackSession.audioTracks.withIndex()) {
+            Log.d(tag, "Android Auto: Adding track $idx: ${track.title ?: "Track ${idx + 1}"}")
+
+            val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
+              .setMediaId("track_$idx")
+              .setTitle(track.title ?: "Track ${idx + 1}")
+              .setSubtitle(playbackSession.displayTitle)
+              .setIconUri(coverUri)
+              .apply {
+                cachedBitmap?.let { setIconBitmap(it) }
+              }
+              .build()
+            val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
+            chapterQueue.add(queueItem)
+          }
+
+          // Update metadata to reflect current track
+          val currentTrackIndex = playbackSession.getCurrentTrackIndex()
+          if (currentTrackIndex >= 0 && currentTrackIndex < playbackSession.audioTracks.size) {
+            val currentTrack = playbackSession.audioTracks[currentTrackIndex]
+            val trackMetadata = MediaMetadataCompat.Builder(metadata)
+              .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "track_$currentTrackIndex")
+              .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTrack.title ?: "Track ${currentTrackIndex + 1}")
+              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, currentTrack.title ?: "Track ${currentTrackIndex + 1}")
+              // Preserve cover images
+              .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
+              .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI))
+              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI))
+              .apply {
+                // Preserve existing bitmaps
+                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
+                if (existingBitmap != null) {
+                  putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, existingBitmap)
+                  putBitmap(MediaMetadataCompat.METADATA_KEY_ART, existingBitmap)
+                }
+              }
+              .build()
+            Log.d(tag, "Android Auto: Setting track metadata for track $currentTrackIndex: ${currentTrack.title}")
+            mediaSession.setMetadata(trackMetadata)
+          }
+        } else {
+          Log.d(tag, "Android Auto: Single track book, creating simple queue")
+          // Single track book - create one queue item
+          val coverUri = playbackSession.getCoverUri(ctx)
+
+          // Load bitmap for local books
+          var bitmap: Bitmap? = null
+          if (playbackSession.localLibraryItem?.coverContentUrl != null) {
+            try {
+              bitmap = if (Build.VERSION.SDK_INT < 28) {
+                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
+              } else {
+                val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
+                ImageDecoder.decodeBitmap(source)
+              }
+              Log.d(tag, "Bitmap loaded for single track local book")
+            } catch (e: Exception) {
+              Log.w(tag, "Failed to load bitmap for single track: ${e.message}")
+            }
+          }
+
           val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
-            .setMediaId("chapter_$idx")
-            .setTitle(chapter.title ?: "Chapter ${idx + 1}")
-            .setSubtitle(playbackSession.displayTitle)
+            .setMediaId("track_0")
+            .setTitle(playbackSession.displayTitle)
+            .setSubtitle(playbackSession.displayAuthor)
+            .setIconUri(coverUri)
+            .apply {
+              bitmap?.let { setIconBitmap(it) }
+            }
             .build()
-          val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
+          val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, 0L)
           chapterQueue.add(queueItem)
         }
-        mediaSession.setQueue(chapterQueue)
+
+        if (chapterQueue.isNotEmpty()) {
+          // Set queue after a small delay to ensure MediaSessionConnector is ready
+          Handler(Looper.getMainLooper()).postDelayed({
+            Log.d(tag, "Android Auto: Setting queue on MediaSession with ${chapterQueue.size} items")
+            mediaSession.setQueue(chapterQueue)
+            Log.d(tag, "Android Auto: Queue set successfully with ${chapterQueue.size} items")
+
+            // Verify the queue was set
+            val setQueue = mediaSession.controller?.queue
+            Log.d(tag, "Android Auto: Queue verification - size: ${setQueue?.size ?: 0}")
+
+            // Set initial active queue item based on current playback position
+            val currentIndex = if (playbackSession.chapters.isNotEmpty()) {
+              getCurrentChapterIndex()
+            } else {
+              playbackSession.getCurrentTrackIndex()
+            }
+            Log.d(tag, "Android Auto: Current index: $currentIndex")
+            if (currentIndex >= 0) {
+              updateActiveQueueItem(currentIndex)
+            }
+          }, 500) // Wait 500ms to ensure everything is ready
+        }
       } catch (e: Exception) {
-        Log.e(tag, "Failed to set chapter queue: ${e.localizedMessage}")
+        Log.e(tag, "Failed to set queue: ${e.localizedMessage}")
       }
       val mediaItems = playbackSession.getMediaItems(ctx)
       val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: 1f
@@ -489,13 +709,18 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       // Stop and force a sync/flush of the previous session. Once complete, proceed to prepare the new session.
       mediaProgressSyncer.stop(true) {
         try {
-          doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+          // Ensure we're on the main thread when calling doPreparePlayer
+          Handler(Looper.getMainLooper()).post {
+            doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+          }
         } catch (e: Exception) {
           AbsLogger.error("PlayerNotificationService", "preparePlayer: Failed to prepare new player session after stopping previous: ${e.message}")
           Log.e(tag, "Exception during player preparation", e)
           // Reset state and notify client of failure
-          currentPlaybackSession = null
-          clientEventEmitter?.onPlaybackFailed("Failed to switch to new media item: ${e.message}")
+          Handler(Looper.getMainLooper()).post {
+            currentPlaybackSession = null
+            clientEventEmitter?.onPlaybackFailed("Failed to switch to new media item: ${e.message}")
+          }
         }
       }
       return
@@ -503,13 +728,22 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
     // No prior session or same item, proceed immediately.
     try {
-      doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+      // Ensure we're on the main thread when calling doPreparePlayer
+      if (Looper.myLooper() == Looper.getMainLooper()) {
+        doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+      } else {
+        Handler(Looper.getMainLooper()).post {
+          doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+        }
+      }
     } catch (e: Exception) {
       AbsLogger.error("PlayerNotificationService", "preparePlayer: Failed to prepare player session: ${e.message}")
       Log.e(tag, "Exception during immediate player preparation", e)
       // Reset state and notify client of failure
-      currentPlaybackSession = null
-      clientEventEmitter?.onPlaybackFailed("Failed to prepare media item: ${e.message}")
+      Handler(Looper.getMainLooper()).post {
+        currentPlaybackSession = null
+        clientEventEmitter?.onPlaybackFailed("Failed to prepare media item: ${e.message}")
+      }
     }
   }
 
@@ -852,8 +1086,120 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         } else {
           currentPlayer.seekTo(chapterStartMs)
         }
+
+        // Update the active queue item for Android Auto
+        updateActiveQueueItem(chapterIndex)
       } catch (e: Exception) {
         Log.e(tag, "seekToChapter error: ${e.localizedMessage}")
+      }
+    }
+  }
+
+  // Update the active queue item and metadata for chapter/track-based books
+  private fun updateActiveQueueItem(index: Int) {
+    try {
+      val currentPlaybackSession = this.currentPlaybackSession ?: return
+      val queue = mediaSession.controller?.queue
+
+      if (queue != null && index >= 0 && index < queue.size) {
+        val queueItem = queue[index]
+        Log.d(tag, "Android Auto: Setting active queue item to index $index: ${queueItem.description.title}")
+
+        // Update the playback state with active queue item
+        mediaSession.setPlaybackState(
+          PlaybackStateCompat.Builder()
+            .setState(mediaSession.controller?.playbackState?.state ?: PlaybackStateCompat.STATE_NONE,
+                     mediaSession.controller?.playbackState?.position ?: 0L,
+                     mediaSession.controller?.playbackState?.playbackSpeed ?: 1.0f)
+            .setActiveQueueItemId(index.toLong())
+            .setActions(mediaSession.controller?.playbackState?.actions ?: 0L)
+            .build()
+        )
+
+        // Update metadata to match the current queue item
+        val currentMetadata = mediaSession.controller?.metadata
+        if (currentMetadata != null) {
+          val coverUri = currentPlaybackSession.getCoverUri(ctx)
+          val updatedMetadata = MediaMetadataCompat.Builder(currentMetadata)
+            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, queueItem.description.mediaId)
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, queueItem.description.title?.toString() ?: "Unknown")
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, queueItem.description.title?.toString() ?: "Unknown")
+            // Preserve cover image URIs
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
+            .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, coverUri.toString())
+
+          // Use bitmap from queue item if available, otherwise preserve existing bitmap
+          val queueItemBitmap = queueItem.description.iconBitmap
+          if (queueItemBitmap != null) {
+            updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, queueItemBitmap)
+            updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, queueItemBitmap)
+            Log.d(tag, "Android Auto: Using bitmap from queue item for now playing")
+          } else {
+            // Fallback to existing bitmap if present
+            val existingBitmap = currentMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
+            if (existingBitmap != null) {
+              updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, existingBitmap)
+              updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, existingBitmap)
+              Log.d(tag, "Android Auto: Using existing bitmap for now playing")
+            }
+          }
+
+          Log.d(tag, "Android Auto: Updating metadata to match queue item: ${queueItem.description.title}")
+          mediaSession.setMetadata(updatedMetadata.build())
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "updateActiveQueueItem error: ${e.localizedMessage}")
+    }
+  }
+
+  fun seekToTrack(trackIndex: Int) {
+    currentPlaybackSession?.let { session ->
+      if (trackIndex < 0 || trackIndex >= session.audioTracks.size) return
+
+      try {
+        Log.d(tag, "MediaSessionCallback: Seeking to track $trackIndex")
+        currentPlayer.seekTo(trackIndex, 0)
+
+        // Update the active queue item for Android Auto
+        updateActiveQueueItem(trackIndex)
+      } catch (e: Exception) {
+        Log.e(tag, "seekToTrack error: ${e.localizedMessage}")
+      }
+    }
+  }
+
+  // Get current chapter index based on playback position
+  fun getCurrentChapterIndex(): Int {
+    currentPlaybackSession?.let { session ->
+      if (session.chapters.isEmpty()) return -1
+
+      val currentTimeMs = (session.currentTime * 1000).toLong()
+      for (i in session.chapters.indices) {
+        val chapter = session.chapters[i]
+        if (currentTimeMs >= chapter.startMs &&
+            (i == session.chapters.size - 1 || currentTimeMs < session.chapters[i + 1].startMs)) {
+          return i
+        }
+      }
+    }
+    return -1
+  }
+
+  // Update queue position based on current playback progress - called periodically
+  fun updateQueuePositionForChapters() {
+    currentPlaybackSession?.let { session ->
+      if (session.chapters.isNotEmpty()) {
+        val currentChapter = getCurrentChapterIndex()
+        if (currentChapter >= 0) {
+          updateActiveQueueItem(currentChapter)
+        }
+      } else if (session.audioTracks.size > 1) {
+        val currentTrack = session.getCurrentTrackIndex()
+        if (currentTrack >= 0) {
+          updateActiveQueueItem(currentTrack)
+        }
       }
     }
   }
@@ -1334,14 +1680,24 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           clientUid: Int,
           rootHints: Bundle?
   ): BrowserRoot? {
-    return mediaBrowserManager.onGetRoot(clientPackageName, clientUid, rootHints)
+    return if (::mediaBrowserManager.isInitialized) {
+      mediaBrowserManager.onGetRoot(clientPackageName, clientUid, rootHints)
+    } else {
+      Log.w(tag, "onGetRoot called before mediaBrowserManager initialized")
+      null
+    }
   }
 
   override fun onLoadChildren(
           parentMediaId: String,
           result: Result<MutableList<MediaBrowserCompat.MediaItem>>
   ) {
-    mediaBrowserManager.onLoadChildren(parentMediaId, result)
+    if (::mediaBrowserManager.isInitialized) {
+      mediaBrowserManager.onLoadChildren(parentMediaId, result)
+    } else {
+      Log.w(tag, "onLoadChildren called before mediaBrowserManager initialized")
+      result.sendResult(mutableListOf())
+    }
   }
 
   override fun onSearch(
@@ -1349,6 +1705,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           extras: Bundle?,
           result: Result<MutableList<MediaBrowserCompat.MediaItem>>
   ) {
-    mediaBrowserManager.onSearch(query, extras, result)
+    if (::mediaBrowserManager.isInitialized) {
+      mediaBrowserManager.onSearch(query, extras, result)
+    } else {
+      Log.w(tag, "onSearch called before mediaBrowserManager initialized")
+      result.sendResult(mutableListOf())
+    }
   }
 }

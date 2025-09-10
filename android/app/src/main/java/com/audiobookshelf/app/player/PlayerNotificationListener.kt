@@ -29,6 +29,10 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
         playerNotificationService.startForeground(notificationId, notification)
       }
       isForegroundService = true
+    } else if (onGoing && isForegroundService) {
+      // Service is already in foreground, just update the notification
+      Log.d(tag, "Notification posted $notificationId - Updating existing foreground notification")
+      // The PlayerNotificationManager will automatically update the notification
     } else {
       Log.d(tag, "Notification posted $notificationId, not starting foreground - onGoing=$onGoing | isForegroundService=$isForegroundService")
     }

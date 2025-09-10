@@ -910,7 +910,15 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
             val localLibraryItem = DeviceManager.dbManager.getLocalLibraryItemByLId(libraryItem.id)
             libraryItem.localLibraryItemId = localLibraryItem?.id
             val description = libraryItem.getMediaDescription(progress, ctx, null, null, "Books (${serverLibrary?.name})")
-            MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
+            
+            // Make books with chapters browsable instead of playable
+            val flagToUse = if (libraryItem.mediaType == "book" && 
+                              (libraryItem.media as? Book)?.chapters?.isNotEmpty() == true) {
+              MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+            } else {
+              MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+            }
+            MediaBrowserCompat.MediaItem(description, flagToUse)
           }
           foundItems["book"] = children
         }

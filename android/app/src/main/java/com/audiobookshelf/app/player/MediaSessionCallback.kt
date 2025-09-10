@@ -83,9 +83,20 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onSkipToQueueItem(id: Long) {
     Log.d(tag, "onSkipToQueueItem $id")
-    // id corresponds to chapter index set in the queue
-    val chapterIndex = id.toInt()
-    playerNotificationService.seekToChapter(chapterIndex)
+    val currentPlaybackSession = playerNotificationService.currentPlaybackSession
+    if (currentPlaybackSession != null) {
+      val index = id.toInt()
+      
+      if (currentPlaybackSession.chapters.isNotEmpty()) {
+        // Chapter-based navigation
+        Log.d(tag, "MediaSessionCallback: Seeking to chapter $index")
+        playerNotificationService.seekToChapter(index)
+      } else {
+        // Track-based navigation
+        Log.d(tag, "MediaSessionCallback: Seeking to track $index")
+        playerNotificationService.seekToTrack(index)
+      }
+    }
   }
 
   override fun onFastForward() {
@@ -136,9 +147,43 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     Log.d(tag, "ON PLAY FROM MEDIA ID $mediaId")
     val libraryItemWrapper: LibraryItemWrapper?
     var podcastEpisode: PodcastEpisode? = null
+    var chapterStartTime: Double? = null
 
     if (mediaId.isNullOrEmpty()) {
       libraryItemWrapper = playerNotificationService.mediaManager.getFirstItem()
+    } else if (mediaId.contains("__CHAPTER__")) {
+      // Handle chapter-specific media ID
+      val parts = mediaId.split("__CHAPTER__")
+      val bookId = parts[0]
+      val chapterIndex = parts.getOrNull(1)?.toIntOrNull()
+      
+      Log.d(tag, "Playing chapter $chapterIndex from book $bookId")
+      
+      // Get the book
+      val bookWrapper = playerNotificationService.mediaManager.getById(bookId)
+      if (bookWrapper != null && chapterIndex != null) {
+        libraryItemWrapper = bookWrapper
+        
+        // Get the chapter start time
+        if (bookWrapper is com.audiobookshelf.app.data.LibraryItem) {
+          val book = bookWrapper.media as? com.audiobookshelf.app.data.Book
+          val chapters = book?.chapters
+          if (chapters != null && chapterIndex < chapters.size) {
+            chapterStartTime = chapters[chapterIndex].start
+            Log.d(tag, "Chapter start time: $chapterStartTime seconds")
+          }
+        } else if (bookWrapper is com.audiobookshelf.app.data.LocalLibraryItem) {
+          val book = bookWrapper.media as? com.audiobookshelf.app.data.Book
+          val chapters = book?.chapters
+          if (chapters != null && chapterIndex < chapters.size) {
+            chapterStartTime = chapters[chapterIndex].start
+            Log.d(tag, "Local chapter start time: $chapterStartTime seconds")
+          }
+        }
+      } else {
+        libraryItemWrapper = null
+        Log.e(tag, "Chapter book not found or invalid chapter index: $bookId, chapter: $chapterIndex")
+      }
     } else {
       val libraryItemWithEpisode = playerNotificationService.mediaManager.getPodcastWithEpisodeByEpisodeId(mediaId)
       if (libraryItemWithEpisode != null) {
@@ -160,6 +205,14 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
           val playbackRate = playerNotificationService.mediaManager.getSavedPlaybackRate()
           Handler(Looper.getMainLooper()).post {
             playerNotificationService.preparePlayer(it, true, playbackRate)
+            
+            // If we have a chapter start time, seek to it after the player is prepared
+            chapterStartTime?.let { startTime ->
+              Handler(Looper.getMainLooper()).postDelayed({
+                Log.d(tag, "Seeking to chapter start time: $startTime seconds")
+                playerNotificationService.seekPlayer((startTime * 1000).toLong())
+              }, 500) // Small delay to ensure player is ready
+            }
           }
         }
       }
