@@ -205,26 +205,31 @@ class PlaybackSession(
   @JsonIgnore
   fun getMediaMetadataCompat(ctx: Context): MediaMetadataCompat {
     val coverUri = getCoverUri(ctx)
+    // Prefer chapter/track title for now-playing if available
+    val currentTrackIndex = try { getCurrentTrackIndex() } catch (e: Exception) { -1 }
+    val currentTrack = if (currentTrackIndex >= 0 && currentTrackIndex < audioTracks.size) audioTracks[currentTrackIndex] else null
+    val nowPlayingTitle = currentTrack?.title ?: displayTitle
+    val nowPlayingSubtitle = if (currentTrack?.title != null) displayAuthor else displayAuthor
 
     val metadataBuilder =
-            MediaMetadataCompat.Builder()
-                    .putString(MediaMetadataCompat.METADATA_KEY_TITLE, displayTitle)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
-                    .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
-                    .putString(
-                            MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI,
-                            coverUri.toString()
-                    )
+      MediaMetadataCompat.Builder()
+        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle)
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, nowPlayingTitle)
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, nowPlayingSubtitle)
+        .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, displayAuthor)
+        .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayAuthor)
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAuthor)
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
+        .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
+        .putString(
+          MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI,
+          coverUri.toString()
+        )
 
-    // Local covers get bitmap
+  // Local covers get bitmap
     if (localLibraryItem?.coverContentUrl != null) {
       val bitmap =
               if (Build.VERSION.SDK_INT < 28) {
@@ -242,16 +247,19 @@ class PlaybackSession(
   }
 
   @JsonIgnore
-  fun getExoMediaMetadata(ctx: Context): MediaMetadata {
+  fun getExoMediaMetadata(ctx: Context, audioTrack: AudioTrack? = null): MediaMetadata {
     val coverUri = getCoverUri(ctx)
+
+    val titleToUse = audioTrack?.title ?: displayTitle
+    val subtitleToUse = if (audioTrack?.title != null) displayAuthor else displayAuthor
 
     val metadataBuilder =
             MediaMetadata.Builder()
-                    .setTitle(displayTitle)
-                    .setDisplayTitle(displayTitle)
+                    .setTitle(titleToUse)
+                    .setDisplayTitle(titleToUse)
                     .setArtist(displayAuthor)
                     .setAlbumArtist(displayAuthor)
-                    .setSubtitle(displayAuthor)
+                    .setSubtitle(subtitleToUse)
                     .setAlbumTitle(displayAuthor)
                     .setDescription(displayAuthor)
                     .setArtworkUri(coverUri)
@@ -265,7 +273,7 @@ class PlaybackSession(
     val mediaItems: MutableList<MediaItem> = mutableListOf()
 
     for (audioTrack in audioTracks) {
-      val mediaMetadata = this.getExoMediaMetadata(ctx)
+  val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack)
       val mediaUri = this.getContentUri(audioTrack)
       val mimeType = audioTrack.mimeType
 

@@ -19,6 +19,9 @@ import kotlin.coroutines.suspendCoroutine
 class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   val tag = "MediaManager"
 
+  // Listeners for Android Auto load completion events
+  private var androidAutoLoadListeners: MutableList<() -> Unit> = mutableListOf()
+
   private var serverLibraryItems = mutableListOf<LibraryItem>() // Store all items here
 
   private var cachedLibraryAuthors : MutableMap<String, MutableMap<String, LibraryAuthorItem>> = hashMapOf()
@@ -699,9 +702,29 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     } else {
       apiHandler.getLibraries { loadedLibraries ->
         serverLibraries = loadedLibraries
+        // Notify Android Auto listeners that libraries have been loaded
+        androidAutoLoadListeners.forEach { listener ->
+          try {
+            listener()
+          } catch (e: Exception) {
+            Log.e(tag, "androidAutoLoadListener error: ${e.localizedMessage}")
+          }
+        }
         cb(serverLibraries)
       }
     }
+  }
+
+  fun registerAndroidAutoLoadListener(listener: () -> Unit) {
+    androidAutoLoadListeners.add(listener)
+  }
+
+  fun unregisterAndroidAutoLoadListener(listener: () -> Unit) {
+    androidAutoLoadListeners.remove(listener)
+  }
+
+  fun clearAndroidAutoLoadListeners() {
+    androidAutoLoadListeners = mutableListOf()
   }
 
   private suspend fun checkServerConnection(config:ServerConnectionConfig) : Boolean {

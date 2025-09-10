@@ -76,6 +76,13 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     playerNotificationService.skipToNext()
   }
 
+  override fun onSkipToQueueItem(id: Long) {
+    Log.d(tag, "onSkipToQueueItem $id")
+    // id corresponds to chapter index set in the queue
+    val chapterIndex = id.toInt()
+    playerNotificationService.seekToChapter(chapterIndex)
+  }
+
   override fun onFastForward() {
     playerNotificationService.jumpForward()
   }

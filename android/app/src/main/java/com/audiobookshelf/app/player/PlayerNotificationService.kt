@@ -196,6 +196,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     mediaSession.release()
     mediaProgressSyncer.reset()
 
+    // Clear android auto listeners to avoid leaking references
+    try {
+      mediaManager.clearAndroidAutoLoadListeners()
+    } catch (e: Exception) {
+      // ignore
+    }
+
     super.onDestroy()
   }
 
@@ -244,6 +251,15 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
     // Initialize media manager
     mediaManager = MediaManager(apiHandler, ctx)
+
+    // Register listener so we refresh the MediaBrowser when MediaManager finishes loading Android Auto data
+    mediaManager.registerAndroidAutoLoadListener {
+      try {
+        notifyChildrenChanged("/")
+      } catch (e: Exception) {
+        Log.e(tag, "Error notifying children changed from mediaManager listener: ${e.localizedMessage}")
+      }
+    }
 
     channelId =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -343,10 +359,31 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                         currentPlaybackSession!!.displayAuthor
                 )
 
-                val mediaDescriptionBuilder =
-                        MediaDescriptionCompat.Builder()
-                                .setExtras(extra)
-                                .setTitle(currentPlaybackSession!!.displayTitle)
+                // Prefer MediaSession queue item title (chapter) if available
+                val queue = mediaSession.controller.getQueue()
+                val queueTitle: String? = try {
+                  if (queue != null && windowIndex >= 0 && windowIndex < queue.size) queue[windowIndex].description.title.toString() else null
+                } catch (e: Exception) { null }
+
+                // Fallback to per-track title if queue title isn't set
+                val track: com.audiobookshelf.app.data.AudioTrack? = try {
+                  if (windowIndex >= 0 && windowIndex < currentPlaybackSession!!.audioTracks.size) currentPlaybackSession!!.audioTracks[windowIndex] else null
+                } catch (e: Exception) { null }
+
+                val titleToShow = queueTitle ?: track?.title ?: currentPlaybackSession!!.displayTitle
+                val bookTitle = currentPlaybackSession!!.displayTitle
+
+                // Include chapter title in extras so Now Playing and other clients can show it
+                if (queueTitle != null) {
+                  extra.putString("chapter_title", queueTitle)
+                } else if (track?.title != null) {
+                  extra.putString("chapter_title", track.title)
+                }
+
+                val mediaDescriptionBuilder = MediaDescriptionCompat.Builder()
+                        .setExtras(extra)
+                        .setTitle(titleToShow)
+                        .setSubtitle(bookTitle)
 
                 bitmap?.let { mediaDescriptionBuilder.setIconBitmap(it) }
                   ?: mediaDescriptionBuilder.setIconUri(coverUri)
@@ -413,6 +450,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             playWhenReady: Boolean,
             playbackRate: Float?
     ) {
+      try {
       if (!isStarted) {
         Log.i(tag, "preparePlayer: foreground service not started - Starting service --")
         Intent(ctx, PlayerNotificationService::class.java).also { intent ->
@@ -435,6 +473,22 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       val metadata = playbackSession.getMediaMetadataCompat(ctx)
       mediaSession.setMetadata(metadata)
+      // Build MediaSession queue from chapters so Android Auto shows actual chapter list
+      try {
+        val chapterQueue: MutableList<android.support.v4.media.session.MediaSessionCompat.QueueItem> = mutableListOf()
+        for ((idx, chapter) in playbackSession.chapters.withIndex()) {
+          val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
+            .setMediaId("chapter_$idx")
+            .setTitle(chapter.title ?: "Chapter ${idx + 1}")
+            .setSubtitle(playbackSession.displayTitle)
+            .build()
+          val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
+          chapterQueue.add(queueItem)
+        }
+        mediaSession.setQueue(chapterQueue)
+      } catch (e: Exception) {
+        Log.e(tag, "Failed to set chapter queue: ${e.localizedMessage}")
+      }
       val mediaItems = playbackSession.getMediaItems(ctx)
       val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: 1f
       initialPlaybackRate = playbackRate
@@ -557,6 +611,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                 mediaType
         )
       }
+      } catch (e: Exception) {
+        AbsLogger.error("PlayerNotificationService", "doPreparePlayer: Failed to prepare player session: ${e.message}")
+        Log.e(tag, "Exception during player preparation", e)
+        // Reset state and notify client of failure
+        currentPlaybackSession = null
+        clientEventEmitter?.onPlaybackFailed("Failed to prepare media item: ${e.message}")
+      }
     }
 
     // If there's an active session and it's different from the new one, finalize it first.
@@ -565,13 +626,29 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       AbsLogger.info("PlayerNotificationService", "preparePlayer: Switching from ${previousSession.mediaItemId} to ${playbackSession.mediaItemId}. Finalizing previous session first.")
       // Stop and force a sync/flush of the previous session. Once complete, proceed to prepare the new session.
       mediaProgressSyncer.stop(true) {
-        doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+        try {
+          doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+        } catch (e: Exception) {
+          AbsLogger.error("PlayerNotificationService", "preparePlayer: Failed to prepare new player session after stopping previous: ${e.message}")
+          Log.e(tag, "Exception during player preparation", e)
+          // Reset state and notify client of failure
+          currentPlaybackSession = null
+          clientEventEmitter?.onPlaybackFailed("Failed to switch to new media item: ${e.message}")
+        }
       }
       return
     }
 
     // No prior session or same item, proceed immediately.
-    doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+    try {
+      doPreparePlayer(playbackSession, playWhenReady, playbackRate)
+    } catch (e: Exception) {
+      AbsLogger.error("PlayerNotificationService", "preparePlayer: Failed to prepare player session: ${e.message}")
+      Log.e(tag, "Exception during immediate player preparation", e)
+      // Reset state and notify client of failure
+      currentPlaybackSession = null
+      clientEventEmitter?.onPlaybackFailed("Failed to prepare media item: ${e.message}")
+    }
   }
 
   private fun setMediaSessionConnectorCustomActions(playbackSession: PlaybackSession) {
@@ -957,11 +1034,82 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
   }
 
+  // Seek to the start of a chapter index (chapterIndex is 0-based)
+  fun seekToChapter(chapterIndex: Int) {
+    currentPlaybackSession?.let { session ->
+      if (chapterIndex < 0 || chapterIndex >= session.chapters.size) return
+      val chapter = session.chapters[chapterIndex]
+      val chapterStartMs = chapter.startMs
+
+      // Map chapterStartMs to window index and offset using audioTracks
+      var foundWindow = 0
+      var offsetMs = chapterStartMs
+      for (i in 0 until session.audioTracks.size) {
+        val track = session.audioTracks[i]
+        if (chapterStartMs >= track.startOffsetMs && chapterStartMs < track.endOffsetMs) {
+          foundWindow = i
+          offsetMs = chapterStartMs - track.startOffsetMs
+          break
+        }
+      }
+
+      try {
+        if (currentPlayer.mediaItemCount > 1) {
+          currentPlayer.seekTo(foundWindow, offsetMs)
+        } else {
+          currentPlayer.seekTo(chapterStartMs)
+        }
+      } catch (e: Exception) {
+        Log.e(tag, "seekToChapter error: ${e.localizedMessage}")
+      }
+    }
+  }
+
   fun skipToPrevious() {
+    try {
+      val currentChapter = getCurrentBookChapter()
+      if (currentChapter != null) {
+        val chapters = currentPlaybackSession?.chapters ?: listOf()
+        val idx = chapters.indexOfFirst { it.id == currentChapter.id }
+        if (idx > 0) {
+          // If we're more than 5s into chapter, restart it; otherwise go to previous
+          val timeInChapter = getCurrentTime() - currentChapter.startMs
+          if (timeInChapter > 5000) {
+            seekToChapter(idx)
+          } else {
+            seekToChapter(idx - 1)
+          }
+          return
+        } else {
+          // At first chapter -> restart chapter
+          seekToChapter(0)
+          return
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "skipToPrevious chapter fallback error: ${e.localizedMessage}")
+    }
+
+    // Fallback: seek to previous media item (track)
     currentPlayer.seekToPrevious()
   }
 
   fun skipToNext() {
+    try {
+      val nextChapter = getNextBookChapter()
+      if (nextChapter != null) {
+        val chapters = currentPlaybackSession?.chapters ?: listOf()
+        val idx = chapters.indexOfFirst { it.id == nextChapter.id }
+        if (idx >= 0) {
+          seekToChapter(idx)
+          return
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "skipToNext chapter fallback error: ${e.localizedMessage}")
+    }
+
+    // Fallback: seek to next media item (track)
     currentPlayer.seekToNext()
   }
 
@@ -1686,19 +1834,50 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     } else if (parentMediaId == LIBRARIES_ROOT || parentMediaId == RECENTLY_ROOT) {
       Log.d(tag, "First load done: $firstLoadDone")
       if (!firstLoadDone) {
-        result.sendResult(null)
+        // Wait briefly for the initial load to complete (avoid immediate empty response)
+        var waitedMs = 0
+        val waitInterval = 150L
+        val maxWait = 1500L
+        while (!firstLoadDone && waitedMs < maxWait) {
+          try {
+            Thread.sleep(waitInterval)
+          } catch (ie: InterruptedException) {
+            // ignore
+          }
+          waitedMs += waitInterval.toInt()
+        }
+        if (!firstLoadDone) {
+          // Still not ready -> return empty list (better than null) to avoid upstream navigation errors
+          result.sendResult(mutableListOf())
+          return
+        }
+      }
+
+      // Wait until top-menu (browseTree) is initialized with a bounded wait
+      var waitedMs2 = 0
+      val waitInterval2 = 150L
+      val maxWait2 = 1500L
+      while (!this::browseTree.isInitialized && waitedMs2 < maxWait2) {
+        try {
+          Thread.sleep(waitInterval2)
+        } catch (ie: InterruptedException) {
+          // ignore
+        }
+        waitedMs2 += waitInterval2.toInt()
+      }
+      if (!this::browseTree.isInitialized) {
+        result.sendResult(mutableListOf())
         return
       }
-      // Wait until top-menu is initialized
-      while (!this::browseTree.isInitialized) {}
+
       val children =
-              browseTree[parentMediaId]?.map { item ->
-                Log.d(tag, "[MENU: $parentMediaId] Showing list item ${item.description.title}")
-                MediaBrowserCompat.MediaItem(
-                        item.description,
-                        MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
-                )
-              }
+        browseTree[parentMediaId]?.map { item ->
+          Log.d(tag, "[MENU: $parentMediaId] Showing list item ${item.description.title}")
+          MediaBrowserCompat.MediaItem(
+            item.description,
+            MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+          )
+        }
       result.sendResult(children as MutableList<MediaBrowserCompat.MediaItem>?)
     } else if (mediaManager.getIsLibrary(parentMediaId)) { // Load library items for library
       Log.d(tag, "Loading items for library $parentMediaId")
