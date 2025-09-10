@@ -8,6 +8,11 @@ import android.util.Log
 import android.view.KeyEvent
 import com.audiobookshelf.app.data.LibraryItemWrapper
 import com.audiobookshelf.app.data.PodcastEpisode
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_JUMP_BACKWARD
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_JUMP_FORWARD
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_SKIP_BACKWARD
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_SKIP_FORWARD
 import java.util.*
 import kotlin.concurrent.schedule
 
@@ -84,10 +89,12 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   override fun onFastForward() {
+    Log.d(tag, "onFastForward called")
     playerNotificationService.jumpForward()
   }
 
   override fun onRewind() {
+    Log.d(tag, "onRewind called")
     playerNotificationService.jumpBackward()
   }
 
@@ -97,10 +104,14 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   private fun onChangeSpeed() {
+    Log.d(tag, "onChangeSpeed called")
     // cycle to next speed, only contains preset android app options, as each increment needs it's own icon
-    // Rounding values in the event a non preset value (.5, 1, 1.2, 1.5, 2, 3) is selected in the phone app
+    // Rounding values in the event a non preset value (.5, 1, 1.2, 1.5, 1.7, 2, 2.5, 3) is selected in the phone app
     val mediaManager = playerNotificationService.mediaManager
-    val newSpeed = when (mediaManager.getSavedPlaybackRate()) {
+    val currentSpeed = mediaManager.getSavedPlaybackRate()
+    Log.d(tag, "Current speed: $currentSpeed")
+    
+    val newSpeed = when (currentSpeed) {
       in 0.5f..0.7f -> 1.0f
       in 0.8f..1.0f -> 1.2f
       in 1.1f..1.2f -> 1.5f
@@ -110,9 +121,15 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       // anything set above 3 (can happen in the android app) will be reset to 1
       else -> 1.0f
     }
+    
+    Log.d(tag, "Setting new speed: $newSpeed")
     mediaManager.setSavedPlaybackRate(newSpeed)
+    
     playerNotificationService.setPlaybackSpeed(newSpeed)
     playerNotificationService.clientEventEmitter?.onPlaybackSpeedChanged(newSpeed)
+    
+    // Note: setPlaybackSpeed already calls setMediaSessionConnectorCustomActions, so no need to duplicate
+    Log.d(tag, "onChangeSpeed completed")
   }
 
   override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
@@ -280,14 +297,33 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   override fun onCustomAction(action: String?, extras: Bundle?) {
+    Log.d(tag, "onCustomAction called with action: $action")
     super.onCustomAction(action, extras)
 
     when (action) {
-      CUSTOM_ACTION_JUMP_FORWARD -> onFastForward()
-      CUSTOM_ACTION_JUMP_BACKWARD -> onRewind()
-      CUSTOM_ACTION_SKIP_FORWARD -> onSkipToNext()
-      CUSTOM_ACTION_SKIP_BACKWARD -> onSkipToPrevious()
-      CUSTOM_ACTION_CHANGE_SPEED -> onChangeSpeed()
+      CUSTOM_ACTION_JUMP_FORWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_JUMP_FORWARD")
+        onFastForward()
+      }
+      CUSTOM_ACTION_JUMP_BACKWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_JUMP_BACKWARD")
+        onRewind()
+      }
+      CUSTOM_ACTION_SKIP_FORWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_SKIP_FORWARD")
+        onSkipToNext()
+      }
+      CUSTOM_ACTION_SKIP_BACKWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_SKIP_BACKWARD")
+        onSkipToPrevious()
+      }
+      CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED")
+        onChangeSpeed()
+      }
+      else -> {
+        Log.d(tag, "onCustomAction: Unknown action: $action")
+      }
     }
   }
 }

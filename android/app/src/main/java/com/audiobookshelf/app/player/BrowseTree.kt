@@ -53,9 +53,8 @@ class BrowseTree(
       rootList += librariesMetadata
 
       libraries.forEach { library ->
-        // Skip libraries without audio content
-        if (library.stats?.numAudioFiles == 0) return@forEach
-        Log.d("BrowseTree", "Library $library | ${library.icon}")
+        // Log library info for debugging
+        Log.d("BrowseTree", "Library ${library.name} | ${library.icon} | audioFiles: ${library.stats?.numAudioFiles}")
         // Generate library list items for Libraries menu
         val libraryMediaMetadata = library.getMediaMetadata(context)
         val children = mediaIdToChildren[LIBRARIES_ROOT] ?: mutableListOf()

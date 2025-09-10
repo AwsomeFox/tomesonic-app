@@ -94,7 +94,7 @@ class MediaProgressSyncer(
                   // Only sync with server on unmetered connection every 15s OR sync with server if
                   // last sync time is >= 60s
                   val shouldSyncServer =
-                          PlayerNotificationService.isUnmeteredNetwork ||
+                          playerNotificationService.networkConnectivityManager.isUnmeteredNetwork ||
                                   System.currentTimeMillis() - lastSyncTime >=
                                           METERED_CONNECTION_SYNC_INTERVAL
 
