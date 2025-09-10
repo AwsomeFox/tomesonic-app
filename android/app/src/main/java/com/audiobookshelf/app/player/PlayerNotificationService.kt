@@ -387,27 +387,26 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
       try {
         val chapterQueue: MutableList<android.support.v4.media.session.MediaSessionCompat.QueueItem> = mutableListOf()
 
+        // Cache bitmap once for all queue items and metadata (local books only)
+        var sharedCachedBitmap: Bitmap? = null
+        val coverUri = playbackSession.getCoverUri(ctx)
+
+        if (playbackSession.localLibraryItem?.coverContentUrl != null) {
+          try {
+            sharedCachedBitmap = if (Build.VERSION.SDK_INT < 28) {
+              MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
+            } else {
+              val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
+              ImageDecoder.decodeBitmap(source)
+            }
+            Log.d(tag, "Shared bitmap cached for Android Auto (${sharedCachedBitmap?.byteCount} bytes)")
+          } catch (e: Exception) {
+            Log.w(tag, "Failed to load shared cached bitmap: ${e.message}")
+          }
+        }
+
         if (playbackSession.chapters.isNotEmpty()) {
           Log.d(tag, "Android Auto: Building chapter queue. Number of chapters: ${playbackSession.chapters.size}")
-
-          // Cache bitmap for local books to avoid loading the same image multiple times
-          var cachedBitmap: Bitmap? = null
-          val coverUri = playbackSession.getCoverUri(ctx)
-
-          // Load bitmap once for local books
-          if (playbackSession.localLibraryItem?.coverContentUrl != null) {
-            try {
-              cachedBitmap = if (Build.VERSION.SDK_INT < 28) {
-                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-              } else {
-                val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-                ImageDecoder.decodeBitmap(source)
-              }
-              Log.d(tag, "Cached bitmap loaded for local book chapters")
-            } catch (e: Exception) {
-              Log.w(tag, "Failed to load cached bitmap for chapters: ${e.message}")
-            }
-          }
 
           for ((idx, chapter) in playbackSession.chapters.withIndex()) {
             Log.d(tag, "Android Auto: Adding chapter $idx: ${chapter.title ?: "Chapter ${idx + 1}"}")
@@ -418,7 +417,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               .setSubtitle(playbackSession.displayTitle)
               .setIconUri(coverUri)
               .apply {
-                cachedBitmap?.let { setIconBitmap(it) }
+                sharedCachedBitmap?.let { setIconBitmap(it) }
               }
               .build()
             val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
@@ -429,6 +428,29 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           val currentChapterIndex = getCurrentChapterIndex()
           if (currentChapterIndex >= 0 && currentChapterIndex < playbackSession.chapters.size) {
             val currentChapter = playbackSession.chapters[currentChapterIndex]
+
+            // Create chapter description with proper bitmap handling for Android Auto
+            val coverUri = playbackSession.getCoverUri(ctx)
+            val chapterDescriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
+              .setMediaId("chapter_$currentChapterIndex")
+              .setTitle(currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
+              .setSubtitle(playbackSession.displayTitle)
+              .setDescription(playbackSession.displayAuthor)
+
+          // Use shared cached bitmap or fallback to original description approach
+          if (sharedCachedBitmap != null) {
+            chapterDescriptionBuilder.setIconBitmap(sharedCachedBitmap)
+          } else {
+            val originalDescription = metadata.description
+            if (originalDescription.iconBitmap != null) {
+              chapterDescriptionBuilder.setIconBitmap(originalDescription.iconBitmap)
+            } else {
+              chapterDescriptionBuilder.setIconUri(originalDescription.iconUri ?: coverUri)
+            }
+          }
+
+          val chapterDescription = chapterDescriptionBuilder.build()
+
             val chapterMetadata = MediaMetadataCompat.Builder(metadata)
               .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "chapter_$currentChapterIndex")
               .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
@@ -438,38 +460,29 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI))
               .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI))
               .apply {
-                // Preserve existing bitmaps
-                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
+                // Preserve existing bitmaps or use shared cached bitmap
+                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) ?: sharedCachedBitmap
                 if (existingBitmap != null) {
                   putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, existingBitmap)
                   putBitmap(MediaMetadataCompat.METADATA_KEY_ART, existingBitmap)
                 }
               }
               .build()
+
+            // Set the description with proper bitmap/URI handling using reflection
+            try {
+              val descriptionField = MediaMetadataCompat::class.java.getDeclaredField("mDescription")
+              descriptionField.isAccessible = true
+              descriptionField.set(chapterMetadata, chapterDescription)
+            } catch (e: Exception) {
+              Log.w(tag, "Failed to set chapter description with iconBitmap: ${e.message}")
+            }
+
             Log.d(tag, "Android Auto: Setting chapter metadata for chapter $currentChapterIndex: ${currentChapter.title}")
             mediaSession.setMetadata(chapterMetadata)
           }
         } else if (playbackSession.audioTracks.size > 1) {
           Log.d(tag, "Android Auto: Building track queue. Number of tracks: ${playbackSession.audioTracks.size}")
-
-          // Cache bitmap for local books to avoid loading the same image multiple times
-          var cachedBitmap: Bitmap? = null
-          val coverUri = playbackSession.getCoverUri(ctx)
-
-          // Load bitmap once for local books
-          if (playbackSession.localLibraryItem?.coverContentUrl != null) {
-            try {
-              cachedBitmap = if (Build.VERSION.SDK_INT < 28) {
-                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-              } else {
-                val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-                ImageDecoder.decodeBitmap(source)
-              }
-              Log.d(tag, "Cached bitmap loaded for local book tracks")
-            } catch (e: Exception) {
-              Log.w(tag, "Failed to load cached bitmap for tracks: ${e.message}")
-            }
-          }
 
           for ((idx, track) in playbackSession.audioTracks.withIndex()) {
             Log.d(tag, "Android Auto: Adding track $idx: ${track.title ?: "Track ${idx + 1}"}")
@@ -480,7 +493,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               .setSubtitle(playbackSession.displayTitle)
               .setIconUri(coverUri)
               .apply {
-                cachedBitmap?.let { setIconBitmap(it) }
+                sharedCachedBitmap?.let { setIconBitmap(it) }
               }
               .build()
             val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
@@ -491,6 +504,29 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           val currentTrackIndex = playbackSession.getCurrentTrackIndex()
           if (currentTrackIndex >= 0 && currentTrackIndex < playbackSession.audioTracks.size) {
             val currentTrack = playbackSession.audioTracks[currentTrackIndex]
+
+            // Create track description with proper bitmap handling for Android Auto
+            val coverUri = playbackSession.getCoverUri(ctx)
+            val trackDescriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
+              .setMediaId("track_$currentTrackIndex")
+              .setTitle(currentTrack.title ?: "Track ${currentTrackIndex + 1}")
+              .setSubtitle(playbackSession.displayTitle)
+              .setDescription(playbackSession.displayAuthor)
+
+            // Use shared cached bitmap or fallback to original description approach
+            if (sharedCachedBitmap != null) {
+              trackDescriptionBuilder.setIconBitmap(sharedCachedBitmap)
+            } else {
+              val originalDescription = metadata.description
+              if (originalDescription.iconBitmap != null) {
+                trackDescriptionBuilder.setIconBitmap(originalDescription.iconBitmap)
+              } else {
+                trackDescriptionBuilder.setIconUri(originalDescription.iconUri ?: coverUri)
+              }
+            }
+
+            val trackDescription = trackDescriptionBuilder.build()
+
             val trackMetadata = MediaMetadataCompat.Builder(metadata)
               .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "track_$currentTrackIndex")
               .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTrack.title ?: "Track ${currentTrackIndex + 1}")
@@ -500,45 +536,37 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI))
               .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI))
               .apply {
-                // Preserve existing bitmaps
-                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
+                // Preserve existing bitmaps or use shared cached bitmap
+                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) ?: sharedCachedBitmap
                 if (existingBitmap != null) {
                   putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, existingBitmap)
                   putBitmap(MediaMetadataCompat.METADATA_KEY_ART, existingBitmap)
                 }
               }
               .build()
+
+            // Set the description with proper bitmap/URI handling using reflection
+            try {
+              val descriptionField = MediaMetadataCompat::class.java.getDeclaredField("mDescription")
+              descriptionField.isAccessible = true
+              descriptionField.set(trackMetadata, trackDescription)
+            } catch (e: Exception) {
+              Log.w(tag, "Failed to set track description with iconBitmap: ${e.message}")
+            }
+
             Log.d(tag, "Android Auto: Setting track metadata for track $currentTrackIndex: ${currentTrack.title}")
             mediaSession.setMetadata(trackMetadata)
           }
         } else {
           Log.d(tag, "Android Auto: Single track book, creating simple queue")
-          // Single track book - create one queue item
-          val coverUri = playbackSession.getCoverUri(ctx)
-
-          // Load bitmap for local books
-          var bitmap: Bitmap? = null
-          if (playbackSession.localLibraryItem?.coverContentUrl != null) {
-            try {
-              bitmap = if (Build.VERSION.SDK_INT < 28) {
-                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-              } else {
-                val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-                ImageDecoder.decodeBitmap(source)
-              }
-              Log.d(tag, "Bitmap loaded for single track local book")
-            } catch (e: Exception) {
-              Log.w(tag, "Failed to load bitmap for single track: ${e.message}")
-            }
-          }
-
+          // Single track book - create one queue item using shared cached bitmap
           val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
             .setMediaId("track_0")
             .setTitle(playbackSession.displayTitle)
             .setSubtitle(playbackSession.displayAuthor)
             .setIconUri(coverUri)
             .apply {
-              bitmap?.let { setIconBitmap(it) }
+              sharedCachedBitmap?.let { setIconBitmap(it) }
             }
             .build()
           val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, 0L)
@@ -546,8 +574,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         }
 
         if (chapterQueue.isNotEmpty()) {
-          // Set queue after a small delay to ensure MediaSessionConnector is ready
-          Handler(Looper.getMainLooper()).postDelayed({
+          // Set queue to ensure MediaSessionConnector is ready
+          Handler(Looper.getMainLooper()).post {
             Log.d(tag, "Android Auto: Setting queue on MediaSession with ${chapterQueue.size} items")
             mediaSession.setQueue(chapterQueue)
             Log.d(tag, "Android Auto: Queue set successfully with ${chapterQueue.size} items")
@@ -566,7 +594,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             if (currentIndex >= 0) {
               updateActiveQueueItem(currentIndex)
             }
-          }, 500) // Wait 500ms to ensure everything is ready
+          }
         }
       } catch (e: Exception) {
         Log.e(tag, "Failed to set queue: ${e.localizedMessage}")

@@ -1,99 +1,97 @@
-# justfile: tasks to run Android Auto Desktop Head Unit (DHU) with adb port forwarding
+# justfile: tasks for Android Auto development
 # Usage examples:
-#   just adb-forward        # sets adb forward tcp:5277 -> localabstract:adb-hub
-#   just dhu                # launches the DHU executable
-#   just run                # sets forwarding then launches DHU
-#   just stop-forward       # removes the forwarding
-#   just build              # build the android app (assembleDebug)
-#   just install-debug      # build and install debug APK onto connected device
-#   just uninstall-debug    # uninstall com.audiobookshelf.app from device
-#   just logcat             # tail filtered logcat for the app
-#   just adb-reverse        # reverse host ports (useful for Nuxt dev server -> Android WebView)
-#   just start-web          # helper to start web dev server (Nuxt) from repo root
+#   just adb-forward       # sets adb forward tcp:5277 -> localabstract:adb-hub
+#   just run-aa            # sets forwarding then launches Android Auto DHU
+#   just stop-forward      # removes the forwarding
+#   just build             # build the android app (assembleDebug)
+#   just install-debug     # build and install debug APK onto connected device
+#   just build-nuxt        # build Nuxt.js and sync Capacitor
+#   just run-debug         # build Nuxt, sync, build and install debug APK
+#   just run               # full workflow: build Nuxt, sync, build/install APK, start Android Auto
+#   just logcat            # tail filtered logcat for the app
+#   just adb-reverse       # reverse host ports (useful for Nuxt dev server -> Android WebView)
+#   just start-web         # helper to start web dev server (Nuxt) from repo root
 
-# default SDK and paths (override by setting env vars)
-ANDROID_SDK_ROOT ?= "${HOME}/Library/Android/sdk"
-ADB_CMD ?= "${ANDROID_SDK_ROOT}/platform-tools/adb"
-GRADLEW ?= "./gradlew"
-# Directory for Desktop Head Unit
-DHU_DIR ?= "/Users/anthonyanderson/Library/Android/sdk/extras/google/auto/desktop-head-unit"
-DHU_PORT ?= "5277"
-APP_ID ?= "com.audiobookshelf.app"
-APK_PATH ?= "app/build/outputs/apk/debug/app-debug.apk"
-WEB_DEV_PORT ?= "3000"
-WEB_CMD ?= "npm run dev"
+ANDROID_SDK_ROOT := "~/Library/Android/sdk"
+ADB_CMD := "adb"
+GRADLEW := "./gradlew"
+DHU_SCRIPT := "~/Library/Android/sdk/extras/google/auto/desktop-head-unit"
+DHU_PORT := "5277"
+APP_ID := "com.audiobookshelf.app"
+APK_PATH := "app/build/outputs/apk/debug/app-debug.apk"
+WEB_DEV_PORT := "3000"
+WEB_CMD := "npm run dev"
+BUILD_CMD := "npm run generate && npx cap sync android"
 
-# helper to locate DHU binary inside DHU_DIR
-@dhubin:
-	echo "Locating DHU binary in ${DHU_DIR}..."
-	if [ -x "${DHU_DIR}/bin/dhu" ]; then
-		echo "${DHU_DIR}/bin/dhu" && exit 0
-	fi
-	if [ -x "${DHU_DIR}/dhu" ]; then
-		echo "${DHU_DIR}/dhu" && exit 0
-	fi
-	if [ -x "${DHU_DIR}/desktop-head-unit" ]; then
-		echo "${DHU_DIR}/desktop-head-unit" && exit 0
-	fi
-	echo "Could not find DHU executable in ${DHU_DIR}" 1>&2 && exit 1
+# ---------------------------
+# Android Auto tasks
+# ---------------------------
+stop-forward:
+	@sh -lc 'set -euo pipefail; ADB="{{ADB_CMD}}"; if ! command -v "$ADB" >/dev/null 2>&1; then echo "adb not found at $ADB" 1>&2; exit 1; fi; echo "Removing forward tcp:{{DHU_PORT}}"; "$ADB" forward --remove tcp:{{DHU_PORT}} || true; echo "Removed forward (if it existed)"'
 
 adb-forward:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; if ! command -v "$ADB" >/dev/null 2>&1; then echo "adb not found at $ADB" 1>&2; exit 1; fi; echo "Using adb: $ADB"; "$ADB" forward tcp:${DHU_PORT} localabstract:adb-hub; echo "Forwarded tcp:${DHU_PORT} -> localabstract:adb-hub"'
+	adb forward tcp:{{DHU_PORT}} tcp:{{DHU_PORT}}
 
-stop-forward:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; if ! command -v "$ADB" >/dev/null 2>&1; then echo "adb not found at $ADB" 1>&2; exit 1; fi; echo "Removing forward tcp:${DHU_PORT}"; "$ADB" forward --remove tcp:${DHU_PORT} || true; echo "Removed forward (if it existed)"'
+run-aa: adb-forward
+	@echo "Launching Android Auto DHU..."
+	@exec {{DHU_SCRIPT}}
 
-# Launch DHU (does not background)
-dhu:
-	@sh -lc 'set -euo pipefail; DHU_BIN=$(just --quiet dhubin); echo "Launching DHU: $DHU_BIN"; exec "$DHU_BIN"'
+run: run-debug && run-aa
 
-# Set forwarding then run DHU
-run: adb-forward dhu
-
-# Run DHU but ensure forwarding exists (idempotent)
-run-with-check:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; if [ -z "$($ADB forward --list 2>/dev/null | grep -F "tcp:${DHU_PORT}" || true)" ]; then echo "Forward not present -> setting up"; "$ADB" forward tcp:${DHU_PORT} localabstract:adb-hub; fi; DHU_BIN=$(just --quiet dhubin); echo "Starting DHU: $DHU_BIN"; exec "$DHU_BIN"'
-
+# ---------------------------
 # Android build helpers
+# ---------------------------
 build:
-	@sh -lc 'set -euo pipefail; echo "Running gradle assembleDebug"; ${GRADLEW} assembleDebug'
+	@sh -lc 'set -euo pipefail; echo "Running gradle assembleDebug"; if [ -f "gradlew" ]; then {{GRADLEW}} assembleDebug; else cd android && {{GRADLEW}} assembleDebug; fi'
 
 assemble-debug: build
 
+build-nuxt:
+	@sh -lc 'set -euo pipefail; echo "Building Nuxt and syncing Capacitor"; if [ -f "package.json" ]; then {{BUILD_CMD}}; else cd .. && {{BUILD_CMD}}; fi'
+
 install-debug:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; APK="${APK_PATH}"; if [ ! -f "$APK" ]; then echo "APK not found at $APK - building first"; ${GRADLEW} assembleDebug; fi; echo "Installing $APK to device"; "$ADB" install -r "$APK"'
+	@sh -lc 'set -euo pipefail; if [ -f "gradlew" ]; then cd .; else cd android; fi; ADB="{{ADB_CMD}}"; APK="{{APK_PATH}}"; if [ ! -f "$APK" ]; then echo "APK not found at $APK - building first"; ./gradlew assembleDebug; fi; echo "Installing $APK to device"; "$ADB" install "$APK"; echo "Launching app"; "$ADB" shell am start -n {{APP_ID}}/.MainActivity || true'
+
+run-debug: build-nuxt && install-debug
 
 uninstall-debug:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; echo "Uninstalling ${APP_ID}"; "$ADB" uninstall ${APP_ID} || true'
+	@sh -lc 'set -euo pipefail; ADB="{{ADB_CMD}}"; echo "Uninstalling {{APP_ID}}"; "$ADB" uninstall {{APP_ID}} || true'
 
-# Reverse a host port into the device (useful for dev server -> WebView)
+# ---------------------------
+# Dev server / reverse proxy helpers
+# ---------------------------
 adb-reverse:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; echo "Reversing host port ${WEB_DEV_PORT} to device"; "$ADB" reverse tcp:${WEB_DEV_PORT} tcp:${WEB_DEV_PORT} || true; echo "Done"'
+	@sh -lc 'set -euo pipefail; ADB="{{ADB_CMD}}"; echo "Reversing host port {{WEB_DEV_PORT}} to device"; "$ADB" reverse tcp:{{WEB_DEV_PORT}} tcp:{{WEB_DEV_PORT}} || true; echo "Done"'
 
 adb-reverse-remove:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; echo "Removing reverse for port ${WEB_DEV_PORT}"; "$ADB" reverse --remove tcp:${WEB_DEV_PORT} || true'
+	@sh -lc 'set -euo pipefail; ADB="{{ADB_CMD}}"; echo "Removing reverse for port {{WEB_DEV_PORT}}"; "$ADB" reverse --remove tcp:{{WEB_DEV_PORT}} || true'
 
-# Tail filtered logcat for the app
-logcat:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; echo "Tailing logcat for ${APP_ID} (press Ctrl+C to exit)"; "$ADB" logcat --clear; "$ADB" logcat | grep --line-buffered "${APP_ID}"'
-
-logcat-full:
-	@sh -lc 'set -euo pipefail; ADB="${ADB_CMD}"; echo "Tailing full logcat"; "$ADB" logcat'
-
-# Clean tasks
-gradle-clean:
-	@sh -lc 'set -euo pipefail; ${GRADLEW} clean'
-
-clean-build:
-	@sh -lc 'set -euo pipefail; rm -rf app/build; echo "Removed app/build"'
-
-# Start web dev server (nuxt) in repo root (android/..)
 start-web:
-	@sh -lc 'set -euo pipefail; echo "Starting web dev server from repo root with: ${WEB_CMD}"; cd ..; ${WEB_CMD}'
+	@sh -lc 'set -euo pipefail; echo "Starting web dev server from repo root with: {{WEB_CMD}}"; if [ -f "package.json" ]; then {{WEB_CMD}}; else cd .. && {{WEB_CMD}}; fi'
 
-# Convenience: ensure reverse then start web
 dev-with-reverse: adb-reverse start-web
 
-# Diagnostics
-info:
-	@sh -lc 'echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"; echo "ADB_CMD=${ADB_CMD}"; echo "GRADLEW=${GRADLEW}"; echo "DHU_DIR=${DHU_DIR}"; echo "DHU_PORT=${DHU_PORT}"; echo "APP_ID=${APP_ID}"; echo "APK_PATH=${APK_PATH}"; echo "WEB_CMD=${WEB_CMD}"; echo "DHU binary: $(just --quiet dhubin 2>/dev/null || echo "not found")"'
+# ---------------------------
+# Logging / cleaning
+# ---------------------------
+logcat:
+	@sh -lc 'set -euo pipefail; ADB="{{ADB_CMD}}"; echo "Tailing logcat for {{APP_ID}} (press Ctrl+C to exit)"; "$ADB" logcat --clear; "$ADB" logcat | grep --line-buffered "{{APP_ID}}"'
+
+logcat-full:
+	@sh -lc 'set -euo pipefail; ADB="{{ADB_CMD}}"; echo "Tailing full logcat"; "$ADB" logcat'
+
+gradle-clean:
+	@sh -lc 'set -euo pipefail; if [ -f "gradlew" ]; then {{GRADLEW}} clean; else cd android && {{GRADLEW}} clean; fi'
+
+clean-build:
+	@sh -lc 'set -euo pipefail; if [ -d "app" ]; then rm -rf app/build; else cd android && rm -rf app/build; fi; echo "Removed app/build"'
+
+
+
+
+
+
+
+
+
+

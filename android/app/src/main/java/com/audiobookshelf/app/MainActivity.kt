@@ -198,15 +198,15 @@ class MainActivity : BridgeActivity() {
           val absAudioPlayer = bridge.getPlugin("AbsAudioPlayer").instance as AbsAudioPlayer
           absAudioPlayer.syncCurrentPlaybackStateWhenReady() // Smart sync that waits for readiness
 
-          // Add a delayed fallback sync for fresh installs/updates where timing might be critical
-          Handler(Looper.getMainLooper()).postDelayed({
+          // Add a fallback sync for fresh installs/updates where timing might be critical
+          Handler(Looper.getMainLooper()).post {
             try {
               Log.d(tag, "Fallback sync attempt after service connection")
               absAudioPlayer.syncCurrentPlaybackStateWhenReady()
             } catch (e: Exception) {
               Log.e(tag, "Fallback sync failed: ${e.message}")
             }
-          }, 3000) // 3 second delay
+          }
 
         } catch (e: Exception) {
           Log.e(tag, "Failed to sync playback state on service connect: ${e.message}")

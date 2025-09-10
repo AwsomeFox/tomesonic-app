@@ -1,4 +1,5 @@
 # Top-level justfile for repo convenience - delegates Android tasks to android/justfile
+import 'android/justfile'
 # Usage examples:
 #   just android-info
 #   just android-build
@@ -6,8 +7,13 @@
 #   just android-dhu
 #   just android-run
 #   just android-logcat
+#   just build-nuxt        # build Nuxt.js and sync Capacitor
+#   just run-debug         # build Nuxt, sync, build and install debug APK
+#   just run               # full workflow: build Nuxt, sync, build/install APK, start Android Auto
+#   just build             # build the android app (assembleDebug)
+#   just install-debug     # build and install debug APK onto connected device
 
-ANDROID_DIR ?= "android"
+ANDROID_DIR := "android"
 
 android-info:
 	@sh -lc 'cd "${ANDROID_DIR}" && just info'
@@ -53,9 +59,6 @@ android-logcat-full:
 
 android-start-web:
 	@sh -lc 'cd "${ANDROID_DIR}" && just start-web'
-
-dev-with-reverse:
-	@sh -lc 'cd "${ANDROID_DIR}" && just dev-with-reverse'
 
 # Convenience aggregate
 android-all:

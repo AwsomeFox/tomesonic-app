@@ -86,7 +86,7 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     val currentPlaybackSession = playerNotificationService.currentPlaybackSession
     if (currentPlaybackSession != null) {
       val index = id.toInt()
-      
+
       if (currentPlaybackSession.chapters.isNotEmpty()) {
         // Chapter-based navigation
         Log.d(tag, "MediaSessionCallback: Seeking to chapter $index")
@@ -121,7 +121,7 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     val mediaManager = playerNotificationService.mediaManager
     val currentSpeed = mediaManager.getSavedPlaybackRate()
     Log.d(tag, "Current speed: $currentSpeed")
-    
+
     val newSpeed = when (currentSpeed) {
       in 0.5f..0.7f -> 1.0f
       in 0.8f..1.0f -> 1.2f
@@ -132,13 +132,13 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       // anything set above 3 (can happen in the android app) will be reset to 1
       else -> 1.0f
     }
-    
+
     Log.d(tag, "Setting new speed: $newSpeed")
     mediaManager.setSavedPlaybackRate(newSpeed)
-    
+
     playerNotificationService.setPlaybackSpeed(newSpeed)
     playerNotificationService.clientEventEmitter?.onPlaybackSpeedChanged(newSpeed)
-    
+
     // Note: setPlaybackSpeed already calls setMediaSessionConnectorCustomActions, so no need to duplicate
     Log.d(tag, "onChangeSpeed completed")
   }
@@ -156,14 +156,14 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       val parts = mediaId.split("__CHAPTER__")
       val bookId = parts[0]
       val chapterIndex = parts.getOrNull(1)?.toIntOrNull()
-      
+
       Log.d(tag, "Playing chapter $chapterIndex from book $bookId")
-      
+
       // Get the book
       val bookWrapper = playerNotificationService.mediaManager.getById(bookId)
       if (bookWrapper != null && chapterIndex != null) {
         libraryItemWrapper = bookWrapper
-        
+
         // Get the chapter start time
         if (bookWrapper is com.audiobookshelf.app.data.LibraryItem) {
           val book = bookWrapper.media as? com.audiobookshelf.app.data.Book
@@ -205,13 +205,13 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
           val playbackRate = playerNotificationService.mediaManager.getSavedPlaybackRate()
           Handler(Looper.getMainLooper()).post {
             playerNotificationService.preparePlayer(it, true, playbackRate)
-            
-            // If we have a chapter start time, seek to it after the player is prepared
+
+              // If we have a chapter start time, seek to it after the player is prepared
             chapterStartTime?.let { startTime ->
-              Handler(Looper.getMainLooper()).postDelayed({
+              Handler(Looper.getMainLooper()).post {
                 Log.d(tag, "Seeking to chapter start time: $startTime seconds")
                 playerNotificationService.seekPlayer((startTime * 1000).toLong())
-              }, 500) // Small delay to ensure player is ready
+              }
             }
           }
         }

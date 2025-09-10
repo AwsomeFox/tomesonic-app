@@ -5,7 +5,9 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.net.toFile
 import com.audiobookshelf.app.BuildConfig
@@ -211,39 +213,76 @@ class PlaybackSession(
     val nowPlayingTitle = currentTrack?.title ?: displayTitle
     val nowPlayingSubtitle = if (currentTrack?.title != null) displayAuthor else displayAuthor
 
-    val metadataBuilder =
-      MediaMetadataCompat.Builder()
-        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle)
-        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, nowPlayingTitle)
-        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, nowPlayingSubtitle)
-        .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, displayAuthor)
-        .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayAuthor)
-        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAuthor)
-        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
-        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
-        .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
-        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
-        .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
-        .putString(
-          MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI,
-          coverUri.toString()
-        )
+    // Create MediaDescriptionCompat with proper bitmap handling for Android Auto
+    val descriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
+      .setMediaId(id)
+      .setTitle(nowPlayingTitle)
+      .setSubtitle(nowPlayingSubtitle)
+      .setDescription(displayAuthor)
 
-  // Local covers get bitmap
+    // Handle images differently for local vs server books
+    var bitmap: android.graphics.Bitmap? = null
     if (localLibraryItem?.coverContentUrl != null) {
-      val bitmap =
-              if (Build.VERSION.SDK_INT < 28) {
-                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-              } else {
-                val source: ImageDecoder.Source =
-                        ImageDecoder.createSource(ctx.contentResolver, coverUri)
-                ImageDecoder.decodeBitmap(source)
-              }
-      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
-      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
+      // Local books: Use bitmap approach for Android Auto compatibility
+      // Note: In Android Auto for local cover images, setting the icon uri to a local path does not work (cover is blank)
+      // so we create and set the bitmap here instead of letting AbMediaDescriptionAdapter handle it
+      try {
+        bitmap = if (Build.VERSION.SDK_INT < 28) {
+          MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
+        } else {
+          val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
+          ImageDecoder.decodeBitmap(source)
+        }
+        descriptionBuilder.setIconBitmap(bitmap)
+      } catch (e: Exception) {
+        Log.w("PlaybackSession", "Failed to load bitmap for local book: ${e.message}")
+        descriptionBuilder.setIconUri(coverUri)
+      }
+    } else {
+      // Server books: Use URI approach (Android Auto can access HTTP URLs)
+      descriptionBuilder.setIconUri(coverUri)
     }
 
-    return metadataBuilder.build()
+    val description = descriptionBuilder.build()
+
+    val metadataBuilder = MediaMetadataCompat.Builder()
+      .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle)
+      .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, nowPlayingTitle)
+      .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, nowPlayingSubtitle)
+      .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
+
+    // Set the description with proper bitmap/URI handling
+    metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, description.mediaId)
+
+    // Also set bitmap in metadata keys for fallback
+    if (bitmap != null) {
+      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
+      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
+    } else {
+      // Server books: Use URI approach
+      metadataBuilder
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, coverUri.toString())
+    }
+
+    val metadata = metadataBuilder.build()
+
+    // Use reflection to set the description with iconBitmap for Android Auto compatibility
+    try {
+      val descriptionField = MediaMetadataCompat::class.java.getDeclaredField("mDescription")
+      descriptionField.isAccessible = true
+      descriptionField.set(metadata, description)
+    } catch (e: Exception) {
+      Log.w("PlaybackSession", "Failed to set description with iconBitmap: ${e.message}")
+    }
+
+    return metadata
   }
 
   @JsonIgnore

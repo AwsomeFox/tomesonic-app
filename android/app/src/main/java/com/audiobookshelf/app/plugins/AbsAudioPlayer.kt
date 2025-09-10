@@ -175,10 +175,10 @@ class AbsAudioPlayer : Plugin() {
         Log.d(tag, "Synced state - Playing: $isPlaying, CurrentTime: $currentTime, Duration: $duration, PlayerState: READY")
 
         // Force a small delay then emit playing state again to ensure UI updates
-        Handler(Looper.getMainLooper()).postDelayed({
+        Handler(Looper.getMainLooper()).post {
           emit("onPlayingUpdate", isPlaying)
           Log.d(tag, "Re-emitted playing state: $isPlaying")
-        }, 100)
+        }
 
       } else {
         Log.d(tag, "No active playback session - checking server for last session")
@@ -346,9 +346,9 @@ class AbsAudioPlayer : Plugin() {
               retryCount++
               if (retryCount < maxRetries) {
                 Log.d(tag, "Web view not ready yet, retry $retryCount/$maxRetries")
-                Handler(Looper.getMainLooper()).postDelayed({
+                Handler(Looper.getMainLooper()).post {
                   attemptSync()
-                }, retryIntervalMs)
+                }
               } else {
                 Log.w(tag, "Max retries reached, falling back to immediate sync")
                 syncCurrentPlaybackState()
@@ -361,9 +361,9 @@ class AbsAudioPlayer : Plugin() {
         retryCount++
         if (retryCount < maxRetries) {
           Log.d(tag, "Bridge/WebView not ready yet, retry $retryCount/$maxRetries")
-          Handler(Looper.getMainLooper()).postDelayed({
+          Handler(Looper.getMainLooper()).post {
             attemptSync()
-          }, retryIntervalMs)
+          }
         } else {
           Log.w(tag, "Max retries reached, falling back to immediate sync")
           syncCurrentPlaybackState()
