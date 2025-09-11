@@ -12,6 +12,8 @@ import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.net.*
 import android.os.*
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import android.support.v4.media.MediaBrowserCompat
@@ -125,6 +127,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   var currentPlaybackSession: PlaybackSession? = null
   private var initialPlaybackRate: Float? = null
   private var lastActiveQueueItemIndex = -1
+  private var desiredActiveQueueItemIndex = -1 // Track the desired active queue item
+  private var currentNavigationIndex = -1 // Track the current navigation index for skip operations
   private var queueSetForCurrentSession = false
 
   internal var isAndroidAuto = false
@@ -392,10 +396,12 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       // First set the basic metadata
       val metadata = playbackSession.getMediaMetadataCompat(ctx)
+      Log.d(tag, "Android Auto: Setting initial metadata with bitmap: ${metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
       mediaSession.setMetadata(metadata)
 
       // Store the original metadata for later use (to preserve after queue changes)
       var originalMetadata = metadata
+      Log.d(tag, "Android Auto: Stored original metadata with bitmap: ${originalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
 
       // Build MediaSession queue from chapters/tracks so Android Auto shows actual navigation list
       try {
@@ -404,16 +410,22 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         // Cache bitmap once for all queue items and metadata (local books only)
         var sharedCachedBitmap: Bitmap? = null
         val coverUri = playbackSession.getCoverUri(ctx)
+        Log.d(tag, "Android Auto: Loading shared bitmap - Cover URI: $coverUri")
+        Log.d(tag, "Android Auto: Local library item cover content URL: ${playbackSession.localLibraryItem?.coverContentUrl}")
 
         if (playbackSession.localLibraryItem?.coverContentUrl != null) {
           try {
+            Log.d(tag, "Android Auto: Attempting to load shared bitmap")
             sharedCachedBitmap = if (Build.VERSION.SDK_INT < 28) {
+              Log.d(tag, "Android Auto: Using MediaStore for shared bitmap (API < 28)")
               MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
             } else {
+              Log.d(tag, "Android Auto: Using ImageDecoder for shared bitmap (API >= 28)")
               val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
               ImageDecoder.decodeBitmap(source)
             }
             if (sharedCachedBitmap != null) {
+              Log.d(tag, "Android Auto: Shared bitmap loaded successfully - Size: ${sharedCachedBitmap.width}x${sharedCachedBitmap.height}, Bytes: ${sharedCachedBitmap.byteCount}")
             } else {
               Log.w(tag, "Android Auto: Shared bitmap is null after loading")
             }
@@ -427,7 +439,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         }
 
         if (playbackSession.chapters.isNotEmpty()) {
+          Log.d(tag, "Android Auto: Building chapter queue. Number of chapters: ${playbackSession.chapters.size}")
+
           for ((idx, chapter) in playbackSession.chapters.withIndex()) {
+            Log.d(tag, "Android Auto: Adding chapter $idx: ${chapter.title ?: "Chapter ${idx + 1}"}")
 
             val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
               .setMediaId("chapter_$idx")
@@ -457,11 +472,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
           // Use shared cached bitmap or fallback to original description approach
           if (sharedCachedBitmap != null) {
+            Log.d(tag, "Android Auto: Setting shared bitmap on chapter description - Size: ${sharedCachedBitmap.width}x${sharedCachedBitmap.height}")
             chapterDescriptionBuilder.setIconBitmap(sharedCachedBitmap)
           } else {
             Log.w(tag, "Android Auto: No shared bitmap available for chapter description")
             val originalDescription = metadata.description
             if (originalDescription.iconBitmap != null) {
+              Log.d(tag, "Android Auto: Using original description bitmap for chapter - Size: ${originalDescription.iconBitmap?.width}x${originalDescription.iconBitmap?.height}")
               chapterDescriptionBuilder.setIconBitmap(originalDescription.iconBitmap)
             } else {
               Log.w(tag, "Android Auto: No fallback bitmap available for chapter description")
@@ -498,10 +515,14 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               Log.w(tag, "Failed to set chapter description with iconBitmap: ${e.message}")
             }
 
+            Log.d(tag, "Android Auto: Setting chapter metadata for chapter $currentChapterIndex: ${currentChapter.title}")
+            mediaSession.setMetadata(chapterMetadata)
           }
         } else if (playbackSession.audioTracks.size > 1) {
+          Log.d(tag, "Android Auto: Building track queue. Number of tracks: ${playbackSession.audioTracks.size}")
 
           for ((idx, track) in playbackSession.audioTracks.withIndex()) {
+            Log.d(tag, "Android Auto: Adding track $idx: ${track.title ?: "Track ${idx + 1}"}")
 
             val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
               .setMediaId("track_$idx")
@@ -570,8 +591,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               Log.w(tag, "Failed to set track description with iconBitmap: ${e.message}")
             }
 
+            Log.d(tag, "Android Auto: Setting track metadata for track $currentTrackIndex: ${currentTrack.title}")
+            mediaSession.setMetadata(trackMetadata)
           }
         } else {
+          Log.d(tag, "Android Auto: Single track book, creating simple queue")
           // Single track book - create one queue item using shared cached bitmap
           val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
             .setMediaId("track_0")
@@ -591,13 +615,19 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           Handler(Looper.getMainLooper()).post {
             // Check if queue has already been set for this session
             if (queueSetForCurrentSession) {
+              Log.d(tag, "Android Auto: Queue already set for current session, skipping")
               return@post
             }
 
+            Log.d(tag, "Android Auto: Setting queue on MediaSession with ${chapterQueue.size} items")
+
             // Preserve current metadata before setting queue (this might be chapter/track specific)
             val currentMetadata = mediaSession.controller?.metadata
+            Log.d(tag, "Android Auto: Current metadata before queue set: ${currentMetadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE)}")
+            Log.d(tag, "Android Auto: Current metadata has bitmap: ${currentMetadata?.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
 
             mediaSession.setQueue(chapterQueue)
+            Log.d(tag, "Android Auto: Queue set successfully with ${chapterQueue.size} items")
 
             // Mark queue as set for this session
             queueSetForCurrentSession = true
@@ -605,10 +635,17 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             // Re-set metadata after queue change to prevent it from being cleared
             // Always use originalMetadata which has the bitmap, don't use currentMetadata as it might not have the bitmap
             val metadataToRestore = originalMetadata
-            
+            Log.d(tag, "Android Auto: Restoring metadata: ${metadataToRestore.getString(MediaMetadataCompat.METADATA_KEY_TITLE)}")
+            Log.d(tag, "Android Auto: Restoring metadata has bitmap: ${metadataToRestore.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
+            Log.d(tag, "Android Auto: originalMetadata bitmap: ${originalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
+
             // Set metadata immediately after queue
-            mediaSession.setMetadata(metadataToRestore)            // Verify the queue was set
+            mediaSession.setMetadata(metadataToRestore)
+            Log.d(tag, "Android Auto: Re-set metadata after queue change")
+
+            // Verify the queue was set
             val setQueue = mediaSession.controller?.queue
+            Log.d(tag, "Android Auto: Queue verification - size: ${setQueue?.size ?: 0}")
 
             // Set initial active queue item based on current playback position
             val currentIndex = if (playbackSession.chapters.isNotEmpty()) {
@@ -616,8 +653,9 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             } else {
               playbackSession.getCurrentTrackIndex()
             }
+            Log.d(tag, "Android Auto: Current index: $currentIndex")
             if (currentIndex >= 0) {
-              updateActiveQueueItem(currentIndex)
+              updateNavigationState(currentIndex)
             }
           }
         }
@@ -648,6 +686,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       currentPlaybackSession = playbackSession
       lastActiveQueueItemIndex = -1 // Reset when starting new playback session
+      desiredActiveQueueItemIndex = -1 // Reset desired active queue item
+      currentNavigationIndex = -1 // Reset navigation index - will be calculated on first access
       queueSetForCurrentSession = false // Reset queue flag for new session
       DeviceManager.setLastPlaybackSession(
               playbackSession
@@ -1122,260 +1162,444 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
   }
 
-  // Seek to the start of a chapter index (chapterIndex is 0-based)
-  fun seekToChapter(chapterIndex: Int) {
-    currentPlaybackSession?.let { session ->
-      if (chapterIndex < 0 || chapterIndex >= session.chapters.size) return
+  /**
+   * Unified navigation method: Navigate to a specific chapter by index
+   * This is the primary navigation method used by both UI and Android Auto
+   *
+   * @param chapterIndex 0-based chapter index
+   */
+  fun navigateToChapter(chapterIndex: Int) {
+    Log.d(tag, "navigateToChapter: Starting navigation to chapter $chapterIndex")
 
-      // For chapter-based books with aligned timeline, seek to the chapter's media item
-      if (session.audioTracks.size == 1 && session.chapters.isNotEmpty()) {
-        Log.d(tag, "MediaSessionCallback: Seeking to chapter media item $chapterIndex")
-        currentPlayer.seekTo(chapterIndex, 0)
-        // Update the active queue item for Android Auto
-        updateActiveQueueItem(chapterIndex)
-      } else {
-        // Fallback to old approach for multi-track books
-        val chapter = session.chapters[chapterIndex]
-        val chapterStartMs = chapter.startMs
-
-        // Map chapterStartMs to window index and offset using audioTracks
-        var foundWindow = 0
-        var offsetMs = chapterStartMs
-        for (i in 0 until session.audioTracks.size) {
-          val track = session.audioTracks[i]
-          if (chapterStartMs >= track.startOffsetMs && chapterStartMs < track.endOffsetMs) {
-            foundWindow = i
-            offsetMs = chapterStartMs - track.startOffsetMs
-            break
-          }
-        }
-
-        try {
-          if (currentPlayer.mediaItemCount > 1) {
-            currentPlayer.seekTo(foundWindow, offsetMs)
-          } else {
-            currentPlayer.seekTo(chapterStartMs)
-          }
-
-          // Update the active queue item for Android Auto
-          updateActiveQueueItem(chapterIndex)
-        } catch (e: Exception) {
-          Log.e(tag, "seekToChapter error: ${e.localizedMessage}")
-        }
-      }
+    val session = currentPlaybackSession ?: run {
+      Log.w(tag, "navigateToChapter: No active playback session")
+      return
     }
-  }
 
-  // Update the active queue item and metadata for chapter/track-based books
-  private fun updateActiveQueueItem(index: Int) {
+    if (chapterIndex < 0 || chapterIndex >= getNavigationItemCount()) {
+      Log.w(tag, "navigateToChapter: Invalid chapter index $chapterIndex (total: ${getNavigationItemCount()})")
+      return
+    }
+
     try {
-      val currentPlaybackSession = this.currentPlaybackSession ?: run {
-        Log.w(tag, "Android Auto: No current playback session available")
+      // Get the navigation item (chapter or track) for this index
+      val navItem = getNavigationItem(chapterIndex)
+      if (navItem == null) {
+        Log.w(tag, "navigateToChapter: Could not get navigation item for index $chapterIndex")
         return
       }
-      val queue = mediaSession.controller?.queue
+      Log.d(tag, "navigateToChapter: Navigating to item: ${navItem.title} at ${navItem.startTimeMs}ms")
 
-      if (queue != null && index >= 0 && index < queue.size) {
-        val queueItem = queue[index]
+      // Use existing seekPlayer method which handles single/multi-file logic
+      seekPlayer(navItem.startTimeMs)
 
-        // Check if the active queue item is actually changing
-        val currentActiveQueueItemId = mediaSession.controller?.playbackState?.activeQueueItemId ?: -1L
-        val newActiveQueueItemId = index.toLong()
+      // Update the tracked navigation index immediately for skip operations
+      currentNavigationIndex = chapterIndex
 
-        // Only update if the active queue item is changing
-        if (currentActiveQueueItemId == newActiveQueueItemId) {
-          return
-        }
+      // Update MediaSession state immediately for Android Auto compatibility
+      // Delays cause race conditions and crashes in Android Auto
+      updateNavigationState(chapterIndex)
 
-        // Update metadata first, then playback state
-        val currentMetadata = mediaSession.controller?.metadata
-        if (currentMetadata != null) {
-          val coverUri = currentPlaybackSession.getCoverUri(ctx)
-
-          val updatedMetadata = MediaMetadataCompat.Builder(currentMetadata)
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, queueItem.description.mediaId)
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, queueItem.description.title?.toString() ?: "Unknown")
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, queueItem.description.title?.toString() ?: "Unknown")
-            // Preserve all existing metadata fields
-            .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_AUTHOR))
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ARTIST))
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM))
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST))
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE))
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION))
-            // Preserve cover image URIs
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
-            .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, coverUri.toString())
-
-          // Ensure we have a bitmap for the cover image
-          var bitmapToUse: Bitmap? = null
-
-          // First try to get bitmap from queue item
-          val queueItemBitmap = queueItem.description.iconBitmap
-          if (queueItemBitmap != null) {
-            bitmapToUse = queueItemBitmap
-            // Fallback to existing bitmap from metadata
-            val existingBitmap = currentMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
-            if (existingBitmap != null) {
-              bitmapToUse = existingBitmap
-            } else {
-              // Last resort: try to load bitmap from URI
-              try {
-                bitmapToUse = if (Build.VERSION.SDK_INT < 28) {
-                  MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-                } else {
-                  val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-                  ImageDecoder.decodeBitmap(source)
-                }
-                if (bitmapToUse != null) {
-                } else {
-                }
-              } catch (e: Exception) {
-                Log.w(tag, "Android Auto: Failed to load bitmap from URI: ${e.message}")
-                Log.w(tag, "Android Auto: Exception type: ${e.javaClass.simpleName}")
-                e.printStackTrace()
-              }
-            }
-          }
-
-          // Set the bitmap if we have one
-          if (bitmapToUse != null) {
-            updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmapToUse)
-            updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmapToUse)
-          } else {
-            Log.w(tag, "Android Auto: No bitmap available for now playing - all sources failed")
-            Log.w(tag, "Android Auto: Current metadata bitmap: ${currentMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-            Log.w(tag, "Android Auto: Queue item bitmap: ${queueItem.description.iconBitmap != null}")
-          }
-
-          val finalMetadata = updatedMetadata.build()
-          mediaSession.setMetadata(finalMetadata)
-        }
-
-        // Update the playback state with active queue item
-        mediaSession.setPlaybackState(
-          PlaybackStateCompat.Builder()
-            .setState(mediaSession.controller?.playbackState?.state ?: PlaybackStateCompat.STATE_NONE,
-                     mediaSession.controller?.playbackState?.position ?: 0L,
-                     mediaSession.controller?.playbackState?.playbackSpeed ?: 1.0f)
-            .setActiveQueueItemId(index.toLong())
-            .setActions(mediaSession.controller?.playbackState?.actions ?: 0L)
-            .build()
-        )
-      } else {
-        Log.w(tag, "Android Auto: Invalid queue state - queue: ${queue != null}, index: $index, queue size: ${queue?.size ?: 0}")
-      }
     } catch (e: Exception) {
-      Log.e(tag, "Android Auto: updateActiveQueueItem error: ${e.localizedMessage}")
-      Log.e(tag, "Android Auto: Exception stack trace:", e)
+      Log.e(tag, "navigateToChapter: Error navigating to chapter $chapterIndex", e)
     }
   }
 
-  fun seekToTrack(trackIndex: Int) {
-    currentPlaybackSession?.let { session ->
-      if (trackIndex < 0 || trackIndex >= session.audioTracks.size) return
+  /**
+   * Legacy method for backward compatibility - delegates to navigateToChapter
+   */
+  fun seekToChapter(chapterIndex: Int) {
+    navigateToChapter(chapterIndex)
+  }
 
-      try {
-        Log.d(tag, "MediaSessionCallback: Seeking to track $trackIndex")
-        currentPlayer.seekTo(trackIndex, 0)
+  /**
+   * Represents a navigation item in the unified system
+   * Can be either a chapter or a track
+   */
+  data class NavigationItem(
+    val index: Int,
+    val title: String,
+    val startTimeMs: Long,
+    val endTimeMs: Long,
+    val isChapter: Boolean
+  )
 
-        // Update the active queue item for Android Auto
-        updateActiveQueueItem(trackIndex)
-      } catch (e: Exception) {
-        Log.e(tag, "seekToTrack error: ${e.localizedMessage}")
-      }
+  /**
+   * Get total number of navigation items (chapters or tracks)
+   */
+  fun getNavigationItemCount(): Int {
+    val session = currentPlaybackSession ?: return 0
+
+    // Prefer chapters over tracks for navigation
+    return if (session.chapters.isNotEmpty()) {
+      session.chapters.size
+    } else {
+      session.audioTracks.size
     }
   }
 
-  // Get current chapter index based on playback position
-  fun getCurrentChapterIndex(): Int {
-    currentPlaybackSession?.let { session ->
-      if (session.chapters.isEmpty()) return -1
+  /**
+   * Get navigation item by index
+   */
+  fun getNavigationItem(index: Int): NavigationItem? {
+    val session = currentPlaybackSession ?: return null
 
-      // For chapter-based books with aligned timeline, use current media item index
-      if (session.audioTracks.size == 1 && session.chapters.isNotEmpty()) {
-        return currentPlayer.currentMediaItemIndex
+    return if (session.chapters.isNotEmpty()) {
+      // Chapter-based navigation
+      if (index >= 0 && index < session.chapters.size) {
+        val chapter = session.chapters[index]
+        NavigationItem(
+          index = index,
+          title = chapter.title ?: "Chapter ${index + 1}",
+          startTimeMs = chapter.startMs,
+          endTimeMs = chapter.endMs,
+          isChapter = true
+        )
+      } else null
+    } else {
+      // Track-based navigation
+      if (index >= 0 && index < session.audioTracks.size) {
+        val track = session.audioTracks[index]
+        NavigationItem(
+          index = index,
+          title = track.title ?: "Track ${index + 1}",
+          startTimeMs = track.startOffsetMs,
+          endTimeMs = track.endOffsetMs,
+          isChapter = false
+        )
+      } else null
+    }
+  }
+
+  /**
+   * Get current navigation index based on playback position
+   * Uses tracked index when available, falls back to calculation
+   */
+  fun getCurrentNavigationIndex(): Int {
+    val session = currentPlaybackSession ?: return -1
+
+    // If we have a tracked navigation index and it's valid, use it
+    // This prevents issues with rapid skip operations where seeks haven't completed yet
+    if (currentNavigationIndex >= 0 && currentNavigationIndex < getNavigationItemCount()) {
+      val calculatedIndex = calculateCurrentNavigationIndex()
+
+      // If the calculated index matches or is very close to tracked index, use tracked
+      // This handles the timing between seek start and seek completion
+      if (calculatedIndex == currentNavigationIndex || calculatedIndex == -1) {
+        return currentNavigationIndex
+      } else {
+        // Playback has moved significantly, update tracked index and use calculated
+        currentNavigationIndex = calculatedIndex
+        return calculatedIndex
       }
+    }
 
-      // Fallback to time-based calculation for multi-track books
-      val currentTimeMs = (session.currentTime * 1000).toLong()
+    // No valid tracked index, calculate and store it
+    val calculatedIndex = calculateCurrentNavigationIndex()
+    currentNavigationIndex = calculatedIndex
+    return calculatedIndex
+  }
+
+  /**
+   * Calculate the navigation index based on current playback state
+   */
+  private fun calculateCurrentNavigationIndex(): Int {
+    val session = currentPlaybackSession ?: return -1
+
+    return if (session.chapters.isNotEmpty()) {
+      // Chapter-based: always use time-based lookup for chapters since they can be within the same file
+      findCurrentNavigationIndexByTime()
+    } else {
+      // Track-based: use current media item index (each track is a separate file)
+      val mediaItemIndex = currentPlayer.currentMediaItemIndex
+      if (mediaItemIndex >= 0 && mediaItemIndex < session.audioTracks.size) mediaItemIndex else -1
+    }
+  }
+
+  /**
+   * Find current navigation index using time-based lookup
+   */
+  private fun findCurrentNavigationIndexByTime(): Int {
+    val session = currentPlaybackSession ?: return -1
+    val currentTimeMs = getCurrentTime()
+
+    if (session.chapters.isNotEmpty()) {
+      // Chapter-based lookup
       for (i in session.chapters.indices) {
         val chapter = session.chapters[i]
-        if (currentTimeMs >= chapter.startMs &&
-            (i == session.chapters.size - 1 || currentTimeMs < session.chapters[i + 1].startMs)) {
+        if (currentTimeMs >= chapter.startMs && currentTimeMs < chapter.endMs) {
+          return i
+        }
+      }
+
+      // If no exact match, return the last started chapter
+      for (i in session.chapters.indices.reversed()) {
+        val chapter = session.chapters[i]
+        if (currentTimeMs >= chapter.startMs) {
+          return i
+        }
+      }
+    } else {
+      // Track-based lookup
+      for (i in session.audioTracks.indices) {
+        val track = session.audioTracks[i]
+        if (currentTimeMs >= track.startOffsetMs && currentTimeMs < track.endOffsetMs) {
+          return i
+        }
+      }
+
+      // If no exact match, return the last started track
+      for (i in session.audioTracks.indices.reversed()) {
+        val track = session.audioTracks[i]
+        if (currentTimeMs >= track.startOffsetMs) {
           return i
         }
       }
     }
+
     return -1
   }
+  /**
+   * Update navigation state for MediaSession (Android Auto)
+   * Simplified version that doesn't fight with MediaSessionConnector
+   */
+  private fun updateNavigationState(index: Int) {
+    try {
+      val session = currentPlaybackSession ?: run {
+        Log.w(tag, "updateNavigationState: No active playback session")
+        return
+      }
 
-  // Update queue position based on current playback progress - called periodically
+      val queue = mediaSession.controller?.queue
+      if (queue == null || index < 0 || index >= queue.size) {
+        Log.w(tag, "updateNavigationState: Invalid queue state - index: $index, queue size: ${queue?.size ?: 0}")
+        return
+      }
+
+      // Get the navigation item for metadata
+      val navItem = getNavigationItem(index)
+      if (navItem == null) {
+        Log.w(tag, "updateNavigationState: Could not get navigation item for index $index")
+        return
+      }
+
+      // Update metadata with current chapter/track info
+      val currentMetadata = mediaSession.controller?.metadata
+      if (currentMetadata != null) {
+        updateMetadataForNavigationItem(navItem, currentMetadata, session)
+      }
+
+      // Update playback state with active queue item immediately
+      // Delays cause race conditions and crashes in Android Auto
+      setActiveQueueItemSafely(index)
+
+    } catch (e: Exception) {
+      Log.e(tag, "updateNavigationState: Error updating navigation state", e)
+    }
+  }
+
+  /**
+   * Safely set the active queue item without fighting MediaSessionConnector
+   */
+  private fun setActiveQueueItemSafely(index: Int) {
+    try {
+      val currentActiveId = mediaSession.controller?.playbackState?.activeQueueItemId ?: -1L
+      val newActiveId = index.toLong()
+
+      if (currentActiveId != newActiveId) {
+        // Get current playback state and preserve all existing values
+        val currentState = mediaSession.controller?.playbackState
+        val currentPosition = getCurrentTime()
+        val currentSpeed = currentPlayer.playbackParameters.speed
+        val playerState = when {
+          !currentPlayer.isPlaying -> PlaybackStateCompat.STATE_PAUSED
+          currentPlayer.isLoading -> PlaybackStateCompat.STATE_BUFFERING
+          else -> PlaybackStateCompat.STATE_PLAYING
+        }
+
+        // Preserve existing actions if available, otherwise use standard set
+        val existingActions = currentState?.actions ?: (
+          PlaybackStateCompat.ACTION_PLAY_PAUSE or
+          PlaybackStateCompat.ACTION_PLAY or
+          PlaybackStateCompat.ACTION_PAUSE or
+          PlaybackStateCompat.ACTION_FAST_FORWARD or
+          PlaybackStateCompat.ACTION_REWIND or
+          PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+          PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+          PlaybackStateCompat.ACTION_STOP or
+          PlaybackStateCompat.ACTION_SEEK_TO
+        )
+
+        // Create new state with updated active queue item
+        val newState = PlaybackStateCompat.Builder()
+          .setState(playerState, currentPosition, currentSpeed)
+          .setActiveQueueItemId(newActiveId)
+          .setActions(existingActions)
+
+        // Preserve custom actions if they exist
+        currentState?.customActions?.forEach { customAction ->
+          newState.addCustomAction(customAction)
+        }
+
+        mediaSession.setPlaybackState(newState.build())
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "setActiveQueueItemSafely: Error setting active queue item", e)
+    }
+  }  /**
+   * Update metadata for current navigation item
+   */
+  private fun updateMetadataForNavigationItem(navItem: NavigationItem, currentMetadata: MediaMetadataCompat, session: PlaybackSession) {
+    try {
+      val metadataBuilder = MediaMetadataCompat.Builder(currentMetadata)
+        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, navItem.title)
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, navItem.title)
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, session.displayAuthor ?: "")
+        .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, session.totalDurationMs)
+
+      // Set album/artist consistently
+      metadataBuilder
+        .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, session.displayAuthor ?: "")
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, session.displayAuthor ?: "")
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, session.displayTitle ?: "")
+
+      val finalMetadata = metadataBuilder.build()
+      mediaSession.setMetadata(finalMetadata)
+
+    } catch (e: Exception) {
+      Log.e(tag, "updateMetadataForNavigationItem: Error updating metadata", e)
+    }
+  }
+
+  // Extract metadata update logic to a separate method
+  /*
+  private fun updateMetadataForQueueItem(
+    queueItem: MediaDescriptionCompat,
+    currentMetadata: MediaMetadataCompat,
+    currentPlaybackSession: PlaybackSession,
+    index: Int
+  ) {
+    // Old method - disabled in favor of updateMetadataForNavigationItem
+    // [entire method commented out]
+  }
+  */
+
+  /**
+   * Legacy method for track-based navigation - delegates to unified system
+   */
+  fun seekToTrack(trackIndex: Int) {
+    navigateToChapter(trackIndex)
+  }
+
+  /**
+   * Legacy method for backward compatibility - delegates to getCurrentNavigationIndex
+   */
+  fun getCurrentChapterIndex(): Int {
+    return getCurrentNavigationIndex()
+  }
+
+  /**
+   * Update queue position based on current playback progress - called periodically
+   * Simplified version using unified navigation system
+   */
   fun updateQueuePositionForChapters() {
-    currentPlaybackSession?.let { session ->
-      val newIndex = if (session.chapters.isNotEmpty()) {
-        getCurrentChapterIndex()
-      } else if (session.audioTracks.size > 1) {
-        session.getCurrentTrackIndex()
-      } else {
-        -1
-      }
+    try {
+      val newIndex = getCurrentNavigationIndex()
 
-      // Only update if the index has actually changed (not just position within same chapter)
+      // Only update if the index has actually changed (not just position within same item)
       if (newIndex >= 0 && newIndex != lastActiveQueueItemIndex) {
+        Log.d(tag, "Navigation: Item changed from $lastActiveQueueItemIndex to $newIndex")
         lastActiveQueueItemIndex = newIndex
-        updateActiveQueueItem(newIndex)
+        updateNavigationState(newIndex)
       }
+    } catch (e: Exception) {
+      Log.e(tag, "updateQueuePositionForChapters: Error updating queue position", e)
     }
   }
 
+  /**
+   * Skip to the previous chapter/track
+   * Simplified logic that works consistently for all book types
+   */
   fun skipToPrevious() {
-    try {
-      val currentChapter = getCurrentBookChapter()
-      if (currentChapter != null) {
-        val chapters = currentPlaybackSession?.chapters ?: listOf()
-        val idx = chapters.indexOfFirst { it.id == currentChapter.id }
-        if (idx > 0) {
-          // If we're more than 5s into chapter, restart it; otherwise go to previous
-          val timeInChapter = getCurrentTime() - currentChapter.startMs
-          if (timeInChapter > 5000) {
-            seekToChapter(idx)
-          } else {
-            seekToChapter(idx - 1)
-          }
-          return
-        } else {
-          // At first chapter -> restart chapter
-          seekToChapter(0)
-          return
-        }
-      }
-    } catch (e: Exception) {
-      Log.e(tag, "skipToPrevious chapter fallback error: ${e.localizedMessage}")
-    }
+    Log.d(tag, "skipToPrevious: Starting previous navigation")
 
-    // Fallback: seek to previous media item (track)
-    currentPlayer.seekToPrevious()
+    try {
+      val currentIndex = getCurrentNavigationIndex()
+
+      if (currentIndex < 0) {
+        Log.w(tag, "skipToPrevious: Could not determine current navigation index")
+        return
+      }
+
+      val navItem = getNavigationItem(currentIndex)
+      if (navItem == null) {
+        Log.w(tag, "skipToPrevious: Could not get current navigation item")
+        return
+      }
+
+      val currentTime = getCurrentTime()
+      val timeInCurrentItem = currentTime - navItem.startTimeMs
+
+      // If we're more than 5 seconds into the current item, restart it
+      if (timeInCurrentItem > 5000) {
+        navigateToChapter(currentIndex)
+      } else if (currentIndex > 0) {
+        // Go to previous item
+        val previousIndex = currentIndex - 1
+        navigateToChapter(previousIndex)
+      } else {
+        // At first item, restart it
+        navigateToChapter(0)
+      }
+
+    } catch (e: Exception) {
+      Log.e(tag, "skipToPrevious: Error during previous navigation", e)
+      // Fallback to ExoPlayer's default behavior
+      try {
+        currentPlayer.seekToPrevious()
+      } catch (fallbackError: Exception) {
+        Log.e(tag, "skipToPrevious: Fallback also failed", fallbackError)
+      }
+    }
   }
 
+  /**
+   * Skip to the next chapter/track
+   * Simplified logic that works consistently for all book types
+   */
   fun skipToNext() {
-    try {
-      val nextChapter = getNextBookChapter()
-      if (nextChapter != null) {
-        val chapters = currentPlaybackSession?.chapters ?: listOf()
-        val idx = chapters.indexOfFirst { it.id == nextChapter.id }
-        if (idx >= 0) {
-          seekToChapter(idx)
-          return
-        }
-      }
-    } catch (e: Exception) {
-      Log.e(tag, "skipToNext chapter fallback error: ${e.localizedMessage}")
-    }
+    Log.d(tag, "skipToNext: Starting next navigation")
 
-    // Fallback: seek to next media item (track)
-    currentPlayer.seekToNext()
+    try {
+      val currentIndex = getCurrentNavigationIndex()
+      val totalItems = getNavigationItemCount()
+
+      if (currentIndex < 0) {
+        Log.w(tag, "skipToNext: Could not determine current navigation index")
+        return
+      }
+
+      if (currentIndex < totalItems - 1) {
+        // Go to next item
+        val nextIndex = currentIndex + 1
+        navigateToChapter(nextIndex)
+      } else {
+        // At last item - could implement various behaviors:
+        // For now, just stay at the last item
+        Log.d(tag, "skipToNext: At last item, staying put")
+        // Could also: seek to end, stop playback, or loop to beginning
+      }
+
+    } catch (e: Exception) {
+      Log.e(tag, "skipToNext: Error during next navigation", e)
+      // Fallback to ExoPlayer's default behavior
+      try {
+        currentPlayer.seekToNext()
+      } catch (fallbackError: Exception) {
+        Log.e(tag, "skipToNext: Fallback also failed", fallbackError)
+      }
+    }
   }
 
   fun jumpForward() {
@@ -1446,6 +1670,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     // because we want to preserve it for resume functionality
     currentPlaybackSession = null
     lastActiveQueueItemIndex = -1
+    currentNavigationIndex = -1
     queueSetForCurrentSession = false
     mediaProgressSyncer.reset()
     clientEventEmitter?.onPlaybackClosed()
@@ -1564,6 +1789,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   // --- Resume from last session when Android Auto starts ---
   private fun resumeFromLastSessionForAndroidAuto() {
     try {
+      Log.d(tag, "Android Auto: Attempting to resume from last session (device or server)")
 
       // First check for local playback session saved on device
       val lastPlaybackSession = DeviceManager.deviceData.lastPlaybackSession
@@ -1573,14 +1799,18 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         val isResumable = progress > 0.01
 
         if (isResumable) {
+          Log.d(tag, "Android Auto: Found local playback session, resuming: ${lastPlaybackSession.displayTitle} at ${(progress * 100).toInt()}%")
 
           // If connected to server, check if server has newer progress for same media
           if (DeviceManager.checkConnectivity(ctx)) {
+            Log.d(tag, "Android Auto: Checking server for potential newer session...")
 
             checkServerSessionVsLocal(lastPlaybackSession, { shouldUseServer: Boolean, serverSession: PlaybackSession? ->
               val sessionToUse = if (shouldUseServer && serverSession != null) {
+                Log.d(tag, "Android Auto: Server session is newer, using server session")
                 serverSession
               } else {
+                Log.d(tag, "Android Auto: Using local session")
                 lastPlaybackSession
               }
 
@@ -1603,17 +1833,22 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           }
           return
         } else {
+          Log.d(tag, "Android Auto: Local session progress too low (${(progress * 100).toInt()}%), checking server instead")
         }
       }
 
       // No suitable local session found, check server for last session if connected
       if (!DeviceManager.checkConnectivity(ctx)) {
+        Log.d(tag, "Android Auto: No connectivity, cannot check server for last session")
         return
       }
+
+      Log.d(tag, "Android Auto: No suitable local session found, querying server for last session")
 
       // Use getCurrentUser to get user data which should include session information
       apiHandler.getCurrentUser { user ->
         if (user != null) {
+          Log.d(tag, "Android Auto: Got user data from server")
 
           try {
             // Get the most recent media progress
@@ -1621,11 +1856,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               val latestProgress = user.mediaProgress.maxByOrNull { it.lastUpdate }
 
               if (latestProgress != null && latestProgress.currentTime > 0) {
+                Log.d(tag, "Android Auto: Found recent progress: ${latestProgress.libraryItemId} at ${latestProgress.currentTime}s")
 
                 // Check if this library item is downloaded locally
                 val localLibraryItem = DeviceManager.dbManager.getLocalLibraryItemByLId(latestProgress.libraryItemId)
 
                 if (localLibraryItem != null) {
+                  Log.d(tag, "Android Auto: Found local download for ${localLibraryItem.title}, using local copy")
 
                   // Create a local playback session
                   val deviceInfo = getDeviceInfo()
@@ -1637,6 +1874,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                   val localPlaybackSession = localLibraryItem.getPlaybackSession(episode, deviceInfo)
                   // Override the current time with the server progress to sync position
                   localPlaybackSession.currentTime = latestProgress.currentTime
+
+                  Log.d(tag, "Android Auto: Resuming from local download: ${localLibraryItem.title} at ${latestProgress.currentTime}s")
 
                   // Prepare the player in paused state with saved playback speed
                   val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
@@ -1654,8 +1893,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                 }
 
                 // No local copy found, get the library item from server
+                Log.d(tag, "Android Auto: No local download found, using server streaming")
                 apiHandler.getLibraryItem(latestProgress.libraryItemId) { libraryItem ->
                   if (libraryItem != null) {
+                    Log.d(tag, "Android Auto: Got library item: ${libraryItem.media?.metadata?.title}")
 
                     // Create a playback session from the library item and progress
                     Handler(Looper.getMainLooper()).post {
@@ -1671,10 +1912,14 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                         // Get the current playback speed from saved settings
                         val currentPlaybackSpeed = mediaManager.getSavedPlaybackRate()
 
+                        Log.d(tag, "Android Auto: Using playback speed: $currentPlaybackSpeed")
+
                         apiHandler.playLibraryItem(latestProgress.libraryItemId, latestProgress.episodeId, playItemRequestPayload) { playbackSession ->
                           if (playbackSession != null) {
                             // Override the current time with the saved progress
                             playbackSession.currentTime = latestProgress.currentTime
+
+                            Log.d(tag, "Android Auto: Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in paused state with speed ${currentPlaybackSpeed}x")
 
                             // Prepare the player in paused state on main thread with correct playback speed
                             Handler(Looper.getMainLooper()).post {
@@ -1697,17 +1942,21 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                       }
                     }
                   } else {
+                    Log.d(tag, "Android Auto: Could not get library item ${latestProgress.libraryItemId} from server")
                   }
                 }
               } else {
+                Log.d(tag, "Android Auto: No recent progress found or progress is at beginning")
               }
             } else {
+              Log.d(tag, "Android Auto: No media progress found in user data")
             }
 
           } catch (e: Exception) {
             Log.e(tag, "Android Auto: Error processing user session data: ${e.message}")
           }
         } else {
+          Log.d(tag, "Android Auto: No user data found from server")
         }
       }
     } catch (e: Exception) {

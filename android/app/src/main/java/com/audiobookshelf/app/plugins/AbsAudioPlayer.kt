@@ -754,4 +754,55 @@ class AbsAudioPlayer : Plugin() {
 
     call.resolve(ret)
   }
+
+  @PluginMethod
+  fun navigateToChapter(call: PluginCall) {
+    val chapterIndex: Int = call.getInt("chapterIndex", -1) ?: -1
+    Log.d(tag, "navigateToChapter action to chapter $chapterIndex")
+    if (chapterIndex < 0) {
+      call.reject("Invalid chapter index")
+      return
+    }
+
+    Handler(Looper.getMainLooper()).post {
+      playerNotificationService.navigateToChapter(chapterIndex)
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun skipToNextChapter(call: PluginCall) {
+    Handler(Looper.getMainLooper()).post {
+      playerNotificationService.skipToNext()
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun skipToPreviousChapter(call: PluginCall) {
+    Handler(Looper.getMainLooper()).post {
+      playerNotificationService.skipToPrevious()
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
+  fun getCurrentNavigationIndex(call: PluginCall) {
+    Handler(Looper.getMainLooper()).post {
+      val currentIndex = playerNotificationService.getCurrentNavigationIndex()
+      val ret = JSObject()
+      ret.put("index", currentIndex)
+      call.resolve(ret)
+    }
+  }
+
+  @PluginMethod
+  fun getNavigationItemCount(call: PluginCall) {
+    Handler(Looper.getMainLooper()).post {
+      val count = playerNotificationService.getNavigationItemCount()
+      val ret = JSObject()
+      ret.put("count", count)
+      call.resolve(ret)
+    }
+  }
 }

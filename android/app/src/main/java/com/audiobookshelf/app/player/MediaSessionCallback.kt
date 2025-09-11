@@ -74,29 +74,20 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   override fun onSkipToPrevious() {
+    Log.d(tag, "onSkipToPrevious called - calling skipToPrevious()")
     playerNotificationService.skipToPrevious()
   }
 
   override fun onSkipToNext() {
+    Log.d(tag, "onSkipToNext called - calling skipToNext()")
     playerNotificationService.skipToNext()
   }
 
   override fun onSkipToQueueItem(id: Long) {
     Log.d(tag, "onSkipToQueueItem $id")
-    val currentPlaybackSession = playerNotificationService.currentPlaybackSession
-    if (currentPlaybackSession != null) {
-      val index = id.toInt()
-
-      if (currentPlaybackSession.chapters.isNotEmpty()) {
-        // Chapter-based navigation
-        Log.d(tag, "MediaSessionCallback: Seeking to chapter $index")
-        playerNotificationService.seekToChapter(index)
-      } else {
-        // Track-based navigation
-        Log.d(tag, "MediaSessionCallback: Seeking to track $index")
-        playerNotificationService.seekToTrack(index)
-      }
-    }
+    val index = id.toInt()
+    Log.d(tag, "MediaSessionCallback: Navigating to index $index")
+    playerNotificationService.navigateToChapter(index)
   }
 
   override fun onFastForward() {
@@ -351,6 +342,7 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onCustomAction(action: String?, extras: Bundle?) {
     Log.d(tag, "onCustomAction called with action: $action")
+    Log.d(tag, "onCustomAction: CUSTOM_ACTION_SKIP_FORWARD constant = $CUSTOM_ACTION_SKIP_FORWARD")
     super.onCustomAction(action, extras)
 
     when (action) {

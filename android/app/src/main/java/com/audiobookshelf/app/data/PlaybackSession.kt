@@ -279,6 +279,8 @@ class PlaybackSession(
       .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
       .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
       .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
+      // Set the total book duration for proper Android Auto progress indicators
+      .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, totalDurationMs)
 
     // Set the description with proper bitmap/URI handling
     metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, description.mediaId)
