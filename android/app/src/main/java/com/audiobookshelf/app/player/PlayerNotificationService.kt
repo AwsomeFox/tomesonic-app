@@ -392,12 +392,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       // First set the basic metadata
       val metadata = playbackSession.getMediaMetadataCompat(ctx)
-      Log.d(tag, "Android Auto: Setting initial metadata with bitmap: ${metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
       mediaSession.setMetadata(metadata)
 
       // Store the original metadata for later use (to preserve after queue changes)
       var originalMetadata = metadata
-      Log.d(tag, "Android Auto: Stored original metadata with bitmap: ${originalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
 
       // Build MediaSession queue from chapters/tracks so Android Auto shows actual navigation list
       try {
@@ -406,22 +404,16 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         // Cache bitmap once for all queue items and metadata (local books only)
         var sharedCachedBitmap: Bitmap? = null
         val coverUri = playbackSession.getCoverUri(ctx)
-        Log.d(tag, "Android Auto: Loading shared bitmap - Cover URI: $coverUri")
-        Log.d(tag, "Android Auto: Local library item cover content URL: ${playbackSession.localLibraryItem?.coverContentUrl}")
 
         if (playbackSession.localLibraryItem?.coverContentUrl != null) {
           try {
-            Log.d(tag, "Android Auto: Attempting to load shared bitmap")
             sharedCachedBitmap = if (Build.VERSION.SDK_INT < 28) {
-              Log.d(tag, "Android Auto: Using MediaStore for shared bitmap (API < 28)")
               MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
             } else {
-              Log.d(tag, "Android Auto: Using ImageDecoder for shared bitmap (API >= 28)")
               val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
               ImageDecoder.decodeBitmap(source)
             }
             if (sharedCachedBitmap != null) {
-              Log.d(tag, "Android Auto: Shared bitmap loaded successfully - Size: ${sharedCachedBitmap.width}x${sharedCachedBitmap.height}, Bytes: ${sharedCachedBitmap.byteCount}")
             } else {
               Log.w(tag, "Android Auto: Shared bitmap is null after loading")
             }
@@ -435,10 +427,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         }
 
         if (playbackSession.chapters.isNotEmpty()) {
-          Log.d(tag, "Android Auto: Building chapter queue. Number of chapters: ${playbackSession.chapters.size}")
-
           for ((idx, chapter) in playbackSession.chapters.withIndex()) {
-            Log.d(tag, "Android Auto: Adding chapter $idx: ${chapter.title ?: "Chapter ${idx + 1}"}")
 
             val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
               .setMediaId("chapter_$idx")
@@ -468,13 +457,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
           // Use shared cached bitmap or fallback to original description approach
           if (sharedCachedBitmap != null) {
-            Log.d(tag, "Android Auto: Setting shared bitmap on chapter description - Size: ${sharedCachedBitmap.width}x${sharedCachedBitmap.height}")
             chapterDescriptionBuilder.setIconBitmap(sharedCachedBitmap)
           } else {
             Log.w(tag, "Android Auto: No shared bitmap available for chapter description")
             val originalDescription = metadata.description
             if (originalDescription.iconBitmap != null) {
-              Log.d(tag, "Android Auto: Using original description bitmap for chapter - Size: ${originalDescription.iconBitmap?.width}x${originalDescription.iconBitmap?.height}")
               chapterDescriptionBuilder.setIconBitmap(originalDescription.iconBitmap)
             } else {
               Log.w(tag, "Android Auto: No fallback bitmap available for chapter description")
@@ -511,14 +498,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               Log.w(tag, "Failed to set chapter description with iconBitmap: ${e.message}")
             }
 
-            Log.d(tag, "Android Auto: Setting chapter metadata for chapter $currentChapterIndex: ${currentChapter.title}")
-            mediaSession.setMetadata(chapterMetadata)
           }
         } else if (playbackSession.audioTracks.size > 1) {
-          Log.d(tag, "Android Auto: Building track queue. Number of tracks: ${playbackSession.audioTracks.size}")
 
           for ((idx, track) in playbackSession.audioTracks.withIndex()) {
-            Log.d(tag, "Android Auto: Adding track $idx: ${track.title ?: "Track ${idx + 1}"}")
 
             val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
               .setMediaId("track_$idx")
@@ -587,11 +570,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               Log.w(tag, "Failed to set track description with iconBitmap: ${e.message}")
             }
 
-            Log.d(tag, "Android Auto: Setting track metadata for track $currentTrackIndex: ${currentTrack.title}")
-            mediaSession.setMetadata(trackMetadata)
           }
         } else {
-          Log.d(tag, "Android Auto: Single track book, creating simple queue")
           // Single track book - create one queue item using shared cached bitmap
           val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
             .setMediaId("track_0")
@@ -611,19 +591,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           Handler(Looper.getMainLooper()).post {
             // Check if queue has already been set for this session
             if (queueSetForCurrentSession) {
-              Log.d(tag, "Android Auto: Queue already set for current session, skipping")
               return@post
             }
 
-            Log.d(tag, "Android Auto: Setting queue on MediaSession with ${chapterQueue.size} items")
-
             // Preserve current metadata before setting queue (this might be chapter/track specific)
             val currentMetadata = mediaSession.controller?.metadata
-            Log.d(tag, "Android Auto: Current metadata before queue set: ${currentMetadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE)}")
-            Log.d(tag, "Android Auto: Current metadata has bitmap: ${currentMetadata?.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
 
             mediaSession.setQueue(chapterQueue)
-            Log.d(tag, "Android Auto: Queue set successfully with ${chapterQueue.size} items")
 
             // Mark queue as set for this session
             queueSetForCurrentSession = true
@@ -631,17 +605,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             // Re-set metadata after queue change to prevent it from being cleared
             // Always use originalMetadata which has the bitmap, don't use currentMetadata as it might not have the bitmap
             val metadataToRestore = originalMetadata
-            Log.d(tag, "Android Auto: Restoring metadata: ${metadataToRestore.getString(MediaMetadataCompat.METADATA_KEY_TITLE)}")
-            Log.d(tag, "Android Auto: Restoring metadata has bitmap: ${metadataToRestore.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-            Log.d(tag, "Android Auto: originalMetadata bitmap: ${originalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-
+            
             // Set metadata immediately after queue
-            mediaSession.setMetadata(metadataToRestore)
-            Log.d(tag, "Android Auto: Re-set metadata after queue change")
-
-            // Verify the queue was set
+            mediaSession.setMetadata(metadataToRestore)            // Verify the queue was set
             val setQueue = mediaSession.controller?.queue
-            Log.d(tag, "Android Auto: Queue verification - size: ${setQueue?.size ?: 0}")
 
             // Set initial active queue item based on current playback position
             val currentIndex = if (playbackSession.chapters.isNotEmpty()) {
@@ -649,7 +616,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             } else {
               playbackSession.getCurrentTrackIndex()
             }
-            Log.d(tag, "Android Auto: Current index: $currentIndex")
             if (currentIndex >= 0) {
               updateActiveQueueItem(currentIndex)
             }
@@ -1202,7 +1168,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   // Update the active queue item and metadata for chapter/track-based books
   private fun updateActiveQueueItem(index: Int) {
-    Log.d(tag, "Android Auto: updateActiveQueueItem called with index: $index")
     try {
       val currentPlaybackSession = this.currentPlaybackSession ?: run {
         Log.w(tag, "Android Auto: No current playback session available")
@@ -1219,19 +1184,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
         // Only update if the active queue item is changing
         if (currentActiveQueueItemId == newActiveQueueItemId) {
-          Log.d(tag, "Android Auto: Active queue item $index is already active, skipping metadata update")
           return
         }
-
-        Log.d(tag, "Android Auto: Setting active queue item to index $index: ${queueItem.description.title}")
 
         // Update metadata first, then playback state
         val currentMetadata = mediaSession.controller?.metadata
         if (currentMetadata != null) {
           val coverUri = currentPlaybackSession.getCoverUri(ctx)
-          Log.d(tag, "Android Auto: Cover URI for now playing: $coverUri")
-          Log.d(tag, "Android Auto: Current metadata has album art: ${currentMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-          Log.d(tag, "Android Auto: Queue item has icon bitmap: ${queueItem.description.iconBitmap != null}")
 
           val updatedMetadata = MediaMetadataCompat.Builder(currentMetadata)
             .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, queueItem.description.mediaId)
@@ -1251,36 +1210,26 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
           // Ensure we have a bitmap for the cover image
           var bitmapToUse: Bitmap? = null
-          Log.d(tag, "Android Auto: Starting bitmap resolution for now playing")
 
           // First try to get bitmap from queue item
           val queueItemBitmap = queueItem.description.iconBitmap
           if (queueItemBitmap != null) {
             bitmapToUse = queueItemBitmap
-            Log.d(tag, "Android Auto: Using bitmap from queue item for now playing - Size: ${queueItemBitmap.width}x${queueItemBitmap.height}")
-          } else {
-            Log.d(tag, "Android Auto: Queue item bitmap is null")
             // Fallback to existing bitmap from metadata
             val existingBitmap = currentMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
             if (existingBitmap != null) {
               bitmapToUse = existingBitmap
-              Log.d(tag, "Android Auto: Using existing bitmap for now playing - Size: ${existingBitmap.width}x${existingBitmap.height}")
             } else {
-              Log.d(tag, "Android Auto: Existing metadata bitmap is null, attempting to load from URI")
               // Last resort: try to load bitmap from URI
               try {
                 bitmapToUse = if (Build.VERSION.SDK_INT < 28) {
-                  Log.d(tag, "Android Auto: Loading bitmap using MediaStore (API < 28)")
                   MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
                 } else {
-                  Log.d(tag, "Android Auto: Loading bitmap using ImageDecoder (API >= 28)")
                   val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
                   ImageDecoder.decodeBitmap(source)
                 }
                 if (bitmapToUse != null) {
-                  Log.d(tag, "Android Auto: Successfully loaded bitmap from URI for now playing - Size: ${bitmapToUse.width}x${bitmapToUse.height}")
                 } else {
-                  Log.d(tag, "Android Auto: Bitmap loaded from URI is null")
                 }
               } catch (e: Exception) {
                 Log.w(tag, "Android Auto: Failed to load bitmap from URI: ${e.message}")
@@ -1292,7 +1241,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
           // Set the bitmap if we have one
           if (bitmapToUse != null) {
-            Log.d(tag, "Android Auto: Setting bitmap on metadata - Size: ${bitmapToUse.width}x${bitmapToUse.height}")
             updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmapToUse)
             updatedMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmapToUse)
           } else {
@@ -1301,14 +1249,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             Log.w(tag, "Android Auto: Queue item bitmap: ${queueItem.description.iconBitmap != null}")
           }
 
-          Log.d(tag, "Android Auto: Updating metadata to match queue item: ${queueItem.description.title}")
           val finalMetadata = updatedMetadata.build()
-          Log.d(tag, "Android Auto: Final metadata has album art: ${finalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-          Log.d(tag, "Android Auto: Final metadata has art: ${finalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ART) != null}")
-          Log.d(tag, "Android Auto: Final metadata album art URI: ${finalMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI)}")
-          Log.d(tag, "Android Auto: Final metadata art URI: ${finalMetadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI)}")
           mediaSession.setMetadata(finalMetadata)
-          Log.d(tag, "Android Auto: Metadata set on media session")
         }
 
         // Update the playback state with active queue item
@@ -1382,7 +1324,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
       // Only update if the index has actually changed (not just position within same chapter)
       if (newIndex >= 0 && newIndex != lastActiveQueueItemIndex) {
-        Log.d(tag, "Android Auto: Chapter/track changed from $lastActiveQueueItemIndex to $newIndex")
         lastActiveQueueItemIndex = newIndex
         updateActiveQueueItem(newIndex)
       }
@@ -1623,7 +1564,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   // --- Resume from last session when Android Auto starts ---
   private fun resumeFromLastSessionForAndroidAuto() {
     try {
-      Log.d(tag, "Android Auto: Attempting to resume from last session (device or server)")
 
       // First check for local playback session saved on device
       val lastPlaybackSession = DeviceManager.deviceData.lastPlaybackSession
@@ -1633,18 +1573,14 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         val isResumable = progress > 0.01
 
         if (isResumable) {
-          Log.d(tag, "Android Auto: Found local playback session, resuming: ${lastPlaybackSession.displayTitle} at ${(progress * 100).toInt()}%")
 
           // If connected to server, check if server has newer progress for same media
           if (DeviceManager.checkConnectivity(ctx)) {
-            Log.d(tag, "Android Auto: Checking server for potential newer session...")
 
             checkServerSessionVsLocal(lastPlaybackSession, { shouldUseServer: Boolean, serverSession: PlaybackSession? ->
               val sessionToUse = if (shouldUseServer && serverSession != null) {
-                Log.d(tag, "Android Auto: Server session is newer, using server session")
                 serverSession
               } else {
-                Log.d(tag, "Android Auto: Using local session")
                 lastPlaybackSession
               }
 
@@ -1667,22 +1603,17 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           }
           return
         } else {
-          Log.d(tag, "Android Auto: Local session progress too low (${(progress * 100).toInt()}%), checking server instead")
         }
       }
 
       // No suitable local session found, check server for last session if connected
       if (!DeviceManager.checkConnectivity(ctx)) {
-        Log.d(tag, "Android Auto: No connectivity, cannot check server for last session")
         return
       }
-
-      Log.d(tag, "Android Auto: No suitable local session found, querying server for last session")
 
       // Use getCurrentUser to get user data which should include session information
       apiHandler.getCurrentUser { user ->
         if (user != null) {
-          Log.d(tag, "Android Auto: Got user data from server")
 
           try {
             // Get the most recent media progress
@@ -1690,13 +1621,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               val latestProgress = user.mediaProgress.maxByOrNull { it.lastUpdate }
 
               if (latestProgress != null && latestProgress.currentTime > 0) {
-                Log.d(tag, "Android Auto: Found recent progress: ${latestProgress.libraryItemId} at ${latestProgress.currentTime}s")
 
                 // Check if this library item is downloaded locally
                 val localLibraryItem = DeviceManager.dbManager.getLocalLibraryItemByLId(latestProgress.libraryItemId)
 
                 if (localLibraryItem != null) {
-                  Log.d(tag, "Android Auto: Found local download for ${localLibraryItem.title}, using local copy")
 
                   // Create a local playback session
                   val deviceInfo = getDeviceInfo()
@@ -1708,8 +1637,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                   val localPlaybackSession = localLibraryItem.getPlaybackSession(episode, deviceInfo)
                   // Override the current time with the server progress to sync position
                   localPlaybackSession.currentTime = latestProgress.currentTime
-
-                  Log.d(tag, "Android Auto: Resuming from local download: ${localLibraryItem.title} at ${latestProgress.currentTime}s")
 
                   // Prepare the player in paused state with saved playback speed
                   val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
@@ -1727,10 +1654,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                 }
 
                 // No local copy found, get the library item from server
-                Log.d(tag, "Android Auto: No local download found, using server streaming")
                 apiHandler.getLibraryItem(latestProgress.libraryItemId) { libraryItem ->
                   if (libraryItem != null) {
-                    Log.d(tag, "Android Auto: Got library item: ${libraryItem.media?.metadata?.title}")
 
                     // Create a playback session from the library item and progress
                     Handler(Looper.getMainLooper()).post {
@@ -1746,14 +1671,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                         // Get the current playback speed from saved settings
                         val currentPlaybackSpeed = mediaManager.getSavedPlaybackRate()
 
-                        Log.d(tag, "Android Auto: Using playback speed: $currentPlaybackSpeed")
-
                         apiHandler.playLibraryItem(latestProgress.libraryItemId, latestProgress.episodeId, playItemRequestPayload) { playbackSession ->
                           if (playbackSession != null) {
                             // Override the current time with the saved progress
                             playbackSession.currentTime = latestProgress.currentTime
-
-                            Log.d(tag, "Android Auto: Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in paused state with speed ${currentPlaybackSpeed}x")
 
                             // Prepare the player in paused state on main thread with correct playback speed
                             Handler(Looper.getMainLooper()).post {
@@ -1776,21 +1697,17 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                       }
                     }
                   } else {
-                    Log.d(tag, "Android Auto: Could not get library item ${latestProgress.libraryItemId} from server")
                   }
                 }
               } else {
-                Log.d(tag, "Android Auto: No recent progress found or progress is at beginning")
               }
             } else {
-              Log.d(tag, "Android Auto: No media progress found in user data")
             }
 
           } catch (e: Exception) {
             Log.e(tag, "Android Auto: Error processing user session data: ${e.message}")
           }
         } else {
-          Log.d(tag, "Android Auto: No user data found from server")
         }
       }
     } catch (e: Exception) {

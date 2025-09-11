@@ -168,12 +168,9 @@ class PlaybackSession(
 
   @JsonIgnore
   fun getCoverUri(ctx: Context): Uri {
-    Log.d("PlaybackSession", "getCoverUri called - localLibraryItem: ${localLibraryItem != null}, coverContentUrl: ${localLibraryItem?.coverContentUrl}")
-    Log.d("PlaybackSession", "getCoverUri - coverPath: $coverPath, serverAddress: $serverAddress, libraryItemId: $libraryItemId")
 
     if (localLibraryItem?.coverContentUrl != null) {
       var coverUri = Uri.parse(localLibraryItem?.coverContentUrl.toString())
-      Log.d("PlaybackSession", "getCoverUri - Using local cover URL: $coverUri")
       if (coverUri.toString().startsWith("file:")) {
         coverUri =
                 FileProvider.getUriForFile(
@@ -181,7 +178,6 @@ class PlaybackSession(
                         "${BuildConfig.APPLICATION_ID}.fileprovider",
                         coverUri.toFile()
                 )
-        Log.d("PlaybackSession", "getCoverUri - Converted file URI to content URI: $coverUri")
 
         // Grant URI permissions to Android Auto packages so they can access the content
         try {
@@ -193,7 +189,6 @@ class PlaybackSession(
 
           for (packageName in androidAutoPackages) {
             ctx.grantUriPermission(packageName, coverUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            Log.d("PlaybackSession", "getCoverUri - Granted read permission to $packageName for URI: $coverUri")
           }
         } catch (e: Exception) {
           Log.w("PlaybackSession", "getCoverUri - Failed to grant URI permissions: ${e.message}")
@@ -205,18 +200,15 @@ class PlaybackSession(
     }
 
     if (coverPath == null) {
-      Log.d("PlaybackSession", "getCoverUri - No cover path, using default icon")
       return Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon)
     }
 
     // As of v2.17.0 token is not needed with cover image requests
     if (checkIsServerVersionGte("2.17.0")) {
       val serverUri = Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
-      Log.d("PlaybackSession", "getCoverUri - Using server URI (v2.17.0+): $serverUri")
       return serverUri
     }
     val serverUriWithToken = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=${DeviceManager.token}")
-    Log.d("PlaybackSession", "getCoverUri - Using server URI with token: $serverUriWithToken")
     return serverUriWithToken
   }
 
@@ -259,23 +251,19 @@ class PlaybackSession(
       // Note: In Android Auto for local cover images, setting the icon uri to a local path does not work (cover is blank)
       // so we create and set the bitmap here instead of letting AbMediaDescriptionAdapter handle it
       try {
-        Log.d("PlaybackSession", "getMediaMetadataCompat - Loading bitmap for local book")
         bitmap = if (Build.VERSION.SDK_INT < 28) {
           MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
         } else {
           val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
           ImageDecoder.decodeBitmap(source)
         }
-        Log.d("PlaybackSession", "getMediaMetadataCompat - Bitmap loaded successfully: ${bitmap != null}, size: ${bitmap?.width}x${bitmap?.height}")
         descriptionBuilder.setIconBitmap(bitmap)
-        Log.d("PlaybackSession", "getMediaMetadataCompat - Set bitmap on description")
       } catch (e: Exception) {
         Log.w("PlaybackSession", "Failed to load bitmap for local book: ${e.message}")
         descriptionBuilder.setIconUri(coverUri)
       }
     } else {
       // Server books: Use URI approach (Android Auto can access HTTP URLs)
-      Log.d("PlaybackSession", "getMediaMetadataCompat - Using URI approach for server book")
       descriptionBuilder.setIconUri(coverUri)
     }
 
@@ -297,12 +285,10 @@ class PlaybackSession(
 
     // Also set bitmap in metadata keys for fallback
     if (bitmap != null) {
-      Log.d("PlaybackSession", "getMediaMetadataCompat - Setting bitmap in metadata keys")
       metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
       metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
     } else {
       // Server books: Use URI approach
-      Log.d("PlaybackSession", "getMediaMetadataCompat - No bitmap, using URI approach")
       metadataBuilder
         .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
         .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
@@ -310,19 +296,16 @@ class PlaybackSession(
     }
 
     val metadata = metadataBuilder.build()
-    Log.d("PlaybackSession", "getMediaMetadataCompat - Built metadata with bitmap: ${metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
 
     // Use reflection to set the description with iconBitmap for Android Auto compatibility
     try {
       val descriptionField = MediaMetadataCompat::class.java.getDeclaredField("mDescription")
       descriptionField.isAccessible = true
       descriptionField.set(metadata, description)
-      Log.d("PlaybackSession", "getMediaMetadataCompat - Set description with reflection")
     } catch (e: Exception) {
       Log.w("PlaybackSession", "Failed to set description with iconBitmap: ${e.message}")
     }
 
-    Log.d("PlaybackSession", "getMediaMetadataCompat - Final metadata bitmap: ${metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
     return metadata
   }
 
@@ -362,7 +345,6 @@ class PlaybackSession(
 
     // For chapter-based books (single track with multiple chapters), create media items for each chapter
     if (audioTracks.size == 1 && chapters.isNotEmpty()) {
-      Log.d("PlaybackSession", "Creating media items for ${chapters.size} chapters")
       for ((index, chapter) in chapters.withIndex()) {
         val audioTrack = audioTracks[0]
         val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)

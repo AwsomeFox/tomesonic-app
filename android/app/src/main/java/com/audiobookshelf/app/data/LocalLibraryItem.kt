@@ -68,7 +68,6 @@ class LocalLibraryItem(
 
         for (packageName in androidAutoPackages) {
           ctx.grantUriPermission(packageName, contentUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-          Log.d("LocalLibraryItem", "getCoverUri - Granted read permission to $packageName for URI: $contentUri")
         }
       } catch (e: Exception) {
         Log.w("LocalLibraryItem", "getCoverUri - Failed to grant URI permissions: ${e.message}")
@@ -144,7 +143,6 @@ class LocalLibraryItem(
       episode.audioTrack?.let { at -> mutableListOf(at) }?.let { tracks -> audioTracks = tracks }
       chapters = episode.chapters
       duration = episode.audioTrack?.duration ?: 0.0
-      Log.d("LocalLibraryItem", "getPlaybackSession: Got podcast episode audio track ${audioTracks.size}")
     }
 
     val dateNow = System.currentTimeMillis()

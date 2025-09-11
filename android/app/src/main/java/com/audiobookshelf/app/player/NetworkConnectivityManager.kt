@@ -125,7 +125,6 @@ class NetworkConnectivityManager(
      */
     fun resumeFromLastSessionForAndroidAuto() {
         try {
-            Log.d(TAG, "Android Auto: Attempting to resume from last session (device or server)")
 
             // First check for local playback session saved on device
             val lastPlaybackSession = DeviceManager.deviceData.lastPlaybackSession
@@ -135,18 +134,13 @@ class NetworkConnectivityManager(
                 val isResumable = progress > 0.01
 
                 if (isResumable) {
-                    Log.d(TAG, "Android Auto: Found local playback session, resuming: ${lastPlaybackSession.displayTitle} at ${(progress * 100).toInt()}%")
 
                     // If connected to server, check if server has newer progress for same media
                     if (DeviceManager.checkConnectivity(context)) {
-                        Log.d(TAG, "Android Auto: Checking server for potential newer session...")
-
                         service.checkServerSessionVsLocal(lastPlaybackSession, { shouldUseServer: Boolean, serverSession: PlaybackSession? ->
                             val sessionToUse = if (shouldUseServer && serverSession != null) {
-                                Log.d(TAG, "Android Auto: Server session is newer, using server session")
                                 serverSession
                             } else {
-                                Log.d(TAG, "Android Auto: Using local session")
                                 lastPlaybackSession
                             }
 
@@ -180,22 +174,17 @@ class NetworkConnectivityManager(
                     }
                     return
                 } else {
-                    Log.d(TAG, "Android Auto: Local session progress too low (${(progress * 100).toInt()}%), checking server instead")
                 }
             }
 
             // No suitable local session found, check server for last session if connected
             if (!DeviceManager.checkConnectivity(context)) {
-                Log.d(TAG, "Android Auto: No connectivity, cannot check server for last session")
                 return
             }
-
-            Log.d(TAG, "Android Auto: No suitable local session found, querying server for last session")
 
             // Use getCurrentUser to get user data which should include session information
             service.apiHandler.getCurrentUser { user ->
                 if (user != null) {
-                    Log.d(TAG, "Android Auto: Got user data from server")
 
                     try {
                         // Get the most recent media progress
@@ -203,13 +192,11 @@ class NetworkConnectivityManager(
                             val latestProgress = user.mediaProgress.maxByOrNull { it.lastUpdate }
 
                             if (latestProgress != null && latestProgress.currentTime > 0) {
-                                Log.d(TAG, "Android Auto: Found recent progress: ${latestProgress.libraryItemId} at ${latestProgress.currentTime}s")
 
                                 // Check if this library item is downloaded locally
                                 val localLibraryItem = DeviceManager.dbManager.getLocalLibraryItemByLId(latestProgress.libraryItemId)
 
                                 if (localLibraryItem != null) {
-                                    Log.d(TAG, "Android Auto: Found local download for ${localLibraryItem.title}, using local copy")
 
                                     // Create a local playback session
                                     val deviceInfo = service.getDeviceInfo()
@@ -221,8 +208,6 @@ class NetworkConnectivityManager(
                                     val localPlaybackSession = localLibraryItem.getPlaybackSession(episode, deviceInfo)
                                     // Override the current time with the server progress to sync position
                                     localPlaybackSession.currentTime = latestProgress.currentTime
-
-                                    Log.d(TAG, "Android Auto: Resuming from local download: ${localLibraryItem.title} at ${latestProgress.currentTime}s")
 
                                     // Prepare the player in paused state with saved playback speed
                                     val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
@@ -240,14 +225,11 @@ class NetworkConnectivityManager(
                                 }
 
                                 // Not downloaded locally, stream from server if possible
-                                Log.d(TAG, "Android Auto: Media not downloaded locally, attempting to stream from server")
                                 // TODO: Implement server streaming functionality
                                 Log.w(TAG, "Android Auto: Server streaming not yet implemented in NetworkConnectivityManager")
                             } else {
-                                Log.d(TAG, "Android Auto: No recent progress found on server")
                             }
                         } else {
-                            Log.d(TAG, "Android Auto: User has no media progress")
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Android Auto: Error processing user data for session resume", e)
