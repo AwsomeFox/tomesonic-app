@@ -1,20 +1,20 @@
 <template>
-  <div class="w-full h-full">
+  <div class="w-full h-full" :style="contentPaddingStyle">
     <div class="relative flex items-center justify-center min-h-screen sm:pt-0">
       <nuxt-link to="/" class="absolute top-2 left-2 z-20">
-        <span class="material-symbols text-4xl text-on-surface">arrow_back</span>
+        <span class="material-symbols text-display-large text-on-surface">arrow_back</span>
       </nuxt-link>
       <div class="absolute top-0 left-0 w-full p-6 flex items-center flex-col justify-center z-0 short:hidden">
         <ui-audiobookshelf-logo :size="80" color="on-surface" class="mb-2" />
-        <h1 class="text-2xl">audiobookshelf</h1>
+        <h1 class="text-headline-medium">audiobookshelf</h1>
       </div>
-      <p class="hidden absolute short:block top-1.5 left-12 p-2 text-xl">audiobookshelf</p>
+      <p class="hidden absolute short:block top-1.5 left-12 p-2 text-headline-small">audiobookshelf</p>
 
       <connection-server-connect-form v-if="deviceData" />
     </div>
 
     <div class="flex items-center justify-center pt-4 fixed bottom-4 left-0 right-0">
-      <a href="https://github.com/advplyr/audiobookshelf-app" target="_blank" class="text-sm pr-2">{{ $strings.MessageFollowTheProjectOnGithub }}</a>
+      <a href="https://github.com/advplyr/audiobookshelf-app" target="_blank" class="text-body-medium pr-2">{{ $strings.MessageFollowTheProjectOnGithub }}</a>
       <a href="https://github.com/advplyr/audiobookshelf-app" target="_blank"
         ><svg class="w-8 h-8 text-fg" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" width="32" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 24 24">
           <path
@@ -34,7 +34,24 @@ export default {
       deviceData: null
     }
   },
-  computed: {},
+  computed: {
+    contentPaddingStyle() {
+      const style = {}
+
+      // Use the same padding calculation as the app bar for consistency
+      // This ensures proper alignment with the status bar
+      try {
+        const raw = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top') || ''
+        const px = parseFloat(raw.replace('px', '')) || 0
+        const cap = Math.min(Math.max(px, 0), 64) // Same cap as app bar (64px max)
+        style.paddingTop = `${cap}px`
+      } catch (e) {
+        style.paddingTop = '24px' // Fallback
+      }
+
+      return style
+    }
+  },
   methods: {
     async init() {
       this.deviceData = await this.$db.getDeviceData()

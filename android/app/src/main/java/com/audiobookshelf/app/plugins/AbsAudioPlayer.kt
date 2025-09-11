@@ -229,17 +229,20 @@ class AbsAudioPlayer : Plugin() {
                   // Get current playbook speed from MediaManager (same as Android Auto implementation)
                   val currentPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
 
-                  // Prepare the player in paused state with saved playback speed
+                  // Determine if we should start playing based on Android Auto mode
+                  val shouldStartPlaying = playerNotificationService.isAndroidAuto
+
+                  // Prepare the player with appropriate play state and saved playback speed
                   Handler(Looper.getMainLooper()).post {
                     if (playerNotificationService.mediaProgressSyncer.listeningTimerRunning) {
                       playerNotificationService.mediaProgressSyncer.stop {
                         PlayerListener.lazyIsPlaying = false
-                        playerNotificationService.preparePlayer(localPlaybackSession, false, currentPlaybackSpeed)
+                        playerNotificationService.preparePlayer(localPlaybackSession, shouldStartPlaying, currentPlaybackSpeed)
                       }
                     } else {
                       playerNotificationService.mediaProgressSyncer.reset()
                       PlayerListener.lazyIsPlaying = false
-                      playerNotificationService.preparePlayer(localPlaybackSession, false, currentPlaybackSpeed)
+                      playerNotificationService.preparePlayer(localPlaybackSession, shouldStartPlaying, currentPlaybackSpeed)
                     }
                   }
                   return@getCurrentUser
@@ -281,19 +284,23 @@ class AbsAudioPlayer : Plugin() {
                             // Override the current time with the saved progress
                             playbackSession.currentTime = latestProgress.currentTime
 
-                            Log.d(tag, "Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in paused state with speed ${currentPlaybackSpeed}x")
+                            // Determine if we should start playing based on Android Auto mode
+                            val shouldStartPlaying = playerNotificationService.isAndroidAuto
+                            val playStateText = if (shouldStartPlaying) "playing" else "paused"
 
-                            // Prepare the player in paused state on main thread with correct playback speed
+                            Log.d(tag, "Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in $playStateText state with speed ${currentPlaybackSpeed}x")
+
+                            // Prepare the player with appropriate play state on main thread with correct playback speed
                             Handler(Looper.getMainLooper()).post {
                               if (playerNotificationService.mediaProgressSyncer.listeningTimerRunning) {
                                 playerNotificationService.mediaProgressSyncer.stop {
                                   PlayerListener.lazyIsPlaying = false
-                                  playerNotificationService.preparePlayer(playbackSession, false, currentPlaybackSpeed) // Use correct speed
+                                  playerNotificationService.preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed) // Use correct speed
                                 }
                               } else {
                                 playerNotificationService.mediaProgressSyncer.reset()
                                 PlayerListener.lazyIsPlaying = false
-                                playerNotificationService.preparePlayer(playbackSession, false, currentPlaybackSpeed) // Use correct speed
+                                playerNotificationService.preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed) // Use correct speed
                               }
                             }
                           } else {
@@ -720,7 +727,9 @@ class AbsAudioPlayer : Plugin() {
         Handler(Looper.getMainLooper()).post {
           try {
             val savedPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
-            playerNotificationService.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+            // Determine if we should start playing based on Android Auto mode
+            val shouldStartPlaying = playerNotificationService.isAndroidAuto
+            playerNotificationService.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
             call.resolve()
           } catch (e: Exception) {
             Log.e(tag, "Error resuming last playback session", e)

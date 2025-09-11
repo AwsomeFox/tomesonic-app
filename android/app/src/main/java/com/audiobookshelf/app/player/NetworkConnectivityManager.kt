@@ -144,31 +144,37 @@ class NetworkConnectivityManager(
                                 lastPlaybackSession
                             }
 
-                            // Prepare the player in paused state with saved playback speed
+                            // Determine if we should start playing based on Android Auto mode
+                            val shouldStartPlaying = service.isAndroidAuto
+
+                            // Prepare the player with appropriate play state and saved playback speed
                             val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
                             Handler(Looper.getMainLooper()).post {
                                 if (service.mediaProgressSyncer.listeningTimerRunning) {
                                     service.mediaProgressSyncer.stop {
-                                        service.preparePlayer(sessionToUse, false, savedPlaybackSpeed)
+                                        service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
                                     }
                                 } else {
                                     service.mediaProgressSyncer.reset()
-                                    service.preparePlayer(sessionToUse, false, savedPlaybackSpeed)
+                                    service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
                                 }
                             }
                         })
                     } else {
                         // No connectivity, use local session
-                        // Prepare the player in paused state with saved playback speed
+                        // Determine if we should start playing based on Android Auto mode
+                        val shouldStartPlaying = service.isAndroidAuto
+
+                        // Prepare the player with appropriate play state and saved playback speed
                         val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
                         Handler(Looper.getMainLooper()).post {
                             if (service.mediaProgressSyncer.listeningTimerRunning) {
                                 service.mediaProgressSyncer.stop {
-                                    service.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+                                    service.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                                 }
                             } else {
                                 service.mediaProgressSyncer.reset()
-                                service.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+                                service.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                             }
                         }
                     }
@@ -209,16 +215,19 @@ class NetworkConnectivityManager(
                                     // Override the current time with the server progress to sync position
                                     localPlaybackSession.currentTime = latestProgress.currentTime
 
-                                    // Prepare the player in paused state with saved playback speed
+                                    // Determine if we should start playing based on Android Auto mode
+                                    val shouldStartPlaying = service.isAndroidAuto
+
+                                    // Prepare the player with appropriate play state and saved playback speed
                                     val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
                                     Handler(Looper.getMainLooper()).post {
                                         if (service.mediaProgressSyncer.listeningTimerRunning) {
                                             service.mediaProgressSyncer.stop {
-                                                service.preparePlayer(localPlaybackSession, false, savedPlaybackSpeed)
+                                                service.preparePlayer(localPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                                             }
                                         } else {
                                             service.mediaProgressSyncer.reset()
-                                            service.preparePlayer(localPlaybackSession, false, savedPlaybackSpeed)
+                                            service.preparePlayer(localPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                                         }
                                     }
                                     return@getCurrentUser

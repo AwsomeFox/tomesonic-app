@@ -1814,16 +1814,19 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                 lastPlaybackSession
               }
 
-              // Prepare the player in paused state with saved playback speed
+              // Since this is Android Auto, we should start playing
+              val shouldStartPlaying = true
+
+              // Prepare the player in playing state with saved playback speed
               val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
               Handler(Looper.getMainLooper()).post {
                 if (mediaProgressSyncer.listeningTimerRunning) {
                   mediaProgressSyncer.stop {
-                    preparePlayer(sessionToUse, false, savedPlaybackSpeed)
+                    preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
                   }
                 } else {
                   mediaProgressSyncer.reset()
-                  preparePlayer(sessionToUse, false, savedPlaybackSpeed)
+                  preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
                 }
               }
             })
@@ -1877,16 +1880,19 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
                   Log.d(tag, "Android Auto: Resuming from local download: ${localLibraryItem.title} at ${latestProgress.currentTime}s")
 
-                  // Prepare the player in paused state with saved playback speed
+                  // Since this is Android Auto, we should start playing
+                  val shouldStartPlaying = true
+
+                  // Prepare the player in playing state with saved playback speed
                   val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
                   Handler(Looper.getMainLooper()).post {
                     if (mediaProgressSyncer.listeningTimerRunning) {
                       mediaProgressSyncer.stop {
-                        preparePlayer(localPlaybackSession, false, savedPlaybackSpeed)
+                        preparePlayer(localPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                       }
                     } else {
                       mediaProgressSyncer.reset()
-                      preparePlayer(localPlaybackSession, false, savedPlaybackSpeed)
+                      preparePlayer(localPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                     }
                   }
                   return@getCurrentUser
@@ -1919,17 +1925,20 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                             // Override the current time with the saved progress
                             playbackSession.currentTime = latestProgress.currentTime
 
-                            Log.d(tag, "Android Auto: Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in paused state with speed ${currentPlaybackSpeed}x")
+                            // Since this is Android Auto, we should start playing
+                            val shouldStartPlaying = true
 
-                            // Prepare the player in paused state on main thread with correct playback speed
+                            Log.d(tag, "Android Auto: Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in playing state with speed ${currentPlaybackSpeed}x")
+
+                            // Prepare the player in playing state on main thread with correct playback speed
                             Handler(Looper.getMainLooper()).post {
                               if (mediaProgressSyncer.listeningTimerRunning) {
                                 mediaProgressSyncer.stop {
-                                  preparePlayer(playbackSession, false, currentPlaybackSpeed)
+                                  preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed)
                                 }
                               } else {
                                 mediaProgressSyncer.reset()
-                                preparePlayer(playbackSession, false, currentPlaybackSpeed)
+                                preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed)
                               }
                             }
                           } else {

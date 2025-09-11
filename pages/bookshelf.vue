@@ -1,7 +1,7 @@
 <template>
   <div class="w-full h-full bg-surface-dynamic">
     <home-bookshelf-toolbar v-show="!hideToolbar" />
-    <div id="bookshelf-wrapper" class="main-content overflow-y-auto overflow-x-hidden relative bg-surface-dynamic" :class="hideToolbar ? 'no-toolbar' : ''">
+    <div id="bookshelf-wrapper" class="main-content overflow-y-auto relative bg-surface-dynamic" :class="hideToolbar ? 'no-toolbar' : ''">
       <nuxt-child />
     </div>
   </div>

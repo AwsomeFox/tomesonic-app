@@ -292,6 +292,85 @@ export default ({ store, app }, inject) => {
   // Expose helper so other parts of the app can toggle native status bar theme
   Vue.prototype.$updateStatusBarTheme = updateNativeStatusBarStyle
 
+  // Calculate and store mini player bottom positions once at startup
+  const calculateMiniPlayerPositions = () => {
+    // Calculate the two positions the mini player should use
+    let withTabBarPosition = '88px' // Default fallback
+    let withoutTabBarPosition = '8px' // Default fallback
+
+    try {
+      // Get safe area bottom inset
+      const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
+      const clampedSafeInset = Math.min(safeInset, 16) // Clamp like BookshelfNavBar does
+
+      // Base navigation height (content area)
+      const baseNavHeight = 56
+
+      // Total tab bar height when visible (base + safe area) - back to original calculation
+      const totalTabBarHeight = baseNavHeight + clampedSafeInset
+
+      // Position 1: When tab bar is visible - above the tab bar with small gap
+      // Account for the tab bar's 1px top border by reducing the gap
+      withTabBarPosition = `${totalTabBarHeight + 10}px`
+
+      // Position 2: When tab bar is NOT visible - maintain same visual position from bottom
+      // This is the same distance from bottom as when tab bar is visible
+      withoutTabBarPosition = `${clampedSafeInset + 4}px`
+
+      console.log('[Init] Mini player positions calculated:', {
+        safeInset,
+        clampedSafeInset,
+        baseNavHeight,
+        totalTabBarHeight,
+        withTabBar: withTabBarPosition,
+        withoutTabBar: withoutTabBarPosition
+      })
+    } catch (e) {
+      console.warn('[Init] Error calculating mini player positions, using fallbacks:', e)
+    }
+
+    // Store positions globally
+    window.MINI_PLAYER_POSITIONS = {
+      withTabBar: withTabBarPosition,
+      withoutTabBar: withoutTabBarPosition
+    }
+
+    // Also set CSS custom properties for easier access
+    document.documentElement.style.setProperty('--mini-player-bottom-with-tab', withTabBarPosition)
+    document.documentElement.style.setProperty('--mini-player-bottom-without-tab', withoutTabBarPosition)
+
+    // Notify components that positions are ready
+    if (typeof window !== 'undefined' && window.dispatchEvent) {
+      window.dispatchEvent(new CustomEvent('miniPlayerPositionsReady', {
+        detail: window.MINI_PLAYER_POSITIONS
+      }))
+    }
+  }
+
+  // Expose function globally for app resume/orientation change scenarios
+  window.recalculateMiniPlayerPositions = calculateMiniPlayerPositions
+
+  // Calculate positions after safe area variables are ready
+  const initMiniPlayerPositions = () => {
+    const maxAttempts = 10
+    let attempts = 0
+
+    function tryCalculate() {
+      attempts++
+      const bottom = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')
+
+      // Check if we have safe area values or reached max attempts
+      if ((bottom && bottom.trim()) || attempts >= maxAttempts) {
+        calculateMiniPlayerPositions()
+        return
+      }
+
+      setTimeout(tryCalculate, 100)
+    }
+
+    if (typeof window !== 'undefined') tryCalculate()
+  }
+
   // Ensure safe-area CSS variables are present and notify the document when ready.
   // Some WebView environments may not have them immediately available on first paint.
   const ensureSafeAreaVars = () => {
@@ -337,6 +416,8 @@ export default ({ store, app }, inject) => {
     // For Android, wait for the next tick to ensure the WebView is fully initialized
     setTimeout(() => {
       ensureSafeAreaVars()
+      // Initialize mini player positions after safe area is ready
+      initMiniPlayerPositions()
     }, 50)
 
     // Also set fallback values immediately to prevent layout issues
@@ -353,6 +434,8 @@ export default ({ store, app }, inject) => {
   } else {
     // For other platforms, initialize immediately
     ensureSafeAreaVars()
+    // Initialize mini player positions after safe area is ready
+    initMiniPlayerPositions()
   }
 
   // Set theme with Material You integration for all themes
@@ -467,6 +550,33 @@ export default ({ store, app }, inject) => {
   App.addListener('appUrlOpen', (data) => {
     eventBus.$emit('url-open', data.url)
   })
+
+  // Listen for app state changes to recalculate mini player positions when needed
+  App.addListener('appStateChange', ({ isActive }) => {
+    if (isActive && window.recalculateMiniPlayerPositions) {
+      // Recalculate positions when app becomes active (e.g., after background)
+      setTimeout(() => {
+        window.recalculateMiniPlayerPositions()
+      }, 100)
+    }
+  })
+
+  // Listen for orientation changes to recalculate positions
+  if (typeof window !== 'undefined') {
+    const handleOrientationChange = () => {
+      if (window.recalculateMiniPlayerPositions) {
+        setTimeout(() => {
+          window.recalculateMiniPlayerPositions()
+        }, 200) // Longer delay for orientation changes
+      }
+    }
+
+    if (screen.orientation) {
+      screen.orientation.addEventListener('change', handleOrientationChange)
+    } else {
+      window.addEventListener('orientationchange', handleOrientationChange)
+    }
+  }
 }
 
 export { encode, decode }

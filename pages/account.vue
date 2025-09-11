@@ -10,7 +10,7 @@
 
     <ui-btn color="primary flex items-center justify-between gap-2 ml-auto text-base mt-8" @click="logout">{{ $strings.ButtonSwitchServerUser }}<span class="material-symbols text-on-primary" style="font-size: 1.1rem">logout</span></ui-btn>
 
-    <div class="flex justify-center items-center my-4 left-0 right-0 bottom-0 absolute">
+    <div class="flex justify-center items-center my-4 left-0 right-0 absolute" :style="bottomContentStyle">
       <p class="text-sm text-on-surface">{{ $strings.MessageReportBugsAndContribute }} <a class="underline" href="https://github.com/advplyr/audiobookshelf-app" target="_blank">GitHub</a></p>
       <a href="https://github.com/advplyr/audiobookshelf-app" target="_blank" class="text-on-surface hover:scale-150 hover:rotate-6 transform duration-500 ml-2">
         <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" width="24" height="24" viewBox="0 0 24 24">
@@ -53,7 +53,18 @@ export default {
       return this.serverConnectionConfig.version
     },
     contentPaddingStyle() {
+      // Follow the settings page pattern - only add bottom padding when player is open
       return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
+    },
+    bottomContentStyle() {
+      const style = { bottom: '1rem' } // Default bottom spacing
+
+      // Add extra bottom spacing when player is open to account for mini player height
+      if (this.$store.getters['getIsPlayerOpen']) {
+        style.bottom = '140px' // 120px for mini player + 20px for spacing
+      }
+
+      return style
     }
   },
   methods: {

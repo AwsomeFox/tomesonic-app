@@ -55,14 +55,14 @@
               <span class="material-symbols text-2xl fill text-on-primary">{{ playerIsPlaying ? 'pause' : 'play_arrow' }}</span>
               <span class="px-1 text-sm text-on-primary">{{ playerIsPlaying ? $strings.ButtonPause : isPodcast ? $strings.ButtonNextEpisode : hasLocal ? $strings.ButtonPlay : $strings.ButtonStream }}</span>
             </ui-btn>
-            <ui-btn v-if="showRead" color="info" class="flex items-center justify-center mx-1" :class="showPlay ? '' : 'flex-grow'" :padding-x="2" @click="readBook">
+            <ui-btn v-if="showRead" variant="tonal" color="secondary" class="flex items-center justify-center mx-1" :class="showPlay ? '' : 'flex-grow'" :padding-x="2" @click="readBook">
               <span class="material-symbols text-2xl text-on-surface">auto_stories</span>
               <span v-if="!showPlay" class="px-2 text-base">{{ $strings.ButtonRead }} {{ ebookFormat }}</span>
             </ui-btn>
-            <ui-btn v-if="showDownload" :color="downloadItem ? 'warning' : 'primary'" class="flex items-center justify-center mx-1" :padding-x="2" @click="downloadClick">
+            <ui-btn v-if="showDownload" variant="tonal" color="secondary" class="flex items-center justify-center mx-1" :padding-x="2" @click="downloadClick">
               <span class="material-symbols text-2xl text-on-surface" :class="downloadItem || startingDownload ? 'animate-pulse' : ''">{{ downloadItem || startingDownload ? 'downloading' : 'download' }}</span>
             </ui-btn>
-            <ui-btn color="primary" class="flex items-center justify-center mx-1" :padding-x="2" @click="moreButtonPress">
+            <ui-btn variant="tonal" color="secondary" class="flex items-center justify-center mx-1" :padding-x="2" @click="moreButtonPress">
               <span class="material-symbols text-2xl text-on-surface">more_vert</span>
             </ui-btn>
           </div>
@@ -71,10 +71,10 @@
             <span class="px-1 text-base">{{ $strings.LabelMissing }}</span>
           </ui-btn>
 
-          <div v-if="!isPodcast && progressPercent > 0" class="px-4 py-2 bg-primary text-sm font-semibold rounded-md text-on-primary mt-4 text-center">
-            <p>{{ $strings.LabelYourProgress }}: {{ Math.round(progressPercent * 100) }}%</p>
-            <p v-if="!useEBookProgress && !userIsFinished" class="text-fg-muted text-xs">{{ $getString('LabelTimeRemaining', [$elapsedPretty(userTimeRemaining)]) }}</p>
-            <p v-else-if="userIsFinished" class="text-fg-muted text-xs">{{ $strings.LabelFinished }} {{ $formatDate(userProgressFinishedAt) }}</p>
+          <div v-if="!isPodcast && progressPercent > 0" class="px-4 py-3 bg-surface-container text-on-surface text-sm font-medium rounded-2xl border border-outline-variant mt-4 text-center shadow-elevation-1">
+            <p class="text-base font-semibold text-on-surface">{{ $strings.LabelYourProgress }}: {{ Math.round(progressPercent * 100) }}%</p>
+            <p v-if="!useEBookProgress && !userIsFinished" class="text-on-surface-variant text-xs mt-1">{{ $getString('LabelTimeRemaining', [$elapsedPretty(userTimeRemaining)]) }}</p>
+            <p v-else-if="userIsFinished" class="text-on-surface-variant text-xs mt-1">{{ $strings.LabelFinished }} {{ $formatDate(userProgressFinishedAt) }}</p>
           </div>
         </div>
 
@@ -163,6 +163,14 @@
 
     <modals-fullscreen-cover v-model="showFullscreenCover" :library-item="libraryItem" />
 
+    <modals-confirm-dialog
+      v-model="showConfirmDialog"
+      :title="confirmDialogTitle"
+      :message="confirmDialogMessage"
+      @confirm="handleConfirm"
+      @cancel="handleCancel"
+    />
+
     <div v-show="processing" class="fixed top-0 left-0 w-screen h-screen flex items-center justify-center bg-black/50 z-50">
       <ui-loading-indicator />
     </div>
@@ -170,7 +178,6 @@
 </template>
 
 <script>
-import { Dialog } from '@capacitor/dialog'
 import { AbsFileSystem, AbsDownloader } from '@/plugins/capacitor'
 import { FastAverageColor } from 'fast-average-color'
 import cellularPermissionHelpers from '@/mixins/cellularPermissionHelpers'
@@ -221,7 +228,13 @@ export default {
       descriptionClamped: false,
       showFullDescription: false,
       episodeStartingPlayback: null,
-      startingDownload: false
+      startingDownload: false,
+      showConfirmDialog: false,
+      confirmDialogTitle: '',
+      confirmDialogMessage: '',
+      pendingConfirmAction: null,
+      pendingPlaybackData: null,
+      pendingDownloadFolder: null
     }
   },
   mixins: [cellularPermissionHelpers],
@@ -586,15 +599,15 @@ export default {
 
         // If start time and is not already streaming then ask for confirmation
         if (startTime !== null && startTime !== undefined && !this.$store.getters['getIsMediaStreaming'](libraryItemId, null)) {
-          const { value } = await Dialog.confirm({
-            title: 'Confirm',
-            message: `Start playback for "${this.title}" at ${this.$secondsToTimestamp(startTime)}?`
-          })
-          if (!value) return
+          this.confirmDialogTitle = 'Confirm'
+          this.confirmDialogMessage = `Start playback for "${this.title}" at ${this.$secondsToTimestamp(startTime)}?`
+          this.pendingConfirmAction = 'startPlayback'
+          this.pendingPlaybackData = { libraryItemId, serverLibraryItemId: this.serverLibraryItemId, startTime }
+          this.showConfirmDialog = true
+          return
         }
 
-        this.$store.commit('setPlayerIsStartingPlayback', libraryItemId)
-        this.$eventBus.$emit('play-item', { libraryItemId, serverLibraryItemId: this.serverLibraryItemId, startTime })
+        this.executeStartPlayback(libraryItemId, this.serverLibraryItemId, startTime)
       }
     },
     itemUpdated(libraryItem) {
@@ -675,13 +688,11 @@ export default {
           startDownloadMessage = `Start download for "${this.title}" with ebook file to folder ${localFolder.name}?`
         }
       }
-      const { value } = await Dialog.confirm({
-        title: 'Confirm',
-        message: startDownloadMessage
-      })
-      if (value) {
-        this.startDownload(localFolder)
-      }
+      this.confirmDialogTitle = 'Confirm'
+      this.confirmDialogMessage = startDownloadMessage
+      this.pendingConfirmAction = 'startDownload'
+      this.pendingDownloadFolder = localFolder
+      this.showConfirmDialog = true
     },
     async startDownload(localFolder = null) {
       const payload = {
@@ -784,6 +795,25 @@ export default {
         return this.$router.replace('/bookshelf')
       }
     }
+  },
+  handleConfirm() {
+    if (this.pendingConfirmAction === 'startPlayback') {
+      this.executeStartPlayback(this.pendingPlaybackData.libraryItemId, this.pendingPlaybackData.serverLibraryItemId, this.pendingPlaybackData.startTime)
+      this.pendingPlaybackData = null
+    } else if (this.pendingConfirmAction === 'startDownload') {
+      this.startDownload(this.pendingDownloadFolder)
+      this.pendingDownloadFolder = null
+    }
+    this.pendingConfirmAction = null
+  },
+  handleCancel() {
+    this.pendingConfirmAction = null
+    this.pendingPlaybackData = null
+    this.pendingDownloadFolder = null
+  },
+  executeStartPlayback(libraryItemId, serverLibraryItemId, startTime) {
+    this.$store.commit('setPlayerIsStartingPlayback', libraryItemId)
+    this.$eventBus.$emit('play-item', { libraryItemId, serverLibraryItemId, startTime })
   },
   async mounted() {
     if (!this.libraryItem) {

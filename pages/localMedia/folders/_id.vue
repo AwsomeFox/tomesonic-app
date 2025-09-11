@@ -4,7 +4,9 @@
       <p class="text-base font-semibold">{{ $strings.LabelFolder }}: {{ folderName }}</p>
       <div class="flex-grow" />
 
-      <span v-if="dialogItems.length" class="material-symbols text-2xl text-on-surface" @click="showDialog = true">more_vert</span>
+      <button v-if="dialogItems.length" class="w-8 h-8 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center hover:bg-secondary-container-hover active:scale-95" @click="showDialog = true">
+        <span class="material-symbols text-lg text-on-surface">more_vert</span>
+      </button>
     </div>
 
     <p class="text-sm mb-4 text-on-surface-variant">{{ $strings.LabelMediaType }}: {{ mediaType }}</p>
@@ -13,12 +15,13 @@
 
     <div class="w-full media-item-container overflow-y-auto">
       <template v-for="localLibraryItem in localLibraryItems">
-        <nuxt-link :to="`/localMedia/item/${localLibraryItem.id}`" :key="localLibraryItem.id" class="flex my-1">
-          <div class="w-12 h-12 min-w-12 min-h-12 bg-primary">
-            <img v-if="localLibraryItem.coverPathSrc" :src="localLibraryItem.coverPathSrc" class="w-full h-full object-contain" />
+        <nuxt-link :to="`/localMedia/item/${localLibraryItem.id}`" :key="localLibraryItem.id" class="flex my-1 p-3 bg-surface-container rounded-2xl hover:bg-surface-container-hover active:scale-95 transition-all">
+          <div class="w-12 h-12 min-w-12 min-h-12 bg-surface-container rounded-lg flex items-center justify-center">
+            <img v-if="localLibraryItem.coverPathSrc" :src="localLibraryItem.coverPathSrc" class="w-full h-full object-contain rounded-lg" />
+            <span v-else class="material-symbols text-2xl text-on-surface-variant">music_note</span>
           </div>
-          <div class="flex-grow px-2">
-            <p class="text-sm">{{ localLibraryItem.media.metadata.title }}</p>
+          <div class="flex-grow px-3">
+            <p class="text-sm text-on-surface">{{ localLibraryItem.media.metadata.title }}</p>
             <p class="text-xs text-on-surface-variant">{{ getLocalLibraryItemSubText(localLibraryItem) }}</p>
           </div>
           <div class="w-8 h-8 flex items-center justify-center">
@@ -29,12 +32,18 @@
     </div>
 
     <modals-dialog v-model="showDialog" :items="dialogItems" @action="dialogAction" />
+    <modals-confirm-dialog
+      v-model="showConfirmDialog"
+      :title="confirmDialogTitle"
+      :message="confirmDialogMessage"
+      @confirm="handleConfirm"
+      @cancel="handleCancel"
+    />
   </div>
 </template>
 
 <script>
 import { Capacitor } from '@capacitor/core'
-import { Dialog } from '@capacitor/dialog'
 import { AbsFileSystem } from '@/plugins/capacitor'
 
 export default {
@@ -48,7 +57,11 @@ export default {
       localLibraryItems: [],
       folder: null,
       removingFolder: false,
-      showDialog: false
+      showDialog: false,
+      showConfirmDialog: false,
+      confirmDialogTitle: '',
+      confirmDialogMessage: '',
+      pendingConfirmAction: null
     }
   },
   computed: {
@@ -97,21 +110,30 @@ export default {
       }
       this.showDialog = false
     },
+    handleConfirm() {
+      if (this.pendingConfirmAction === 'removeFolder') {
+        this.executeRemoveFolder()
+      }
+      this.pendingConfirmAction = null
+    },
+    handleCancel() {
+      this.pendingConfirmAction = null
+    },
+    async executeRemoveFolder() {
+      this.removingFolder = true
+      await AbsFileSystem.removeFolder({ folderId: this.folderId })
+      this.removingFolder = false
+      this.$router.replace('/localMedia/folders')
+    },
     async removeFolder() {
       var deleteMessage = 'Are you sure you want to remove this folder? (does not delete anything in your file system)'
       if (this.localLibraryItems.length) {
         deleteMessage = `Are you sure you want to remove this folder and ${this.localLibraryItems.length} items? (does not delete anything in your file system)`
       }
-      const { value } = await Dialog.confirm({
-        title: 'Confirm',
-        message: deleteMessage
-      })
-      if (value) {
-        this.removingFolder = true
-        await AbsFileSystem.removeFolder({ folderId: this.folderId })
-        this.removingFolder = false
-        this.$router.replace('/localMedia/folders')
-      }
+      this.confirmDialogTitle = 'Confirm'
+      this.confirmDialogMessage = deleteMessage
+      this.pendingConfirmAction = 'removeFolder'
+      this.showConfirmDialog = true
     },
     async init() {
       var folder = await this.$db.getLocalFolder(this.folderId)

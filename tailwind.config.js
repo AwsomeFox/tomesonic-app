@@ -91,24 +91,50 @@ module.exports = {
         none: 'none'
       },
       fontFamily: {
-        // Material 3 recommends system fonts for better performance
-        sans: ['Roboto', 'system-ui', '-apple-system', 'sans-serif', ...defaultTheme.fontFamily.sans],
-        mono: ['Roboto Mono', 'Ubuntu Mono', ...defaultTheme.fontFamily.mono]
+        // Material 3 Expressive Typography - prioritizing expressive fonts
+        sans: [
+          'Google Sans',
+          'Roboto Flex',
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'Segoe UI',
+          'Roboto',
+          'Oxygen',
+          'Ubuntu',
+          'Cantarell',
+          'Open Sans',
+          'Helvetica Neue',
+          'sans-serif'
+        ],
+        mono: [
+          'JetBrains Mono',
+          'Fira Code',
+          'Roboto Mono',
+          'Ubuntu Mono',
+          'SF Mono',
+          'Monaco',
+          'Inconsolata',
+          'Fira Mono',
+          'Droid Sans Mono',
+          'Source Code Pro',
+          'monospace'
+        ]
       },
       fontSize: {
-        // Material 3 Typography Scale
-        'display-large': ['57px', { lineHeight: '64px', letterSpacing: '-0.25px' }],
-        'display-medium': ['45px', { lineHeight: '52px', letterSpacing: '0px' }],
-        'display-small': ['36px', { lineHeight: '44px', letterSpacing: '0px' }],
-        'headline-large': ['32px', { lineHeight: '40px', letterSpacing: '0px' }],
-        'headline-medium': ['28px', { lineHeight: '36px', letterSpacing: '0px' }],
-        'headline-small': ['24px', { lineHeight: '32px', letterSpacing: '0px' }],
-        'title-large': ['22px', { lineHeight: '28px', letterSpacing: '0px' }],
+        // Material 3 Expressive Typography Scale with proper weights
+        'display-large': ['57px', { lineHeight: '64px', letterSpacing: '-0.25px', fontWeight: '400' }],
+        'display-medium': ['45px', { lineHeight: '52px', letterSpacing: '0px', fontWeight: '400' }],
+        'display-small': ['36px', { lineHeight: '44px', letterSpacing: '0px', fontWeight: '400' }],
+        'headline-large': ['32px', { lineHeight: '40px', letterSpacing: '0px', fontWeight: '400' }],
+        'headline-medium': ['28px', { lineHeight: '36px', letterSpacing: '0px', fontWeight: '400' }],
+        'headline-small': ['24px', { lineHeight: '32px', letterSpacing: '0px', fontWeight: '400' }],
+        'title-large': ['22px', { lineHeight: '28px', letterSpacing: '0px', fontWeight: '500' }],
         'title-medium': ['16px', { lineHeight: '24px', letterSpacing: '0.15px', fontWeight: '500' }],
         'title-small': ['14px', { lineHeight: '20px', letterSpacing: '0.1px', fontWeight: '500' }],
-        'body-large': ['16px', { lineHeight: '24px', letterSpacing: '0.5px' }],
-        'body-medium': ['14px', { lineHeight: '20px', letterSpacing: '0.25px' }],
-        'body-small': ['12px', { lineHeight: '16px', letterSpacing: '0.4px' }],
+        'body-large': ['16px', { lineHeight: '24px', letterSpacing: '0.5px', fontWeight: '400' }],
+        'body-medium': ['14px', { lineHeight: '20px', letterSpacing: '0.25px', fontWeight: '400' }],
+        'body-small': ['12px', { lineHeight: '16px', letterSpacing: '0.4px', fontWeight: '400' }],
         'label-large': ['14px', { lineHeight: '20px', letterSpacing: '0.1px', fontWeight: '500' }],
         'label-medium': ['12px', { lineHeight: '16px', letterSpacing: '0.5px', fontWeight: '500' }],
         'label-small': ['11px', { lineHeight: '16px', letterSpacing: '0.5px', fontWeight: '500' }],
