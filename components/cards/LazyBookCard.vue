@@ -14,7 +14,7 @@
 
       <!-- Book cover image - fills entire card -->
       <img
-        v-show="libraryItem"
+        v-show="libraryItem && !isMaterialSymbolPlaceholder"
         ref="cover"
         :src="bookCoverSrc"
         class="w-full h-full transition-opacity duration-300 object-cover z-5"
@@ -24,6 +24,11 @@
           objectPosition: 'center center'
         }"
       />
+
+      <!-- Material Symbol placeholder -->
+      <div v-if="isMaterialSymbolPlaceholder" class="w-full h-full absolute inset-0 flex items-center justify-center bg-surface-container z-5">
+        <span class="material-symbols text-6xl text-on-surface-variant">book</span>
+      </div>
 
       <!-- Placeholder Cover Title & Author -->
       <div v-if="!hasCover" class="absolute inset-0 flex flex-col items-center justify-center bg-primary p-4 z-10">
@@ -202,7 +207,9 @@ export default {
       return this.mediaType === 'podcast'
     },
     placeholderUrl() {
-      return '/book_placeholder.jpg'
+      // Material 3 book icon as SVG data URL
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg>`;
+      return `data:image/svg+xml;base64,${btoa(svg)}`;
     },
     bookCoverSrc() {
       if (this.isLocal) {
@@ -448,6 +455,9 @@ export default {
     showPlayButton() {
       return false
       // return !this.isMissing && !this.isInvalid && !this.isStreaming && (this.numTracks || this.recentEpisode)
+    },
+    isMaterialSymbolPlaceholder() {
+      return this.bookCoverSrc === 'material-symbol:book'
     }
   },
   methods: {

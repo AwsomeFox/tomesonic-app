@@ -59,7 +59,12 @@
         </div>
 
         <div class="w-full h-full absolute top-0 left-0">
-          <img v-show="libraryItem" ref="cover" :src="bookCoverSrc" class="w-full h-full transition-opacity duration-300" :class="[showCoverBg ? 'object-contain' : 'object-fill', squareAspectRatio ? 'rounded-lg' : 'rounded-xl']" @load="imageLoaded" :style="{ opacity: imageReady ? 1 : 0 }" />
+          <img v-show="libraryItem && !isMaterialSymbolPlaceholder" ref="cover" :src="bookCoverSrc" class="w-full h-full transition-opacity duration-300" :class="[showCoverBg ? 'object-contain' : 'object-fill', squareAspectRatio ? 'rounded-lg' : 'rounded-xl']" @load="imageLoaded" :style="{ opacity: imageReady ? 1 : 0 }" />
+
+          <!-- Material Symbol placeholder -->
+          <div v-if="isMaterialSymbolPlaceholder" class="w-full h-full flex items-center justify-center bg-surface-container" :class="squareAspectRatio ? 'rounded-lg' : 'rounded-xl'">
+            <span class="material-symbols text-4xl text-on-surface-variant">book</span>
+          </div>
         </div>
 
         <!-- Enhanced progress indicator -->
@@ -190,7 +195,9 @@ export default {
       return this._libraryItem.numEpisodesIncomplete || 0
     },
     placeholderUrl() {
-      return '/book_placeholder.jpg'
+      // Material 3 book icon as SVG data URL
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg>`;
+      return `data:image/svg+xml;base64,${btoa(svg)}`;
     },
     bookCoverSrc() {
       if (this.isLocal) {
@@ -333,6 +340,9 @@ export default {
     },
     coverWidth() {
       return 80 / this.bookCoverAspectRatio
+    },
+    isMaterialSymbolPlaceholder() {
+      return this.bookCoverSrc === 'material-symbol:book'
     }
   },
   methods: {
@@ -567,7 +577,6 @@ export default {
   transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1);
   position: relative;
   margin-bottom: 8px; /* Add spacing between list items */
-  width: calc(100% - 32px); /* Account for margins and ensure proper width */
 }
 
 .material-3-list-card::before {

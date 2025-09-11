@@ -144,7 +144,7 @@ export default {
       return this.bookWidth * 1.6
     },
     entityWidth() {
-      if (this.showBookshelfListView) return this.bookshelfWidth - 16 // Reduced from 32 to use more space
+      if (this.showBookshelfListView) return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
       if (this.isBookEntity || this.entityName === 'playlists') return this.bookWidth
       return this.bookWidth * 2
     },

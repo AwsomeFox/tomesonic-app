@@ -205,7 +205,10 @@ export default {
     },
     coverUrl() {
       if (this.isLocal) {
-        if (!this.libraryItem.coverContentUrl) return '/book_placeholder.jpg'
+        if (!this.libraryItem.coverContentUrl) {
+          // Return material symbol placeholder
+          return 'material-symbol:book';
+        }
         return Capacitor.convertFileSrc(this.libraryItem.coverContentUrl)
       }
       return this.$store.getters['globals/getLibraryItemCoverSrcById'](this.libraryItemId)

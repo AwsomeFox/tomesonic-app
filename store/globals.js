@@ -85,7 +85,10 @@ export const getters = {
   getLibraryItemCoverSrcById:
     (state, getters, rootState, rootGetters) =>
     (libraryItemId, placeholder = null) => {
-      if (!placeholder) placeholder = `${rootState.routerBasePath}/book_placeholder.jpg`
+      if (!placeholder) {
+        // Return a placeholder that will be replaced with Material Symbol in template
+        placeholder = 'material-symbol:book';
+      }
       if (!libraryItemId) return placeholder
       const serverAddress = rootGetters['user/getServerAddress']
       if (!serverAddress) return placeholder

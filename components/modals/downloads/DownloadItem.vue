@@ -1,7 +1,9 @@
 <template>
   <div class="flex items-center justify-center">
     <img v-if="download.cover" :src="download.cover" class="w-10 h-16 object-contain" />
-    <img v-else src="/book_placeholder.jpg" class="w-10 h-16 object-contain" />
+    <div v-else class="w-10 h-16 bg-surface-container flex items-center justify-center rounded">
+      <span class="material-symbols text-2xl text-on-surface-variant">book</span>
+    </div>
     <div class="pl-2 w-2/3">
       <p class="font-normal truncate text-sm">{{ download.audiobook.book.title }}</p>
       <p class="font-normal truncate text-xs text-on-surface-variant">{{ download.audiobook.book.author }}</p>
@@ -37,6 +39,13 @@ export default {
     },
     isMissing() {
       return this.download.isMissing
+    },
+    placeholderUrl() {
+      // Return a placeholder that will be replaced with Material Symbol in template
+      return 'material-symbol:book';
+    },
+    isMaterialSymbolPlaceholder() {
+      return !this.download.cover
     }
   },
   methods: {
