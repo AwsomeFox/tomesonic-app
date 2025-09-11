@@ -35,7 +35,6 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   private var cachedLibraryPodcasts : MutableMap<String, MutableMap<String, LibraryItem>> = hashMapOf()
   private var isLibraryPodcastsCached : MutableMap<String, Boolean> = hashMapOf()
   var allLibraryPersonalizationsDone : Boolean = false
-  private var libraryPersonalizationsDone : Int = 0
 
   private var selectedPodcast:Podcast? = null
   private var selectedLibraryItemId:String? = null
@@ -47,6 +46,92 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   var serverLibraries = listOf<Library>()
 
   var userSettingsPlaybackRate:Float? = null
+
+  /**
+   * Initialize MediaManager by loading persisted server data
+   */
+  private fun initializePersistedData() {
+    val serverConfigId = DeviceManager.serverConnectionConfigId
+    if (serverConfigId.isNotEmpty()) {
+      Log.d(tag, "AABrowser: Initializing persisted data for server $serverConfigId")
+
+      // Load persisted server libraries first
+      val persistedLibraries = DeviceManager.dbManager.getServerLibraries(serverConfigId)
+      if (persistedLibraries != null && persistedLibraries.isNotEmpty()) {
+        serverLibraries = persistedLibraries
+        Log.d(tag, "AABrowser: Loaded ${persistedLibraries.size} persisted libraries")
+      }
+
+      // If we have libraries (either from persistence or already loaded), load their cached data
+      if (serverLibraries.isNotEmpty()) {
+        serverLibraries.forEach { library ->
+          val libraryId = library.id
+
+          // Load cached library items (podcasts, books, etc.)
+          val cachedItems = DeviceManager.dbManager.getCachedLibraryItems(serverConfigId, libraryId)
+          if (cachedItems != null && cachedItems.isNotEmpty()) {
+            // Populate cachedLibraryPodcasts for podcasts
+            if (!cachedLibraryPodcasts.containsKey(libraryId)) {
+              cachedLibraryPodcasts[libraryId] = mutableMapOf()
+            }
+            cachedItems.forEach { item ->
+              cachedLibraryPodcasts[libraryId]?.set(item.id, item)
+              if (serverLibraryItems.find { li -> li.id == item.id } == null) {
+                serverLibraryItems.add(item)
+              }
+            }
+            isLibraryPodcastsCached[libraryId] = true
+            Log.d(tag, "AABrowser: Loaded ${cachedItems.size} persisted items for library $libraryId")
+          }
+
+          // Load cached author items
+          val authorKeys = DeviceManager.dbManager.getAllKeys().filter { it.startsWith("${serverConfigId}_${libraryId}_author_") && !it.contains("_series_") }
+          authorKeys.forEach { cacheKey ->
+            val authorId = cacheKey.substringAfter("${serverConfigId}_${libraryId}_author_")
+            val cachedAuthorItems = DeviceManager.dbManager.getCachedLibraryItems(serverConfigId, "${libraryId}_author_${authorId}")
+            if (cachedAuthorItems != null && cachedAuthorItems.isNotEmpty()) {
+              if (!cachedLibraryAuthorItems.containsKey(libraryId)) {
+                cachedLibraryAuthorItems[libraryId] = mutableMapOf()
+              }
+              cachedLibraryAuthorItems[libraryId]!![authorId] = cachedAuthorItems
+              cachedAuthorItems.forEach { item ->
+                if (serverLibraryItems.find { li -> li.id == item.id } == null) {
+                  serverLibraryItems.add(item)
+                }
+              }
+              Log.d(tag, "AABrowser: Loaded ${cachedAuthorItems.size} persisted author items for author $authorId")
+            }
+          }
+
+          // Load cached series items
+          val seriesKeys = DeviceManager.dbManager.getAllKeys().filter { it.startsWith("${serverConfigId}_") && !it.contains("_author_") && !it.contains("_series_") }
+          seriesKeys.forEach { cacheKey ->
+            // Extract seriesId from cache key (format: serverConfigId_seriesId)
+            val seriesId = cacheKey.substringAfter("${serverConfigId}_")
+            if (seriesId.isNotEmpty() && seriesId != cacheKey) { // Make sure we actually found a separator
+              val cachedSeriesItems = DeviceManager.dbManager.getCachedSeriesItems(serverConfigId, seriesId)
+              if (cachedSeriesItems != null && cachedSeriesItems.isNotEmpty()) {
+                if (!cachedLibrarySeriesItem.containsKey(libraryId)) {
+                  cachedLibrarySeriesItem[libraryId] = hashMapOf()
+                }
+                cachedLibrarySeriesItem[libraryId]!![seriesId] = cachedSeriesItems
+                cachedSeriesItems.forEach { item ->
+                  if (serverLibraryItems.find { li -> li.id == item.id } == null) {
+                    serverLibraryItems.add(item)
+                  }
+                }
+                Log.d(tag, "AABrowser: Loaded ${cachedSeriesItems.size} persisted series items for series $seriesId")
+              }
+            }
+          }
+        }
+      } else {
+        Log.d(tag, "AABrowser: No persisted libraries found, skipping cached data loading")
+      }
+    } else {
+      Log.d(tag, "AABrowser: No server connection config, skipping persisted data initialization")
+    }
+  }
 
   fun getIsLibrary(id:String) : Boolean {
     return serverLibraries.find { it.id == id } != null
@@ -139,6 +224,9 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     val serverConnConfig = if (DeviceManager.isConnectedToServer) DeviceManager.serverConnectionConfig else DeviceManager.deviceData.getLastServerConnectionConfig()
 
     if (!DeviceManager.isConnectedToServer || !DeviceManager.checkConnectivity(ctx) || serverConnConfig == null || serverConnConfig.id !== serverConfigIdUsed) {
+      Log.d(tag, "AABrowser: Server connection changed, clearing in-memory cache but preserving persisted data")
+
+      // Clear in-memory cache but preserve persisted data
       podcastEpisodeLibraryItemMap = mutableMapOf()
       serverLibraries = listOf()
       serverLibraryItems = mutableListOf()
@@ -154,7 +242,12 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       isLibraryPodcastsCached = hashMapOf()
       serverItemsInProgress = listOf()
       allLibraryPersonalizationsDone = false
-      libraryPersonalizationsDone = 0
+
+      // Reload persisted data for the new server connection
+      if (serverConnConfig != null) {
+        initializePersistedData()
+      }
+
       return true
     }
     return false
@@ -179,20 +272,29 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    * [cb] resolves when all libraries are processed
    */
   fun populatePersonalizedDataForAllLibraries(cb: () -> Unit ) {
-    serverLibraries.forEach {
-      libraryPersonalizationsDone++
-      Log.d(tag, "Loading personalization for library ${it.name} - ${it.id} - ${it.mediaType}")
-      populatePersonalizedDataForLibrary(it.id) {
-        Log.d(tag, "Loaded personalization for library ${it.name} - ${it.id} - ${it.mediaType}")
-        libraryPersonalizationsDone--
-      }
+    if (serverLibraries.isEmpty()) {
+      Log.d(tag, "AABrowser: No libraries to populate personalization data for")
+      allLibraryPersonalizationsDone = true
+      cb()
+      return
     }
 
-    while (libraryPersonalizationsDone > 0) { }
+    allLibraryPersonalizationsDone = false
+    var totalLibraries = serverLibraries.size
+    var completedLibraries = 0
 
-    Log.d(tag, "Finished loading all library personalization data")
-    allLibraryPersonalizationsDone = true
-    cb()
+    serverLibraries.forEach { library ->
+      Log.d(tag, "AABrowser: Loading personalization for library ${library.name} - ${library.id} - ${library.mediaType}")
+      populatePersonalizedDataForLibrary(library.id) {
+        Log.d(tag, "AABrowser: Loaded personalization for library ${library.name} - ${library.id} - ${library.mediaType}")
+        completedLibraries++
+        if (completedLibraries >= totalLibraries) {
+          Log.d(tag, "AABrowser: Finished loading all library personalization data")
+          allLibraryPersonalizationsDone = true
+          cb()
+        }
+      }
+    }
   }
 
   /**
@@ -312,6 +414,14 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
           }
         }
         isLibraryPodcastsCached[libraryId] = true
+
+        // Persist cached library items for Android Auto
+        val serverConfigId = DeviceManager.serverConnectionConfigId
+        if (serverConfigId.isNotEmpty()) {
+          DeviceManager.dbManager.saveCachedLibraryItems(serverConfigId, libraryId, libraryItemsWithAudio)
+          Log.d(tag, "loadLibraryPodcasts: Persisted ${libraryItemsWithAudio.size} podcast items for library $libraryId")
+        }
+
         Log.d(tag, "loadLibraryPodcasts: loaded from server: $libraryId")
         cb(libraryItemsWithAudio.sortedBy { libraryItem -> (libraryItem.media as Podcast).metadata.title })
       }
@@ -390,6 +500,14 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
             serverLibraryItems.add(libraryItem)
           }
         }
+
+        // Persist cached series items for Android Auto
+        val serverConfigId = DeviceManager.serverConnectionConfigId
+        if (serverConfigId.isNotEmpty()) {
+          DeviceManager.dbManager.saveCachedSeriesItems(serverConfigId, seriesId, sortedLibraryItemsWithAudio)
+          Log.d(tag, "loadLibrarySeriesItemsWithAudio: Persisted ${sortedLibraryItemsWithAudio.size} series items for series $seriesId")
+        }
+
         cb(sortedLibraryItemsWithAudio)
       }
     }
@@ -465,6 +583,13 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
           }
         }
 
+        // Persist cached author items for Android Auto (using authorId as cache key)
+        val serverConfigId = DeviceManager.serverConnectionConfigId
+        if (serverConfigId.isNotEmpty()) {
+          DeviceManager.dbManager.saveCachedLibraryItems(serverConfigId, "${libraryId}_author_${authorId}", libraryItemsWithAudio)
+          Log.d(tag, "loadAuthorBooksWithAudio: Persisted ${libraryItemsWithAudio.size} author items for author $authorId")
+        }
+
         cb(libraryItemsWithAudio)
       }
     }
@@ -502,6 +627,13 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
           if (serverLibraryItems.find { li -> li.id == libraryItem.id } == null) {
             serverLibraryItems.add(libraryItem)
           }
+        }
+
+        // Persist cached author series items for Android Auto
+        val serverConfigId = DeviceManager.serverConnectionConfigId
+        if (serverConfigId.isNotEmpty()) {
+          DeviceManager.dbManager.saveCachedLibraryItems(serverConfigId, "${libraryId}_author_${authorId}_series_${seriesId}", sortedLibraryItemsWithAudio)
+          Log.d(tag, "loadAuthorSeriesBooksWithAudio: Persisted ${sortedLibraryItemsWithAudio.size} author series items for author $authorId series $seriesId")
         }
 
         cb(sortedLibraryItemsWithAudio)
@@ -698,16 +830,27 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   private fun loadLibraries(cb: (List<Library>) -> Unit) {
     if (serverLibraries.isNotEmpty()) {
+      Log.d(tag, "AABrowser: Using cached libraries, count=${serverLibraries.size}")
       cb(serverLibraries)
     } else {
+      Log.d(tag, "AABrowser: Loading libraries from API")
       apiHandler.getLibraries { loadedLibraries ->
+        Log.d(tag, "AABrowser: API returned ${loadedLibraries.size} libraries")
         serverLibraries = loadedLibraries
+
+        // Persist server libraries for Android Auto
+        val serverConfigId = DeviceManager.serverConnectionConfigId
+        if (serverConfigId.isNotEmpty()) {
+          DeviceManager.dbManager.saveServerLibraries(serverConfigId, loadedLibraries)
+          Log.d(tag, "AABrowser: Persisted ${loadedLibraries.size} libraries for server $serverConfigId")
+        }
+
         // Notify Android Auto listeners that libraries have been loaded
         androidAutoLoadListeners.forEach { listener ->
           try {
             listener()
           } catch (e: Exception) {
-            Log.e(tag, "androidAutoLoadListener error: ${e.localizedMessage}")
+            Log.e(tag, "AABrowser: androidAutoLoadListener error: ${e.localizedMessage}")
           }
         }
         cb(serverLibraries)
@@ -856,24 +999,29 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   }
 
   fun loadAndroidAutoItems(cb: () -> Unit) {
-    Log.d(tag, "Load android auto items")
+    Log.d(tag, "AABrowser: Load android auto items")
+
+    // Initialize persisted data first
+    initializePersistedData()
 
     // Check if any valid server connection if not use locally downloaded books
     checkSetValidServerConnectionConfig { isConnected ->
       if (isConnected) {
         serverConfigIdUsed = DeviceManager.serverConnectionConfigId
-        Log.d(tag, "loadAndroidAutoItems: Connected to server config id=$serverConfigIdUsed")
+        Log.d(tag, "AABrowser: Connected to server config id=$serverConfigIdUsed")
 
         loadLibraries { libraries ->
+          Log.d(tag, "AABrowser: Libraries loaded, count=${libraries.size}")
           if (libraries.isEmpty()) {
-            Log.w(tag, "No libraries returned from server request")
+            Log.w(tag, "AABrowser: No libraries returned from server request")
             cb()
           } else {
+            Log.d(tag, "AABrowser: Libraries loaded successfully, calling callback")
             cb() // Fully loaded
           }
         }
       } else { // Not connected to server
-        Log.d(tag, "loadAndroidAutoItems: Not connected to server")
+        Log.d(tag, "AABrowser: Not connected to server")
         cb()
       }
     }
@@ -910,9 +1058,9 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
             val localLibraryItem = DeviceManager.dbManager.getLocalLibraryItemByLId(libraryItem.id)
             libraryItem.localLibraryItemId = localLibraryItem?.id
             val description = libraryItem.getMediaDescription(progress, ctx, null, null, "Books (${serverLibrary?.name})")
-            
+
             // Make books with chapters browsable instead of playable
-            val flagToUse = if (libraryItem.mediaType == "book" && 
+            val flagToUse = if (libraryItem.mediaType == "book" &&
                               (libraryItem.media as? Book)?.chapters?.isNotEmpty() == true) {
               MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
             } else {
@@ -1019,5 +1167,16 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     }
 
     return cost[lhsLength - 1]
+  }
+
+  fun fetchAllDataForAndroidAuto(cb: () -> Unit) {
+    Log.d(tag, "AABrowser: Starting to fetch all data")
+    populatePersonalizedDataForAllLibraries {
+        Log.d(tag, "AABrowser: Personalized data loaded, loading in-progress items")
+        initializeInProgressItems {
+            Log.d(tag, "AABrowser: All data loaded, calling callback")
+            cb()
+        }
+    }
   }
 }

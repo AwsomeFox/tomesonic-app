@@ -82,6 +82,7 @@ class MediaBrowserManager(
         )
     }
     private var forceReloadingAndroidAuto: Boolean = false
+    private var cacheResetInProgress: Boolean = false // Prevent multiple cache resets during connection
     private var firstLoadDone: Boolean = false
     private var cachedSearch: String = ""
     private var cachedSearchResults: MutableList<MediaBrowserCompat.MediaItem> = mutableListOf()
@@ -90,11 +91,12 @@ class MediaBrowserManager(
     // Only allowing android auto or similar to access media browser service
     //  normal loading of audiobooks is handled in webview (not natively)
     fun isValid(packageName: String, uid: Int): Boolean {
-        Log.d(tag, "onGetRoot: Checking package $packageName with uid $uid")
+        Log.d(tag, "AABrowser: Checking if package $packageName (uid: $uid) is valid for media browser")
         if (!VALID_MEDIA_BROWSERS.contains(packageName)) {
-            Log.d(tag, "onGetRoot: package $packageName not valid for the media browser service")
+            Log.d(tag, "AABrowser: Package $packageName not in valid list: $VALID_MEDIA_BROWSERS")
             return false
         }
+        Log.d(tag, "AABrowser: Package $packageName is valid")
         return true
     }
 
@@ -103,26 +105,33 @@ class MediaBrowserManager(
         clientUid: Int,
         rootHints: Bundle?
     ): MediaBrowserServiceCompat.BrowserRoot? {
+        Log.d(tag, "AABrowser: MediaBrowserManager.onGetRoot called for $clientPackageName")
         // Verify that the specified package is allowed to access your content
         return if (!isValid(clientPackageName, clientUid)) {
             // No further calls will be made to other media browsing methods.
+            Log.d(tag, "AABrowser: Client $clientPackageName not allowed to access media browser")
             null
         } else {
-            AbsLogger.info(tag, "onGetRoot: clientPackageName: $clientPackageName, clientUid: $clientUid")
+            Log.d(tag, "AABrowser: Client $clientPackageName allowed, proceeding with onGetRoot")
+            AbsLogger.info(tag, "AABrowser: clientPackageName: $clientPackageName, clientUid: $clientUid")
             PlayerNotificationService.isStarted = true
 
             // Reset cache if no longer connected to server or server changed
-            if (mediaManager.checkResetServerItems()) {
-                AbsLogger.info(tag, "onGetRoot: Reset Android Auto server items cache (${DeviceManager.serverConnectionConfigString})")
+            if (mediaManager.checkResetServerItems() && !cacheResetInProgress) {
+                Log.d(tag, "AABrowser: checkResetServerItems returned true and no cache reset in progress, forcing reload")
+                AbsLogger.info(tag, "AABrowser: Reset Android Auto server items cache (${DeviceManager.serverConnectionConfigString})")
                 forceReloadingAndroidAuto = true
                 firstLoadDone = false // Reset firstLoadDone when server items are reset
                 networkConnectivityManager.setFirstLoadDone(false) // Sync with NetworkConnectivityManager
+                cacheResetInProgress = true // Prevent further cache resets during this connection
 
                 // Trigger refresh to ensure service is ready
                 Handler(Looper.getMainLooper()).post {
                     AbsLogger.info(tag, "onGetRoot: Triggering Android Auto refresh after cache reset")
                     service.notifyChildrenChanged(AUTO_MEDIA_ROOT)
                 }
+            } else if (cacheResetInProgress) {
+                Log.d(tag, "AABrowser: Cache reset already in progress, skipping additional reset")
             }
 
             service.isAndroidAuto = true
@@ -259,34 +268,100 @@ class MediaBrowserManager(
             }
             result.sendResult(localBrowseItems)
         } else if (parentMediaId == AUTO_MEDIA_ROOT) {
-            Log.d(tag, "Trying to initialize browseTree.")
+            Log.d(tag, "AABrowser: onLoadChildren called for AUTO_MEDIA_ROOT, browseTree initialized: ${this::browseTree.isInitialized}, forceReloading: $forceReloadingAndroidAuto")
             if (!this::browseTree.isInitialized || forceReloadingAndroidAuto) {
+                Log.d(tag, "AABrowser: Creating new BrowseTree (initialized: ${this::browseTree.isInitialized}, forceReload: $forceReloadingAndroidAuto)")
                 forceReloadingAndroidAuto = false
-                AbsLogger.info(tag, "onLoadChildren: Loading Android Auto items")
+                cacheResetInProgress = false // Reset the flag since we're creating a new BrowseTree
+                AbsLogger.info(tag, "AABrowser: Loading Android Auto items")
 
-                // Show loading indicator immediately
-                val loadingItem = createLoadingMediaItem()
-                result.sendResult(mutableListOf(loadingItem))
+                // Don't send loading result immediately - wait for data to load
+                // This prevents the IllegalStateException from calling sendResult() multiple times
+                // val loadingItem = createLoadingMediaItem()
+                // result.sendResult(mutableListOf(loadingItem))
 
                 mediaManager.loadAndroidAutoItems {
-                    AbsLogger.info(tag, "onLoadChildren: Loaded Android Auto data (${mediaManager.serverLibraries.size} libraries), initializing browseTree")
+                    AbsLogger.info(tag, "AABrowser: Loaded Android Auto data (${mediaManager.serverLibraries.size} libraries), initializing browseTree")
 
                     // Check connection status
                     val isConnected = DeviceManager.isConnectedToServer
                     val hasConnectivity = DeviceManager.checkConnectivity(ctx)
-                    AbsLogger.info(tag, "onLoadChildren: Connection status - Server: $isConnected, Network: $hasConnectivity")
+                    AbsLogger.info(tag, "AABrowser: Connection status - Server: $isConnected, Network: $hasConnectivity")
 
                     // Check for existing session or resume from server when Android Auto starts
                     if (service.currentPlaybackSession == null) {
-                        Log.d(tag, "Android Auto: No active session found, attempting to resume from last session")
+                        Log.d(tag, "AABrowser: No active session found, attempting to resume from last session")
                         networkConnectivityManager.resumeFromLastSessionForAndroidAuto()
                     } else {
-                        Log.d(tag, "Android Auto: Active session found: ${service.currentPlaybackSession?.displayTitle}")
+                        Log.d(tag, "AABrowser: Active session found: ${service.currentPlaybackSession?.displayTitle}")
                     }
 
+                    val onDataReady = {
+                        Log.d(tag, "AABrowser: Building browse tree with ${mediaManager.serverLibraries.size} libraries, allPersonalizationsDone=${mediaManager.allLibraryPersonalizationsDone}")
+                        browseTree =
+                            BrowseTree(
+                                ctx,
+                                mediaManager.serverItemsInProgress,
+                                mediaManager.serverLibraries,
+                                mediaManager.allLibraryPersonalizationsDone
+                            )
+                        val children =
+                            browseTree[parentMediaId]?.map { item ->
+                                Log.d(tag, "AABrowser: Found top menu item: ${item.description.title}")
+                                MediaBrowserCompat.MediaItem(
+                                    item.description,
+                                    MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                )
+                            }?.toMutableList() ?: mutableListOf()
+
+                        Log.d(tag, "AABrowser: Built ${children.size} children items")
+
+                        // If no server content but we have local books, add downloads option
+                        if (children.isEmpty()) {
+                            val localBooks = DeviceManager.dbManager.getLocalLibraryItems("book")
+                            val localPodcasts = DeviceManager.dbManager.getLocalLibraryItems("podcast")
+                            if (localBooks.isNotEmpty() || localPodcasts.isNotEmpty()) {
+                                val downloadsDescription = MediaDescriptionCompat.Builder()
+                                    .setMediaId(DOWNLOADS_ROOT)
+                                    .setTitle("Downloaded Content")
+                                    .setSubtitle("${localBooks.size + localPodcasts.size} items")
+                                    .setIconUri(getUriToDrawable(ctx, R.drawable.icon_monochrome))
+                                    .build()
+
+                                children.add(MediaBrowserCompat.MediaItem(
+                                    downloadsDescription,
+                                    MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+                                ))
+                                Log.d(tag, "AABrowser: Added downloads option with ${localBooks.size + localPodcasts.size} items")
+                            }
+                        }
+
+                        Log.d(tag, "AABrowser: Sending result with ${children.size} items")
+                        result.sendResult(children)
+                        firstLoadDone = true
+                        networkConnectivityManager.setFirstLoadDone(true) // Sync with NetworkConnectivityManager
+                    }
+
+                    if (mediaManager.serverLibraries.isNotEmpty()) {
+                        Log.d(tag, "AABrowser: Libraries found (${mediaManager.serverLibraries.size}), fetching all data")
+                        AbsLogger.info(tag, "AABrowser: Android Auto fetching all data")
+                        mediaManager.fetchAllDataForAndroidAuto {
+                            AbsLogger.info(tag, "AABrowser: Android Auto finished fetching all data")
+                            Log.d(tag, "AABrowser: All data fetched, calling onDataReady")
+                            onDataReady()
+                        }
+                    } else {
+                        Log.d(tag, "AABrowser: No libraries found, calling onDataReady directly")
+                        onDataReady()
+                    }
+                }
+                return
+            } else {
+                Log.d(tag, "Starting browseTree refresh")
+                val onDataReady = {
                     browseTree =
                         BrowseTree(
-                            ctx,
+                            service,
                             mediaManager.serverItemsInProgress,
                             mediaManager.serverLibraries,
                             mediaManager.allLibraryPersonalizationsDone
@@ -298,73 +373,27 @@ class MediaBrowserManager(
                                 item.description,
                                 MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
                             )
-                        }?.toMutableList() ?: mutableListOf()
+                        }?.toMutableList()
 
-                    // If no server content but we have local books, add downloads option
-                    if (children.isEmpty()) {
-                        val localBooks = DeviceManager.dbManager.getLocalLibraryItems("book")
-                        val localPodcasts = DeviceManager.dbManager.getLocalLibraryItems("podcast")
-                        if (localBooks.isNotEmpty() || localPodcasts.isNotEmpty()) {
-                            val downloadsDescription = MediaDescriptionCompat.Builder()
-                                .setMediaId(DOWNLOADS_ROOT)
-                                .setTitle("Downloaded Content")
-                                .setSubtitle("${localBooks.size + localPodcasts.size} items")
-                                .setIconUri(getUriToDrawable(ctx, R.drawable.icon_monochrome))
-                                .build()
-
-                            children.add(MediaBrowserCompat.MediaItem(
-                                downloadsDescription,
-                                MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
-                            ))
-                        }
-                    }
-
-                    service.notifyChildrenChanged(AUTO_MEDIA_ROOT)
-                    firstLoadDone = true
-                    networkConnectivityManager.setFirstLoadDone(true) // Sync with NetworkConnectivityManager
-
-                    if (mediaManager.serverLibraries.isNotEmpty()) {
-                        AbsLogger.info(tag, "onLoadChildren: Android Auto fetching personalized data for all libraries")
-                        mediaManager.populatePersonalizedDataForAllLibraries {
-                            AbsLogger.info(tag, "onLoadChildren: Android Auto loaded personalized data for all libraries")
-                            service.notifyChildrenChanged("/")
-                        }
-
-                        AbsLogger.info(tag, "onLoadChildren: Android Auto fetching in progress items")
-                        mediaManager.initializeInProgressItems {
-                            AbsLogger.info(tag, "onLoadChildren: Android Auto loaded in progress items")
-                            service.notifyChildrenChanged("/")
-                        }
-                    }
+                    AbsLogger.info(tag, "onLoadChildren: Android auto data loaded")
+                    result.sendResult(children)
                 }
-                return
-            } else {
-                Log.d(tag, "Starting browseTree refresh")
-                browseTree =
-                    BrowseTree(
-                        service,
-                        mediaManager.serverItemsInProgress,
-                        mediaManager.serverLibraries,
-                        mediaManager.allLibraryPersonalizationsDone
-                    )
-                val children =
-                    browseTree[parentMediaId]?.map { item ->
-                        Log.d(tag, "Found top menu item: ${item.description.title}")
-                        MediaBrowserCompat.MediaItem(
-                            item.description,
-                            MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
-                        )
-                    }?.toMutableList()
 
-                AbsLogger.info(tag, "onLoadChildren: Android auto data loaded")
-                result.sendResult(children)
+                if (mediaManager.serverLibraries.isNotEmpty() && !mediaManager.allLibraryPersonalizationsDone) {
+                    mediaManager.fetchAllDataForAndroidAuto {
+                        onDataReady()
+                    }
+                } else {
+                    onDataReady()
+                }
             }
         } else if (parentMediaId == LIBRARIES_ROOT || parentMediaId == RECENTLY_ROOT) {
             Log.d(tag, "Loading $parentMediaId - First load done: $firstLoadDone")
             if (!firstLoadDone) {
-                // Show loading indicator while waiting for initial load to complete
-                val loadingItem = createLoadingMediaItem()
-                result.sendResult(mutableListOf(loadingItem))
+                // Don't send loading result immediately - wait for data to load
+                // This prevents the IllegalStateException from calling sendResult() multiple times
+                // val loadingItem = createLoadingMediaItem()
+                // result.sendResult(mutableListOf(loadingItem))
 
                 // Start a background task to wait and retry
                 Thread {
@@ -1065,20 +1094,33 @@ class MediaBrowserManager(
                 // Cache bitmap for local books to avoid loading the same image multiple times
                 var cachedBitmap: Bitmap? = null
                 val coverUri = localLibraryItem.getCoverUri(ctx)
+                Log.d(tag, "AABrowser: Loading bitmap for local book chapters - Cover URI: $coverUri")
+                Log.d(tag, "AABrowser: Local library item cover content URL: ${localLibraryItem.coverContentUrl}")
 
                 // Load bitmap once for local books
                 if (localLibraryItem.coverContentUrl != null) {
                     try {
+                        Log.d(tag, "AABrowser: Attempting to load bitmap from URI")
                         cachedBitmap = if (Build.VERSION.SDK_INT < 28) {
+                            Log.d(tag, "AABrowser: Using MediaStore (API < 28)")
                             MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
                         } else {
+                            Log.d(tag, "AABrowser: Using ImageDecoder (API >= 28)")
                             val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
                             ImageDecoder.decodeBitmap(source)
                         }
-                        Log.d(tag, "Cached bitmap loaded for local book browse chapters")
+                        if (cachedBitmap != null) {
+                            Log.d(tag, "AABrowser: Cached bitmap loaded successfully - Size: ${cachedBitmap.width}x${cachedBitmap.height}")
+                        } else {
+                            Log.w(tag, "AABrowser: Cached bitmap is null after loading")
+                        }
                     } catch (e: Exception) {
-                        Log.w(tag, "Failed to load cached bitmap for browse chapters: ${e.message}")
+                        Log.w(tag, "AABrowser: Failed to load cached bitmap for browse chapters: ${e.message}")
+                        Log.w(tag, "AABrowser: Exception type: ${e.javaClass.simpleName}")
+                        e.printStackTrace()
                     }
+                } else {
+                    Log.w(tag, "AABrowser: No cover content URL for local library item")
                 }
 
                 val children = chapters.mapIndexed { index, chapter ->
@@ -1092,9 +1134,16 @@ class MediaBrowserManager(
                         .setSubtitle(chapterSubtitle)
                         .setIconUri(coverUri)
                         .apply {
-                            cachedBitmap?.let { setIconBitmap(it) }
+                            if (cachedBitmap != null) {
+                                Log.d(tag, "AABrowser: Setting cached bitmap on chapter description - Size: ${cachedBitmap.width}x${cachedBitmap.height}")
+                                setIconBitmap(cachedBitmap)
+                            } else {
+                                Log.w(tag, "AABrowser: No cached bitmap to set on chapter description")
+                            }
                         }
                         .build()
+
+                    Log.d(tag, "AABrowser: Chapter description created - Has icon bitmap: ${description.iconBitmap != null}")
 
                     MediaBrowserCompat.MediaItem(
                         description,
@@ -1149,10 +1198,28 @@ class MediaBrowserManager(
 
     // Method to force reload (called when server changes)
     fun resetForceReloading() {
+        Log.d(tag, "AABrowser: resetForceReloading called - setting forceReloadingAndroidAuto to true")
         AbsLogger.info(tag, "resetForceReloading: Forcing Android Auto to reload")
         forceReloadingAndroidAuto = true
         firstLoadDone = false // Reset to trigger proper reload
         networkConnectivityManager.setFirstLoadDone(false) // Sync with NetworkConnectivityManager
+    }
+
+    // Method to force reload
+    fun forceReload() {
+        Log.d(tag, "AABrowser: forceReload called - setting forceReloadingAndroidAuto to true")
+        AbsLogger.info(tag, "forceReload: Forcing Android Auto to reload")
+        forceReloadingAndroidAuto = true
+        firstLoadDone = false // Reset to trigger proper reload
+        networkConnectivityManager.setFirstLoadDone(false) // Sync with NetworkConnectivityManager
+        cacheResetInProgress = false // Reset cache reset flag to allow proper cache reset if needed
+        service.notifyChildrenChanged(AUTO_MEDIA_ROOT)
+    }
+
+    // Method to reset cache reset flag (for testing or manual reset)
+    fun resetCacheResetFlag() {
+        Log.d(tag, "AABrowser: Manually resetting cache reset flag")
+        cacheResetInProgress = false
     }
 
     // Method to get browse tree state
@@ -1160,10 +1227,12 @@ class MediaBrowserManager(
 
     // Method to handle app refresh scenarios
     fun handleAppRefresh() {
+        Log.d(tag, "AABrowser: handleAppRefresh called - setting forceReloadingAndroidAuto to true")
         AbsLogger.info(tag, "handleAppRefresh: Resetting Android Auto state for app refresh")
         forceReloadingAndroidAuto = true
         firstLoadDone = false
         networkConnectivityManager.setFirstLoadDone(false)
+        cacheResetInProgress = false // Reset cache reset flag for app refresh scenarios
 
         // Clear server data if not connected
         if (!DeviceManager.isConnectedToServer || !DeviceManager.checkConnectivity(ctx)) {

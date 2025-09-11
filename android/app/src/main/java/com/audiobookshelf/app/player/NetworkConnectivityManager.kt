@@ -5,6 +5,7 @@ import android.net.*
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.audiobookshelf.app.data.PlaybackSession
 import com.audiobookshelf.app.data.Podcast
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.media.MediaManager
@@ -85,6 +86,7 @@ class NetworkConnectivityManager(
             firstLoadDone &&
             service.mediaManager.serverLibraries.isEmpty()
         ) {
+            Log.d("NetworkConnectivityManager", "AABrowser: Network restored and libraries empty - setting forceReloadingAndroidAuto to true")
             forceReloadingAndroidAuto = true
             service.notifyChildrenChanged("/")
         }
@@ -139,7 +141,7 @@ class NetworkConnectivityManager(
                     if (DeviceManager.checkConnectivity(context)) {
                         Log.d(TAG, "Android Auto: Checking server for potential newer session...")
 
-                        service.checkServerSessionVsLocal(lastPlaybackSession) { shouldUseServer, serverSession ->
+                        service.checkServerSessionVsLocal(lastPlaybackSession, { shouldUseServer: Boolean, serverSession: PlaybackSession? ->
                             val sessionToUse = if (shouldUseServer && serverSession != null) {
                                 Log.d(TAG, "Android Auto: Server session is newer, using server session")
                                 serverSession
@@ -148,11 +150,33 @@ class NetworkConnectivityManager(
                                 lastPlaybackSession
                             }
 
-                            service.prepareSessionForAndroidAuto(sessionToUse, false)
-                        }
+                            // Prepare the player in paused state with saved playback speed
+                            val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+                            Handler(Looper.getMainLooper()).post {
+                                if (service.mediaProgressSyncer.listeningTimerRunning) {
+                                    service.mediaProgressSyncer.stop {
+                                        service.preparePlayer(sessionToUse, false, savedPlaybackSpeed)
+                                    }
+                                } else {
+                                    service.mediaProgressSyncer.reset()
+                                    service.preparePlayer(sessionToUse, false, savedPlaybackSpeed)
+                                }
+                            }
+                        })
                     } else {
                         // No connectivity, use local session
-                        service.prepareSessionForAndroidAuto(lastPlaybackSession, false)
+                        // Prepare the player in paused state with saved playback speed
+                        val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+                        Handler(Looper.getMainLooper()).post {
+                            if (service.mediaProgressSyncer.listeningTimerRunning) {
+                                service.mediaProgressSyncer.stop {
+                                    service.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+                                }
+                            } else {
+                                service.mediaProgressSyncer.reset()
+                                service.preparePlayer(lastPlaybackSession, false, savedPlaybackSpeed)
+                            }
+                        }
                     }
                     return
                 } else {

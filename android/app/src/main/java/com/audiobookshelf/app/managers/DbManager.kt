@@ -320,4 +320,52 @@ class DbManager {
       AbsLogger.info("DbManager", "cleanLogs: Removed $logsRemoved logs older than $numberOfHoursToKeep hours")
     }
   }
+
+  // Server data persistence methods for Android Auto
+  fun saveServerLibraries(serverConnectionConfigId: String, libraries: List<Library>) {
+    Paper.book("serverLibraries").write(serverConnectionConfigId, libraries)
+  }
+
+  fun getServerLibraries(serverConnectionConfigId: String): List<Library>? {
+    return Paper.book("serverLibraries").read(serverConnectionConfigId)
+  }
+
+  fun saveCachedLibraryItems(serverConnectionConfigId: String, libraryId: String, items: List<LibraryItem>) {
+    val cacheKey = "${serverConnectionConfigId}_${libraryId}"
+    Paper.book("cachedLibraryItems").write(cacheKey, items)
+  }
+
+  fun getCachedLibraryItems(serverConnectionConfigId: String, libraryId: String): List<LibraryItem>? {
+    val cacheKey = "${serverConnectionConfigId}_${libraryId}"
+    return Paper.book("cachedLibraryItems").read(cacheKey)
+  }
+
+  fun saveCachedSeriesItems(serverConnectionConfigId: String, seriesId: String, items: List<LibraryItem>) {
+    val cacheKey = "${serverConnectionConfigId}_${seriesId}"
+    Paper.book("cachedSeriesItems").write(cacheKey, items)
+  }
+
+  fun getCachedSeriesItems(serverConnectionConfigId: String, seriesId: String): List<LibraryItem>? {
+    val cacheKey = "${serverConnectionConfigId}_${seriesId}"
+    return Paper.book("cachedSeriesItems").read(cacheKey)
+  }
+
+  fun clearServerData(serverConnectionConfigId: String) {
+    // Clear server libraries
+    Paper.book("serverLibraries").delete(serverConnectionConfigId)
+
+    // Clear all cached data for this server
+    val cachedLibraryKeys = Paper.book("cachedLibraryItems").allKeys.filter { it.startsWith("${serverConnectionConfigId}_") }
+    cachedLibraryKeys.forEach { Paper.book("cachedLibraryItems").delete(it) }
+
+    val cachedSeriesKeys = Paper.book("cachedSeriesItems").allKeys.filter { it.startsWith("${serverConnectionConfigId}_") }
+    cachedSeriesKeys.forEach { Paper.book("cachedSeriesItems").delete(it) }
+  }
+
+  fun getAllKeys(): List<String> {
+    val allKeys = mutableListOf<String>()
+    allKeys.addAll(Paper.book("cachedLibraryItems").allKeys)
+    allKeys.addAll(Paper.book("cachedSeriesItems").allKeys)
+    return allKeys
+  }
 }

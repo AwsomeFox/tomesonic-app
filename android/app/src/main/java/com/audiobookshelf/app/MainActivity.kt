@@ -135,6 +135,8 @@ class MainActivity : BridgeActivity() {
       try {
         val absAudioPlayer = bridge.getPlugin("AbsAudioPlayer").instance as AbsAudioPlayer
         absAudioPlayer.syncCurrentPlaybackStateWhenReady() // Smart sync that waits for readiness
+        Log.d(tag, "AABrowser: Calling forceAndroidAutoReload on app resume")
+        foregroundService.forceAndroidAutoReload()
       } catch (e: Exception) {
         Log.e(tag, "Failed to sync playback state on resume: ${e.message}")
       }
