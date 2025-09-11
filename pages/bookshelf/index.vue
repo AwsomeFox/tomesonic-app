@@ -1,14 +1,24 @@
 <template>
   <div class="w-full h-full min-h-full relative">
-    <!-- Card-shaped Material 3 skeleton in two columns to match book cards -->
+    <!-- Proper-sized Material 3 skeleton cards to match actual book card dimensions -->
     <div v-if="isLoading && !shelves.length" class="w-full px-4 py-4">
-      <div class="grid grid-cols-2 gap-4">
-        <div v-for="n in 8" :key="`card-skel-${n}`" :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', n % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']" :style="{ '--shimmer-delay': n * 90 + 'ms' }">
-          <div class="p-3">
-            <!-- Cover placeholder (tall) -->
-            <div class="w-full bg-surface-variant rounded-lg shimmer-block" style="padding-top: 140%"></div>
-            <!-- Content placeholder -->
-            <div class="mt-3 space-y-2">
+      <div class="grid grid-cols-2 gap-8">
+        <div v-for="n in 8" :key="`card-skel-${n}`"
+             :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', n % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
+             :style="{
+               '--shimmer-delay': n * 90 + 'ms',
+               width: bookSkeletonWidth + 'px',
+               height: bookSkeletonHeight + 'px'
+             }">
+          <div class="p-3 h-full flex flex-col">
+            <!-- Cover placeholder with correct aspect ratio -->
+            <div class="w-full bg-surface-variant rounded-lg shimmer-block flex-1"
+                 :style="{
+                   minHeight: bookSkeletonCoverHeight + 'px',
+                   maxHeight: bookSkeletonCoverHeight + 'px'
+                 }"></div>
+            <!-- Content placeholder - only shown in alt view -->
+            <div v-if="altViewEnabled" class="mt-3 space-y-2 flex-shrink-0">
               <div class="h-4 bg-surface-variant rounded-md w-3/4 shimmer-block"></div>
               <div class="h-3 bg-surface-variant rounded-md w-1/2 shimmer-block"></div>
             </div>
@@ -17,7 +27,7 @@
       </div>
     </div>
 
-    <div class="w-full" :class="{ 'py-6': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }" :style="contentPaddingStyle">
+    <div class="w-full" :class="{ 'py-3': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }" :style="contentPaddingStyle">
       <template v-for="(shelf, index) in shelves">
         <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :style="{ zIndex: shelves.length - index }" :class="[{ 'shelf-updating': shelf._updating }, 'shelf-item', `shelf-delay-${Math.min(index, 6)}`]" />
       </template>
@@ -103,6 +113,30 @@ export default {
         return { paddingBottom: '120px' }
       }
       return {}
+    },
+    // Skeleton card dimensions to match actual book cards
+    bookCoverAspectRatio() {
+      return this.$store.getters['libraries/getBookCoverAspectRatio']
+    },
+    isCoverSquareAspectRatio() {
+      return this.bookCoverAspectRatio === 1
+    },
+    bookSkeletonWidth() {
+      // Match Shelf.vue bookWidth calculation
+      if (this.isCoverSquareAspectRatio) return 192
+      return 120
+    },
+    bookSkeletonHeight() {
+      // Match Shelf.vue bookHeight calculation
+      if (this.isCoverSquareAspectRatio) return this.bookSkeletonWidth
+      return this.bookSkeletonWidth * 1.6
+    },
+    bookSkeletonCoverHeight() {
+      // Height for just the cover portion (excluding text in alt view)
+      if (this.altViewEnabled) {
+        return this.bookSkeletonHeight - 60 // Reserve space for text
+      }
+      return this.bookSkeletonHeight
     }
   },
   methods: {

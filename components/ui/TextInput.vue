@@ -78,8 +78,8 @@ export default {
           classes.push('border-outline-variant')
         }
       } else if (this.variant === 'outlined') {
-        // Material 3 outlined inputs should have transparent background
-        classes.push('bg-transparent')
+        // Material 3 outlined inputs should have surface background
+        classes.push('bg-surface')
         classes.push('rounded-md')
         classes.push('border-2')
         if (this.focused) {

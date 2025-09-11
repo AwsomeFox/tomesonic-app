@@ -1,7 +1,7 @@
 <template>
-  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl cursor-pointer z-30 bg-surface-container shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer overflow-hidden relative" @click="clickCard">
+  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card rounded-xl cursor-pointer z-30 bg-surface-container shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
     <!-- Series cover container - single representative image -->
-    <div class="cover-container absolute inset-0 overflow-hidden z-0">
+    <div class="cover-container absolute inset-0 z-0">
       <!-- Blurred background for aspect ratio mismatch -->
       <div v-show="showCoverBg" class="absolute inset-0 z-0">
         <div class="absolute cover-bg inset-0" ref="coverBg" />
@@ -33,22 +33,21 @@
       <div v-if="series && (!firstBook || !hasCover)" class="absolute inset-0 flex flex-col items-center justify-center bg-primary p-4 z-10">
         <div class="text-center">
           <p class="text-on-primary font-medium mb-2" :style="{ fontSize: titleFontSize + 'rem' }">{{ title }}</p>
-          <p class="text-on-primary opacity-75" :style="{ fontSize: subtitleFontSize + 'rem' }">{{ books.length }} {{ books.length === 1 ? 'Book' : 'Books' }}</p>
-        </div>
+        <p class="text-on-primary opacity-75" :style="{ fontSize: subtitleFontSize + 'rem' }">{{ books.length }} {{ books.length === 1 ? 'Book' : 'Books' }}</p>
       </div>
     </div>
 
     <!-- Series book count badge -->
-    <div class="absolute top-2 right-2 z-30">
+    <div class="absolute top-4 right-4 z-30">
       <div class="bg-primary-container shadow-elevation-3 rounded-full border border-outline-variant border-opacity-30 flex items-center justify-center px-2 py-1">
         <span class="text-on-primary-container font-bold text-xs">{{ books.length }}</span>
       </div>
     </div>
 
     <!-- Progress indicator with enhanced visibility -->
-    <div v-if="seriesPercentInProgress > 0" class="absolute bottom-0 left-0 w-full h-1.5 z-40 rounded-bl-2xl rounded-br-2xl overflow-hidden">
+    <div v-if="seriesPercentInProgress > 0" class="absolute bottom-3 left-3 right-3 h-1.5 z-40 rounded-bl-xl rounded-br-xl overflow-hidden">
       <!-- Blurred background for incomplete portion to improve visibility -->
-      <div class="w-full h-full bg-surface-dynamic bg-opacity-60 backdrop-blur-sm rounded-bl-2xl rounded-br-2xl shadow-elevation-2"></div>
+      <div class="w-full h-full bg-surface-dynamic bg-opacity-60 backdrop-blur-sm rounded-bl-xl rounded-br-xl shadow-elevation-2"></div>
       <!-- Progress fill that starts from the corner -->
       <div
         class="absolute top-0 left-0 h-full shadow-elevation-4 ring-1 ring-surface-variant ring-opacity-50"
@@ -61,7 +60,7 @@
     </div>
 
     <!-- Series title overlay -->
-    <div class="absolute bottom-2 left-2 z-50 max-w-[70%]">
+    <div class="absolute bottom-3 left-3 z-50 max-w-[70%]">
       <div class="bg-surface-container bg-opacity-95 backdrop-blur-md rounded-lg p-2 shadow-elevation-2 border border-outline-variant border-opacity-20">
         <p class="truncate text-on-surface font-bold drop-shadow-sm" :style="{ fontSize: labelFontSize * 0.8 + 'rem' }">{{ title }}</p>
       </div>
@@ -210,6 +209,10 @@ export default {
 /* Material 3 Expressive Series Card Styles */
 .material-3-card {
   transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 300ms cubic-bezier(0.2, 0, 0, 1);
+  /* Ensure card content doesn't overflow */
+  overflow: visible;
+  /* Ensure proper containment */
+  contain: layout style paint;
 }
 
 .material-3-card::before {
@@ -257,10 +260,17 @@ export default {
   object-position: center center;
 }
 
-/* Ensure cover container fills the square card */
+/* Ensure cover container fills the square card properly */
 .material-3-card > div:first-child {
   width: 100%;
   height: 100%;
+  /* Ensure proper positioning */
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Prevent overflow issues */
+  overflow: hidden;
+  border-radius: inherit;
 }
 
 /* Enhanced text visibility */

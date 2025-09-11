@@ -1,7 +1,7 @@
 <template>
-  <div ref="card" :id="`book-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer overflow-hidden relative" @click="clickCard">
+  <div ref="card" :id="`book-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
     <!-- Cover image container - fills entire card (first in DOM, lowest z-index) -->
-    <div class="cover-container absolute inset-0 overflow-hidden z-0">
+    <div class="cover-container absolute inset-0 z-0">
       <!-- Blurred background for aspect ratio mismatch -->
       <div v-show="showCoverBg" class="absolute inset-0 z-0">
         <div class="absolute cover-bg inset-0" ref="coverBg" />
@@ -40,7 +40,7 @@
     </div>
 
     <!-- Alternative bookshelf title/author/sort with improved visibility -->
-    <div v-if="isAltViewEnabled" class="absolute bottom-2 z-50 max-w-[80%]" :class="showPlayButton ? 'right-2' : 'left-2'">
+    <div v-if="isAltViewEnabled && (!imageReady || !hasCover || isMaterialSymbolPlaceholder)" class="absolute bottom-2 z-50 max-w-[80%]" :class="showPlayButton ? 'right-2' : 'left-2'">
       <div class="bg-card-title-overlay backdrop-blur-md rounded-lg p-2 shadow-elevation-3 border border-outline border-opacity-25">
         <div :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }" class="flex items-center">
           <p class="truncate text-on-surface font-medium" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
@@ -81,16 +81,16 @@
     </div>
 
     <!-- Material 3 Progress indicator with enhanced visibility -->
-    <div v-if="!collapsedSeries && (!isPodcast || recentEpisode) && userProgressPercent > 0" class="absolute bottom-0 left-0 w-full h-1.5 z-40 rounded-bl-2xl rounded-br-2xl overflow-hidden">
+    <div v-if="!collapsedSeries && (!isPodcast || recentEpisode) && userProgressPercent > 0" class="absolute bottom-1 left-1 right-1 h-1.5 z-40 rounded-bl-xl rounded-br-xl overflow-hidden">
       <!-- Blurred background for incomplete portion to improve visibility -->
-      <div class="w-full h-full bg-surface-dynamic bg-opacity-60 backdrop-blur-sm rounded-bl-2xl rounded-br-2xl shadow-elevation-2"></div>
+      <div class="w-full h-full bg-surface-dynamic bg-opacity-60 backdrop-blur-sm rounded-bl-xl rounded-br-xl shadow-elevation-2"></div>
       <!-- Progress fill that starts from the corner -->
       <div
         class="absolute top-0 left-0 h-full shadow-elevation-4 ring-1 ring-surface-variant ring-opacity-50"
         :class="itemIsFinished ? 'bg-tertiary' : 'bg-primary'"
         :style="{
           width: Math.max(userProgressPercent * 100, userProgressPercent > 0 ? 4 : 0) + '%',
-          borderRadius: userProgressPercent < 1 ? '0 4px 4px 0' : '8px 8px 8px 8px'
+          borderRadius: userProgressPercent < 1 ? '0 4px 4px 0' : '12px 12px 12px 12px'
         }"
       ></div>
     </div>

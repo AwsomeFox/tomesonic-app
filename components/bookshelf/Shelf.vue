@@ -4,7 +4,7 @@
       <p class="font-semibold" :style="{ fontSize: sizeMultiplier + 'rem' }">{{ label }}</p>
     </div>
 
-    <div class="flex items-end px-3 max-w-full overflow-x-auto" :class="altViewEnabled ? '' : 'bookshelfRow'" :style="{ height: shelfHeight + 'px', paddingBottom: entityPaddingBottom + 'px' }">
+    <div class="flex items-end px-3 max-w-full overflow-x-auto shelf-scroll-container" :class="altViewEnabled ? '' : 'bookshelfRow'" :style="{ height: shelfHeight + 'px', paddingBottom: entityPaddingBottom + 'px' }">
       <template v-for="(entity, index) in entities">
         <cards-lazy-book-card v-if="type === 'book' || type === 'podcast'" :key="entity.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative item-loading-animation" :class="`loading-delay-${Math.min(index, 12)}`" :style="{ animationDelay: index * 80 + 'ms' }" />
         <cards-lazy-book-card v-if="type === 'episode'" :key="entity.recentEpisode.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative item-loading-animation" :class="`loading-delay-${Math.min(index, 12)}`" :style="{ animationDelay: index * 80 + 'ms' }" />
@@ -31,7 +31,7 @@
         <p class="transform text-xs">{{ label }}</p>
       </div>
     </div>
-    <div v-if="!altViewEnabled" class="w-full h-3 z-40 bookshelfDivider"></div>
+    <div v-if="!altViewEnabled" class="w-full h-1 z-40 bookshelfDivider"></div>
   </div>
 </template>
 
@@ -51,16 +51,15 @@ export default {
   computed: {
     entityPaddingBottom() {
       if (!this.altViewEnabled) return 0
-      if (this.type === 'authors') return 10
-      else if (this.type === 'series') return 40
-      return 60 * this.sizeMultiplier
+      if (this.type === 'authors') return 8
+      return 15 * this.sizeMultiplier // Consistent padding for all types
     },
     shelfHeight() {
       if (this.altViewEnabled) {
-        var extraTitleSpace = this.type === 'authors' ? 10 : this.type === 'series' ? 50 : 60
+        var extraTitleSpace = this.type === 'authors' ? 5 : 25
         return this.entityHeight + extraTitleSpace * this.sizeMultiplier
       }
-      return this.entityHeight + 40
+      return this.entityHeight + 24 // Original spacing for bookshelf view
     },
     bookWidth() {
       // Use base sizes that match card sizeMultiplier calculations
@@ -89,11 +88,31 @@ export default {
     }
   },
   methods: {},
-  mounted() {}
+  mounted() {},
+  beforeDestroy() {}
 }
 </script>
 
 <style scoped>
+/* Material 3 Expressive Scroll Container */
+.shelf-scroll-container {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* Enhanced scroll effect for iOS/Android */
+.shelf-scroll-container::-webkit-scrollbar {
+  display: none;
+}
+
+/* Material 3 scroll behavior */
+@supports (overscroll-behavior: bounce) {
+  .shelf-scroll-container {
+    overscroll-behavior-x: auto;
+  }
+}
+
 /* Material 3 Loading Animations */
 .item-loading-animation {
   opacity: 0;

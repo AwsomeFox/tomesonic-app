@@ -5,12 +5,14 @@
       <transition
         name="page-transition"
         mode="out-in"
-        enter-active-class="transition-all duration-500 ease-expressive"
-        leave-active-class="transition-all duration-300 ease-expressive"
-        enter-from-class="opacity-0 transform translate-x-8 scale-95"
-        enter-to-class="opacity-100 transform translate-x-0 scale-100"
-        leave-from-class="opacity-100 transform translate-x-0 scale-100"
-        leave-to-class="opacity-0 transform -translate-x-8 scale-95"
+        @enter="onPageEnter"
+        @leave="onPageLeave"
+        enter-active-class="transition-all duration-500 ease-emphasized-decelerate"
+        leave-active-class="transition-all duration-300 ease-emphasized-accelerate"
+        enter-from-class="opacity-0 transform scale-90 translate-y-8"
+        enter-to-class="opacity-100 transform scale-100 translate-y-0"
+        leave-from-class="opacity-100 transform scale-100 translate-y-0"
+        leave-to-class="opacity-0 transform scale-95 translate-y-4"
       >
         <Nuxt :key="currentLang" />
       </transition>
@@ -110,6 +112,15 @@ export default {
     }
   },
   methods: {
+    onPageEnter(el) {
+      // Optional: Add any additional page enter effects here
+      if (this.$haptics) {
+        this.$haptics.impactLight()
+      }
+    },
+    onPageLeave(el) {
+      // Optional: Add any additional page leave effects here
+    },
     initialStream(stream) {
       if (this.$refs.streamContainer?.audioPlayerReady) {
         this.$refs.streamContainer.streamOpen(stream)
@@ -411,30 +422,36 @@ export default {
 /* Material 3 Expressive Page Transitions */
 .page-transition-enter-active {
   transition: all 500ms cubic-bezier(0.05, 0.7, 0.1, 1) !important;
+  z-index: 2;
 }
 
 .page-transition-leave-active {
   transition: all 300ms cubic-bezier(0.3, 0, 0.8, 0.15) !important;
+  z-index: 1;
 }
 
 .page-transition-enter-from {
   opacity: 0;
-  transform: translateX(32px) scale(0.96);
+  transform: scale(0.9) translateY(32px);
+  filter: blur(4px);
 }
 
 .page-transition-enter-to {
   opacity: 1;
-  transform: translateX(0) scale(1);
+  transform: scale(1) translateY(0);
+  filter: blur(0);
 }
 
 .page-transition-leave-from {
   opacity: 1;
-  transform: translateX(0) scale(1);
+  transform: scale(1) translateY(0);
+  filter: blur(0);
 }
 
 .page-transition-leave-to {
   opacity: 0;
-  transform: translateX(-32px) scale(0.96);
+  transform: scale(0.95) translateY(16px);
+  filter: blur(2px);
 }
 
 /* Prevent layout shift during transitions */
@@ -445,16 +462,15 @@ export default {
   left: 0;
   right: 0;
   width: 100%;
+  background: rgb(var(--md-sys-color-surface));
 }
 
-/* Ensure smooth transitions on different screen sizes */
-@media (max-width: 640px) {
-  .page-transition-enter-from {
-    transform: translateX(24px) scale(0.97);
-  }
+/* Enhanced motion for bottom nav transitions */
+.has-bottom-nav .page-transition-enter-from {
+  transform: scale(0.92) translateY(24px);
+}
 
-  .page-transition-leave-to {
-    transform: translateX(-24px) scale(0.97);
-  }
+.has-bottom-nav .page-transition-leave-to {
+  transform: scale(0.96) translateY(12px);
 }
 </style>

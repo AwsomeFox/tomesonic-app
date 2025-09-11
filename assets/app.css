@@ -211,7 +211,7 @@ body {
 }
 
 .bookshelfRow {
-  background: rgb(var(--md-sys-color-surface-dim));
+  background: rgb(var(--md-sys-color-surface));
 }
 
 .bookshelfDivider {

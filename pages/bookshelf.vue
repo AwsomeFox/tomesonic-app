@@ -1,7 +1,7 @@
 <template>
   <div class="w-full h-full bg-surface-dynamic">
     <home-bookshelf-toolbar v-show="!hideToolbar" />
-    <div id="bookshelf-wrapper" class="main-content overflow-y-auto relative bg-surface-dynamic" :class="hideToolbar ? 'no-toolbar' : ''">
+    <div id="bookshelf-wrapper" class="main-content overflow-y-auto relative bg-surface-dynamic library-scroll-container" :class="hideToolbar ? 'no-toolbar' : ''">
       <nuxt-child />
     </div>
   </div>
@@ -30,6 +30,13 @@ export default {
 </script>
 
 <style>
+/* Material 3 Expressive Scroll Behavior */
+.library-scroll-container {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
 .main-content {
   height: calc(100% - 48px); /* Subtract toolbar height (48px) - navigation already accounted for in layout */
   max-height: calc(100% - 48px);

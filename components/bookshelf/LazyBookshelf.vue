@@ -1,5 +1,5 @@
 <template>
-  <div id="bookshelf" class="w-full max-w-full h-full bg-surface-dynamic">
+  <div id="bookshelf" class="w-full max-w-full h-full bg-surface-dynamic library-scroll-container">
     <!-- Loading skeleton for initial load -->
     <div v-if="!initialized" class="w-full px-4 space-y-2 py-4">
       <div v-for="n in 8" :key="n" class="w-full h-20 bg-surface-container rounded-2xl shadow-elevation-1 animate-pulse loading-skeleton" :style="{ animationDelay: n * 100 + 'ms' }">
@@ -580,6 +580,13 @@ export default {
 </script>
 
 <style>
+/* Material 3 Expressive Vertical Scroll Container */
+.library-scroll-container {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
 /* Loading skeleton animations */
 .loading-skeleton {
   opacity: 0;
