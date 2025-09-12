@@ -72,6 +72,40 @@ class AbsDatabase : Plugin() {
   }
 
   @PluginMethod
+  fun saveLocalFolder(call:PluginCall) {
+    val folderJson = call.getString("folder", "").toString()
+    if (folderJson.isEmpty()) {
+      call.reject("Folder data is required")
+      return
+    }
+    
+    try {
+      val localFolder = jacksonMapper.readValue(folderJson, LocalFolder::class.java)
+      GlobalScope.launch(Dispatchers.IO) {
+        DeviceManager.dbManager.saveLocalFolder(localFolder)
+        call.resolve()
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to save local folder", e)
+      call.reject("Failed to save local folder", e.message)
+    }
+  }
+
+  @PluginMethod
+  fun removeLocalFolder(call:PluginCall) {
+    val folderId = call.getString("folderId", "").toString()
+    if (folderId.isEmpty()) {
+      call.reject("Folder ID is required")
+      return
+    }
+
+    GlobalScope.launch(Dispatchers.IO) {
+      DeviceManager.dbManager.removeLocalFolder(folderId)
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
   fun getLocalLibraryItem(call:PluginCall) {
     val id = call.getString("id", "").toString()
 

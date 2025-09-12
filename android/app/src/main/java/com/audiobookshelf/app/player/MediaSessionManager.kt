@@ -59,6 +59,8 @@ class MediaSessionManager(
         // Create MediaSession
         mediaSession = MediaSessionCompat(context, TAG).apply {
             setSessionActivity(sessionActivityPendingIntent)
+            setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
+                    MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
             isActive = true
         }
 
@@ -87,28 +89,32 @@ class MediaSessionManager(
         playerNotificationManager = builder.build()
         playerNotificationManager.setMediaSessionToken(mediaSession.sessionToken)
         playerNotificationManager.setUsePlayPauseActions(true)
-        playerNotificationManager.setUseNextAction(false)
-        playerNotificationManager.setUsePreviousAction(false)
-        playerNotificationManager.setUseChronometer(false)
+        playerNotificationManager.setUseNextAction(true)
+        playerNotificationManager.setUsePreviousAction(true)
+        playerNotificationManager.setUseChronometer(true)
         playerNotificationManager.setUseStopAction(false)
         playerNotificationManager.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        playerNotificationManager.setPriority(NotificationCompat.PRIORITY_MAX)
+        playerNotificationManager.setPriority(NotificationCompat.PRIORITY_HIGH)
         playerNotificationManager.setUseFastForwardActionInCompactView(true)
         playerNotificationManager.setUseRewindActionInCompactView(true)
         playerNotificationManager.setSmallIcon(R.drawable.icon_monochrome)
-        playerNotificationManager.setBadgeIconType(NotificationCompat.BADGE_ICON_LARGE)
+        playerNotificationManager.setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
+        // Disable colorization to prevent image quality degradation
+        playerNotificationManager.setColorized(false)
+        playerNotificationManager.setUseNextActionInCompactView(false)
+        playerNotificationManager.setUsePreviousActionInCompactView(false)
     }
 
     private fun initializeMediaSessionConnector() {
         mediaSessionConnector = MediaSessionConnector(mediaSession)
-        
+
         val queueNavigator: TimelineQueueNavigator? = createQueueNavigator()
-        
+
         // Set up connector components
         service.setMediaSessionConnectorPlaybackActions()
         mediaSessionConnector.setQueueNavigator(queueNavigator)
         mediaSessionConnector.setPlaybackPreparer(MediaSessionPlaybackPreparer(service))
-        
+
         // Set callback
         mediaSession.setCallback(MediaSessionCallback(service))
     }
@@ -148,14 +154,14 @@ class MediaSessionManager(
             }
             return
         }
-        
+
         val mediaItems = playbackSession.getMediaItems(context)
         val customActionProviders = mutableListOf<CustomActionProvider>(
             JumpBackwardCustomActionProvider(service),
             JumpForwardCustomActionProvider(service),
             ChangePlaybackSpeedCustomActionProvider(service) // Will be pushed to far left
         )
-        
+
         // Show skip buttons if we have multiple chapters OR multiple tracks (but not for cast player)
         val hasMultipleItems = playbackSession.chapters.size > 1 || mediaItems.size > 1
         if (playbackSession.mediaPlayer != "cast-player" && hasMultipleItems) {

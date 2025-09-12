@@ -27,6 +27,7 @@ import com.audiobookshelf.app.plugins.AbsDatabase
 import com.audiobookshelf.app.plugins.AbsDownloader
 import com.audiobookshelf.app.plugins.AbsFileSystem
 import com.audiobookshelf.app.plugins.AbsLogger
+// import com.audiobookshelf.app.plugins.AbsToast
 import com.audiobookshelf.app.plugins.DynamicColorPlugin
 import com.getcapacitor.BridgeActivity
 
@@ -56,6 +57,7 @@ class MainActivity : BridgeActivity() {
     registerPlugin(AbsFileSystem::class.java)
     registerPlugin(AbsDatabase::class.java)
     registerPlugin(AbsLogger::class.java)
+    // registerPlugin(AbsToast::class.java)
     registerPlugin(DynamicColorPlugin::class.java)
 
     super.onCreate(savedInstanceState)
@@ -134,7 +136,13 @@ class MainActivity : BridgeActivity() {
     if (::foregroundService.isInitialized) {
       try {
         val absAudioPlayer = bridge.getPlugin("AbsAudioPlayer").instance as AbsAudioPlayer
-        absAudioPlayer.syncCurrentPlaybackStateWhenReady() // Smart sync that waits for readiness
+        // Only sync if there's already an active session - don't trigger restoration on resume
+        if (foregroundService.currentPlaybackSession != null) {
+          Log.d(tag, "Active session exists, syncing playback state on resume")
+          absAudioPlayer.syncCurrentPlaybackStateWhenReady() // Smart sync that waits for readiness
+        } else {
+          Log.d(tag, "No active session, skipping sync on resume to avoid interfering with automatic restoration")
+        }
         Log.d(tag, "AABrowser: Calling forceAndroidAutoReload on app resume")
         foregroundService.forceAndroidAutoReload()
       } catch (e: Exception) {

@@ -1,6 +1,7 @@
 package com.audiobookshelf.app.data
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
@@ -15,6 +16,10 @@ import com.audiobookshelf.app.R
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.media.MediaProgressSyncData
 import com.audiobookshelf.app.player.*
+import com.bumptech.glide.Glide
+import com.bumptech.glide.load.DecodeFormat
+import kotlinx.coroutines.*
+import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.google.android.exoplayer2.MediaItem
@@ -251,11 +256,33 @@ class PlaybackSession(
       // Note: In Android Auto for local cover images, setting the icon uri to a local path does not work (cover is blank)
       // so we create and set the bitmap here instead of letting AbMediaDescriptionAdapter handle it
       try {
-        bitmap = if (Build.VERSION.SDK_INT < 28) {
+        val rawBitmap = if (Build.VERSION.SDK_INT < 28) {
           MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
         } else {
           val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-          ImageDecoder.decodeBitmap(source)
+          ImageDecoder.decodeBitmap(source) { decoder, info, source ->
+            decoder.setTargetSize(512, 512) // Use larger size for testing notification quality
+            decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE) // Ensure high quality
+          }
+        }
+
+        // Ensure bitmap is exactly 1024x1024 for high quality (larger to combat notification compression)
+        bitmap = if (rawBitmap.width != 1024 || rawBitmap.height != 1024) {
+          // Use Canvas-based scaling for better quality instead of createScaledBitmap
+          val scaledBitmap = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
+          val canvas = android.graphics.Canvas(scaledBitmap)
+          val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            isFilterBitmap = true
+            isDither = false
+          }
+          val srcRect = android.graphics.Rect(0, 0, rawBitmap.width, rawBitmap.height)
+          val dstRect = android.graphics.Rect(0, 0, 1024, 1024)
+          canvas.drawBitmap(rawBitmap, srcRect, dstRect, paint)
+          rawBitmap.recycle() // Free memory
+          scaledBitmap
+        } else {
+          rawBitmap
         }
         descriptionBuilder.setIconBitmap(bitmap)
       } catch (e: Exception) {
@@ -263,7 +290,8 @@ class PlaybackSession(
         descriptionBuilder.setIconUri(coverUri)
       }
     } else {
-      // Server books: Use URI approach (Android Auto can access HTTP URLs)
+      // Server books: Use URI for Android Auto compatibility
+      Log.d("PlaybackSession", "Server book - using URI for Android Auto: $coverUri")
       descriptionBuilder.setIconUri(coverUri)
     }
 

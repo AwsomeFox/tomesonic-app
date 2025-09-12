@@ -237,8 +237,8 @@ export default {
       this._openTouchStart = e
       const t = e.changedTouches && e.changedTouches[0]
       if (t) {
-        // Only capture if touch starts in left 1/4 of screen
-        if (t.clientX < window.innerWidth * 0.25) {
+        // Only capture if touch starts in left 1/8 of screen
+        if (t.clientX < window.innerWidth * 0.125) {
           this._openStartX = t.clientX
           this._openStartY = t.clientY
         } else {

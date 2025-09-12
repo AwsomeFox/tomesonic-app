@@ -93,6 +93,8 @@ export default {
           classes.push('text-secondary')
         } else if (this.color === 'error') {
           classes.push('text-error')
+        } else if (this.color === 'on-surface') {
+          classes.push('text-on-surface')
         } else {
           classes.push('text-on-surface-variant')
         }

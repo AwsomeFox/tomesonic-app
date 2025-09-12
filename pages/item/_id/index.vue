@@ -630,6 +630,7 @@ export default {
       this.download(localFolder)
     },
     async downloadClick() {
+      console.log('downloadClick called')
       if (this.downloadItem || this.startingDownload) return
 
       const hasPermission = await this.checkCellularPermission('download')
@@ -661,6 +662,7 @@ export default {
         console.log('Folders with media type', this.mediaType, foldersWithMediaType.length)
         const internalStorageFolder = foldersWithMediaType.find((f) => f.id === `internal-${this.mediaType}`)
         if (!foldersWithMediaType.length) {
+          // Use internal app storage as default
           localFolder = {
             id: `internal-${this.mediaType}`,
             name: this.$strings.LabelInternalAppStorage,
@@ -679,20 +681,17 @@ export default {
         }
       }
 
-      console.log('Local folder', JSON.stringify(localFolder))
-      let startDownloadMessage = `Start download for "${this.title}" with ${this.numTracks} audio track${this.numTracks == 1 ? '' : 's'} to folder ${localFolder.name}?`
-      if (!this.isIos && this.showRead) {
-        if (this.numTracks > 0) {
-          startDownloadMessage = `Start download for "${this.title}" with ${this.numTracks} audio track${this.numTracks == 1 ? '' : 's'} and ebook file to folder ${localFolder.name}?`
-        } else {
-          startDownloadMessage = `Start download for "${this.title}" with ebook file to folder ${localFolder.name}?`
+      // Check if the selected folder is in app's external storage
+      if (localFolder && !this.isIos) {
+        const appExternalFolder = await AbsFileSystem.getAppExternalFolder({ mediaType: this.mediaType })
+        if (appExternalFolder && localFolder.absolutePath && !localFolder.absolutePath.startsWith(appExternalFolder.absolutePath)) {
+          this.$toast.warning('Warning: Files in this location will not be automatically cleaned up when the app is uninstalled.')
         }
       }
-      this.confirmDialogTitle = 'Confirm'
-      this.confirmDialogMessage = startDownloadMessage
-      this.pendingConfirmAction = 'startDownload'
-      this.pendingDownloadFolder = localFolder
-      this.showConfirmDialog = true
+
+      console.log('Local folder', JSON.stringify(localFolder))
+      // Start download immediately without confirmation dialog
+      this.startDownload(localFolder)
     },
     async startDownload(localFolder = null) {
       const payload = {
@@ -774,7 +773,6 @@ export default {
       }
     },
     async loadServerLibraryItem() {
-      console.log(`Fetching library item "${this.libraryItemId}" from server`)
       const libraryItem = await this.$nativeHttp.get(`/api/items/${this.libraryItemId}?expanded=1&include=rssfeed`, { connectTimeout: 5000 }).catch((error) => {
         console.error('Failed', error)
         return null
@@ -794,15 +792,16 @@ export default {
         this.$toast.error('Failed to get library item from server')
         return this.$router.replace('/bookshelf')
       }
+    },
+    executeStartPlayback(libraryItemId, serverLibraryItemId, startTime) {
+      this.$store.commit('setPlayerIsStartingPlayback', libraryItemId)
+      this.$eventBus.$emit('play-item', { libraryItemId, serverLibraryItemId, startTime })
     }
   },
   handleConfirm() {
     if (this.pendingConfirmAction === 'startPlayback') {
       this.executeStartPlayback(this.pendingPlaybackData.libraryItemId, this.pendingPlaybackData.serverLibraryItemId, this.pendingPlaybackData.startTime)
       this.pendingPlaybackData = null
-    } else if (this.pendingConfirmAction === 'startDownload') {
-      this.startDownload(this.pendingDownloadFolder)
-      this.pendingDownloadFolder = null
     }
     this.pendingConfirmAction = null
   },
@@ -810,10 +809,6 @@ export default {
     this.pendingConfirmAction = null
     this.pendingPlaybackData = null
     this.pendingDownloadFolder = null
-  },
-  executeStartPlayback(libraryItemId, serverLibraryItemId, startTime) {
-    this.$store.commit('setPlayerIsStartingPlayback', libraryItemId)
-    this.$eventBus.$emit('play-item', { libraryItemId, serverLibraryItemId, startTime })
   },
   async mounted() {
     if (!this.libraryItem) {

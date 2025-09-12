@@ -26,7 +26,10 @@
         <div class="flex-grow pr-1">
           <ui-dropdown v-model="newFolderMediaType" placeholder="Select media type" :items="mediaTypeItems" />
         </div>
-        <ui-btn small class="w-28 bg-secondary-container text-on-secondary-container hover:bg-secondary-container-hover active:scale-95" @click="selectFolder">{{ $strings.ButtonNewFolder }}</ui-btn>
+        <div class="flex space-x-2">
+          <ui-btn small class="bg-secondary-container text-on-secondary-container hover:bg-secondary-container-hover active:scale-95" @click="resetToDefault">{{ $strings.ButtonReset || 'Reset' }}</ui-btn>
+          <ui-btn small class="w-28 bg-secondary-container text-on-secondary-container hover:bg-secondary-container-hover active:scale-95" @click="selectFolder">{{ $strings.ButtonNewFolder }}</ui-btn>
+        </div>
       </div>
       <div v-else class="flex border-t border-outline-variant my-4 py-4">
         <div class="flex-grow pr-1">
@@ -89,6 +92,9 @@ export default {
         this.localFolders.push(folderObj)
       }
 
+      // Save to database
+      await this.$db.saveLocalFolder(folderObj)
+
       const permissionsGood = await AbsFileSystem.checkFolderPermissions({ folderUrl: folderObj.contentUrl })
 
       if (!permissionsGood) {
@@ -115,6 +121,55 @@ export default {
 
       this.localFolders = (await this.$db.getLocalFolders()) || []
       this.localLibraryItems = await this.$db.getLocalLibraryItems()
+    },
+    async resetToDefault() {
+      if (!this.newFolderMediaType) {
+        return this.$toast.error('Must select a media type')
+      }
+      
+      try {
+        // Use internal app storage as the default
+        const appFolder = {
+          id: `internal-${this.newFolderMediaType}`,
+          name: this.$strings.LabelInternalAppStorage,
+          mediaType: this.newFolderMediaType
+        }
+
+        // Remove all existing folders for this media type from database
+        const foldersToRemove = this.localFolders.filter(folder => folder.mediaType === this.newFolderMediaType && folder.id !== appFolder.id)
+        for (const folder of foldersToRemove) {
+          try {
+            await this.$db.removeLocalFolder(folder.id)
+          } catch (error) {
+            console.warn('Failed to remove folder', folder.id, error)
+            // Continue with other folders - don't fail the entire operation
+          }
+        }
+
+        // Update in-memory array
+        this.localFolders = this.localFolders.filter(folder => folder.mediaType !== this.newFolderMediaType || folder.id === appFolder.id)
+        
+        // Ensure the default folder is in the array
+        if (!this.localFolders.find(f => f.id === appFolder.id)) {
+          this.localFolders.push(appFolder)
+        }
+
+        // Save the default folder to database (in case it wasn't already there)
+        try {
+          await this.$db.saveLocalFolder(appFolder)
+        } catch (error) {
+          console.warn('Failed to save default folder', error)
+          // This is not critical - the folder might already exist
+        }
+        
+        this.$toast.success('Reset to default download location')
+        
+        // Clear the dropdown selection
+        this.newFolderMediaType = null
+      } catch (error) {
+        console.error('Failed to reset to default', error)
+        this.$toast.error('Failed to reset to default download location')
+      }
     }
   },
   mounted() {

@@ -80,25 +80,41 @@
       </div>
     </div>
 
-    <!-- Material 3 Progress indicator with enhanced visibility -->
-    <div v-if="!collapsedSeries && (!isPodcast || recentEpisode) && userProgressPercent > 0" class="absolute bottom-1 left-1 right-1 h-1.5 z-40 rounded-bl-xl rounded-br-xl overflow-hidden">
-      <!-- Blurred background for incomplete portion to improve visibility -->
-      <div class="w-full h-full bg-surface-dynamic bg-opacity-60 backdrop-blur-sm rounded-bl-xl rounded-br-xl shadow-elevation-2"></div>
-      <!-- Progress fill that starts from the corner -->
-      <div
-        class="absolute top-0 left-0 h-full shadow-elevation-4 ring-1 ring-surface-variant ring-opacity-50"
-        :class="itemIsFinished ? 'bg-tertiary' : 'bg-primary'"
-        :style="{
-          width: Math.max(userProgressPercent * 100, userProgressPercent > 0 ? 4 : 0) + '%',
-          borderRadius: userProgressPercent < 1 ? '0 4px 4px 0' : '12px 12px 12px 12px'
-        }"
-      ></div>
+    <!-- Material 3 Circular Progress indicator in top left corner -->
+    <div v-if="!collapsedSeries && (!isPodcast || recentEpisode) && userProgressPercent > 0" class="absolute top-2 left-2 z-40">
+      <!-- Completed book check mark -->
+      <div v-if="itemIsFinished" class="bg-primary-container shadow-elevation-4 rounded-full border-2 border-outline-variant border-opacity-40 flex items-center justify-center backdrop-blur-sm" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
+        <span class="material-symbols text-on-primary-container drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }">check</span>
+      </div>
+      <!-- Progress circle for incomplete books -->
+      <div v-else class="relative rounded-full backdrop-blur-sm bg-surface-container bg-opacity-80 border-2 border-outline-variant border-opacity-40 shadow-elevation-3" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
+        <!-- Background circle (subtle) -->
+        <svg class="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+          <path
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+            fill="none"
+            stroke="rgba(var(--md-sys-color-outline-variant), 0.3)"
+            stroke-width="2"
+            stroke-dasharray="100, 100"
+          />
+          <!-- Progress circle -->
+          <path
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+            fill="none"
+            stroke="rgb(var(--md-sys-color-primary))"
+            stroke-width="3"
+            stroke-linecap="round"
+            :stroke-dasharray="`${userProgressPercent * 100}, 100`"
+            class="transition-all duration-300 ease-out"
+          />
+        </svg>
+      </div>
     </div>
 
     <!-- Downloaded indicator with enhanced visibility -->
     <div v-if="showHasLocalDownload" class="absolute right-2 top-2 z-30">
-      <div class="bg-success-container shadow-elevation-3 rounded-full border border-outline-variant border-opacity-30 flex items-center justify-center" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
-        <span class="material-symbols text-on-success-container drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }">download_done</span>
+      <div class="bg-primary-container shadow-elevation-4 rounded-full border-2 border-outline-variant border-opacity-40 flex items-center justify-center backdrop-blur-sm" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
+        <span class="material-symbols text-on-primary-container drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }">download_done</span>
       </div>
     </div>
 
@@ -208,8 +224,8 @@ export default {
     },
     placeholderUrl() {
       // Material 3 book icon as SVG data URL
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg>`;
-      return `data:image/svg+xml;base64,${btoa(svg)}`;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg>`
+      return `data:image/svg+xml;base64,${btoa(svg)}`
     },
     bookCoverSrc() {
       if (this.isLocal) {

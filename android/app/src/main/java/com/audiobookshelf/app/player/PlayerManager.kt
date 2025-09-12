@@ -100,7 +100,7 @@ class PlayerManager(
     fun seekToPosition(time: Long) {
         var timeToSeek = time
         Log.d(TAG, "seekPlayer mediaCount = ${currentPlayer.mediaItemCount} | $timeToSeek")
-        
+
         if (timeToSeek < 0) {
             Log.w(TAG, "seekPlayer invalid time $timeToSeek - setting to 0")
             timeToSeek = 0L
@@ -108,7 +108,7 @@ class PlayerManager(
             Log.w(TAG, "seekPlayer invalid time $timeToSeek - setting to MAX - 2000")
             timeToSeek = getDuration() - 2000L
         }
-        
+
         currentPlayer.seekTo(timeToSeek)
     }
 

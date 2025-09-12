@@ -243,6 +243,28 @@ class AbsFileSystem : Plugin() {
   }
 
   @PluginMethod
+  fun getAppExternalFolder(call: PluginCall) {
+    val mediaType = call.data.getString("mediaType", "book").toString()
+    val externalFilesDir = mainActivity.getExternalFilesDir(null)
+    if (externalFilesDir != null) {
+      val mediaFolder = File(externalFilesDir, mediaType)
+      if (!mediaFolder.exists()) {
+        mediaFolder.mkdirs()
+      }
+
+      // For app-managed external storage, create LocalFolder directly from File
+      val absolutePath = mediaFolder.absolutePath
+      val folderId = "app-external-${mediaType}"
+      val contentUrl = "file://${absolutePath}"
+
+      val localFolder = LocalFolder(folderId, "App Storage ($mediaType)", contentUrl, absolutePath, absolutePath, mediaType, "external", mediaType)
+      call.resolve(JSObject(jacksonMapper.writeValueAsString(localFolder)))
+    } else {
+      call.reject("External storage not available")
+    }
+  }
+
+  @PluginMethod
   fun deleteTrackFromItem(call: PluginCall) {
     val localLibraryItemId = call.data.getString("id", "").toString()
     val trackLocalFileId = call.data.getString("trackLocalFileId", "").toString()

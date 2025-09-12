@@ -3,20 +3,25 @@
     <!-- Proper-sized Material 3 skeleton cards to match actual book card dimensions -->
     <div v-if="isLoading && !shelves.length" class="w-full px-4 py-4">
       <div class="grid grid-cols-2 gap-8">
-        <div v-for="n in 8" :key="`card-skel-${n}`"
-             :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', n % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
-             :style="{
-               '--shimmer-delay': n * 90 + 'ms',
-               width: bookSkeletonWidth + 'px',
-               height: bookSkeletonHeight + 'px'
-             }">
+        <div
+          v-for="n in 8"
+          :key="`card-skel-${n}`"
+          :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', n % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
+          :style="{
+            '--shimmer-delay': n * 90 + 'ms',
+            width: bookSkeletonWidth + 'px',
+            height: bookSkeletonHeight + 'px'
+          }"
+        >
           <div class="p-3 h-full flex flex-col">
             <!-- Cover placeholder with correct aspect ratio -->
-            <div class="w-full bg-surface-variant rounded-lg shimmer-block flex-1"
-                 :style="{
-                   minHeight: bookSkeletonCoverHeight + 'px',
-                   maxHeight: bookSkeletonCoverHeight + 'px'
-                 }"></div>
+            <div
+              class="w-full bg-surface-variant rounded-lg shimmer-block flex-1"
+              :style="{
+                minHeight: bookSkeletonCoverHeight + 'px',
+                maxHeight: bookSkeletonCoverHeight + 'px'
+              }"
+            ></div>
             <!-- Content placeholder - only shown in alt view -->
             <div v-if="altViewEnabled" class="mt-3 space-y-2 flex-shrink-0">
               <div class="h-4 bg-surface-variant rounded-md w-3/4 shimmer-block"></div>

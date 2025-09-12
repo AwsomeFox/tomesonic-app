@@ -5,7 +5,7 @@
     <button
       type="button"
       :disabled="disabled"
-      class="relative w-full border border-outline bg-surface-container-high text-on-surface rounded-lg pl-4 pr-10 py-3 text-left focus:outline-none transition-all duration-200"
+      class="relative w-full border border-outline bg-surface-container text-on-surface rounded-lg pl-4 pr-10 py-3 text-left focus:outline-none transition-all duration-200"
       :class="buttonClass"
       aria-haspopup="listbox"
       :aria-expanded="showMenu.toString()"

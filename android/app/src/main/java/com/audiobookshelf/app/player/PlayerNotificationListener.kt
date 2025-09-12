@@ -18,15 +18,23 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     notification: Notification,
     onGoing: Boolean) {
 
+    // TODO: Add WearableExtender for better Wear OS support
+    // val wearableExtender = NotificationCompat.WearableExtender()
+    //   .setHintShowBackgroundOnly(true)
+    //   .setBackground(notification.getLargeIcon())
+
+    // For now, use the original notification
+    val enhancedNotification = notification
+
     if (onGoing && !isForegroundService) {
       // Start foreground service
       Log.d(tag, "Notification Posted $notificationId - Start Foreground | $notification")
       PlayerNotificationService.isClosed = false
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        playerNotificationService.startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        playerNotificationService.startForeground(notificationId, enhancedNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
       } else {
-        playerNotificationService.startForeground(notificationId, notification)
+        playerNotificationService.startForeground(notificationId, enhancedNotification)
       }
       isForegroundService = true
     } else if (onGoing && isForegroundService) {

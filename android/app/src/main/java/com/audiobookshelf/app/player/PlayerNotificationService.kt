@@ -195,9 +195,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   @RequiresApi(Build.VERSION_CODES.O)
   private fun createNotificationChannel(channelId: String, channelName: String): String {
-    val chan = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_LOW)
+    val chan = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_HIGH)
     chan.lightColor = Color.DKGRAY
     chan.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+    // Ensure high-quality image rendering
+    chan.setShowBadge(false)
     val service = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     service.createNotificationChannel(chan)
     return channelId
@@ -415,19 +417,44 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
         if (playbackSession.localLibraryItem?.coverContentUrl != null) {
           try {
-            Log.d(tag, "Android Auto: Attempting to load shared bitmap")
-            sharedCachedBitmap = if (Build.VERSION.SDK_INT < 28) {
+            Log.d(tag, "Android Auto: Attempting to load shared bitmap with high quality processing")
+            val rawBitmap = if (Build.VERSION.SDK_INT < 28) {
               Log.d(tag, "Android Auto: Using MediaStore for shared bitmap (API < 28)")
               MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
             } else {
               Log.d(tag, "Android Auto: Using ImageDecoder for shared bitmap (API >= 28)")
               val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-              ImageDecoder.decodeBitmap(source)
+              ImageDecoder.decodeBitmap(source) { decoder, info, source ->
+                decoder.setTargetSize(512, 512) // 320dp optimal size for notifications
+                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+              }
             }
+
+            // Ensure bitmap is exactly 512x512 for optimal notification quality
+            sharedCachedBitmap = if (rawBitmap.width != 512 || rawBitmap.height != 512) {
+              Log.d(tag, "Android Auto: Scaling bitmap from ${rawBitmap.width}x${rawBitmap.height} to 512x512")
+              // Use Canvas-based scaling for better quality instead of createScaledBitmap
+              val scaledBitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
+              val canvas = android.graphics.Canvas(scaledBitmap)
+              val paint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                isFilterBitmap = true
+                isDither = false
+              }
+              val srcRect = android.graphics.Rect(0, 0, rawBitmap.width, rawBitmap.height)
+              val dstRect = android.graphics.Rect(0, 0, 512, 512)
+              canvas.drawBitmap(rawBitmap, srcRect, dstRect, paint)
+              rawBitmap.recycle() // Free memory
+              scaledBitmap
+            } else {
+              Log.d(tag, "Android Auto: Bitmap already 512x512, using as-is")
+              rawBitmap
+            }
+
             if (sharedCachedBitmap != null) {
               Log.d(tag, "Android Auto: Shared bitmap loaded successfully - Size: ${sharedCachedBitmap.width}x${sharedCachedBitmap.height}, Bytes: ${sharedCachedBitmap.byteCount}")
             } else {
-              Log.w(tag, "Android Auto: Shared bitmap is null after loading")
+              Log.w(tag, "Android Auto: Shared bitmap is null after processing")
             }
           } catch (e: Exception) {
             Log.w(tag, "Android Auto: Failed to load shared cached bitmap: ${e.message}")

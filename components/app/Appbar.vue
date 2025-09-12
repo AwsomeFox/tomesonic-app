@@ -3,13 +3,13 @@
     <div id="appbar" class="w-full flex items-center px-4" style="min-height: 3.5rem">
       <!-- keep ~h-14 / 56px height via min-height -->
       <!-- Menu Button - hidden when back button is shown -->
-      <ui-icon-btn v-if="!showBack" icon="menu" variant="standard" color="on-surface" size="medium" class="mr-2" @click="clickShowSideDrawer" />
+      <ui-icon-btn v-if="!showBack" icon="menu" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="clickShowSideDrawer" />
 
       <!-- Logo/Back Navigation - back button takes menu button's position -->
       <nuxt-link v-show="!showBack && !user" to="/" class="mr-4 state-layer rounded-lg p-2 -m-2">
-        <ui-audiobookshelf-logo :size="32" color="on-surface" />
+        <ui-audiobookshelf-logo :size="32" color="on-surface-variant" />
       </nuxt-link>
-      <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface" size="medium" class="mr-2" @click="back" />
+      <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="back" />
 
       <!-- Library Selector -->
       <div v-if="user && currentLibrary">
@@ -26,7 +26,7 @@
       <widgets-download-progress-indicator />
 
       <!-- Cast Button -->
-      <ui-icon-btn v-show="isCastAvailable && user" :icon="isCasting ? 'cast_connected' : 'cast'" variant="standard" color="on-surface" size="medium" class="mx-1" @click="castClick" />
+      <ui-icon-btn v-show="isCastAvailable && user" :icon="isCasting ? 'cast_connected' : 'cast'" variant="standard" color="on-surface-variant" size="medium" class="mx-1" @click="castClick" />
 
       <!-- Search Button -->
       <nuxt-link v-if="user" to="/search" class="mx-1 block w-12 h-12 rounded-full flex items-center justify-center state-layer transition-all duration-200 ease-standard">
@@ -35,7 +35,7 @@
 
       <!-- Logo moved to right when user is logged in -->
       <nuxt-link v-if="user" to="/" class="ml-2 state-layer rounded-lg p-2 -m-2">
-        <ui-audiobookshelf-logo :size="32" color="on-surface" />
+        <ui-audiobookshelf-logo :size="32" color="on-surface-variant" />
       </nuxt-link>
     </div>
   </div>

@@ -107,7 +107,7 @@
         </div>
 
         <!-- Progress Bars Container - manages both tracks -->
-        <div v-if="showFullscreen" id="progressBarsContainer" class="absolute left-0 w-full px-6">
+        <div v-if="showFullscreen" id="progressBarsContainer" class="absolute left-0 right-0 mx-auto w-full px-6 bottom-56" style="max-width: 414px">
           <!-- Total Progress Track (shown when both tracks enabled) -->
           <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-6">
             <div class="flex mb-1">
@@ -857,6 +857,7 @@ export default {
       this.swipeOffset = 0
       this.isSwipeActive = false
       this.showFullscreen = true
+      this.trackWidth = 0 // Reset track width so it gets recalculated for full view
       if (this.titleMarquee) this.titleMarquee.reset()
 
       // Update track for total time bar if useChapterTrack is set
@@ -868,9 +869,15 @@ export default {
       this.swipeOffset = 0
       this.isSwipeActive = false
       this.showFullscreen = false
+      this.trackWidth = 0 // Reset track width so it gets recalculated for mini view
       if (this.titleMarquee) this.titleMarquee.reset()
 
       this.forceCloseDropdownMenu()
+
+      // Update track immediately for mini view
+      this.$nextTick(() => {
+        this.updateTrack()
+      })
     },
     async jumpNextChapter() {
       await this.$hapticsImpact()
@@ -1044,7 +1051,7 @@ export default {
       // Full view
       if (this.$refs.playedTrackFull) this.$refs.playedTrackFull.style.width = ptWidth + 'px'
       if (this.$refs.bufferedTrackFull) this.$refs.bufferedTrackFull.style.width = bufferedWidth + 'px'
-      if (this.$refs.trackCursorFull) this.$refs.trackCursorFull.style.left = Math.max(0, Math.min(ptWidth - 14, this.trackWidth - 28)) + 'px'
+      if (this.$refs.trackCursorFull && !this.isDraggingSeek) this.$refs.trackCursorFull.style.left = Math.max(0, Math.min(ptWidth - 14, this.trackWidth - 28)) + 'px'
       // Mini view
       if (this.$refs.playedTrackMini) this.$refs.playedTrackMini.style.width = ptWidth + 'px'
       if (this.$refs.bufferedTrackMini) this.$refs.bufferedTrackMini.style.width = bufferedWidth + 'px'
@@ -1080,13 +1087,32 @@ export default {
       }
     },
     async touchstartCursor(e) {
-      if (!e || !e.touches || !this.$refs.track || !this.showFullscreen || this.playerSettings.lockUi) return
+      if (!e || !e.touches || !this.$refs.trackFull || !this.showFullscreen || this.playerSettings.lockUi) return
 
       await this.$hapticsImpact()
       this.isDraggingCursor = true
       this.draggingTouchStartX = e.touches[0].pageX
       this.draggingTouchStartTime = this.currentTime
       this.draggingCurrentTime = this.currentTime
+
+      // Also set up seek drag mechanism for cursor dragging
+      this.isDraggingSeek = true
+      this.draggingTrackElement = this.$refs.trackFull
+      this.draggingStartTime = this.currentTime
+
+      // Get initial position
+      const rect = this.draggingTrackElement.getBoundingClientRect()
+      const clientX = e.touches[0].clientX
+      this.draggingStartX = clientX - rect.left
+      this.draggingTrackRect = rect
+
+      // Add global event listeners for seek drag
+      document.addEventListener('touchmove', this.handleDragSeek, { passive: false })
+      document.addEventListener('touchend', this.endDragSeek)
+
+      // Prevent text selection during drag
+      document.body.style.userSelect = 'none'
+
       this.updateTrack()
     },
     async playPauseClick() {
@@ -1151,6 +1177,21 @@ export default {
           this.seek(this.draggingCurrentTime)
         }
         this.isDraggingCursor = false
+
+        // Also clean up seek drag state
+        this.isDraggingSeek = false
+        this.draggingTrackElement = null
+        this.draggingStartTime = 0
+        this.draggingCurrentTime = 0
+        this.draggingStartX = 0
+        this.draggingTrackRect = null
+
+        // Remove global event listeners
+        document.removeEventListener('touchmove', this.handleDragSeek)
+        document.removeEventListener('touchend', this.endDragSeek)
+
+        // Restore text selection
+        document.body.style.userSelect = ''
       } else {
         if (touchDuration > 1200) {
           // console.log('touch too long', touchDuration)
@@ -1167,7 +1208,7 @@ export default {
       }
     },
     touchmove(e) {
-      if (!this.isDraggingCursor || !e.touches) return
+      if (!this.isDraggingCursor || !e.touches || this.isDraggingSeek) return
 
       const distanceMoved = e.touches[0].pageX - this.draggingTouchStartX
       let duration = this.totalDuration
@@ -1269,6 +1310,12 @@ export default {
 
       const seekTime = minTime + percentage * duration
       this.draggingCurrentTime = Math.min(maxTime, Math.max(minTime, seekTime))
+
+      // Update cursor position directly for smooth dragging - center the 24px cursor on the touch position
+      if (this.$refs.trackCursorFull) {
+        const cursorLeft = Math.max(0, Math.min(clickX - 12, rect.width - 24))
+        this.$refs.trackCursorFull.style.left = cursorLeft + 'px'
+      }
 
       this.updateTimestamp()
       this.updateTrack()

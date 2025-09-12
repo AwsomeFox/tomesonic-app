@@ -61,8 +61,8 @@
 
     <!-- Series title overlay -->
     <div class="absolute bottom-3 left-3 z-50 max-w-[70%]">
-      <div class="bg-surface-container bg-opacity-95 backdrop-blur-md rounded-lg p-2 shadow-elevation-2 border border-outline-variant border-opacity-20">
-        <p class="truncate text-on-surface font-bold drop-shadow-sm" :style="{ fontSize: labelFontSize * 0.8 + 'rem' }">{{ title }}</p>
+      <div class="bg-surface-container backdrop-blur-md rounded-lg p-2 shadow-elevation-3 border-2 border-outline-variant border-opacity-30">
+        <p class="truncate text-on-surface font-bold drop-shadow-lg" :style="{ fontSize: labelFontSize * 0.8 + 'rem', textShadow: '0 0 4px rgba(255, 255, 255, 0.8), 0 0 8px rgba(255, 255, 255, 0.4)' }">{{ title }}</p>
       </div>
     </div>
   </div>

@@ -173,7 +173,7 @@ export default {
         cancelButtonTitle: this.$strings.ButtonReadMore
       })
       if (!confirmResult.value) {
-        window.open('https://github.com/advplyr/audiobookshelf/discussions/4460', '_blank')
+        window.open('https://github.com/AwsomeFox/audiobookshelf/discussions/4460', '_blank')
       }
     },
     checkIdUuid(userId) {
