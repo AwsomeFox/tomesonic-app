@@ -22,10 +22,10 @@
       transition: showFullscreen ? 'none' : 'bottom 0.3s ease-in-out'
     }"
   >
-    <!-- Full screen player with complete background coverage using surface-container for distinction -->
-    <div v-if="showFullscreen" class="w-screen h-screen fixed top-0 left-0 pointer-events-auto bg-surface-dynamic" :class="{ 'landscape-layout': isLandscape }" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})` }" style="z-index: 2147483647; width: 100vw">
-      <!-- Additional background coverage to ensure nothing shows through -->
-      <div class="w-screen h-screen absolute top-0 left-0 pointer-events-none bg-surface-dynamic" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})` }" style="width: 100vw; z-index: 0" />
+    <!-- Full screen player with flexible layout for all screen sizes -->
+    <div v-if="showFullscreen" class="fullscreen-container fixed inset-0 pointer-events-auto bg-surface-dynamic" :class="{ 'landscape-layout': isLandscape }" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})`, zIndex: 9999 }">
+      <!-- Background coverage -->
+      <div class="absolute inset-0 pointer-events-none bg-surface-dynamic" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})` }" />
 
       <div class="top-4 left-4 absolute">
         <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="collapseFullscreen">
@@ -51,19 +51,19 @@
 
       <!-- Portrait Layout (existing) -->
       <template v-if="!isLandscape">
-        <!-- Fullscreen Cover Image -->
-        <div class="cover-wrapper absolute z-30 pointer-events-auto" @click="collapseFullscreen">
-          <div class="w-full h-full flex justify-center">
+        <!-- Fullscreen Cover Image with responsive sizing -->
+        <div class="cover-wrapper-portrait flex justify-center items-start pointer-events-auto" @click="collapseFullscreen">
+          <div class="cover-container relative">
             <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
-          </div>
 
-          <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute top-0 left-0 w-full h-full flex items-center justify-center z-30" @click.stop="showSyncsFailedDialog">
-            <span class="material-symbols text-error text-3xl">error</span>
+            <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute inset-0 flex items-center justify-center z-10" @click.stop="showSyncsFailedDialog">
+              <span class="material-symbols text-error text-3xl">error</span>
+            </div>
           </div>
         </div>
 
-        <!-- Fullscreen Controls -->
-        <div id="playerControls" class="absolute right-0 bottom-0 mx-auto" style="max-width: 414px">
+        <!-- Fullscreen Controls with responsive positioning -->
+        <div id="playerControls" class="controls-container-portrait pointer-events-auto">
           <!-- Main playback controls row -->
           <div class="flex items-center max-w-full mb-4" :class="playerSettings.lockUi ? 'justify-center' : 'justify-between'">
             <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpChapterStart">
@@ -180,23 +180,23 @@
           </div>
         </div>
 
-        <!-- Landscape Content Container -->
-        <div class="landscape-content-container absolute inset-0 flex items-start justify-center" :style="{ top: '60px', height: `calc(100vh - 60px - ${fullscreenTopPadding})`, paddingTop: '10px', paddingBottom: '20px' }">
+        <!-- Landscape Content Container with flexible grid -->
+        <div class="landscape-content-container flex" :style="{ top: '60px', height: `calc(100vh - 60px - ${fullscreenTopPadding})`, padding: '20px' }">
           <!-- Left Side: Cover Image -->
-          <div class="landscape-cover-section flex-shrink-0 h-full flex items-center justify-center px-4" style="width: 50%">
-            <div class="cover-wrapper-landscape relative z-30 pointer-events-auto" @click="collapseFullscreen">
-              <div class="w-full h-full flex justify-center">
-                <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
-              </div>
+          <div class="landscape-cover-section flex items-center justify-center" style="flex: 0 0 45%; min-width: 0;">
+            <div class="cover-wrapper-landscape relative pointer-events-auto" @click="collapseFullscreen">
+              <div class="cover-container-landscape">
+                <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="landscapeBookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
 
-              <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute top-0 left-0 w-full h-full flex items-center justify-center z-30" @click.stop="showSyncsFailedDialog">
-                <span class="material-symbols text-error text-3xl">error</span>
+                <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute inset-0 flex items-center justify-center z-10" @click.stop="showSyncsFailedDialog">
+                  <span class="material-symbols text-error text-3xl">error</span>
+                </div>
               </div>
             </div>
           </div>
 
           <!-- Right Side: Controls and Content -->
-          <div class="landscape-controls-section flex-1 h-full flex flex-col justify-start px-4 py-4 overflow-hidden" style="max-width: 50%">
+          <div class="landscape-controls-section flex flex-col justify-center overflow-hidden" style="flex: 1; min-width: 0; padding-left: 20px;">
             <!-- Title and Author -->
             <div class="title-author-texts-landscape mb-4 text-left">
               <div ref="titlewrapper" class="overflow-hidden relative">
@@ -296,7 +296,7 @@
       id="playerContent"
       class="playerContainer w-full pointer-events-auto bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20"
       :class="{ 'transition-all duration-500 ease-expressive': !isSwipeActive }"
-      :style="{ backgroundColor: showFullscreen ? '' : '', transform: showFullscreen ? 'translateY(-100vh)' : `translateY(${swipeOffset}px) translateX(${swipeOffsetX}px)`, zIndex: showFullscreen ? '2147483647' : '50' }"
+      :style="{ backgroundColor: showFullscreen ? '' : '', transform: showFullscreen ? 'translateY(-100vh)' : `translateY(${swipeOffset}px) translateX(${swipeOffsetX}px)`, zIndex: showFullscreen ? '9999' : '50' }"
       @touchstart="handleTouchStart"
       @touchmove="handleTouchMove"
       @touchend="handleTouchEnd"
@@ -560,6 +560,25 @@ export default {
         return finalWidth
       }
     },
+    landscapeBookCoverWidth() {
+      if (!this.isLandscape) return this.bookCoverWidth
+
+      // Use much more aggressive sizing for landscape
+      const availableHeight = this.windowHeight - 120 // Account for top bar and padding
+      const availableWidth = (this.windowWidth * 0.45) - 40 // 45% of width minus padding
+
+      // Calculate based on aspect ratio and available space
+      const aspectRatio = this.bookCoverAspectRatio
+      let finalWidth = Math.min(availableWidth, availableHeight / aspectRatio)
+
+      // Ensure good minimum size for landscape
+      const minWidth = Math.min(250, availableWidth * 0.8)
+      const maxWidth = Math.min(400, availableWidth)
+      finalWidth = Math.max(Math.min(finalWidth, maxWidth), minWidth)
+
+      console.log('AudioPlayer: landscape cover width - available space:', availableWidth, 'x', availableHeight, 'final width:', finalWidth)
+      return finalWidth
+    },
     showCastBtn() {
       return this.$store.state.isCastAvailable
     },
@@ -693,8 +712,8 @@ export default {
       // Use pre-calculated positions from init.client.js
       // Force reactivity by checking this.miniPlayerPositionsReady
       if (this.miniPlayerPositionsReady && window.MINI_PLAYER_POSITIONS) {
-        const position = this.isInBookshelfContext 
-          ? window.MINI_PLAYER_POSITIONS.withTabBar 
+        const position = this.isInBookshelfContext
+          ? window.MINI_PLAYER_POSITIONS.withTabBar
           : window.MINI_PLAYER_POSITIONS.withoutTabBar
         console.log('[AudioPlayer] Using calculated position:', position, 'bookshelf context:', this.isInBookshelfContext)
         return position
@@ -1927,14 +1946,47 @@ export default {
   font-size: 2.1rem;
 }
 
+/* Fullscreen Layout Styles */
+.fullscreen-container {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Portrait Layout Styles */
+.cover-wrapper-portrait {
+  flex: 1;
+  padding: 100px 20px 10px;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.cover-container {
+  max-height: 50vh;
+  max-width: 85vw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.controls-container-portrait {
+  flex: 0 0 auto;
+  padding: 10px 20px 20px;
+  max-width: 500px;
+  margin: 0 auto;
+  z-index: 10;
+  position: relative;
+}
+
 /* Landscape Layout Styles */
 .landscape-layout {
   overflow: hidden;
 }
 
-/* Hide portrait layout elements when in landscape */
-.landscape-layout .cover-wrapper,
-.landscape-layout #playerControls,
+.landscape-layout .cover-wrapper-portrait,
+.landscape-layout .controls-container-portrait,
 .landscape-layout #progressBarsContainer,
 .landscape-layout .title-author-texts {
   display: none !important;
@@ -1949,7 +2001,10 @@ export default {
 }
 
 .landscape-content-container {
+  position: absolute;
+  inset: 0;
   max-height: 100vh;
+  align-items: center;
 }
 
 .landscape-cover-section {
@@ -1957,6 +2012,7 @@ export default {
   align-items: center;
   justify-content: center;
   min-height: 0;
+  padding-bottom: 10px;
 }
 
 .cover-wrapper-landscape {
@@ -1964,10 +2020,20 @@ export default {
   overflow: hidden;
   box-shadow: var(--md-sys-elevation-surface-container-high);
   transition: all 0.3s cubic-bezier(0.39, 0.575, 0.565, 1);
-  max-height: calc(100vh - 40px); /* Much more height available */
+  max-height: 75vh;
   max-width: 100%;
-  width: 100%;
-  height: 100%;
+  width: fit-content;
+  height: fit-content;
+}
+
+.cover-container-landscape {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cover-wrapper-landscape:active {
+  transform: scale(0.98);
 }
 
 .landscape-controls-section {
@@ -2094,5 +2160,72 @@ export default {
   .landscape-secondary-controls button {
     transform: scale(0.85);
   }
+}
+
+/* Portrait responsive adjustments */
+@media screen and (max-width: 480px) {
+  .cover-wrapper-portrait {
+    padding: 90px 15px 5px;
+  }
+
+  .controls-container-portrait {
+    padding: 5px 15px 15px;
+  }
+}
+
+@media screen and (max-height: 667px) {
+  .cover-wrapper-portrait {
+    padding: 80px 20px 5px;
+  }
+
+  .cover-container {
+    max-height: 45vh;
+  }
+
+  .controls-container-portrait {
+    padding: 5px 20px 15px;
+  }
+}
+
+@media screen and (max-height: 568px) {
+  .cover-wrapper-portrait {
+    padding: 70px 15px 5px;
+  }
+
+  .cover-container {
+    max-height: 40vh;
+  }
+
+  .controls-container-portrait {
+    padding: 5px 15px 10px;
+  }
+}
+
+@media screen and (max-height: 480px) {
+  .cover-wrapper-portrait {
+    padding: 60px 15px 5px;
+  }
+
+  .cover-container {
+    max-height: 35vh;
+  }
+
+  .controls-container-portrait {
+    padding: 5px 15px 8px;
+  }
+}
+
+/* Fix button visibility issues */
+.controls-container-portrait button,
+.landscape-controls-section button {
+  pointer-events: auto;
+  z-index: 10;
+  position: relative;
+}
+
+/* Ensure all control elements are visible and interactive */
+.controls-container-portrait *,
+.landscape-controls-section * {
+  pointer-events: auto;
 }
 </style>
