@@ -8,6 +8,11 @@ import android.util.Log
 import android.view.KeyEvent
 import com.audiobookshelf.app.data.LibraryItemWrapper
 import com.audiobookshelf.app.data.PodcastEpisode
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_JUMP_BACKWARD
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_JUMP_FORWARD
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_SKIP_BACKWARD
+import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_SKIP_FORWARD
 import java.util.*
 import kotlin.concurrent.schedule
 
@@ -69,18 +74,29 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   override fun onSkipToPrevious() {
+    Log.d(tag, "onSkipToPrevious called - calling skipToPrevious()")
     playerNotificationService.skipToPrevious()
   }
 
   override fun onSkipToNext() {
+    Log.d(tag, "onSkipToNext called - calling skipToNext()")
     playerNotificationService.skipToNext()
   }
 
+  override fun onSkipToQueueItem(id: Long) {
+    Log.d(tag, "onSkipToQueueItem $id")
+    val index = id.toInt()
+    Log.d(tag, "MediaSessionCallback: Navigating to index $index")
+    playerNotificationService.navigateToChapter(index)
+  }
+
   override fun onFastForward() {
+    Log.d(tag, "onFastForward called")
     playerNotificationService.jumpForward()
   }
 
   override fun onRewind() {
+    Log.d(tag, "onRewind called")
     playerNotificationService.jumpBackward()
   }
 
@@ -90,10 +106,14 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   private fun onChangeSpeed() {
+    Log.d(tag, "onChangeSpeed called")
     // cycle to next speed, only contains preset android app options, as each increment needs it's own icon
-    // Rounding values in the event a non preset value (.5, 1, 1.2, 1.5, 2, 3) is selected in the phone app
+    // Rounding values in the event a non preset value (.5, 1, 1.2, 1.5, 1.7, 2, 2.5, 3) is selected in the phone app
     val mediaManager = playerNotificationService.mediaManager
-    val newSpeed = when (mediaManager.getSavedPlaybackRate()) {
+    val currentSpeed = mediaManager.getSavedPlaybackRate()
+    Log.d(tag, "Current speed: $currentSpeed")
+
+    val newSpeed = when (currentSpeed) {
       in 0.5f..0.7f -> 1.0f
       in 0.8f..1.0f -> 1.2f
       in 1.1f..1.2f -> 1.5f
@@ -103,18 +123,58 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       // anything set above 3 (can happen in the android app) will be reset to 1
       else -> 1.0f
     }
+
+    Log.d(tag, "Setting new speed: $newSpeed")
     mediaManager.setSavedPlaybackRate(newSpeed)
+
     playerNotificationService.setPlaybackSpeed(newSpeed)
     playerNotificationService.clientEventEmitter?.onPlaybackSpeedChanged(newSpeed)
+
+    // Note: setPlaybackSpeed already calls setMediaSessionConnectorCustomActions, so no need to duplicate
+    Log.d(tag, "onChangeSpeed completed")
   }
 
   override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
     Log.d(tag, "ON PLAY FROM MEDIA ID $mediaId")
     val libraryItemWrapper: LibraryItemWrapper?
     var podcastEpisode: PodcastEpisode? = null
+    var chapterStartTime: Double? = null
 
     if (mediaId.isNullOrEmpty()) {
       libraryItemWrapper = playerNotificationService.mediaManager.getFirstItem()
+    } else if (mediaId.contains("__CHAPTER__")) {
+      // Handle chapter-specific media ID
+      val parts = mediaId.split("__CHAPTER__")
+      val bookId = parts[0]
+      val chapterIndex = parts.getOrNull(1)?.toIntOrNull()
+
+      Log.d(tag, "Playing chapter $chapterIndex from book $bookId")
+
+      // Get the book
+      val bookWrapper = playerNotificationService.mediaManager.getById(bookId)
+      if (bookWrapper != null && chapterIndex != null) {
+        libraryItemWrapper = bookWrapper
+
+        // Get the chapter start time
+        if (bookWrapper is com.audiobookshelf.app.data.LibraryItem) {
+          val book = bookWrapper.media as? com.audiobookshelf.app.data.Book
+          val chapters = book?.chapters
+          if (chapters != null && chapterIndex < chapters.size) {
+            chapterStartTime = chapters[chapterIndex].start
+            Log.d(tag, "Chapter start time: $chapterStartTime seconds")
+          }
+        } else if (bookWrapper is com.audiobookshelf.app.data.LocalLibraryItem) {
+          val book = bookWrapper.media as? com.audiobookshelf.app.data.Book
+          val chapters = book?.chapters
+          if (chapters != null && chapterIndex < chapters.size) {
+            chapterStartTime = chapters[chapterIndex].start
+            Log.d(tag, "Local chapter start time: $chapterStartTime seconds")
+          }
+        }
+      } else {
+        libraryItemWrapper = null
+        Log.e(tag, "Chapter book not found or invalid chapter index: $bookId, chapter: $chapterIndex")
+      }
     } else {
       val libraryItemWithEpisode = playerNotificationService.mediaManager.getPodcastWithEpisodeByEpisodeId(mediaId)
       if (libraryItemWithEpisode != null) {
@@ -136,6 +196,14 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
           val playbackRate = playerNotificationService.mediaManager.getSavedPlaybackRate()
           Handler(Looper.getMainLooper()).post {
             playerNotificationService.preparePlayer(it, true, playbackRate)
+
+              // If we have a chapter start time, seek to it after the player is prepared
+            chapterStartTime?.let { startTime ->
+              Handler(Looper.getMainLooper()).post {
+                Log.d(tag, "Seeking to chapter start time: $startTime seconds")
+                playerNotificationService.seekPlayer((startTime * 1000).toLong())
+              }
+            }
           }
         }
       }
@@ -273,14 +341,34 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   override fun onCustomAction(action: String?, extras: Bundle?) {
+    Log.d(tag, "onCustomAction called with action: $action")
+    Log.d(tag, "onCustomAction: CUSTOM_ACTION_SKIP_FORWARD constant = $CUSTOM_ACTION_SKIP_FORWARD")
     super.onCustomAction(action, extras)
 
     when (action) {
-      CUSTOM_ACTION_JUMP_FORWARD -> onFastForward()
-      CUSTOM_ACTION_JUMP_BACKWARD -> onRewind()
-      CUSTOM_ACTION_SKIP_FORWARD -> onSkipToNext()
-      CUSTOM_ACTION_SKIP_BACKWARD -> onSkipToPrevious()
-      CUSTOM_ACTION_CHANGE_SPEED -> onChangeSpeed()
+      CUSTOM_ACTION_JUMP_FORWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_JUMP_FORWARD")
+        onFastForward()
+      }
+      CUSTOM_ACTION_JUMP_BACKWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_JUMP_BACKWARD")
+        onRewind()
+      }
+      CUSTOM_ACTION_SKIP_FORWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_SKIP_FORWARD")
+        onSkipToNext()
+      }
+      CUSTOM_ACTION_SKIP_BACKWARD -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_SKIP_BACKWARD")
+        onSkipToPrevious()
+      }
+      CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED -> {
+        Log.d(tag, "onCustomAction: CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED")
+        onChangeSpeed()
+      }
+      else -> {
+        Log.d(tag, "onCustomAction: Unknown action: $action")
+      }
     }
   }
 }

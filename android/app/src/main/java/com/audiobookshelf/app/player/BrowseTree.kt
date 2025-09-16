@@ -16,6 +16,7 @@ class BrowseTree(
   private val mediaIdToChildren = mutableMapOf<String, MutableList<MediaMetadataCompat>>()
 
   init {
+    Log.d("BrowseTree", "AABrowser: BrowseTree init: libraries=${libraries.size}, itemsInProgress=${itemsInProgress.size}, recentsLoaded=$recentsLoaded")
     val rootList = mediaIdToChildren[AUTO_BROWSE_ROOT] ?: mutableListOf()
 
     val continueListeningMetadata = MediaMetadataCompat.Builder().apply {
@@ -43,19 +44,21 @@ class BrowseTree(
     }.build()
 
     if (itemsInProgress.isNotEmpty()) {
+      Log.d("BrowseTree", "AABrowser: Adding Continue item")
       rootList += continueListeningMetadata
     }
 
     if (libraries.isNotEmpty()) {
+      Log.d("BrowseTree", "AABrowser: Adding Libraries and potentially Recent items")
       if (recentsLoaded) {
+        Log.d("BrowseTree", "AABrowser: Adding Recent item")
         rootList += recentMetadata
       }
       rootList += librariesMetadata
 
       libraries.forEach { library ->
-        // Skip libraries without audio content
-        if (library.stats?.numAudioFiles == 0) return@forEach
-        Log.d("BrowseTree", "Library $library | ${library.icon}")
+        // Log library info for debugging
+        Log.d("BrowseTree", "AABrowser: Library ${library.name} | ${library.icon} | audioFiles: ${library.stats?.numAudioFiles}")
         // Generate library list items for Libraries menu
         val libraryMediaMetadata = library.getMediaMetadata(context)
         val children = mediaIdToChildren[LIBRARIES_ROOT] ?: mutableListOf()
@@ -72,9 +75,11 @@ class BrowseTree(
       }
     }
 
+    Log.d("BrowseTree", "AABrowser: Adding Downloads item")
     rootList += downloadsMetadata
 
     mediaIdToChildren[AUTO_BROWSE_ROOT] = rootList
+    Log.d("BrowseTree", "AABrowser: Final root list has ${rootList.size} items")
   }
 
   operator fun get(mediaId: String) = mediaIdToChildren[mediaId]

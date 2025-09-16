@@ -1,11 +1,14 @@
 package com.audiobookshelf.app.data
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.net.toFile
 import com.audiobookshelf.app.BuildConfig
@@ -13,6 +16,10 @@ import com.audiobookshelf.app.R
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.media.MediaProgressSyncData
 import com.audiobookshelf.app.player.*
+import com.bumptech.glide.Glide
+import com.bumptech.glide.load.DecodeFormat
+import kotlinx.coroutines.*
+import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.google.android.exoplayer2.MediaItem
@@ -20,6 +27,11 @@ import com.google.android.exoplayer2.MediaMetadata
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.common.images.WebImage
+
+// Android Auto package names for URI permission granting
+private const val ANDROID_AUTO_PKG_NAME = "com.google.android.projection.gearhead"
+private const val ANDROID_AUTO_SIMULATOR_PKG_NAME = "com.google.android.projection.gearhead.emulator"
+private const val ANDROID_AUTOMOTIVE_PKG_NAME = "com.google.android.projection.gearhead.phone"
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 class PlaybackSession(
@@ -161,6 +173,7 @@ class PlaybackSession(
 
   @JsonIgnore
   fun getCoverUri(ctx: Context): Uri {
+
     if (localLibraryItem?.coverContentUrl != null) {
       var coverUri = Uri.parse(localLibraryItem?.coverContentUrl.toString())
       if (coverUri.toString().startsWith("file:")) {
@@ -170,20 +183,38 @@ class PlaybackSession(
                         "${BuildConfig.APPLICATION_ID}.fileprovider",
                         coverUri.toFile()
                 )
+
+        // Grant URI permissions to Android Auto packages so they can access the content
+        try {
+          val androidAutoPackages = arrayOf(
+            ANDROID_AUTO_PKG_NAME,
+            ANDROID_AUTO_SIMULATOR_PKG_NAME,
+            ANDROID_AUTOMOTIVE_PKG_NAME
+          )
+
+          for (packageName in androidAutoPackages) {
+            ctx.grantUriPermission(packageName, coverUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          }
+        } catch (e: Exception) {
+          Log.w("PlaybackSession", "getCoverUri - Failed to grant URI permissions: ${e.message}")
+        }
       }
 
       return coverUri
               ?: Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon)
     }
 
-    if (coverPath == null)
-            return Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon)
+    if (coverPath == null) {
+      return Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon)
+    }
 
     // As of v2.17.0 token is not needed with cover image requests
     if (checkIsServerVersionGte("2.17.0")) {
-      return Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
+      val serverUri = Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
+      return serverUri
     }
-    return Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=${DeviceManager.token}")
+    val serverUriWithToken = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=${DeviceManager.token}")
+    return serverUriWithToken
   }
 
   @JsonIgnore
@@ -205,53 +236,131 @@ class PlaybackSession(
   @JsonIgnore
   fun getMediaMetadataCompat(ctx: Context): MediaMetadataCompat {
     val coverUri = getCoverUri(ctx)
+    // Prefer chapter/track title for now-playing if available
+    val currentTrackIndex = try { getCurrentTrackIndex() } catch (e: Exception) { -1 }
+    val currentTrack = if (currentTrackIndex >= 0 && currentTrackIndex < audioTracks.size) audioTracks[currentTrackIndex] else null
+    val nowPlayingTitle = currentTrack?.title ?: displayTitle
+    val nowPlayingSubtitle = if (currentTrack?.title != null) displayAuthor else displayAuthor
 
-    val metadataBuilder =
-            MediaMetadataCompat.Builder()
-                    .putString(MediaMetadataCompat.METADATA_KEY_TITLE, displayTitle)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
-                    .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
-                    .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
-                    .putString(
-                            MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI,
-                            coverUri.toString()
-                    )
+    // Create MediaDescriptionCompat with proper bitmap handling for Android Auto
+    val descriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
+      .setMediaId(id)
+      .setTitle(nowPlayingTitle)
+      .setSubtitle(nowPlayingSubtitle)
+      .setDescription(displayAuthor)
 
-    // Local covers get bitmap
+    // Handle images differently for local vs server books
+    var bitmap: android.graphics.Bitmap? = null
     if (localLibraryItem?.coverContentUrl != null) {
-      val bitmap =
-              if (Build.VERSION.SDK_INT < 28) {
-                MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-              } else {
-                val source: ImageDecoder.Source =
-                        ImageDecoder.createSource(ctx.contentResolver, coverUri)
-                ImageDecoder.decodeBitmap(source)
-              }
-      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
-      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
+      // Local books: Use bitmap approach for Android Auto compatibility
+      // Note: In Android Auto for local cover images, setting the icon uri to a local path does not work (cover is blank)
+      // so we create and set the bitmap here instead of letting AbMediaDescriptionAdapter handle it
+      try {
+        val rawBitmap = if (Build.VERSION.SDK_INT < 28) {
+          MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
+        } else {
+          val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
+          ImageDecoder.decodeBitmap(source) { decoder, info, source ->
+            decoder.setTargetSize(512, 512) // Use larger size for testing notification quality
+            decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE) // Ensure high quality
+          }
+        }
+
+        // Ensure bitmap is exactly 1024x1024 for high quality (larger to combat notification compression)
+        bitmap = if (rawBitmap.width != 1024 || rawBitmap.height != 1024) {
+          // Use Canvas-based scaling for better quality instead of createScaledBitmap
+          val scaledBitmap = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
+          val canvas = android.graphics.Canvas(scaledBitmap)
+          val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            isFilterBitmap = true
+            isDither = false
+          }
+          val srcRect = android.graphics.Rect(0, 0, rawBitmap.width, rawBitmap.height)
+          val dstRect = android.graphics.Rect(0, 0, 1024, 1024)
+          canvas.drawBitmap(rawBitmap, srcRect, dstRect, paint)
+          rawBitmap.recycle() // Free memory
+          scaledBitmap
+        } else {
+          rawBitmap
+        }
+        descriptionBuilder.setIconBitmap(bitmap)
+      } catch (e: Exception) {
+        Log.w("PlaybackSession", "Failed to load bitmap for local book: ${e.message}")
+        descriptionBuilder.setIconUri(coverUri)
+      }
+    } else {
+      // Server books: Use URI for Android Auto compatibility
+      Log.d("PlaybackSession", "Server book - using URI for Android Auto: $coverUri")
+      descriptionBuilder.setIconUri(coverUri)
     }
 
-    return metadataBuilder.build()
+    val description = descriptionBuilder.build()
+
+    val metadataBuilder = MediaMetadataCompat.Builder()
+      .putString(MediaMetadataCompat.METADATA_KEY_TITLE, nowPlayingTitle)
+      .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, nowPlayingTitle)
+      .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, nowPlayingSubtitle)
+      .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
+      // Set the total book duration for proper Android Auto progress indicators
+      .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, totalDurationMs)
+
+    // Set the description with proper bitmap/URI handling
+    metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, description.mediaId)
+
+    // Also set bitmap in metadata keys for fallback
+    if (bitmap != null) {
+      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
+      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
+    } else {
+      // Server books: Use URI approach
+      metadataBuilder
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, coverUri.toString())
+    }
+
+    val metadata = metadataBuilder.build()
+
+    // Use reflection to set the description with iconBitmap for Android Auto compatibility
+    try {
+      val descriptionField = MediaMetadataCompat::class.java.getDeclaredField("mDescription")
+      descriptionField.isAccessible = true
+      descriptionField.set(metadata, description)
+    } catch (e: Exception) {
+      Log.w("PlaybackSession", "Failed to set description with iconBitmap: ${e.message}")
+    }
+
+    return metadata
   }
 
   @JsonIgnore
-  fun getExoMediaMetadata(ctx: Context): MediaMetadata {
+  fun getExoMediaMetadata(ctx: Context, audioTrack: AudioTrack? = null, chapter: BookChapter? = null, chapterIndex: Int = -1): MediaMetadata {
     val coverUri = getCoverUri(ctx)
+
+    val titleToUse = when {
+      chapter != null -> chapter.title ?: "Chapter ${chapterIndex + 1}"
+      audioTrack?.title != null -> audioTrack.title
+      else -> displayTitle
+    }
+    val subtitleToUse = when {
+      chapter != null -> displayTitle
+      audioTrack?.title != null -> displayAuthor
+      else -> displayAuthor
+    }
 
     val metadataBuilder =
             MediaMetadata.Builder()
-                    .setTitle(displayTitle)
-                    .setDisplayTitle(displayTitle)
+                    .setTitle(titleToUse)
+                    .setDisplayTitle(titleToUse)
                     .setArtist(displayAuthor)
                     .setAlbumArtist(displayAuthor)
-                    .setSubtitle(displayAuthor)
+                    .setSubtitle(subtitleToUse)
                     .setAlbumTitle(displayAuthor)
                     .setDescription(displayAuthor)
                     .setArtworkUri(coverUri)
@@ -264,26 +373,52 @@ class PlaybackSession(
   fun getMediaItems(ctx: Context): List<MediaItem> {
     val mediaItems: MutableList<MediaItem> = mutableListOf()
 
-    for (audioTrack in audioTracks) {
-      val mediaMetadata = this.getExoMediaMetadata(ctx)
-      val mediaUri = this.getContentUri(audioTrack)
-      val mimeType = audioTrack.mimeType
+    // For chapter-based books (single track with multiple chapters), create media items for each chapter
+    if (audioTracks.size == 1 && chapters.isNotEmpty()) {
+      for ((index, chapter) in chapters.withIndex()) {
+        val audioTrack = audioTracks[0]
+        val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)
+        val mediaUri = this.getContentUri(audioTrack)
+        val mimeType = audioTrack.mimeType
 
-      val queueItem = getQueueItem(audioTrack) // Queue item used in exo player CastManager
-      val mediaItem =
-              MediaItem.Builder()
-                      .setUri(mediaUri)
-                      .setTag(queueItem)
-                      .setMediaMetadata(mediaMetadata)
-                      .setMimeType(mimeType)
-                      .build()
-      mediaItems.add(mediaItem)
+        // Create clipping configuration for this chapter
+        val clippingConfig = MediaItem.ClippingConfiguration.Builder()
+          .setStartPositionMs(chapter.startMs)
+          .setEndPositionMs(if (index < chapters.size - 1) chapters[index + 1].startMs else Long.MAX_VALUE)
+          .build()
+
+        val queueItem = getQueueItem(audioTrack, chapter, index)
+        val mediaItem = MediaItem.Builder()
+          .setUri(mediaUri)
+          .setTag(queueItem)
+          .setMediaMetadata(mediaMetadata)
+          .setMimeType(mimeType)
+          .setClippingConfiguration(clippingConfig)
+          .build()
+        mediaItems.add(mediaItem)
+      }
+    } else {
+      // For multi-track books, create media items for each track
+      for (audioTrack in audioTracks) {
+        val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack)
+        val mediaUri = this.getContentUri(audioTrack)
+        val mimeType = audioTrack.mimeType
+
+        val queueItem = getQueueItem(audioTrack)
+        val mediaItem = MediaItem.Builder()
+          .setUri(mediaUri)
+          .setTag(queueItem)
+          .setMediaMetadata(mediaMetadata)
+          .setMimeType(mimeType)
+          .build()
+        mediaItems.add(mediaItem)
+      }
     }
     return mediaItems
   }
 
   @JsonIgnore
-  fun getCastMediaMetadata(audioTrack: AudioTrack): com.google.android.gms.cast.MediaMetadata {
+  fun getCastMediaMetadata(audioTrack: AudioTrack, chapter: BookChapter? = null, chapterIndex: Int = -1): com.google.android.gms.cast.MediaMetadata {
     val castMetadata =
             com.google.android.gms.cast.MediaMetadata(
                     com.google.android.gms.cast.MediaMetadata.MEDIA_TYPE_AUDIOBOOK_CHAPTER
@@ -301,7 +436,10 @@ class PlaybackSession(
       castMetadata.addImage(WebImage(coverUri))
     }
 
-    castMetadata.putString(com.google.android.gms.cast.MediaMetadata.KEY_TITLE, displayTitle ?: "")
+    val titleToUse = chapter?.title ?: audioTrack.title ?: displayTitle ?: ""
+    val chapterTitleToUse = if (chapter != null) chapter.title ?: "Chapter ${chapterIndex + 1}" else audioTrack.title
+
+    castMetadata.putString(com.google.android.gms.cast.MediaMetadata.KEY_TITLE, titleToUse)
     castMetadata.putString(
             com.google.android.gms.cast.MediaMetadata.KEY_ARTIST,
             displayAuthor ?: ""
@@ -312,19 +450,27 @@ class PlaybackSession(
     )
     castMetadata.putString(
             com.google.android.gms.cast.MediaMetadata.KEY_CHAPTER_TITLE,
-            audioTrack.title
+            chapterTitleToUse
     )
 
     castMetadata.putInt(
             com.google.android.gms.cast.MediaMetadata.KEY_TRACK_NUMBER,
-            audioTrack.index
+            chapterIndex + 1
     )
     return castMetadata
   }
 
+  fun getCastMediaMetadata(audioTrack: AudioTrack): com.google.android.gms.cast.MediaMetadata {
+    return getCastMediaMetadata(audioTrack, null, -1)
+  }
+
   @JsonIgnore
-  fun getQueueItem(audioTrack: AudioTrack): MediaQueueItem {
-    val castMetadata = getCastMediaMetadata(audioTrack)
+  fun getQueueItem(audioTrack: AudioTrack, chapter: BookChapter? = null, chapterIndex: Int = -1): MediaQueueItem {
+    val castMetadata = if (chapter != null) {
+      getCastMediaMetadata(audioTrack, chapter, chapterIndex)
+    } else {
+      getCastMediaMetadata(audioTrack)
+    }
 
     val mediaUri = getContentUri(audioTrack)
 
@@ -341,6 +487,10 @@ class PlaybackSession(
     return MediaQueueItem.Builder(mediaInfo)
             .apply { setPlaybackDuration(audioTrack.duration) }
             .build()
+  }
+
+  fun getQueueItem(audioTrack: AudioTrack): MediaQueueItem {
+    return getQueueItem(audioTrack, null, -1)
   }
 
   @JsonIgnore

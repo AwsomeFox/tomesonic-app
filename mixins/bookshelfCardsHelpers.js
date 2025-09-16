@@ -18,8 +18,8 @@ export default {
       if (this.entityName === 'series') return Vue.extend(LazySeriesCard)
       if (this.entityName === 'collections') return Vue.extend(LazyCollectionCard)
       if (this.entityName === 'playlists') return Vue.extend(LazyPlaylistCard)
-      if (this.showBookshelfListView) return Vue.extend(LazyListBookCard)
-      return Vue.extend(LazyBookCard)
+      // Always use list view for books - removed card view option
+      return Vue.extend(LazyListBookCard)
     },
     async mountEntityCard(index) {
       var shelf = Math.floor(index / this.entitiesPerShelf)
@@ -36,11 +36,35 @@ export default {
         bookComponent.isHovering = false
         return
       }
-      var shelfOffsetY = this.showBookshelfListView ? 8 : this.isBookEntity ? 24 : 16
+      var shelfOffsetY = this.showBookshelfListView ? 4 : 16
       var row = index % this.entitiesPerShelf
 
-      var marginShiftLeft = this.showBookshelfListView ? 0 : 12
-      var shelfOffsetX = row * this.totalEntityCardWidth + this.bookshelfMarginLeft + marginShiftLeft
+      var shelfOffsetX
+
+      if (this.showBookshelfListView || this.entityName === 'books' || this.entityName === 'series-books') {
+        // For list view and books, center the wider items within the shelf container
+        // Account for the fact that cards are now wider than the container minus padding
+        var availableWidth = this.bookshelfWidth - 32 // Container has px-4 padding (32px total)
+        var overflow = Math.max(0, this.entityWidth - availableWidth)
+        shelfOffsetX = -overflow / 2 // Center by offsetting half the overflow to the left
+      } else {
+        // For grid view (series, collections, playlists), center the cards within the available space
+        var availableWidth = this.bookshelfWidth - 32 // Account for px-4 padding
+
+        if (this.entityName === 'playlists') {
+          // For playlists, center the grid as a whole (typically 2 columns)
+          // Calculate total width needed for all columns
+          var totalColumnsWidth = this.entitiesPerShelf * this.totalEntityCardWidth
+          var leftMargin = Math.max(0, (availableWidth - totalColumnsWidth) / 2)
+          shelfOffsetX = leftMargin + row * this.totalEntityCardWidth
+        } else {
+          // For series and collections, center each row based on cards in that row
+          var cardsInThisShelf = Math.min(this.entitiesPerShelf, this.entities.length - shelf * this.entitiesPerShelf)
+          var totalWidthUsed = cardsInThisShelf * this.totalEntityCardWidth
+          var leftMargin = Math.max(0, (availableWidth - totalWidthUsed) / 2)
+          shelfOffsetX = leftMargin + row * this.totalEntityCardWidth
+        }
+      }
 
       var ComponentClass = this.getComponentClass()
       var props = {
@@ -81,12 +105,12 @@ export default {
         instance.setEntity(entity)
 
         if (this.isBookEntity && !entity.isLocal) {
-          var localLibraryItem = this.localLibraryItems.find(lli => lli.libraryItemId == entity.id)
+          var localLibraryItem = this.localLibraryItems.find((lli) => lli.libraryItemId == entity.id)
           if (localLibraryItem) {
             instance.setLocalLibraryItem(localLibraryItem)
           }
         }
       }
-    },
+    }
   }
 }

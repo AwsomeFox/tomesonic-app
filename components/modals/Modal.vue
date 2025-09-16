@@ -1,12 +1,9 @@
 <template>
-  <div ref="wrapper" class="modal modal-bg w-full h-full max-h-screen fixed top-0 left-0 bg-primary bg-opacity-75 flex items-center justify-center z-50 opacity-0">
+  <div ref="wrapper" class="modal modal-bg w-full h-full max-h-screen fixed top-0 left-0 bg-black bg-opacity-40 backdrop-blur-sm flex items-center justify-center" style="z-index: 2147483648">
     <div class="absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-black to-transparent opacity-90 pointer-events-none" />
 
-    <div class="absolute z-40 top-11 right-4 h-10 w-10 flex items-center justify-center cursor-pointer text-white hover:text-gray-300" @click="show = false">
-      <span class="material-symbols text-4xl">close</span>
-    </div>
     <slot name="outer" />
-    <div ref="content" style="min-height: 200px" class="relative text-fg max-h-screen" :style="{ height: modalHeight, width: modalWidth, maxWidth: maxWidth }" v-click-outside="clickBg">
+    <div ref="content" style="min-height: 200px; transform: scale(0); transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)" class="relative text-on-surface max-h-screen" :style="{ height: modalHeight, width: modalWidth, maxWidth: maxWidth }" v-click-outside="clickBg">
       <slot />
     </div>
   </div>
@@ -80,6 +77,8 @@ export default {
       this.$store.commit('globals/setIsModalOpen', true)
 
       document.body.appendChild(this.el)
+      // Force reflow to ensure the element is in the DOM
+      this.el.offsetHeight
       setTimeout(() => {
         this.content.style.transform = 'scale(1)'
       }, 10)
@@ -89,7 +88,11 @@ export default {
       this.$store.commit('globals/setIsModalOpen', false)
 
       this.content.style.transform = 'scale(0)'
-      this.el.remove()
+      setTimeout(() => {
+        if (this.el.parentNode) {
+          this.el.parentNode.removeChild(this.el)
+        }
+      }, 250) // Wait for transition to complete
       document.documentElement.classList.remove('modal-open')
     },
     closeModalEvt() {
@@ -101,10 +104,10 @@ export default {
     this.$eventBus.$on('close-modal', this.closeModalEvt)
     this.el = this.$refs.wrapper
     this.content = this.$refs.content
-    this.content.style.transform = 'scale(0)'
-    this.content.style.transition = 'transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
-    this.el.style.opacity = 1
-    this.el.remove()
+    // Don't remove initially - let setHide handle removal
+    if (this.el.parentNode) {
+      this.el.parentNode.removeChild(this.el)
+    }
   },
   beforeDestroy() {
     this.$eventBus.$off('close-modal', this.closeModalEvt)

@@ -1,16 +1,36 @@
 <template>
-  <div id="bookshelf" class="w-full max-w-full h-full">
+  <div id="bookshelf" class="w-full max-w-full h-full bg-surface-dynamic library-scroll-container">
+    <!-- Loading skeleton for initial load -->
+    <div v-if="!initialized" class="w-full px-4 space-y-2 py-4">
+      <div v-for="n in 8" :key="n" class="w-full h-20 bg-surface-container rounded-2xl shadow-elevation-1 animate-pulse loading-skeleton" :style="{ animationDelay: n * 100 + 'ms' }">
+        <div class="h-full flex items-center p-2">
+          <!-- Cover placeholder -->
+          <div class="w-16 h-16 bg-surface-variant rounded-xl animate-pulse"></div>
+
+          <!-- Content placeholder -->
+          <div class="flex-grow pl-4 space-y-2">
+            <div class="h-4 bg-surface-variant rounded-md w-3/4 animate-pulse"></div>
+            <div class="h-3 bg-surface-variant rounded-md w-1/2 animate-pulse"></div>
+            <div class="h-3 bg-surface-variant rounded-md w-1/3 animate-pulse"></div>
+          </div>
+
+          <!-- Play button placeholder -->
+          <div class="w-12 h-12 bg-surface-variant rounded-full animate-pulse"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actual shelves -->
     <template v-for="shelf in totalShelves">
-      <div :key="shelf" class="w-full px-2 relative" :class="showBookshelfListView || altViewEnabled ? '' : 'bookshelfRow'" :id="`shelf-${shelf - 1}`" :style="{ height: shelfHeight + 'px' }">
-        <div v-if="!showBookshelfListView && !altViewEnabled" class="w-full absolute bottom-0 left-0 z-30 bookshelfDivider" style="min-height: 16px" :class="`h-${shelfDividerHeightIndex}`" />
-        <div v-else-if="showBookshelfListView" class="flex border-t border-white border-opacity-10" />
+      <div :key="shelf" class="w-full px-4 relative" :class="showBookshelfListView || altViewEnabled ? 'bg-surface-dynamic' : 'bookshelfRow bg-surface-dynamic'" :id="`shelf-${shelf - 1}`" :style="{ height: shelfHeight + 'px' }">
+        <div v-if="!showBookshelfListView && !altViewEnabled" class="w-full absolute bottom-0 left-0 z-30 bookshelfDivider bg-outline-variant opacity-20" style="min-height: 2px" :class="`h-${shelfDividerHeightIndex}`" />
       </div>
     </template>
 
-    <div v-show="!entities.length && initialized" class="w-full py-16 text-center text-xl">
-      <div v-if="page === 'collections'" class="py-4">{{ $strings.MessageNoCollections }}</div>
-      <div v-else class="py-4 capitalize">No {{ entityName }}</div>
-      <ui-btn v-if="hasFilter" @click="clearFilter">{{ $strings.ButtonClearFilter }}</ui-btn>
+    <div v-show="!entities.length && initialized" class="w-full py-16 text-center">
+      <div v-if="page === 'collections'" class="py-4 text-on-surface text-title-large">{{ $strings.MessageNoCollections }}</div>
+      <div v-else class="py-4 text-on-surface text-title-large capitalize">No {{ entityName }}</div>
+      <ui-btn v-if="hasFilter" @click="clearFilter" variant="filled">{{ $strings.ButtonClearFilter }}</ui-btn>
     </div>
   </div>
 </template>
@@ -49,9 +69,6 @@ export default {
     }
   },
   watch: {
-    showBookshelfListView(newVal) {
-      this.resetEntities()
-    },
     seriesId() {
       this.resetEntities()
     }
@@ -71,7 +88,8 @@ export default {
       return this.$store.state.globals.bookshelfListView
     },
     showBookshelfListView() {
-      return this.isBookEntity && this.bookshelfListView
+      // Always use list view for book entities - removed card view option
+      return this.isBookEntity
     },
     sortingIgnorePrefix() {
       return this.$store.getters['getServerSetting']('sortingIgnorePrefix')
@@ -126,7 +144,7 @@ export default {
       return this.bookWidth * 1.6
     },
     entityWidth() {
-      if (this.showBookshelfListView) return this.bookshelfWidth - 16
+      if (this.showBookshelfListView) return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
       if (this.isBookEntity || this.entityName === 'playlists') return this.bookWidth
       return this.bookWidth * 2
     },
@@ -141,17 +159,17 @@ export default {
       return this.$store.getters['libraries/getCurrentLibraryMediaType']
     },
     shelfHeight() {
-      if (this.showBookshelfListView) return this.entityHeight + 16
+      if (this.showBookshelfListView) return this.entityHeight + 6 // Reduced from 8
       if (this.altViewEnabled) {
-        var extraTitleSpace = this.isBookEntity ? 80 : 40
+        var extraTitleSpace = this.isBookEntity ? 60 : 30 // Reduced from 80:40
         return this.entityHeight + extraTitleSpace * this.sizeMultiplier
       }
-      return this.entityHeight + 40
+      return this.entityHeight + 24 // Reduced from 40
     },
     totalEntityCardWidth() {
       if (this.showBookshelfListView) return this.entityWidth
-      // Includes margin
-      return this.entityWidth + 24
+      // Use Material 3 spacing - 16px between cards
+      return this.entityWidth + 16
     },
     altViewEnabled() {
       return this.$store.getters['getAltViewEnabled']
@@ -332,9 +350,9 @@ export default {
       var { clientHeight, clientWidth } = bookshelf
       this.bookshelfHeight = clientHeight
       this.bookshelfWidth = clientWidth
-      this.entitiesPerShelf = Math.max(1, this.showBookshelfListView ? 1 : Math.floor((this.bookshelfWidth - 16) / this.totalEntityCardWidth))
+      this.entitiesPerShelf = Math.max(1, this.showBookshelfListView ? 1 : Math.floor((this.bookshelfWidth - 32) / this.totalEntityCardWidth))
       this.shelvesPerPage = Math.ceil(this.bookshelfHeight / this.shelfHeight) + 2
-      this.bookshelfMarginLeft = (this.bookshelfWidth - this.entitiesPerShelf * this.totalEntityCardWidth) / 2
+      this.bookshelfMarginLeft = (this.bookshelfWidth - 32 - this.entitiesPerShelf * this.totalEntityCardWidth) / 2
 
       const entitiesPerPage = this.shelvesPerPage * this.entitiesPerShelf
       this.booksPerFetch = Math.ceil(entitiesPerPage / 20) * 20 // Round up to the nearest 20
@@ -560,3 +578,30 @@ export default {
   }
 }
 </script>
+
+<style>
+/* Material 3 Expressive Vertical Scroll Container */
+.library-scroll-container {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* Loading skeleton animations */
+.loading-skeleton {
+  opacity: 0;
+  transform: translateY(20px) scale(0.95);
+  animation: skeletonSlideIn 600ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+@keyframes skeletonSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+</style>

@@ -8,10 +8,13 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowInsets
+import androidx.core.view.WindowCompat
 import android.webkit.WebView
 import androidx.core.app.ActivityCompat
 import androidx.core.view.updateLayoutParams
@@ -24,6 +27,8 @@ import com.audiobookshelf.app.plugins.AbsDatabase
 import com.audiobookshelf.app.plugins.AbsDownloader
 import com.audiobookshelf.app.plugins.AbsFileSystem
 import com.audiobookshelf.app.plugins.AbsLogger
+// import com.audiobookshelf.app.plugins.AbsToast
+import com.audiobookshelf.app.plugins.DynamicColorPlugin
 import com.getcapacitor.BridgeActivity
 
 
@@ -52,13 +57,18 @@ class MainActivity : BridgeActivity() {
     registerPlugin(AbsFileSystem::class.java)
     registerPlugin(AbsDatabase::class.java)
     registerPlugin(AbsLogger::class.java)
+    // registerPlugin(AbsToast::class.java)
+    registerPlugin(DynamicColorPlugin::class.java)
 
     super.onCreate(savedInstanceState)
     Log.d(tag, "onCreate")
 
-    // Update the margins to handle edge-to-edge enforced in SDK 35
-    // See: https://developer.android.com/develop/ui/views/layout/edge-to-edge
+  // Enable edge-to-edge so the webview can render behind the system bars.
+  // See: https://developer.android.com/develop/ui/views/layout/edge-to-edge
+  WindowCompat.setDecorFitsSystemWindows(window, false)
     val webView: WebView = findViewById(R.id.webview)
+    // Keep injecting CSS safe-area insets but DO NOT add margins so the webview
+    // content draws behind the system bars (transparent nav/status bar)
     webView.setOnApplyWindowInsetsListener { v, insets ->
       val (left, top, right, bottom) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         val sysInsets = insets.getInsets(WindowInsets.Type.systemBars())
@@ -73,26 +83,21 @@ class MainActivity : BridgeActivity() {
         )
       }
 
-      // Inject as CSS variables
-      // NOTE: Possibly able to use in the future to support edge-to-edge better.
-       val js = """
+      // Inject as CSS variables so Nuxt pages can use env(safe-area-inset-*) or
+      // the --safe-area-inset-* variables for layout while content stays full-bleed.
+      val js = """
        document.documentElement.style.setProperty('--safe-area-inset-top', '${top}px');
        document.documentElement.style.setProperty('--safe-area-inset-bottom', '${bottom}px');
        document.documentElement.style.setProperty('--safe-area-inset-left', '${left}px');
        document.documentElement.style.setProperty('--safe-area-inset-right', '${right}px');
+       document.documentElement.setAttribute('data-safe-area-ready', 'true');
+       console.log('[Android] Set safe area insets - top: ${top}px, bottom: ${bottom}px');
       """.trimIndent()
       webView.evaluateJavascript(js, null)
 
-      // Set margins
-      v.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-        leftMargin = left
-        bottomMargin = bottom
-        rightMargin = right
-        topMargin = top
-      }
-
+      // Do not consume insets so underlying handling remains intact on older SDKs
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        WindowInsets.CONSUMED
+        insets
       } else {
         insets
       }
@@ -108,6 +113,74 @@ class MainActivity : BridgeActivity() {
 
   override fun onDestroy() {
     super.onDestroy()
+  }
+
+  override fun onStart() {
+    super.onStart()
+    Log.d(tag, "onStart MainActivity")
+    // Additional sync point for when activity becomes visible
+    if (::foregroundService.isInitialized) {
+      try {
+        val absAudioPlayer = bridge.getPlugin("AbsAudioPlayer").instance as AbsAudioPlayer
+        absAudioPlayer.syncCurrentPlaybackStateWhenReady()
+      } catch (e: Exception) {
+        Log.e(tag, "Failed to sync playback state on start: ${e.message}")
+      }
+    }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    Log.d(tag, "onResume MainActivity")
+    // Trigger UI sync when app comes to foreground, waiting for UI to be ready
+    if (::foregroundService.isInitialized) {
+      try {
+        val absAudioPlayer = bridge.getPlugin("AbsAudioPlayer").instance as AbsAudioPlayer
+        // Only sync if there's already an active session - don't trigger restoration on resume
+        if (foregroundService.currentPlaybackSession != null) {
+          Log.d(tag, "Active session exists, syncing playback state on resume")
+          absAudioPlayer.syncCurrentPlaybackStateWhenReady() // Smart sync that waits for readiness
+        } else {
+          Log.d(tag, "No active session, skipping sync on resume to avoid interfering with automatic restoration")
+        }
+        Log.d(tag, "AABrowser: Calling forceAndroidAutoReload on app resume")
+        foregroundService.forceAndroidAutoReload()
+      } catch (e: Exception) {
+        Log.e(tag, "Failed to sync playback state on resume: ${e.message}")
+      }
+    }
+
+    // Ensure safe area insets are set when app resumes
+    updateSafeAreaInsets()
+  }
+
+  private fun updateSafeAreaInsets() {
+    val webView: WebView = findViewById(R.id.webview)
+    val insets = webView.rootWindowInsets
+    if (insets != null) {
+      val (left, top, right, bottom) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val sysInsets = insets.getInsets(WindowInsets.Type.systemBars())
+        Log.d(tag, "updateSafeAreaInsets sysInsets: $sysInsets")
+        arrayOf(sysInsets.left, sysInsets.top, sysInsets.right, sysInsets.bottom)
+      } else {
+        arrayOf(
+          insets.systemWindowInsetLeft,
+          insets.systemWindowInsetTop,
+          insets.systemWindowInsetRight,
+          insets.systemWindowInsetBottom
+        )
+      }
+
+      // Inject as CSS variables so Nuxt pages can use env(safe-area-inset-*) or
+      // the --safe-area-inset-* variables for layout while content stays full-bleed.
+      val js = """
+       document.documentElement.style.setProperty('--safe-area-inset-top', '${top}px');
+       document.documentElement.style.setProperty('--safe-area-inset-bottom', '${bottom}px');
+       document.documentElement.style.setProperty('--safe-area-inset-left', '${left}px');
+       document.documentElement.style.setProperty('--safe-area-inset-right', '${right}px');
+      """.trimIndent()
+      webView.evaluateJavascript(js, null)
+    }
   }
 
   override fun onPostCreate(savedInstanceState: Bundle?) {
@@ -129,6 +202,25 @@ class MainActivity : BridgeActivity() {
 
         // Let NativeAudio know foreground service is ready and setup event listener
         pluginCallback()
+
+        // Also trigger UI sync when service connects on activity creation
+        try {
+          val absAudioPlayer = bridge.getPlugin("AbsAudioPlayer").instance as AbsAudioPlayer
+          absAudioPlayer.syncCurrentPlaybackStateWhenReady() // Smart sync that waits for readiness
+
+          // Add a fallback sync for fresh installs/updates where timing might be critical
+          Handler(Looper.getMainLooper()).post {
+            try {
+              Log.d(tag, "Fallback sync attempt after service connection")
+              absAudioPlayer.syncCurrentPlaybackStateWhenReady()
+            } catch (e: Exception) {
+              Log.e(tag, "Fallback sync failed: ${e.message}")
+            }
+          }
+
+        } catch (e: Exception) {
+          Log.e(tag, "Failed to sync playback state on service connect: ${e.message}")
+        }
       }
     }
 

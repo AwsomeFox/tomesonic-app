@@ -10,6 +10,8 @@ import android.support.v4.media.session.MediaControllerCompat
 import com.audiobookshelf.app.BuildConfig
 import com.audiobookshelf.app.R
 import com.bumptech.glide.Glide
+import com.bumptech.glide.load.DecodeFormat
+import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.ui.PlayerNotificationManager
 import kotlinx.coroutines.*
@@ -54,6 +56,30 @@ class AbMediaDescriptionAdapter (private val controller: MediaControllerCompat, 
         } else {
           val source: ImageDecoder.Source = ImageDecoder.createSource(playerNotificationService.contentResolver, currentIconUri!!)
           ImageDecoder.decodeBitmap(source)
+        }
+        currentBitmap
+      } else if (currentIconUri.toString().startsWith("http")) {
+        // For server books (HTTP URLs), load synchronously to ensure notification gets bitmap immediately
+        currentBitmap = runBlocking {
+          withContext(Dispatchers.IO) {
+            try {
+              Glide.with(playerNotificationService)
+                .asBitmap()
+                .load(currentIconUri)
+                .format(com.bumptech.glide.load.DecodeFormat.PREFER_ARGB_8888)
+                .diskCacheStrategy(com.bumptech.glide.load.engine.DiskCacheStrategy.ALL)
+                .override(1024, 1024)
+                .submit()
+                .get()
+            } catch (e: Exception) {
+              // Fallback to default icon
+              Glide.with(playerNotificationService)
+                .asBitmap()
+                .load(Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon))
+                .submit()
+                .get()
+            }
+          }
         }
         currentBitmap
       } else {

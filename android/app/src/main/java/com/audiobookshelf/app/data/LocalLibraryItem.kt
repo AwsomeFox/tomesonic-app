@@ -21,6 +21,11 @@ import com.audiobookshelf.app.player.PLAYMETHOD_LOCAL
 import java.io.File
 import java.util.*
 
+// Android Auto package names for URI permission granting
+private const val ANDROID_AUTO_PKG_NAME = "com.google.android.projection.gearhead"
+private const val ANDROID_AUTO_SIMULATOR_PKG_NAME = "com.google.android.projection.gearhead.emulator"
+private const val ANDROID_AUTOMOTIVE_PKG_NAME = "com.google.android.projection.gearhead.phone"
+
 @JsonIgnoreProperties(ignoreUnknown = true)
 class LocalLibraryItem(
   id:String,
@@ -51,7 +56,24 @@ class LocalLibraryItem(
   @JsonIgnore
   fun getCoverUri(ctx:Context): Uri {
     if (coverContentUrl?.startsWith("file:") == true) {
-      return FileProvider.getUriForFile(ctx, "${BuildConfig.APPLICATION_ID}.fileprovider", Uri.parse(coverContentUrl).toFile())
+      val contentUri = FileProvider.getUriForFile(ctx, "${BuildConfig.APPLICATION_ID}.fileprovider", Uri.parse(coverContentUrl).toFile())
+
+      // Grant URI permissions to Android Auto packages so they can access the content
+      try {
+        val androidAutoPackages = arrayOf(
+          ANDROID_AUTO_PKG_NAME,
+          ANDROID_AUTO_SIMULATOR_PKG_NAME,
+          ANDROID_AUTOMOTIVE_PKG_NAME
+        )
+
+        for (packageName in androidAutoPackages) {
+          ctx.grantUriPermission(packageName, contentUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+      } catch (e: Exception) {
+        Log.w("LocalLibraryItem", "getCoverUri - Failed to grant URI permissions: ${e.message}")
+      }
+
+      return contentUri
     }
     return if (coverContentUrl != null) Uri.parse(coverContentUrl) else Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon)
   }
@@ -121,7 +143,6 @@ class LocalLibraryItem(
       episode.audioTrack?.let { at -> mutableListOf(at) }?.let { tracks -> audioTracks = tracks }
       chapters = episode.chapters
       duration = episode.audioTrack?.duration ?: 0.0
-      Log.d("LocalLibraryItem", "getPlaybackSession: Got podcast episode audio track ${audioTracks.size}")
     }
 
     val dateNow = System.currentTimeMillis()
@@ -139,11 +160,33 @@ class LocalLibraryItem(
 
     var bitmap:Bitmap? = null
     if (coverContentUrl != null) {
-      bitmap = if (Build.VERSION.SDK_INT < 28) {
+      val rawBitmap = if (Build.VERSION.SDK_INT < 28) {
         MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
       } else {
         val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-        ImageDecoder.decodeBitmap(source)
+        ImageDecoder.decodeBitmap(source) { decoder, info, source ->
+          decoder.setTargetSize(512, 512) // Use larger size for testing notification quality
+          decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE) // Ensure high quality
+        }
+      }
+
+      // Ensure bitmap is exactly 1024x1024 for high quality (larger to combat notification compression)
+      bitmap = if (rawBitmap.width != 1024 || rawBitmap.height != 1024) {
+        // Use Canvas-based scaling for better quality instead of createScaledBitmap
+        val scaledBitmap = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(scaledBitmap)
+        val paint = android.graphics.Paint().apply {
+          isAntiAlias = true
+          isFilterBitmap = true
+          isDither = false
+        }
+        val srcRect = android.graphics.Rect(0, 0, rawBitmap.width, rawBitmap.height)
+        val dstRect = android.graphics.Rect(0, 0, 1024, 1024)
+        canvas.drawBitmap(rawBitmap, srcRect, dstRect, paint)
+        rawBitmap.recycle() // Free memory
+        scaledBitmap
+      } else {
+        rawBitmap
       }
     }
 

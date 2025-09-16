@@ -18,17 +18,29 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     notification: Notification,
     onGoing: Boolean) {
 
+    // TODO: Add WearableExtender for better Wear OS support
+    // val wearableExtender = NotificationCompat.WearableExtender()
+    //   .setHintShowBackgroundOnly(true)
+    //   .setBackground(notification.getLargeIcon())
+
+    // For now, use the original notification
+    val enhancedNotification = notification
+
     if (onGoing && !isForegroundService) {
       // Start foreground service
       Log.d(tag, "Notification Posted $notificationId - Start Foreground | $notification")
       PlayerNotificationService.isClosed = false
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        playerNotificationService.startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        playerNotificationService.startForeground(notificationId, enhancedNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
       } else {
-        playerNotificationService.startForeground(notificationId, notification)
+        playerNotificationService.startForeground(notificationId, enhancedNotification)
       }
       isForegroundService = true
+    } else if (onGoing && isForegroundService) {
+      // Service is already in foreground, just update the notification
+      Log.d(tag, "Notification posted $notificationId - Updating existing foreground notification")
+      // The PlayerNotificationManager will automatically update the notification
     } else {
       Log.d(tag, "Notification posted $notificationId, not starting foreground - onGoing=$onGoing | isForegroundService=$isForegroundService")
     }
@@ -41,16 +53,16 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     if (dismissedByUser) {
       Log.d(tag, "onNotificationCancelled dismissed by user")
       playerNotificationService.stopSelf()
+      isForegroundService = false
     } else {
       Log.d(tag, "onNotificationCancelled not dismissed by user")
 
-      if (PlayerNotificationService.isSwitchingPlayer) {
+      if (playerNotificationService.castPlayerManager.isSwitchingPlayer) {
         // When switching from cast player to exo player and vice versa the notification is cancelled and posted again
           // so we don't want to cancel the playback during this switch
         Log.d(tag, "PNS is switching player")
-        PlayerNotificationService.isSwitchingPlayer = false
+        playerNotificationService.castPlayerManager.isSwitchingPlayer = false
       }
     }
-    isForegroundService = false
   }
 }
