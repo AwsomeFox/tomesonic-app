@@ -21,7 +21,7 @@ import androidx.core.view.updateLayoutParams
 import com.anggrayudi.storage.SimpleStorage
 import com.anggrayudi.storage.SimpleStorageHelper
 import com.audiobookshelf.app.managers.DbManager
-import com.audiobookshelf.app.player.PlayerNotificationService
+import com.audiobookshelf.app.player.service.AudiobookMediaService
 import com.audiobookshelf.app.plugins.AbsAudioPlayer
 import com.audiobookshelf.app.plugins.AbsDatabase
 import com.audiobookshelf.app.plugins.AbsDownloader
@@ -36,7 +36,7 @@ class MainActivity : BridgeActivity() {
   private val tag = "MainActivity"
 
   private var mBounded = false
-  lateinit var foregroundService : PlayerNotificationService
+  lateinit var foregroundService : AudiobookMediaService
   private lateinit var mConnection : ServiceConnection
 
   lateinit var pluginCallback : () -> Unit
@@ -197,7 +197,7 @@ class MainActivity : BridgeActivity() {
         Log.d(tag, "Service Connected $name")
 
         mBounded = true
-        val mLocalBinder = service as PlayerNotificationService.LocalBinder
+        val mLocalBinder = service as AudiobookMediaService.LocalBinder
         foregroundService = mLocalBinder.getService()
 
         // Let NativeAudio know foreground service is ready and setup event listener
@@ -224,8 +224,8 @@ class MainActivity : BridgeActivity() {
       }
     }
 
-    Intent(this, PlayerNotificationService::class.java).also { intent ->
-      Log.d(tag, "Binding PlayerNotificationService")
+    Intent(this, AudiobookMediaService::class.java).also { intent ->
+      Log.d(tag, "Binding AudiobookMediaService")
       bindService(intent, mConnection, Context.BIND_AUTO_CREATE)
     }
   }
@@ -239,7 +239,7 @@ class MainActivity : BridgeActivity() {
       mConnection.let { unbindService(it) };
       mBounded = false;
     }
-    val stopIntent = Intent(this, PlayerNotificationService::class.java)
+    val stopIntent = Intent(this, AudiobookMediaService::class.java)
     stopService(stopIntent)
   }
 

@@ -2,15 +2,18 @@ package com.audiobookshelf.app.player
 
 import android.content.Context
 import android.util.Log
-import com.google.android.exoplayer2.*
-import com.google.android.exoplayer2.audio.AudioAttributes
-import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
-import com.google.android.exoplayer2.ui.PlayerNotificationManager
+// Media3 imports
+import androidx.media3.common.*
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.ui.PlayerNotificationManager
+import androidx.media3.session.MediaSession
 import com.audiobookshelf.app.data.DeviceSettings
 import com.audiobookshelf.app.data.PlaybackSession
 
 /**
- * Manages ExoPlayer and Cast player instances and their lifecycle
+ * Manages Media3 ExoPlayer and Cast player instances and their lifecycle
  */
 class PlayerManager(
     private val context: Context,
@@ -21,22 +24,28 @@ class PlayerManager(
         private const val TAG = "PlayerManager"
     }
 
-    // Player instances
+    // Media3 Player instances
     lateinit var mPlayer: ExoPlayer
         private set
     lateinit var currentPlayer: Player
         private set
 
     // Dependencies that will be injected
-    private lateinit var playerNotificationManager: PlayerNotificationManager
-    private lateinit var mediaSessionConnector: MediaSessionConnector
+    private var playerNotificationManager: PlayerNotificationManager? = null
+    private var mediaSession: MediaSession? = null
 
     fun setDependencies(
-        playerNotificationManager: PlayerNotificationManager,
-        mediaSessionConnector: MediaSessionConnector
+        playerNotificationManager: PlayerNotificationManager?,
+        mediaSession: MediaSession?
     ) {
         this.playerNotificationManager = playerNotificationManager
-        this.mediaSessionConnector = mediaSessionConnector
+        this.mediaSession = mediaSession
+
+        // Connect the notification manager to the player if both are available
+        if (::mPlayer.isInitialized && playerNotificationManager != null) {
+            playerNotificationManager.setPlayer(mPlayer)
+            Log.d(TAG, "Connected PlayerNotificationManager to ExoPlayer")
+        }
     }
 
     fun initializeExoPlayer() {
@@ -50,6 +59,7 @@ class PlayerManager(
                 )
                 .build()
 
+        // Create Media3 ExoPlayer
         mPlayer = ExoPlayer.Builder(context)
             .setLoadControl(customLoadControl)
             .setSeekBackIncrementMs(deviceSettings.jumpBackwardsTimeMs)
@@ -59,6 +69,7 @@ class PlayerManager(
         mPlayer.setHandleAudioBecomingNoisy(true)
         mPlayer.addListener(PlayerListener(service))
 
+        // Set Media3 audio attributes
         val audioAttributes: AudioAttributes =
             AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -69,11 +80,20 @@ class PlayerManager(
         // Set as current player
         currentPlayer = mPlayer
 
-        // Connect to notification and media session
-        playerNotificationManager.setPlayer(mPlayer)
-        mediaSessionConnector.setPlayer(mPlayer)
+        // Connect to notification manager (if available)
+        playerNotificationManager?.setPlayer(mPlayer) ?: run {
+            Log.d(TAG, "PlayerNotificationManager not yet available - will connect later")
+        }
 
-        Log.d(TAG, "ExoPlayer initialized successfully")
+        // Connect to MediaSession (Media3 style)
+        mediaSession?.let { session ->
+            session.player = mPlayer
+            Log.d(TAG, "Connected to Media3 MediaSession")
+        } ?: run {
+            Log.d(TAG, "No MediaSession available - player will work without session integration")
+        }
+
+        Log.d(TAG, "Media3 ExoPlayer initialized successfully")
     }
 
     fun releasePlayer() {

@@ -276,7 +276,7 @@ class CastManager constructor(val mainActivity:Activity) {
           if (it.castPlayer == null) {
             Log.d(tag, "Initializing castPlayer on session started - switch to cast player")
             it.castPlayer = com.google.android.exoplayer2.ext.cast.CastPlayer(castContext).apply {
-              addListener(PlayerListener(it))
+              addListener(LegacyPlayerListener(it))
               setSessionAvailabilityListener(CastSessionAvailabilityListener())
             }
             switchToPlayer(true)

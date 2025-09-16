@@ -144,8 +144,9 @@ class NetworkConnectivityManager(
                                 lastPlaybackSession
                             }
 
-                            // Determine if we should start playing based on Android Auto mode
-                            val shouldStartPlaying = service.isAndroidAuto
+                            // When resuming from stored session, start in paused state to allow user control
+                            // Android Auto users can manually start playback via the UI
+                            val shouldStartPlaying = false
 
                             // Prepare the player with appropriate play state and saved playback speed
                             val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
@@ -162,8 +163,9 @@ class NetworkConnectivityManager(
                         })
                     } else {
                         // No connectivity, use local session
-                        // Determine if we should start playing based on Android Auto mode
-                        val shouldStartPlaying = service.isAndroidAuto
+                        // When resuming from stored session, start in paused state to allow user control
+                        // Android Auto users can manually start playback via the UI
+                        val shouldStartPlaying = false
 
                         // Prepare the player with appropriate play state and saved playback speed
                         val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
@@ -215,8 +217,9 @@ class NetworkConnectivityManager(
                                     // Override the current time with the server progress to sync position
                                     localPlaybackSession.currentTime = latestProgress.currentTime
 
-                                    // Determine if we should start playing based on Android Auto mode
-                                    val shouldStartPlaying = service.isAndroidAuto
+                                    // When resuming from stored session, start in paused state to allow user control
+                                    // Android Auto users can manually start playback via the UI
+                                    val shouldStartPlaying = false
 
                                     // Prepare the player with appropriate play state and saved playback speed
                                     val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()

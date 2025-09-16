@@ -2,7 +2,6 @@ package com.audiobookshelf.app.player
 
 import android.util.Log
 import com.google.android.exoplayer2.ext.cast.CastPlayer
-import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import com.google.android.exoplayer2.ui.PlayerNotificationManager
 import com.google.android.gms.cast.framework.CastContext
 import com.audiobookshelf.app.data.PlaybackSession
@@ -37,17 +36,16 @@ class CastPlayerManager(
         useCastPlayer: Boolean,
         currentPlayer: com.google.android.exoplayer2.Player,
         mPlayer: com.google.android.exoplayer2.Player,
-        mediaSessionConnector: MediaSessionConnector,
-        playerNotificationManager: PlayerNotificationManager,
+        playerNotificationManager: PlayerNotificationManager?,
         currentPlaybackSession: PlaybackSession?,
         mediaProgressSyncer: Any, // TODO: Define proper type
         preparePlayerCallback: (PlaybackSession, Boolean, Float?) -> Unit,
         onMediaPlayerChangedCallback: (String) -> Unit,
         onPlayingUpdateCallback: (Boolean) -> Unit
     ): com.google.android.exoplayer2.Player {
-        
+
         val wasPlaying = currentPlayer.isPlaying
-        
+
         if (useCastPlayer) {
             if (currentPlayer == castPlayer) {
                 Log.d(TAG, "switchToPlayer: Already using Cast Player ${castPlayer?.deviceInfo}")
@@ -77,13 +75,13 @@ class CastPlayerManager(
 
         val newCurrentPlayer = if (useCastPlayer) {
             Log.d(TAG, "switchToPlayer: Using Cast Player ${castPlayer?.deviceInfo}")
-            mediaSessionConnector.setPlayer(castPlayer)
-            playerNotificationManager.setPlayer(castPlayer)
+            // Media3 MediaSession will handle player switching automatically
+            playerNotificationManager?.setPlayer(castPlayer)
             castPlayer as CastPlayer
         } else {
             Log.d(TAG, "switchToPlayer: Using ExoPlayer")
-            mediaSessionConnector.setPlayer(mPlayer)
-            playerNotificationManager.setPlayer(mPlayer)
+            // Media3 MediaSession will handle player switching automatically
+            playerNotificationManager?.setPlayer(mPlayer)
             mPlayer
         }
 
@@ -121,12 +119,10 @@ class CastPlayerManager(
      */
     fun setupCastPlayer(
         playbackSession: PlaybackSession,
-        mediaSessionConnector: MediaSessionConnector,
         playerNotificationManager: PlayerNotificationManager
     ) {
         if (playbackSession.mediaPlayer == PLAYER_CAST) {
-            // If cast-player is the first player to be used
-            mediaSessionConnector.setPlayer(castPlayer)
+            // Media3 MediaSession will handle player assignment automatically
             playerNotificationManager.setPlayer(castPlayer)
         }
     }
@@ -143,7 +139,7 @@ class CastPlayerManager(
         mediaType: String
     ) {
         Log.d(TAG, "Loading cast player $currentTrackIndex $currentTrackTime $mediaType")
-        
+
         // TODO: Implement proper CastPlayer loading based on API
         // The exact method signature needs to be verified
         // castPlayer?.load(mediaItems, currentTrackIndex, currentTrackTime, playWhenReady, playbackRate, mediaType)

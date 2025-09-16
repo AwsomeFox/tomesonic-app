@@ -9,7 +9,7 @@ import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.media.MediaEventManager
 import com.audiobookshelf.app.player.CastManager
 import com.audiobookshelf.app.player.PlayerListener
-import com.audiobookshelf.app.player.PlayerNotificationService
+import com.audiobookshelf.app.player.service.AudiobookMediaService
 import com.audiobookshelf.app.server.ApiHandler
 import com.fasterxml.jackson.core.json.JsonReadFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -29,7 +29,7 @@ class AbsAudioPlayer : Plugin() {
   private lateinit var apiHandler:ApiHandler
   var castManager:CastManager? = null
 
-  lateinit var playerNotificationService: PlayerNotificationService
+  lateinit var playerNotificationService: AudiobookMediaService
 
   private var isCastAvailable:Boolean = false
 
@@ -46,7 +46,7 @@ class AbsAudioPlayer : Plugin() {
     val foregroundServiceReady : () -> Unit = {
       playerNotificationService = mainActivity.foregroundService
 
-      playerNotificationService.clientEventEmitter = (object : PlayerNotificationService.ClientEventEmitter {
+      playerNotificationService.clientEventEmitter = (object : AudiobookMediaService.ClientEventEmitter {
         override fun onPlaybackSession(playbackSession: PlaybackSession) {
           notifyListeners("onPlaybackSession", JSObject(jacksonMapper.writeValueAsString(playbackSession)))
         }
@@ -150,6 +150,26 @@ class AbsAudioPlayer : Plugin() {
       val playbackSession = playerNotificationService.currentPlaybackSession
       if (playbackSession != null) {
         Log.d(tag, "Syncing playback state: ${playbackSession.libraryItem?.media?.metadata?.title}")
+
+        // CRITICAL FIX: Check if player has media items loaded, if not, prepare the player
+        val hasMediaItems = playerNotificationService.currentPlayer.mediaItemCount > 0
+        Log.d(tag, "Player has ${playerNotificationService.currentPlayer.mediaItemCount} media items")
+
+        if (!hasMediaItems) {
+          Log.w(tag, "Player has no media items! Preparing player with existing session...")
+          // Get the saved playback rate to maintain consistency
+          val currentPlaybackSpeed = try {
+            playerNotificationService.mediaManager.getSavedPlaybackRate()
+          } catch (e: Exception) {
+            Log.w(tag, "Could not get saved playback rate, using 1.0f: ${e.message}")
+            1.0f
+          }
+
+          // Prepare the player with the existing session but don't auto-play
+          playerNotificationService.preparePlayer(playbackSession, false, currentPlaybackSpeed)
+          Log.i(tag, "Player prepared with existing session at speed ${currentPlaybackSpeed}x")
+        }
+
         notifyListeners("onPlaybackSession", JSObject(jacksonMapper.writeValueAsString(playbackSession)))
 
         // Create and emit metadata using the same pattern as the service
@@ -675,7 +695,10 @@ class AbsAudioPlayer : Plugin() {
       Log.e(tag, "Cast Manager not initialized")
       return
     }
-    castManager?.requestSession(playerNotificationService, object : CastManager.RequestSessionCallback() {
+    // TODO: Update CastManager to work with AudiobookMediaService
+    // For now, cast functionality is disabled during migration
+    Log.w(tag, "Cast functionality temporarily disabled during Media3 migration")
+    /*castManager?.requestSession(playerNotificationService, object : CastManager.RequestSessionCallback() {
       override fun onError(errorCode: Int) {
         Log.e(tag, "CAST REQUEST SESSION CALLBACK ERROR $errorCode")
       }
@@ -687,7 +710,7 @@ class AbsAudioPlayer : Plugin() {
       override fun onJoin(jsonSession: JSONObject?) {
         Log.d(tag, "CAST REQUEST SESSION ON JOIN")
       }
-    })
+    })*/
   }
 
   @PluginMethod

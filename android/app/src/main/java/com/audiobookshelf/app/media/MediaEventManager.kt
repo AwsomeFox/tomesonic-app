@@ -3,12 +3,12 @@ package com.audiobookshelf.app.media
 import android.util.Log
 import com.audiobookshelf.app.data.*
 import com.audiobookshelf.app.device.DeviceManager
-import com.audiobookshelf.app.player.PlayerNotificationService
+import com.audiobookshelf.app.player.service.AudiobookMediaService
 
 object MediaEventManager {
   const val tag = "MediaEventManager"
 
-  var clientEventEmitter: PlayerNotificationService.ClientEventEmitter? = null
+  var clientEventEmitter: AudiobookMediaService.ClientEventEmitter? = null
 
   fun playEvent(playbackSession: PlaybackSession) {
     Log.i(tag, "Play Event for media \"${playbackSession.displayTitle}\"")

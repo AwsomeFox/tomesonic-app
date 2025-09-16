@@ -78,7 +78,7 @@ class AbsDatabase : Plugin() {
       call.reject("Folder data is required")
       return
     }
-    
+
     try {
       val localFolder = jacksonMapper.readValue(folderJson, LocalFolder::class.java)
       GlobalScope.launch(Dispatchers.IO) {
@@ -600,9 +600,10 @@ class AbsDatabase : Plugin() {
       DeviceManager.dbManager.saveDeviceData(DeviceManager.deviceData)
 
       // Updates playback actions for media notification (handles media control seek locking setting)
-      if (mainActivity.isPlayerNotificationServiceInitialized()) {
-        mainActivity.foregroundService.setMediaSessionConnectorPlaybackActions()
-      }
+      // TODO: Implement setMediaSessionPlaybackActions in AudiobookMediaService
+      /*if (mainActivity.isPlayerNotificationServiceInitialized()) {
+        mainActivity.foregroundService.setMediaSessionPlaybackActions()
+      }*/
 
       call.resolve(JSObject(jacksonMapper.writeValueAsString(DeviceManager.deviceData)))
     }

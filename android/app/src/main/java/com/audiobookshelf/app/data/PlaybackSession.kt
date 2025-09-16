@@ -22,8 +22,10 @@ import kotlinx.coroutines.*
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.MediaMetadata
+// Media3 imports
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+// Legacy ExoPlayer2 imports (during migration)
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.common.images.WebImage
@@ -361,7 +363,7 @@ class PlaybackSession(
                     .setArtist(displayAuthor)
                     .setAlbumArtist(displayAuthor)
                     .setSubtitle(subtitleToUse)
-                    .setAlbumTitle(displayAuthor)
+                    .setAlbumTitle(displayTitle)
                     .setDescription(displayAuthor)
                     .setArtworkUri(coverUri)
                     .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
@@ -382,10 +384,22 @@ class PlaybackSession(
         val mimeType = audioTrack.mimeType
 
         // Create clipping configuration for this chapter
-        val clippingConfig = MediaItem.ClippingConfiguration.Builder()
-          .setStartPositionMs(chapter.startMs)
-          .setEndPositionMs(if (index < chapters.size - 1) chapters[index + 1].startMs else Long.MAX_VALUE)
-          .build()
+        val clippingConfigBuilder = MediaItem.ClippingConfiguration.Builder()
+
+        // Validate and set start position (must be >= 0)
+        val startPositionMs = maxOf(0L, chapter.startMs)
+        clippingConfigBuilder.setStartPositionMs(startPositionMs)
+
+        // Only set end position if not the last chapter (Media3 doesn't allow Long.MAX_VALUE)
+        if (index < chapters.size - 1) {
+          val nextChapterStartMs = chapters[index + 1].startMs
+          // Ensure end position is greater than start position
+          if (nextChapterStartMs > startPositionMs) {
+            clippingConfigBuilder.setEndPositionMs(nextChapterStartMs)
+          }
+        }
+
+        val clippingConfig = clippingConfigBuilder.build()
 
         val queueItem = getQueueItem(audioTrack, chapter, index)
         val mediaItem = MediaItem.Builder()

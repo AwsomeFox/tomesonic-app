@@ -99,7 +99,22 @@ dependencies {
 
   implementation "androidx.media:media:$androidx_media_version"
 
-  // Exo Player
+  // Media3 (new)
+  implementation "androidx.media3:media3-exoplayer:$androidx_media3_version"
+  implementation "androidx.media3:media3-ui:$androidx_media3_version"
+  implementation "androidx.media3:media3-session:$androidx_media3_version"
+  implementation "androidx.media3:media3-cast:$androidx_media3_version"
+  implementation "androidx.media3:media3-extractor:$androidx_media3_version"
+  implementation "androidx.media3:media3-datasource:$androidx_media3_version"
+  implementation "androidx.media3:media3-common:$androidx_media3_version"
+  implementation "androidx.media3:media3-exoplayer-hls:$androidx_media3_version"
+
+  // Lifecycle components
+  implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7"
+  implementation "androidx.lifecycle:lifecycle-livedata-ktx:2.8.7"
+  implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.8.7"
+
+  // Exo Player (legacy - will be gradually replaced)
   if (findProject(':exoplayer-library-core') != null) {
     implementation project(':exoplayer-library-core')
     implementation project(':exoplayer-library-ui')

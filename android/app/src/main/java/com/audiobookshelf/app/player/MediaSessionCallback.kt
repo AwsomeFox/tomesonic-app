@@ -130,7 +130,7 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     playerNotificationService.setPlaybackSpeed(newSpeed)
     playerNotificationService.clientEventEmitter?.onPlaybackSpeedChanged(newSpeed)
 
-    // Note: setPlaybackSpeed already calls setMediaSessionConnectorCustomActions, so no need to duplicate
+    // Note: setPlaybackSpeed already calls setMediaSessionCustomActions, so no need to duplicate
     Log.d(tag, "onChangeSpeed completed")
   }
 
@@ -204,6 +204,51 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
                 playerNotificationService.seekPlayer((startTime * 1000).toLong())
               }
             }
+          }
+        }
+      }
+    }
+  }
+
+  override fun onPrepareFromMediaId(mediaId: String?, extras: Bundle?) {
+    Log.d(tag, "ON PREPARE FROM MEDIA ID $mediaId")
+    // In Media3/MediaSessionCompat, onPrepareFromMediaId is used to prepare media without auto-playing
+    // This is primarily for Android Auto integration where the UI may want to prepare content
+    // before actually starting playback
+
+    // For now, we'll use the same logic as onPlayFromMediaId but without auto-playing
+    val libraryItemWrapper: LibraryItemWrapper?
+    var podcastEpisode: PodcastEpisode? = null
+
+    if (mediaId.isNullOrEmpty()) {
+      libraryItemWrapper = playerNotificationService.mediaManager.getFirstItem()
+    } else if (mediaId.contains("__CHAPTER__")) {
+      // Handle chapter-specific media ID
+      val parts = mediaId.split("__CHAPTER__")
+      val bookId = parts[0]
+      libraryItemWrapper = playerNotificationService.mediaManager.getById(bookId)
+    } else {
+      val libraryItemWithEpisode = playerNotificationService.mediaManager.getPodcastWithEpisodeByEpisodeId(mediaId)
+      if (libraryItemWithEpisode != null) {
+        libraryItemWrapper = libraryItemWithEpisode.libraryItemWrapper
+        podcastEpisode = libraryItemWithEpisode.episode
+      } else {
+        libraryItemWrapper = playerNotificationService.mediaManager.getById(mediaId)
+        if (libraryItemWrapper == null) {
+          Log.e(tag, "onPrepareFromMediaId: Media item not found $mediaId")
+        }
+      }
+    }
+
+    libraryItemWrapper?.let { li ->
+      playerNotificationService.mediaManager.play(li, podcastEpisode, playerNotificationService.getPlayItemRequestPayload(false)) {
+        if (it == null) {
+         Log.e(tag, "Failed to prepare library item")
+        } else {
+          val playbackRate = playerNotificationService.mediaManager.getSavedPlaybackRate()
+          Handler(Looper.getMainLooper()).post {
+            // Prepare but don't auto-play (false instead of true)
+            playerNotificationService.preparePlayer(it, false, playbackRate)
           }
         }
       }

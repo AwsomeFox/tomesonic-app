@@ -294,6 +294,18 @@ class MediaBrowserManager(
                         networkConnectivityManager.resumeFromLastSessionForAndroidAuto()
                     } else {
                         Log.d(tag, "AABrowser: Active session found: ${service.currentPlaybackSession?.displayTitle}")
+
+                        // Ensure Android Auto is aware of the current session
+                        // Update the MediaSession metadata to reflect current session
+                        service.currentPlaybackSession?.let { session ->
+                            val metadata = session.getMediaMetadataCompat(ctx)
+                            service.mediaSession.setMetadata(metadata)
+                            Log.d(tag, "AABrowser: Updated MediaSession metadata for existing session")
+
+                            // Make sure Android Auto knows about the current playback state
+                            service.setMediaSessionPlaybackActions()
+                            Log.d(tag, "AABrowser: Updated MediaSession playback actions for Android Auto")
+                        }
                     }
 
                     val onDataReady = {

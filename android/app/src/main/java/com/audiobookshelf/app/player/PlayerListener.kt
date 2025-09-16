@@ -4,11 +4,15 @@ import android.util.Log
 import com.audiobookshelf.app.data.PlaybackSession
 import com.audiobookshelf.app.data.PlayerState
 import com.audiobookshelf.app.device.DeviceManager
-import com.google.android.exoplayer2.PlaybackException
-import com.google.android.exoplayer2.Player
+// Media3 imports
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 
 //const val PAUSE_LEN_BEFORE_RECHECK = 30000 // 30 seconds
 
+/**
+ * Media3 Player.Listener implementation
+ */
 class PlayerListener(var playerNotificationService:PlayerNotificationService) : Player.Listener {
   var tag = "PlayerListener"
 
