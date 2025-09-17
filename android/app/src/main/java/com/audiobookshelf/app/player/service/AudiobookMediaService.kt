@@ -114,7 +114,7 @@ class AudiobookMediaService : MediaLibraryService(), PlayerSwitchListener {
     private fun refreshTokenAndInitialize() {
         // Use ApiHandler to attempt token refresh
         val apiHandler = ApiHandler(this)
-        
+
         // Ensure server address has proper scheme
         val serverAddress = DeviceManager.serverAddress.let { address ->
             if (!address.startsWith("http://") && !address.startsWith("https://")) {
@@ -123,13 +123,13 @@ class AudiobookMediaService : MediaLibraryService(), PlayerSwitchListener {
                 address
             }
         }
-        
+
         // Create a dummy request to trigger token refresh
         val dummyRequest = okhttp3.Request.Builder()
             .url("${serverAddress}/api/libraries")
             .addHeader("Authorization", "Bearer ${DeviceManager.token}")
             .build()
-        
+
         apiHandler.makeRequest(dummyRequest, null) { response ->
             if (response.has("error")) {
                 Log.e(TAG, "Token refresh failed, proceeding with expired token: ${response.getString("error")}")
@@ -213,7 +213,7 @@ class AudiobookMediaService : MediaLibraryService(), PlayerSwitchListener {
 
                     clientEventEmitter?.onPlayingUpdate(true)
                     // registerShakeSensor() // TODO: Implement shake sensor functionality
-                    
+
                     Log.i(TAG, "*** PLAYBACK STARTED - Foreground service initiated. Media3 should now create a notification. ***")
                 } else {
                     Log.i(TAG, "*** PLAYBACK STOPPED - Releasing resources. ***")
