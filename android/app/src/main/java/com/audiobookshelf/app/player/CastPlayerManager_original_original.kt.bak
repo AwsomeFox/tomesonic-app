@@ -1,9 +1,9 @@
 package com.audiobookshelf.app.player
 
 import android.util.Log
-import com.google.android.exoplayer2.ext.cast.CastPlayer
-import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
-import com.google.android.exoplayer2.ui.PlayerNotificationManager
+import androidx.media3.ext.cast.CastPlayer
+import androidx.media3.ext.mediasession.MediaSessionConnector
+import androidx.media3.ui.PlayerNotificationManager
 import com.google.android.gms.cast.framework.CastContext
 import com.audiobookshelf.app.data.PlaybackSession
 
@@ -35,8 +35,8 @@ class CastPlayerManager(
      */
     fun switchToPlayer(
         useCastPlayer: Boolean,
-        currentPlayer: com.google.android.exoplayer2.Player,
-        mPlayer: com.google.android.exoplayer2.Player,
+        currentPlayer: androidx.media3.Player,
+        mPlayer: androidx.media3.Player,
         mediaSessionConnector: MediaSessionConnector,
         playerNotificationManager: PlayerNotificationManager,
         currentPlaybackSession: PlaybackSession?,
@@ -44,7 +44,7 @@ class CastPlayerManager(
         preparePlayerCallback: (PlaybackSession, Boolean, Float?) -> Unit,
         onMediaPlayerChangedCallback: (String) -> Unit,
         onPlayingUpdateCallback: (Boolean) -> Unit
-    ): com.google.android.exoplayer2.Player {
+    ): androidx.media3.Player {
         
         val wasPlaying = currentPlayer.isPlaying
         
@@ -105,7 +105,7 @@ class CastPlayerManager(
     /**
      * Gets the current media player type
      */
-    fun getMediaPlayer(currentPlayer: com.google.android.exoplayer2.Player): String {
+    fun getMediaPlayer(currentPlayer: androidx.media3.Player): String {
         return if (currentPlayer == castPlayer) PLAYER_CAST else PLAYER_EXO
     }
 
@@ -135,7 +135,7 @@ class CastPlayerManager(
      * Loads media into cast player - implementation to be completed based on CastPlayer API
      */
     fun loadCastPlayer(
-        mediaItems: List<com.google.android.exoplayer2.MediaItem>,
+        mediaItems: List<androidx.media3.MediaItem>,
         currentTrackIndex: Int,
         currentTrackTime: Long,
         playWhenReady: Boolean,

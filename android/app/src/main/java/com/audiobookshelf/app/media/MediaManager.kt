@@ -8,7 +8,9 @@ import com.audiobookshelf.app.data.*
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.server.ApiHandler
 import com.getcapacitor.JSObject
+import com.google.common.util.concurrent.SettableFuture
 import java.util.*
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.json.JSONException
@@ -253,7 +255,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     return false
   }
 
-  private fun loadItemsInProgressForAllLibraries(cb: (List<ItemInProgress>) -> Unit) {
+  fun loadItemsInProgressForAllLibraries(cb: (List<ItemInProgress>) -> Unit) {
     if (serverItemsInProgress.isNotEmpty()) {
       cb(serverItemsInProgress)
     } else {
@@ -429,6 +431,25 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   }
 
   /**
+   * Returns podcasts for selected library synchronously for Android Auto
+   * If data is not found from local cache it is loaded from server
+   */
+  fun loadLibraryPodcastsSync(libraryId: String): List<LibraryItem>? {
+    val future = SettableFuture.create<List<LibraryItem>?>()
+    
+    loadLibraryPodcasts(libraryId) { podcasts ->
+      future.set(podcasts)
+    }
+    
+    return try {
+      future.get()
+    } catch (e: Exception) {
+      Log.e(tag, "AABrowser: Error loading library podcasts synchronously", e)
+      null
+    }
+  }
+
+  /**
    *  Returns series with audio books from selected library.
    *  If data is not found from local cache then it will be fetched from server
    */
@@ -446,6 +467,25 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
         cb(seriesItemsWithAudio)
       }
+    }
+  }
+
+  /**
+   *  Returns series with audio books from selected library synchronously for Android Auto
+   *  If data is not found from local cache then it will be fetched from server
+   */
+  fun loadLibrarySeriesWithAudioSync(libraryId: String): List<LibrarySeriesItem> {
+    val future = SettableFuture.create<List<LibrarySeriesItem>>()
+    
+    loadLibrarySeriesWithAudio(libraryId) { series ->
+      future.set(series)
+    }
+    
+    return try {
+      future.get()
+    } catch (e: Exception) {
+      Log.e(tag, "AABrowser: Error loading library series synchronously", e)
+      emptyList()
     }
   }
 
@@ -539,6 +579,25 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         }
         cb(authorItemsWithBooks)
       }
+    }
+  }
+
+  /**
+   * Returns authors with books from library synchronously for Android Auto
+   * If data is not found from local cache then it will be fetched from server
+   */
+  fun loadAuthorsWithBooksSync(libraryId: String): List<LibraryAuthorItem> {
+    val future = SettableFuture.create<List<LibraryAuthorItem>>()
+    
+    loadAuthorsWithBooks(libraryId) { authors ->
+      future.set(authors)
+    }
+    
+    return try {
+      future.get()
+    } catch (e: Exception) {
+      Log.e(tag, "AABrowser: Error loading library authors synchronously", e)
+      emptyList()
     }
   }
 
@@ -667,6 +726,25 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   }
 
   /**
+   * Returns collections with audiobooks from library synchronously for Android Auto
+   * If data is not found from local cache then it will be fetched from server
+   */
+  fun loadLibraryCollectionsWithAudioSync(libraryId: String): List<LibraryCollection> {
+    val future = SettableFuture.create<List<LibraryCollection>>()
+    
+    loadLibraryCollectionsWithAudio(libraryId) { collections ->
+      future.set(collections)
+    }
+    
+    return try {
+      future.get()
+    } catch (e: Exception) {
+      Log.e(tag, "AABrowser: Error loading library collections synchronously", e)
+      emptyList()
+    }
+  }
+
+  /**
    * Returns audiobooks for collection from library
    * If data is not found from local cache then it will be fetched from server
    */
@@ -693,10 +771,45 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   fun loadLibraryDiscoveryBooksWithAudio(libraryId: String, cb: (List<LibraryItem>) -> Unit) {
     if (!cachedLibraryDiscovery.containsKey(libraryId)) {
       cb(listOf())
+      return
     }
-    val libraryItemsWithAudio = cachedLibraryDiscovery[libraryId]?.filter { li -> li.checkHasTracks() }
-    libraryItemsWithAudio?.forEach { libraryItem -> addServerLibrary(libraryItem) }
-    cb(libraryItemsWithAudio as List<LibraryItem>)
+    val libraryItemsWithAudio = cachedLibraryDiscovery[libraryId]?.filter { li -> li.checkHasTracks() } ?: listOf()
+    libraryItemsWithAudio.forEach { libraryItem -> addServerLibrary(libraryItem) }
+    cb(libraryItemsWithAudio)
+  }
+
+  /**
+   * Returns library discovery books with audio synchronously for Android Auto
+   */
+  fun loadLibraryDiscoveryBooksWithAudioSync(libraryId: String): List<LibraryItem> {
+    if (!cachedLibraryDiscovery.containsKey(libraryId)) {
+      return listOf()
+    }
+    val libraryItemsWithAudio = cachedLibraryDiscovery[libraryId]?.filter { li -> li.checkHasTracks() } ?: listOf()
+    libraryItemsWithAudio.forEach { libraryItem -> addServerLibrary(libraryItem) }
+    return libraryItemsWithAudio
+  }
+
+  /**
+   * Returns cached library discovery items for [libraryId]
+   * If no items are cached returns empty list
+   */
+  fun getCachedLibraryDiscoveryItems(libraryId: String): List<LibraryItem> {
+    return cachedLibraryDiscovery[libraryId] ?: listOf()
+  }
+
+  /**
+   * Returns all cached library recent shelves
+   */
+  fun getAllCachedLibraryRecentShelves(): Map<String, MutableList<LibraryShelfType>> {
+    return cachedLibraryRecentShelves
+  }
+
+  /**
+   * Returns true if any recent shelves are loaded
+   */
+  fun hasRecentShelvesLoaded(): Boolean {
+    return cachedLibraryRecentShelves.isNotEmpty() && cachedLibraryRecentShelves.values.any { it.isNotEmpty() }
   }
 
   /**
@@ -870,6 +983,317 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     androidAutoLoadListeners = mutableListOf()
   }
 
+  /**
+   * Load libraries synchronously for Android Auto
+   */
+  fun loadLibrariesSync(): List<Library> {
+    val future = SettableFuture.create<List<Library>>()
+    
+    loadLibraries { libraries ->
+      future.set(libraries)
+    }
+    
+    return try {
+      future.get()
+    } catch (e: Exception) {
+      Log.e(tag, "AABrowser: Error loading libraries synchronously", e)
+      emptyList()
+    }
+  }
+
+  /**
+   * Load libraries asynchronously for Android Auto
+   */
+  fun loadLibrariesAsync(cb: (List<Library>) -> Unit) {
+    loadLibraries(cb)
+  }
+
+  /**
+   * Load items in progress synchronously for Android Auto
+   */
+  fun loadItemsInProgressSync(): List<ItemInProgress> {
+    val future = SettableFuture.create<List<ItemInProgress>>()
+    
+    if (serverItemsInProgress.isNotEmpty()) {
+      Log.d(tag, "AABrowser: Using cached items in progress, count=${serverItemsInProgress.size}")
+      // Sort by last played time (most recent first)
+      return serverItemsInProgress.sortedByDescending { it.progressLastUpdate }
+    } else {
+      Log.d(tag, "AABrowser: Loading items in progress from API")
+      apiHandler.getAllItemsInProgress { itemsInProgress ->
+        val filteredItemsInProgress = itemsInProgress.filter {
+          val libraryItem = it.libraryItemWrapper as LibraryItem
+          libraryItem.checkHasTracks()
+        }
+        
+        serverItemsInProgress = filteredItemsInProgress
+        Log.d(tag, "AABrowser: Loaded ${filteredItemsInProgress.size} items in progress from all libraries")
+        
+        // Sort by last played time (most recent first)
+        val sortedItems = filteredItemsInProgress.sortedByDescending { it.progressLastUpdate }
+        future.set(sortedItems)
+      }
+      
+      return try {
+        future.get()
+      } catch (e: Exception) {
+        Log.e(tag, "AABrowser: Error loading items in progress synchronously", e)
+        emptyList()
+      }
+    }
+  }
+
+  /**
+   * Load items in progress asynchronously for Android Auto
+   */
+  fun loadItemsInProgressAsync(cb: (List<ItemInProgress>) -> Unit) {
+    if (serverItemsInProgress.isNotEmpty()) {
+      Log.d(tag, "AABrowser: Using cached items in progress, count=${serverItemsInProgress.size}")
+      cb(serverItemsInProgress)
+    } else {
+      Log.d(tag, "AABrowser: Loading items in progress from API")
+      apiHandler.getCurrentUser { user ->
+        if (user != null && user.mediaProgress.isNotEmpty()) {
+          Log.d(tag, "AABrowser: API returned ${user.mediaProgress.size} media progress items")
+          serverUserMediaProgress = user.mediaProgress.toMutableList()
+
+          // Convert to items in progress
+          val itemsInProgress = user.mediaProgress.mapNotNull { progress ->
+            val libraryItem = serverLibraryItems.find { it.id == progress.libraryItemId }
+            if (libraryItem != null) {
+              ItemInProgress(libraryItem, null, progress.lastUpdate, false)
+            } else {
+              null
+            }
+          }
+
+          serverItemsInProgress = itemsInProgress
+          Log.d(tag, "AABrowser: Converted to ${itemsInProgress.size} items in progress")
+          cb(itemsInProgress)
+        } else {
+          Log.d(tag, "AABrowser: No user data or media progress available")
+          cb(emptyList())
+        }
+      }
+    }
+  }
+
+  /**
+   * Load recent items synchronously for Android Auto
+   */
+  fun loadRecentItemsSync(): List<LibraryItem> {
+    val future = SettableFuture.create<List<LibraryItem>>()
+    
+    // First, ensure personalized data is loaded for all libraries
+    if (!allLibraryPersonalizationsDone) {
+      Log.d(tag, "AABrowser: Loading personalized data for recent items")
+      populatePersonalizedDataForAllLibraries {
+        // After personalized data is loaded, get recent items
+        val recentItems = getRecentItemsFromShelves()
+        future.set(recentItems)
+      }
+    } else {
+      // Personalized data already loaded, get recent items directly
+      val recentItems = getRecentItemsFromShelves()
+      future.set(recentItems)
+    }
+    
+    return try {
+      future.get()
+    } catch (e: Exception) {
+      Log.e(tag, "AABrowser: Error loading recent items synchronously", e)
+      emptyList()
+    }
+  }
+
+  /**
+   * Helper method to extract recent items from loaded shelves
+   */
+  private fun getRecentItemsFromShelves(): List<LibraryItem> {
+    val recentItems = mutableListOf<LibraryItem>()
+
+    // Load recent items from all libraries
+    val allRecentShelves = getAllCachedLibraryRecentShelves()
+    allRecentShelves.values.forEach { shelves ->
+      shelves.forEach { shelf ->
+        when (shelf) {
+          is LibraryShelfBookEntity -> {
+            shelf.entities?.forEach { book ->
+              if (recentItems.find { it.id == book.id } == null) {
+                recentItems.add(book)
+              }
+            }
+          }
+          is LibraryShelfPodcastEntity -> {
+            shelf.entities?.forEach { podcast ->
+              if (recentItems.find { it.id == podcast.id } == null) {
+                recentItems.add(podcast)
+              }
+            }
+          }
+          else -> {
+            // Handle other shelf types or ignore
+          }
+        }
+      }
+    }
+
+    Log.d(tag, "AABrowser: Found ${recentItems.size} recent items from personalized shelves")
+    return recentItems
+  }
+
+  /**
+   * Load recent items asynchronously for Android Auto
+   */
+  fun loadRecentItemsAsync(cb: (List<LibraryItem>) -> Unit) {
+    val recentItems = mutableListOf<LibraryItem>()
+
+    // Load recent items from all libraries
+    val allRecentShelves = getAllCachedLibraryRecentShelves()
+    allRecentShelves.values.forEach { shelves ->
+      shelves.forEach { shelf ->
+        when (shelf) {
+          is LibraryShelfBookEntity -> {
+            shelf.entities?.forEach { book ->
+              if (recentItems.find { it.id == book.id } == null) {
+                recentItems.add(book)
+              }
+            }
+          }
+          is LibraryShelfPodcastEntity -> {
+            shelf.entities?.forEach { podcast ->
+              if (recentItems.find { it.id == podcast.id } == null) {
+                recentItems.add(podcast)
+              }
+            }
+          }
+          else -> {
+            // Handle other shelf types or ignore
+          }
+        }
+      }
+    }
+
+    if (recentItems.isNotEmpty()) {
+      Log.d(tag, "AABrowser: Using cached recent items, count=${recentItems.size}")
+      cb(recentItems)
+    } else {
+      // If no cached recent items, load from discovery shelves
+      var loadedCount = 0
+      val totalLibraries = serverLibraries.count { (it.stats?.numAudioFiles ?: 0) > 0 }
+
+      if (totalLibraries == 0) {
+        Log.d(tag, "AABrowser: No libraries to load recent items from")
+        cb(emptyList())
+        return
+      }
+
+      serverLibraries.forEach { library ->
+        if ((library.stats?.numAudioFiles ?: 0) > 0) {
+          loadLibraryDiscoveryBooksWithAudio(library.id) {
+            loadedCount++
+            Log.d(tag, "AABrowser: Loaded discovery for ${library.name} ($loadedCount/$totalLibraries)")
+
+            if (loadedCount >= totalLibraries) {
+              // Re-try loading recent items after discovery is loaded
+              val finalRecentItems = mutableListOf<LibraryItem>()
+              val finalRecentShelves = getAllCachedLibraryRecentShelves()
+              finalRecentShelves.values.forEach { shelves ->
+                shelves.forEach { shelf ->
+                  when (shelf) {
+                    is LibraryShelfBookEntity -> {
+                      shelf.entities?.forEach { book ->
+                        if (finalRecentItems.find { it.id == book.id } == null) {
+                          finalRecentItems.add(book)
+                        }
+                      }
+                    }
+                    is LibraryShelfPodcastEntity -> {
+                      shelf.entities?.forEach { podcast ->
+                        if (finalRecentItems.find { it.id == podcast.id } == null) {
+                          finalRecentItems.add(podcast)
+                        }
+                      }
+                    }
+                    else -> {
+                      // Handle other shelf types or ignore
+                    }
+                  }
+                }
+              }
+              Log.d(tag, "AABrowser: Final recent items count=${finalRecentItems.size}")
+              cb(finalRecentItems)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Load library contents synchronously for Android Auto
+   */
+  fun loadLibraryContentsSync(libraryId: String): List<LibraryItem> {
+    val future = SettableFuture.create<List<LibraryItem>>()
+    
+    val library = serverLibraries.find { it.id == libraryId }
+    if (library == null) {
+      Log.w(tag, "AABrowser: Library $libraryId not found")
+      return emptyList()
+    }
+
+    if (library.mediaType == "podcast") {
+      // For podcast libraries, load podcasts
+      loadLibraryPodcasts(libraryId) { podcasts ->
+        val podcastItems = podcasts ?: emptyList()
+        Log.d(tag, "AABrowser: Loaded ${podcastItems.size} podcasts for library $libraryId")
+        future.set(podcastItems)
+      }
+    } else {
+      // For book libraries, load from discovery shelf
+      loadLibraryDiscoveryBooksWithAudio(libraryId) {
+        val discoveryItems = cachedLibraryDiscovery[libraryId] ?: emptyList()
+        Log.d(tag, "AABrowser: Loaded ${discoveryItems.size} discovery items for library $libraryId")
+        future.set(discoveryItems)
+      }
+    }
+    
+    return try {
+      future.get()
+    } catch (e: Exception) {
+      Log.e(tag, "AABrowser: Error loading library contents synchronously", e)
+      emptyList()
+    }
+  }
+
+  /**
+   * Load library contents asynchronously for Android Auto
+   */
+  fun loadLibraryContentsAsync(libraryId: String, cb: (List<LibraryItem>) -> Unit) {
+    val library = serverLibraries.find { it.id == libraryId }
+    if (library == null) {
+      Log.w(tag, "AABrowser: Library $libraryId not found")
+      cb(emptyList())
+      return
+    }
+
+    if (library.mediaType == "podcast") {
+      // For podcast libraries, load podcasts
+      loadLibraryPodcasts(libraryId) { podcasts ->
+        val podcastItems = podcasts ?: emptyList()
+        Log.d(tag, "AABrowser: Loaded ${podcastItems.size} podcasts for library $libraryId")
+        cb(podcastItems)
+      }
+    } else {
+      // For book libraries, load from discovery shelf
+      loadLibraryDiscoveryBooksWithAudio(libraryId) {
+        val discoveryItems = cachedLibraryDiscovery[libraryId] ?: emptyList()
+        Log.d(tag, "AABrowser: Loaded ${discoveryItems.size} discovery items for library $libraryId")
+        cb(discoveryItems)
+      }
+    }
+  }
+
   private suspend fun checkServerConnection(config:ServerConnectionConfig) : Boolean {
     var successfulPing = false
     suspendCoroutine { cont ->
@@ -1016,8 +1440,18 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
             Log.w(tag, "AABrowser: No libraries returned from server request")
             cb()
           } else {
-            Log.d(tag, "AABrowser: Libraries loaded successfully, calling callback")
-            cb() // Fully loaded
+            Log.d(tag, "AABrowser: Libraries loaded successfully, now loading continue items and recent shelves")
+
+            // Load continue items
+            initializeInProgressItems {
+              Log.d(tag, "AABrowser: Continue items loaded, count=${serverItemsInProgress.size}")
+
+              // Load recent shelves for all libraries
+              populatePersonalizedDataForAllLibraries {
+                Log.d(tag, "AABrowser: Recent shelves loaded for all libraries")
+                cb() // Fully loaded
+              }
+            }
           }
         }
       } else { // Not connected to server
@@ -1119,10 +1553,69 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     }
   }
 
+  /**
+   * Get library item by ID with fallback to server if not found in cache
+   * This is used for Android Auto playback when the item might not be cached
+   */
+  fun getByIdSync(id: String): LibraryItemWrapper? {
+    return if (id.startsWith("local")) {
+      DeviceManager.dbManager.getLocalLibraryItem(id)
+    } else {
+      // First try to find in cache
+      var item = serverLibraryItems.find { it.id == id }
+      if (item != null) {
+        Log.d(tag, "Found item $id in cache")
+        return item
+      }
+      
+      // If not found in cache, try to fetch from server synchronously
+      Log.d(tag, "Item $id not found in cache (${serverLibraryItems.size} items cached), fetching from server...")
+      val future = SettableFuture.create<LibraryItem?>()
+      
+      loadLibraryItem(id) { libraryItem ->
+        if (libraryItem != null && libraryItem is LibraryItem) {
+          // Add to cache for future use
+          addServerLibrary(libraryItem)
+          Log.d(tag, "Successfully fetched and cached item $id from server")
+          future.set(libraryItem)
+        } else {
+          Log.e(tag, "Failed to fetch item $id from server")
+          future.set(null)
+        }
+      }
+      
+      try {
+        item = future.get(5, TimeUnit.SECONDS)
+      } catch (e: Exception) {
+        Log.e(tag, "Failed to fetch library item $id from server: ${e.message}")
+        return null
+      }
+      item
+    }
+  }
+
   fun getFromSearch(query:String?) : LibraryItemWrapper? {
     if (query.isNullOrEmpty()) return getFirstItem()
     return serverLibraryItems.find {
       it.title.lowercase(Locale.getDefault()).contains(query.lowercase(Locale.getDefault()))
+    }
+  }
+
+  /**
+   * Get progress percentage for a library item
+   */
+  fun getProgressPercentage(libraryItemId: String, episodeId: String? = null): Int {
+    val progress = if (episodeId != null) {
+      // For podcast episodes
+      serverUserMediaProgress.find { it.libraryItemId == libraryItemId && it.episodeId == episodeId }
+    } else {
+      // For books
+      serverUserMediaProgress.find { it.libraryItemId == libraryItemId }
+    }
+    return if (progress != null) {
+      (progress.progress * 100).toInt()
+    } else {
+      0
     }
   }
 
@@ -1177,6 +1670,312 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
             Log.d(tag, "AABrowser: All data loaded, calling callback")
             cb()
         }
+    }
+  }
+
+  // Cache accessor methods for Media3 Android Auto browser
+
+  /**
+   * Get cached authors for a library, return empty list if not cached
+   * If no cached data, trigger async loading for next time
+   */
+  fun getCachedAuthors(libraryId: String): List<LibraryAuthorItem> {
+    val cached = cachedLibraryAuthors[libraryId]?.values?.toList()
+    if (cached.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached authors for $libraryId, triggering load")
+      loadAuthorsWithBooks(libraryId) { authors ->
+        Log.d(tag, "AABrowser: Loaded ${authors.size} authors for $libraryId")
+      }
+      return emptyList()
+    }
+    return cached
+  }
+
+  /**
+   * Get cached books for a specific author, return empty list if not cached
+   * If no cached data, trigger async loading for next time
+   */
+  fun getCachedAuthorBooks(libraryId: String, authorId: String): List<LibraryItem> {
+    val cached = cachedLibraryAuthorItems[libraryId]?.get(authorId)
+    if (cached.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached author books for $libraryId/$authorId, triggering load")
+      loadAuthorBooksWithAudio(libraryId, authorId) { books ->
+        Log.d(tag, "AABrowser: Loaded ${books.size} books for author $authorId")
+      }
+      return emptyList()
+    }
+    return cached
+  }
+
+  /**
+   * Get cached series for a library, return empty list if not cached
+   * If no cached data, trigger async loading for next time
+   */
+  fun getCachedSeries(libraryId: String): List<LibrarySeriesItem> {
+    val cached = cachedLibrarySeries[libraryId]
+    if (cached.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached series for $libraryId, triggering load")
+      loadLibrarySeriesWithAudio(libraryId) { series ->
+        Log.d(tag, "AABrowser: Loaded ${series.size} series for $libraryId")
+      }
+      return emptyList()
+    }
+    return cached
+  }
+
+  /**
+   * Get cached books for a specific series, return empty list if not cached
+   * If no cached data, trigger async loading for next time
+   */
+  fun getCachedSeriesBooks(libraryId: String, seriesId: String): List<LibraryItem> {
+    val cached = cachedLibrarySeriesItem[libraryId]?.get(seriesId)
+    if (cached.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached series books for $libraryId/$seriesId, triggering load")
+      loadLibrarySeriesItemsWithAudio(libraryId, seriesId) { books ->
+        Log.d(tag, "AABrowser: Loaded ${books.size} books for series $seriesId")
+      }
+      return emptyList()
+    }
+    return cached
+  }
+
+  /**
+   * Get cached collections for a library, return empty list if not cached
+   * If no cached data, trigger async loading for next time
+   */
+  fun getCachedCollections(libraryId: String): List<LibraryCollection> {
+    val cached = cachedLibraryCollections[libraryId]?.values?.toList()
+    if (cached.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached collections for $libraryId, triggering load")
+      loadLibraryCollectionsWithAudio(libraryId) { collections ->
+        Log.d(tag, "AABrowser: Loaded ${collections.size} collections for $libraryId")
+      }
+      return emptyList()
+    }
+    return cached
+  }
+
+  /**
+   * Get cached books for a specific collection, return empty list if not cached
+   */
+  fun getCachedCollectionBooks(libraryId: String, collectionId: String): List<LibraryItem> {
+    val collection = cachedLibraryCollections[libraryId]?.get(collectionId)
+    if (collection?.books.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached collection books for $libraryId/$collectionId, triggering load")
+      loadLibraryCollectionBooksWithAudio(libraryId, collectionId) { books ->
+        Log.d(tag, "AABrowser: Loaded ${books.size} books for collection $collectionId")
+      }
+      return emptyList()
+    }
+    return collection?.books ?: emptyList()
+  }
+
+  /**
+   * Get cached discovery items for a library, return empty list if not cached
+   * If no cached data, trigger async loading for next time
+   */
+  fun getCachedDiscoveryItems(libraryId: String): List<LibraryItem> {
+    val cached = cachedLibraryDiscovery[libraryId]
+    if (cached.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached discovery for $libraryId, triggering load")
+      loadLibraryDiscoveryBooksWithAudio(libraryId) { books ->
+        Log.d(tag, "AABrowser: Loaded ${books.size} discovery books for $libraryId")
+      }
+      return emptyList()
+    }
+    return cached
+  }
+
+  /**
+   * Get cached podcasts for a library, return empty list if not cached
+   * If no cached data, trigger async loading for next time
+   */
+  fun getCachedPodcasts(libraryId: String): List<LibraryItem> {
+    val cached = cachedLibraryPodcasts[libraryId]?.values?.toList()
+    if (cached.isNullOrEmpty()) {
+      // Trigger async loading for next browsing session
+      Log.d(tag, "AABrowser: No cached podcasts for $libraryId, triggering load")
+      loadLibraryPodcasts(libraryId) { podcasts ->
+        Log.d(tag, "AABrowser: Loaded ${podcasts?.size ?: 0} podcasts for $libraryId")
+      }
+      return emptyList()
+    }
+    return cached
+  }
+
+  /**
+   * Get cached books for a specific author in a specific series, return empty list if not cached
+   */
+  fun getCachedAuthorSeriesBooks(libraryId: String, authorId: String, seriesId: String): List<LibraryItem> {
+    val authorSeriesKey = "$authorId|$seriesId"
+    return cachedLibraryAuthorSeriesItems[libraryId]?.get(authorSeriesKey) ?: emptyList()
+  }
+
+  /**
+   * Check if we have any cached data for Android Auto browsing
+   */
+  fun hasCachedBrowsingData(): Boolean {
+    return cachedLibraryAuthors.isNotEmpty() ||
+           cachedLibrarySeries.isNotEmpty() ||
+           cachedLibraryCollections.isNotEmpty() ||
+           cachedLibraryDiscovery.isNotEmpty()
+  }
+
+  /**
+   * Ensure server connection is established for Android Auto
+   * This is specifically for Android Auto initialization to check and establish server connection
+   */
+  fun ensureServerConnectionForAndroidAuto(cb: () -> Unit) {
+    Log.d(tag, "AABrowser: Ensuring server connection for Android Auto")
+
+    // If we already have a valid connection, just call the callback
+    if (hasValidServerConnection()) {
+      Log.d(tag, "AABrowser: Already have valid server connection")
+      cb()
+      return
+    }
+
+    // Initialize persisted data first
+    initializePersistedData()
+
+    // Try to establish server connection
+    checkSetValidServerConnectionConfig { isConnected ->
+      if (isConnected) {
+        serverConfigIdUsed = DeviceManager.serverConnectionConfigId
+        Log.d(tag, "AABrowser: Server connection established for Android Auto - config id=$serverConfigIdUsed")
+      } else {
+        Log.d(tag, "AABrowser: No server connection available for Android Auto")
+      }
+      cb()
+    }
+  }
+
+  /**
+   * Pre-load essential data for Android Auto browsing
+   * This should be called when Android Auto connects to ensure we have data available
+   */
+  fun preloadAndroidAutoBrowsingData(cb: () -> Unit) {
+    Log.d(tag, "AABrowser: Pre-loading essential browsing data")
+
+    // Check if we have a valid server connection before attempting to load data
+    if (!hasValidServerConnection()) {
+      Log.w(tag, "AABrowser: No valid server connection, skipping server data loading")
+      cb()
+      return
+    }
+
+    // First ensure we have libraries loaded
+    if (serverLibraries.isEmpty()) {
+      Log.d(tag, "AABrowser: No libraries available, attempting to load from server")
+      loadLibraries { libraries ->
+        if (libraries.isNotEmpty()) {
+          Log.d(tag, "AABrowser: Loaded ${libraries.size} libraries, now loading browsing data")
+          loadPersonalizedAndLibraryData(cb)
+        } else {
+          Log.w(tag, "AABrowser: No libraries available from server")
+          cb()
+        }
+      }
+      return
+    }
+
+    loadPersonalizedAndLibraryData(cb)
+  }
+
+  private fun loadPersonalizedAndLibraryData(cb: () -> Unit) {
+    // First load personalized data (for recent items and continue listening)
+    Log.d(tag, "AABrowser: Loading personalized data for all libraries")
+    populatePersonalizedDataForAllLibraries {
+      Log.d(tag, "AABrowser: Personalized data loaded, now loading library browsing data")
+      preloadLibraryData(cb)
+    }
+  }
+
+  private fun preloadLibraryData(cb: () -> Unit) {
+    var loadingCount = 0
+    var completedCount = 0
+
+    // Count libraries that need data loading
+    serverLibraries.forEach { library ->
+      if (library.stats?.numAudioFiles ?: 0 > 0) {
+        if (library.mediaType == "podcast") {
+          loadingCount += 1 // Only podcasts for podcast libraries
+        } else {
+          loadingCount += 4 // authors, series, collections, discovery for book libraries
+        }
+      }
+    }
+
+    if (loadingCount == 0) {
+      Log.d(tag, "AABrowser: No libraries to load data for")
+      cb()
+      return
+    }
+
+    val checkComplete = {
+      completedCount++
+      Log.d(tag, "AABrowser: Completed $completedCount/$loadingCount data loads")
+      if (completedCount >= loadingCount) {
+        Log.d(tag, "AABrowser: All essential browsing data loaded")
+        cb()
+      }
+    }
+
+    // Load essential data for each library
+    serverLibraries.forEach { library ->
+      if (library.stats?.numAudioFiles ?: 0 > 0) {
+        if (library.mediaType == "podcast") {
+          // Load podcasts for podcast library
+          loadLibraryPodcasts(library.id) {
+            Log.d(tag, "AABrowser: Loaded podcasts for ${library.name}")
+            checkComplete()
+          }
+        } else {
+          // Load all categories for book library
+          loadAuthorsWithBooks(library.id) {
+            Log.d(tag, "AABrowser: Loaded authors for ${library.name}")
+            checkComplete()
+          }
+
+          loadLibrarySeriesWithAudio(library.id) {
+            Log.d(tag, "AABrowser: Loaded series for ${library.name}")
+            checkComplete()
+          }
+
+          loadLibraryCollectionsWithAudio(library.id) {
+            Log.d(tag, "AABrowser: Loaded collections for ${library.name}")
+            checkComplete()
+          }
+
+          loadLibraryDiscoveryBooksWithAudio(library.id) {
+            Log.d(tag, "AABrowser: Loaded discovery for ${library.name}")
+            checkComplete()
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if we have a valid server connection and libraries
+   */
+  fun hasValidServerConnection(): Boolean {
+    return DeviceManager.isConnectedToServer && serverLibraries.isNotEmpty()
+  }
+
+  /**
+   * Get all available libraries with audio content
+   */
+  fun getLibrariesWithAudio(): List<Library> {
+    return serverLibraries.filter { library ->
+      (library.stats?.numAudioFiles ?: 0) > 0
     }
   }
 }

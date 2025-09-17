@@ -40,6 +40,7 @@ class MediaProgressSyncer(
 
   var currentPlaybackSession: PlaybackSession? = null // copy of pb session currently syncing
   var currentLocalMediaProgress: LocalMediaProgress? = null
+  var isInitialSessionEstablishment: Boolean = true // Track if this is the first time establishing a session
 
   private val currentDisplayTitle
     get() = currentPlaybackSession?.displayTitle ?: "Unset"
@@ -60,11 +61,16 @@ class MediaProgressSyncer(
         lastSyncTime = 0L
         Log.d(tag, "start: Set last sync time 0 $lastSyncTime")
         failedSyncs = 0
+        isInitialSessionEstablishment = true // New session, reset establishment flag
       } else {
+        isInitialSessionEstablishment = false // Continuing existing session
         return
       }
     } else if (playbackSession.id != currentSessionId) {
       currentLocalMediaProgress = null
+      isInitialSessionEstablishment = true // New session
+    } else {
+      isInitialSessionEstablishment = false // Same session
     }
 
     listeningTimerRunning = true
@@ -128,7 +134,10 @@ class MediaProgressSyncer(
     // Try to force an immediate sync after playback starts so remote progress
     // is updated promptly (if network/server available).
     try {
-      forceSyncNow(true) { /* ignore result here */ }
+      forceSyncNow(true) {
+        // After first sync, this is no longer initial establishment
+        isInitialSessionEstablishment = false
+      }
     } catch (e: Exception) {
       Log.e(tag, "play: forceSyncNow failed: ${e.message}")
     }
@@ -464,5 +473,6 @@ class MediaProgressSyncer(
     lastSyncTime = 0L
     Log.d(tag, "reset: Set last sync time 0 $lastSyncTime")
     failedSyncs = 0
+    isInitialSessionEstablishment = true
   }
 }

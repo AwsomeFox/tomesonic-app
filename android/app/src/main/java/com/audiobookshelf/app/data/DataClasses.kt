@@ -5,6 +5,8 @@ import android.icu.text.DateFormat
 import android.os.Bundle
 import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media.utils.MediaConstants
 import com.audiobookshelf.app.media.MediaManager
 import com.fasterxml.jackson.annotation.*
@@ -380,6 +382,26 @@ data class Library(
       putString(MediaMetadataCompat.METADATA_KEY_TITLE, name)
       putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, getUriToAbsIconDrawable(context, icon).toString())
     }.build()
+  }
+
+  @JsonIgnore
+  fun getMediaItem(context: Context, targetType: String? = null): MediaItem {
+    var mediaId = id
+    if (targetType !== null) {
+      mediaId = "__RECENTLY__$id"
+    }
+    return MediaItem.Builder()
+      .setMediaId(mediaId)
+      .setMediaMetadata(
+        MediaMetadata.Builder()
+          .setTitle(name)
+          .setArtworkUri(getUriToAbsIconDrawable(context, icon))
+          .setIsBrowsable(true)
+          .setIsPlayable(false)
+          .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+          .build()
+      )
+      .build()
   }
 }
 

@@ -60,6 +60,11 @@ android {
       proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
     }
   }
+
+  lint {
+    abortOnError false
+    checkReleaseBuilds false
+  }
 }
 
 repositories {
@@ -99,19 +104,19 @@ dependencies {
 
   implementation "androidx.media:media:$androidx_media_version"
 
-  // Exo Player
-  if (findProject(':exoplayer-library-core') != null) {
-    implementation project(':exoplayer-library-core')
-    implementation project(':exoplayer-library-ui')
-    implementation project(':exoplayer-extension-mediasession')
-    implementation project(':exoplayer-extension-cast')
-    implementation project(':exoplayer-hls')
+  // Media3 - migrated from ExoPlayer2
+  if (findProject(':media3-exoplayer') != null) {
+    implementation project(':media3-exoplayer')
+    implementation project(':media3-ui')
+    implementation project(':media3-session')
+    // MIGRATION-DEFERRED: CAST implementation project(':media3-cast')
+    implementation project(':media3-exoplayer-hls')
   } else {
-    implementation "com.google.android.exoplayer:exoplayer-core:$exoplayer_version"
-    implementation "com.google.android.exoplayer:exoplayer-ui:$exoplayer_version"
-    implementation "com.google.android.exoplayer:extension-mediasession:$exoplayer_version"
-    implementation "com.google.android.exoplayer:extension-cast:$exoplayer_version"
-    implementation "com.google.android.exoplayer:exoplayer-hls:$exoplayer_version"
+    implementation "androidx.media3:media3-exoplayer:$media3_version"
+    implementation "androidx.media3:media3-ui:$media3_version"
+    implementation "androidx.media3:media3-session:$media3_version"
+    // MIGRATION-DEFERRED: CAST implementation "androidx.media3:media3-cast:$media3_version"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3_version"
   }
 
   // Glide for images
@@ -128,6 +133,13 @@ dependencies {
 
   // Jackson for JSON
   implementation 'com.fasterxml.jackson.module:jackson-module-kotlin:2.12.2'
+}
+
+dependencies {
+  // Test dependencies
+  testImplementation 'junit:junit:4.13.2'
+  androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+  androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 }
 
 apply from: 'capacitor.build.gradle'

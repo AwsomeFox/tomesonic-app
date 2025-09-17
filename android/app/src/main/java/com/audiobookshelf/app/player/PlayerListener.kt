@@ -4,8 +4,8 @@ import android.util.Log
 import com.audiobookshelf.app.data.PlaybackSession
 import com.audiobookshelf.app.data.PlayerState
 import com.audiobookshelf.app.device.DeviceManager
-import com.google.android.exoplayer2.PlaybackException
-import com.google.android.exoplayer2.Player
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 
 //const val PAUSE_LEN_BEFORE_RECHECK = 30000 // 30 seconds
 
@@ -28,6 +28,12 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
     newPosition: Player.PositionInfo,
     reason: Int
   ) {
+    // Reset track transition flag on any position discontinuity
+    if (playerNotificationService.expectingTrackTransition) {
+      Log.d(tag, "onPositionDiscontinuity: Resetting expectingTrackTransition flag")
+      playerNotificationService.expectingTrackTransition = false
+    }
+
     if (reason == Player.DISCONTINUITY_REASON_SEEK) {
       // If playing set seeking flag
       Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying} reason=SEEK")

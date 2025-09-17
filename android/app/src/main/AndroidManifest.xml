@@ -44,10 +44,12 @@
             android:resource="@drawable/icon" />
         <meta-data
             android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" /> <!-- Support for Cast -->
+            android:resource="@xml/automotive_app_desc" />
+        <!-- MIGRATION-DEFERRED: CAST
         <meta-data
             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
             android:value="com.audiobookshelf.app.CastOptionsProvider" />
+        -->
 
         <activity
             android:name=".MainActivity"
@@ -90,7 +92,10 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <!-- Primary intent filter for Android Auto compatibility -->
                 <action android:name="android.media.browse.MediaBrowserService" />
+                <!-- Media3 MediaLibraryService for modern Android -->
+                <action android:name="androidx.media3.session.MediaLibraryService" />
             </intent-filter>
         </service>
 

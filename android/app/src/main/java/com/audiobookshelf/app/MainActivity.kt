@@ -14,10 +14,16 @@ import android.os.Looper
 import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowInsets
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import android.webkit.WebView
-import androidx.core.app.ActivityCompat
-import androidx.core.view.updateLayoutParams
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import androidx.media3.common.Player
+import com.google.common.util.concurrent.FutureCallback
+import com.google.common.util.concurrent.Futures
+import java.util.concurrent.ExecutionException
 import com.anggrayudi.storage.SimpleStorage
 import com.anggrayudi.storage.SimpleStorageHelper
 import com.audiobookshelf.app.managers.DbManager
@@ -36,8 +42,9 @@ class MainActivity : BridgeActivity() {
   private val tag = "MainActivity"
 
   private var mBounded = false
+  private lateinit var mConnection: ServiceConnection
   lateinit var foregroundService : PlayerNotificationService
-  private lateinit var mConnection : ServiceConnection
+  private var mediaController: MediaController? = null
 
   lateinit var pluginCallback : () -> Unit
 
@@ -183,10 +190,11 @@ class MainActivity : BridgeActivity() {
     }
   }
 
-  override fun onPostCreate(savedInstanceState: Bundle?) {
+    override fun onPostCreate(savedInstanceState: Bundle?) {
     super.onPostCreate(savedInstanceState)
     Log.d(tag, "onPostCreate MainActivity")
 
+    // Bind to service for direct access (needed for plugin operations)
     mConnection = object : ServiceConnection {
       override fun onServiceDisconnected(name: ComponentName) {
         Log.w(tag, "Service Disconnected $name")
@@ -200,8 +208,34 @@ class MainActivity : BridgeActivity() {
         val mLocalBinder = service as PlayerNotificationService.LocalBinder
         foregroundService = mLocalBinder.getService()
 
+        // Try to connect Media3 MediaController for playback control
+        val sessionToken = SessionToken(this@MainActivity, ComponentName(this@MainActivity, PlayerNotificationService::class.java))
+        val controllerFuture = MediaController.Builder(this@MainActivity, sessionToken).buildAsync()
+
+        Futures.addCallback(controllerFuture, object : FutureCallback<MediaController> {
+          override fun onSuccess(controller: MediaController) {
+            Log.d(tag, "Media3 MediaController connected")
+            mediaController = controller
+
+            // Set up MediaController callback to handle custom actions
+            controller.addListener(object : Player.Listener {
+              override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+                Log.d(tag, "Available commands changed: ${availableCommands.size()}")
+                // Custom actions should be available here
+              }
+            })
+          }
+
+          override fun onFailure(throwable: Throwable) {
+            Log.w(tag, "Media3 MediaController connection failed (expected for now): ${throwable.message}")
+            // This is expected since the service might not be fully migrated to Media3 yet
+          }
+        }, ContextCompat.getMainExecutor(this@MainActivity))
+
         // Let NativeAudio know foreground service is ready and setup event listener
-        pluginCallback()
+        if (::pluginCallback.isInitialized) {
+          pluginCallback()
+        }
 
         // Also trigger UI sync when service connects on activity creation
         try {
@@ -224,6 +258,12 @@ class MainActivity : BridgeActivity() {
       }
     }
 
+    // Start the service as foreground service first, then bind to it
+    Intent(this, PlayerNotificationService::class.java).also { intent ->
+      Log.d(tag, "Starting PlayerNotificationService as foreground service")
+      ContextCompat.startForegroundService(this, intent)
+    }
+
     Intent(this, PlayerNotificationService::class.java).also { intent ->
       Log.d(tag, "Binding PlayerNotificationService")
       bindService(intent, mConnection, Context.BIND_AUTO_CREATE)
@@ -234,11 +274,38 @@ class MainActivity : BridgeActivity() {
     return ::foregroundService.isInitialized
   }
 
-  fun stopMyService() {
+  fun startMyService() {
+    Log.d(tag, "startMyService called")
+
     if (mBounded) {
-      mConnection.let { unbindService(it) };
-      mBounded = false;
+      Log.d(tag, "Service already bound")
+      return
     }
+
+    // Start the service
+    Intent(this, PlayerNotificationService::class.java).also { intent ->
+      Log.d(tag, "Starting PlayerNotificationService")
+      ContextCompat.startForegroundService(this, intent)
+    }
+
+    // Bind to it
+    Intent(this, PlayerNotificationService::class.java).also { intent ->
+      Log.d(tag, "Binding PlayerNotificationService")
+      bindService(intent, mConnection, Context.BIND_AUTO_CREATE)
+    }
+  }
+
+  fun stopMyService() {
+    // Release Media3 MediaController
+    mediaController?.release()
+    mediaController = null
+
+    // Unbind service
+    if (mBounded && ::mConnection.isInitialized) {
+      unbindService(mConnection)
+      mBounded = false
+    }
+
     val stopIntent = Intent(this, PlayerNotificationService::class.java)
     stopService(stopIntent)
   }

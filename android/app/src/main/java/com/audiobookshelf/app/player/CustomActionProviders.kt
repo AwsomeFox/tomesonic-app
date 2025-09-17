@@ -1,107 +1,69 @@
 package com.audiobookshelf.app.player
 
 import android.os.Bundle
-import android.support.v4.media.session.PlaybackStateCompat
-import com.google.android.exoplayer2.Player
-import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector.CustomActionProvider
-import com.audiobookshelf.app.R
-import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_JUMP_BACKWARD
-import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_JUMP_FORWARD
-import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_SKIP_FORWARD
-import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_SKIP_BACKWARD
-import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED
+import androidx.media3.common.Player
+import android.support.v4.media.MediaMetadataCompat
 
-class JumpBackwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider {
+// MIGRATION-DEFERRED: CAST - Stub implementations for Media3 migration
+// Original functionality will be restored and converted to Media3 session callbacks in Step 7
+
+// Abstract base for custom action providers in Media3 context
+abstract class CustomActionProvider {
+  abstract fun onCustomAction(player: Player, action: String, extras: Bundle?)
+  abstract fun getCustomAction(player: Player): MediaMetadataCompat.Builder
+}
+
+class JumpBackwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider() {
   override fun onCustomAction(player: Player, action: String, extras: Bundle?) {
-    // This does not appear to ever get called. Instead, MediaSessionCallback.onCustomAction() is
-    // responsible to reacting to a custom action.
+    // Stub implementation
   }
 
-  override fun getCustomAction(player: Player): PlaybackStateCompat.CustomAction? {
-    return PlaybackStateCompat.CustomAction.Builder(
-      CUSTOM_ACTION_JUMP_BACKWARD,
-      service.getString(R.string.action_jump_backward),
-      R.drawable.exo_icon_rewind
-    ).build()
+  override fun getCustomAction(player: Player): MediaMetadataCompat.Builder {
+    // Stub implementation
+    return MediaMetadataCompat.Builder()
   }
 }
 
-class JumpForwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider {
+class JumpForwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider() {
   override fun onCustomAction(player: Player, action: String, extras: Bundle?) {
-    // This does not appear to ever get called. Instead, MediaSessionCallback.onCustomAction() is
-    // responsible to reacting to a custom action.
+    // Stub implementation
   }
 
-  override fun getCustomAction(player: Player): PlaybackStateCompat.CustomAction? {
-    return PlaybackStateCompat.CustomAction.Builder(
-      CUSTOM_ACTION_JUMP_FORWARD,
-      service.getString(R.string.action_jump_forward),
-      R.drawable.exo_icon_fastforward
-    ).build()
+  override fun getCustomAction(player: Player): MediaMetadataCompat.Builder {
+    // Stub implementation
+    return MediaMetadataCompat.Builder()
   }
 }
 
-class SkipForwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider {
+class SkipForwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider() {
   override fun onCustomAction(player: Player, action: String, extras: Bundle?) {
-    // This does not appear to ever get called. Instead, MediaSessionCallback.onCustomAction() is
-    // responsible to reacting to a custom action.
+    // Stub implementation
   }
 
-  override fun getCustomAction(player: Player): PlaybackStateCompat.CustomAction? {
-    return PlaybackStateCompat.CustomAction.Builder(
-      CUSTOM_ACTION_SKIP_FORWARD,
-      service.getString(R.string.action_skip_forward),
-      R.drawable.skip_next_24
-    ).build()
+  override fun getCustomAction(player: Player): MediaMetadataCompat.Builder {
+    // Stub implementation
+    return MediaMetadataCompat.Builder()
   }
 }
 
-class SkipBackwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider {
+class SkipBackwardCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider() {
   override fun onCustomAction(player: Player, action: String, extras: Bundle?) {
-    // This does not appear to ever get called. Instead, MediaSessionCallback.onCustomAction() is
-    // responsible to reacting to a custom action.
+    // Stub implementation
   }
 
-  override fun getCustomAction(player: Player): PlaybackStateCompat.CustomAction? {
-    return PlaybackStateCompat.CustomAction.Builder(
-      CUSTOM_ACTION_SKIP_BACKWARD,
-      service.getString(R.string.action_skip_backward),
-      R.drawable.skip_previous_24
-    ).build()
+  override fun getCustomAction(player: Player): MediaMetadataCompat.Builder {
+    // Stub implementation
+    return MediaMetadataCompat.Builder()
   }
 }
 
-class ChangePlaybackSpeedCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider {
+class ChangePlaybackSpeedCustomActionProvider(private val service: PlayerNotificationService) : CustomActionProvider() {
   override fun onCustomAction(player: Player, action: String, extras: Bundle?) {
-    // This does not appear to ever get called. Instead, MediaSessionCallback.onCustomAction() is
-    // responsible to reacting to a custom action.
-    android.util.Log.d("ChangePlaybackSpeedProvider", "onCustomAction called with action: $action")
+    // Stub implementation
   }
 
-  override fun getCustomAction(player: Player): PlaybackStateCompat.CustomAction? {
-    val playbackRate = service.mediaManager.getSavedPlaybackRate()
-
-    // Rounding values in the event a non preset value (.5, 1, 1.2, 1.5, 2, 3) is selected in the
-    // phone app
-    val drawable: Int =
-      when (playbackRate) {
-        in 0.5f..0.7f -> R.drawable.ic_play_speed_0_5x
-        in 0.8f..1.0f -> R.drawable.ic_play_speed_1_0x
-        in 1.1f..1.3f -> R.drawable.ic_play_speed_1_2x
-        in 1.4f..1.6f -> R.drawable.ic_play_speed_1_5x
-        in 1.7f..2.2f -> R.drawable.ic_play_speed_2_0x
-        in 2.3f..3.0f -> R.drawable.ic_play_speed_3_0x
-        // anything set above 3 will be show the 3x to save from creating 100 icons
-        else -> R.drawable.ic_play_speed_3_0x
-      }
-    val customActionExtras = Bundle()
-    customActionExtras.putFloat("speed", playbackRate)
-    return PlaybackStateCompat.CustomAction.Builder(
-      CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED,
-      service.getString(R.string.action_change_speed),
-      drawable
-    ).setExtras(customActionExtras).build()
+  override fun getCustomAction(player: Player): MediaMetadataCompat.Builder {
+    // Stub implementation
+    return MediaMetadataCompat.Builder()
   }
 }
-
-

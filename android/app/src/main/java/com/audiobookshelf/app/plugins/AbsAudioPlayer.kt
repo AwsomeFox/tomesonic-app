@@ -15,9 +15,10 @@ import com.fasterxml.jackson.core.json.JsonReadFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.getcapacitor.*
 import com.getcapacitor.annotation.CapacitorPlugin
-import com.google.android.gms.cast.CastDevice
-import com.google.android.gms.common.ConnectionResult
-import com.google.android.gms.common.GoogleApiAvailability
+// MIGRATION-DEFERRED: CAST - Commented out Cast imports
+// import com.google.android.gms.cast.CastDevice
+// import com.google.android.gms.common.ConnectionResult
+// import com.google.android.gms.common.GoogleApiAvailability
 import org.json.JSONObject
 
 @CapacitorPlugin(name = "AbsAudioPlayer")
@@ -27,6 +28,10 @@ class AbsAudioPlayer : Plugin() {
 
   private lateinit var mainActivity: MainActivity
   private lateinit var apiHandler:ApiHandler
+
+  // Rate limiting for socket updates to prevent overwhelming the player
+  private var lastSocketUpdateTime = 0L
+  private val SOCKET_UPDATE_MIN_INTERVAL = 1000L // Minimum 1 second between socket updates
   var castManager:CastManager? = null
 
   lateinit var playerNotificationService: PlayerNotificationService
@@ -44,6 +49,7 @@ class AbsAudioPlayer : Plugin() {
     }
 
     val foregroundServiceReady : () -> Unit = {
+      Log.d(tag, "foregroundServiceReady callback called - service is now initialized")
       playerNotificationService = mainActivity.foregroundService
 
       playerNotificationService.clientEventEmitter = (object : PlayerNotificationService.ClientEventEmitter {
@@ -146,6 +152,10 @@ class AbsAudioPlayer : Plugin() {
 
   // --- New function to sync playback state and metadata ---
   fun syncCurrentPlaybackState() {
+    if (!::playerNotificationService.isInitialized) {
+      Log.d(tag, "PlayerNotificationService not initialized yet, skipping sync")
+      return
+    }
     try {
       val playbackSession = playerNotificationService.currentPlaybackSession
       if (playbackSession != null) {
@@ -154,8 +164,21 @@ class AbsAudioPlayer : Plugin() {
 
         // Create and emit metadata using the same pattern as the service
         val duration = playbackSession.duration
-        val currentTime = playerNotificationService.getCurrentTimeSeconds()
         val isPlaying = playerNotificationService.currentPlayer.isPlaying
+
+        // Get current time - prefer playback session time if player position seems incorrect
+        // This prevents reporting stale player position during app resume
+        val playerCurrentTime = playerNotificationService.getCurrentTimeSeconds()
+        val sessionCurrentTime = playbackSession.currentTime
+
+        // Use session time if player time is significantly different and player is not actively playing
+        // This handles the case where player position hasn't been restored yet on app resume
+        val currentTime = if (!isPlaying && Math.abs(playerCurrentTime - sessionCurrentTime) > 1.0) {
+          Log.d(tag, "Using session time ($sessionCurrentTime) instead of player time ($playerCurrentTime) - likely stale position")
+          sessionCurrentTime
+        } else {
+          playerCurrentTime
+        }
 
         // Use READY state for both playing and paused (when player is loaded)
         // Only use IDLE for truly idle states
@@ -189,8 +212,55 @@ class AbsAudioPlayer : Plugin() {
     }
   }
 
+  // --- Helper method to check if player service is ready ---
+  private fun isPlayerServiceReady(): Boolean {
+    return ::playerNotificationService.isInitialized
+  }
+
+    // --- Helper method to determine if we should use server progress ---
+  private fun shouldUseServerProgress(playbackSession: PlaybackSession, serverProgress: MediaProgress): Boolean {
+    val localCurrentTime = playbackSession.currentTime
+    val serverCurrentTime = serverProgress.currentTime
+    val localUpdatedAt = playbackSession.updatedAt ?: 0L
+    val serverUpdatedAt = serverProgress.lastUpdate
+
+    // Check if server progress is newer (within a reasonable time window)
+    val serverIsNewer = serverUpdatedAt > localUpdatedAt
+
+    // Check if server progress is significantly farther ahead (more than 30 seconds)
+    val serverIsFarther = serverCurrentTime > localCurrentTime + 30.0
+
+    // Also check if server progress is significantly behind (more than 30 seconds)
+    // In this case, we might want to use local progress if it's much further
+    val serverIsMuchBehind = serverCurrentTime < localCurrentTime - 30.0
+
+    val shouldUseServer = if (serverIsNewer) {
+      // If server is newer, use it if it's not much behind local progress
+      !serverIsMuchBehind
+    } else {
+      // If server is older, only use it if it's significantly farther ahead
+      serverIsFarther
+    }
+
+    Log.d(tag, "Progress comparison - Local: ${localCurrentTime}s (updated: $localUpdatedAt), Server: ${serverCurrentTime}s (updated: $serverUpdatedAt)")
+    Log.d(tag, "Decision: ${if (shouldUseServer) "USE SERVER" else "USE LOCAL"} (newer: $serverIsNewer, farther: $serverIsFarther, muchBehind: $serverIsMuchBehind)")
+
+    return shouldUseServer
+  }
+
   // --- Resume from last server session when no active session ---
   private fun resumeFromLastServerSession() {
+    if (!::playerNotificationService.isInitialized) {
+      Log.d(tag, "PlayerNotificationService not initialized yet, skipping resume")
+      return
+    }
+
+    // Check if we have a valid server connection before making API calls
+    if (!DeviceManager.isConnectedToServer) {
+      Log.d(tag, "No valid server connection available, skipping resume from server session")
+      return
+    }
+
     try {
       Log.d(tag, "Querying server for current user to get last playback session")
 
@@ -221,10 +291,19 @@ class AbsAudioPlayer : Plugin() {
                   } else null
 
                   val localPlaybackSession = localLibraryItem.getPlaybackSession(episode, deviceInfo)
-                  // Override the current time with the server progress to sync position
-                  localPlaybackSession.currentTime = latestProgress.currentTime
 
-                  Log.d(tag, "Resuming from local download: ${localLibraryItem.title} at ${latestProgress.currentTime}s")
+                  // Check if we should use server progress or local progress
+                  val shouldUseServerProgress = shouldUseServerProgress(localPlaybackSession, latestProgress)
+
+                  if (shouldUseServerProgress) {
+                    // Override the current time with the server progress to sync position
+                    localPlaybackSession.currentTime = latestProgress.currentTime
+                    Log.d(tag, "Using server progress: ${latestProgress.currentTime}s (newer/farther than local)")
+                  } else {
+                    Log.d(tag, "Using local progress: ${localPlaybackSession.currentTime}s (server progress not newer/farther)")
+                  }
+
+                  Log.d(tag, "Resuming from local download: ${localLibraryItem.title} at ${localPlaybackSession.currentTime}s")
 
                   // Get current playbook speed from MediaManager (same as Android Auto implementation)
                   val currentPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
@@ -281,14 +360,22 @@ class AbsAudioPlayer : Plugin() {
 
                         apiHandler.playLibraryItem(latestProgress.libraryItemId, latestProgress.episodeId, playItemRequestPayload) { playbackSession ->
                           if (playbackSession != null) {
-                            // Override the current time with the saved progress
-                            playbackSession.currentTime = latestProgress.currentTime
+                            // Check if we should use server progress or local progress
+                            val shouldUseServerProgress = shouldUseServerProgress(playbackSession, latestProgress)
+
+                            if (shouldUseServerProgress) {
+                              // Override the current time with the saved progress
+                              playbackSession.currentTime = latestProgress.currentTime
+                              Log.d(tag, "Using server progress: ${latestProgress.currentTime}s (newer/farther than local)")
+                            } else {
+                              Log.d(tag, "Using local progress: ${playbackSession.currentTime}s (server progress not newer/farther)")
+                            }
 
                             // Determine if we should start playing based on Android Auto mode
                             val shouldStartPlaying = playerNotificationService.isAndroidAuto
                             val playStateText = if (shouldStartPlaying) "playing" else "paused"
 
-                            Log.d(tag, "Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in $playStateText state with speed ${currentPlaybackSpeed}x")
+                            Log.d(tag, "Resuming from server session: ${libraryItem.media.metadata?.title} at ${playbackSession.currentTime}s in $playStateText state with speed ${currentPlaybackSpeed}x")
 
                             // Prepare the player with appropriate play state on main thread with correct playback speed
                             Handler(Looper.getMainLooper()).post {
@@ -391,7 +478,61 @@ class AbsAudioPlayer : Plugin() {
     notifyListeners(evtName, ret)
   }
 
+  // --- Wait for player service to be ready before preparing library item ---
+  private fun prepareLibraryItemWhenReady(call: PluginCall, libraryItem: LocalLibraryItem, episode: PodcastEpisode?, startTimeOverride: Double?, playbackRate: Float, retryCount: Int = 0) {
+    val maxRetries = 50 // 5 seconds max wait time
+    if (::playerNotificationService.isInitialized) {
+      // Service is ready, proceed immediately
+      Log.d(tag, "prepareLibraryItem: Service ready after $retryCount retries, preparing Local Media item")
+      val playbackSession = libraryItem.getPlaybackSession(episode, playerNotificationService.getDeviceInfo())
+      if (startTimeOverride != null) {
+        Log.d(tag, "prepareLibraryItem: Using start time override $startTimeOverride")
+        playbackSession.currentTime = startTimeOverride
+      }
+
+      if (playerNotificationService.mediaProgressSyncer.listeningTimerRunning) { // If progress syncing then first stop before preparing next
+        playerNotificationService.mediaProgressSyncer.stop {
+          Log.d(tag, "Media progress syncer was already syncing - stopped")
+          PlayerListener.lazyIsPlaying = false
+
+          Handler(Looper.getMainLooper()).post { // TODO: This was needed again which is probably a design a flaw
+            playerNotificationService.preparePlayer(
+              playbackSession,
+              true, // playWhenReady for local items
+              playbackRate
+            )
+          }
+        }
+      } else {
+        playerNotificationService.mediaProgressSyncer.reset()
+        playerNotificationService.preparePlayer(playbackSession, true, playbackRate) // playWhenReady for local items
+      }
+      call.resolve(JSObject())
+    } else {
+      // Service not ready yet
+      if (retryCount == 0) {
+        // First attempt - start the service if not already started
+        Log.d(tag, "prepareLibraryItem: Service not initialized, starting service...")
+        mainActivity.startMyService()
+      }
+
+      if (retryCount >= maxRetries) {
+        // Timeout - service never initialized
+        Log.e(tag, "prepareLibraryItem: Service initialization timeout after ${maxRetries * 100}ms")
+        call.resolve(JSObject("{\"error\":\"Player service failed to initialize\"}"))
+      } else {
+        // Service not ready yet, wait and retry
+        Log.d(tag, "prepareLibraryItem: PlayerNotificationService not ready yet, waiting... (attempt ${retryCount + 1}/$maxRetries)")
+        Handler(Looper.getMainLooper()).postDelayed({
+          prepareLibraryItemWhenReady(call, libraryItem, episode, startTimeOverride, playbackRate, retryCount + 1)
+        }, 100) // Check again in 100ms
+      }
+    }
+  }
+
   private fun initCastManager() {
+    // MIGRATION-DEFERRED: CAST - Commented out Cast initialization
+    /*
     val googleApi = GoogleApiAvailability.getInstance()
     val statusCode = googleApi.isGooglePlayServicesAvailable(mainActivity)
 
@@ -444,6 +585,7 @@ class AbsAudioPlayer : Plugin() {
 
     castManager = CastManager(mainActivity)
     castManager?.startRouteScan(connListener)
+    */
   }
 
   @PluginMethod
@@ -477,36 +619,17 @@ class AbsAudioPlayer : Plugin() {
         }
 
         Handler(Looper.getMainLooper()).post {
-          Log.d(tag, "prepareLibraryItem: Preparing Local Media item ${jacksonMapper.writeValueAsString(it)}")
-          val playbackSession = it.getPlaybackSession(episode, playerNotificationService.getDeviceInfo())
-          if (startTimeOverride != null) {
-            Log.d(tag, "prepareLibraryItem: Using start time override $startTimeOverride")
-            playbackSession.currentTime = startTimeOverride
-          }
-
-          if (playerNotificationService.mediaProgressSyncer.listeningTimerRunning) { // If progress syncing then first stop before preparing next
-            playerNotificationService.mediaProgressSyncer.stop {
-              Log.d(tag, "Media progress syncer was already syncing - stopped")
-              PlayerListener.lazyIsPlaying = false
-
-              Handler(Looper.getMainLooper()).post { // TODO: This was needed again which is probably a design a flaw
-                playerNotificationService.preparePlayer(
-                  playbackSession,
-                  playWhenReady,
-                  playbackRate
-                )
-              }
-            }
-          } else {
-            playerNotificationService.mediaProgressSyncer.reset()
-            playerNotificationService.preparePlayer(playbackSession, playWhenReady, playbackRate)
-          }
+          prepareLibraryItemWhenReady(call, it, episode, startTimeOverride, playbackRate)
         }
-        return call.resolve(JSObject())
       }
     } else { // Play library item from server
-      val playItemRequestPayload = playerNotificationService.getPlayItemRequestPayload(false)
       Handler(Looper.getMainLooper()).post {
+        if (!::playerNotificationService.isInitialized) {
+          Log.e(tag, "prepareLibraryItem: playerNotificationService not initialized yet for server item")
+          call.resolve(JSObject("{\"error\":\"Player service not ready\"}"))
+          return@post
+        }
+        val playItemRequestPayload = playerNotificationService.getPlayItemRequestPayload(false)
         playerNotificationService.mediaProgressSyncer.stop {
           apiHandler.playLibraryItem(libraryItemId, episodeId, playItemRequestPayload) {
             if (it == null) {
@@ -553,6 +676,11 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun playPlayer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
+      if (!isPlayerServiceReady()) {
+        Log.e(tag, "playPlayer: PlayerNotificationService not initialized yet")
+        call.resolve(JSObject("{\"error\":\"Player service not ready\"}"))
+        return@post
+      }
       playerNotificationService.play()
       call.resolve()
     }
@@ -561,6 +689,11 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun playPause(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
+      if (!isPlayerServiceReady()) {
+        Log.e(tag, "playPause: PlayerNotificationService not initialized yet")
+        call.resolve(JSObject("{\"error\":\"Player service not ready\"}"))
+        return@post
+      }
       val playing = playerNotificationService.playPause()
       call.resolve(JSObject("{\"playing\":$playing}"))
     }
@@ -571,6 +704,11 @@ class AbsAudioPlayer : Plugin() {
     val time:Int = call.getInt("value", 0) ?: 0 // Value in seconds
     Log.d(tag, "seek action to $time")
     Handler(Looper.getMainLooper()).post {
+      if (!isPlayerServiceReady()) {
+        Log.e(tag, "seek: PlayerNotificationService not initialized yet")
+        call.resolve(JSObject("{\"error\":\"Player service not ready\"}"))
+        return@post
+      }
       playerNotificationService.seekPlayer(time * 1000L) // convert to ms
       call.resolve()
     }
@@ -814,4 +952,88 @@ class AbsAudioPlayer : Plugin() {
       call.resolve(ret)
     }
   }
+
+    @PluginMethod
+    fun userMediaProgressUpdate(call: PluginCall) {
+        val data = call.data
+        val libraryItemId = data.getString("libraryItemId")
+        val episodeId = data.getString("episodeId")
+
+        // Rate limiting to prevent overwhelming the player with too frequent updates
+        val currentTimeMillis = System.currentTimeMillis()
+        if (currentTimeMillis - lastSocketUpdateTime < SOCKET_UPDATE_MIN_INTERVAL) {
+            AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Rate limiting socket update (too frequent)")
+            call.resolve()
+            return
+        }
+        lastSocketUpdateTime = currentTimeMillis
+
+        val localLibraryItemId = playerNotificationService.currentPlaybackSession?.libraryItemId
+        val localEpisodeId = playerNotificationService.currentPlaybackSession?.episodeId
+
+        // Debug logging to understand the values
+        AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Received socket update - libraryItemId=$libraryItemId, episodeId=$episodeId")
+        AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Current session - localLibraryItemId=$localLibraryItemId, localEpisodeId=$localEpisodeId")
+        AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Current playback session exists: ${playerNotificationService.currentPlaybackSession != null}")
+
+        // If there's no current playback session, we can't determine if this is for the currently playing item
+        if (playerNotificationService.currentPlaybackSession == null) {
+            AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: No current playback session, processing update")
+            // Continue with the update
+        }
+
+        // Ignore socket updates for the currently playing item
+        // Check if this is the same item we're currently playing
+        val isCurrentlyPlayingItem = (libraryItemId == localLibraryItemId) &&
+                                    (episodeId == localEpisodeId ||
+                                     (episodeId.isNullOrEmpty() && localEpisodeId.isNullOrEmpty()) ||
+                                     (episodeId == "" && localEpisodeId.isNullOrEmpty()) ||
+                                     (localEpisodeId == "" && episodeId.isNullOrEmpty()))
+
+        // Also check if the player is currently playing - if so, we should be more conservative about updates
+        val isPlayerCurrentlyPlaying = playerNotificationService.currentPlayer.isPlaying
+
+        // If this is the currently selected item, we should be very conservative about updates
+        // This prevents interrupting active playback with socket updates
+        if (isCurrentlyPlayingItem) {
+            if (isPlayerCurrentlyPlaying) {
+                AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Ignoring socket progress update for actively playing item")
+                call.resolve()
+                return
+            } else {
+                AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Current item is paused, allowing conservative progress update")
+                // For paused items, we might still want to update progress, but let's be careful
+            }
+        }
+
+        // For non-currently-playing items, we can be more aggressive with updates
+        if (!isCurrentlyPlayingItem) {
+            AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Processing update for different item (not currently playing)")
+        }
+
+        val lastUpdate = data.getLong("lastUpdate")
+        val currentTime = data.getDouble("currentTime")
+        val duration = data.getDouble("duration")
+        val isPlaying = data.getBoolean("isPlaying", false)
+        val isBuffering = data.getBoolean("isBuffering", false)
+        val ebookProgress = data.getDouble("ebookProgress")
+
+        // Get local media progress
+        val mediaItemId = if (episodeId != null) "$libraryItemId-$episodeId" else libraryItemId ?: ""
+        val localMediaProgress = DeviceManager.dbManager.getLocalMediaProgress(mediaItemId)
+        if (localMediaProgress != null) {
+            if (lastUpdate > localMediaProgress.lastUpdate) {
+                AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Syncing progress from server for \"$libraryItemId\" | server lastUpdate=$lastUpdate > local lastUpdate=${localMediaProgress.lastUpdate}")
+                // Update local media progress with server data
+                localMediaProgress.currentTime = currentTime
+                localMediaProgress.duration = duration
+                localMediaProgress.ebookProgress = ebookProgress
+                localMediaProgress.lastUpdate = lastUpdate
+                DeviceManager.dbManager.saveLocalMediaProgress(localMediaProgress)
+            } else {
+                AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: NOT syncing progress from server with local item for \"$libraryItemId\" | server lastUpdate=$lastUpdate <= local lastUpdate=${localMediaProgress.lastUpdate}")
+            }
+        }
+        call.resolve()
+    }
 }

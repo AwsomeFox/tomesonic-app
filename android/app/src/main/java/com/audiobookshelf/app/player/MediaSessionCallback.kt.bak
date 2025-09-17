@@ -3,7 +3,8 @@ package com.audiobookshelf.app.player
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.*
-import android.support.v4.media.session.MediaSessionCompat
+import androidx.media3.session.MediaSession
+import androidx.media3.common.Player
 import android.util.Log
 import android.view.KeyEvent
 import com.audiobookshelf.app.data.LibraryItemWrapper
@@ -16,7 +17,7 @@ import com.audiobookshelf.app.player.PlayerNotificationService.Companion.CUSTOM_
 import java.util.*
 import kotlin.concurrent.schedule
 
-class MediaSessionCallback(var playerNotificationService:PlayerNotificationService) : MediaSessionCompat.Callback() {
+class MediaSessionCallback(var playerNotificationService:PlayerNotificationService) : MediaSession.Callback {
   var tag = "MediaSessionCallback"
 
   private var mediaButtonClickCount: Int = 0

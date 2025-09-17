@@ -57,6 +57,15 @@ class ApiHandler(var ctx:Context) {
     val address = config?.address ?: DeviceManager.serverAddress
     val token = config?.token ?: DeviceManager.token
 
+    // Check if we have a valid server address before making the request
+    if (address.isNullOrEmpty()) {
+      Log.w(tag, "getRequest: No valid server address available, skipping request to $endpoint")
+      val jsobj = JSObject()
+      jsobj.put("error", "No valid server address configured")
+      cb(jsobj)
+      return
+    }
+
     try {
       val request = Request.Builder()
         .url("${address}$endpoint").addHeader("Authorization", "Bearer $token")
@@ -73,6 +82,16 @@ class ApiHandler(var ctx:Context) {
   private fun postRequest(endpoint:String, payload: JSObject?, config:ServerConnectionConfig?, cb: (JSObject) -> Unit) {
     val address = config?.address ?: DeviceManager.serverAddress
     val token = config?.token ?: DeviceManager.token
+
+    // Check if we have a valid server address before making the request
+    if (address.isNullOrEmpty()) {
+      Log.w(tag, "postRequest: No valid server address available, skipping request to $endpoint")
+      val jsobj = JSObject()
+      jsobj.put("error", "No valid server address configured")
+      cb(jsobj)
+      return
+    }
+
     val mediaType = "application/json; charset=utf-8".toMediaType()
     val requestBody = payload?.toString()?.toRequestBody(mediaType) ?: EMPTY_REQUEST
     val requestUrl = "${address}$endpoint"
@@ -91,6 +110,15 @@ class ApiHandler(var ctx:Context) {
   }
 
   private fun patchRequest(endpoint:String, payload: JSObject, cb: (JSObject) -> Unit) {
+    // Check if we have a valid server address before making the request
+    if (DeviceManager.serverAddress.isNullOrEmpty()) {
+      Log.w(tag, "patchRequest: No valid server address available, skipping request to $endpoint")
+      val jsobj = JSObject()
+      jsobj.put("error", "No valid server address configured")
+      cb(jsobj)
+      return
+    }
+
     val mediaType = "application/json; charset=utf-8".toMediaType()
     val requestBody = payload.toString().toRequestBody(mediaType)
     try {
@@ -198,6 +226,15 @@ class ApiHandler(var ctx:Context) {
       }
 
       Log.d(tag, "handleTokenRefresh: Retrieved refresh token, attempting to refresh access token")
+
+      // Check if we have a valid server address before making the refresh request
+      if (DeviceManager.serverAddress.isNullOrEmpty()) {
+        AbsLogger.error(tag, "handleTokenRefresh: No valid server address available for refresh")
+        val errorObj = JSObject()
+        errorObj.put("error", "No valid server address configured")
+        callback(errorObj)
+        return
+      }
 
       // Create refresh token request
       val refreshEndpoint = "${DeviceManager.serverAddress}/auth/refresh"

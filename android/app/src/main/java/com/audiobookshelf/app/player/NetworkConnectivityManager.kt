@@ -86,9 +86,10 @@ class NetworkConnectivityManager(
             firstLoadDone &&
             service.mediaManager.serverLibraries.isEmpty()
         ) {
-            Log.d("NetworkConnectivityManager", "AABrowser: Network restored and libraries empty - setting forceReloadingAndroidAuto to true")
+            Log.d("NetworkConnectivityManager", "AALibrary: Network restored and libraries empty - setting forceReloadingAndroidAuto to true")
             forceReloadingAndroidAuto = true
-            service.notifyChildrenChanged("/")
+            // MIGRATION: MediaLibraryService doesn't have notifyChildrenChanged
+            // service.notifyChildrenChanged("/")
         }
 
         // Send any queued local progress syncs when network is restored

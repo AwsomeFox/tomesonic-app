@@ -2,10 +2,15 @@ package com.audiobookshelf.app.player
 
 import android.content.Context
 import android.util.Log
-import com.google.android.exoplayer2.*
-import com.google.android.exoplayer2.audio.AudioAttributes
-import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
-import com.google.android.exoplayer2.ui.PlayerNotificationManager
+import androidx.media3.*
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.ui.PlayerNotificationManager
 import com.audiobookshelf.app.data.DeviceSettings
 import com.audiobookshelf.app.data.PlaybackSession
 
@@ -26,18 +31,6 @@ class PlayerManager(
         private set
     lateinit var currentPlayer: Player
         private set
-
-    // Dependencies that will be injected
-    private lateinit var playerNotificationManager: PlayerNotificationManager
-    private lateinit var mediaSessionConnector: MediaSessionConnector
-
-    fun setDependencies(
-        playerNotificationManager: PlayerNotificationManager,
-        mediaSessionConnector: MediaSessionConnector
-    ) {
-        this.playerNotificationManager = playerNotificationManager
-        this.mediaSessionConnector = mediaSessionConnector
-    }
 
     fun initializeExoPlayer() {
         val customLoadControl: LoadControl =
@@ -69,10 +62,6 @@ class PlayerManager(
         // Set as current player
         currentPlayer = mPlayer
 
-        // Connect to notification and media session
-        playerNotificationManager.setPlayer(mPlayer)
-        mediaSessionConnector.setPlayer(mPlayer)
-
         Log.d(TAG, "ExoPlayer initialized successfully")
     }
 
@@ -85,16 +74,37 @@ class PlayerManager(
 
     // Basic player controls
     fun play() {
+        val stateString = when (currentPlayer.playbackState) {
+            Player.STATE_IDLE -> "IDLE"
+            Player.STATE_BUFFERING -> "BUFFERING"
+            Player.STATE_READY -> "READY"
+            Player.STATE_ENDED -> "ENDED"
+            else -> "UNKNOWN"
+        }
+        Log.d(TAG, "play() called - isPlaying: ${currentPlayer.isPlaying}, mediaItemCount: ${currentPlayer.mediaItemCount}, playbackState: $stateString (${currentPlayer.playbackState}), playWhenReady: ${currentPlayer.playWhenReady}")
         if (currentPlayer.isPlaying) {
             Log.d(TAG, "Already playing")
             return
         }
+        if (currentPlayer.mediaItemCount == 0) {
+            Log.e(TAG, "Cannot play - no media items loaded")
+            return
+        }
+        if (currentPlayer.playbackState == Player.STATE_IDLE) {
+            Log.w(TAG, "Player is in IDLE state, preparing first")
+            currentPlayer.prepare()
+        } else if (currentPlayer.playbackState == Player.STATE_ENDED) {
+            Log.w(TAG, "Player is in ENDED state, seeking to start")
+            currentPlayer.seekTo(0)
+        }
         currentPlayer.volume = 1F
-        currentPlayer.play()
+        // In Media3, use setPlayWhenReady instead of play()
+        currentPlayer.setPlayWhenReady(true)
+        Log.d(TAG, "After setPlayWhenReady(true) - isPlaying: ${currentPlayer.isPlaying}, playWhenReady: ${currentPlayer.playWhenReady}")
     }
 
     fun pause() {
-        currentPlayer.pause()
+        currentPlayer.setPlayWhenReady(false)
     }
 
     fun seekToPosition(time: Long) {

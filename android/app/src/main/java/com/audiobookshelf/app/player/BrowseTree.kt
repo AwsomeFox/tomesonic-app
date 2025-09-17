@@ -1,7 +1,8 @@
 package com.audiobookshelf.app.player
 
 import android.content.Context
-import android.support.v4.media.MediaMetadataCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import android.util.Log
 import com.audiobookshelf.app.R
 import com.audiobookshelf.app.data.*
@@ -13,70 +14,98 @@ class BrowseTree(
   libraries: List<Library>,
   recentsLoaded: Boolean
 ) {
-  private val mediaIdToChildren = mutableMapOf<String, MutableList<MediaMetadataCompat>>()
+  private val mediaIdToChildren = mutableMapOf<String, MutableList<MediaItem>>()
 
   init {
     Log.d("BrowseTree", "AABrowser: BrowseTree init: libraries=${libraries.size}, itemsInProgress=${itemsInProgress.size}, recentsLoaded=$recentsLoaded")
     val rootList = mediaIdToChildren[AUTO_BROWSE_ROOT] ?: mutableListOf()
 
-    val continueListeningMetadata = MediaMetadataCompat.Builder().apply {
-      putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, CONTINUE_ROOT)
-      putString(MediaMetadataCompat.METADATA_KEY_TITLE, "Continue")
-      putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, getUriToDrawable(context, R.drawable.exo_icon_localaudio).toString())
-    }.build()
+    val continueListeningItem = MediaItem.Builder()
+      .setMediaId(CONTINUE_ROOT)
+      .setMediaMetadata(
+        MediaMetadata.Builder()
+          .setTitle("Continue")
+          .setArtworkUri(getUriToDrawable(context, R.drawable.exo_icon_localaudio))
+          .setIsBrowsable(true)
+          .setIsPlayable(false)
+          .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+          .build()
+      )
+      .build()
 
-    val recentMetadata = MediaMetadataCompat.Builder().apply {
-      putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, RECENTLY_ROOT)
-      putString(MediaMetadataCompat.METADATA_KEY_TITLE, "Recent")
-      putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, getUriToDrawable(context, R.drawable.md_clock_outline).toString())
-    }.build()
+    val recentItem = MediaItem.Builder()
+      .setMediaId(RECENTLY_ROOT)
+      .setMediaMetadata(
+        MediaMetadata.Builder()
+          .setTitle("Recent")
+          .setArtworkUri(getUriToDrawable(context, R.drawable.md_clock_outline))
+          .setIsBrowsable(true)
+          .setIsPlayable(false)
+          .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+          .build()
+      )
+      .build()
 
-    val downloadsMetadata = MediaMetadataCompat.Builder().apply {
-      putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, DOWNLOADS_ROOT)
-      putString(MediaMetadataCompat.METADATA_KEY_TITLE, "Downloads")
-      putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, getUriToDrawable(context, R.drawable.exo_icon_downloaddone).toString())
-    }.build()
+    val downloadsItem = MediaItem.Builder()
+      .setMediaId(DOWNLOADS_ROOT)
+      .setMediaMetadata(
+        MediaMetadata.Builder()
+          .setTitle("Downloads")
+          .setArtworkUri(getUriToDrawable(context, R.drawable.exo_icon_downloaddone))
+          .setIsBrowsable(true)
+          .setIsPlayable(false)
+          .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+          .build()
+      )
+      .build()
 
-    val librariesMetadata = MediaMetadataCompat.Builder().apply {
-      putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, LIBRARIES_ROOT)
-      putString(MediaMetadataCompat.METADATA_KEY_TITLE, "Libraries")
-      putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, getUriToDrawable(context, R.drawable.icon_library_folder).toString())
-    }.build()
+    val librariesItem = MediaItem.Builder()
+      .setMediaId(LIBRARIES_ROOT)
+      .setMediaMetadata(
+        MediaMetadata.Builder()
+          .setTitle("Libraries")
+          .setArtworkUri(getUriToDrawable(context, R.drawable.icon_library_folder))
+          .setIsBrowsable(true)
+          .setIsPlayable(false)
+          .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+          .build()
+      )
+      .build()
 
     if (itemsInProgress.isNotEmpty()) {
       Log.d("BrowseTree", "AABrowser: Adding Continue item")
-      rootList += continueListeningMetadata
+      rootList += continueListeningItem
     }
 
     if (libraries.isNotEmpty()) {
       Log.d("BrowseTree", "AABrowser: Adding Libraries and potentially Recent items")
       if (recentsLoaded) {
         Log.d("BrowseTree", "AABrowser: Adding Recent item")
-        rootList += recentMetadata
+        rootList += recentItem
       }
-      rootList += librariesMetadata
+      rootList += librariesItem
 
       libraries.forEach { library ->
         // Log library info for debugging
         Log.d("BrowseTree", "AABrowser: Library ${library.name} | ${library.icon} | audioFiles: ${library.stats?.numAudioFiles}")
         // Generate library list items for Libraries menu
-        val libraryMediaMetadata = library.getMediaMetadata(context)
+        val libraryMediaItem = library.getMediaItem(context)
         val children = mediaIdToChildren[LIBRARIES_ROOT] ?: mutableListOf()
-        children += libraryMediaMetadata
+        children += libraryMediaItem
         mediaIdToChildren[LIBRARIES_ROOT] = children
 
         if (recentsLoaded) {
           // Generate library list items for Recent menu
-          val recentlyMediaMetadata = library.getMediaMetadata(context,"recently")
+          val recentlyMediaItem = library.getMediaItem(context, "recently")
           val childrenRecently = mediaIdToChildren[RECENTLY_ROOT] ?: mutableListOf()
-          childrenRecently += recentlyMediaMetadata
+          childrenRecently += recentlyMediaItem
           mediaIdToChildren[RECENTLY_ROOT] = childrenRecently
         }
       }
     }
 
     Log.d("BrowseTree", "AABrowser: Adding Downloads item")
-    rootList += downloadsMetadata
+    rootList += downloadsItem
 
     mediaIdToChildren[AUTO_BROWSE_ROOT] = rootList
     Log.d("BrowseTree", "AABrowser: Final root list has ${rootList.size} items")

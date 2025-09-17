@@ -22,11 +22,12 @@ import kotlinx.coroutines.*
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.MediaMetadata
-import com.google.android.gms.cast.MediaInfo
-import com.google.android.gms.cast.MediaQueueItem
-import com.google.android.gms.common.images.WebImage
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+// MIGRATION-DEFERRED: CAST - Commented out for migration
+// import com.google.android.gms.cast.MediaInfo
+// import com.google.android.gms.cast.MediaQueueItem
+// import com.google.android.gms.common.images.WebImage
 
 // Android Auto package names for URI permission granting
 private const val ANDROID_AUTO_PKG_NAME = "com.google.android.projection.gearhead"
@@ -349,7 +350,7 @@ class PlaybackSession(
       else -> displayTitle
     }
     val subtitleToUse = when {
-      chapter != null -> displayTitle
+      chapter != null -> if (displayAuthor.isNullOrEmpty()) displayTitle else "$displayTitle - $displayAuthor"
       audioTrack?.title != null -> displayAuthor
       else -> displayAuthor
     }
@@ -373,41 +374,65 @@ class PlaybackSession(
   fun getMediaItems(ctx: Context): List<MediaItem> {
     val mediaItems: MutableList<MediaItem> = mutableListOf()
 
-    // For chapter-based books (single track with multiple chapters), create media items for each chapter
-    if (audioTracks.size == 1 && chapters.isNotEmpty()) {
-      for ((index, chapter) in chapters.withIndex()) {
-        val audioTrack = audioTracks[0]
-        val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)
-        val mediaUri = this.getContentUri(audioTrack)
-        val mimeType = audioTrack.mimeType
+    // For books with chapters, always prefer chapter-based display
+    // This gives proper "Chapter Name" titles instead of track names
+    if (mediaType == "book" && chapters.isNotEmpty()) {
+      // Handle chapter-based books
+      if (audioTracks.size == 1) {
+        // Single audio file with multiple chapters - use clipping
+        for ((index, chapter) in chapters.withIndex()) {
+          val audioTrack = audioTracks[0]
+          val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)
+          val mediaUri = this.getContentUri(audioTrack)
+          val mimeType = audioTrack.mimeType
 
-        // Create clipping configuration for this chapter
-        val clippingConfig = MediaItem.ClippingConfiguration.Builder()
-          .setStartPositionMs(chapter.startMs)
-          .setEndPositionMs(if (index < chapters.size - 1) chapters[index + 1].startMs else Long.MAX_VALUE)
-          .build()
+          // Create clipping configuration for this chapter
+          val clippingConfigBuilder = MediaItem.ClippingConfiguration.Builder()
+            .setStartPositionMs(chapter.startMs)
 
-        val queueItem = getQueueItem(audioTrack, chapter, index)
-        val mediaItem = MediaItem.Builder()
-          .setUri(mediaUri)
-          .setTag(queueItem)
-          .setMediaMetadata(mediaMetadata)
-          .setMimeType(mimeType)
-          .setClippingConfiguration(clippingConfig)
-          .build()
-        mediaItems.add(mediaItem)
+          // Only set end position for non-final chapters
+          if (index < chapters.size - 1) {
+            clippingConfigBuilder.setEndPositionMs(chapters[index + 1].startMs)
+          }
+
+          val clippingConfig = clippingConfigBuilder.build()
+
+          val mediaItem = MediaItem.Builder()
+            .setUri(mediaUri)
+            .setMediaMetadata(mediaMetadata)
+            .setMimeType(mimeType)
+            .setClippingConfiguration(clippingConfig)
+            .build()
+          mediaItems.add(mediaItem)
+        }
+      } else {
+        // Multiple audio files with chapters - map chapters to tracks
+        // For now, we'll use the simpler approach: one media item per audio track but with chapter metadata
+        // This is a common case for audiobooks where each file represents a chapter
+        for ((index, audioTrack) in audioTracks.withIndex()) {
+          // Try to find corresponding chapter for this track
+          val chapter = if (index < chapters.size) chapters[index] else null
+          val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)
+          val mediaUri = this.getContentUri(audioTrack)
+          val mimeType = audioTrack.mimeType
+
+          val mediaItem = MediaItem.Builder()
+            .setUri(mediaUri)
+            .setMediaMetadata(mediaMetadata)
+            .setMimeType(mimeType)
+            .build()
+          mediaItems.add(mediaItem)
+        }
       }
     } else {
-      // For multi-track books, create media items for each track
+      // For podcasts or books without chapters, create media items for each track
       for (audioTrack in audioTracks) {
         val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack)
         val mediaUri = this.getContentUri(audioTrack)
         val mimeType = audioTrack.mimeType
 
-        val queueItem = getQueueItem(audioTrack)
         val mediaItem = MediaItem.Builder()
           .setUri(mediaUri)
-          .setTag(queueItem)
           .setMediaMetadata(mediaMetadata)
           .setMimeType(mimeType)
           .build()
@@ -417,6 +442,8 @@ class PlaybackSession(
     return mediaItems
   }
 
+  // MIGRATION-DEFERRED: CAST - Commented out Cast-related methods
+  /*
   @JsonIgnore
   fun getCastMediaMetadata(audioTrack: AudioTrack, chapter: BookChapter? = null, chapterIndex: Int = -1): com.google.android.gms.cast.MediaMetadata {
     val castMetadata =
@@ -463,7 +490,10 @@ class PlaybackSession(
   fun getCastMediaMetadata(audioTrack: AudioTrack): com.google.android.gms.cast.MediaMetadata {
     return getCastMediaMetadata(audioTrack, null, -1)
   }
+  */
 
+  // MIGRATION-DEFERRED: CAST - Commented out Cast-related methods
+  /*
   @JsonIgnore
   fun getQueueItem(audioTrack: AudioTrack, chapter: BookChapter? = null, chapterIndex: Int = -1): MediaQueueItem {
     val castMetadata = if (chapter != null) {
@@ -492,6 +522,7 @@ class PlaybackSession(
   fun getQueueItem(audioTrack: AudioTrack): MediaQueueItem {
     return getQueueItem(audioTrack, null, -1)
   }
+  */
 
   @JsonIgnore
   fun clone(): PlaybackSession {
