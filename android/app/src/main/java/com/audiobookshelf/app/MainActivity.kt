@@ -45,9 +45,16 @@ class MainActivity : BridgeActivity() {
   val storage = SimpleStorage(this)
 
   val REQUEST_PERMISSIONS = 1
-  var PERMISSIONS_ALL = arrayOf(
-    Manifest.permission.READ_EXTERNAL_STORAGE
-  )
+  var PERMISSIONS_ALL = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    arrayOf(
+      Manifest.permission.READ_EXTERNAL_STORAGE,
+      Manifest.permission.POST_NOTIFICATIONS
+    )
+  } else {
+    arrayOf(
+      Manifest.permission.READ_EXTERNAL_STORAGE
+    )
+  }
 
   public override fun onCreate(savedInstanceState: Bundle?) {
     DbManager.initialize(applicationContext)
@@ -103,11 +110,18 @@ class MainActivity : BridgeActivity() {
       }
     }
 
-    val permission = ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-    if (permission != PackageManager.PERMISSION_GRANTED) {
+    // Check if all required permissions are granted
+    val missingPermissions = PERMISSIONS_ALL.filter { permission ->
+      ActivityCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+    }
+
+    if (missingPermissions.isNotEmpty()) {
+      Log.d(tag, "Requesting missing permissions: ${missingPermissions.joinToString(", ")}")
       ActivityCompat.requestPermissions(this,
         PERMISSIONS_ALL,
         REQUEST_PERMISSIONS)
+    } else {
+      Log.d(tag, "All required permissions already granted")
     }
   }
 
@@ -230,8 +244,13 @@ class MainActivity : BridgeActivity() {
     }
   }
 
-  fun isPlayerNotificationServiceInitialized():Boolean {
+  fun isAudiobookMediaServiceInitialized():Boolean {
     return ::foregroundService.isInitialized
+  }
+
+  // Legacy method name for backward compatibility
+  fun isPlayerNotificationServiceInitialized():Boolean {
+    return isAudiobookMediaServiceInitialized()
   }
 
   fun stopMyService() {

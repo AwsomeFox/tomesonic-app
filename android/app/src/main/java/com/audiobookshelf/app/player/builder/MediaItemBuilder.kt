@@ -62,7 +62,7 @@ class MediaItemBuilder @Inject constructor() {
 
             MediaItem.Builder()
                 .setMediaId("${libraryItem.id}_chapter_$index")
-                .setUri(audioTrack.contentUrl)
+                .setUri(playbackSession.getContentUri(audioTrack))
                 .setMimeType(getMimeType(audioTrack.contentUrl))
                 .setMediaMetadata(
                     MediaMetadata.Builder()
@@ -126,7 +126,7 @@ class MediaItemBuilder @Inject constructor() {
 
         val mediaItem = MediaItem.Builder()
             .setMediaId(libraryItem.id)
-            .setUri(primaryTrack.contentUrl)
+            .setUri(playbackSession.getContentUri(primaryTrack))
             .setMimeType(getMimeType(primaryTrack.contentUrl))
             .setMediaMetadata(
                 MediaMetadata.Builder()
@@ -213,7 +213,7 @@ class MediaItemBuilder @Inject constructor() {
         return playbackSession.audioTracks.map { audioTrack ->
             MediaItem.Builder()
                 .setMediaId("${libraryItem.id}_episode")
-                .setUri(audioTrack.contentUrl)
+                .setUri(playbackSession.getContentUri(audioTrack))
                 .setMimeType(getMimeType(audioTrack.contentUrl))
                 .setMediaMetadata(
                     MediaMetadata.Builder()
@@ -251,6 +251,7 @@ class MediaItemBuilder @Inject constructor() {
             url.contains(".flac", ignoreCase = true) -> "audio/flac"
             url.contains(".ogg", ignoreCase = true) -> "audio/ogg"
             url.contains(".wav", ignoreCase = true) -> "audio/wav"
+            url.contains(".m3u8", ignoreCase = true) -> MimeTypes.APPLICATION_M3U8
             else -> MimeTypes.AUDIO_UNKNOWN
         }
     }

@@ -3,20 +3,24 @@ package com.audiobookshelf.app.managers
 import android.content.Context
 import android.media.MediaPlayer
 import android.os.*
+import android.os.VibratorManager
+import android.os.Vibrator
 import android.util.Log
 import com.audiobookshelf.app.R
 import com.audiobookshelf.app.device.DeviceManager
-import com.audiobookshelf.app.player.PlayerNotificationService
-import com.audiobookshelf.app.player.SLEEP_TIMER_WAKE_UP_EXPIRATION
+import com.audiobookshelf.app.player.service.AudiobookMediaService
 import com.audiobookshelf.app.plugins.AbsLogger
 import java.util.*
 import kotlin.concurrent.schedule
 import kotlin.math.roundToInt
 
+// SLEEP_TIMER_WAKE_UP_EXPIRATION constant - 2 minutes in milliseconds
+const val SLEEP_TIMER_WAKE_UP_EXPIRATION = 120000L
+
 const val SLEEP_TIMER_CHIME_SOUND_VOLUME = 0.7f
 
 class SleepTimerManager
-constructor(private val playerNotificationService: PlayerNotificationService) {
+constructor(private val audiobookMediaService: AudiobookMediaService) {
   private val tag = "SleepTimerManager"
 
   private var sleepTimerTask: TimerTask? = null
@@ -34,7 +38,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * @return Long - the current time in milliseconds.
    */
   private fun getCurrentTime(): Long {
-    return playerNotificationService.getCurrentTime()
+    return audiobookMediaService.getCurrentTime()
   }
 
   /**
@@ -42,7 +46,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * @return Long - the duration in milliseconds.
    */
   private fun getDuration(): Long {
-    return playerNotificationService.getDuration()
+    return audiobookMediaService.getDuration()
   }
 
   /**
@@ -50,7 +54,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * @return Boolean - true if the player is playing, false otherwise.
    */
   private fun getIsPlaying(): Boolean {
-    return playerNotificationService.currentPlayer.isPlaying
+    return audiobookMediaService.currentPlayer.isPlaying
   }
 
   /**
@@ -58,7 +62,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * @return Float - the playback speed.
    */
   private fun getPlaybackSpeed(): Float {
-    return playerNotificationService.currentPlayer.playbackParameters.speed
+    return audiobookMediaService.currentPlayer.playbackParameters.speed
   }
 
   /**
@@ -66,17 +70,17 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * @param volume Float - the volume level to set.
    */
   private fun setVolume(volume: Float) {
-    playerNotificationService.currentPlayer.volume = volume
+    audiobookMediaService.currentPlayer.volume = volume
   }
 
   /** Pauses the player. */
   private fun pause() {
-    playerNotificationService.currentPlayer.pause()
+    audiobookMediaService.currentPlayer.pause()
   }
 
   /** Plays the player. */
   private fun play() {
-    playerNotificationService.currentPlayer.play()
+    audiobookMediaService.currentPlayer.play()
   }
 
   /**
@@ -134,9 +138,9 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     sleepTimerLength = time
 
     // Register shake sensor
-    playerNotificationService.registerSensor()
+    audiobookMediaService.registerSensor()
 
-    playerNotificationService.clientEventEmitter?.onSleepTimerSet(
+    audiobookMediaService.clientEventEmitter?.onSleepTimerSet(
             getSleepTimerTimeRemainingSeconds(getPlaybackSpeed()),
             isAutoSleepTimer
     )
@@ -155,7 +159,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
                   )
 
                   if (sleepTimeSecondsRemaining > 0) {
-                    playerNotificationService.clientEventEmitter?.onSleepTimerSet(
+                    audiobookMediaService.clientEventEmitter?.onSleepTimerSet(
                             sleepTimeSecondsRemaining,
                             isAutoSleepTimer
                     )
@@ -169,7 +173,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
                     Log.d(tag, "Sleep Timer Pausing Player on Chapter")
                     pause()
 
-                    playerNotificationService.clientEventEmitter?.onSleepTimerEnded(
+                    audiobookMediaService.clientEventEmitter?.onSleepTimerEnded(
                             getCurrentTime()
                     )
                     clearSleepTimer()
@@ -221,7 +225,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     sleepTimerTask = null
     sleepTimerEndTime = 0
     sleepTimerRunning = false
-    playerNotificationService.unregisterSensor()
+    audiobookMediaService.unregisterSensor()
 
     setVolume(1f)
   }
@@ -244,14 +248,14 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     }
 
     clearSleepTimer()
-    playerNotificationService.clientEventEmitter?.onSleepTimerSet(0, false)
+    audiobookMediaService.clientEventEmitter?.onSleepTimerSet(0, false)
   }
 
   /** Provides vibration feedback when resetting the sleep timer. */
   private fun vibrateFeedback() {
     if (DeviceManager.deviceData.deviceSettings?.disableSleepTimerResetFeedback == true) return
 
-    val context = playerNotificationService.getContext()
+    val context = audiobookMediaService.getContext()
     val vibrator: Vibrator
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       val vibratorManager =
@@ -275,7 +279,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
   /** Plays chime sound */
   private fun playChimeSound() {
     AbsLogger.info(tag, "playChimeSound: Playing sleep timer chime sound")
-    val ctx = playerNotificationService.getContext()
+    val ctx = audiobookMediaService.getContext()
     val mediaPlayer = MediaPlayer.create(ctx, R.raw.bell)
     mediaPlayer.setVolume(SLEEP_TIMER_CHIME_SOUND_VOLUME, SLEEP_TIMER_CHIME_SOUND_VOLUME)
     mediaPlayer.start()
@@ -290,7 +294,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * @return Long? - the chapter end time in milliseconds, or null if there is no current session.
    */
   private fun getChapterEndTime(): Long? {
-    val currentChapterEndTimeMs = playerNotificationService.getEndTimeOfChapterOrTrack()
+    val currentChapterEndTimeMs = audiobookMediaService.getEndTimeOfChapterOrTrack()
     if (currentChapterEndTimeMs == null) {
       Log.e(tag, "Getting chapter sleep timer end of chapter/track but there is no current session")
       return null
@@ -302,7 +306,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     // chapter
     return if (timeLeftInChapter < 10000L) {
       Log.i(tag, "Getting chapter sleep timer time and current chapter has less than 10s remaining")
-      val nextChapterEndTimeMs = playerNotificationService.getEndTimeOfNextChapterOrTrack()
+      val nextChapterEndTimeMs = audiobookMediaService.getEndTimeOfNextChapterOrTrack()
       if (nextChapterEndTimeMs == null || currentChapterEndTimeMs == nextChapterEndTimeMs) {
         Log.e(
                 tag,
@@ -328,7 +332,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
                 tag,
                 "Auto sleep timer auto rewind seeking back ${deviceSettings.autoSleepTimerAutoRewindTime}ms"
         )
-        playerNotificationService.seekBackward(deviceSettings.autoSleepTimerAutoRewindTime)
+        audiobookMediaService.seekBackward(deviceSettings.autoSleepTimerAutoRewindTime)
       }
     }
   }
@@ -410,7 +414,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     }
 
     setVolume(1F)
-    playerNotificationService.clientEventEmitter?.onSleepTimerSet(
+    audiobookMediaService.clientEventEmitter?.onSleepTimerSet(
             getSleepTimerTimeRemainingSeconds(getPlaybackSpeed()),
             isAutoSleepTimer
     )
@@ -439,7 +443,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
     }
 
     setVolume(1F)
-    playerNotificationService.clientEventEmitter?.onSleepTimerSet(
+    audiobookMediaService.clientEventEmitter?.onSleepTimerSet(
             getSleepTimerTimeRemainingSeconds(getPlaybackSpeed()),
             isAutoSleepTimer
     )

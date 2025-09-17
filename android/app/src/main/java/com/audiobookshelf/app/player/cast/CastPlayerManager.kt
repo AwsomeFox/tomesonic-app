@@ -43,6 +43,9 @@ class CastPlayerManager @Inject constructor(
     // Callback for player switching
     private var playerSwitchListener: PlayerSwitchListener? = null
 
+    // Player switching state
+    var isSwitchingPlayer: Boolean = false
+
     val castPlayer: CastPlayer?
         get() = _castPlayer
 
@@ -81,6 +84,7 @@ class CastPlayerManager @Inject constructor(
             Log.d(TAG, "Connected to Cast device: ${session.castDevice?.friendlyName}")
         }
 
+        isSwitchingPlayer = true
         playerSwitchListener?.onSwitchToCastPlayer(_castPlayer!!)
     }
 
@@ -89,6 +93,7 @@ class CastPlayerManager @Inject constructor(
         _isCastConnected.value = false
         _castDeviceName.value = null
 
+        isSwitchingPlayer = true
         playerSwitchListener?.onSwitchToLocalPlayer()
     }
 

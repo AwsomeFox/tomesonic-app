@@ -2,13 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:dist="http://schemas.android.com/apk/distribution"
     xmlns:tools="http://schemas.android.com/tools"
-    android:installLocation="preferExternal" >
+    package="com.audiobookshelf.app"
+    android:installLocation="preferExternal">
 
     <!-- Permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
@@ -24,19 +27,18 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true"
-        android:largeHeap="true" >
+        android:largeHeap="true">
 
         <!-- Android app widget -->
         <receiver
-          android:name="MediaPlayerWidget"
-          android:exported="false">
-          <intent-filter>
-            <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-          </intent-filter>
-
-          <meta-data
-            android:name="android.appwidget.provider"
-            android:resource="@xml/media_player_widget_info" />
+            android:name="MediaPlayerWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/media_player_widget_info" />
         </receiver>
 
         <!-- Used by Android Auto -->
@@ -45,7 +47,9 @@
             android:resource="@drawable/icon" />
         <meta-data
             android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" /> <!-- Support for Cast -->
+            android:resource="@xml/automotive_app_desc" />
+
+        <!-- Support for Cast -->
         <meta-data
             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
             android:value="com.audiobookshelf.app.CastOptionsProvider" />
@@ -56,25 +60,20 @@
             android:exported="true"
             android:label="@string/title_activity_main"
             android:launchMode="singleTask"
-            android:theme="@style/AppTheme.NoActionBarLaunch" >
+            android:theme="@style/AppTheme.NoActionBarLaunch">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
-
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-
             <!-- Register URL scheme -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
-
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-
                 <data android:scheme="@string/custom_url_scheme" />
             </intent-filter>
         </activity>
@@ -85,15 +84,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Legacy service - MediaBrowserService intent removed to prevent conflicts with Media3 -->
-        <service
-            android:name=".player.PlayerNotificationService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback">
-            <!-- No intent-filter - only used for local binding, not Android Auto -->
-        </service>
-
         <!-- Media3 MediaLibraryService - Primary service for unified playback -->
         <service
             android:name=".player.service.AudiobookMediaService"
@@ -101,19 +91,28 @@
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
                 <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
+            <!-- Android Auto compatibility metadata -->
+            <meta-data
+                android:name="android.media.session.MEDIA_SESSION"
+                android:value="AudiobookMediaSession" />
+            <!-- Additional Android Auto metadata for enhanced discovery -->
+            <meta-data
+                android:name="androidx.media3.session.MediaLibraryService"
+                android:value="true" />
         </service>
 
         <provider
-          android:name="androidx.core.content.FileProvider"
-          android:authorities="${applicationId}.fileprovider"
-          android:grantUriPermissions="true"
-          android:exported="false">
-          <meta-data
-            android:name="android.support.FILE_PROVIDER_PATHS"
-            android:resource="@xml/file_paths" />
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:grantUriPermissions="true"
+            android:exported="false">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
         </provider>
     </application>
 

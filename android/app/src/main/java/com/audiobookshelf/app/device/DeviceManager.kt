@@ -9,16 +9,18 @@ import android.util.Log
 import com.audiobookshelf.app.MediaPlayerWidget
 import com.audiobookshelf.app.data.*
 import com.audiobookshelf.app.managers.DbManager
-import com.audiobookshelf.app.player.PlayerNotificationService
+import com.audiobookshelf.app.player.service.AudiobookMediaService
 import com.audiobookshelf.app.updateAppWidget
+import org.json.JSONObject
+import java.util.Base64
 
 /** Interface for widget event handling. */
 interface WidgetEventEmitter {
   /**
    * Called when the player state changes.
-   * @param pns The PlayerNotificationService instance.
+   * @param service The AudiobookMediaService instance.
    */
-  fun onPlayerChanged(pns: PlayerNotificationService)
+  fun onPlayerChanged(service: AudiobookMediaService)
 
   /** Called when the player is closed. */
   fun onPlayerClosed()
@@ -44,6 +46,36 @@ object DeviceManager {
   val serverVersion get() = serverConnectionConfig?.version ?: ""
   val isConnectedToServer
     get() = serverConnectionConfig != null
+
+  /**
+   * Checks if the current access token is expired
+   * @return true if token is expired or invalid, false otherwise
+   */
+  fun isTokenExpired(): Boolean {
+    val currentToken = token
+    if (currentToken.isEmpty()) return true
+
+    return try {
+      // JWT format: header.payload.signature
+      val parts = currentToken.split(".")
+      if (parts.size != 3) return true
+
+      // Decode the payload (second part)
+      val payload = String(Base64.getUrlDecoder().decode(parts[1]))
+      val jsonObject = JSONObject(payload)
+
+      // Get expiration timestamp
+      val exp = jsonObject.optLong("exp", 0)
+      if (exp == 0L) return true
+
+      // Check if token is expired (with 30 second buffer)
+      val currentTime = System.currentTimeMillis() / 1000
+      currentTime >= (exp - 30)
+    } catch (e: Exception) {
+      Log.e(tag, "Error checking token expiration", e)
+      true // Assume expired if we can't parse it
+    }
+  }
 
   var widgetUpdater: WidgetEventEmitter? = null
 
@@ -188,8 +220,8 @@ object DeviceManager {
     Log.d(tag, "Initializing widget updater")
     widgetUpdater =
             (object : WidgetEventEmitter {
-              override fun onPlayerChanged(pns: PlayerNotificationService) {
-                val isPlaying = pns.currentPlayer.isPlaying
+              override fun onPlayerChanged(pns: AudiobookMediaService) {
+                val isPlaying = !pns.isClosed() && pns.player.isPlaying
 
                 val appWidgetManager = AppWidgetManager.getInstance(context)
                 val componentName = ComponentName(context, MediaPlayerWidget::class.java)
@@ -203,7 +235,7 @@ object DeviceManager {
                           widgetId,
                           playbackSession,
                           isPlaying,
-                          PlayerNotificationService.isClosed
+                          false
                   )
                 }
               }
@@ -219,7 +251,7 @@ object DeviceManager {
                           widgetId,
                           deviceData.lastPlaybackSession,
                           false,
-                          PlayerNotificationService.isClosed
+                          false
                   )
                 }
               }

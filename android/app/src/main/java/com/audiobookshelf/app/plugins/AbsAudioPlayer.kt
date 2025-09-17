@@ -7,10 +7,12 @@ import com.audiobookshelf.app.MainActivity
 import com.audiobookshelf.app.data.*
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.media.MediaEventManager
-import com.audiobookshelf.app.player.CastManager
+// Legacy CastManager removed - using Media3 cast integration in AudiobookMediaService
 import com.audiobookshelf.app.player.PlayerListener
 import com.audiobookshelf.app.player.service.AudiobookMediaService
 import com.audiobookshelf.app.server.ApiHandler
+import androidx.media3.session.MediaController
+import com.google.common.util.concurrent.MoreExecutors
 import com.fasterxml.jackson.core.json.JsonReadFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.getcapacitor.*
@@ -27,9 +29,12 @@ class AbsAudioPlayer : Plugin() {
 
   private lateinit var mainActivity: MainActivity
   private lateinit var apiHandler:ApiHandler
-  var castManager:CastManager? = null
+  // Legacy castManager removed - Cast functionality now handled by AudiobookMediaService
 
-  lateinit var playerNotificationService: AudiobookMediaService
+  lateinit var audiobookMediaService: AudiobookMediaService
+
+  // MediaController for proper Media3 interface
+  private var mediaController: MediaController? = null
 
   private var isCastAvailable:Boolean = false
 
@@ -37,16 +42,12 @@ class AbsAudioPlayer : Plugin() {
     mainActivity = (activity as MainActivity)
     apiHandler = ApiHandler(mainActivity)
 
-    try {
-      initCastManager()
-    } catch(e:Exception) {
-      Log.e(tag, "initCastManager exception ${e.printStackTrace()}")
-    }
+    // Cast functionality now handled by AudiobookMediaService - no separate initialization needed
 
     val foregroundServiceReady : () -> Unit = {
-      playerNotificationService = mainActivity.foregroundService
+      audiobookMediaService = mainActivity.foregroundService
 
-      playerNotificationService.clientEventEmitter = (object : AudiobookMediaService.ClientEventEmitter {
+      audiobookMediaService.clientEventEmitter = (object : AudiobookMediaService.ClientEventEmitter {
         override fun onPlaybackSession(playbackSession: PlaybackSession) {
           notifyListeners("onPlaybackSession", JSObject(jacksonMapper.writeValueAsString(playbackSession)))
         }
@@ -57,7 +58,7 @@ class AbsAudioPlayer : Plugin() {
           try {
             Handler(Looper.getMainLooper()).post {
               try {
-                playerNotificationService.mediaProgressSyncer.stop(true) { /* finished */ }
+                audiobookMediaService.mediaProgressSyncer.stop(true) { /* finished */ }
               } catch (e: Exception) {
                 Log.e(tag, "onPlaybackClosed: Failed to stop/sync mediaProgressSyncer: ${e.message}")
               }
@@ -75,10 +76,10 @@ class AbsAudioPlayer : Plugin() {
               try {
                 if (isPlaying) {
                   // Force an immediate sync attempt on start (will respect network/settings)
-                  playerNotificationService.mediaProgressSyncer.forceSyncNow(true) { /* result ignored */ }
+                  audiobookMediaService.mediaProgressSyncer.forceSyncNow(true) { /* result ignored */ }
                 } else {
                   // On pause, ensure local progress is saved and attempt to push to server
-                  playerNotificationService.mediaProgressSyncer.pause { /* result ignored */ }
+                  audiobookMediaService.mediaProgressSyncer.pause { /* result ignored */ }
                 }
               } catch (e: Exception) {
                 Log.e(tag, "onPlayingUpdate: Failed to trigger sync/pause: ${e.message}")
@@ -135,9 +136,20 @@ class AbsAudioPlayer : Plugin() {
         override fun onPlaybackSpeedChanged(playbackSpeed:Float) {
           emit("onPlaybackSpeedChanged", playbackSpeed)
         }
+
+        override fun onPlayerError(errorMessage: String) {
+          emit("onPlayerError", errorMessage)
+        }
       })
 
-      MediaEventManager.clientEventEmitter = playerNotificationService.clientEventEmitter
+      MediaEventManager.clientEventEmitter = audiobookMediaService.clientEventEmitter
+
+      // Initialize MediaController for proper Media3 interface
+      initializeMediaController()
+
+      // Set up Cast availability monitoring
+      setupCastListeners()
+
       // --- Sync playback state and metadata on service connection ---
       syncCurrentPlaybackState()
     }
@@ -147,26 +159,26 @@ class AbsAudioPlayer : Plugin() {
   // --- New function to sync playback state and metadata ---
   fun syncCurrentPlaybackState() {
     try {
-      val playbackSession = playerNotificationService.currentPlaybackSession
+      val playbackSession = audiobookMediaService.currentPlaybackSession
       if (playbackSession != null) {
         Log.d(tag, "Syncing playback state: ${playbackSession.libraryItem?.media?.metadata?.title}")
 
         // CRITICAL FIX: Check if player has media items loaded, if not, prepare the player
-        val hasMediaItems = playerNotificationService.currentPlayer.mediaItemCount > 0
-        Log.d(tag, "Player has ${playerNotificationService.currentPlayer.mediaItemCount} media items")
+        val hasMediaItems = audiobookMediaService.currentPlayer.mediaItemCount > 0
+        Log.d(tag, "Player has ${audiobookMediaService.currentPlayer.mediaItemCount} media items")
 
         if (!hasMediaItems) {
           Log.w(tag, "Player has no media items! Preparing player with existing session...")
           // Get the saved playback rate to maintain consistency
           val currentPlaybackSpeed = try {
-            playerNotificationService.mediaManager.getSavedPlaybackRate()
+            audiobookMediaService.mediaManager.getSavedPlaybackRate()
           } catch (e: Exception) {
             Log.w(tag, "Could not get saved playback rate, using 1.0f: ${e.message}")
             1.0f
           }
 
           // Prepare the player with the existing session but don't auto-play
-          playerNotificationService.preparePlayer(playbackSession, false, currentPlaybackSpeed)
+          audiobookMediaService.preparePlayer(playbackSession, false, currentPlaybackSpeed)
           Log.i(tag, "Player prepared with existing session at speed ${currentPlaybackSpeed}x")
         }
 
@@ -174,8 +186,8 @@ class AbsAudioPlayer : Plugin() {
 
         // Create and emit metadata using the same pattern as the service
         val duration = playbackSession.duration
-        val currentTime = playerNotificationService.getCurrentTimeSeconds()
-        val isPlaying = playerNotificationService.currentPlayer.isPlaying
+        val currentTime = audiobookMediaService.getCurrentTimeSeconds()
+        val isPlaying = audiobookMediaService.currentPlayer.isPlaying
 
         // Use READY state for both playing and paused (when player is loaded)
         // Only use IDLE for truly idle states
@@ -189,7 +201,7 @@ class AbsAudioPlayer : Plugin() {
         // Emit current time to update progress bar
         val ret = JSObject()
         ret.put("value", currentTime)
-        ret.put("bufferedTime", playerNotificationService.getBufferedTimeSeconds())
+        ret.put("bufferedTime", audiobookMediaService.getBufferedTimeSeconds())
         notifyListeners("onTimeUpdate", ret)
 
         Log.d(tag, "Synced state - Playing: $isPlaying, CurrentTime: $currentTime, Duration: $duration, PlayerState: READY")
@@ -234,7 +246,7 @@ class AbsAudioPlayer : Plugin() {
                   Log.d(tag, "Found local download for ${localLibraryItem.title}, using local copy")
 
                   // Create a local playback session
-                  val deviceInfo = playerNotificationService.getDeviceInfo()
+                  val deviceInfo = audiobookMediaService.getDeviceInfo()
                   val episode = if (latestProgress.episodeId != null && localLibraryItem.isPodcast) {
                     val podcast = localLibraryItem.media as? Podcast
                     podcast?.episodes?.find { ep -> ep.id == latestProgress.episodeId }
@@ -247,22 +259,22 @@ class AbsAudioPlayer : Plugin() {
                   Log.d(tag, "Resuming from local download: ${localLibraryItem.title} at ${latestProgress.currentTime}s")
 
                   // Get current playbook speed from MediaManager (same as Android Auto implementation)
-                  val currentPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
+                  val currentPlaybackSpeed = audiobookMediaService.mediaManager.getSavedPlaybackRate()
 
                   // Determine if we should start playing based on Android Auto mode
-                  val shouldStartPlaying = playerNotificationService.isAndroidAuto
+                  val shouldStartPlaying = audiobookMediaService.isAndroidAuto
 
                   // Prepare the player with appropriate play state and saved playback speed
                   Handler(Looper.getMainLooper()).post {
-                    if (playerNotificationService.mediaProgressSyncer.listeningTimerRunning) {
-                      playerNotificationService.mediaProgressSyncer.stop {
+                    if (audiobookMediaService.mediaProgressSyncer.listeningTimerRunning) {
+                      audiobookMediaService.mediaProgressSyncer.stop {
                         PlayerListener.lazyIsPlaying = false
-                        playerNotificationService.preparePlayer(localPlaybackSession, shouldStartPlaying, currentPlaybackSpeed)
+                        audiobookMediaService.preparePlayer(localPlaybackSession, shouldStartPlaying, currentPlaybackSpeed)
                       }
                     } else {
-                      playerNotificationService.mediaProgressSyncer.reset()
+                      audiobookMediaService.mediaProgressSyncer.reset()
                       PlayerListener.lazyIsPlaying = false
-                      playerNotificationService.preparePlayer(localPlaybackSession, shouldStartPlaying, currentPlaybackSpeed)
+                      audiobookMediaService.preparePlayer(localPlaybackSession, shouldStartPlaying, currentPlaybackSpeed)
                     }
                   }
                   return@getCurrentUser
@@ -283,12 +295,12 @@ class AbsAudioPlayer : Plugin() {
                         } else null
 
                         // Use the API to get a proper playback session but don't start playback
-                        val playItemRequestPayload = playerNotificationService.getPlayItemRequestPayload(false)
+                        val playItemRequestPayload = audiobookMediaService.getPlayItemRequestPayload(false)
 
                         // Try to get the current playback speed from the player, default to 1.0f if not available
                         val currentPlaybackSpeed = try {
-                          if (::playerNotificationService.isInitialized && playerNotificationService.currentPlayer != null) {
-                            playerNotificationService.currentPlayer.playbackParameters?.speed ?: 1.0f
+                          if (::audiobookMediaService.isInitialized && audiobookMediaService.currentPlayer != null) {
+                            audiobookMediaService.currentPlayer.playbackParameters?.speed ?: 1.0f
                           } else {
                             1.0f
                           }
@@ -305,22 +317,22 @@ class AbsAudioPlayer : Plugin() {
                             playbackSession.currentTime = latestProgress.currentTime
 
                             // Determine if we should start playing based on Android Auto mode
-                            val shouldStartPlaying = playerNotificationService.isAndroidAuto
+                            val shouldStartPlaying = audiobookMediaService.isAndroidAuto
                             val playStateText = if (shouldStartPlaying) "playing" else "paused"
 
                             Log.d(tag, "Resuming from server session: ${libraryItem.media.metadata?.title} at ${latestProgress.currentTime}s in $playStateText state with speed ${currentPlaybackSpeed}x")
 
                             // Prepare the player with appropriate play state on main thread with correct playback speed
                             Handler(Looper.getMainLooper()).post {
-                              if (playerNotificationService.mediaProgressSyncer.listeningTimerRunning) {
-                                playerNotificationService.mediaProgressSyncer.stop {
+                              if (audiobookMediaService.mediaProgressSyncer.listeningTimerRunning) {
+                                audiobookMediaService.mediaProgressSyncer.stop {
                                   PlayerListener.lazyIsPlaying = false
-                                  playerNotificationService.preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed) // Use correct speed
+                                  audiobookMediaService.preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed) // Use correct speed
                                 }
                               } else {
-                                playerNotificationService.mediaProgressSyncer.reset()
+                                audiobookMediaService.mediaProgressSyncer.reset()
                                 PlayerListener.lazyIsPlaying = false
-                                playerNotificationService.preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed) // Use correct speed
+                                audiobookMediaService.preparePlayer(playbackSession, shouldStartPlaying, currentPlaybackSpeed) // Use correct speed
                               }
                             }
                           } else {
@@ -411,59 +423,76 @@ class AbsAudioPlayer : Plugin() {
     notifyListeners(evtName, ret)
   }
 
-  private fun initCastManager() {
-    val googleApi = GoogleApiAvailability.getInstance()
-    val statusCode = googleApi.isGooglePlayServicesAvailable(mainActivity)
+  // Legacy initCastManager removed - Cast functionality now handled by AudiobookMediaService
 
-    if (statusCode != ConnectionResult.SUCCESS) {
-        if (statusCode == ConnectionResult.SERVICE_MISSING) {
-          Log.w(tag, "initCastManager: Google Api Missing")
-        } else if (statusCode == ConnectionResult.SERVICE_DISABLED) {
-          Log.w(tag, "initCastManager: Google Api Disabled")
-        } else if (statusCode == ConnectionResult.SERVICE_INVALID) {
-          Log.w(tag, "initCastManager: Google Api Invalid")
-        } else if (statusCode == ConnectionResult.SERVICE_UPDATING) {
-          Log.w(tag, "initCastManager: Google Api Updating")
-        } else if (statusCode == ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED) {
-          Log.w(tag, "initCastManager: Google Api Update Required")
-        }
+  /**
+   * Initialize MediaController for proper Media3 interface
+   * This provides the standard way to control media playback instead of direct service calls
+   */
+  private fun initializeMediaController() {
+    try {
+      Log.i(tag, "*** Initializing MediaController for proper Media3 interface ***")
+
+      if (!::audiobookMediaService.isInitialized) {
+        Log.w(tag, "AudiobookMediaService not initialized, cannot create MediaController")
         return
+      }
+
+      val sessionToken = audiobookMediaService.getSessionToken()
+      if (sessionToken == null) {
+        Log.w(tag, "Session token not available, cannot create MediaController")
+        return
+      }
+
+      val controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
+
+      controllerFuture.addListener({
+        try {
+          mediaController = controllerFuture.get()
+          Log.i(tag, "*** MediaController connected - UI can now use standardized Media3 interface ***")
+          Log.i(tag, "*** Benefits: Decoupled architecture, consistent with Android Auto, proper session management ***")
+        } catch (e: Exception) {
+          Log.e(tag, "*** Error connecting MediaController: ${e.message} ***")
+        }
+      }, MoreExecutors.directExecutor())
+
+    } catch (e: Exception) {
+      Log.e(tag, "*** Error creating MediaController: ${e.message} ***")
     }
+  }
 
-    val connListener = object: CastManager.ChromecastListener() {
-      override fun onReceiverAvailableUpdate(available: Boolean) {
-        Log.d(tag, "ChromecastListener: CAST Receiver Update Available $available")
-        isCastAvailable = available
-        emit("onCastAvailableUpdate", available)
+  private fun setupCastListeners() {
+    try {
+      // Monitor cast availability changes
+      val castPlayerManager = audiobookMediaService.castPlayerManager
+
+      // Since we can't use coroutines directly here, we'll check periodically
+      // This is a simple approach - a better implementation would use coroutines
+      val handler = Handler(Looper.getMainLooper())
+      var lastCastAvailable = false
+
+      val checkCastAvailability = object : Runnable {
+        override fun run() {
+          try {
+            val currentCastAvailable = castPlayerManager.isCastAvailable.value
+            if (currentCastAvailable != lastCastAvailable) {
+              lastCastAvailable = currentCastAvailable
+              isCastAvailable = currentCastAvailable
+              emit("onCastAvailableUpdate", currentCastAvailable)
+              Log.d(tag, "Cast availability changed: $currentCastAvailable")
+            }
+          } catch (e: Exception) {
+            Log.e(tag, "Error checking cast availability: ${e.message}")
+          }
+          handler.postDelayed(this, 2000) // Check every 2 seconds
+        }
       }
 
-      override fun onSessionRejoin(jsonSession: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onSessionRejoin")
-      }
-
-      override fun onMediaLoaded(jsonMedia: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onMediaLoaded")
-      }
-
-      override fun onMediaUpdate(jsonMedia: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onMediaUpdate")
-      }
-
-      override fun onSessionUpdate(jsonSession: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onSessionUpdate")
-      }
-
-      override fun onSessionEnd(jsonSession: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onSessionEnd")
-      }
-
-      override fun onMessageReceived(p0: CastDevice, p1: String, p2: String) {
-        Log.d(tag, "ChromecastListener: CAST onMessageReceived")
-      }
+      handler.post(checkCastAvailability)
+      Log.d(tag, "Cast listeners setup completed")
+    } catch (e: Exception) {
+      Log.e(tag, "Error setting up cast listeners: ${e.message}")
     }
-
-    castManager = CastManager(mainActivity)
-    castManager?.startRouteScan(connListener)
   }
 
   @PluginMethod
@@ -498,19 +527,19 @@ class AbsAudioPlayer : Plugin() {
 
         Handler(Looper.getMainLooper()).post {
           Log.d(tag, "prepareLibraryItem: Preparing Local Media item ${jacksonMapper.writeValueAsString(it)}")
-          val playbackSession = it.getPlaybackSession(episode, playerNotificationService.getDeviceInfo())
+          val playbackSession = it.getPlaybackSession(episode, audiobookMediaService.getDeviceInfo())
           if (startTimeOverride != null) {
             Log.d(tag, "prepareLibraryItem: Using start time override $startTimeOverride")
             playbackSession.currentTime = startTimeOverride
           }
 
-          if (playerNotificationService.mediaProgressSyncer.listeningTimerRunning) { // If progress syncing then first stop before preparing next
-            playerNotificationService.mediaProgressSyncer.stop {
+          if (audiobookMediaService.mediaProgressSyncer.listeningTimerRunning) { // If progress syncing then first stop before preparing next
+            audiobookMediaService.mediaProgressSyncer.stop {
               Log.d(tag, "Media progress syncer was already syncing - stopped")
               PlayerListener.lazyIsPlaying = false
 
               Handler(Looper.getMainLooper()).post { // TODO: This was needed again which is probably a design a flaw
-                playerNotificationService.preparePlayer(
+                audiobookMediaService.preparePlayer(
                   playbackSession,
                   playWhenReady,
                   playbackRate
@@ -518,16 +547,16 @@ class AbsAudioPlayer : Plugin() {
               }
             }
           } else {
-            playerNotificationService.mediaProgressSyncer.reset()
-            playerNotificationService.preparePlayer(playbackSession, playWhenReady, playbackRate)
+            audiobookMediaService.mediaProgressSyncer.reset()
+            audiobookMediaService.preparePlayer(playbackSession, playWhenReady, playbackRate)
           }
         }
         return call.resolve(JSObject())
       }
     } else { // Play library item from server
-      val playItemRequestPayload = playerNotificationService.getPlayItemRequestPayload(false)
+      val playItemRequestPayload = audiobookMediaService.getPlayItemRequestPayload(false)
       Handler(Looper.getMainLooper()).post {
-        playerNotificationService.mediaProgressSyncer.stop {
+        audiobookMediaService.mediaProgressSyncer.stop {
           apiHandler.playLibraryItem(libraryItemId, episodeId, playItemRequestPayload) {
             if (it == null) {
               call.resolve(JSObject("{\"error\":\"Server play request failed\"}"))
@@ -540,7 +569,7 @@ class AbsAudioPlayer : Plugin() {
               Handler(Looper.getMainLooper()).post {
                 Log.d(tag, "Preparing Player playback session ${jacksonMapper.writeValueAsString(it)}")
                 PlayerListener.lazyIsPlaying = false
-                playerNotificationService.preparePlayer(it, playWhenReady, playbackRate)
+                audiobookMediaService.preparePlayer(it, playWhenReady, playbackRate)
               }
               call.resolve(JSObject(jacksonMapper.writeValueAsString(it)))
             }
@@ -553,8 +582,8 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun getCurrentTime(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      val currentTime = playerNotificationService.getCurrentTimeSeconds()
-      val bufferedTime = playerNotificationService.getBufferedTimeSeconds()
+      val currentTime = audiobookMediaService.getCurrentTimeSeconds()
+      val bufferedTime = audiobookMediaService.getBufferedTimeSeconds()
       val ret = JSObject()
       ret.put("value", currentTime)
       ret.put("bufferedTime", bufferedTime)
@@ -565,7 +594,14 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun pausePlayer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.pause()
+      // Use MediaController for proper Media3 interface
+      if (mediaController != null) {
+        Log.d(tag, "*** Using MediaController.pause() - proper Media3 interface ***")
+        mediaController!!.pause()
+      } else {
+        Log.w(tag, "*** MediaController not available, falling back to direct service call ***")
+        audiobookMediaService.pause()
+      }
       call.resolve()
     }
   }
@@ -573,7 +609,14 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun playPlayer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.play()
+      // Use MediaController for proper Media3 interface
+      if (mediaController != null) {
+        Log.d(tag, "*** Using MediaController.play() - proper Media3 interface ***")
+        mediaController!!.play()
+      } else {
+        Log.w(tag, "*** MediaController not available, falling back to direct service call ***")
+        audiobookMediaService.play()
+      }
       call.resolve()
     }
   }
@@ -581,8 +624,21 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun playPause(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      val playing = playerNotificationService.playPause()
-      call.resolve(JSObject("{\"playing\":$playing}"))
+      // Use MediaController for proper Media3 interface
+      if (mediaController != null) {
+        Log.d(tag, "*** Using MediaController.play/pause() - proper Media3 interface ***")
+        val isPlaying = mediaController!!.isPlaying
+        if (isPlaying) {
+          mediaController!!.pause()
+        } else {
+          mediaController!!.play()
+        }
+        call.resolve(JSObject("{\"playing\":${!isPlaying}}"))
+      } else {
+        Log.w(tag, "*** MediaController not available, falling back to direct service call ***")
+        val playing = audiobookMediaService.playPause()
+        call.resolve(JSObject("{\"playing\":$playing}"))
+      }
     }
   }
 
@@ -591,7 +647,14 @@ class AbsAudioPlayer : Plugin() {
     val time:Int = call.getInt("value", 0) ?: 0 // Value in seconds
     Log.d(tag, "seek action to $time")
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.seekPlayer(time * 1000L) // convert to ms
+      // Use MediaController for proper Media3 interface
+      if (mediaController != null) {
+        Log.d(tag, "*** Using MediaController.seekTo() - proper Media3 interface ***")
+        mediaController!!.seekTo(time * 1000L) // convert to ms
+      } else {
+        Log.w(tag, "*** MediaController not available, falling back to direct service call ***")
+        audiobookMediaService.seekPlayer(time * 1000L) // convert to ms
+      }
       call.resolve()
     }
   }
@@ -600,7 +663,7 @@ class AbsAudioPlayer : Plugin() {
   fun seekForward(call: PluginCall) {
     val amount:Int = call.getInt("value", 0) ?: 0
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.seekForward(amount * 1000L) // convert to ms
+      audiobookMediaService.seekForward(amount * 1000L) // convert to ms
       call.resolve()
     }
   }
@@ -609,7 +672,7 @@ class AbsAudioPlayer : Plugin() {
   fun seekBackward(call: PluginCall) {
     val amount:Int = call.getInt("value", 0) ?: 0 // Value in seconds
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.seekBackward(amount * 1000L) // convert to ms
+      audiobookMediaService.seekBackward(amount * 1000L) // convert to ms
       call.resolve()
     }
   }
@@ -619,7 +682,7 @@ class AbsAudioPlayer : Plugin() {
     val playbackSpeed:Float = call.getFloat("value", 1.0f) ?: 1.0f
 
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.setPlaybackSpeed(playbackSpeed)
+      audiobookMediaService.setPlaybackSpeed(playbackSpeed)
       call.resolve()
     }
   }
@@ -627,7 +690,7 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun closePlayback(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.closePlayback()
+      audiobookMediaService.closePlayback()
       call.resolve()
     }
   }
@@ -638,8 +701,8 @@ class AbsAudioPlayer : Plugin() {
     val isChapterTime:Boolean = call.getBoolean("isChapterTime", false) == true
 
     Handler(Looper.getMainLooper()).post {
-        val playbackSession: PlaybackSession? = playerNotificationService.mediaProgressSyncer.currentPlaybackSession ?: playerNotificationService.currentPlaybackSession
-        val success:Boolean = playerNotificationService.sleepTimerManager.setManualSleepTimer(playbackSession?.id ?: "", time, isChapterTime)
+        val playbackSession: PlaybackSession? = audiobookMediaService.mediaProgressSyncer.currentPlaybackSession ?: audiobookMediaService.currentPlaybackSession
+        val success:Boolean = audiobookMediaService.sleepTimerManager.setManualSleepTimer(playbackSession?.id ?: "", time, isChapterTime)
         val ret = JSObject()
         ret.put("success", success)
         call.resolve(ret)
@@ -648,7 +711,7 @@ class AbsAudioPlayer : Plugin() {
 
   @PluginMethod
   fun getSleepTimerTime(call: PluginCall) {
-    val time = playerNotificationService.sleepTimerManager.getSleepTimerTime()
+    val time = audiobookMediaService.sleepTimerManager.getSleepTimerTime()
     val ret = JSObject()
     ret.put("value", time)
     call.resolve(ret)
@@ -659,7 +722,7 @@ class AbsAudioPlayer : Plugin() {
     val time:Long = call.getString("time", "300000")!!.toLong()
 
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.sleepTimerManager.increaseSleepTime(time)
+      audiobookMediaService.sleepTimerManager.increaseSleepTime(time)
       val ret = JSObject()
       ret.put("success", true)
       call.resolve()
@@ -671,7 +734,7 @@ class AbsAudioPlayer : Plugin() {
     val time:Long = call.getString("time", "300000")!!.toLong()
 
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.sleepTimerManager.decreaseSleepTime(time)
+      audiobookMediaService.sleepTimerManager.decreaseSleepTime(time)
       val ret = JSObject()
       ret.put("success", true)
       call.resolve()
@@ -681,42 +744,35 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun cancelSleepTimer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.sleepTimerManager.cancelSleepTimer()
+      audiobookMediaService.sleepTimerManager.cancelSleepTimer()
     }
     call.resolve()
   }
 
   @PluginMethod
   fun requestSession(call: PluginCall) {
-    // Need to make sure the player service has been started
-    Log.d(tag, "CAST REQUEST SESSION PLUGIN")
+    Log.d(tag, "CAST REQUEST SESSION - Using Media3 Cast integration")
+
+    // AudiobookMediaService automatically handles cast player switching
+    // when cast becomes available via CastPlayerManager
+    // Cast availability and switching is managed automatically
+
+    Log.d(tag, "Cast functionality is integrated into AudiobookMediaService - no manual session request needed")
     call.resolve()
-    if (castManager == null) {
-      Log.e(tag, "Cast Manager not initialized")
-      return
-    }
-    // TODO: Update CastManager to work with AudiobookMediaService
-    // For now, cast functionality is disabled during migration
-    Log.w(tag, "Cast functionality temporarily disabled during Media3 migration")
-    /*castManager?.requestSession(playerNotificationService, object : CastManager.RequestSessionCallback() {
-      override fun onError(errorCode: Int) {
-        Log.e(tag, "CAST REQUEST SESSION CALLBACK ERROR $errorCode")
-      }
-
-      override fun onCancel() {
-        Log.d(tag, "CAST REQUEST SESSION ON CANCEL")
-      }
-
-      override fun onJoin(jsonSession: JSONObject?) {
-        Log.d(tag, "CAST REQUEST SESSION ON JOIN")
-      }
-    })*/
   }
 
   @PluginMethod
   fun getIsCastAvailable(call: PluginCall) {
     val jsobj = JSObject()
-    jsobj.put("value", isCastAvailable)
+    // Get cast availability from AudiobookMediaService's CastPlayerManager
+    try {
+      val castAvailable = audiobookMediaService.castPlayerManager.isCastAvailable.value
+      jsobj.put("value", castAvailable)
+      Log.d(tag, "Cast available: $castAvailable")
+    } catch (e: Exception) {
+      Log.e(tag, "Error getting cast availability: ${e.message}")
+      jsobj.put("value", false)
+    }
     call.resolve(jsobj)
   }
 
@@ -749,10 +805,10 @@ class AbsAudioPlayer : Plugin() {
         // Ensure this runs on the main thread since ExoPlayer operations require it
         Handler(Looper.getMainLooper()).post {
           try {
-            val savedPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
+            val savedPlaybackSpeed = audiobookMediaService.mediaManager.getSavedPlaybackRate()
             // Determine if we should start playing based on Android Auto mode
-            val shouldStartPlaying = playerNotificationService.isAndroidAuto
-            playerNotificationService.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
+            val shouldStartPlaying = audiobookMediaService.isAndroidAuto
+            audiobookMediaService.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
             call.resolve()
           } catch (e: Exception) {
             Log.e(tag, "Error resuming last playback session", e)
@@ -797,7 +853,7 @@ class AbsAudioPlayer : Plugin() {
     }
 
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.navigateToChapter(chapterIndex)
+      audiobookMediaService.navigateToChapter(chapterIndex)
       call.resolve()
     }
   }
@@ -805,7 +861,7 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun skipToNextChapter(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.skipToNext()
+      audiobookMediaService.skipToNext()
       call.resolve()
     }
   }
@@ -813,7 +869,7 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun skipToPreviousChapter(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.skipToPrevious()
+      audiobookMediaService.skipToPrevious()
       call.resolve()
     }
   }
@@ -821,7 +877,7 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun getCurrentNavigationIndex(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      val currentIndex = playerNotificationService.getCurrentNavigationIndex()
+      val currentIndex = audiobookMediaService.getCurrentNavigationIndex()
       val ret = JSObject()
       ret.put("index", currentIndex)
       call.resolve(ret)
@@ -831,10 +887,23 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun getNavigationItemCount(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      val count = playerNotificationService.getNavigationItemCount()
+      val count = audiobookMediaService.getNavigationItemCount()
       val ret = JSObject()
       ret.put("count", count)
       call.resolve(ret)
+    }
+  }
+
+  /**
+   * Cleanup MediaController when plugin is destroyed
+   */
+  protected fun finalize() {
+    try {
+      mediaController?.release()
+      mediaController = null
+      Log.d(tag, "MediaController cleanup completed")
+    } catch (e: Exception) {
+      Log.e(tag, "Error during MediaController cleanup: ${e.message}")
     }
   }
 }

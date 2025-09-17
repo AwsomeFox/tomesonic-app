@@ -228,8 +228,13 @@ class PlaybackSession(
       return if (isDirectPlay) {
         Uri.parse("$serverAddress/public/session/$id/track/${audioTrack.index}")
       } else {
-        // Transcode uses HlsRouter on server
-        Uri.parse("$serverAddress${audioTrack.contentUrl}")
+        // Transcode uses HlsRouter on server - include token for HLS streams
+        val baseUrl = "$serverAddress${audioTrack.contentUrl}"
+        return if (audioTrack.contentUrl.contains("/hls/") || audioTrack.mimeType == "application/vnd.apple.mpegurl") {
+          Uri.parse("$baseUrl?token=${DeviceManager.token}")
+        } else {
+          Uri.parse(baseUrl)
+        }
       }
     }
     return Uri.parse("$serverAddress${audioTrack.contentUrl}?token=${DeviceManager.token}")

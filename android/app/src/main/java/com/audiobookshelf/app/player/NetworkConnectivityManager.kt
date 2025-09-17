@@ -17,7 +17,7 @@ import com.audiobookshelf.app.server.ApiHandler
  */
 class NetworkConnectivityManager(
     private val context: Context,
-    private val service: PlayerNotificationService
+    private val service: com.audiobookshelf.app.player.service.AudiobookMediaService
 ) {
     companion object {
         private const val TAG = "NetworkConnectivityManager"
@@ -82,7 +82,7 @@ class NetworkConnectivityManager(
     private fun handleNetworkRestored() {
         // Force android auto loading if libraries are empty.
         // Lack of network connectivity is most likely reason for libraries being empty
-        if (service.isBrowseTreeInitialized() &&
+        if (service.isBrowseTreeInitialized &&
             firstLoadDone &&
             service.mediaManager.serverLibraries.isEmpty()
         ) {

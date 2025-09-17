@@ -106,7 +106,7 @@ class ApiHandler(var ctx:Context) {
     }
   }
 
-  private fun makeRequest(request:Request, httpClient:OkHttpClient?, cb: (JSObject) -> Unit) {
+  internal fun makeRequest(request:Request, httpClient:OkHttpClient?, cb: (JSObject) -> Unit) {
     val client = httpClient ?: defaultClient
 
     client.newCall(request).enqueue(object : Callback {

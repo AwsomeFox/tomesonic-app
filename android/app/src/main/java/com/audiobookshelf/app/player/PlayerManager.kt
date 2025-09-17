@@ -18,7 +18,7 @@ import com.audiobookshelf.app.data.PlaybackSession
 class PlayerManager(
     private val context: Context,
     private val deviceSettings: DeviceSettings,
-    private val service: PlayerNotificationService
+    private val service: com.audiobookshelf.app.player.service.AudiobookMediaService
 ) {
     companion object {
         private const val TAG = "PlayerManager"

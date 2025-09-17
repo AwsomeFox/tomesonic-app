@@ -13,7 +13,7 @@ import androidx.media3.common.Player
 /**
  * Media3 Player.Listener implementation
  */
-class PlayerListener(var playerNotificationService:PlayerNotificationService) : Player.Listener {
+class PlayerListener(var audiobookMediaService: com.audiobookshelf.app.player.service.AudiobookMediaService) : Player.Listener {
   var tag = "PlayerListener"
 
   companion object {
@@ -24,7 +24,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
   override fun onPlayerError(error: PlaybackException) {
     val errorMessage = error.message ?: "Unknown Error"
     Log.e(tag, "onPlayerError $errorMessage")
-    playerNotificationService.handlePlayerPlaybackError(errorMessage) // If was direct playing session, fallback to transcode
+    audiobookMediaService.handlePlayerPlaybackError(errorMessage) // If was direct playing session, fallback to transcode
   }
 
   override fun onPositionDiscontinuity(
@@ -34,18 +34,18 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
   ) {
     if (reason == Player.DISCONTINUITY_REASON_SEEK) {
       // If playing set seeking flag
-      Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying} reason=SEEK")
-      playerNotificationService.mediaProgressSyncer.seek()
+      Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${audiobookMediaService.currentPlayer.isPlaying} reason=SEEK")
+      audiobookMediaService.seek()
       lastPauseTime = 0 // When seeking while paused reset the auto-rewind
     } else {
-      Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying}, reason=$reason")
+      Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${audiobookMediaService.currentPlayer.isPlaying}, reason=$reason")
     }
   }
 
   override fun onIsPlayingChanged(isPlaying: Boolean) {
-    Log.d(tag, "onIsPlayingChanged to $isPlaying | ${playerNotificationService.getMediaPlayer()} | playbackState=${playerNotificationService.currentPlayer.playbackState}")
+    Log.d(tag, "onIsPlayingChanged to $isPlaying | ${audiobookMediaService.getMediaPlayer()} | playbackState=${audiobookMediaService.currentPlayer.playbackState}")
 
-    val player = playerNotificationService.currentPlayer
+    val player = audiobookMediaService.currentPlayer
 
     // Goal of these 2 if statements and the lazyIsPlaying is to ignore this event when it is triggered by a seek
     //  When a seek occurs the player is paused and buffering, then plays again right afterwards.
@@ -61,7 +61,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
     lazyIsPlaying = isPlaying
 
     // Update widget
-    DeviceManager.widgetUpdater?.onPlayerChanged(playerNotificationService)
+    DeviceManager.widgetUpdater?.onPlayerChanged(audiobookMediaService)
 
     if (isPlaying) {
       Log.d(tag, "SeekBackTime: Player is playing")
@@ -70,10 +70,10 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
         var seekBackTime = calcPauseSeekBackTime()
         if (seekBackTime > 0) {
           // Current chapter is used so that seek back does not go back to the previous chapter
-          val currentChapter = playerNotificationService.getCurrentBookChapter()
-          val minSeekBackTime = currentChapter?.startMs ?: 0
+          val currentChapter = audiobookMediaService.getCurrentBookChapter()
+          val minSeekBackTime = (currentChapter as? com.audiobookshelf.app.data.BookChapter)?.start?.toLong() ?: 0L
 
-          val currentTime = playerNotificationService.getCurrentTime()
+          val currentTime = audiobookMediaService.getCurrentTime()
           val newTime = currentTime - seekBackTime
           if (newTime < minSeekBackTime) {
             seekBackTime = currentTime - minSeekBackTime
@@ -85,12 +85,12 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
         // Check if playback session still exists or sync media progress if updated
 //        val pauseLength: Long = System.currentTimeMillis() - lastPauseTime
 //        if (pauseLength > PAUSE_LEN_BEFORE_RECHECK) {
-//          val shouldCarryOn = playerNotificationService.checkCurrentSessionProgress(seekBackTime)
+//          val shouldCarryOn = audiobookMediaService.checkCurrentSessionProgress(seekBackTime)
 //          if (!shouldCarryOn) return
 //        }
 
         if (seekBackTime > 0L) {
-          playerNotificationService.seekBackward(seekBackTime)
+          audiobookMediaService.seekBackward(seekBackTime)
         }
       }
     } else {
@@ -100,67 +100,67 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
     // Start/stop progress sync interval
     if (isPlaying) {
-      val playbackSession: PlaybackSession? = playerNotificationService.mediaProgressSyncer.currentPlaybackSession ?: playerNotificationService.currentPlaybackSession
+      val playbackSession: PlaybackSession? = audiobookMediaService.mediaProgressSyncer.currentPlaybackSession ?: audiobookMediaService.currentPlaybackSession
       playbackSession?.let {
         // Handles auto-starting sleep timer and resetting sleep timer
-        playerNotificationService.sleepTimerManager.handleMediaPlayEvent(it.id)
+        audiobookMediaService.handleMediaPlayEvent(it.id)
 
         player.volume = 1F // Volume on sleep timer might have decreased this
 
-        playerNotificationService.mediaProgressSyncer.play(it)
+        audiobookMediaService.play(it)
       }
     } else {
-      playerNotificationService.mediaProgressSyncer.pause {
+      audiobookMediaService.mediaProgressSyncer.pause {
         Log.d(tag, "Media Progress Syncer paused and synced")
       }
     }
 
-    playerNotificationService.clientEventEmitter?.onPlayingUpdate(isPlaying)
+    audiobookMediaService.clientEventEmitter?.onPlayingUpdate(isPlaying)
   }
 
   override fun onEvents(player: Player, events: Player.Events) {
-    Log.d(tag, "onEvents ${playerNotificationService.getMediaPlayer()} | ${events.size()}")
+    Log.d(tag, "onEvents ${audiobookMediaService.getMediaPlayer()} | ${events.size()}")
 
     if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) {
       Log.d(tag, "EVENT_POSITION_DISCONTINUITY")
     }
 
     if (events.contains(Player.EVENT_IS_LOADING_CHANGED)) {
-      Log.d(tag, "EVENT_IS_LOADING_CHANGED : " + playerNotificationService.currentPlayer.isLoading)
+      Log.d(tag, "EVENT_IS_LOADING_CHANGED : " + audiobookMediaService.currentPlayer.isLoading)
     }
 
     if (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)) {
-      Log.d(tag, "EVENT_PLAYBACK_STATE_CHANGED MediaPlayer = ${playerNotificationService.getMediaPlayer()}")
+      Log.d(tag, "EVENT_PLAYBACK_STATE_CHANGED MediaPlayer = ${audiobookMediaService.getMediaPlayer()}")
 
-      if (playerNotificationService.currentPlayer.playbackState == Player.STATE_READY) {
-        Log.d(tag, "STATE_READY : " + playerNotificationService.currentPlayer.duration)
+      if (audiobookMediaService.currentPlayer.playbackState == Player.STATE_READY) {
+        Log.d(tag, "STATE_READY : " + audiobookMediaService.currentPlayer.duration)
 
         if (lastPauseTime == 0L) {
           lastPauseTime = -1
         }
-        playerNotificationService.sendClientMetadata(PlayerState.READY)
+        audiobookMediaService.sendClientMetadata(PlayerState.READY)
       }
-      if (playerNotificationService.currentPlayer.playbackState == Player.STATE_BUFFERING) {
-        Log.d(tag, "STATE_BUFFERING : " + playerNotificationService.currentPlayer.currentPosition)
-        playerNotificationService.sendClientMetadata(PlayerState.BUFFERING)
+      if (audiobookMediaService.currentPlayer.playbackState == Player.STATE_BUFFERING) {
+        Log.d(tag, "STATE_BUFFERING : " + audiobookMediaService.currentPlayer.currentPosition)
+        audiobookMediaService.sendClientMetadata(PlayerState.BUFFERING)
       }
-      if (playerNotificationService.currentPlayer.playbackState == Player.STATE_ENDED) {
+      if (audiobookMediaService.currentPlayer.playbackState == Player.STATE_ENDED) {
         Log.d(tag, "STATE_ENDED")
-        playerNotificationService.sendClientMetadata(PlayerState.ENDED)
+        audiobookMediaService.sendClientMetadata(PlayerState.ENDED)
 
-        playerNotificationService.handlePlaybackEnded()
+        audiobookMediaService.handlePlaybackEnded()
       }
-      if (playerNotificationService.currentPlayer.playbackState == Player.STATE_IDLE) {
+      if (audiobookMediaService.currentPlayer.playbackState == Player.STATE_IDLE) {
         Log.d(tag, "STATE_IDLE")
-        playerNotificationService.sendClientMetadata(PlayerState.IDLE)
+        audiobookMediaService.sendClientMetadata(PlayerState.IDLE)
       }
     }
 
     if (events.contains(Player.EVENT_MEDIA_METADATA_CHANGED)) {
-      Log.d(tag, "EVENT_MEDIA_METADATA_CHANGED ${playerNotificationService.getMediaPlayer()}")
+      Log.d(tag, "EVENT_MEDIA_METADATA_CHANGED ${audiobookMediaService.getMediaPlayer()}")
     }
     if (events.contains(Player.EVENT_PLAYLIST_METADATA_CHANGED)) {
-      Log.d(tag, "EVENT_PLAYLIST_METADATA_CHANGED ${playerNotificationService.getMediaPlayer()}")
+      Log.d(tag, "EVENT_PLAYLIST_METADATA_CHANGED ${audiobookMediaService.getMediaPlayer()}")
     }
   }
 

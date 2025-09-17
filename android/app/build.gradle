@@ -114,20 +114,7 @@ dependencies {
   implementation "androidx.lifecycle:lifecycle-livedata-ktx:2.8.7"
   implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.8.7"
 
-  // Exo Player (legacy - will be gradually replaced)
-  if (findProject(':exoplayer-library-core') != null) {
-    implementation project(':exoplayer-library-core')
-    implementation project(':exoplayer-library-ui')
-    implementation project(':exoplayer-extension-mediasession')
-    implementation project(':exoplayer-extension-cast')
-    implementation project(':exoplayer-hls')
-  } else {
-    implementation "com.google.android.exoplayer:exoplayer-core:$exoplayer_version"
-    implementation "com.google.android.exoplayer:exoplayer-ui:$exoplayer_version"
-    implementation "com.google.android.exoplayer:extension-mediasession:$exoplayer_version"
-    implementation "com.google.android.exoplayer:extension-cast:$exoplayer_version"
-    implementation "com.google.android.exoplayer:exoplayer-hls:$exoplayer_version"
-  }
+  // Legacy ExoPlayer2 dependencies removed - using Media3 instead
 
   // Glide for images
   implementation "com.github.bumptech.glide:glide:$glide_version"
