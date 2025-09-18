@@ -101,7 +101,7 @@
         android:layout_height="16dp"
         android:layout_margin="6dp"
         android:adjustViewBounds ="true"
-        android:src="@drawable/icon_monochrome" />
+        android:src="@drawable/icon" />
     </LinearLayout>
 
   </LinearLayout>
