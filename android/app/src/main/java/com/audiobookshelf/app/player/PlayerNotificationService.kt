@@ -550,13 +550,20 @@ class PlayerNotificationService : MediaLibraryService() {
         if (playbackSession.chapters.isNotEmpty()) {
           Log.d(tag, "Android Auto: Building chapter queue. Number of chapters: ${playbackSession.chapters.size}")
 
+          // Create consistent subtitle format: "Book Title • Author"
+          val queueSubtitle = run {
+            val title = playbackSession.displayTitle ?: "Audiobook"
+            val author = playbackSession.displayAuthor
+            if (!author.isNullOrBlank()) "$title • $author" else title
+          }
+
           for ((idx, chapter) in playbackSession.chapters.withIndex()) {
             Log.d(tag, "Android Auto: Adding chapter $idx: ${chapter.title ?: "Chapter ${idx + 1}"}")
 
             val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
               .setMediaId("chapter_$idx")
               .setTitle(chapter.title ?: "Chapter ${idx + 1}")
-              .setSubtitle(playbackSession.displayTitle)
+              .setSubtitle(queueSubtitle)
               .setIconUri(coverUri)
               .apply {
                 sharedCachedBitmap?.let { setIconBitmap(it) }
@@ -576,7 +583,7 @@ class PlayerNotificationService : MediaLibraryService() {
             val chapterDescriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
               .setMediaId("chapter_$currentChapterIndex")
               .setTitle(currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
-              .setSubtitle(playbackSession.displayTitle)
+              .setSubtitle(queueSubtitle)
               .setDescription(playbackSession.displayAuthor)
 
           // Use shared cached bitmap or fallback to original description approach
@@ -601,6 +608,8 @@ class PlayerNotificationService : MediaLibraryService() {
               .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "chapter_$currentChapterIndex")
               .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
               .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
+              // Preserve the original subtitle (Book Title • Author format)
+              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE))
               // Preserve cover images
               .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
               .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI))
@@ -628,90 +637,15 @@ class PlayerNotificationService : MediaLibraryService() {
             // MIGRATION-TODO: Convert to Media3 MediaMetadata
             // mediaSessionManager.setMetadata(chapterMetadata)
           }
-        } else if (playbackSession.audioTracks.size > 1) {
-          Log.d(tag, "Android Auto: Building track queue. Number of tracks: ${playbackSession.audioTracks.size}")
-
-          for ((idx, track) in playbackSession.audioTracks.withIndex()) {
-            Log.d(tag, "Android Auto: Adding track $idx: ${track.title ?: "Track ${idx + 1}"}")
-
-            val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
-              .setMediaId("track_$idx")
-              .setTitle(track.title ?: "Track ${idx + 1}")
-              .setSubtitle(playbackSession.displayTitle)
-              .setIconUri(coverUri)
-              .apply {
-                sharedCachedBitmap?.let { setIconBitmap(it) }
-              }
-              .build()
-            val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
-            chapterQueue.add(queueItem)
-          }
-
-          // Update metadata to reflect current track
-          val currentTrackIndex = playbackSession.getCurrentTrackIndex()
-          if (currentTrackIndex >= 0 && currentTrackIndex < playbackSession.audioTracks.size) {
-            val currentTrack = playbackSession.audioTracks[currentTrackIndex]
-
-            // Create track description with proper bitmap handling for Android Auto
-            val coverUri = playbackSession.getCoverUri(ctx)
-            val trackDescriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
-              .setMediaId("track_$currentTrackIndex")
-              .setTitle(currentTrack.title ?: "Track ${currentTrackIndex + 1}")
-              .setSubtitle(playbackSession.displayTitle)
-              .setDescription(playbackSession.displayAuthor)
-
-            // Use shared cached bitmap or fallback to original description approach
-            if (sharedCachedBitmap != null) {
-              trackDescriptionBuilder.setIconBitmap(sharedCachedBitmap)
-            } else {
-              val originalDescription = metadata.description
-              if (originalDescription.iconBitmap != null) {
-                trackDescriptionBuilder.setIconBitmap(originalDescription.iconBitmap)
-              } else {
-                trackDescriptionBuilder.setIconUri(originalDescription.iconUri ?: coverUri)
-              }
-            }
-
-            val trackDescription = trackDescriptionBuilder.build()
-
-            val trackMetadata = MediaMetadataCompat.Builder(metadata)
-              .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "track_$currentTrackIndex")
-              .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTrack.title ?: "Track ${currentTrackIndex + 1}")
-              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, currentTrack.title ?: "Track ${currentTrackIndex + 1}")
-              // Preserve cover images
-              .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
-              .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI))
-              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI))
-              .apply {
-                // Preserve existing bitmaps or use shared cached bitmap
-                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) ?: sharedCachedBitmap
-                if (existingBitmap != null) {
-                  putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, existingBitmap)
-                  putBitmap(MediaMetadataCompat.METADATA_KEY_ART, existingBitmap)
-                }
-              }
-              .build()
-
-            // Set the description with proper bitmap/URI handling using reflection
-            try {
-              val descriptionField = MediaMetadataCompat::class.java.getDeclaredField("mDescription")
-              descriptionField.isAccessible = true
-              descriptionField.set(trackMetadata, trackDescription)
-            } catch (e: Exception) {
-              Log.w(tag, "Failed to set track description with iconBitmap: ${e.message}")
-            }
-
-            Log.d(tag, "Android Auto: Setting track metadata for track $currentTrackIndex: ${currentTrack.title}")
-            // MIGRATION-TODO: Convert to Media3 MediaMetadata
-            // mediaSessionManager.setMetadata(trackMetadata)
-          }
         } else {
-          Log.d(tag, "Android Auto: Single track book, creating simple queue")
-          // Single track book - create one queue item using shared cached bitmap
+          Log.d(tag, "Android Auto: Book without chapters, creating single track queue")
+          // Book without chapters - create one queue item using book metadata
+          // For single track books, title is the book title and subtitle is just the author
           val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
-            .setMediaId("track_0")
-            .setTitle(playbackSession.displayTitle)
-            .setSubtitle(playbackSession.displayAuthor)
+            .setMediaId("book_single_track")
+            .setTitle(playbackSession.displayTitle ?: "Audiobook")
+            .setSubtitle(playbackSession.displayAuthor ?: "")
+            .setDescription(playbackSession.displayAuthor)
             .setIconUri(coverUri)
             .apply {
               sharedCachedBitmap?.let { setIconBitmap(it) }
@@ -1136,13 +1070,8 @@ class PlayerNotificationService : MediaLibraryService() {
   */
 
   fun getCurrentTrackStartOffsetMs(): Long {
-    return if (currentPlayer.mediaItemCount > 1) {
-      val windowIndex = currentPlayer.currentMediaItemIndex
-      val currentTrackStartOffset = currentPlaybackSession?.getTrackStartOffsetMs(windowIndex) ?: 0L
-      currentTrackStartOffset
-    } else {
-      0
-    }
+    // No longer using track-based offset - always 0 for chapter-per-MediaItem architecture
+    return 0L
   }
 
   fun getCurrentTime(): Long {
@@ -1151,14 +1080,17 @@ class PlayerNotificationService : MediaLibraryService() {
     val absoluteTime = if (::chapterNavigationHelper.isInitialized) {
       chapterNavigationHelper.getAbsolutePosition()
     } else {
-      rawPlayer?.currentPosition?.plus(getCurrentTrackStartOffsetMs()) ?: 0L
+      rawPlayer?.currentPosition ?: 0L
     }
 
     // Add debug logging to track progress syncing issues
     if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
       val currentChapter = chapterNavigationHelper.getCurrentChapter()
+      val currentChapterIndex = chapterNavigationHelper.getCurrentChapterIndex()
       val chapterRelativePos = currentPlayer.currentPosition // Native chapter-relative position
-      Log.v(tag, "getCurrentTime: absolute=${absoluteTime}ms, chapter-relative=${chapterRelativePos}ms, chapter=${currentChapter?.title}")
+      Log.d(tag, "getCurrentTime: absolute=${absoluteTime}ms (${absoluteTime/1000.0}s), chapter-relative=${chapterRelativePos}ms, chapterIndex=${currentChapterIndex}, chapter=${currentChapter?.title}")
+    } else {
+      Log.d(tag, "getCurrentTime: absolute=${absoluteTime}ms (${absoluteTime/1000.0}s) [no chapters]")
     }
 
     return absoluteTime
@@ -1217,13 +1149,8 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   private fun getBufferedTime(): Long {
-    return if (currentPlayer.mediaItemCount > 1) {
-      val windowIndex = currentPlayer.currentMediaItemIndex
-      val currentTrackStartOffset = currentPlaybackSession?.getTrackStartOffsetMs(windowIndex) ?: 0L
-      currentPlayer.bufferedPosition + currentTrackStartOffset
-    } else {
-      currentPlayer.bufferedPosition
-    }
+    // No longer using track-based offset - direct buffered position
+    return currentPlayer.bufferedPosition
   }
 
   fun getBufferedTimeSeconds(): Double {
@@ -1450,16 +1377,15 @@ class PlayerNotificationService : MediaLibraryService() {
       timeToSeek = getDuration() - 2000L
     }
 
-    if (currentPlayer.mediaItemCount > 1) {
-      currentPlaybackSession?.currentTime = timeToSeek / 1000.0
-      val newWindowIndex = currentPlaybackSession?.getCurrentTrackIndex() ?: 0
-      val newTimeOffset = currentPlaybackSession?.getCurrentTrackTimeMs() ?: 0
-      Log.d(tag, "seekPlayer seekTo $newWindowIndex | $newTimeOffset")
-      currentPlayer.seekTo(newWindowIndex, newTimeOffset)
+    // Check if we're using the chapter-per-MediaItem architecture
+    if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      // Use chapter-aware seeking for books with chapters
+      Log.d(tag, "seekPlayer: Using chapter-aware seek to ${timeToSeek}ms")
+      chapterNavigationHelper.seekToAbsolutePosition(timeToSeek)
     } else {
-      // For single-track content, use audiobookProgressTracker for chapter-aware seeking
-      Log.d(tag, "seekPlayer: Using AudiobookProgressTracker for chapter-aware seek to ${timeToSeek}ms")
-      audiobookProgressTracker.seekToAbsolutePosition(timeToSeek)
+      // Direct seek for books without chapters (single track)
+      Log.d(tag, "seekPlayer: Direct seek to ${timeToSeek}ms (single track)")
+      currentPlayer.seekTo(timeToSeek)
     }
   }
 
@@ -1519,16 +1445,16 @@ class PlayerNotificationService : MediaLibraryService() {
   )
 
   /**
-   * Get total number of navigation items (chapters or tracks)
+   * Get total number of navigation items (chapters only, or 1 for single track)
    */
   fun getNavigationItemCount(): Int {
     val session = currentPlaybackSession ?: return 0
 
-    // Prefer chapters over tracks for navigation
+    // Only use chapters for navigation, or 1 for single track
     return if (session.chapters.isNotEmpty()) {
       session.chapters.size
     } else {
-      session.audioTracks.size
+      1 // Single item for books without chapters
     }
   }
 
@@ -1551,14 +1477,13 @@ class PlayerNotificationService : MediaLibraryService() {
         )
       } else null
     } else {
-      // Track-based navigation
-      if (index >= 0 && index < session.audioTracks.size) {
-        val track = session.audioTracks[index]
+      // Single track for books without chapters
+      if (index == 0) {
         NavigationItem(
-          index = index,
-          title = track.title ?: "Track ${index + 1}",
-          startTimeMs = track.startOffsetMs,
-          endTimeMs = track.endOffsetMs,
+          index = 0,
+          title = session.displayTitle ?: "Audiobook",
+          startTimeMs = 0L,
+          endTimeMs = session.duration?.times(1000)?.toLong() ?: 0L,
           isChapter = false
         )
       } else null
@@ -1634,21 +1559,8 @@ class PlayerNotificationService : MediaLibraryService() {
         }
       }
     } else {
-      // Track-based lookup
-      for (i in session.audioTracks.indices) {
-        val track = session.audioTracks[i]
-        if (currentTimeMs >= track.startOffsetMs && currentTimeMs < track.endOffsetMs) {
-          return i
-        }
-      }
-
-      // If no exact match, return the last started track
-      for (i in session.audioTracks.indices.reversed()) {
-        val track = session.audioTracks[i]
-        if (currentTimeMs >= track.startOffsetMs) {
-          return i
-        }
-      }
+      // Books without chapters - always return 0 for single track
+      return 0
     }
 
     return -1
@@ -1664,10 +1576,17 @@ class PlayerNotificationService : MediaLibraryService() {
         return
       }
 
-      // MIGRATION-TODO: Convert to Media3 queue access
-      val queue = null // mediaSessionManager.getCurrentQueue()
-      val queueSize = 0 // queue?.size ?: 0 - MIGRATION-TODO
-      if (queue == null || index < 0 || index >= queueSize) {
+      // For chapter-per-MediaItem architecture, only use chapters for queue
+      // If no chapters, treat as single long track (queue size = 1)
+      val queueSize = if (session.chapters.isNotEmpty()) {
+        session.chapters.size
+      } else {
+        1 // Single item for books without chapters
+      }
+
+      Log.d(tag, "updateNavigationState: index=$index, queueSize=$queueSize, chapters=${session.chapters.size} (track-based queues removed)")
+
+      if (index < 0 || index >= queueSize) {
         Log.w(tag, "updateNavigationState: Invalid queue state - index: $index, queue size: $queueSize")
         return
       }
@@ -1679,12 +1598,7 @@ class PlayerNotificationService : MediaLibraryService() {
         return
       }
 
-      // Update metadata with current chapter/track info
-      // MIGRATION-TODO: Convert to Media3 metadata access
-      val currentMetadata = null // mediaSessionManager.getCurrentMetadata()
-      if (currentMetadata != null) {
-        updateMetadataForNavigationItem(navItem, currentMetadata, session)
-      }
+      Log.d(tag, "updateNavigationState: Updated to ${navItem.title} (index=$index)")
 
       // Update playback state with active queue item immediately
       // Delays cause race conditions and crashes in Android Auto
@@ -1880,16 +1794,12 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   private fun performSeekForward(amount: Long) {
-    // For multi-track content, ensure we get accurate current position after any track changes
-    val currentTime = if (currentPlayer.mediaItemCount > 1) {
-      // Get fresh values to ensure accuracy after track transitions
-      val playerPosition = currentPlayer.currentPosition
-      val mediaItemIndex = currentPlayer.currentMediaItemIndex
-      val trackStartOffset = currentPlaybackSession?.getTrackStartOffsetMs(mediaItemIndex) ?: 0L
-      val calculatedTime = playerPosition + trackStartOffset
-      Log.d(tag, "performSeekForward: multi-track mode - playerPosition=$playerPosition, mediaItemIndex=$mediaItemIndex, trackStartOffset=$trackStartOffset, calculatedTime=$calculatedTime")
-      calculatedTime
+    // Use chapter-aware seeking for books with chapters, direct position for books without
+    val currentTime = if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      // Use chapter-aware position calculation for books with chapters
+      chapterNavigationHelper.getAbsolutePosition()
     } else {
+      // Direct position for books without chapters (single track)
       currentPlayer.currentPosition
     }
     seekPlayer(currentTime + amount)
@@ -1912,16 +1822,12 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   private fun performSeekBackward(amount: Long) {
-    // For multi-track content, ensure we get accurate current position after any track changes
-    val currentTime = if (currentPlayer.mediaItemCount > 1) {
-      // Get fresh values to ensure accuracy after track transitions
-      val playerPosition = currentPlayer.currentPosition
-      val mediaItemIndex = currentPlayer.currentMediaItemIndex
-      val trackStartOffset = currentPlaybackSession?.getTrackStartOffsetMs(mediaItemIndex) ?: 0L
-      val calculatedTime = playerPosition + trackStartOffset
-      Log.d(tag, "performSeekBackward: multi-track mode - playerPosition=$playerPosition, mediaItemIndex=$mediaItemIndex, trackStartOffset=$trackStartOffset, calculatedTime=$calculatedTime")
-      calculatedTime
+    // Use chapter-aware seeking for books with chapters, direct position for books without
+    val currentTime = if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      // Use chapter-aware position calculation for books with chapters
+      chapterNavigationHelper.getAbsolutePosition()
     } else {
+      // Direct position for books without chapters (single track)
       currentPlayer.currentPosition
     }
     seekPlayer(currentTime - amount)
@@ -2000,8 +1906,10 @@ class PlayerNotificationService : MediaLibraryService() {
           .build()
 
         // Replace the current MediaItem (this will update the notification)
-        currentPlayer?.setMediaItem(updatedMediaItem)
-        Log.d(tag, "updateNotificationMetadata: Updated MediaItem metadata - Title: '$displayTitle', Subtitle: '$displaySubtitle'")
+        val currentIndex = currentPlayer?.currentMediaItemIndex ?: 0
+        currentPlayer?.removeMediaItem(currentIndex)
+        currentPlayer?.addMediaItem(currentIndex, updatedMediaItem)
+        Log.d(tag, "updateNotificationMetadata: Replaced MediaItem at index $currentIndex - Title: '$displayTitle', Subtitle: '$displaySubtitle'")
       }
 
       // Also update any legacy MediaSessionCompat metadata if present
@@ -2696,7 +2604,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                   .setIsBrowsable(true)
                   .setIsPlayable(false)
                   .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_recent))
+                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.md_clock_outline))
                   .build()
               )
               .build()
@@ -2728,7 +2636,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                   .setIsBrowsable(true)
                   .setIsPlayable(false)
                   .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_library))
+                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.md_book_multiple_outline))
                   .build()
               )
               .build()
@@ -2759,6 +2667,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           } else {
             Log.d("PlayerNotificationServ", "AALibrary: Returning ${audioLibraries.size} libraries")
             val libraryItems = audioLibraries.map { library ->
+              // Use the library's icon but add subtitle with book count for Android Auto
               MediaItem.Builder()
                 .setMediaId(library.id)
                 .setMediaMetadata(
@@ -2768,7 +2677,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                     .setIsBrowsable(true)
                     .setIsPlayable(false)
                     .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                    .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_library))
+                    .setArtworkUri(getUriToAbsIconDrawable(service.applicationContext, library.icon))
                     .build()
                 )
                 .build()
@@ -2820,10 +2729,23 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                 id ?: "unknown",
                 itemInProgress.episode?.id
               )
+
+              // Check if this item is downloaded locally (for server books)
+              val isDownloaded = when (wrapper) {
+                is LocalLibraryItem -> true // Already local
+                is LibraryItem -> {
+                  // Check if this server book has a local download
+                  DeviceManager.dbManager.getLocalLibraryItemByLId(wrapper.id) != null
+                }
+                else -> false
+              }
+
               val authorWithProgress = if (progressPercent > 0) {
-                "$authorName • ${progressPercent}%"
+                val downloadIcon = if (isDownloaded) "⤋ " else ""
+                "$downloadIcon$authorName • ${progressPercent}%"
               } else {
-                authorName
+                val downloadIcon = if (isDownloaded) "⤋ " else ""
+                "$downloadIcon$authorName"
               }
 
               MediaItem.Builder()
@@ -2955,7 +2877,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                 .setMediaMetadata(
                   MediaMetadata.Builder()
                     .setTitle(localItem.title ?: "Unknown Title")
-                    .setArtist((localItem.media as? Book)?.metadata?.getAuthorDisplayName() ?: "Unknown Author")
+                    .setArtist("⤋ " + ((localItem.media as? Book)?.metadata?.getAuthorDisplayName() ?: "Unknown Author"))
                     .setIsPlayable(true)
                     .setIsBrowsable(false)
                     .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
@@ -2988,7 +2910,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                         .setMediaMetadata(
                           MediaMetadata.Builder()
                             .setTitle(book.title ?: "Unknown Title")
-                            .setArtist(book.authorName)
+                            .setArtist(formatAuthorWithDownloadIcon(book.id, book.authorName))
                             .setIsPlayable(true)
                             .setIsBrowsable(false)
                             .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
@@ -3313,7 +3235,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         .setMediaMetadata(
           MediaMetadata.Builder()
             .setTitle(book.title ?: "Unknown Title")
-            .setArtist(book.authorName)
+            .setArtist(formatAuthorWithDownloadIcon(book.id, book.authorName))
             .setIsPlayable(true)
             .setIsBrowsable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
@@ -4151,6 +4073,18 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       parts[2]
     } else {
       ""
+    }
+  }
+
+  /**
+   * Helper function to add download icon to author name if the book is downloaded locally
+   */
+  private fun formatAuthorWithDownloadIcon(bookId: String, authorName: String): String {
+    val isDownloaded = DeviceManager.dbManager.getLocalLibraryItemByLId(bookId) != null
+    return if (isDownloaded) {
+      "⤋ $authorName"
+    } else {
+      authorName
     }
   }
 }

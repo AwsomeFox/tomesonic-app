@@ -88,32 +88,20 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         val segments = mutableListOf<ChapterSegment>()
 
         when {
-            // Multi-file audiobook: each audio file corresponds to a chapter
-            playbackSession.audioTracks.size > 1 && playbackSession.chapters.isNotEmpty() -> {
-                Log.d(TAG, "Processing multi-file audiobook with ${playbackSession.audioTracks.size} files and ${playbackSession.chapters.size} chapters")
-                segments.addAll(createMultiFileSegments(playbackSession))
+            // Audiobook with chapters - create segments based purely on chapters
+            playbackSession.chapters.isNotEmpty() -> {
+                Log.d(TAG, "Processing audiobook with ${playbackSession.chapters.size} chapters")
+                segments.addAll(createChapterBasedSegments(playbackSession))
             }
 
-            // Single-file audiobook with chapter metadata
-            playbackSession.audioTracks.size == 1 && playbackSession.chapters.isNotEmpty() -> {
-                Log.d(TAG, "Processing single-file audiobook with ${playbackSession.chapters.size} chapters")
-                segments.addAll(createSingleFileSegments(playbackSession))
-            }
-
-            // Single-file audiobook without chapters (treat as one chapter)
-            playbackSession.audioTracks.size == 1 && playbackSession.chapters.isEmpty() -> {
-                Log.d(TAG, "Processing single-file audiobook without chapters")
-                segments.addAll(createSingleChapterSegment(playbackSession))
-            }
-
-            // Multi-file audiobook without chapter metadata (each file is a chapter)
-            playbackSession.audioTracks.size > 1 && playbackSession.chapters.isEmpty() -> {
-                Log.d(TAG, "Processing multi-file audiobook without chapter metadata")
-                segments.addAll(createFileBasedSegments(playbackSession))
+            // Audiobook without chapters - fallback to track-based segments
+            playbackSession.chapters.isEmpty() -> {
+                Log.d(TAG, "Processing audiobook without chapters, using ${playbackSession.audioTracks.size} tracks")
+                segments.addAll(createTrackBasedSegments(playbackSession))
             }
 
             else -> {
-                Log.e(TAG, "Unsupported audiobook structure: ${playbackSession.audioTracks.size} files, ${playbackSession.chapters.size} chapters")
+                Log.e(TAG, "Unsupported audiobook structure")
             }
         }
 
@@ -121,91 +109,59 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     }
 
     /**
-     * Creates segments for multi-file audiobooks where files and chapters correspond
+     * Creates segments based purely on chapters, determining which audio tracks contain each chapter
      */
-    private fun createMultiFileSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
+    private fun createChapterBasedSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
         val segments = mutableListOf<ChapterSegment>()
-        var absoluteStartTime = 0L
-
-        playbackSession.audioTracks.forEachIndexed { index, audioTrack ->
-            val chapter = playbackSession.chapters.getOrNull(index)
-            val audioFileUri = playbackSession.getContentUri(audioTrack)
-            val audioFileDurationMs = (audioTrack.duration * 1000).toLong()
-
-            segments.add(
-                ChapterSegment(
-                    chapterIndex = index,
-                    title = chapter?.title,
-                    audioFileUri = audioFileUri,
-                    chapterStartMs = absoluteStartTime,
-                    chapterEndMs = absoluteStartTime + audioFileDurationMs,
-                    audioFileStartMs = 0L,
-                    audioFileEndMs = audioFileDurationMs,
-                    audioFileDurationMs = audioFileDurationMs
-                )
-            )
-
-            absoluteStartTime += audioFileDurationMs
-        }
-
-        return segments
-    }
-
-    /**
-     * Creates segments for single-file audiobooks with chapter timings
-     */
-    private fun createSingleFileSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
-        val segments = mutableListOf<ChapterSegment>()
-        val audioTrack = playbackSession.audioTracks.first()
-        val audioFileUri = playbackSession.getContentUri(audioTrack)
-        val audioFileDurationMs = (audioTrack.duration * 1000).toLong()
 
         playbackSession.chapters.forEachIndexed { index, chapter ->
-            segments.add(
-                ChapterSegment(
-                    chapterIndex = index,
-                    title = chapter.title,
-                    audioFileUri = audioFileUri,
-                    chapterStartMs = chapter.startMs,
-                    chapterEndMs = chapter.endMs,
-                    audioFileStartMs = chapter.startMs,
-                    audioFileEndMs = chapter.endMs,
-                    audioFileDurationMs = audioFileDurationMs
+            // Find which audio track(s) contain this chapter
+            val containingTrack = findTrackContainingTime(playbackSession, chapter.startMs)
+
+            if (containingTrack != null) {
+                val audioFileUri = playbackSession.getContentUri(containingTrack)
+
+                // Calculate the chapter's position within the audio file
+                val chapterStartInFile = chapter.startMs - containingTrack.startOffsetMs
+                val chapterEndInFile = chapter.endMs - containingTrack.startOffsetMs
+
+                segments.add(
+                    ChapterSegment(
+                        chapterIndex = index,
+                        title = chapter.title,
+                        audioFileUri = audioFileUri,
+                        chapterStartMs = chapter.startMs,
+                        chapterEndMs = chapter.endMs,
+                        audioFileStartMs = chapterStartInFile,
+                        audioFileEndMs = chapterEndInFile,
+                        audioFileDurationMs = (containingTrack.duration * 1000).toLong()
+                    )
                 )
-            )
+
+                Log.d(TAG, "Chapter $index '${chapter.title}' -> Track ${containingTrack.index} " +
+                        "(${chapterStartInFile}ms-${chapterEndInFile}ms in file)")
+            } else {
+                Log.w(TAG, "Could not find audio track containing chapter $index at ${chapter.startMs}ms")
+            }
         }
 
         return segments
     }
 
     /**
-     * Creates a single segment for audiobooks without chapters
+     * Find the audio track that contains the given absolute time position
      */
-    private fun createSingleChapterSegment(playbackSession: PlaybackSession): List<ChapterSegment> {
-        val audioTrack = playbackSession.audioTracks.first()
-        val audioFileUri = playbackSession.getContentUri(audioTrack)
-        val audioFileDurationMs = (audioTrack.duration * 1000).toLong()
-
-        return listOf(
-            ChapterSegment(
-                chapterIndex = 0,
-                title = playbackSession.displayTitle,
-                audioFileUri = audioFileUri,
-                chapterStartMs = 0L,
-                chapterEndMs = audioFileDurationMs,
-                audioFileStartMs = 0L,
-                audioFileEndMs = audioFileDurationMs,
-                audioFileDurationMs = audioFileDurationMs
-            )
-        )
+    private fun findTrackContainingTime(playbackSession: PlaybackSession, timeMs: Long): AudioTrack? {
+        return playbackSession.audioTracks.find { track ->
+            timeMs >= track.startOffsetMs && timeMs < track.startOffsetMs + (track.duration * 1000).toLong()
+        }
     }
 
     /**
-     * Creates segments for multi-file audiobooks without chapter metadata
+     * Creates segments based on tracks when no chapter metadata is available
      */
-    private fun createFileBasedSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
+    private fun createTrackBasedSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
         val segments = mutableListOf<ChapterSegment>()
-        var absoluteStartTime = 0L
 
         playbackSession.audioTracks.forEachIndexed { index, audioTrack ->
             val audioFileUri = playbackSession.getContentUri(audioTrack)
@@ -216,15 +172,13 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
                     chapterIndex = index,
                     title = audioTrack.title ?: "Part ${index + 1}",
                     audioFileUri = audioFileUri,
-                    chapterStartMs = absoluteStartTime,
-                    chapterEndMs = absoluteStartTime + audioFileDurationMs,
+                    chapterStartMs = audioTrack.startOffsetMs,
+                    chapterEndMs = audioTrack.startOffsetMs + audioFileDurationMs,
                     audioFileStartMs = 0L,
                     audioFileEndMs = audioFileDurationMs,
                     audioFileDurationMs = audioFileDurationMs
                 )
             )
-
-            absoluteStartTime += audioFileDurationMs
         }
 
         return segments
@@ -263,17 +217,26 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     }
 
     /**
-     * Creates MediaMetadata for a chapter
+     * Creates MediaMetadata for a chapter using the PlaybackSession's library metadata
      */
     private fun createChapterMetadata(
         segment: ChapterSegment,
         playbackSession: PlaybackSession
     ): MediaMetadata {
+        // Get the base metadata from PlaybackSession which includes proper cover image and library metadata
+        val chapter = playbackSession.chapters.getOrNull(segment.chapterIndex)
+        val baseMetadata = playbackSession.getExoMediaMetadata(context, null, chapter, segment.chapterIndex)
+
+        // Create a new metadata builder using the library metadata fields
         return MediaMetadata.Builder()
-            .setTitle(segment.displayTitle)
-            .setSubtitle(playbackSession.displayTitle ?: "Unknown Book")
-            .setArtist(playbackSession.displayAuthor ?: "Unknown Author")
-            .setAlbumTitle(playbackSession.displayTitle ?: "Unknown Book")
+            .setTitle(baseMetadata.title)
+            .setSubtitle(baseMetadata.subtitle)
+            .setArtist(baseMetadata.artist)
+            .setAlbumArtist(baseMetadata.albumArtist)
+            .setAlbumTitle(baseMetadata.albumTitle)
+            .setDescription(baseMetadata.description)
+            .setArtworkUri(baseMetadata.artworkUri) // This includes the library cover image
+            .setMediaType(baseMetadata.mediaType)
             .setTrackNumber(segment.chapterIndex + 1)
             .setDurationMs(segment.durationMs) // Set chapter duration for Android Auto timeline
             .setIsPlayable(true)

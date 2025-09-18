@@ -183,7 +183,7 @@
         <!-- Landscape Content Container with flexible grid -->
         <div class="landscape-content-container flex" :style="{ top: '60px', height: `calc(100vh - 60px - ${fullscreenTopPadding})`, padding: '20px' }">
           <!-- Left Side: Cover Image -->
-          <div class="landscape-cover-section flex items-center justify-center" style="flex: 0 0 45%; min-width: 0;">
+          <div class="landscape-cover-section flex items-center justify-center" style="flex: 0 0 45%; min-width: 0">
             <div class="cover-wrapper-landscape relative pointer-events-auto" @click="collapseFullscreen">
               <div class="cover-container-landscape">
                 <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="landscapeBookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
@@ -196,7 +196,7 @@
           </div>
 
           <!-- Right Side: Controls and Content -->
-          <div class="landscape-controls-section flex flex-col justify-center overflow-hidden" style="flex: 1; min-width: 0; padding-left: 20px;">
+          <div class="landscape-controls-section flex flex-col justify-center overflow-hidden" style="flex: 1; min-width: 0; padding-left: 20px">
             <!-- Title and Author -->
             <div class="title-author-texts-landscape mb-4 text-left">
               <div ref="titlewrapper" class="overflow-hidden relative">
@@ -565,7 +565,7 @@ export default {
 
       // Use much more aggressive sizing for landscape
       const availableHeight = this.windowHeight - 120 // Account for top bar and padding
-      const availableWidth = (this.windowWidth * 0.45) - 40 // 45% of width minus padding
+      const availableWidth = this.windowWidth * 0.45 - 40 // 45% of width minus padding
 
       // Calculate based on aspect ratio and available space
       const aspectRatio = this.bookCoverAspectRatio
@@ -712,9 +712,7 @@ export default {
       // Use pre-calculated positions from init.client.js
       // Force reactivity by checking this.miniPlayerPositionsReady
       if (this.miniPlayerPositionsReady && window.MINI_PLAYER_POSITIONS) {
-        const position = this.isInBookshelfContext
-          ? window.MINI_PLAYER_POSITIONS.withTabBar
-          : window.MINI_PLAYER_POSITIONS.withoutTabBar
+        const position = this.isInBookshelfContext ? window.MINI_PLAYER_POSITIONS.withTabBar : window.MINI_PLAYER_POSITIONS.withoutTabBar
         console.log('[AudioPlayer] Using calculated position:', position, 'bookshelf context:', this.isInBookshelfContext)
         return position
       }

@@ -159,6 +159,48 @@ class AbsAudioPlayerWeb extends WebPlugin {
   }
 
   // PluginMethod
+  async getChapterProgress() {
+    // Web implementation - calculate chapter progress from current time and chapters
+    if (!this.playbackSession || !this.playbackSession.chapters) {
+      return { error: 'No chapter progress available' }
+    }
+
+    const chapters = this.playbackSession.chapters
+    const currentTime = this.overallCurrentTime
+
+    // Find current chapter
+    let currentChapter = null
+    let chapterIndex = -1
+
+    for (let i = 0; i < chapters.length; i++) {
+      const chapter = chapters[i]
+      if (currentTime >= chapter.start && currentTime < chapter.end) {
+        currentChapter = chapter
+        chapterIndex = i
+        break
+      }
+    }
+
+    if (!currentChapter) {
+      return { error: 'No current chapter found' }
+    }
+
+    const chapterPosition = (currentTime - currentChapter.start) * 1000 // Convert to ms
+    const chapterDuration = (currentChapter.end - currentChapter.start) * 1000 // Convert to ms
+    const chapterProgress = chapterDuration > 0 ? chapterPosition / chapterDuration : 0
+
+    return {
+      chapterIndex,
+      chapterTitle: currentChapter.title,
+      chapterPosition,
+      chapterDuration,
+      chapterProgress,
+      absolutePosition: currentTime * 1000, // Convert to ms
+      totalDuration: this.totalDuration * 1000 // Convert to ms
+    }
+  }
+
+  // PluginMethod
   async getCurrentTime() {
     return {
       value: this.overallCurrentTime,

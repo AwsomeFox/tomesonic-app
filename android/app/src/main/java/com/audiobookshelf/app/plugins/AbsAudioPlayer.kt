@@ -679,6 +679,28 @@ class AbsAudioPlayer : Plugin() {
   }
 
   @PluginMethod
+  fun getChapterProgress(call: PluginCall) {
+    Handler(Looper.getMainLooper()).post {
+      val chapterProgress = playerNotificationService.getChapterProgressInfo()
+      if (chapterProgress != null) {
+        val ret = JSObject()
+        ret.put("chapterIndex", chapterProgress.chapterIndex)
+        ret.put("chapterTitle", chapterProgress.chapterTitle)
+        ret.put("chapterPosition", chapterProgress.chapterPosition)
+        ret.put("chapterDuration", chapterProgress.chapterDuration)
+        ret.put("chapterProgress", chapterProgress.chapterProgress)
+        ret.put("absolutePosition", playerNotificationService.getCurrentTime())
+        ret.put("totalDuration", playerNotificationService.currentPlaybackSession?.totalDurationMs ?: 0L)
+        call.resolve(ret)
+      } else {
+        val ret = JSObject()
+        ret.put("error", "No chapter progress available")
+        call.resolve(ret)
+      }
+    }
+  }
+
+  @PluginMethod
   fun pausePlayer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
       playerNotificationService.pause()

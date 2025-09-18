@@ -328,11 +328,15 @@ class PlaybackSession(
   @JsonIgnore
   fun getMediaMetadataCompat(ctx: Context): MediaMetadataCompat {
     val coverUri = getCoverUri(ctx)
-    // Prefer chapter/track title for now-playing if available
-    val currentTrackIndex = try { getCurrentTrackIndex() } catch (e: Exception) { -1 }
-    val currentTrack = if (currentTrackIndex >= 0 && currentTrackIndex < audioTracks.size) audioTracks[currentTrackIndex] else null
-    val nowPlayingTitle = currentTrack?.title ?: displayTitle
-    val nowPlayingSubtitle = if (currentTrack?.title != null) displayAuthor else displayAuthor
+    // Always use book metadata, never track metadata
+    val nowPlayingTitle = displayTitle ?: "Audiobook"
+
+    // Use consistent "Book Title • Author" format for subtitles
+    val nowPlayingSubtitle = run {
+      val title = displayTitle ?: "Audiobook"
+      val author = displayAuthor
+      if (!author.isNullOrBlank()) "$title • $author" else title
+    }
 
     // Create MediaDescriptionCompat with proper bitmap handling for Android Auto
     val descriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
@@ -394,9 +398,9 @@ class PlaybackSession(
       .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, nowPlayingTitle)
       .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, nowPlayingSubtitle)
       .putString(MediaMetadataCompat.METADATA_KEY_AUTHOR, displayAuthor)
-      .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, nowPlayingSubtitle) // Use "Book Title • Author" format
       .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, displayAuthor)
-      .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, displayAuthor)
+      .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, nowPlayingSubtitle) // Use "Book Title • Author" format
       .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, displayAuthor)
       .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, id)
       // Set the total book duration for proper Android Auto progress indicators
@@ -435,23 +439,25 @@ class PlaybackSession(
   fun getExoMediaMetadata(ctx: Context, audioTrack: AudioTrack? = null, chapter: BookChapter? = null, chapterIndex: Int = -1): MediaMetadata {
     val coverUri = getCoverUri(ctx)
 
+    // Always prioritize book metadata over embedded track metadata
     val titleToUse = when {
       chapter != null -> chapter.title ?: "Chapter ${chapterIndex + 1}"
-      audioTrack?.title != null -> audioTrack.title
-      else -> displayTitle
+      else -> displayTitle ?: "Audiobook"
     }
-    val subtitleToUse = when {
-      chapter != null -> if (displayAuthor.isNullOrEmpty()) displayTitle else "$displayTitle - $displayAuthor"
-      audioTrack?.title != null -> displayAuthor
-      else -> displayAuthor
+
+    // Use consistent "Book Title • Author" format for subtitles
+    val subtitleToUse = run {
+      val title = displayTitle ?: "Audiobook"
+      val author = displayAuthor
+      if (!author.isNullOrBlank()) "$title • $author" else title
     }
 
     val metadataBuilder =
             MediaMetadata.Builder()
                     .setTitle(titleToUse)
                     .setDisplayTitle(titleToUse)
-                    .setArtist(displayAuthor)
-                    .setAlbumArtist(displayAuthor)
+                    .setArtist(subtitleToUse) // Use the same "Book Title • Author" format for artist
+                    .setAlbumArtist(subtitleToUse) // Use the same format for album artist too
                     .setSubtitle(subtitleToUse)
                     .setAlbumTitle(displayAuthor)
                     .setDescription(displayAuthor)
@@ -459,88 +465,6 @@ class PlaybackSession(
                     .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
 
     return metadataBuilder.build()
-  }
-
-  @JsonIgnore
-  fun getMediaItems(ctx: Context): List<MediaItem> {
-    val mediaItems: MutableList<MediaItem> = mutableListOf()
-
-    Log.d("PlaybackSession", "getMediaItems: Creating media items for ${audioTracks.size} tracks, mediaType: $mediaType, chapters: ${chapters.size}")
-
-    // For books with chapters, always prefer chapter-based display
-    // This gives proper "Chapter Name" titles instead of track names
-    if (mediaType == "book" && chapters.isNotEmpty()) {
-      // Handle chapter-based books
-      if (audioTracks.size == 1) {
-        // Single audio file with multiple chapters - use clipping
-        for ((index, chapter) in chapters.withIndex()) {
-          val audioTrack = audioTracks[0]
-          val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)
-          val mediaUri = this.getContentUri(audioTrack)
-          val mimeType = audioTrack.mimeType
-
-          Log.d("PlaybackSession", "getMediaItems: Chapter $index - URI: $mediaUri, mimeType: $mimeType")
-
-          // Create clipping configuration for this chapter
-          val clippingConfigBuilder = MediaItem.ClippingConfiguration.Builder()
-            .setStartPositionMs(chapter.startMs)
-
-          // Only set end position for non-final chapters
-          if (index < chapters.size - 1) {
-            clippingConfigBuilder.setEndPositionMs(chapters[index + 1].startMs)
-          }
-
-          val clippingConfig = clippingConfigBuilder.build()
-
-          val mediaItem = MediaItem.Builder()
-            .setUri(mediaUri)
-            .setMediaMetadata(mediaMetadata)
-            .setMimeType(mimeType)
-            .setClippingConfiguration(clippingConfig)
-            .build()
-          mediaItems.add(mediaItem)
-        }
-      } else {
-        // Multiple audio files with chapters - map chapters to tracks
-        // For now, we'll use the simpler approach: one media item per audio track but with chapter metadata
-        // This is a common case for audiobooks where each file represents a chapter
-        for ((index, audioTrack) in audioTracks.withIndex()) {
-          // Try to find corresponding chapter for this track
-          val chapter = if (index < chapters.size) chapters[index] else null
-          val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)
-          val mediaUri = this.getContentUri(audioTrack)
-          val mimeType = audioTrack.mimeType
-
-          Log.d("PlaybackSession", "getMediaItems: Track $index - URI: $mediaUri, mimeType: $mimeType")
-
-          val mediaItem = MediaItem.Builder()
-            .setUri(mediaUri)
-            .setMediaMetadata(mediaMetadata)
-            .setMimeType(mimeType)
-            .build()
-          mediaItems.add(mediaItem)
-        }
-      }
-    } else {
-      // For podcasts or books without chapters, create media items for each track
-      for ((index, audioTrack) in audioTracks.withIndex()) {
-        val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack)
-        val mediaUri = this.getContentUri(audioTrack)
-        val mimeType = audioTrack.mimeType
-
-        Log.d("PlaybackSession", "getMediaItems: No chapters - Track $index - URI: $mediaUri, mimeType: $mimeType")
-
-        val mediaItem = MediaItem.Builder()
-          .setUri(mediaUri)
-          .setMediaMetadata(mediaMetadata)
-          .setMimeType(mimeType)
-          .build()
-        mediaItems.add(mediaItem)
-      }
-    }
-
-    Log.d("PlaybackSession", "getMediaItems: Created ${mediaItems.size} media items")
-    return mediaItems
   }
 
   // MIGRATION-DEFERRED: CAST - Commented out Cast-related methods
@@ -564,8 +488,8 @@ class PlaybackSession(
       castMetadata.addImage(WebImage(coverUri))
     }
 
-    val titleToUse = chapter?.title ?: audioTrack.title ?: displayTitle ?: ""
-    val chapterTitleToUse = if (chapter != null) chapter.title ?: "Chapter ${chapterIndex + 1}" else audioTrack.title
+    val titleToUse = chapter?.title ?: displayTitle ?: "Audiobook"
+    val chapterTitleToUse = if (chapter != null) chapter.title ?: "Chapter ${chapterIndex + 1}" else displayTitle ?: "Audiobook"
 
     castMetadata.putString(com.google.android.gms.cast.MediaMetadata.KEY_TITLE, titleToUse)
     castMetadata.putString(
