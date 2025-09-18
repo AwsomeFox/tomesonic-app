@@ -596,10 +596,17 @@ class AbsAudioPlayer : Plugin() {
     val playbackRate = call.getFloat("playbackRate",1f) ?: 1f
     val startTimeOverride = call.getDouble("startTime")
 
+    Log.d(tag, "prepareLibraryItem: ===== STARTING PREPARATION =====")
+    Log.d(tag, "prepareLibraryItem: Library Item ID: $libraryItemId")
+    Log.d(tag, "prepareLibraryItem: Episode ID: $episodeId")
+    Log.d(tag, "prepareLibraryItem: Play When Ready: $playWhenReady")
+    Log.d(tag, "prepareLibraryItem: Playback Rate: $playbackRate")
+    Log.d(tag, "prepareLibraryItem: Start Time Override: $startTimeOverride")
+
     AbsLogger.info("AbsAudioPlayer", "prepareLibraryItem: lid=$libraryItemId, startTimeOverride=$startTimeOverride, playbackRate=$playbackRate")
 
     if (libraryItemId.isEmpty()) {
-      Log.e(tag, "Invalid call to play library item no library item id")
+      Log.e(tag, "prepareLibraryItem: Invalid call - no library item id")
       return call.resolve(JSObject("{\"error\":\"Invalid request\"}"))
     }
 
@@ -661,6 +668,12 @@ class AbsAudioPlayer : Plugin() {
       val ret = JSObject()
       ret.put("value", currentTime)
       ret.put("bufferedTime", bufferedTime)
+
+      // Note: Chapter information is intentionally NOT included here to avoid
+      // the web UI using chapter-relative durations instead of total duration.
+      // The web UI handles its own chapter management and expects absolute time/duration.
+      // Chapter info is available separately via getChapterProgress() if needed.
+
       call.resolve(ret)
     }
   }
@@ -676,11 +689,72 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun playPlayer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
+      Log.d(tag, "playPlayer: Called - checking player state...")
+
       if (!isPlayerServiceReady()) {
         Log.e(tag, "playPlayer: PlayerNotificationService not initialized yet")
         call.resolve(JSObject("{\"error\":\"Player service not ready\"}"))
         return@post
       }
+
+      Log.d(tag, "playPlayer: PlayerNotificationService is ready")
+      Log.d(tag, "playPlayer: Current playback session: ${playerNotificationService.currentPlaybackSession?.displayTitle ?: "null"}")
+      Log.d(tag, "playPlayer: Current media item count: ${playerNotificationService.currentPlayer.mediaItemCount}")
+
+      // Check if we have a valid playback session
+      if (playerNotificationService.currentPlaybackSession == null) {
+        Log.e(tag, "playPlayer: No playback session available")
+
+        // Try to check if there's a last session we can resume
+        val lastSession = DeviceManager.deviceData.lastPlaybackSession
+        if (lastSession != null) {
+          Log.w(tag, "playPlayer: Found last session '${lastSession.displayTitle}', but playback session is null")
+          Log.w(tag, "playPlayer: This suggests prepareLibraryItem was not called or failed")
+          // TODO: We could attempt to auto-prepare here, but we need the libraryItemId
+        } else {
+          Log.w(tag, "playPlayer: No last session available either")
+        }
+
+        call.resolve(JSObject("{\"error\":\"No playback session. Call prepareLibraryItem first.\"}"))
+        return@post
+      }
+
+      // Check if we have media items loaded
+      if (playerNotificationService.currentPlayer.mediaItemCount == 0) {
+        Log.e(tag, "playPlayer: No media items loaded in player")
+        Log.w(tag, "playPlayer: Session exists but no media items - this indicates preparePlayer was not called")
+        Log.w(tag, "playPlayer: Session: ${playerNotificationService.currentPlaybackSession?.displayTitle}")
+        Log.w(tag, "playPlayer: Session ID: ${playerNotificationService.currentPlaybackSession?.mediaItemId}")
+
+        // DEFENSIVE FIX: Try to automatically prepare the current session
+        val currentSession = playerNotificationService.currentPlaybackSession
+        if (currentSession != null) {
+          Log.i(tag, "playPlayer: Attempting automatic preparation of current session")
+          try {
+            // Get current playback speed from MediaManager
+            val currentPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
+
+            // Prepare the player with playWhenReady=true since user wants to play
+            playerNotificationService.preparePlayer(currentSession, true, currentPlaybackSpeed)
+
+            // Resolve immediately - the preparation will handle starting playback
+            Log.i(tag, "playPlayer: Automatic preparation initiated for session: ${currentSession.displayTitle}")
+            call.resolve()
+            return@post
+          } catch (e: Exception) {
+            Log.e(tag, "playPlayer: Automatic preparation failed: ${e.message}")
+            call.resolve(JSObject("{\"error\":\"Failed to prepare media items: ${e.message}\"}"))
+            return@post
+          }
+        }
+
+        // If no current session or preparation failed, return error
+        call.resolve(JSObject("{\"error\":\"No media items loaded in player. Session exists but not prepared.\"}"))
+        return@post
+      }
+
+      Log.d(tag, "playPlayer: All checks passed - starting playback for session: ${playerNotificationService.currentPlaybackSession?.displayTitle}")
+      Log.d(tag, "playPlayer: Media items loaded: ${playerNotificationService.currentPlayer.mediaItemCount}")
       playerNotificationService.play()
       call.resolve()
     }
@@ -920,7 +994,7 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun skipToNextChapter(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.skipToNext()
+      playerNotificationService.seekToNextChapter()
       call.resolve()
     }
   }
@@ -928,7 +1002,7 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun skipToPreviousChapter(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.skipToPrevious()
+      playerNotificationService.seekToPreviousChapter()
       call.resolve()
     }
   }
@@ -952,6 +1026,115 @@ class AbsAudioPlayer : Plugin() {
       call.resolve(ret)
     }
   }
+
+    @PluginMethod
+    fun setChapterTrack(call: PluginCall) {
+        val enabled = call.getBoolean("enabled") ?: false
+        Log.d(tag, "setChapterTrack: enabled=$enabled")
+
+        Handler(Looper.getMainLooper()).post {
+            if (::playerNotificationService.isInitialized) {
+                playerNotificationService.setUseChapterTrack(enabled)
+                call.resolve()
+            } else {
+                call.reject("Player service not ready")
+            }
+        }
+    }
+
+    @PluginMethod
+    fun seekInChapter(call: PluginCall) {
+        val position: Double = call.getDouble("position") ?: 0.0 // Position in seconds within current chapter
+        Log.d(tag, "seekInChapter action to $position seconds within current chapter")
+
+        Handler(Looper.getMainLooper()).post {
+            if (::playerNotificationService.isInitialized) {
+                val playbackSession = playerNotificationService.getCurrentPlaybackSessionCopy()
+                if (playbackSession != null && playbackSession.chapters.isNotEmpty()) {
+                    // Calculate chapter boundaries using raw player data
+                    val currentTimeMs = playerNotificationService.getCurrentTime()
+                    val currentChapter = playbackSession.getChapterForTime(currentTimeMs)
+
+                    if (currentChapter != null) {
+                        // Convert chapter-relative position to absolute position
+                        val positionMs = (position * 1000).toLong()
+                        val absolutePositionMs = currentChapter.startMs + positionMs
+                        // Ensure we don't seek beyond the chapter end
+                        val clampedPositionMs = absolutePositionMs.coerceAtMost(currentChapter.endMs - 1)
+
+                        Log.d(tag, "seekInChapter: Chapter-relative ${positionMs}ms -> absolute ${clampedPositionMs}ms in chapter '${currentChapter.title}'")
+                        playerNotificationService.seekPlayer(clampedPositionMs)
+                        call.resolve()
+                    } else {
+                        Log.w(tag, "seekInChapter: No current chapter found, falling back to regular seek")
+                        // Fallback to regular seek
+                        val currentTime = playerNotificationService.getCurrentTimeSeconds()
+                        playerNotificationService.seekPlayer(((currentTime + position) * 1000).toLong())
+                        call.resolve()
+                    }
+                } else {
+                    Log.d(tag, "seekInChapter: No chapters available, falling back to regular seek")
+                    // Fallback to regular seek
+                    val currentTime = playerNotificationService.getCurrentTimeSeconds()
+                    playerNotificationService.seekPlayer(((currentTime + position) * 1000).toLong())
+                    call.resolve()
+                }
+            } else {
+                call.reject("Player service not ready")
+            }
+        }
+    }
+
+    @PluginMethod
+    fun getChapterInfo(call: PluginCall) {
+        Handler(Looper.getMainLooper()).post {
+            if (::playerNotificationService.isInitialized) {
+                val playbackSession = playerNotificationService.getCurrentPlaybackSessionCopy()
+                if (playbackSession != null && playbackSession.chapters.isNotEmpty()) {
+                    // Calculate chapter info using raw player data and session chapters
+                    val currentTimeMs = playerNotificationService.getCurrentTime()
+                    val currentChapter = playbackSession.getChapterForTime(currentTimeMs)
+
+                    val ret = JSObject()
+                    ret.put("hasChapters", true)
+
+                    if (currentChapter != null) {
+                        val chapterIndex = playbackSession.chapters.indexOf(currentChapter)
+                        val chapterPositionMs = currentTimeMs - currentChapter.startMs
+                        val chapterDurationMs = currentChapter.endMs - currentChapter.startMs
+                        val totalDurationMs = playbackSession.totalDurationMs
+
+                        ret.put("currentChapterIndex", chapterIndex)
+                        ret.put("currentChapterTitle", currentChapter.title ?: "Untitled Chapter")
+                        ret.put("chapterPosition", chapterPositionMs / 1000.0) // Chapter-relative position in seconds
+                        ret.put("chapterDuration", chapterDurationMs / 1000.0) // Chapter duration in seconds
+                        ret.put("chapterProgress", if (chapterDurationMs > 0) chapterPositionMs.toFloat() / chapterDurationMs else 0f)
+                        ret.put("totalProgress", if (totalDurationMs > 0) currentTimeMs.toFloat() / totalDurationMs else 0f)
+                    }
+
+                    // Include all chapters information from session data
+                    val chaptersArray = playbackSession.chapters.map { chapter ->
+                        val chapterObj = JSObject()
+                        chapterObj.put("title", chapter.title ?: "Untitled Chapter")
+                        chapterObj.put("start", chapter.start)
+                        chapterObj.put("end", chapter.end)
+                        chapterObj.put("startMs", chapter.startMs)
+                        chapterObj.put("endMs", chapter.endMs)
+                        chapterObj
+                    }
+                    ret.put("chapters", jacksonMapper.writeValueAsString(chaptersArray))
+
+                    call.resolve(ret)
+                } else {
+                    val ret = JSObject()
+                    ret.put("hasChapters", false)
+                    call.resolve(ret)
+                }
+            } else {
+                call.reject("Player service not ready")
+            }
+        }
+    }
 
     @PluginMethod
     fun userMediaProgressUpdate(call: PluginCall) {
@@ -1022,16 +1205,39 @@ class AbsAudioPlayer : Plugin() {
         val mediaItemId = if (episodeId != null) "$libraryItemId-$episodeId" else libraryItemId ?: ""
         val localMediaProgress = DeviceManager.dbManager.getLocalMediaProgress(mediaItemId)
         if (localMediaProgress != null) {
-            if (lastUpdate > localMediaProgress.lastUpdate) {
-                AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Syncing progress from server for \"$libraryItemId\" | server lastUpdate=$lastUpdate > local lastUpdate=${localMediaProgress.lastUpdate}")
-                // Update local media progress with server data
-                localMediaProgress.currentTime = currentTime
-                localMediaProgress.duration = duration
-                localMediaProgress.ebookProgress = ebookProgress
-                localMediaProgress.lastUpdate = lastUpdate
-                DeviceManager.dbManager.saveLocalMediaProgress(localMediaProgress)
+            // Convert timestamps to the same timezone for accurate comparison
+            val serverLastUpdateMs = lastUpdate
+            val localLastUpdateMs = localMediaProgress.lastUpdate
+
+            // Convert currentTime to milliseconds for comparison
+            val serverCurrentTimeMs = (currentTime * 1000).toLong()
+            val localCurrentTimeMs = (localMediaProgress.currentTime * 1000).toLong()
+
+            Log.d("AbsAudioPlayer", "userMediaProgressUpdate: Comparing server vs local progress")
+            Log.d("AbsAudioPlayer", "userMediaProgressUpdate: Server - time: ${currentTime}s (${serverCurrentTimeMs}ms), lastUpdate: $serverLastUpdateMs")
+            Log.d("AbsAudioPlayer", "userMediaProgressUpdate: Local  - time: ${localMediaProgress.currentTime}s (${localCurrentTimeMs}ms), lastUpdate: $localLastUpdateMs")
+
+            // Only update if server timestamp is newer AND server progress is significantly ahead
+            if (serverLastUpdateMs > localLastUpdateMs) {
+                val timeDiffMs = serverCurrentTimeMs - localCurrentTimeMs
+                val oneMinuteMs = 60 * 1000L // 1 minute in milliseconds
+
+                Log.d("AbsAudioPlayer", "userMediaProgressUpdate: Server timestamp is newer. Progress difference: ${timeDiffMs}ms (${timeDiffMs/1000.0}s)")
+
+                if (timeDiffMs > oneMinuteMs) {
+                    AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Syncing progress from server for \"$libraryItemId\" | server: ${currentTime}s vs local: ${localMediaProgress.currentTime}s (diff: ${timeDiffMs/1000.0}s)")
+
+                    // Update local media progress with server data
+                    localMediaProgress.currentTime = currentTime
+                    localMediaProgress.duration = duration
+                    localMediaProgress.ebookProgress = ebookProgress
+                    localMediaProgress.lastUpdate = serverLastUpdateMs
+                    DeviceManager.dbManager.saveLocalMediaProgress(localMediaProgress)
+                } else {
+                    AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Server progress difference (${timeDiffMs/1000.0}s) is less than 1 minute threshold, keeping local progress")
+                }
             } else {
-                AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: NOT syncing progress from server with local item for \"$libraryItemId\" | server lastUpdate=$lastUpdate <= local lastUpdate=${localMediaProgress.lastUpdate}")
+                AbsLogger.info("AbsAudioPlayer", "userMediaProgressUpdate: Local timestamp is newer or equal, keeping local progress | server lastUpdate=$serverLastUpdateMs <= local lastUpdate=$localLastUpdateMs")
             }
         }
         call.resolve()

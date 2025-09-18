@@ -135,6 +135,85 @@ class PlaybackSession(
     return chapters.find { time < it.startMs } // First chapter where start time is > then time
   }
 
+  /**
+   * Get the chapter index for a given time position
+   * Returns -1 if no chapters or time doesn't fall within any chapter
+   */
+  @JsonIgnore
+  fun getChapterIndexForTime(time: Long): Int {
+    if (chapters.isEmpty()) return -1
+    return chapters.indexOfFirst { time >= it.startMs && it.endMs > time }
+  }
+
+  /**
+   * Get a chapter by its index
+   * Returns null if index is out of bounds
+   */
+  @JsonIgnore
+  fun getChapterByIndex(index: Int): BookChapter? {
+    return chapters.getOrNull(index)
+  }
+
+  /**
+   * Get the previous chapter for a given time position
+   * Returns null if no chapters or already at first chapter
+   */
+  @JsonIgnore
+  fun getPreviousChapterForTime(time: Long): BookChapter? {
+    if (chapters.isEmpty()) return null
+    val currentIndex = getChapterIndexForTime(time)
+    if (currentIndex <= 0) return null
+    return chapters.getOrNull(currentIndex - 1)
+  }
+
+  /**
+   * Check if this playback session has chapters
+   */
+  @JsonIgnore
+  fun hasChapters(): Boolean {
+    return chapters.isNotEmpty()
+  }
+
+  /**
+   * Get the duration of a specific chapter in milliseconds
+   */
+  @JsonIgnore
+  fun getChapterDuration(chapterIndex: Int): Long {
+    val chapter = getChapterByIndex(chapterIndex) ?: return 0L
+    return chapter.endMs - chapter.startMs
+  }
+
+  /**
+   * Determine the starting track and position based on current playback time
+   * This is useful for initializing ChapterAwarePlayer
+   */
+  @JsonIgnore
+  fun getStartingPlaybackInfo(): PlaybackStartInfo {
+    val startTrackIndex = getCurrentTrackIndex()
+    val startTrackPosition = getCurrentTrackTimeMs()
+    val currentChapter = getChapterForTime(currentTimeMs)
+    val currentChapterIndex = if (currentChapter != null) getChapterIndexForTime(currentTimeMs) else -1
+
+    return PlaybackStartInfo(
+      trackIndex = startTrackIndex,
+      trackPositionMs = startTrackPosition,
+      absolutePositionMs = currentTimeMs,
+      chapterIndex = currentChapterIndex,
+      chapter = currentChapter
+    )
+  }
+
+  /**
+   * Data class to hold playback starting information
+   */
+  data class PlaybackStartInfo(
+    val trackIndex: Int,
+    val trackPositionMs: Long,
+    val absolutePositionMs: Long,
+    val chapterIndex: Int,
+    val chapter: BookChapter?
+  )
+
   @JsonIgnore
   fun getNextTrackEndTime(): Long {
     val currentTrack = audioTracks[this.getNextTrackIndex()]
@@ -220,18 +299,30 @@ class PlaybackSession(
 
   @JsonIgnore
   fun getContentUri(audioTrack: AudioTrack): Uri {
-    if (isLocal) return Uri.parse(audioTrack.contentUrl) // Local content url
+    Log.d("PlaybackSession", "getContentUri: isLocal=$isLocal, audioTrack.contentUrl=${audioTrack.contentUrl}")
+
+    if (isLocal) {
+      val uri = Uri.parse(audioTrack.contentUrl)
+      Log.d("PlaybackSession", "getContentUri: Local URI created: $uri")
+      return uri
+    }
+
     // As of v2.22.0 tracks use a different endpoint
     // See: https://github.com/advplyr/audiobookshelf/pull/4263
     if (checkIsServerVersionGte("2.22.0")) {
-      return if (isDirectPlay) {
+      val uri = if (isDirectPlay) {
         Uri.parse("$serverAddress/public/session/$id/track/${audioTrack.index}")
       } else {
         // Transcode uses HlsRouter on server
         Uri.parse("$serverAddress${audioTrack.contentUrl}")
       }
+      Log.d("PlaybackSession", "getContentUri: Server v2.22.0+ URI created: $uri")
+      return uri
     }
-    return Uri.parse("$serverAddress${audioTrack.contentUrl}?token=${DeviceManager.token}")
+
+    val uri = Uri.parse("$serverAddress${audioTrack.contentUrl}?token=${DeviceManager.token}")
+    Log.d("PlaybackSession", "getContentUri: Legacy server URI created: $uri")
+    return uri
   }
 
   @JsonIgnore
@@ -374,6 +465,8 @@ class PlaybackSession(
   fun getMediaItems(ctx: Context): List<MediaItem> {
     val mediaItems: MutableList<MediaItem> = mutableListOf()
 
+    Log.d("PlaybackSession", "getMediaItems: Creating media items for ${audioTracks.size} tracks, mediaType: $mediaType, chapters: ${chapters.size}")
+
     // For books with chapters, always prefer chapter-based display
     // This gives proper "Chapter Name" titles instead of track names
     if (mediaType == "book" && chapters.isNotEmpty()) {
@@ -385,6 +478,8 @@ class PlaybackSession(
           val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack, chapter, index)
           val mediaUri = this.getContentUri(audioTrack)
           val mimeType = audioTrack.mimeType
+
+          Log.d("PlaybackSession", "getMediaItems: Chapter $index - URI: $mediaUri, mimeType: $mimeType")
 
           // Create clipping configuration for this chapter
           val clippingConfigBuilder = MediaItem.ClippingConfiguration.Builder()
@@ -416,6 +511,8 @@ class PlaybackSession(
           val mediaUri = this.getContentUri(audioTrack)
           val mimeType = audioTrack.mimeType
 
+          Log.d("PlaybackSession", "getMediaItems: Track $index - URI: $mediaUri, mimeType: $mimeType")
+
           val mediaItem = MediaItem.Builder()
             .setUri(mediaUri)
             .setMediaMetadata(mediaMetadata)
@@ -426,10 +523,12 @@ class PlaybackSession(
       }
     } else {
       // For podcasts or books without chapters, create media items for each track
-      for (audioTrack in audioTracks) {
+      for ((index, audioTrack) in audioTracks.withIndex()) {
         val mediaMetadata = this.getExoMediaMetadata(ctx, audioTrack)
         val mediaUri = this.getContentUri(audioTrack)
         val mimeType = audioTrack.mimeType
+
+        Log.d("PlaybackSession", "getMediaItems: No chapters - Track $index - URI: $mediaUri, mimeType: $mimeType")
 
         val mediaItem = MediaItem.Builder()
           .setUri(mediaUri)
@@ -439,6 +538,8 @@ class PlaybackSession(
         mediaItems.add(mediaItem)
       }
     }
+
+    Log.d("PlaybackSession", "getMediaItems: Created ${mediaItems.size} media items")
     return mediaItems
   }
 

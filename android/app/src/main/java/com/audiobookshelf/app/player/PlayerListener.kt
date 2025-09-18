@@ -49,6 +49,20 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
     val player = playerNotificationService.currentPlayer
 
+    // ENHANCED DEBUG: Log detailed state information
+    Log.d(tag, "DETAILED_STATE: isPlaying=$isPlaying, playWhenReady=${player.playWhenReady}, playbackState=${player.playbackState}")
+    Log.d(tag, "DETAILED_STATE: mediaItemCount=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}")
+    Log.d(tag, "DETAILED_STATE: isLoading=${player.isLoading}, duration=${player.duration}, position=${player.currentPosition}")
+
+    // Check for state inconsistencies that might indicate audio focus issues
+    if (!isPlaying && player.playWhenReady && player.playbackState == Player.STATE_READY) {
+      Log.w(tag, "POTENTIAL_ISSUE: playWhenReady=true, STATE_READY, but isPlaying=false - possible audio focus issue")
+    }
+
+    if (isPlaying && !player.playWhenReady) {
+      Log.w(tag, "POTENTIAL_ISSUE: isPlaying=true but playWhenReady=false - inconsistent state")
+    }
+
     // Goal of these 2 if statements and the lazyIsPlaying is to ignore this event when it is triggered by a seek
     //  When a seek occurs the player is paused and buffering, then plays again right afterwards.
     if (!isPlaying && player.playbackState == Player.STATE_BUFFERING) {
@@ -67,32 +81,34 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
     if (isPlaying) {
       Log.d(tag, "SeekBackTime: Player is playing")
-      if (lastPauseTime > 0 && DeviceManager.deviceData.deviceSettings?.disableAutoRewind != true) {
-        Log.d(tag, "SeekBackTime: playing started now set seek back time $lastPauseTime")
-        var seekBackTime = calcPauseSeekBackTime()
-        if (seekBackTime > 0) {
-          // Current chapter is used so that seek back does not go back to the previous chapter
-          val currentChapter = playerNotificationService.getCurrentBookChapter()
-          val minSeekBackTime = currentChapter?.startMs ?: 0
+      Log.d(tag, "SeekBackTime: isAndroidAuto=${playerNotificationService.isAndroidAuto}")
+      Log.d(tag, "SeekBackTime: lastPauseTime=$lastPauseTime")
+      Log.d(tag, "SeekBackTime: disableAutoRewind=${DeviceManager.deviceData.deviceSettings?.disableAutoRewind}")
 
-          val currentTime = playerNotificationService.getCurrentTime()
-          val newTime = currentTime - seekBackTime
-          if (newTime < minSeekBackTime) {
-            seekBackTime = currentTime - minSeekBackTime
-          }
-          Log.d(tag, "SeekBackTime $seekBackTime")
+      // Skip auto-rewind when Android Auto is connected to prevent unexpected position jumps
+      if (playerNotificationService.isAndroidAuto) {
+        Log.d(tag, "SeekBackTime: Android Auto detected, skipping auto-rewind")
+      } else if (lastPauseTime > 0 && DeviceManager.deviceData.deviceSettings?.disableAutoRewind != true) {
+        Log.d(tag, "SeekBackTime: playing started, checking if auto-rewind needed")
+
+        // Only auto-rewind if paused for more than 10 seconds to avoid unnecessary seeks
+        val pauseDuration = System.currentTimeMillis() - lastPauseTime
+        if (pauseDuration > 10000) { // 10 seconds
+          // Use the standard jump backward time configured by the user (default 10 seconds)
+          val jumpBackwardTimeMs = DeviceManager.deviceData.deviceSettings?.jumpBackwardsTimeMs ?: 10000L
+          Log.d(tag, "SeekBackTime: Paused for ${pauseDuration}ms, auto-rewinding by ${jumpBackwardTimeMs}ms")
+
+          // Use the same seekBackward method that manual navigation uses
+          playerNotificationService.seekBackward(jumpBackwardTimeMs)
+        } else {
+          Log.d(tag, "SeekBackTime: Short pause (${pauseDuration}ms), skipping auto-rewind")
         }
-
-        // TODO: this needs to be reworked so that the audio doesn't start playing before it checks for updated progress
-        // Check if playback session still exists or sync media progress if updated
-//        val pauseLength: Long = System.currentTimeMillis() - lastPauseTime
-//        if (pauseLength > PAUSE_LEN_BEFORE_RECHECK) {
-//          val shouldCarryOn = playerNotificationService.checkCurrentSessionProgress(seekBackTime)
-//          if (!shouldCarryOn) return
-//        }
-
-        if (seekBackTime > 0L) {
-          playerNotificationService.seekBackward(seekBackTime)
+      } else {
+        if (lastPauseTime <= 0) {
+          Log.d(tag, "SeekBackTime: No previous pause time, skipping auto-rewind")
+        }
+        if (DeviceManager.deviceData.deviceSettings?.disableAutoRewind == true) {
+          Log.d(tag, "SeekBackTime: Auto-rewind disabled in settings, skipping")
         }
       }
     } else {
@@ -137,6 +153,30 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       if (playerNotificationService.currentPlayer.playbackState == Player.STATE_READY) {
         Log.d(tag, "STATE_READY : " + playerNotificationService.currentPlayer.duration)
 
+        // ENHANCED DEBUG: Log comprehensive state when reaching STATE_READY
+        val player = playerNotificationService.currentPlayer
+        Log.d(tag, "STATE_READY_DEBUG: isPlaying=${player.isPlaying}, playWhenReady=${player.playWhenReady}")
+        Log.d(tag, "STATE_READY_DEBUG: mediaItemCount=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}")
+        Log.d(tag, "STATE_READY_DEBUG: duration=${player.duration}, position=${player.currentPosition}")
+        Log.d(tag, "STATE_READY_DEBUG: isLoading=${player.isLoading}, volume=${player.volume}")
+
+        // Check if this is the auto-start scenario
+        if (player.playWhenReady && !player.isPlaying) {
+          Log.w(tag, "STATE_READY_ISSUE: playWhenReady=true but isPlaying=false - auto-start failed!")
+          Log.w(tag, "STATE_READY_ISSUE: This suggests audio focus loss, device audio routing issues, or ExoPlayer bug")
+
+          // Try calling play() explicitly as a workaround
+          Log.d(tag, "STATE_READY_WORKAROUND: Attempting explicit play() call")
+          try {
+            player.play()
+            Log.d(tag, "STATE_READY_WORKAROUND: play() called - isPlaying now: ${player.isPlaying}")
+          } catch (e: Exception) {
+            Log.e(tag, "STATE_READY_WORKAROUND: Exception calling play(): ${e.message}")
+          }
+        } else if (player.playWhenReady && player.isPlaying) {
+          Log.d(tag, "STATE_READY_SUCCESS: Auto-start working correctly!")
+        }
+
         if (lastPauseTime == 0L) {
           lastPauseTime = -1
         }
@@ -148,9 +188,16 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       }
       if (playerNotificationService.currentPlayer.playbackState == Player.STATE_ENDED) {
         Log.d(tag, "STATE_ENDED")
-        playerNotificationService.sendClientMetadata(PlayerState.ENDED)
 
-        playerNotificationService.handlePlaybackEnded()
+        // Check if we have a valid playback session
+        // If not, this might be Android Auto trying to play on an empty player
+        if (playerNotificationService.currentPlaybackSession != null) {
+          Log.d(tag, "STATE_ENDED with valid session - handling playback completion")
+          playerNotificationService.sendClientMetadata(PlayerState.ENDED)
+          playerNotificationService.handlePlaybackEnded()
+        } else {
+          Log.d(tag, "STATE_ENDED with no session - likely empty player, ignoring")
+        }
       }
       if (playerNotificationService.currentPlayer.playbackState == Player.STATE_IDLE) {
         Log.d(tag, "STATE_IDLE")
@@ -166,15 +213,4 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
     }
   }
 
-  private fun calcPauseSeekBackTime() : Long {
-    if (lastPauseTime <= 0) return 0
-    val time: Long = System.currentTimeMillis() - lastPauseTime
-    val seekback: Long
-    if (time < 10000) seekback = 0 // 10s or less = no seekback
-    else if (time < 60000) seekback = 3000 // 10s to 1m = jump back 3s
-    else if (time < 300000) seekback = 10000 // 1m to 5m = jump back 10s
-    else if (time < 1800000) seekback = 20000 // 5m to 30m = jump back 20s
-    else seekback = 29500 // 30m and up = jump back 30s
-    return seekback
-  }
 }

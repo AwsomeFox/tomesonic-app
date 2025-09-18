@@ -60,10 +60,10 @@ class MediaSessionManager(
         // Create Media3 MediaLibrarySession
         val sessionBuilder = MediaLibrarySession.Builder(context, player, callback)
         sessionActivityPendingIntent?.let { sessionBuilder.setSessionActivity(it) }
-        
+
         // Enable custom commands and actions for Android Auto
         sessionBuilder.setCustomLayout(buildCustomMediaActions())
-        
+
         mediaSession = sessionBuilder.build()
 
         Log.d(TAG, "Media3 MediaLibrarySession initialized successfully")
@@ -75,7 +75,7 @@ class MediaSessionManager(
 
     private fun buildCustomMediaActionsWithSpeed(currentSpeed: Float): ImmutableList<androidx.media3.session.CommandButton> {
         val customActions = ImmutableList.builder<androidx.media3.session.CommandButton>()
-        
+
         // Jump backward button
         customActions.add(
             androidx.media3.session.CommandButton.Builder()
@@ -84,7 +84,7 @@ class MediaSessionManager(
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
                 .build()
         )
-        
+
         // Jump forward button
         customActions.add(
             androidx.media3.session.CommandButton.Builder()
@@ -93,25 +93,7 @@ class MediaSessionManager(
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
                 .build()
         )
-        
-        // Skip backward button
-        customActions.add(
-            androidx.media3.session.CommandButton.Builder()
-                .setDisplayName("Previous")
-                .setIconResId(R.drawable.skip_previous_24)
-                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_BACKWARD, Bundle.EMPTY))
-                .build()
-        )
-        
-        // Skip forward button
-        customActions.add(
-            androidx.media3.session.CommandButton.Builder()
-                .setDisplayName("Next")
-                .setIconResId(R.drawable.skip_next_24)
-                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_FORWARD, Bundle.EMPTY))
-                .build()
-        )
-        
+
         // Speed control button with dynamic icon
         val speedIcon = getSpeedIcon(currentSpeed)
         customActions.add(
@@ -121,7 +103,7 @@ class MediaSessionManager(
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
                 .build()
         )
-        
+
         return customActions.build()
     }
 
@@ -143,6 +125,39 @@ class MediaSessionManager(
             val newLayout = buildCustomMediaActionsWithSpeed(service.mediaManager.getSavedPlaybackRate())
             session.setCustomLayout(newLayout)
             Log.d(TAG, "Updated MediaSession custom layout with new speed icon")
+        }
+    }
+
+    /**
+     * Update MediaSession metadata with chapter-aware information
+     * This makes Android Auto treat each chapter as a separate track with proper duration
+     *
+     * NOTE: With the new MediaSource architecture, MediaItems already have correct metadata
+     * from creation, so this method primarily serves as a fallback or for notification updates
+     */
+    fun updateChapterMetadata(chapterTitle: String, chapterDuration: Long, bookTitle: String, author: String?, bitmap: Bitmap?) {
+        Log.d(TAG, "Updating chapter metadata: chapter='$chapterTitle', duration=${chapterDuration}ms")
+
+        // With the new MediaSource architecture, the MediaItems should already have the correct
+        // metadata including chapter duration, so we don't need to replace the MediaItem.
+        // Android Auto will use the MediaItem's original metadata.
+
+        // However, we can still log this for debugging purposes
+        mediaSession?.let { session ->
+            val currentMediaItem = session.player.currentMediaItem
+            if (currentMediaItem != null) {
+                val currentMetadata = currentMediaItem.mediaMetadata
+                Log.d(TAG, "Current MediaItem metadata: title='${currentMetadata.title}', duration=${currentMetadata.durationMs}ms")
+
+                // Verify that the MediaItem already has the correct duration
+                if (currentMetadata.durationMs != null && currentMetadata.durationMs!! > 0) {
+                    Log.d(TAG, "MediaItem already has correct duration metadata, no update needed")
+                } else {
+                    Log.w(TAG, "MediaItem missing duration metadata, this may cause Android Auto timeline issues")
+                }
+            } else {
+                Log.w(TAG, "No current MediaItem to check metadata")
+            }
         }
     }
 

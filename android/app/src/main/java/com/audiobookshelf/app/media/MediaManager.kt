@@ -436,11 +436,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadLibraryPodcastsSync(libraryId: String): List<LibraryItem>? {
     val future = SettableFuture.create<List<LibraryItem>?>()
-    
+
     loadLibraryPodcasts(libraryId) { podcasts ->
       future.set(podcasts)
     }
-    
+
     return try {
       future.get()
     } catch (e: Exception) {
@@ -476,11 +476,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadLibrarySeriesWithAudioSync(libraryId: String): List<LibrarySeriesItem> {
     val future = SettableFuture.create<List<LibrarySeriesItem>>()
-    
+
     loadLibrarySeriesWithAudio(libraryId) { series ->
       future.set(series)
     }
-    
+
     return try {
       future.get()
     } catch (e: Exception) {
@@ -588,11 +588,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadAuthorsWithBooksSync(libraryId: String): List<LibraryAuthorItem> {
     val future = SettableFuture.create<List<LibraryAuthorItem>>()
-    
+
     loadAuthorsWithBooks(libraryId) { authors ->
       future.set(authors)
     }
-    
+
     return try {
       future.get()
     } catch (e: Exception) {
@@ -731,11 +731,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadLibraryCollectionsWithAudioSync(libraryId: String): List<LibraryCollection> {
     val future = SettableFuture.create<List<LibraryCollection>>()
-    
+
     loadLibraryCollectionsWithAudio(libraryId) { collections ->
       future.set(collections)
     }
-    
+
     return try {
       future.get()
     } catch (e: Exception) {
@@ -988,11 +988,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadLibrariesSync(): List<Library> {
     val future = SettableFuture.create<List<Library>>()
-    
+
     loadLibraries { libraries ->
       future.set(libraries)
     }
-    
+
     return try {
       future.get()
     } catch (e: Exception) {
@@ -1013,33 +1013,105 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadItemsInProgressSync(): List<ItemInProgress> {
     val future = SettableFuture.create<List<ItemInProgress>>()
-    
+    val combinedItems = mutableListOf<ItemInProgress>()
+
+    // First, get local books with progress
+    val localBooksWithProgress = getLocalBooksWithProgress()
+    Log.d(tag, "AABrowser: Found ${localBooksWithProgress.size} local books with progress")
+
+    // Add local books as ItemInProgress objects
+    localBooksWithProgress.forEach { localBook ->
+      val libraryItemId = localBook.libraryItemId ?: return@forEach
+      val localProgress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId)
+      if (localProgress != null) {
+        val itemInProgress = ItemInProgress(
+          libraryItemWrapper = localBook,
+          episode = null,
+          progressLastUpdate = localProgress.lastUpdate,
+          isLocal = true
+        )
+        combinedItems.add(itemInProgress)
+      }
+    }
+
+    // Then, try to get server items if available
     if (serverItemsInProgress.isNotEmpty()) {
-      Log.d(tag, "AABrowser: Using cached items in progress, count=${serverItemsInProgress.size}")
-      // Sort by last played time (most recent first)
-      return serverItemsInProgress.sortedByDescending { it.progressLastUpdate }
+      Log.d(tag, "AABrowser: Using cached server items in progress, count=${serverItemsInProgress.size}")
+
+      // Add server items, but avoid duplicates (prefer server progress over local for same item)
+      serverItemsInProgress.forEach { serverItem ->
+        val existingLocalIndex = combinedItems.indexOfFirst {
+          it.libraryItemWrapper.id == serverItem.libraryItemWrapper.id
+        }
+
+        if (existingLocalIndex >= 0) {
+          // Replace local item with server item (server progress takes precedence)
+          combinedItems[existingLocalIndex] = serverItem
+          Log.d(tag, "AABrowser: Replaced local progress with server progress for item ${serverItem.libraryItemWrapper.id}")
+        } else {
+          // Add new server item
+          combinedItems.add(serverItem)
+        }
+      }
     } else {
-      Log.d(tag, "AABrowser: Loading items in progress from API")
+      Log.d(tag, "AABrowser: No cached server items, trying to load from API")
       apiHandler.getAllItemsInProgress { itemsInProgress ->
         val filteredItemsInProgress = itemsInProgress.filter {
           val libraryItem = it.libraryItemWrapper as LibraryItem
           libraryItem.checkHasTracks()
         }
-        
+
         serverItemsInProgress = filteredItemsInProgress
-        Log.d(tag, "AABrowser: Loaded ${filteredItemsInProgress.size} items in progress from all libraries")
-        
+        Log.d(tag, "AABrowser: Loaded ${filteredItemsInProgress.size} server items in progress")
+
+        // Merge server items with existing local items, avoiding duplicates
+        filteredItemsInProgress.forEach { serverItem ->
+          val existingLocalIndex = combinedItems.indexOfFirst {
+            it.libraryItemWrapper.id == serverItem.libraryItemWrapper.id
+          }
+
+          if (existingLocalIndex >= 0) {
+            // Replace local item with server item (server progress takes precedence)
+            combinedItems[existingLocalIndex] = serverItem
+            Log.d(tag, "AABrowser: Replaced local progress with server progress for item ${serverItem.libraryItemWrapper.id}")
+          } else {
+            // Add new server item
+            combinedItems.add(serverItem)
+          }
+        }
+
         // Sort by last played time (most recent first)
-        val sortedItems = filteredItemsInProgress.sortedByDescending { it.progressLastUpdate }
+        val sortedItems = combinedItems.sortedByDescending { it.progressLastUpdate }
         future.set(sortedItems)
       }
-      
+
       return try {
         future.get()
       } catch (e: Exception) {
-        Log.e(tag, "AABrowser: Error loading items in progress synchronously", e)
-        emptyList()
+        Log.e(tag, "AABrowser: Error loading server items in progress, returning local items only", e)
+        // Return local items only if server fails
+        combinedItems.sortedByDescending { it.progressLastUpdate }
       }
+    }
+
+    // Sort by last played time (most recent first) and return
+    return combinedItems.sortedByDescending { it.progressLastUpdate }
+  }
+
+  /**
+   * Get local books with progress for continue section
+   */
+  fun getLocalBooksWithProgress(): List<LocalLibraryItem> {
+    val localBooks = DeviceManager.dbManager.getLocalLibraryItems("book")
+    return localBooks.filter { localBook ->
+      val libraryItemId = localBook.libraryItemId ?: return@filter false
+      val localProgress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId)
+      localProgress != null && localProgress.currentTime > 0 && localProgress.duration > 0
+    }.sortedByDescending { localBook ->
+      // Sort by last update time (most recent first)
+      val libraryItemId = localBook.libraryItemId ?: return@sortedByDescending 0L
+      val localProgress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId)
+      localProgress?.lastUpdate ?: 0L
     }
   }
 
@@ -1083,7 +1155,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadRecentItemsSync(): List<LibraryItem> {
     val future = SettableFuture.create<List<LibraryItem>>()
-    
+
     // First, ensure personalized data is loaded for all libraries
     if (!allLibraryPersonalizationsDone) {
       Log.d(tag, "AABrowser: Loading personalized data for recent items")
@@ -1097,7 +1169,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       val recentItems = getRecentItemsFromShelves()
       future.set(recentItems)
     }
-    
+
     return try {
       future.get()
     } catch (e: Exception) {
@@ -1235,7 +1307,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun loadLibraryContentsSync(libraryId: String): List<LibraryItem> {
     val future = SettableFuture.create<List<LibraryItem>>()
-    
+
     val library = serverLibraries.find { it.id == libraryId }
     if (library == null) {
       Log.w(tag, "AABrowser: Library $libraryId not found")
@@ -1257,7 +1329,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         future.set(discoveryItems)
       }
     }
-    
+
     return try {
       future.get()
     } catch (e: Exception) {
@@ -1322,6 +1394,8 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
   private fun checkSetValidServerConnectionConfig(cb: (Boolean) -> Unit) = runBlocking {
     Log.d(tag, "checkSetValidServerConnectionConfig | serverConfigIdUsed=$serverConfigIdUsed | lastServerConnectionConfigId=${DeviceManager.deviceData.lastServerConnectionConfigId}")
+    Log.d(tag, "checkSetValidServerConnectionConfig | DeviceManager.serverConnectionConfig=${DeviceManager.serverConnectionConfig?.name}")
+    Log.d(tag, "checkSetValidServerConnectionConfig | DeviceManager.isConnectedToServer=${DeviceManager.isConnectedToServer}")
 
     coroutineScope {
       if (!DeviceManager.checkConnectivity(ctx)) {
@@ -1331,6 +1405,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       } else if (DeviceManager.deviceData.lastServerConnectionConfigId.isNullOrBlank()) { // If in offline mode last server connection config is unset
         serverUserMediaProgress = mutableListOf()
         Log.d(tag, "checkSetValidServerConnectionConfig: No last server connection config")
+        Log.d(tag, "checkSetValidServerConnectionConfig: Available server configs: ${DeviceManager.deviceData.serverConnectionConfigs.size}")
         cb(false)
       } else {
         var hasValidConn = false
@@ -1567,11 +1642,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         Log.d(tag, "Found item $id in cache")
         return item
       }
-      
+
       // If not found in cache, try to fetch from server synchronously
       Log.d(tag, "Item $id not found in cache (${serverLibraryItems.size} items cached), fetching from server...")
       val future = SettableFuture.create<LibraryItem?>()
-      
+
       loadLibraryItem(id) { libraryItem ->
         if (libraryItem != null && libraryItem is LibraryItem) {
           // Add to cache for future use
@@ -1583,7 +1658,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
           future.set(null)
         }
       }
-      
+
       try {
         item = future.get(5, TimeUnit.SECONDS)
       } catch (e: Exception) {
@@ -1605,15 +1680,29 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    * Get progress percentage for a library item
    */
   fun getProgressPercentage(libraryItemId: String, episodeId: String? = null): Int {
-    val progress = if (episodeId != null) {
+    // First check server progress
+    val serverProgress = if (episodeId != null) {
       // For podcast episodes
       serverUserMediaProgress.find { it.libraryItemId == libraryItemId && it.episodeId == episodeId }
     } else {
       // For books
       serverUserMediaProgress.find { it.libraryItemId == libraryItemId }
     }
-    return if (progress != null) {
-      (progress.progress * 100).toInt()
+
+    if (serverProgress != null) {
+      return (serverProgress.progress * 100).toInt()
+    }
+
+    // If no server progress, check local media progress
+    val localMediaProgressId = if (episodeId != null) {
+      "$libraryItemId-$episodeId"
+    } else {
+      libraryItemId
+    }
+
+    val localProgress = DeviceManager.dbManager.getLocalMediaProgress(localMediaProgressId)
+    return if (localProgress != null && localProgress.duration > 0) {
+      ((localProgress.currentTime / localProgress.duration) * 100).toInt()
     } else {
       0
     }

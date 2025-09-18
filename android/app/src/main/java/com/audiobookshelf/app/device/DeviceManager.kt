@@ -89,6 +89,49 @@ object DeviceManager {
       deviceData.deviceSettings?.androidAutoBrowseSeriesSequenceOrder =
               AndroidAutoBrowseSeriesSequenceOrderSetting.ASC
     }
+
+    // Initialize server connection config from persisted last server connection config ID
+    Log.d(tag, "DeviceManager init: About to initialize server connection config")
+    Log.d(tag, "DeviceManager init: lastServerConnectionConfigId = ${deviceData.lastServerConnectionConfigId}")
+    Log.d(tag, "DeviceManager init: Available server configs count = ${deviceData.serverConnectionConfigs.size}")
+    initializeServerConnectionConfig()
+    Log.d(tag, "DeviceManager init: After initialization, serverConnectionConfig = ${serverConnectionConfig?.name}")
+  }
+
+  /**
+   * Initialize the server connection config from the persisted last server connection config ID
+   */
+  private fun initializeServerConnectionConfig() {
+    Log.d(tag, "initializeServerConnectionConfig: Starting initialization")
+    deviceData.lastServerConnectionConfigId?.let { configId ->
+      Log.d(tag, "initializeServerConnectionConfig: Found lastServerConnectionConfigId = $configId")
+      val config = getServerConnectionConfig(configId)
+      if (config != null) {
+        serverConnectionConfig = config
+        Log.d(tag, "initializeServerConnectionConfig: Successfully initialized server connection config: ${config.name} (${config.id})")
+        Log.d(tag, "initializeServerConnectionConfig: Server address: ${config.address}")
+      } else {
+        Log.w(tag, "initializeServerConnectionConfig: Could not find server connection config for ID: $configId")
+        Log.w(tag, "initializeServerConnectionConfig: Available config IDs: ${deviceData.serverConnectionConfigs.map { it.id }}")
+      }
+    } ?: run {
+      Log.d(tag, "initializeServerConnectionConfig: No last server connection config ID found")
+      Log.d(tag, "initializeServerConnectionConfig: Available server configs count: ${deviceData.serverConnectionConfigs.size}")
+      if (deviceData.serverConnectionConfigs.isNotEmpty()) {
+        Log.d(tag, "initializeServerConnectionConfig: Available configs: ${deviceData.serverConnectionConfigs.map { "${it.name} (${it.id})" }}")
+
+        // If there's only one server config and no last config is set, use it as the default
+        if (deviceData.serverConnectionConfigs.size == 1) {
+          val defaultConfig = deviceData.serverConnectionConfigs.first()
+          Log.d(tag, "initializeServerConnectionConfig: Auto-selecting single available server config: ${defaultConfig.name}")
+          serverConnectionConfig = defaultConfig
+          deviceData.lastServerConnectionConfigId = defaultConfig.id
+          // Save the updated device data
+          dbManager.saveDeviceData(deviceData)
+          Log.d(tag, "initializeServerConnectionConfig: Set and saved default server config: ${defaultConfig.name} (${defaultConfig.id})")
+        }
+      }
+    }
   }
 
   /**

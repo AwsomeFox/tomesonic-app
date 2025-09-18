@@ -252,8 +252,10 @@ class MediaProgressSyncer(
   }
 
   fun seek() {
-    currentPlaybackSession?.currentTime = playerNotificationService.getCurrentTimeSeconds()
-    Log.d(tag, "seek: $currentDisplayTitle, currentTime=${currentPlaybackSession?.currentTime}")
+    val newCurrentTime = playerNotificationService.getCurrentTimeSeconds()
+    val oldCurrentTime = currentPlaybackSession?.currentTime
+    currentPlaybackSession?.currentTime = newCurrentTime
+    Log.d(tag, "seek: $currentDisplayTitle, currentTime updated from ${oldCurrentTime}s to ${newCurrentTime}s (${newCurrentTime*1000}ms)")
 
     if (currentPlaybackSession == null) {
       Log.e(tag, "seek: Playback session not set")

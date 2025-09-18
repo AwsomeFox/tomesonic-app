@@ -275,6 +275,8 @@ class MediaBrowserManager(
                     Log.d(tag, "Getting continue items: ${mediaManager.serverItemsInProgress.size} items")
                     mediaManager.serverItemsInProgress.map { itemInProgress ->
                         val libraryItem = itemInProgress.libraryItemWrapper as LibraryItem
+                        val isBrowsable = shouldBookBeBrowsable(libraryItem)
+
                         // Create MediaItem for item in progress
                         MediaItem.Builder()
                             .setMediaId(libraryItem.id)
@@ -282,8 +284,8 @@ class MediaBrowserManager(
                                 MediaMetadata.Builder()
                                     .setTitle(libraryItem.title ?: "Unknown Title")
                                     .setArtist(libraryItem.authorName ?: "Unknown Author")
-                                    .setIsPlayable(true)
-                                    .setIsBrowsable(false)
+                                    .setIsPlayable(!isBrowsable)
+                                    .setIsBrowsable(isBrowsable)
                                     .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
                                     .build()
                             )
@@ -375,23 +377,84 @@ class MediaBrowserManager(
                         val libraryItems = mediaManager.getCachedLibraryDiscoveryItems(library.id)
                         Log.d(tag, "Getting library items for ${library.name}: ${libraryItems.size} items")
                         libraryItems.map { libraryItem ->
+                            val isBrowsable = shouldBookBeBrowsable(libraryItem)
                             MediaItem.Builder()
                                 .setMediaId(libraryItem.id)
                                 .setMediaMetadata(
                                     MediaMetadata.Builder()
                                         .setTitle(libraryItem.title ?: "Unknown Title")
                                         .setArtist(libraryItem.authorName ?: "Unknown Author")
-                                        .setIsPlayable(true)
-                                        .setIsBrowsable(false)
+                                        .setIsPlayable(!isBrowsable)
+                                        .setIsBrowsable(isBrowsable)
                                         .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
                                         .build()
                                 )
                                 .build()
                         }.toMutableList()
                     } else {
-                        // Unknown parent ID
-                        Log.w(tag, "Unknown parentId: $parentId")
-                        mutableListOf()
+                        // Check if parentId is a local book ID with chapters
+                        val localBook = DeviceManager.dbManager.getLocalLibraryItem(parentId)
+                        if (localBook != null && shouldLocalBookBeBrowsable(localBook)) {
+                            // Return chapters for this local book
+                            val book = localBook.media as Book
+                            Log.d(tag, "Getting chapters for local book: ${localBook.title} (${book.chapters?.size ?: 0} chapters)")
+                            book.chapters?.mapIndexed { index, chapter ->
+                                MediaItem.Builder()
+                                    .setMediaId("${localBook.id}_chapter_$index")
+                                    .setMediaMetadata(
+                                        MediaMetadata.Builder()
+                                            .setTitle(chapter.title ?: "Chapter ${index + 1}")
+                                            .setArtist(localBook.authorName ?: "Unknown Author")
+                                            .setAlbumTitle(localBook.title ?: "Unknown Book")
+                                            .setIsPlayable(true)
+                                            .setIsBrowsable(false)
+                                            .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK_CHAPTER)
+                                            .build()
+                                    )
+                                    .build()
+                            }?.toMutableList() ?: mutableListOf()
+                        } else {
+                            // Check if parentId matches any cached server library items
+                            var foundServerBook: LibraryItem? = null
+
+                            // Search through all cached library discovery items
+                            for (library in mediaManager.serverLibraries) {
+                                val libraryItems = mediaManager.getCachedLibraryDiscoveryItems(library.id)
+                                foundServerBook = libraryItems.find { it.id == parentId }
+                                if (foundServerBook != null) break
+                            }
+
+                            // Also check items in progress
+                            if (foundServerBook == null) {
+                                foundServerBook = mediaManager.serverItemsInProgress
+                                    .map { it.libraryItemWrapper as LibraryItem }
+                                    .find { it.id == parentId }
+                            }
+
+                            if (foundServerBook != null && shouldBookBeBrowsable(foundServerBook)) {
+                                val book = foundServerBook.media as Book
+                                Log.d(tag, "Getting chapters for server book: ${foundServerBook.media?.metadata?.title} (${book.chapters?.size ?: 0} chapters)")
+                                book.chapters?.mapIndexed { index, chapter ->
+                                    MediaItem.Builder()
+                                        .setMediaId("${foundServerBook.id}_chapter_$index")
+                                        .setMediaMetadata(
+                                            MediaMetadata.Builder()
+                                                .setTitle(chapter.title ?: "Chapter ${index + 1}")
+                                                .setArtist(foundServerBook.authorName ?: "Unknown Author")
+                                                .setAlbumTitle(foundServerBook.media?.metadata?.title ?: "Unknown Book")
+                                                .setIsPlayable(true)
+                                                .setIsBrowsable(false)
+                                                .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK_CHAPTER)
+                                                .build()
+                                        )
+                                        .build()
+                                }?.toMutableList() ?: mutableListOf()
+                            } else {
+                                // Unknown parent ID
+                                Log.w(tag, "Unknown parentId: $parentId")
+                                mutableListOf()
+                            }
+                        }
                     }
                 }
             }

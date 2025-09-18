@@ -45,6 +45,8 @@ import com.audiobookshelf.app.media.getUriToAbsIconDrawable
 import com.audiobookshelf.app.media.getUriToDrawable
 import com.audiobookshelf.app.plugins.AbsLogger
 import com.audiobookshelf.app.server.ApiHandler
+import com.audiobookshelf.app.player.mediasource.AudiobookMediaSourceBuilder
+import com.audiobookshelf.app.player.mediasource.AudiobookProgressTracker
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -75,6 +77,7 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.ui.PlayerNotificationManager
+import com.audiobookshelf.app.player.ChapterNavigationHelper
 import java.util.*
 import kotlin.concurrent.schedule
 import kotlinx.coroutines.runBlocking
@@ -91,8 +94,6 @@ class PlayerNotificationService : MediaLibraryService() {
     // Custom action constants for MediaSession
     const val CUSTOM_ACTION_JUMP_BACKWARD = "jump_backward"
     const val CUSTOM_ACTION_JUMP_FORWARD = "jump_forward"
-    const val CUSTOM_ACTION_SKIP_FORWARD = "skip_forward"
-    const val CUSTOM_ACTION_SKIP_BACKWARD = "skip_backward"
     const val CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED = "change_playback_speed"
   }
 
@@ -132,7 +133,14 @@ class PlayerNotificationService : MediaLibraryService() {
   lateinit var networkConnectivityManager: NetworkConnectivityManager
   lateinit var mPlayer: ExoPlayer
   lateinit var currentPlayer: Player
+  internal lateinit var rawPlayer: ExoPlayer // Direct access to underlying ExoPlayer when needed
+  // NEW ARCHITECTURE: Use ExoPlayer directly instead of wrapper
   // MIGRATION-DEFERRED: CAST var castPlayer: androidx.media3.ext.cast.CastPlayer? = null
+
+  // New Media3 architecture components
+  private lateinit var audiobookMediaSourceBuilder: AudiobookMediaSourceBuilder
+  private lateinit var audiobookProgressTracker: AudiobookProgressTracker
+  private lateinit var chapterNavigationHelper: ChapterNavigationHelper
 
   lateinit var sleepTimerManager: SleepTimerManager
   lateinit var mediaProgressSyncer: MediaProgressSyncer
@@ -143,9 +151,10 @@ class PlayerNotificationService : MediaLibraryService() {
 
   var currentPlaybackSession: PlaybackSession? = null
   private var initialPlaybackRate: Float? = null
+  internal var useChapterTrack: Boolean = false // Reserved for future web UI control over chapter progress behavior
   private var lastActiveQueueItemIndex = -1
   private var desiredActiveQueueItemIndex = -1 // Track the desired active queue item
-  private var currentNavigationIndex = -1 // Track the current navigation index for skip operations
+  private var currentNavigationIndex = -1 // Track the current navigation index
   private var queueSetForCurrentSession = false
   internal var expectingTrackTransition = false // Flag to track when we're waiting for a track change to complete
 
@@ -161,6 +170,46 @@ class PlayerNotificationService : MediaLibraryService() {
   fun isBrowseTreeInitialized(): Boolean {
     val localBooks = DeviceManager.dbManager.getLocalLibraryItems("book")
     return mediaManager.serverItemsInProgress.isNotEmpty() || localBooks.isNotEmpty()
+  }
+
+  fun setUseChapterTrack(enabled: Boolean) {
+    Log.d(tag, "setUseChapterTrack: enabled=$enabled (reserved for future use)")
+    useChapterTrack = enabled
+    // Note: Android Auto and notifications always use chapter progress when chapters are available
+  }
+
+  fun getChapterRelativePosition(): Long {
+    // NEW ARCHITECTURE: ExoPlayer naturally reports chapter-relative positions
+    // since each chapter is now a separate MediaItem
+    return if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      currentPlayer.currentPosition // Already chapter-relative with new architecture
+    } else {
+      val currentChapter = getCurrentBookChapter()
+      return if (currentChapter != null) {
+        val chapterStartMs = currentChapter.startMs
+        val currentTime = getCurrentTime()
+        (currentTime - chapterStartMs).coerceAtLeast(0L)
+      } else {
+        getCurrentTime()
+      }
+    }
+  }
+
+  fun getChapterRelativeDuration(): Long {
+    // NEW ARCHITECTURE: ExoPlayer naturally reports chapter-relative duration
+    // since each chapter is now a separate MediaItem
+    return if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      currentPlayer.duration // Already chapter-relative with new architecture
+    } else {
+      val currentChapter = getCurrentBookChapter()
+      return if (currentChapter != null) {
+        val chapterStartMs = currentChapter.startMs
+        val chapterEndMs = currentChapter.endMs
+        chapterEndMs - chapterStartMs
+      } else {
+        getDuration()
+      }
+    }
   }
 
   /*
@@ -248,6 +297,10 @@ class PlayerNotificationService : MediaLibraryService() {
     // MIGRATION-DEFERRED: CAST castPlayerManager.release()
     // MIGRATION-TODO: mediaSession.release() - now handled by MediaSessionManager
     mediaSessionManager.release()
+
+    // Release ChapterAwarePlayer resources
+    // Clean up new architecture components - no wrapper to release
+
     mediaProgressSyncer.reset()
 
     // Clear android auto listeners to avoid leaking references
@@ -345,12 +398,22 @@ class PlayerNotificationService : MediaLibraryService() {
 
     // Set references for backward compatibility
     mPlayer = playerManager.mPlayer
-    currentPlayer = playerManager.currentPlayer
+    rawPlayer = playerManager.mPlayer // Use mPlayer directly since currentPlayer may be generic Player type
 
-    // Now initialize MediaSession with the player
+    // Initialize new Media3 architecture components
+    audiobookMediaSourceBuilder = AudiobookMediaSourceBuilder(this)
+    audiobookProgressTracker = AudiobookProgressTracker(rawPlayer, currentPlaybackSession)
+    chapterNavigationHelper = ChapterNavigationHelper(rawPlayer, audiobookProgressTracker)
+
+    // NEW ARCHITECTURE: Use ExoPlayer directly instead of wrapper
+    currentPlayer = rawPlayer
+    Log.d(tag, "Initialized new Media3 MediaSource architecture with direct ExoPlayer usage")
+
+    // Now initialize MediaSession with the direct ExoPlayer
     if (currentPlayer != null) {
         mediaSessionManager.initializeMediaSession(notificationId, channelId, sessionActivityPendingIntent, currentPlayer)
-        Log.d(tag, "AABrowser: MediaSessionManager initialized")
+        Log.d(tag, "AABrowser: MediaSessionManager initialized with direct ExoPlayer")
+        Log.d(tag, "AABrowser: ExoPlayer will naturally report chapter-relative positions")
     } else {
         Log.e(tag, "AABrowser: Failed to initialize MediaSession - currentPlayer is null")
     }
@@ -715,7 +778,26 @@ class PlayerNotificationService : MediaLibraryService() {
         Log.e(tag, "Failed to set queue: ${e.localizedMessage}")
       }
       */
-      val mediaItems = playbackSession.getMediaItems(ctx)
+
+      // NEW MEDIA3 ARCHITECTURE: Use MediaSource instead of MediaItems
+      Log.d(tag, "Using new Media3 MediaSource architecture for audiobook")
+
+      // Build the MediaSource using the new architecture
+      val mediaSource = audiobookMediaSourceBuilder.buildMediaSource(playbackSession)
+      if (mediaSource == null) {
+        Log.e(tag, "Failed to build MediaSource for playback session")
+        currentPlaybackSession = null
+        return
+      }
+
+      // Update progress tracker with the playback session
+      audiobookProgressTracker.updatePlaybackSession(playbackSession)
+
+      // Set chapter segments in the progress tracker
+      val chapterSegments = audiobookMediaSourceBuilder.getLastChapterSegments()
+      audiobookProgressTracker.setChapterSegments(chapterSegments)
+      Log.d(tag, "Set ${chapterSegments.size} chapter segments in progress tracker")
+
       val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: 1f
       initialPlaybackRate = playbackRate
 
@@ -745,6 +827,43 @@ class PlayerNotificationService : MediaLibraryService() {
       desiredActiveQueueItemIndex = -1 // Reset desired active queue item
       currentNavigationIndex = -1 // Reset navigation index - will be calculated on first access
       queueSetForCurrentSession = false // Reset queue flag for new session
+
+      // RE-ENABLE: Update AudiobookProgressTracker with new session
+      audiobookProgressTracker.updatePlaybackSession(playbackSession)
+
+      // RE-ENABLE: Set up chapter change listener for automatic metadata updates
+      chapterNavigationHelper.setChapterChangeListener { chapter, chapterIndex ->
+        Log.d(tag, "Chapter changed to: ${chapter?.title ?: "Unknown"}")
+        // Update MediaSession metadata when chapter changes
+        if (chapter != null) {
+          val chapterDuration = chapter.endMs - chapter.startMs
+          mediaSessionManager.updateChapterMetadata(
+            chapterTitle = chapter.title ?: "Chapter ${chapterIndex + 1}",
+            chapterDuration = chapterDuration,
+            bookTitle = playbackSession.displayTitle ?: "",
+            author = playbackSession.displayAuthor,
+            bitmap = null // TODO: Load chapter artwork if available
+          )
+        }
+      }
+
+      // Set initial chapter metadata for current position
+      val currentChapter = chapterNavigationHelper.getCurrentChapter()
+      if (currentChapter != null) {
+        val chapterDuration = currentChapter.endMs - currentChapter.startMs
+        val chapterIndex = chapterNavigationHelper.getCurrentChapterIndex()
+        mediaSessionManager.updateChapterMetadata(
+          chapterTitle = currentChapter.title ?: "Chapter ${chapterIndex + 1}",
+          chapterDuration = chapterDuration,
+          bookTitle = playbackSession.displayTitle ?: "",
+          author = playbackSession.displayAuthor,
+          bitmap = null // TODO: Load chapter artwork if available
+        )
+        Log.d(tag, "Set initial chapter metadata: ${currentChapter.title}, duration=${chapterDuration}ms")
+      }
+
+      Log.d(tag, "ChapterAwarePlayer update and listeners configured")
+
       DeviceManager.setLastPlaybackSession(
               playbackSession
       ) // Save playback session to use when app is closed
@@ -756,139 +875,87 @@ class PlayerNotificationService : MediaLibraryService() {
       // Update widget
       DeviceManager.widgetUpdater?.onPlayerChanged(this)
 
-      if (mediaItems.isEmpty()) {
-        Log.e(tag, "Invalid playback session no media items to play")
-        currentPlaybackSession = null
-        return
-      }
+      // MediaSource validation is already done above
 
-      if (mPlayer == currentPlayer) {
-        val mediaSource: MediaSource
+      // CRITICAL FIX: Check if we're using local player (not cast)
+      if (currentPlayer == rawPlayer || currentPlayer == mPlayer) {
+        // NEW MEDIA3 ARCHITECTURE: Use MediaSource with ConcatenatingMediaSource + ClippingMediaSource
+        // This creates a unified timeline where each chapter is a separate MediaItem
+        AbsLogger.info("PlayerNotificationService", "preparePlayer: Setting up MediaSource for ${currentPlaybackSession?.mediaItemId}.")
+        Log.d(tag, "NEW_ARCHITECTURE: Using Media3 MediaSource architecture (currentPlayer type: ${currentPlayer.javaClass.simpleName})")
 
-        if (playbackSession.isLocal) {
-          AbsLogger.info("PlayerNotificationService", "preparePlayer: Playing local item ${currentPlaybackSession?.mediaItemId}.")
-          val dataSourceFactory = DefaultDataSource.Factory(ctx)
+        // Set the MediaSource to populate the timeline
+        Log.d(tag, "INITIAL_POSITION: Setting MediaSource")
+        rawPlayer.setMediaSource(mediaSource)
 
-          val extractorsFactory = DefaultExtractorsFactory()
-          if (DeviceManager.deviceData.deviceSettings?.enableMp3IndexSeeking == true) {
-            // @see
-            // https://exoplayer.dev/troubleshooting.html#why-is-seeking-inaccurate-in-some-mp3-files
-            extractorsFactory.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
-          }
+        // Calculate initial position using the new progress tracker
+        val startPosition = playbackSession.currentTimeMs
+        Log.d(tag, "INITIAL_POSITION: Calculating initial position: ${startPosition}ms")
 
-          mediaSource =
-                  ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
-                          .createMediaSource(mediaItems[0])
-        } else if (!playbackSession.isHLS) {
-          AbsLogger.info("PlayerNotificationService", "preparePlayer: Direct playing item ${currentPlaybackSession?.mediaItemId}.")
-          val dataSourceFactory = DefaultHttpDataSource.Factory()
-
-          val extractorsFactory = DefaultExtractorsFactory()
-          if (DeviceManager.deviceData.deviceSettings?.enableMp3IndexSeeking == true) {
-            // @see
-            // https://exoplayer.dev/troubleshooting.html#why-is-seeking-inaccurate-in-some-mp3-files
-            extractorsFactory.setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
-          }
-
-          dataSourceFactory.setUserAgent(channelId)
-          mediaSource =
-                  ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
-                          .createMediaSource(mediaItems[0])
-        } else if (playbackSession.isHLS) {
-          AbsLogger.info("PlayerNotificationService", "preparePlayer: Playing HLS stream of item ${currentPlaybackSession?.mediaItemId}.")
-          val dataSourceFactory = DefaultHttpDataSource.Factory()
-          dataSourceFactory.setUserAgent(channelId)
-          dataSourceFactory.setDefaultRequestProperties(
-                  hashMapOf("Authorization" to "Bearer ${DeviceManager.token}")
-          )
-          // MIGRATION: Restore HLS module dependency
-          mediaSource = HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItems[0])
+        if (startPosition > 0) {
+          // Use the new progress tracker to seek to the correct position
+          Log.d(tag, "INITIAL_POSITION: Using AudiobookProgressTracker for positioning")
+          // Note: We'll seek after prepare() to ensure the timeline is ready
         } else {
-          AbsLogger.info("PlayerNotificationService", "preparePlayer: Playing regular stream of item ${currentPlaybackSession?.mediaItemId}.")
-          val dataSourceFactory = DefaultHttpDataSource.Factory()
-          dataSourceFactory.setUserAgent(channelId)
-          dataSourceFactory.setDefaultRequestProperties(
-                  hashMapOf("Authorization" to "Bearer ${DeviceManager.token}")
-          )
-          mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItems[0])
+          // Starting from beginning
+          Log.d(tag, "INITIAL_POSITION: Starting from beginning")
         }
 
-        // Set media source and prepare
-        mPlayer.setMediaSource(mediaSource)
-
-        // Add remaining media items if multi-track
-        if (mediaItems.size > 1) {
-          currentPlayer.addMediaItems(mediaItems.subList(1, mediaItems.size))
-          Log.d(tag, "currentPlayer total media items ${currentPlayer.mediaItemCount}")
-        }
+        // ENHANCED DEBUG: Log state before setting playWhenReady
+        Log.d(tag, "PREPARE_DEBUG: Before setting playWhenReady - playbackState=${currentPlayer.playbackState}, isPlaying=${currentPlayer.isPlaying}")
+        Log.d(tag, "PREPARE_DEBUG: MediaItems set - count=${currentPlayer.mediaItemCount}")
 
         currentPlayer.playWhenReady = playWhenReady
+        Log.d(tag, "PREPARE_DEBUG: playWhenReady set to $playWhenReady - current value=${currentPlayer.playWhenReady}")
+
         currentPlayer.setPlaybackSpeed(playbackRateToUse)
+        Log.d(tag, "PREPARE_DEBUG: Playback speed set to $playbackRateToUse")
+
+        // ENHANCED DEBUG: Log state before prepare()
+        Log.d(tag, "PREPARE_DEBUG: Before prepare() - playbackState=${currentPlayer.playbackState}, isPlaying=${currentPlayer.isPlaying}, playWhenReady=${currentPlayer.playWhenReady}")
 
         // Prepare the player
         currentPlayer.prepare()
 
-        // CRITICAL: Use a listener to seek after the player is actually ready to avoid position reset
-        val playerListener = object : Player.Listener {
-          override fun onPlaybackStateChanged(playbackState: Int) {
-            val stateString = when (playbackState) {
-              Player.STATE_IDLE -> "IDLE"
-              Player.STATE_BUFFERING -> "BUFFERING"
-              Player.STATE_READY -> "READY"
-              Player.STATE_ENDED -> "ENDED"
-              else -> "UNKNOWN($playbackState)"
-            }
-            Log.d(tag, "SEEK_LISTENER: Player state changed to $stateString")
+        // ENHANCED DEBUG: Log state immediately after prepare()
+        Log.d(tag, "PREPARE_DEBUG: After prepare() - playbackState=${currentPlayer.playbackState}, isPlaying=${currentPlayer.isPlaying}, playWhenReady=${currentPlayer.playWhenReady}")
+        Log.d(tag, "PREPARE_DEBUG: Expected behavior: prepare() should transition to BUFFERING then READY, and auto-start if playWhenReady=true")
 
-            if (playbackState == Player.STATE_READY) {
-              Log.d(tag, "SEEK_LISTENER: Player is ready, attempting to seek...")
-              // Remove this listener to avoid multiple calls
-              currentPlayer.removeListener(this)
-
-              // Now seek to the correct position when player is truly ready
-              if (mediaItems.size > 1) {
-                val currentTrackIndex = playbackSession.getCurrentTrackIndex()
-                val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
-                Log.d(
-                      tag,
-                      "SEEK_LISTENER: Player ready - seeking to track index $currentTrackIndex & track time $currentTrackTime"
-                )
-                currentPlayer.seekTo(currentTrackIndex, currentTrackTime)
-              } else {
-                val startPosition = playbackSession.currentTimeMs
-                Log.d(tag, "SEEK_LISTENER: Player ready - seeking to position ${startPosition}ms")
-                currentPlayer.seekTo(startPosition)
-              }
-              Log.d(tag, "SEEK_LISTENER: Seek operation completed, position should now be at ${currentPlayer.currentPosition}ms")
-            }
-          }
+        // Now seek to the initial position using the new progress tracker
+        if (startPosition > 0) {
+          Log.d(tag, "SEEK_AFTER_PREPARE: Seeking to initial position ${startPosition}ms using AudiobookProgressTracker")
+          audiobookProgressTracker.seekToAbsolutePosition(startPosition)
         }
-        Log.d(tag, "SEEK_LISTENER: Adding listener to player")
-        currentPlayer.addListener(playerListener)
+
+        // Use PlayerManager debug method for comprehensive state logging
+        playerManager.logPlayerState("IMMEDIATELY_AFTER_PREPARE")
 
         Log.d(
                 tag,
                 "Prepare complete for session ${currentPlaybackSession?.displayTitle} | ${currentPlayer.mediaItemCount}"
         )
-      }
-      // MIGRATION-DEFERRED: CAST
-      /*
-      else if (castPlayer != null) {
-        val currentTrackIndex = playbackSession.getCurrentTrackIndex()
-        val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
-        val mediaType = playbackSession.mediaType
-        Log.d(tag, "Loading cast player $currentTrackIndex $currentTrackTime $mediaType")
 
-        castPlayerManager.loadCastPlayer(
-                mediaItems,
-                currentTrackIndex,
-                currentTrackTime,
-                playWhenReady,
-                playbackRateToUse,
-                mediaType
-        )
-      }
-      */
+        // MIGRATION-DEFERRED: CAST
+        /*
+        // Cast player code is deferred during Media3 migration
+        if (castPlayer != null) {
+          val currentTrackIndex = playbackSession.getCurrentTrackIndex()
+          val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
+          val mediaType = playbackSession.mediaType
+          Log.d(tag, "Loading cast player $currentTrackIndex $currentTrackTime $mediaType")
+
+          castPlayerManager.loadCastPlayer(
+                  mediaItems,
+                  currentTrackIndex,
+                  currentTrackTime,
+                  playWhenReady,
+                  playbackRateToUse,
+                  mediaType
+          )
+        }
+        */
+
+      } // Close the if (currentPlayer == chapterAwarePlayer || currentPlayer == mPlayer) block
       } catch (e: Exception) {
         AbsLogger.error("PlayerNotificationService", "doPreparePlayer: Failed to prepare player session: ${e.message}")
         Log.e(tag, "Exception during player preparation", e)
@@ -1079,11 +1146,74 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun getCurrentTime(): Long {
-    return currentPlayer?.currentPosition?.plus(getCurrentTrackStartOffsetMs()) ?: 0L
+    // Always return absolute position for progress syncing and server communication
+    // Use AudiobookProgressTracker's absolute position method for the new architecture
+    val absoluteTime = if (::chapterNavigationHelper.isInitialized) {
+      chapterNavigationHelper.getAbsolutePosition()
+    } else {
+      rawPlayer?.currentPosition?.plus(getCurrentTrackStartOffsetMs()) ?: 0L
+    }
+
+    // Add debug logging to track progress syncing issues
+    if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      val currentChapter = chapterNavigationHelper.getCurrentChapter()
+      val chapterRelativePos = currentPlayer.currentPosition // Native chapter-relative position
+      Log.v(tag, "getCurrentTime: absolute=${absoluteTime}ms, chapter-relative=${chapterRelativePos}ms, chapter=${currentChapter?.title}")
+    }
+
+    return absoluteTime
   }
 
   fun getCurrentTimeSeconds(): Double {
     return getCurrentTime() / 1000.0
+  }
+
+  /**
+   * Chapter progress information for compatibility
+   */
+  data class ChapterProgress(
+    val chapterIndex: Int,
+    val chapterTitle: String,
+    val chapterPosition: Long,
+    val chapterDuration: Long,
+    val chapterProgress: Float,
+    val totalProgress: Float
+  )
+
+  /**
+   * Get chapter-relative progress information for UI components
+   * Returns null if not in a chapter-based book
+   */
+  fun getChapterProgressInfo(): ChapterProgress? {
+    // NEW ARCHITECTURE: Use AudiobookProgressTracker
+    return if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      val progressInfo = chapterNavigationHelper.getProgressInfo()
+      if (progressInfo != null) {
+        ChapterProgress(
+          chapterIndex = progressInfo.chapterIndex,
+          chapterTitle = progressInfo.chapterTitle ?: "Unknown Chapter",
+          chapterPosition = progressInfo.chapterPositionMs,
+          chapterDuration = progressInfo.chapterDurationMs,
+          chapterProgress = progressInfo.chapterProgress,
+          totalProgress = progressInfo.totalProgress
+        )
+      } else null
+    } else {
+      null
+    }
+  }
+
+  /**
+   * Get the current chapter index (0-based)
+   * Returns -1 if not in a chapter-based book
+   */
+  fun getCurrentChapterIndex(): Int {
+    // NEW ARCHITECTURE: Use ExoPlayer's native currentMediaItemIndex
+    return if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      currentPlayer.currentMediaItemIndex // Each MediaItem is a chapter
+    } else {
+      -1
+    }
   }
 
   private fun getBufferedTime(): Long {
@@ -1109,7 +1239,8 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun getCurrentBookChapter(): BookChapter? {
-    return currentPlaybackSession?.getChapterForTime(this.getCurrentTime())
+    // NEW: Use chapterNavigationHelper for chapter-aware functionality
+    return chapterNavigationHelper.getCurrentChapter()
   }
 
   fun getEndTimeOfChapterOrTrack(): Long? {
@@ -1177,10 +1308,17 @@ class PlayerNotificationService : MediaLibraryService() {
               }
 
               Handler(Looper.getMainLooper()).post {
-                seekPlayer(playbackSession.currentTimeMs)
+                // Seek to the updated server position, not the old local position
+                val updatedPosition = mediaProgressSyncer.currentPlaybackSession?.currentTimeMs ?: (mediaProgress.currentTime * 1000).toLong()
+                Log.d(tag, "checkCurrentSessionProgress: Seeking to server position ${updatedPosition}ms instead of local ${playbackSession.currentTimeMs}ms")
+                seekPlayer(updatedPosition)
                 // Should already be playing
                 currentPlayer.volume = 1F // Volume on sleep timer might have decreased this
-                currentPlaybackSession?.let { mediaProgressSyncer.play(it) }
+                currentPlaybackSession?.let {
+                  mediaProgressSyncer.play(it)
+                  // Start chapter change monitoring with new helper
+                  startChapterChangeMonitoring()
+                }
                 clientEventEmitter?.onPlayingUpdate(true)
               }
             } else {
@@ -1199,6 +1337,8 @@ class PlayerNotificationService : MediaLibraryService() {
               currentPlayer.volume = 1F // Volume on sleep timer might have decreased this
               mediaProgressSyncer.currentPlaybackSession?.let { playbackSession ->
                 mediaProgressSyncer.play(playbackSession)
+                // Start chapter change monitoring with new helper
+                startChapterChangeMonitoring()
               }
               clientEventEmitter?.onPlayingUpdate(true)
             }
@@ -1231,6 +1371,8 @@ class PlayerNotificationService : MediaLibraryService() {
               currentPlayer.volume = 1F // Volume on sleep timer might have decreased this
               mediaProgressSyncer.currentPlaybackSession?.let { playbackSession ->
                 mediaProgressSyncer.play(playbackSession)
+                // Start chapter change monitoring with new helper
+                startChapterChangeMonitoring()
               }
 
               clientEventEmitter?.onPlayingUpdate(true)
@@ -1243,16 +1385,46 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun play() {
+    Log.d(tag, "play(): Method called")
+    playerManager.logPlayerState("PLAY_METHOD_START")
+
     if (currentPlayer.isPlaying) {
       Log.d(tag, "Already playing")
       return
     }
+
+    // Check if we have a valid playback session and media prepared
+    if (currentPlaybackSession == null) {
+      Log.w(tag, "play(): No playback session available - cannot start playback")
+      return
+    }
+
+    if (currentPlayer.mediaItemCount == 0) {
+      Log.w(tag, "play(): No media items loaded in player - cannot start playback")
+      return
+    }
+
+    Log.d(tag, "play(): Starting playback - Session: ${currentPlaybackSession?.displayTitle}, Media items: ${currentPlayer.mediaItemCount}")
     currentPlayer.volume = 1F
+
+    // Log state before calling play()
+    Log.d(tag, "play(): Before currentPlayer.play() - playWhenReady=${currentPlayer.playWhenReady}, playbackState=${currentPlayer.playbackState}")
+
     currentPlayer.play()
+
+    // Log state after calling play()
+    Log.d(tag, "play(): After currentPlayer.play() - playWhenReady=${currentPlayer.playWhenReady}, isPlaying=${currentPlayer.isPlaying}, playbackState=${currentPlayer.playbackState}")
+
+    playerManager.logPlayerState("PLAY_METHOD_END")
+
+    // RE-ENABLE: Start chapter change monitoring when playing
+    startChapterChangeMonitoring()
+    Log.d(tag, "Chapter change monitoring started")
   }
 
   fun pause() {
     currentPlayer.pause()
+    stopChapterChangeMonitoring() // Stop monitoring when paused
   }
 
   fun playPause(): Boolean {
@@ -1285,7 +1457,9 @@ class PlayerNotificationService : MediaLibraryService() {
       Log.d(tag, "seekPlayer seekTo $newWindowIndex | $newTimeOffset")
       currentPlayer.seekTo(newWindowIndex, newTimeOffset)
     } else {
-      currentPlayer.seekTo(timeToSeek)
+      // For single-track content, use audiobookProgressTracker for chapter-aware seeking
+      Log.d(tag, "seekPlayer: Using AudiobookProgressTracker for chapter-aware seek to ${timeToSeek}ms")
+      audiobookProgressTracker.seekToAbsolutePosition(timeToSeek)
     }
   }
 
@@ -1299,7 +1473,7 @@ class PlayerNotificationService : MediaLibraryService() {
     Log.d(tag, "navigateToChapter: Starting navigation to chapter $chapterIndex")
 
     val session = currentPlaybackSession ?: run {
-      Log.w(tag, "navigateToChapter: No active playback session")
+      Log.w(tag, "navigateToChapter: No active playbook session")
       return
     }
 
@@ -1309,16 +1483,9 @@ class PlayerNotificationService : MediaLibraryService() {
     }
 
     try {
-      // Get the navigation item (chapter or track) for this index
-      val navItem = getNavigationItem(chapterIndex)
-      if (navItem == null) {
-        Log.w(tag, "navigateToChapter: Could not get navigation item for index $chapterIndex")
-        return
-      }
-      Log.d(tag, "navigateToChapter: Navigating to item: ${navItem.title} at ${navItem.startTimeMs}ms")
-
-      // Use existing seekPlayer method which handles single/multi-file logic
-      seekPlayer(navItem.startTimeMs)
+      // Use ChapterNavigationHelper for chapter navigation
+      Log.d(tag, "navigateToChapter: Using ChapterNavigationHelper for chapter navigation")
+      chapterNavigationHelper.seekToChapter(chapterIndex)
 
       // Update the tracked navigation index immediately for skip operations
       currentNavigationIndex = chapterIndex
@@ -1326,8 +1493,7 @@ class PlayerNotificationService : MediaLibraryService() {
       // Update notification metadata for the new chapter
       updateNotificationMetadata(chapterIndex)
 
-      Log.d(tag, "navigateToChapter: Successfully navigated to chapter $chapterIndex")
-
+      Log.d(tag, "navigateToChapter: Successfully navigated to chapter $chapterIndex using ChapterNavigationHelper")
     } catch (e: Exception) {
       Log.e(tag, "navigateToChapter: Error navigating to chapter $chapterIndex", e)
     }
@@ -1626,12 +1792,6 @@ class PlayerNotificationService : MediaLibraryService() {
     navigateToChapter(trackIndex)
   }
 
-  /**
-   * Legacy method for backward compatibility - delegates to getCurrentNavigationIndex
-   */
-  fun getCurrentChapterIndex(): Int {
-    return getCurrentNavigationIndex()
-  }
 
   /**
    * Update queue position based on current playback progress - called periodically
@@ -1656,32 +1816,52 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   /**
-   * Skip to the previous chapter/track
-   * Simplified logic that works consistently for all book types
+   * Start chapter change monitoring - Media3 handles this automatically
    */
-  fun skipToPrevious() {
-    Log.d(tag, "skipToPrevious: Calling currentPlayer.seekToPrevious()")
-    expectingTrackTransition = true
-    currentPlayer.seekToPrevious()
+  private fun startChapterChangeMonitoring() {
+    // With new architecture, chapter changes are handled by Media3's timeline events
+    Log.d(tag, "Chapter change monitoring handled by Media3 timeline events")
   }
 
-  /**
-   * Skip to the next chapter/track
-   */
-  fun skipToNext() {
-    Log.d(tag, "skipToNext: Calling currentPlayer.seekToNext()")
-    expectingTrackTransition = true
-    currentPlayer.seekToNext()
+  private fun stopChapterChangeMonitoring() {
+    // Chapter change monitoring is handled by Media3's timeline events
+    Log.d(tag, "Chapter change monitoring handled by Media3 timeline events")
+  }
+
+  fun seekToNextChapter(): Boolean {
+    return if (::chapterNavigationHelper.isInitialized) {
+      chapterNavigationHelper.seekToNextChapter()
+    } else {
+      Log.w(tag, "ChapterNavigationHelper not initialized")
+      false
+    }
+  }
+
+  fun seekToPreviousChapter(): Boolean {
+    return if (::chapterNavigationHelper.isInitialized) {
+      chapterNavigationHelper.seekToPreviousChapter()
+    } else {
+      Log.w(tag, "ChapterNavigationHelper not initialized")
+      false
+    }
   }
 
   fun jumpForward() {
-    Log.d(tag, "jumpForward: Calling seekForward with ${deviceSettings.jumpForwardTimeMs}ms")
-    seekForward(deviceSettings.jumpForwardTimeMs)
+    Log.d(tag, "jumpForward: Using chapter-aware jumping with ${deviceSettings.jumpForwardTimeMs}ms")
+
+    // Use AudiobookProgressTracker for chapter-aware jumping
+    val currentAbsolutePosition = audiobookProgressTracker.getCurrentAbsolutePosition()
+    val newPosition = currentAbsolutePosition + deviceSettings.jumpForwardTimeMs
+    audiobookProgressTracker.seekToAbsolutePosition(newPosition)
   }
 
   fun jumpBackward() {
-    Log.d(tag, "jumpBackward: Calling seekBackward with ${deviceSettings.jumpBackwardsTimeMs}ms")
-    seekBackward(deviceSettings.jumpBackwardsTimeMs)
+    Log.d(tag, "jumpBackward: Using chapter-aware jumping with ${deviceSettings.jumpBackwardsTimeMs}ms")
+
+    // Use AudiobookProgressTracker for chapter-aware jumping
+    val currentAbsolutePosition = audiobookProgressTracker.getCurrentAbsolutePosition()
+    val newPosition = (currentAbsolutePosition - deviceSettings.jumpBackwardsTimeMs).coerceAtLeast(0)
+    audiobookProgressTracker.seekToAbsolutePosition(newPosition)
   }
 
   fun seekForward(amount: Long) {
@@ -1792,15 +1972,26 @@ class PlayerNotificationService : MediaLibraryService() {
 
     try {
       val session = currentPlaybackSession ?: return
-      val navItem = getNavigationItem(chapterIndex) ?: return
+
+      // Get title and subtitle from chapter navigation helper
+      val currentChapter = chapterNavigationHelper.getCurrentChapter()
+      val displayTitle = currentChapter?.title ?: "Chapter ${chapterIndex + 1}"
+
+      val displaySubtitle = run {
+        val title = session.displayTitle ?: "Unknown"
+        val author = session.displayAuthor
+        if (!author.isNullOrBlank()) "$title • $author" else title
+      }
 
       // For Media3, update the current MediaItem's metadata
       val currentMediaItem = currentPlayer?.currentMediaItem
       if (currentMediaItem != null) {
-        // Create new MediaMetadata with chapter title
+        // Create new MediaMetadata with chapter-aware title and subtitle
         val updatedMetadata = currentMediaItem.mediaMetadata.buildUpon()
-          .setTitle(navItem.title ?: "Chapter ${chapterIndex + 1}")
-          .setDisplayTitle(navItem.title ?: "Chapter ${chapterIndex + 1}")
+          .setTitle(displayTitle)
+          .setDisplayTitle(displayTitle)
+          .setSubtitle(displaySubtitle)
+          .setAlbumTitle(displaySubtitle)
           .build()
 
         // Create updated MediaItem with new metadata
@@ -1810,12 +2001,12 @@ class PlayerNotificationService : MediaLibraryService() {
 
         // Replace the current MediaItem (this will update the notification)
         currentPlayer?.setMediaItem(updatedMediaItem)
-        Log.d(tag, "updateNotificationMetadata: Updated MediaItem metadata for chapter: ${navItem.title}")
+        Log.d(tag, "updateNotificationMetadata: Updated MediaItem metadata - Title: '$displayTitle', Subtitle: '$displaySubtitle'")
       }
 
       // Also update any legacy MediaSessionCompat metadata if present
       // This ensures compatibility with older notification systems
-      updateLegacyMetadata(chapterIndex, navItem.title)
+      updateLegacyMetadata(chapterIndex, displayTitle)
 
     } catch (e: Exception) {
       Log.e(tag, "updateNotificationMetadata: Error updating notification metadata", e)
@@ -1845,6 +2036,7 @@ class PlayerNotificationService : MediaLibraryService() {
 
   fun closePlayback(calledOnError: Boolean? = false) {
     Log.d(tag, "closePlayback")
+    stopChapterChangeMonitoring() // Stop monitoring when closing playback
     val config = DeviceManager.serverConnectionConfig
 
     val isLocal = mediaProgressSyncer.currentIsLocal
@@ -2586,15 +2778,18 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         }
 
         CONTINUE_ROOT -> {
-          // Ensure items in progress are loaded before returning them
-          if (!service.mediaManager.hasValidServerConnection()) {
-            Log.w("PlayerNotificationServ", "AALibrary: No server connection for continue items")
+          // Always try to load items in progress (includes both server and local items)
+          Log.d("PlayerNotificationServ", "AALibrary: Loading items in progress for Android Auto (server + local)")
+          val itemsInProgress = service.mediaManager.loadItemsInProgressSync()
+          Log.d("PlayerNotificationServ", "Getting continue items: ${itemsInProgress.size} items")
+
+          if (itemsInProgress.isEmpty()) {
             val noItemsItem = MediaItem.Builder()
               .setMediaId("__NO_CONTINUE__")
               .setMediaMetadata(
                 MediaMetadata.Builder()
                   .setTitle("No items in progress")
-                  .setSubtitle("Connect to server to see continue items")
+                  .setSubtitle("Start listening to see items here")
                   .setIsBrowsable(false)
                   .setIsPlayable(false)
                   .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -2603,53 +2798,49 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
               .build()
             future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noItemsItem)), params))
           } else {
-            Log.d("PlayerNotificationServ", "AALibrary: Loading items in progress for Android Auto")
-            val itemsInProgress = service.mediaManager.loadItemsInProgressSync()
-            Log.d("PlayerNotificationServ", "Getting continue items: ${itemsInProgress.size} items")
+            val continueItems = itemsInProgress.map { itemInProgress ->
+              val wrapper = itemInProgress.libraryItemWrapper
+              val (id, title, authorName) = when (wrapper) {
+                is LibraryItem -> Triple(wrapper.id, wrapper.title, wrapper.authorName)
+                is LocalLibraryItem -> Triple(
+                  wrapper.libraryItemId ?: wrapper.id,
+                  wrapper.title ?: "Unknown Title",
+                  wrapper.authorName ?: "Unknown Author"
+                )
+                else -> Triple("unknown", "Unknown Title", "Unknown Author")
+              }
 
-            if (itemsInProgress.isEmpty()) {
-              val noItemsItem = MediaItem.Builder()
-                .setMediaId("__NO_CONTINUE__")
+              val artworkUri = when (wrapper) {
+                is LibraryItem -> wrapper.getCoverUri()
+                is LocalLibraryItem -> wrapper.getCoverUri(service)
+                else -> null
+              }
+
+              val progressPercent = service.mediaManager.getProgressPercentage(
+                id ?: "unknown",
+                itemInProgress.episode?.id
+              )
+              val authorWithProgress = if (progressPercent > 0) {
+                "$authorName • ${progressPercent}%"
+              } else {
+                authorName
+              }
+
+              MediaItem.Builder()
+                .setMediaId(id ?: "unknown")
                 .setMediaMetadata(
                   MediaMetadata.Builder()
-                    .setTitle("No items in progress")
-                    .setSubtitle("Start listening to see items here")
+                    .setTitle(title ?: "Unknown Title")
+                    .setArtist(authorWithProgress)
+                    .setIsPlayable(true)
                     .setIsBrowsable(false)
-                    .setIsPlayable(false)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                    .setArtworkUri(artworkUri)
                     .build()
                 )
                 .build()
-              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noItemsItem)), params))
-            } else {
-              val continueItems = itemsInProgress.map { itemInProgress ->
-                val libraryItem = itemInProgress.libraryItemWrapper as LibraryItem
-                val progressPercent = service.mediaManager.getProgressPercentage(
-                  libraryItem.id, 
-                  itemInProgress.episode?.id
-                )
-                val authorWithProgress = if (progressPercent > 0) {
-                  "${libraryItem.authorName} • ${progressPercent}%"
-                } else {
-                  libraryItem.authorName
-                }
-                
-                MediaItem.Builder()
-                  .setMediaId(libraryItem.id)
-                  .setMediaMetadata(
-                    MediaMetadata.Builder()
-                      .setTitle(libraryItem.title ?: "Unknown Title")
-                      .setArtist(authorWithProgress)
-                      .setIsPlayable(true)
-                      .setIsBrowsable(false)
-                      .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                      .setArtworkUri(libraryItem.getCoverUri())
-                      .build()
-                  )
-                  .build()
-              }
-              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(continueItems), params))
             }
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(continueItems), params))
           }
         }
 
@@ -2672,16 +2863,16 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
             future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
           } else {
             Log.d("PlayerNotificationServ", "AALibrary: Loading recent items organized by library")
-            
+
             // Load recent shelves synchronously for all libraries
             service.mediaManager.loadRecentItemsSync()
-            
+
             // Get libraries that have recent items
             val recentShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
             val librariesWithRecent = mutableListOf<MediaItem>()
-            
+
             Log.d("PlayerNotificationServ", "AALibrary: Found recent shelves for ${recentShelves.size} libraries")
-            
+
             recentShelves.forEach { (libraryId, shelves) ->
               val library = service.mediaManager.getLibrary(libraryId)
               if (library != null) {
@@ -2696,7 +2887,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                     }
                   }
                 }
-                
+
                 if (itemCount > 0) {
                   librariesWithRecent.add(
                     MediaItem.Builder()
@@ -2784,10 +2975,10 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
               // Handle browsing into recent items for a specific library
               val libraryId = parentId.removePrefix("__RECENT_LIBRARY__")
               Log.d("PlayerNotificationServ", "AALibrary: Getting recent items for library: $libraryId")
-              
+
               val recentItems = mutableListOf<MediaItem>()
               val recentShelves = service.mediaManager.getAllCachedLibraryRecentShelves()[libraryId]
-              
+
               recentShelves?.forEach { shelf ->
                 when (shelf) {
                   is LibraryShelfBookEntity -> {
@@ -2831,7 +3022,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                   }
                 }
               }
-              
+
               future.set(LibraryResult.ofItemList(ImmutableList.copyOf(recentItems), params))
             }
             parentId.startsWith("__LIBRARY__") -> {
@@ -3578,14 +3769,6 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         Log.d("PlayerNotificationServ", "Media3: JUMP_FORWARD -> calling jumpForward()")
         service.jumpForward()
       }
-      PlayerNotificationService.CUSTOM_ACTION_SKIP_FORWARD -> {
-        Log.d("PlayerNotificationServ", "Media3: SKIP_FORWARD -> calling skipToNext()")
-        service.skipToNext()
-      }
-      PlayerNotificationService.CUSTOM_ACTION_SKIP_BACKWARD -> {
-        Log.d("PlayerNotificationServ", "Media3: SKIP_BACKWARD -> calling skipToPrevious()")
-        service.skipToPrevious()
-      }
       PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED -> {
         Log.d("PlayerNotificationServ", "Media3: CHANGE_PLAYBACK_SPEED -> calling cyclePlaybackSpeed()")
         service.cyclePlaybackSpeed()
@@ -3625,17 +3808,43 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
     Log.d("PlayerNotificationServ", "AALibrary: onSetMediaItems called with ${mediaItems.size} items, startIndex: $startIndex")
 
-    if (mediaItems.isNotEmpty()) {
-      val startItem = mediaItems.getOrNull(startIndex) ?: mediaItems[0]
-      val mediaId = startItem.mediaId
-      Log.d("PlayerNotificationServ", "AALibrary: Starting playback for MediaItem: $mediaId")
-
-      // Start playback for the selected item
-      handleMediaItemPlayback(mediaId)
+    // Debug: Log all MediaItem URIs to identify null ones
+    mediaItems.forEachIndexed { index, mediaItem ->
+      Log.d("PlayerNotificationServ", "AALibrary: MediaItem[$index] - ID: ${mediaItem.mediaId}, URI: ${mediaItem.localConfiguration?.uri}")
     }
 
+    // Separate browsable MediaItems (null URIs) from playable ones
+    val playableMediaItems = mutableListOf<MediaItem>()
+    var hasNullUriItems = false
+
+    mediaItems.forEach { mediaItem ->
+      if (mediaItem.localConfiguration?.uri == null) {
+        hasNullUriItems = true
+        Log.w("PlayerNotificationServ", "AALibrary: MediaItem with null URI found: ${mediaItem.mediaId}, starting playback directly")
+
+        // Start playback for this item directly since it doesn't have a URI
+        // The actual media items will be set when preparePlayer is called
+        handleMediaItemPlayback(mediaItem.mediaId)
+      } else {
+        // This MediaItem has a valid URI and can be played
+        playableMediaItems.add(mediaItem)
+      }
+    }
+
+    // If we had null URI items, we started playback directly via handleMediaItemPlayback
+    // Return an empty MediaItemsWithStartPosition to avoid ExoPlayer trying to process null URIs
+    // The actual playable MediaItems will be set when preparePlayer() is called
+    if (hasNullUriItems) {
+      Log.d("PlayerNotificationServ", "AALibrary: Found null URI items, returning empty MediaItems (playback started via handleMediaItemPlayback)")
+      return Futures.immediateFuture(
+        MediaSession.MediaItemsWithStartPosition(mutableListOf(), 0, 0L)
+      )
+    }
+
+    // If all MediaItems have valid URIs, return them normally
+    Log.d("PlayerNotificationServ", "AALibrary: All ${playableMediaItems.size} MediaItems have valid URIs, returning normally")
     return Futures.immediateFuture(
-      MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)
+      MediaSession.MediaItemsWithStartPosition(playableMediaItems, startIndex, startPositionMs)
     )
   }
 
@@ -3669,9 +3878,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       mediaId.isNullOrEmpty() -> {
         libraryItemWrapper = service.mediaManager.getFirstItem()
       }
-      mediaId.contains("__CHAPTER__") -> {
-        // Handle chapter-specific media ID
-        val parts = mediaId.split("__CHAPTER__")
+      mediaId.contains("_chapter_") -> {
+        // Handle chapter-specific media ID from MediaBrowserManager
+        val parts = mediaId.split("_chapter_")
         val bookId = parts[0]
         val chapterIndex = parts.getOrNull(1)?.toIntOrNull()
 
@@ -3737,17 +3946,40 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           Log.e("PlayerNotificationServ", "AALibrary: Failed to create playback session")
         } else {
           Log.d("PlayerNotificationServ", "AALibrary: Playback session created, preparing player")
+          Log.d("PlayerNotificationServ", "AALibrary: Playback session currentTime: ${playbackSession.currentTime}s (${playbackSession.currentTimeMs}ms)")
+
+          // Check if this is a chapter-aware book and log chapter information
+          if (playbackSession.chapters.isNotEmpty()) {
+            Log.d("PlayerNotificationServ", "AALibrary: Book has ${playbackSession.chapters.size} chapters")
+            val currentTimeMs = playbackSession.currentTimeMs
+            val targetChapter = playbackSession.chapters.find { chapter ->
+              currentTimeMs >= chapter.startMs && currentTimeMs < chapter.endMs
+            }
+            if (targetChapter != null) {
+              val chapterRelativePosition = currentTimeMs - targetChapter.startMs
+              Log.d("PlayerNotificationServ", "AALibrary: Target chapter: '${targetChapter.title}' (${targetChapter.startMs}ms-${targetChapter.endMs}ms)")
+              Log.d("PlayerNotificationServ", "AALibrary: Chapter-relative position would be: ${chapterRelativePosition}ms")
+            } else {
+              Log.w("PlayerNotificationServ", "AALibrary: No chapter found for saved position ${currentTimeMs}ms")
+            }
+          }
+
           val playbackRate = service.mediaManager.getSavedPlaybackRate()
           Handler(Looper.getMainLooper()).post {
+            Log.d("PlayerNotificationServ", "AALibrary: Preparing player with playWhenReady=true for automatic start")
+
+            // Prepare player with playWhenReady=true for Android Auto to start automatically
             service.preparePlayer(playbackSession, true, playbackRate)
 
-            // If we have a chapter start time, seek to it after the player is prepared
+            // If we have a chapter start time, seek to it after a small delay
             chapterStartTime?.let { startTime ->
               Handler(Looper.getMainLooper()).postDelayed({
                 Log.d("PlayerNotificationServ", "AALibrary: Seeking to chapter start time: $startTime seconds")
                 service.seekPlayer((startTime * 1000).toLong())
-              }, 500) // Small delay to ensure player is ready
+              }, 500)
             }
+
+            Log.d("PlayerNotificationServ", "AALibrary: Player prepared with auto-start enabled")
           }
         }
       }
@@ -3762,8 +3994,6 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     // Add custom session commands
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
-    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_FORWARD, Bundle.EMPTY))
-    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_BACKWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
 
     // CRITICAL: Disable default Android Auto skip buttons to prevent duplicates
