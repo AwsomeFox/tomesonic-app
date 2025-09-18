@@ -1,7 +1,7 @@
 <template>
   <modals-modal v-model="show" @input="modalInput" :width="200" height="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
-      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%" @click.stop>
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
         <div class="px-6 py-4 border-b border-outline-variant">
           <h2 class="text-headline-small text-on-surface font-medium">{{ $strings.LabelPlaybackSpeed }}</h2>
@@ -17,13 +17,13 @@
           </template>
         </ul>
         <div class="flex items-center justify-center py-3 border-t border-outline-variant">
-          <button :disabled="!canDecrement" @click="decrement" class="w-8 h-8 text-on-surface-variant rounded border border-outline-variant flex items-center justify-center state-layer disabled:opacity-50">
+          <button :disabled="!canDecrement" @click.stop="decrementClick" class="w-8 h-8 text-on-surface-variant rounded border border-outline-variant flex items-center justify-center state-layer disabled:opacity-50">
             <span class="material-symbols text-on-surface">remove</span>
           </button>
           <div class="w-24 text-center">
             <p class="text-xl text-on-surface">{{ playbackRate }}<span class="text-lg">⨯</span></p>
           </div>
-          <button :disabled="!canIncrement" @click="increment" class="w-8 h-8 text-on-surface-variant rounded border border-outline-variant flex items-center justify-center state-layer disabled:opacity-50">
+          <button :disabled="!canIncrement" @click.stop="incrementClick" class="w-8 h-8 text-on-surface-variant rounded border border-outline-variant flex items-center justify-center state-layer disabled:opacity-50">
             <span class="material-symbols text-on-surface">add</span>
           </button>
         </div>
@@ -80,12 +80,20 @@ export default {
     }
   },
   methods: {
-    increment() {
+    incrementClick() {
+      this.increment()
+    },
+    decrementClick() {
+      this.decrement()
+    },
+    async increment() {
+      await this.$hapticsImpact()
       if (this.selected + 0.1 > this.MAX_SPEED) return
       var newPlaybackRate = this.selected + 0.1
       this.selected = Number(newPlaybackRate.toFixed(1))
     },
-    decrement() {
+    async decrement() {
+      await this.$hapticsImpact()
       if (this.selected - 0.1 < this.MIN_SPEED) return
       var newPlaybackRate = this.selected - 0.1
       this.selected = Number(newPlaybackRate.toFixed(1))

@@ -19,6 +19,17 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
   override fun onPlayerError(error: PlaybackException) {
     val errorMessage = error.message ?: "Unknown Error"
+    Log.e("NUXT_SKIP_DEBUG", "PlayerListener.onPlayerError: ${error.javaClass.simpleName}: $errorMessage")
+    Log.e("NUXT_SKIP_DEBUG", "PlayerListener.onPlayerError: Error code: ${error.errorCode}")
+    Log.e("NUXT_SKIP_DEBUG", "PlayerListener.onPlayerError: Full exception:", error)
+
+    // Check if this is a format recognition issue
+    if (error.cause?.javaClass?.simpleName?.contains("UnrecognizedInputFormatException") == true) {
+      Log.e("NUXT_SKIP_DEBUG", "PlayerListener.onPlayerError: *** UnrecognizedInputFormatException detected ***")
+      Log.e("NUXT_SKIP_DEBUG", "PlayerListener.onPlayerError: This indicates ExoPlayer cannot parse the audio file format")
+      Log.e("NUXT_SKIP_DEBUG", "PlayerListener.onPlayerError: Cause: ${error.cause}")
+    }
+
     Log.e(tag, "onPlayerError $errorMessage")
     playerNotificationService.handlePlayerPlaybackError(errorMessage) // If was direct playing session, fallback to transcode
   }

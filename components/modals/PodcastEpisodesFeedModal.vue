@@ -1,7 +1,7 @@
 <template>
   <modals-modal v-model="show" width="100%" height="100%" max-width="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
-      <div class="feed-content w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 backdrop-blur-md" @click.stop.prevent>
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop >
+      <div class="feed-content w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 backdrop-blur-md">
         <!-- Material 3 Modal Header -->
         <div class="px-6 py-4 border-b border-outline-variant">
           <h2 class="text-headline-small text-on-surface font-medium">Feed Episodes</h2>
@@ -23,7 +23,7 @@
         </template>
       </div>
       <div class="absolute bottom-6 left-0 w-full flex items-center" style="height: 50px">
-        <ui-btn class="w-full" :disabled="!episodesSelected.length" color="success" @click.stop="downloadEpisodes">{{ episodesSelected.length ? `Add ${episodesSelected.length} Episode(s) to Server` : 'No Episodes Selected' }}</ui-btn>
+        <ui-btn class="w-full" :disabled="!episodesSelected.length" color="success" @click="downloadEpisodes">{{ episodesSelected.length ? `Add ${episodesSelected.length} Episode(s) to Server` : 'No Episodes Selected' }}</ui-btn>
       </div>
     </div>
   </modals-modal>

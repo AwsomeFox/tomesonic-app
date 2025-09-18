@@ -331,7 +331,7 @@ export default {
             newLocalMediaProgress = await this.$db.syncServerMediaProgressWithLocalMediaProgress(payload)
           }
         } else {
-          console.log(`[default] userMediaProgressUpdate no local media progress or lli found for this server item ${prog.id}`)
+          console.log(`[default] userMediaProgressUpdate no local media progress or lli found for this server item ${prog?.id || prog?.libraryItemId || 'unknown'}`)
         }
       }
 

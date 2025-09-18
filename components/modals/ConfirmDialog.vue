@@ -9,7 +9,7 @@
     leave-to-class="opacity-0 scale-95"
   >
     <modals-modal v-if="show" v-model="show" :width="width" height="100%">
-      <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
+      <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop >
         <transition
           name="dialog-content-transition"
           enter-active-class="transition-all duration-250 ease-expressive"
@@ -19,7 +19,7 @@
           leave-from-class="opacity-100 transform translate-y-0 scale-100"
           leave-to-class="opacity-0 transform translate-y-4 scale-95"
         >
-          <div v-if="show" ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface-container-high rounded-3xl border border-outline-variant shadow-elevation-3 p-6 max-w-sm mx-4" @click.stop>
+          <div v-if="show" ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface-container-high rounded-3xl border border-outline-variant shadow-elevation-3 p-6 max-w-sm mx-4" >
             <!-- Material 3 Dialog Header -->
             <div v-if="title" class="mb-4">
               <h2 class="text-headline-small text-on-surface font-medium">{{ title }}</h2>

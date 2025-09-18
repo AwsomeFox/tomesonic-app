@@ -343,6 +343,7 @@
 
     <modals-chapters-modal v-model="showChapterModal" :current-chapter="currentChapter" :chapters="chapters" :playback-rate="currentPlaybackRate" @select="selectChapter" />
     <modals-dialog v-model="showMoreMenuDialog" :items="menuItems" width="80vw" @action="clickMenuAction" />
+    <modals-cast-device-selection-modal ref="castDeviceModal" @cast-device-connected="onCastDeviceConnected" @cast-device-disconnected="onCastDeviceDisconnected" />
   </div>
 </template>
 
@@ -858,11 +859,16 @@ export default {
     },
     async castClick() {
       await this.$hapticsImpact()
+
+      // Always show the Cast device selection modal when clicking the cast button
+      // This allows users to connect to a new device, disconnect from current device,
+      // or switch between devices regardless of current state
+      this.$refs.castDeviceModal.init()
+
+      // For local items, also emit the cast-local-item event for any additional handling
       if (this.isLocalPlayMethod) {
         this.$eventBus.$emit('cast-local-item')
-        return
       }
-      AbsAudioPlayer.requestSession()
     },
     clickContainer() {
       this.expandToFullscreen()
@@ -897,26 +903,64 @@ export default {
       })
     },
     async jumpNextChapter() {
+      console.log('[NUXT_SKIP_DEBUG] jumpNextChapter called', {
+        isLoading: this.isLoading,
+        hasNextChapter: !!this.nextChapter,
+        nextChapter: this.nextChapter,
+        currentChapter: this.currentChapter,
+        currentTime: this.currentTime,
+        chapters: this.chapters.length
+      })
+
       await this.$hapticsImpact()
-      if (this.isLoading) return
-      if (!this.nextChapter) return
+      if (this.isLoading) {
+        console.log('[NUXT_SKIP_DEBUG] jumpNextChapter: Skipping due to isLoading=true')
+        return
+      }
+      if (!this.nextChapter) {
+        console.log('[NUXT_SKIP_DEBUG] jumpNextChapter: No next chapter available')
+        return
+      }
+
+      console.log('[NUXT_SKIP_DEBUG] jumpNextChapter: Seeking to next chapter start:', this.nextChapter.start)
       this.seek(this.nextChapter.start)
     },
     async jumpChapterStart() {
+      console.log('[NUXT_SKIP_DEBUG] jumpChapterStart called', {
+        isLoading: this.isLoading,
+        hasCurrentChapter: !!this.currentChapter,
+        currentChapter: this.currentChapter,
+        currentTime: this.currentTime,
+        chapters: this.chapters.length
+      })
+
       await this.$hapticsImpact()
-      if (this.isLoading) return
+      if (this.isLoading) {
+        console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: Skipping due to isLoading=true')
+        return
+      }
       if (!this.currentChapter) {
+        console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: No current chapter, calling restart()')
         return this.restart()
       }
 
       // If 4 seconds or less into current chapter, then go to previous
-      if (this.currentTime - this.currentChapter.start <= 4) {
+      const timeSinceChapterStart = this.currentTime - this.currentChapter.start
+      console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: Time since chapter start:', timeSinceChapterStart)
+
+      if (timeSinceChapterStart <= 4) {
+        console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: Within 4 seconds, seeking to previous chapter')
         const currChapterIndex = this.chapters.findIndex((ch) => Number(ch.start) <= this.currentTime && Number(ch.end) >= this.currentTime)
+        console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: Current chapter index:', currChapterIndex)
         if (currChapterIndex > 0) {
           const prevChapter = this.chapters[currChapterIndex - 1]
+          console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: Seeking to previous chapter:', prevChapter)
           this.seek(prevChapter.start)
+        } else {
+          console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: Already at first chapter')
         }
       } else {
+        console.log('[NUXT_SKIP_DEBUG] jumpChapterStart: More than 4 seconds, seeking to current chapter start:', this.currentChapter.start)
         this.seek(this.currentChapter.start)
       }
     },
@@ -933,14 +977,48 @@ export default {
       this.seek(0)
     },
     async jumpBackwards() {
+      console.log('[NUXT_SKIP_DEBUG] jumpBackwards called', {
+        isLoading: this.isLoading,
+        jumpBackwardsTime: this.jumpBackwardsTime,
+        currentTime: this.currentTime,
+        totalDuration: this.totalDuration
+      })
+
       await this.$hapticsImpact()
-      if (this.isLoading) return
-      AbsAudioPlayer.seekBackward({ value: this.jumpBackwardsTime })
+      if (this.isLoading) {
+        console.log('[NUXT_SKIP_DEBUG] jumpBackwards: Skipping due to isLoading=true')
+        return
+      }
+
+      console.log('[NUXT_SKIP_DEBUG] jumpBackwards: Calling AbsAudioPlayer.seekBackward with value:', this.jumpBackwardsTime)
+      try {
+        const result = await AbsAudioPlayer.seekBackward({ value: this.jumpBackwardsTime })
+        console.log('[NUXT_SKIP_DEBUG] jumpBackwards: AbsAudioPlayer.seekBackward result:', result)
+      } catch (error) {
+        console.error('[NUXT_SKIP_DEBUG] jumpBackwards: Error calling AbsAudioPlayer.seekBackward:', error)
+      }
     },
     async jumpForward() {
+      console.log('[NUXT_SKIP_DEBUG] jumpForward called', {
+        isLoading: this.isLoading,
+        jumpForwardTime: this.jumpForwardTime,
+        currentTime: this.currentTime,
+        totalDuration: this.totalDuration
+      })
+
       await this.$hapticsImpact()
-      if (this.isLoading) return
-      AbsAudioPlayer.seekForward({ value: this.jumpForwardTime })
+      if (this.isLoading) {
+        console.log('[NUXT_SKIP_DEBUG] jumpForward: Skipping due to isLoading=true')
+        return
+      }
+
+      console.log('[NUXT_SKIP_DEBUG] jumpForward: Calling AbsAudioPlayer.seekForward with value:', this.jumpForwardTime)
+      try {
+        const result = await AbsAudioPlayer.seekForward({ value: this.jumpForwardTime })
+        console.log('[NUXT_SKIP_DEBUG] jumpForward: AbsAudioPlayer.seekForward result:', result)
+      } catch (error) {
+        console.error('[NUXT_SKIP_DEBUG] jumpForward: Error calling AbsAudioPlayer.seekForward:', error)
+      }
     },
     setStreamReady() {
       this.readyTrackWidth = this.trackWidth
@@ -982,8 +1060,9 @@ export default {
     updateTimestamp() {
       const tsFull = this.$refs.currentTimestampFull
       const tsMini = this.$refs.currentTimestamp
+      // Only require at least one timestamp element to exist
       if (!tsFull && !tsMini) {
-        console.error('No timestamp el')
+        // Skip error if neither element exists (may be during component lifecycle)
         return
       }
 
@@ -1000,14 +1079,23 @@ export default {
       if (tsMini) tsMini.innerText = rounded
     },
     timeupdate() {
+      console.log('[NUXT_SKIP_DEBUG] timeupdate called', {
+        currentTime: this.currentTime,
+        totalDuration: this.totalDuration,
+        isPlaying: this.isPlaying,
+        seekLoading: this.seekLoading,
+        isDraggingCursor: this.isDraggingCursor
+      })
+
       // Ensure at least one played track exists
       if (!this.$refs.playedTrackFull && !this.$refs.playedTrack && !this.$refs.playedTrackMini) {
-        console.error('Invalid no played track ref')
+        console.error('[NUXT_SKIP_DEBUG] timeupdate: Invalid no played track ref')
         return
       }
       this.$emit('updateTime', this.currentTime)
 
       if (this.seekLoading) {
+        console.log('[NUXT_SKIP_DEBUG] timeupdate: Seek loading completed, resetting track colors')
         this.seekLoading = false
         // Restore original colors for all progress tracks after seek completes
         if (this.$refs.playedTrack) {
@@ -1079,16 +1167,32 @@ export default {
       }
     },
     seek(time) {
-      if (this.isLoading) return
+      console.log('[NUXT_SKIP_DEBUG] seek called', {
+        time: time,
+        isLoading: this.isLoading,
+        seekLoading: this.seekLoading,
+        currentTime: this.currentTime,
+        totalDuration: this.totalDuration
+      })
+
+      if (this.isLoading) {
+        console.log('[NUXT_SKIP_DEBUG] seek: Skipping due to isLoading=true')
+        return
+      }
       if (this.seekLoading) {
-        console.error('Already seek loading', this.seekedTime)
+        console.error('[NUXT_SKIP_DEBUG] seek: Already seek loading', this.seekedTime)
         return
       }
 
       this.seekedTime = time
       this.seekLoading = true
 
-      AbsAudioPlayer.seek({ value: Math.floor(time) })
+      console.log('[NUXT_SKIP_DEBUG] seek: Calling AbsAudioPlayer.seek with value:', Math.floor(time))
+      try {
+        AbsAudioPlayer.seek({ value: Math.floor(time) })
+      } catch (error) {
+        console.error('[NUXT_SKIP_DEBUG] seek: Error calling AbsAudioPlayer.seek:', error)
+      }
 
       const perc = time / this.totalDuration
       const ptWidth = Math.max(0, Math.min(Math.round(perc * this.trackWidth), this.trackWidth))
@@ -1150,18 +1254,36 @@ export default {
       this.isPlaying = false
     },
     startPlayInterval() {
+      console.log('[NUXT_SKIP_DEBUG] startPlayInterval called')
       clearInterval(this.playInterval)
       this.playInterval = setInterval(async () => {
-        var data = await AbsAudioPlayer.getCurrentTime()
-        this.currentTime = Number(data.value.toFixed(2))
-        this.bufferedTime = Number(data.bufferedTime.toFixed(2))
-        this.timeupdate()
+        try {
+          var data = await AbsAudioPlayer.getCurrentTime()
+          const newCurrentTime = Number(data.value.toFixed(2))
+          const newBufferedTime = Number(data.bufferedTime.toFixed(2))
+
+          // Only log if time actually changed to avoid spam
+          if (newCurrentTime !== this.currentTime) {
+            console.log('[NUXT_SKIP_DEBUG] Progress update:', {
+              oldTime: this.currentTime,
+              newTime: newCurrentTime,
+              bufferedTime: newBufferedTime,
+              totalDuration: this.totalDuration
+            })
+          }
+
+          this.currentTime = newCurrentTime
+          this.bufferedTime = newBufferedTime
+          this.timeupdate()
+        } catch (error) {
+          console.error('[NUXT_SKIP_DEBUG] Error in playInterval getCurrentTime:', error)
+        }
       }, 1000)
     },
     stopPlayInterval() {
       clearInterval(this.playInterval)
     },
-    resetStream(startTime) {
+    resetStream() {
       this.closePlayback()
     },
     touchstart(e) {
@@ -1532,6 +1654,38 @@ export default {
       this.currentPlaybackRate = Number(data.value)
       this.updateTimestamp()
     },
+    onCastSessionConnected(data) {
+      console.log('Cast session connected:', data)
+      const deviceName = data.deviceName || 'Unknown Device'
+      this.$toast.success(`Connected to ${deviceName}`)
+      // Update store to reflect casting state
+      this.$store.commit('setMediaPlayer', 'cast-player')
+    },
+    onCastSessionDisconnected(data) {
+      console.log('Cast session disconnected:', data)
+      this.$toast.info('Cast session disconnected')
+      // Update store to reflect local playback
+      this.$store.commit('setMediaPlayer', 'local-player')
+    },
+    onCastSessionFailed(data) {
+      console.log('Cast session failed:', data)
+      this.$toast.error('Failed to connect to cast device')
+    },
+    onCastSessionRequested(data) {
+      console.log('Cast session requested:', data)
+      // Show the Cast device selection modal
+      this.$refs.castDeviceModal.init()
+    },
+    onCastDeviceConnected(device) {
+      console.log('Cast device connected from modal:', device)
+      // Device connection is handled by the modal and native layer
+      // The onCastSessionConnected method will be called by the native layer
+    },
+    onCastDeviceDisconnected(device) {
+      console.log('Cast device disconnected from modal:', device)
+      // Device disconnection is handled by the modal and native layer
+      // The onCastSessionDisconnected method will be called by the native layer
+    },
     async init() {
       await this.loadPlayerSettings()
 
@@ -1548,33 +1702,42 @@ export default {
       try {
         // Only check on first app load and if no current session
         if (!this.$store.state.isFirstAudioLoad || this.$store.state.currentPlaybackSession) {
+          console.log('[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: Skipping check - isFirstAudioLoad:', this.$store.state.isFirstAudioLoad, 'currentSession:', !!this.$store.state.currentPlaybackSession)
           return
         }
 
-        console.log('[AudioPlayer] Checking for last playback session to resume')
+        console.log('[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: Checking for last playback session to resume')
         const lastSession = await this.$store.dispatch('loadLastPlaybackSession')
 
         if (lastSession) {
           // Check if this session is worth resuming (not at the very beginning)
           const progress = lastSession.currentTime / lastSession.duration
           if (progress > 0.01) {
-            console.log(`[AudioPlayer] Found resumable session: ${lastSession.displayTitle} at ${Math.floor(progress * 100)}%`)
+            console.log(`[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: Found resumable session: ${lastSession.displayTitle} at ${Math.floor(progress * 100)}%`)
 
             // Resume the session
             await this.resumeFromLastSession()
+          } else {
+            console.log(`[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: Session found but progress too low: ${Math.floor(progress * 100)}%`)
           }
+        } else {
+          console.log('[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: No last session found')
         }
       } catch (error) {
-        console.error('[AudioPlayer] Failed to check for last playback session', error)
+        console.error('[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: Failed to check for last playback session:', error)
+        console.error('[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: Error type:', error.constructor.name)
+        console.error('[NUXT_SKIP_DEBUG] AudioPlayer.checkForLastPlaybackSession: Error message:', error.message)
       }
     },
     async resumeFromLastSession() {
       try {
-        console.log('[AudioPlayer] Attempting to resume from last session')
+        console.log('[NUXT_SKIP_DEBUG] AudioPlayer.resumeFromLastSession: Attempting to resume from last session')
         await AbsAudioPlayer.resumeLastPlaybackSession()
-        console.log('[AudioPlayer] Successfully resumed from last session')
+        console.log('[NUXT_SKIP_DEBUG] AudioPlayer.resumeFromLastSession: Successfully resumed from last session')
       } catch (error) {
-        console.error('[AudioPlayer] Failed to resume from last session', error)
+        console.error('[NUXT_SKIP_DEBUG] AudioPlayer.resumeFromLastSession: Failed to resume from last session:', error)
+        console.error('[NUXT_SKIP_DEBUG] AudioPlayer.resumeFromLastSession: Error type:', error.constructor.name)
+        console.error('[NUXT_SKIP_DEBUG] AudioPlayer.resumeFromLastSession: Error message:', error.message)
         throw error
       }
     },
@@ -1660,6 +1823,12 @@ export default {
     AbsAudioPlayer.addListener('onProgressSyncFailing', this.showProgressSyncIsFailing)
     AbsAudioPlayer.addListener('onProgressSyncSuccess', this.hideProgressSyncIsFailing)
     AbsAudioPlayer.addListener('onPlaybackSpeedChanged', this.onPlaybackSpeedChanged)
+
+    // Cast event listeners
+    AbsAudioPlayer.addListener('onCastSessionConnected', this.onCastSessionConnected)
+    AbsAudioPlayer.addListener('onCastSessionDisconnected', this.onCastSessionDisconnected)
+    AbsAudioPlayer.addListener('onCastSessionFailed', this.onCastSessionFailed)
+    AbsAudioPlayer.addListener('onCastSessionRequested', this.onCastSessionRequested)
   },
   mounted() {
     this.updateScreenSize()

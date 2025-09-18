@@ -311,18 +311,58 @@ class PlaybackSession(
     // See: https://github.com/advplyr/audiobookshelf/pull/4263
     if (checkIsServerVersionGte("2.22.0")) {
       val uri = if (isDirectPlay) {
-        Uri.parse("$serverAddress/public/session/$id/track/${audioTrack.index}")
+        val publicSessionUri = "$serverAddress/public/session/$id/track/${audioTrack.index}"
+        Log.d("PlaybackSession", "getContentUri: Creating public session URI: $publicSessionUri")
+        Log.d("PlaybackSession", "getContentUri: Session details - id=$id, trackIndex=${audioTrack.index}, serverAddress=$serverAddress")
+        Uri.parse(publicSessionUri)
       } else {
         // Transcode uses HlsRouter on server
-        Uri.parse("$serverAddress${audioTrack.contentUrl}")
+        val transcodeUri = "$serverAddress${audioTrack.contentUrl}"
+        Log.d("PlaybackSession", "getContentUri: Creating transcode URI: $transcodeUri")
+        Uri.parse(transcodeUri)
       }
-      Log.d("PlaybackSession", "getContentUri: Server v2.22.0+ URI created: $uri")
+      Log.d("PlaybackSession", "getContentUri: Server v2.22.0+ URI created: $uri (sessionId: $id, trackIndex: ${audioTrack.index}, isDirectPlay: $isDirectPlay)")
       return uri
     }
 
     val uri = Uri.parse("$serverAddress${audioTrack.contentUrl}?token=${DeviceManager.token}")
     Log.d("PlaybackSession", "getContentUri: Legacy server URI created: $uri")
     return uri
+  }
+
+  /**
+   * Gets server content URI for casting, even for downloaded books
+   * This ensures downloaded books can be cast using their server URLs
+   */
+  @JsonIgnore
+  fun getServerContentUri(audioTrack: AudioTrack): Uri {
+    Log.d("PlaybackSession", "getServerContentUri: forcing server URI for cast")
+    Log.d("PlaybackSession", "getServerContentUri: session details - id=$id, serverAddress=$serverAddress, isLocal=$isLocal")
+    Log.d("PlaybackSession", "getServerContentUri: audioTrack - index=${audioTrack.index}, contentUrl=${audioTrack.contentUrl}")
+
+    // For downloaded books, we need to use the server equivalent
+    if (isLocal && localLibraryItem != null && !localLibraryItem!!.libraryItemId.isNullOrEmpty()) {
+      // Create a server-based URI using the server library item ID
+      val serverLibraryItemId = localLibraryItem!!.libraryItemId!!
+      Log.d("PlaybackSession", "getServerContentUri: local item, using serverLibraryItemId=$serverLibraryItemId")
+
+      // As of v2.22.0 tracks use a different endpoint
+      if (checkIsServerVersionGte("2.22.0")) {
+        // We need to construct a server session for this server item
+        val uri = "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}"
+        Log.d("PlaybackSession", "getServerContentUri: local item v2.22.0+ URI: $uri")
+        return Uri.parse(uri)
+      } else {
+        val uri = "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}?token=${DeviceManager.token}"
+        Log.d("PlaybackSession", "getServerContentUri: local item legacy URI: $uri")
+        return Uri.parse(uri)
+      }
+    }
+
+    // For server items, use the normal server URI
+    val serverUri = getContentUri(audioTrack)
+    Log.d("PlaybackSession", "getServerContentUri: server item URI: $serverUri")
+    return serverUri
   }
 
   @JsonIgnore
@@ -607,5 +647,87 @@ class PlaybackSession(
             libraryItemId,
             episodeId
     )
+  }
+
+  /**
+   * Creates Media3 compatible MediaMetadata for cast player
+   * This replaces the old getCastMediaMetadata method for Media3
+   */
+  @JsonIgnore
+  fun createCastMediaMetadata(
+    track: AudioTrack,
+    chapter: BookChapter? = null,
+    chapterIndex: Int = -1
+  ): androidx.media3.common.MediaMetadata {
+    val titleToUse = chapter?.title ?: displayTitle ?: "Audiobook"
+    val chapterTitleToUse = if (chapter != null) {
+      chapter.title ?: "Chapter ${chapterIndex + 1}"
+    } else {
+      displayTitle ?: "Audiobook"
+    }
+
+    // Calculate the duration for this specific chapter/segment for cast
+    val durationMs = if (chapter != null) {
+      chapter.endMs - chapter.startMs
+    } else {
+      // For books without chapters, use track duration
+      (track.duration * 1000).toLong()
+    }
+
+    // Create artwork URI for cast
+    val artworkUri = if (coverPath != null) {
+      if (checkIsServerVersionGte("2.17.0")) {
+        Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
+      } else {
+        Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=${DeviceManager.token}")
+      }
+    } else null
+
+    val metadataBuilder = androidx.media3.common.MediaMetadata.Builder()
+      .setTitle(titleToUse)
+      .setArtist(displayAuthor ?: "")
+      .setAlbumTitle(displayTitle ?: "")
+      .setDisplayTitle(chapterTitleToUse)
+      .setTrackNumber(if (chapterIndex >= 0) chapterIndex + 1 else null)
+      .setTotalTrackCount(if (chapters.isNotEmpty()) chapters.size else audioTracks.size)
+      .setMediaType(androidx.media3.common.MediaMetadata.MEDIA_TYPE_MUSIC)
+      .setArtworkUri(artworkUri)
+
+    // Set explicit duration for cast receivers
+    if (durationMs > 0) {
+      // Create extras bundle with duration and chapter info
+      val extras = android.os.Bundle().apply {
+        putLong("duration_ms", durationMs)
+        putLong("media_duration_ms", durationMs) // Alternative key that cast receivers might use
+
+        if (chapter != null) {
+          putString("chapter_title", chapter.title ?: "")
+          putLong("chapter_start_ms", chapter.startMs)
+          putLong("chapter_end_ms", chapter.endMs)
+          putLong("chapter_duration_ms", durationMs)
+          putInt("chapter_index", chapterIndex)
+          putBoolean("supports_chapter_navigation", true)
+        }
+
+        // Add audiobook-specific metadata for cast controls
+        putBoolean("supports_skip_forward", true)
+        putBoolean("supports_skip_backward", true)
+        putInt("skip_forward_ms", 30000) // 30 seconds
+        putInt("skip_backward_ms", 10000) // 10 seconds
+        putString("media_type", "audiobook")
+        putBoolean("supports_speed_control", true)
+        
+        // Add library ID for Media Browse API support in Cast receiver
+        if (libraryItem?.libraryId != null) {
+          putString("libraryId", libraryItem!!.libraryId)
+        } else {
+          // For local items, we might not have a library ID
+          putString("libraryId", "")
+        }
+      }
+      metadataBuilder.setExtras(extras)
+    }
+
+    return metadataBuilder.build()
   }
 }

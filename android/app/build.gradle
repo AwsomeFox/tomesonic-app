@@ -50,7 +50,6 @@ android {
   }
   buildTypes {
     debug {
-      applicationIdSuffix ".debug"
       versionNameSuffix "-debug"
       minifyEnabled false
       proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -109,15 +108,18 @@ dependencies {
     implementation project(':media3-exoplayer')
     implementation project(':media3-ui')
     implementation project(':media3-session')
-    // MIGRATION-DEFERRED: CAST implementation project(':media3-cast')
+    implementation project(':media3-cast')
     implementation project(':media3-exoplayer-hls')
   } else {
     implementation "androidx.media3:media3-exoplayer:$media3_version"
     implementation "androidx.media3:media3-ui:$media3_version"
     implementation "androidx.media3:media3-session:$media3_version"
-    // MIGRATION-DEFERRED: CAST implementation "androidx.media3:media3-cast:$media3_version"
+    implementation "androidx.media3:media3-cast:$media3_version"
     implementation "androidx.media3:media3-exoplayer-hls:$media3_version"
   }
+
+  // Google Cast Framework
+  implementation "com.google.android.gms:play-services-cast-framework:21.5.0"
 
   // Glide for images
   implementation "com.github.bumptech.glide:glide:$glide_version"

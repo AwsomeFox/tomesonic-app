@@ -1,7 +1,7 @@
 <template>
   <modals-modal v-model="show" :width="400" height="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
-      <div class="w-full rounded-2xl bg-surface border border-outline-variant shadow-elevation-4 backdrop-blur-md overflow-y-auto overflow-x-hidden relative mt-16" style="max-height: 80vh" @click.stop.prevent>
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div class="w-full rounded-2xl bg-surface border border-outline-variant shadow-elevation-4 backdrop-blur-md overflow-y-auto overflow-x-hidden relative mt-16" style="max-height: 80vh">
         <!-- Material 3 Modal Header -->
         <div class="px-6 py-4 border-b border-outline-variant">
           <h2 class="text-headline-small text-on-surface font-medium">{{ $strings.LabelYourBookmarks }}</h2>
@@ -156,8 +156,6 @@ export default {
 
       this.newBookmarkTitle = ''
       this.showBookmarkTitleInput = false
-
-      this.show = false
     },
     createBookmark() {
       this.selectedBookmark = null

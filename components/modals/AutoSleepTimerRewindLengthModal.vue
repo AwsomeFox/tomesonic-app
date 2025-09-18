@@ -1,13 +1,7 @@
 <template>
   <modals-modal v-model="show" :width="200" height="100%">
-    <div
-      class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center"
-      @click="
-        show = false
-        manualTimerModal = false
-      "
-    >
-      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%" @click.stop>
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
         <div class="px-6 py-4 border-b border-outline-variant">
           <h2 class="text-headline-small text-on-surface font-medium capitalize">{{ $strings.LabelAutoRewindTime }}</h2>
@@ -18,11 +12,11 @@
             <span class="material-symbols text-3xl text-on-surface">arrow_back</span>
           </div>
           <div class="flex my-2 justify-between">
-            <ui-btn @click="decreaseManualTimeout" class="w-9 h-9" :padding-x="0" small style="max-width: 36px">
+            <ui-btn @click.stop="decreaseManualTimeout" class="w-9 h-9" :padding-x="0" small style="max-width: 36px">
               <span class="material-symbols text-on-surface">remove</span>
             </ui-btn>
             <p class="text-2xl font-mono text-center text-on-surface">{{ manualTimeoutMin }} min</p>
-            <ui-btn @click="increaseManualTimeout" class="w-9 h-9" :padding-x="0" small style="max-width: 36px">
+            <ui-btn @click.stop="increaseManualTimeout" class="w-9 h-9" :padding-x="0" small style="max-width: 36px">
               <span class="material-symbols text-on-surface">add</span>
             </ui-btn>
           </div>

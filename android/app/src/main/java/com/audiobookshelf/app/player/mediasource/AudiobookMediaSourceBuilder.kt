@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.source.ClippingMediaSource
@@ -13,6 +14,11 @@ import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.mp3.Mp3Extractor
+import androidx.media3.extractor.mp4.Mp4Extractor
+import androidx.media3.extractor.wav.WavExtractor
+import androidx.media3.extractor.flac.FlacExtractor
+import androidx.media3.extractor.ogg.OggExtractor
 import com.audiobookshelf.app.data.AudioTrack
 import com.audiobookshelf.app.data.BookChapter
 import com.audiobookshelf.app.data.PlaybackSession
@@ -32,7 +38,12 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     }
 
     private val extractorsFactory by lazy {
+        Log.d(TAG, "Creating enhanced DefaultExtractorsFactory with comprehensive audio format support")
+
         DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)  // Better seeking for audio files
+            .setFlacExtractorFlags(FlacExtractor.FLAG_DISABLE_ID3_METADATA) // Better FLAC support
+            .setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_CONSTANT_BITRATE_SEEKING) // Better MP3 support
     }
 
     // Store the last created chapter segments for external access
@@ -45,59 +56,82 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
     /**
      * Builds a complete MediaSource for an audiobook with chapter-based MediaItems
+     * @param playbackSession The playback session containing audiobook data
+     * @param forCast Whether to build MediaSource for cast (uses server URIs) or local playback
      */
-    fun buildMediaSource(playbackSession: PlaybackSession): MediaSource? {
-        Log.d(TAG, "Building MediaSource for ${playbackSession.displayTitle}")
+    fun buildMediaSource(playbackSession: PlaybackSession, forCast: Boolean = false): MediaSource? {
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Building for '${playbackSession.displayTitle}' (forCast: $forCast)")
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: ${playbackSession.audioTracks.size} audio tracks, ${playbackSession.chapters.size} chapters")
 
         if (playbackSession.audioTracks.isEmpty()) {
-            Log.e(TAG, "No audio tracks found in playback session")
+            Log.e("NUXT_SKIP_DEBUG", "buildMediaSource: No audio tracks found in playback session")
             return null
         }
 
+        // Log each audio track for format debugging
+        playbackSession.audioTracks.forEachIndexed { index, track ->
+            val uri = if (forCast) {
+                playbackSession.getServerContentUri(track)
+            } else {
+                playbackSession.getContentUri(track)
+            }
+            Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Track $index: '${track.title}' URI: $uri")
+        }
+
         // Create chapter segments from the playback session
-        val chapterSegments = createChapterSegments(playbackSession)
+        val chapterSegments = createChapterSegments(playbackSession, forCast)
         if (chapterSegments.isEmpty()) {
-            Log.e(TAG, "No chapter segments could be created")
+            Log.e("NUXT_SKIP_DEBUG", "buildMediaSource: No chapter segments could be created")
             return null
         }
 
         // Store segments for external access
         lastChapterSegments = chapterSegments
 
-        Log.d(TAG, "Created ${chapterSegments.size} chapter segments")
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Created ${chapterSegments.size} chapter segments")
 
         // Build the concatenating MediaSource
         val concatenatingMediaSource = ConcatenatingMediaSource()
 
         chapterSegments.forEach { segment ->
-            val chapterMediaSource = createChapterMediaSource(segment, playbackSession)
-            concatenatingMediaSource.addMediaSource(chapterMediaSource)
+            Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Creating MediaSource for chapter ${segment.chapterIndex}: '${segment.displayTitle}'")
+            try {
+                val chapterMediaSource = createChapterMediaSource(segment, playbackSession)
+                concatenatingMediaSource.addMediaSource(chapterMediaSource)
+                Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Successfully added chapter ${segment.chapterIndex} MediaSource")
+            } catch (e: Exception) {
+                Log.e("NUXT_SKIP_DEBUG", "buildMediaSource: Failed to create MediaSource for chapter ${segment.chapterIndex}: ${e.javaClass.simpleName}: ${e.message}")
+                Log.e("NUXT_SKIP_DEBUG", "buildMediaSource: Chapter ${segment.chapterIndex} exception:", e)
+                throw e  // Re-throw to prevent partial MediaSource creation
+            }
 
             Log.d(TAG, "Added chapter ${segment.chapterIndex}: '${segment.displayTitle}' " +
                     "(${segment.chapterStartMs}ms-${segment.chapterEndMs}ms, duration=${segment.durationMs}ms)")
         }
 
-        Log.d(TAG, "Built ConcatenatingMediaSource with ${concatenatingMediaSource.size} chapters")
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Successfully built ConcatenatingMediaSource with ${concatenatingMediaSource.size} chapters")
         return concatenatingMediaSource
     }
 
     /**
      * Creates chapter segments based on the audiobook structure
+     * @param playbackSession The playback session containing audiobook data
+     * @param forCast Whether to use server URIs (for cast) or local URIs (for local playback)
      */
-    private fun createChapterSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
+    private fun createChapterSegments(playbackSession: PlaybackSession, forCast: Boolean = false): List<ChapterSegment> {
         val segments = mutableListOf<ChapterSegment>()
 
         when {
             // Audiobook with chapters - create segments based purely on chapters
             playbackSession.chapters.isNotEmpty() -> {
                 Log.d(TAG, "Processing audiobook with ${playbackSession.chapters.size} chapters")
-                segments.addAll(createChapterBasedSegments(playbackSession))
+                segments.addAll(createChapterBasedSegments(playbackSession, forCast))
             }
 
             // Audiobook without chapters - fallback to track-based segments
             playbackSession.chapters.isEmpty() -> {
                 Log.d(TAG, "Processing audiobook without chapters, using ${playbackSession.audioTracks.size} tracks")
-                segments.addAll(createTrackBasedSegments(playbackSession))
+                segments.addAll(createTrackBasedSegments(playbackSession, forCast))
             }
 
             else -> {
@@ -109,9 +143,22 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     }
 
     /**
-     * Creates segments based purely on chapters, determining which audio tracks contain each chapter
+     * Public method to access chapter segments for player navigation
      */
-    private fun createChapterBasedSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
+    fun getChapterSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
+        return createChapterSegments(playbackSession)
+    }
+
+    fun getChapterSegments(playbackSession: PlaybackSession, forCast: Boolean): List<ChapterSegment> {
+        return createChapterSegments(playbackSession, forCast)
+    }
+
+    /**
+     * Creates segments based purely on chapters, determining which audio tracks contain each chapter
+     * @param playbackSession The playback session containing audiobook data
+     * @param forCast Whether to use server URIs (for cast) or local URIs (for local playback)
+     */
+    private fun createChapterBasedSegments(playbackSession: PlaybackSession, forCast: Boolean = false): List<ChapterSegment> {
         val segments = mutableListOf<ChapterSegment>()
 
         playbackSession.chapters.forEachIndexed { index, chapter ->
@@ -119,7 +166,12 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             val containingTrack = findTrackContainingTime(playbackSession, chapter.startMs)
 
             if (containingTrack != null) {
-                val audioFileUri = playbackSession.getContentUri(containingTrack)
+                // Use appropriate URI method based on target player
+                val audioFileUri = if (forCast) {
+                    playbackSession.getServerContentUri(containingTrack)
+                } else {
+                    playbackSession.getContentUri(containingTrack)
+                }
 
                 // Calculate the chapter's position within the audio file
                 val chapterStartInFile = chapter.startMs - containingTrack.startOffsetMs
@@ -159,12 +211,19 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
     /**
      * Creates segments based on tracks when no chapter metadata is available
+     * @param playbackSession The playback session containing audiobook data
+     * @param forCast Whether to use server URIs (for cast) or local URIs (for local playback)
      */
-    private fun createTrackBasedSegments(playbackSession: PlaybackSession): List<ChapterSegment> {
+    private fun createTrackBasedSegments(playbackSession: PlaybackSession, forCast: Boolean = false): List<ChapterSegment> {
         val segments = mutableListOf<ChapterSegment>()
 
         playbackSession.audioTracks.forEachIndexed { index, audioTrack ->
-            val audioFileUri = playbackSession.getContentUri(audioTrack)
+            // Use appropriate URI method based on target player
+            val audioFileUri = if (forCast) {
+                playbackSession.getServerContentUri(audioTrack)
+            } else {
+                playbackSession.getContentUri(audioTrack)
+            }
             val audioFileDurationMs = (audioTrack.duration * 1000).toLong()
 
             segments.add(
@@ -191,29 +250,65 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         segment: ChapterSegment,
         playbackSession: PlaybackSession
     ): MediaSource {
-        // Create the base MediaSource for the audio file
-        val baseMediaSource = ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
-            .createMediaSource(
-                MediaItem.Builder()
-                    .setMediaId("${playbackSession.mediaItemId}_chapter_${segment.chapterIndex}")
-                    .setUri(segment.audioFileUri)
-                    .setMediaMetadata(createChapterMetadata(segment, playbackSession))
-                    .build()
-            )
-
-        // If the chapter spans the entire file, return the base MediaSource
-        if (segment.spansEntireFile) {
-            Log.d(TAG, "Chapter ${segment.chapterIndex} spans entire file, using base MediaSource")
-            return baseMediaSource
+        // Log detailed format information for debugging
+        val audioFileUri = segment.audioFileUri
+        val fileName = audioFileUri.lastPathSegment ?: audioFileUri.toString()
+        val detectedMimeType = when {
+            fileName.contains(".mp3", ignoreCase = true) -> MimeTypes.AUDIO_MPEG
+            fileName.contains(".m4a", ignoreCase = true) -> MimeTypes.AUDIO_MP4
+            fileName.contains(".mp4", ignoreCase = true) -> MimeTypes.AUDIO_MP4
+            fileName.contains(".aac", ignoreCase = true) -> MimeTypes.AUDIO_AAC
+            fileName.contains(".flac", ignoreCase = true) -> "audio/flac"
+            fileName.contains(".ogg", ignoreCase = true) -> "audio/ogg"
+            fileName.contains(".wav", ignoreCase = true) -> "audio/wav"
+            else -> "audio/unknown"
         }
 
-        // Otherwise, wrap in ClippingMediaSource to clip to chapter boundaries
-        Log.d(TAG, "Chapter ${segment.chapterIndex} needs clipping: ${segment.audioFileStartMs}ms to ${segment.audioFileEndMs}ms")
-        return ClippingMediaSource(
-            baseMediaSource,
-            segment.audioFileStartMs * 1000, // Convert to microseconds
-            segment.audioFileEndMs * 1000     // Convert to microseconds
-        )
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: Creating MediaSource for chapter ${segment.chapterIndex}:")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - URI: $audioFileUri")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - File: $fileName")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - Detected MIME type: $detectedMimeType")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - Spans entire file: ${segment.spansEntireFile}")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - Chapter range: ${segment.audioFileStartMs}ms - ${segment.audioFileEndMs}ms")
+
+        // Create the base MediaSource for the audio file
+        val mediaItemBuilder = MediaItem.Builder()
+            .setMediaId("${playbackSession.mediaItemId}_chapter_${segment.chapterIndex}")
+            .setUri(segment.audioFileUri)
+            .setMediaMetadata(createChapterMetadata(segment, playbackSession))
+
+        // Set MIME type if we can detect it to help the extractor
+        if (detectedMimeType != "audio/unknown") {
+            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - Setting MIME type hint: $detectedMimeType")
+            mediaItemBuilder.setMimeType(detectedMimeType)
+        }
+
+        try {
+            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: Creating ProgressiveMediaSource with enhanced extractors")
+            val baseMediaSource = ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
+                .createMediaSource(mediaItemBuilder.build())
+            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: ProgressiveMediaSource created successfully")
+
+            // If the chapter spans the entire file, return the base MediaSource
+            if (segment.spansEntireFile) {
+                Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: Chapter ${segment.chapterIndex} spans entire file, using base MediaSource")
+                return baseMediaSource
+            }
+
+            // Otherwise, wrap in ClippingMediaSource to clip to chapter boundaries
+            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: Chapter ${segment.chapterIndex} needs clipping: ${segment.audioFileStartMs}ms to ${segment.audioFileEndMs}ms")
+            val clippingMediaSource = ClippingMediaSource(
+                baseMediaSource,
+                segment.audioFileStartMs * 1000, // Convert to microseconds
+                segment.audioFileEndMs * 1000     // Convert to microseconds
+            )
+            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: ClippingMediaSource created successfully")
+            return clippingMediaSource
+        } catch (e: Exception) {
+            Log.e("NUXT_SKIP_DEBUG", "createChapterMediaSource: Failed to create MediaSource for chapter ${segment.chapterIndex}: ${e.javaClass.simpleName}: ${e.message}")
+            Log.e("NUXT_SKIP_DEBUG", "createChapterMediaSource: Full exception:", e)
+            throw e
+        }
     }
 
     /**

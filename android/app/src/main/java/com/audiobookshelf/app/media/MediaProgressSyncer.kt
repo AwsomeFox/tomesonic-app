@@ -6,8 +6,11 @@ import android.util.Log
 import com.audiobookshelf.app.data.LocalMediaProgress
 import com.audiobookshelf.app.data.MediaProgress
 import com.audiobookshelf.app.data.PlaybackSession
+import com.audiobookshelf.app.data.PlayerState
+import com.audiobookshelf.app.data.PlaybackMetadata
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.player.PlayerNotificationService
+import com.audiobookshelf.app.player.CastPlayerManager
 import com.audiobookshelf.app.plugins.AbsLogger
 import com.audiobookshelf.app.server.ApiHandler
 import java.util.*
@@ -119,6 +122,28 @@ class MediaProgressSyncer(
                       currentPlaybackSession?.let { playbackSession ->
                         MediaEventManager.saveEvent(playbackSession, syncResult)
                       }
+                    }
+
+                    // Send real-time progress updates to frontend during cast playbook
+                    val mediaPlayerType = playerNotificationService.getMediaPlayer()
+                    if (mediaPlayerType == CastPlayerManager.PLAYER_CAST) {
+                      // For cast players, send continuous progress updates since cast position
+                      // events might not fire as frequently as local player events
+                      val duration = playerNotificationService.getDuration() / 1000.0 // Convert ms to seconds (now chapter duration for cast)
+
+                      // For cast players with chapter-based MediaItems, use chapter-relative progress
+                      val currentTimeForCast = if (playerNotificationService.getCurrentBookChapter() != null) {
+                        // Use chapter-relative position for cast UI
+                        playerNotificationService.currentPlayer.currentPosition / 1000.0
+                      } else {
+                        // Fall back to absolute time for books without chapters
+                        currentTime
+                      }
+
+                      playerNotificationService.clientEventEmitter?.onMetadata(
+                        PlaybackMetadata(duration, currentTimeForCast, PlayerState.READY)
+                      )
+                      Log.d(tag, "Sent cast progress update: chapter-relative=${currentTimeForCast}s/${duration}s, absolute=${currentTime}s")
                     }
                   }
                 }

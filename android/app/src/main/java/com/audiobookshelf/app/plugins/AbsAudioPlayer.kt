@@ -15,10 +15,19 @@ import com.fasterxml.jackson.core.json.JsonReadFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.getcapacitor.*
 import com.getcapacitor.annotation.CapacitorPlugin
-// MIGRATION-DEFERRED: CAST - Commented out Cast imports
-// import com.google.android.gms.cast.CastDevice
-// import com.google.android.gms.common.ConnectionResult
-// import com.google.android.gms.common.GoogleApiAvailability
+// Cast-related imports for Media3
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastSession
+import com.google.android.gms.cast.framework.CastState
+import com.google.android.gms.cast.framework.Session
+import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
+// MediaRouter for Cast device discovery
+import androidx.mediarouter.media.MediaRouter
+import androidx.mediarouter.media.MediaRouteSelector
+import com.google.android.gms.cast.CastMediaControlIntent
+import com.google.android.gms.cast.framework.media.CastMediaOptions
 import org.json.JSONObject
 
 @CapacitorPlugin(name = "AbsAudioPlayer")
@@ -32,11 +41,13 @@ class AbsAudioPlayer : Plugin() {
   // Rate limiting for socket updates to prevent overwhelming the player
   private var lastSocketUpdateTime = 0L
   private val SOCKET_UPDATE_MIN_INTERVAL = 1000L // Minimum 1 second between socket updates
-  var castManager:CastManager? = null
+  private var castContext: CastContext? = null
+  private var mediaRouter: MediaRouter? = null
+  private var mediaRouteSelector: MediaRouteSelector? = null
 
   lateinit var playerNotificationService: PlayerNotificationService
 
-  private var isCastAvailable:Boolean = false
+  private var isCastAvailable: Boolean = false
 
   override fun load() {
     mainActivity = (activity as MainActivity)
@@ -531,61 +542,185 @@ class AbsAudioPlayer : Plugin() {
   }
 
   private fun initCastManager() {
-    // MIGRATION-DEFERRED: CAST - Commented out Cast initialization
-    /*
+    // Check Google Play Services availability
     val googleApi = GoogleApiAvailability.getInstance()
     val statusCode = googleApi.isGooglePlayServicesAvailable(mainActivity)
 
     if (statusCode != ConnectionResult.SUCCESS) {
-        if (statusCode == ConnectionResult.SERVICE_MISSING) {
-          Log.w(tag, "initCastManager: Google Api Missing")
-        } else if (statusCode == ConnectionResult.SERVICE_DISABLED) {
-          Log.w(tag, "initCastManager: Google Api Disabled")
-        } else if (statusCode == ConnectionResult.SERVICE_INVALID) {
-          Log.w(tag, "initCastManager: Google Api Invalid")
-        } else if (statusCode == ConnectionResult.SERVICE_UPDATING) {
-          Log.w(tag, "initCastManager: Google Api Updating")
-        } else if (statusCode == ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED) {
-          Log.w(tag, "initCastManager: Google Api Update Required")
+        when (statusCode) {
+          ConnectionResult.SERVICE_MISSING -> Log.w(tag, "initCastManager: Google Play Services Missing")
+          ConnectionResult.SERVICE_DISABLED -> Log.w(tag, "initCastManager: Google Play Services Disabled")
+          ConnectionResult.SERVICE_INVALID -> Log.w(tag, "initCastManager: Google Play Services Invalid")
+          ConnectionResult.SERVICE_UPDATING -> Log.w(tag, "initCastManager: Google Play Services Updating")
+          ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED -> Log.w(tag, "initCastManager: Google Play Services Update Required")
         }
         return
     }
 
-    val connListener = object: CastManager.ChromecastListener() {
-      override fun onReceiverAvailableUpdate(available: Boolean) {
-        Log.d(tag, "ChromecastListener: CAST Receiver Update Available $available")
-        isCastAvailable = available
-        emit("onCastAvailableUpdate", available)
+    try {
+      // Initialize Cast Context for Media3
+      castContext = CastContext.getSharedInstance(mainActivity)
+      Log.d(tag, "Cast Context initialized successfully")
+      Log.d(tag, "Cast Context state: ${castContext?.castState}")
+
+      // IMPORTANT: Debug the actual Cast options being used
+      val castOptions = castContext?.castOptions
+      Log.d(tag, "CAST_DEBUG: Cast Context receiver app ID: ${castOptions?.receiverApplicationId}")
+      Log.d(tag, "CAST_DEBUG: Expected app ID: 242E16ED")
+      
+      if (castOptions?.receiverApplicationId != "242E16ED") {
+        Log.e(tag, "CAST_DEBUG: *** MISMATCH! Cast Context is using wrong app ID: ${castOptions?.receiverApplicationId}")
+        Log.e(tag, "CAST_DEBUG: *** This indicates Cast framework cache issue or CastOptionsProvider not being used")
+      } else {
+        Log.d(tag, "CAST_DEBUG: Cast Context is using correct custom app ID")
       }
 
-      override fun onSessionRejoin(jsonSession: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onSessionRejoin")
+      // Add cast session state debugging
+      castContext?.addCastStateListener { state ->
+        when (state) {
+          CastState.NO_DEVICES_AVAILABLE -> Log.d(tag, "CAST_DEBUG: No devices available")
+          CastState.NOT_CONNECTED -> Log.d(tag, "CAST_DEBUG: Not connected")
+          CastState.CONNECTING -> Log.d(tag, "CAST_DEBUG: Connecting...")
+          CastState.CONNECTED -> Log.d(tag, "CAST_DEBUG: Connected successfully")
+        }
       }
 
-      override fun onMediaLoaded(jsonMedia: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onMediaLoaded")
+      // Monitor session manager for connection errors
+      val sessionManager = castContext?.sessionManager
+      sessionManager?.addSessionManagerListener(object : SessionManagerListener<Session> {
+        override fun onSessionStarted(session: Session, sessionId: String) {
+          Log.d(tag, "CAST_DEBUG: Session started: $sessionId")
+          if (session is CastSession) {
+            Log.d(tag, "CAST_DEBUG: Session app ID: ${session.applicationMetadata?.applicationId}")
+          }
+        }
+
+        override fun onSessionStarting(session: Session) {
+          Log.d(tag, "CAST_DEBUG: Session starting")
+        }
+
+        override fun onSessionStartFailed(session: Session, error: Int) {
+          Log.e(tag, "CAST_DEBUG: *** SESSION START FAILED with error code: $error")
+          when (error) {
+            2473 -> Log.e(tag, "CAST_DEBUG: Error 2473 - RECEIVER_APP_NOT_COMPATIBLE")
+            2474 -> Log.e(tag, "CAST_DEBUG: Error 2474 - RECEIVER_UNAVAILABLE")
+            else -> Log.e(tag, "CAST_DEBUG: Unknown error code: $error")
+          }
+        }
+
+        override fun onSessionEnded(session: Session, error: Int) {
+          Log.d(tag, "CAST_DEBUG: Session ended with error: $error")
+        }
+
+        override fun onSessionEnding(session: Session) {
+          Log.d(tag, "CAST_DEBUG: Session ending")
+        }
+
+        override fun onSessionResumed(session: Session, wasSuspended: Boolean) {
+          Log.d(tag, "CAST_DEBUG: Session resumed")
+        }
+
+        override fun onSessionResuming(session: Session, sessionId: String) {
+          Log.d(tag, "CAST_DEBUG: Session resuming: $sessionId")
+        }
+
+        override fun onSessionResumeFailed(session: Session, error: Int) {
+          Log.e(tag, "CAST_DEBUG: Session resume failed: $error")
+        }
+
+        override fun onSessionSuspended(session: Session, reason: Int) {
+          Log.d(tag, "CAST_DEBUG: Session suspended: $reason")
+        }
+      })      // Initialize MediaRouter for device discovery
+      mediaRouter = MediaRouter.getInstance(mainActivity)
+
+      // Use the same Cast App ID as defined in CastOptionsProvider
+      val castAppId = "242E16ED" // Custom Audiobookshelf Cast Receiver
+      mediaRouteSelector = MediaRouteSelector.Builder()
+        .addControlCategory(CastMediaControlIntent.categoryForCast(castAppId))
+        .build()
+      Log.d(tag, "MediaRouter initialized with Cast app ID: $castAppId")
+
+      // Log available routes for debugging
+      val routes = mediaRouter?.routes
+      Log.d(tag, "MediaRouter found ${routes?.size ?: 0} total routes")
+      routes?.forEach { route ->
+        Log.d(tag, "Route: ${route.name} - ${route.description} - supportsControlCategory: ${route.supportsControlCategory(CastMediaControlIntent.categoryForCast(castAppId))}")
       }
 
-      override fun onMediaUpdate(jsonMedia: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onMediaUpdate")
+      // Listen for cast state changes
+      castContext?.addCastStateListener { state ->
+        val isAvailable = state != CastState.NO_DEVICES_AVAILABLE
+        Log.d(tag, "Cast state changed: $state, available: $isAvailable")
+
+        // Log additional cast state details
+        Log.d(tag, "Cast session manager: ${castContext?.sessionManager}")
+        Log.d(tag, "Current cast session: ${castContext?.sessionManager?.currentCastSession}")
+
+        if (isCastAvailable != isAvailable) {
+          isCastAvailable = isAvailable
+          emit("onCastAvailableUpdate", isAvailable)
+        }
       }
 
-      override fun onSessionUpdate(jsonSession: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onSessionUpdate")
+      // Add session manager listeners for connect/disconnect events
+      castContext?.sessionManager?.addSessionManagerListener(object : SessionManagerListener<Session> {
+        override fun onSessionStarted(session: Session, sessionId: String) {
+          Log.d(tag, "Cast session started: ${(session as? CastSession)?.castDevice?.friendlyName}")
+          emit("onCastSessionConnected", mapOf("deviceName" to ((session as? CastSession)?.castDevice?.friendlyName ?: "Unknown")))
+        }
+
+        override fun onSessionResumed(session: Session, wasSuspended: Boolean) {
+          Log.d(tag, "Cast session resumed: ${(session as? CastSession)?.castDevice?.friendlyName}")
+          emit("onCastSessionConnected", mapOf("deviceName" to ((session as? CastSession)?.castDevice?.friendlyName ?: "Unknown")))
+        }
+
+        override fun onSessionEnded(session: Session, error: Int) {
+          Log.d(tag, "Cast session ended")
+          emit("onCastSessionDisconnected", true)
+        }
+
+        override fun onSessionSuspended(session: Session, reason: Int) {
+          Log.d(tag, "Cast session suspended")
+          emit("onCastSessionDisconnected", true)
+        }
+
+        override fun onSessionStartFailed(session: Session, error: Int) {
+          Log.e(tag, "Cast session start failed: $error")
+          emit("onCastSessionFailed", mapOf("error" to error))
+        }
+
+        override fun onSessionStarting(session: Session) {
+          Log.d(tag, "Cast session starting...")
+        }
+
+        override fun onSessionEnding(session: Session) {
+          Log.d(tag, "Cast session ending...")
+        }
+
+        override fun onSessionResuming(session: Session, sessionId: String) {
+          Log.d(tag, "Cast session resuming...")
+        }
+
+        override fun onSessionResumeFailed(session: Session, error: Int) {
+          Log.e(tag, "Cast session resume failed: $error")
+          emit("onCastSessionFailed", mapOf("error" to error))
+        }
+      })
+
+      // Initial cast availability check
+      castContext?.let { context ->
+        isCastAvailable = context.castState != CastState.NO_DEVICES_AVAILABLE
+        Log.d(tag, "Initial cast availability: $isCastAvailable (state: ${context.castState})")
+        emit("onCastAvailableUpdate", isCastAvailable)
       }
 
-      override fun onSessionEnd(jsonSession: JSONObject?) {
-        Log.d(tag, "ChromecastListener: CAST onSessionEnd")
-      }
-
-      override fun onMessageReceived(p0: CastDevice, p1: String, p2: String) {
-        Log.d(tag, "ChromecastListener: CAST onMessageReceived")
-      }
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to initialize Cast Context: ${e.javaClass.simpleName}: ${e.message}", e)
+      Log.e(tag, "Cast functionality will not be available")
+      isCastAvailable = false
+      emit("onCastAvailableUpdate", false)
     }
-
-    castManager = CastManager(mainActivity)
-    castManager?.startRouteScan(connListener)
-    */
   }
 
   @PluginMethod
@@ -602,6 +737,26 @@ class AbsAudioPlayer : Plugin() {
     Log.d(tag, "prepareLibraryItem: Play When Ready: $playWhenReady")
     Log.d(tag, "prepareLibraryItem: Playback Rate: $playbackRate")
     Log.d(tag, "prepareLibraryItem: Start Time Override: $startTimeOverride")
+
+    // Check for cast session before preparation (thread-safe)
+    if (::playerNotificationService.isInitialized) {
+      playerNotificationService.castPlayerManager.isConnectedSafe { isCastConnected ->
+        Log.d(tag, "prepareLibraryItem: Cast session connected: $isCastConnected")
+        if (isCastConnected) {
+          Log.d(tag, "prepareLibraryItem: Active cast session detected - will switch to cast player during preparation")
+        }
+      }
+
+      // Also schedule a delayed check in case the cast session is establishing
+      Handler(Looper.getMainLooper()).postDelayed({
+        playerNotificationService.castPlayerManager.isConnectedSafe { isCastConnected ->
+          Log.d(tag, "prepareLibraryItem: [DELAYED CHECK] Cast session connected: $isCastConnected")
+          if (isCastConnected) {
+            Log.d(tag, "prepareLibraryItem: [DELAYED] Cast session now available - may need to restart playback")
+          }
+        }
+      }, 2000) // Check again after 2 seconds
+    }
 
     AbsLogger.info("AbsAudioPlayer", "prepareLibraryItem: lid=$libraryItemId, startTimeOverride=$startTimeOverride, playbackRate=$playbackRate")
 
@@ -752,18 +907,36 @@ class AbsAudioPlayer : Plugin() {
         val currentSession = playerNotificationService.currentPlaybackSession
         if (currentSession != null) {
           Log.i(tag, "playPlayer: Attempting automatic preparation of current session")
+          Log.d("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Session found: '${currentSession.displayTitle}', ID: ${currentSession.mediaItemId}")
+          Log.d("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Session chapters: ${currentSession.chapters.size}")
+          Log.d("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Session current time: ${currentSession.currentTime}")
+
           try {
             // Get current playback speed from MediaManager
             val currentPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
+            Log.d("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Using playback speed: $currentPlaybackSpeed")
 
             // Prepare the player with playWhenReady=true since user wants to play
+            Log.d("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Calling preparePlayer() now...")
             playerNotificationService.preparePlayer(currentSession, true, currentPlaybackSpeed)
+
+            // Check if preparation was successful
+            val mediaItemCountAfterPrep = playerNotificationService.currentPlayer.mediaItemCount
+            Log.d("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - After preparePlayer call, media item count: $mediaItemCountAfterPrep")
+
+            if (mediaItemCountAfterPrep > 0) {
+              Log.d("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Success! Media items loaded")
+            } else {
+              Log.e("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Failed! Still no media items after preparation")
+            }
 
             // Resolve immediately - the preparation will handle starting playback
             Log.i(tag, "playPlayer: Automatic preparation initiated for session: ${currentSession.displayTitle}")
             call.resolve()
             return@post
           } catch (e: Exception) {
+            Log.e("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Exception during preparation: ${e.javaClass.simpleName}: ${e.message}")
+            Log.e("NUXT_SKIP_DEBUG", "playPlayer: AUTO_PREPARE - Exception stack trace:", e)
             Log.e(tag, "playPlayer: Automatic preparation failed: ${e.message}")
             call.resolve(JSObject("{\"error\":\"Failed to prepare media items: ${e.message}\"}"))
             return@post
@@ -813,7 +986,9 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun seekForward(call: PluginCall) {
     val amount:Int = call.getInt("value", 0) ?: 0
+    Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekForward called with amount: $amount seconds")
     Handler(Looper.getMainLooper()).post {
+      Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekForward: Calling playerNotificationService.seekForward with ${amount * 1000L}ms")
       playerNotificationService.seekForward(amount * 1000L) // convert to ms
       call.resolve()
     }
@@ -822,7 +997,9 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun seekBackward(call: PluginCall) {
     val amount:Int = call.getInt("value", 0) ?: 0 // Value in seconds
+    Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekBackward called with amount: $amount seconds")
     Handler(Looper.getMainLooper()).post {
+      Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekBackward: Calling playerNotificationService.seekBackward with ${amount * 1000L}ms")
       playerNotificationService.seekBackward(amount * 1000L) // convert to ms
       call.resolve()
     }
@@ -902,26 +1079,36 @@ class AbsAudioPlayer : Plugin() {
 
   @PluginMethod
   fun requestSession(call: PluginCall) {
-    // Need to make sure the player service has been started
-    Log.d(tag, "CAST REQUEST SESSION PLUGIN")
+    Log.d(tag, "CAST REQUEST SESSION - triggering cast session")
     call.resolve()
-    if (castManager == null) {
-      Log.e(tag, "Cast Manager not initialized")
+
+    if (castContext == null) {
+      Log.e(tag, "Cast Context not initialized")
       return
     }
-    castManager?.requestSession(playerNotificationService, object : CastManager.RequestSessionCallback() {
-      override fun onError(errorCode: Int) {
-        Log.e(tag, "CAST REQUEST SESSION CALLBACK ERROR $errorCode")
-      }
 
-      override fun onCancel() {
-        Log.d(tag, "CAST REQUEST SESSION ON CANCEL")
+    try {
+      // Show the Cast dialog to let user select a Cast device
+      activity.runOnUiThread {
+        val sessionManager = castContext?.sessionManager
+        if (sessionManager != null) {
+          // Start a cast session - this will show the Cast device selection dialog
+          val currentSession = sessionManager.currentCastSession
+          if (currentSession != null && currentSession.isConnected) {
+            Log.d(tag, "Already connected to cast device: ${currentSession.castDevice?.friendlyName}")
+            emit("onCastSessionConnected", true)
+          } else {
+            // For Capacitor apps with web UI, emit event instead of showing native dialog
+            Log.d(tag, "Requesting Cast session through web UI")
+            emit("onCastSessionRequested", true)
+          }
+        } else {
+          Log.e(tag, "SessionManager is null")
+        }
       }
-
-      override fun onJoin(jsonSession: JSONObject?) {
-        Log.d(tag, "CAST REQUEST SESSION ON JOIN")
-      }
-    })
+    } catch (e: Exception) {
+      Log.e(tag, "Error requesting cast session", e)
+    }
   }
 
   @PluginMethod
@@ -929,6 +1116,154 @@ class AbsAudioPlayer : Plugin() {
     val jsobj = JSObject()
     jsobj.put("value", isCastAvailable)
     call.resolve(jsobj)
+  }
+
+  @PluginMethod
+  fun getCastDevices(call: PluginCall) {
+    if (castContext == null || mediaRouter == null || mediaRouteSelector == null) {
+      Log.e(tag, "Cast Context or MediaRouter not initialized")
+      call.reject("Cast not available")
+      return
+    }
+
+    try {
+      // MediaRouter must be accessed on main thread
+      activity.runOnUiThread {
+        try {
+          val deviceArray = JSArray()
+
+          // Get available routes from MediaRouter
+          val routes = mediaRouter!!.getRoutes()
+
+          for (route in routes) {
+            // Only include Cast-compatible routes
+            if (route.matchesSelector(mediaRouteSelector!!)) {
+              val device = JSObject()
+              device.put("id", route.id)
+              device.put("name", route.name)
+              device.put("description", route.description ?: "")
+              device.put("isConnected", route.isSelected)
+              device.put("connectionState", route.connectionState)
+              deviceArray.put(device)
+            }
+          }
+
+          val ret = JSObject()
+          ret.put("devices", deviceArray)
+          call.resolve(ret)
+        } catch (e: Exception) {
+          Log.e(tag, "Error getting cast devices on main thread", e)
+          call.reject("Error getting cast devices: ${e.message}")
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "Error getting cast devices", e)
+      call.reject("Error getting cast devices: ${e.message}")
+    }
+  }
+
+  @PluginMethod
+  fun connectToCastDevice(call: PluginCall) {
+    val deviceId = call.getString("deviceId")
+    if (deviceId == null) {
+      call.reject("Device ID is required")
+      return
+    }
+
+    if (castContext == null || mediaRouter == null) {
+      Log.e(tag, "Cast Context or MediaRouter not initialized")
+      call.reject("Cast not available")
+      return
+    }
+
+    try {
+      activity.runOnUiThread {
+        // Find the route by ID
+        val routes = mediaRouter!!.getRoutes()
+        val targetRoute = routes.find { it.id == deviceId }
+
+        if (targetRoute != null) {
+          Log.d(tag, "Connecting to cast device: ${targetRoute.name}")
+          mediaRouter!!.selectRoute(targetRoute)
+          call.resolve()
+        } else {
+          Log.e(tag, "Cast device not found: $deviceId")
+          call.reject("Cast device not found")
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "Error connecting to cast device", e)
+      call.reject("Error connecting to cast device: ${e.message}")
+    }
+  }
+
+  @PluginMethod
+  fun disconnectFromCastDevice(call: PluginCall) {
+    if (castContext == null) {
+      Log.e(tag, "Cast Context not initialized")
+      call.reject("Cast not available")
+      return
+    }
+
+    try {
+      activity.runOnUiThread {
+        val sessionManager = castContext?.sessionManager
+        if (sessionManager != null) {
+          val currentSession = sessionManager.currentCastSession
+          if (currentSession != null && currentSession.isConnected) {
+            Log.d(tag, "Disconnecting from cast device: ${currentSession.castDevice?.friendlyName}")
+            sessionManager.endCurrentSession(true)
+            call.resolve()
+          } else {
+            Log.w(tag, "No active cast session to disconnect")
+            call.resolve()
+          }
+        } else {
+          Log.e(tag, "SessionManager is null")
+          call.reject("SessionManager not available")
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "Error disconnecting from cast device", e)
+      call.reject("Error disconnecting from cast device: ${e.message}")
+    }
+  }
+
+  @PluginMethod
+  fun getCurrentCastDevice(call: PluginCall) {
+    if (castContext == null) {
+      Log.e(tag, "Cast Context not initialized")
+      call.resolve()
+      return
+    }
+
+    try {
+      val sessionManager = castContext?.sessionManager
+      if (sessionManager != null) {
+        val currentSession = sessionManager.currentCastSession
+        if (currentSession != null && currentSession.isConnected) {
+          val device = currentSession.castDevice
+          if (device != null) {
+            val deviceInfo = JSObject()
+            deviceInfo.put("id", device.deviceId)
+            deviceInfo.put("name", device.friendlyName)
+            deviceInfo.put("modelName", device.modelName)
+            deviceInfo.put("isConnected", true)
+
+            val ret = JSObject()
+            ret.put("device", deviceInfo)
+            call.resolve(ret)
+            return
+          }
+        }
+      }
+
+      // No connected device
+      call.resolve()
+    } catch (e: Exception) {
+      Log.e(tag, "Error getting current cast device", e)
+      call.resolve()
+    }
   }
 
   @PluginMethod
@@ -955,7 +1290,13 @@ class AbsAudioPlayer : Plugin() {
       // Check if session has meaningful progress (not at the very beginning)
       val progress = lastPlaybackSession.currentTime / lastPlaybackSession.duration
       if (progress > 0.01) {
-        Log.d(tag, "Resuming last playback session: ${lastPlaybackSession.displayTitle}")
+        Log.d("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: Resuming session '${lastPlaybackSession.displayTitle}' at ${progress * 100}% (${lastPlaybackSession.currentTime}s/${lastPlaybackSession.duration}s)")
+        Log.d("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: Session has ${lastPlaybackSession.audioTracks.size} audio tracks, ${lastPlaybackSession.chapters.size} chapters")
+
+        // Log audio track details for debugging format issues
+        lastPlaybackSession.audioTracks.forEachIndexed { index, track ->
+          Log.d("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: Track $index: ${track.title} - ${track.contentUrl}")
+        }
 
         // Ensure this runs on the main thread since ExoPlayer operations require it
         Handler(Looper.getMainLooper()).post {
@@ -963,17 +1304,22 @@ class AbsAudioPlayer : Plugin() {
             val savedPlaybackSpeed = playerNotificationService.mediaManager.getSavedPlaybackRate()
             // Determine if we should start playing based on Android Auto mode
             val shouldStartPlaying = playerNotificationService.isAndroidAuto
+            Log.d("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: Calling preparePlayer with playWhenReady=$shouldStartPlaying, playbackRate=$savedPlaybackSpeed")
             playerNotificationService.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
+            Log.d("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: preparePlayer completed successfully")
             call.resolve()
           } catch (e: Exception) {
-            Log.e(tag, "Error resuming last playback session", e)
+            Log.e("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: Error in preparePlayer: ${e.javaClass.simpleName}: ${e.message}")
+            Log.e("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: Full exception:", e)
             call.reject("Failed to resume session: ${e.message}", "RESUME_FAILED")
           }
         }
       } else {
+        Log.w("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: Session not resumable - progress too low: ${progress * 100}%")
         call.reject("Session not resumable", "PROGRESS_INVALID")
       }
     } else {
+      Log.w("NUXT_SKIP_DEBUG", "resumeLastPlaybackSession: No last session found")
       call.reject("No last session found", "NO_SESSION")
     }
   }

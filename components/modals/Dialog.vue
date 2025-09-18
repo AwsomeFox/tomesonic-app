@@ -1,7 +1,7 @@
 <template>
   <modals-modal v-model="show" :width="width" height="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
-      <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 p-2 backdrop-blur-md" style="max-height: 75%" @click.stop>
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 p-2 backdrop-blur-md" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
         <div v-if="title" class="px-4 py-4 border-b border-outline-variant">
           <h2 class="text-headline-small text-on-surface font-medium">{{ title }}</h2>

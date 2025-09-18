@@ -22,7 +22,7 @@
 
     <!-- Actual shelves -->
     <template v-for="shelf in totalShelves">
-      <div :key="shelf" class="w-full px-4 relative" :class="showBookshelfListView || altViewEnabled ? 'bg-surface-dynamic' : 'bookshelfRow bg-surface-dynamic'" :id="`shelf-${shelf - 1}`" :style="{ height: shelfHeight + 'px' }">
+      <div :key="shelf" class="w-full px-4" :class="showBookshelfListView || altViewEnabled ? 'bg-surface-dynamic shelf-list-view' : 'bookshelfRow bg-surface-dynamic shelf-grid-view'" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle">
         <div v-if="!showBookshelfListView && !altViewEnabled" class="w-full absolute bottom-0 left-0 z-30 bookshelfDivider bg-outline-variant opacity-20" style="min-height: 2px" :class="`h-${shelfDividerHeightIndex}`" />
       </div>
     </template>
@@ -123,21 +123,23 @@ export default {
       return this.$store.getters['libraries/getBookCoverAspectRatio']
     },
     bookWidth() {
-      const availableWidth = window.innerWidth - 16
-      let coverSize = 100
+      const availableWidth = window.innerWidth - 32 // Account for px-4 padding (16px each side)
 
-      // Smaller screens fill width with 2 items per row
-      if (availableWidth <= 400) {
-        coverSize = Math.floor(availableWidth / 2 - 24)
-        if (coverSize < 120) {
-          // Fallback to 1 item per row
-          coverSize = Math.min(availableWidth - 24, 200)
-        }
-        if (this.isCoverSquareAspectRatio || this.entityName === 'playlists') coverSize /= 1.6
-      }
+      // Determine optimal columns based on screen width and entity type
+      let targetColumns = this.getTargetColumnsForWidth(availableWidth)
 
-      if (this.isCoverSquareAspectRatio || this.entityName === 'playlists') return coverSize * 1.6
-      return coverSize
+      // Calculate card width based on columns
+      const totalGaps = (targetColumns - 1) * 16 // 16px gap between cards
+      let cardWidth = Math.floor((availableWidth - totalGaps) / targetColumns)
+
+      // Ensure minimum width constraints
+      const minWidth = this.entityName === 'series' ? 160 : 120
+      const maxWidth = this.entityName === 'series' ? 200 : 160
+
+      cardWidth = Math.max(minWidth, Math.min(maxWidth, cardWidth))
+
+      if (this.isCoverSquareAspectRatio || this.entityName === 'playlists') return cardWidth * 1.6
+      return cardWidth
     },
     bookHeight() {
       if (this.isCoverSquareAspectRatio || this.entityName === 'playlists') return this.bookWidth
@@ -145,6 +147,16 @@ export default {
     },
     entityWidth() {
       if (this.showBookshelfListView) return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
+
+      // For CSS Grid layouts (series, collections), cards fill their grid cells
+      const usesCssGrid = !this.showBookshelfListView && !this.altViewEnabled &&
+                         (this.entityName === 'series' || this.entityName === 'collections')
+
+      if (usesCssGrid) {
+        // Grid cards will size themselves based on the grid container
+        return this.bookWidth
+      }
+
       if (this.isBookEntity || this.entityName === 'playlists') return this.bookWidth
       return this.bookWidth * 2
     },
@@ -168,7 +180,16 @@ export default {
     },
     totalEntityCardWidth() {
       if (this.showBookshelfListView) return this.entityWidth
-      // Use Material 3 spacing - 16px between cards
+
+      // For CSS Grid layouts, the gap is handled by the grid
+      const usesCssGrid = !this.showBookshelfListView && !this.altViewEnabled &&
+                         (this.entityName === 'series' || this.entityName === 'collections')
+
+      if (usesCssGrid) {
+        return this.entityWidth // No extra spacing needed for CSS Grid
+      }
+
+      // Use Material 3 spacing - 16px between cards for absolute positioned items
       return this.entityWidth + 16
     },
     altViewEnabled() {
@@ -177,9 +198,41 @@ export default {
     sizeMultiplier() {
       const baseSize = this.isCoverSquareAspectRatio ? 192 : 120
       return this.entityWidth / baseSize
+    },
+    shelfContainerStyle() {
+      if (this.showBookshelfListView || this.altViewEnabled) {
+        return { height: this.shelfHeight + 'px' }
+      }
+
+      // For grid view, use CSS Grid
+      return {
+        height: this.shelfHeight + 'px',
+        display: 'grid',
+        gridTemplateColumns: `repeat(${this.entitiesPerShelf}, 1fr)`,
+        gap: '16px',
+        alignItems: 'start',
+        position: 'relative'
+      }
     }
   },
   methods: {
+    getTargetColumnsForWidth(availableWidth) {
+      // Responsive column logic for different screen sizes
+      if (this.entityName === 'series') {
+        // Series cards need more space
+        if (availableWidth >= 800) return 4      // Large screens: 4 columns
+        if (availableWidth >= 600) return 3      // Tablets: 3 columns
+        if (availableWidth >= 400) return 2      // Small tablets/large phones: 2 columns
+        return 1                                 // Small phones: 1 column
+      } else {
+        // Books and other entities can be smaller
+        if (availableWidth >= 900) return 5      // Large screens: 5 columns
+        if (availableWidth >= 700) return 4      // Medium screens: 4 columns
+        if (availableWidth >= 500) return 3      // Tablets: 3 columns
+        if (availableWidth >= 300) return 2      // Small screens: 2 columns
+        return 1                                 // Very small: 1 column
+      }
+    },
     clearFilter() {
       this.$store.dispatch('user/updateUserSettings', {
         mobileFilterBy: 'all'
@@ -217,6 +270,83 @@ export default {
           this.totalShelves = Math.ceil(this.totalEntities / this.entitiesPerShelf)
           this.entities = new Array(this.totalEntities)
           this.$eventBus.$emit('bookshelf-total-entities', this.totalEntities)
+        } else {
+          // Handle filter changes - recalculate total entities and shelves
+          const previousTotal = this.totalEntities
+          this.totalEntities = payload.total
+          this.totalShelves = Math.ceil(this.totalEntities / this.entitiesPerShelf)
+
+          if (previousTotal !== this.totalEntities) {
+            const changeRatio = this.totalEntities / Math.max(previousTotal, 1)
+
+            // If the change is significant (more than 3x increase), force a full reset
+            if (changeRatio > 3) {
+              console.log(`[LazyBookshelf] Significant entity change detected (${changeRatio.toFixed(1)}x) - forcing full reset`)
+              this.resetEntities()
+              return
+            }
+
+            // Clear old entity components to prevent stale data
+            this.destroyEntityComponents()
+            this.entityIndexesMounted = []
+            this.entityComponentRefs = {}
+
+            // Resize entities array and recalculate viewable area
+            this.entities = new Array(this.totalEntities)
+            this.$eventBus.$emit('bookshelf-total-entities', this.totalEntities)
+
+            // Update the viewable area calculation
+            this.initSizeData()
+
+            // Ensure we mount entities for the expanded viewable area
+            if (this.totalEntities > previousTotal) {
+              // Use $nextTick to ensure DOM has updated with new totalShelves
+              this.$nextTick(() => {
+                // Force recalculate container dimensions after DOM update
+                const bookshelf = document.getElementById('bookshelf')
+                const bookshelfWrapper = document.getElementById('bookshelf-wrapper')
+                if (bookshelf && bookshelfWrapper) {
+                  const { clientWidth } = bookshelf
+                  // Use the scroll container viewport height, not the content height
+                  const { clientHeight: wrapperHeight } = bookshelfWrapper
+                  this.bookshelfHeight = wrapperHeight
+                  this.bookshelfWidth = clientWidth
+                  console.log(`[LazyBookshelf] Updated dimensions - content: ${clientWidth}x${bookshelf.clientHeight}, viewport: ${clientWidth}x${wrapperHeight}`)
+
+                  // Force recalculate viewport-based values
+                  this.shelvesPerPage = Math.ceil(this.bookshelfHeight / this.shelfHeight) + 2
+                  const entitiesPerPage = this.shelvesPerPage * this.entitiesPerShelf
+                  this.booksPerFetch = Math.ceil(entitiesPerPage / 20) * 20
+
+                  console.log(`[LazyBookshelf] Recalculated viewport - shelvesPerPage: ${this.shelvesPerPage}, booksPerFetch: ${this.booksPerFetch}`)
+                }
+
+                const currentScrollTop = window['bookshelf-wrapper']?.scrollTop || 0
+
+                // Ensure we mount entities for the current scroll position with new viewport
+                if (currentScrollTop === 0) {
+                  const initialLastBookIndex = Math.min(this.totalEntities, this.shelvesPerPage * this.entitiesPerShelf)
+                  console.log(`[LazyBookshelf] Mounting initial entities 0-${initialLastBookIndex}`)
+
+                  // Load additional pages if needed for the expanded viewport
+                  const lastBookPage = Math.floor(initialLastBookIndex / this.booksPerFetch)
+                  for (let page = 0; page <= lastBookPage; page++) {
+                    if (!this.pagesLoaded[page]) {
+                      console.log(`[LazyBookshelf] Loading additional page ${page} for expanded viewport`)
+                      this.loadPage(page)
+                    }
+                  }
+
+                  this.mountEntites(0, initialLastBookIndex)
+                } else {
+                  // If not at top, ensure we handle the current scroll position with new viewport
+                  this.handleScroll(currentScrollTop)
+                }
+              })
+            }
+
+            console.log(`[LazyBookshelf] Filter changed - entities: ${previousTotal} → ${this.totalEntities}, shelves: ${this.totalShelves}`)
+          }
         }
 
         for (let i = 0; i < payload.results.length; i++) {
@@ -341,18 +471,34 @@ export default {
     },
     initSizeData() {
       var bookshelf = document.getElementById('bookshelf')
-      if (!bookshelf) {
+      var bookshelfWrapper = document.getElementById('bookshelf-wrapper')
+      if (!bookshelf || !bookshelfWrapper) {
         console.error('Failed to init size data')
         return
       }
       var entitiesPerShelfBefore = this.entitiesPerShelf
 
-      var { clientHeight, clientWidth } = bookshelf
-      this.bookshelfHeight = clientHeight
+      var { clientWidth } = bookshelf
+      // Use the scroll container viewport height, not the content height
+      var { clientHeight: wrapperHeight } = bookshelfWrapper
+      this.bookshelfHeight = wrapperHeight
       this.bookshelfWidth = clientWidth
-      this.entitiesPerShelf = Math.max(1, this.showBookshelfListView ? 1 : Math.floor((this.bookshelfWidth - 32) / this.totalEntityCardWidth))
+      console.log(`[LazyBookshelf] initSizeData - content: ${clientWidth}x${bookshelf.clientHeight}, viewport: ${clientWidth}x${wrapperHeight}`)
+
+      if (this.showBookshelfListView) {
+        this.entitiesPerShelf = 1
+        this.bookshelfMarginLeft = 0
+      } else {
+        // Use responsive column calculation
+        const availableWidth = this.bookshelfWidth - 32 // Account for padding
+        this.entitiesPerShelf = this.getTargetColumnsForWidth(availableWidth)
+
+        // Center the grid if there's extra space
+        const usedWidth = this.entitiesPerShelf * this.totalEntityCardWidth - 16 // Remove last gap
+        this.bookshelfMarginLeft = Math.max(0, (availableWidth - usedWidth) / 2)
+      }
+
       this.shelvesPerPage = Math.ceil(this.bookshelfHeight / this.shelfHeight) + 2
-      this.bookshelfMarginLeft = (this.bookshelfWidth - 32 - this.entitiesPerShelf * this.totalEntityCardWidth) / 2
 
       const entitiesPerPage = this.shelvesPerPage * this.entitiesPerShelf
       this.booksPerFetch = Math.ceil(entitiesPerPage / 20) * 20 // Round up to the nearest 20
@@ -360,7 +506,7 @@ export default {
       if (this.totalEntities) {
         this.totalShelves = Math.ceil(this.totalEntities / this.entitiesPerShelf)
       }
-      return entitiesPerShelfBefore < this.entitiesPerShelf // Books per shelf has changed
+      return entitiesPerShelfBefore !== this.entitiesPerShelf // Column count has changed
     },
     async init() {
       if (this.isFirstInit) return
@@ -445,7 +591,7 @@ export default {
 
       return false
     },
-    settingsUpdated(settings) {
+    settingsUpdated() {
       const wasUpdated = this.checkUpdateSearchParams()
       if (wasUpdated) {
         this.resetEntities()
@@ -603,5 +749,23 @@ export default {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
+}
+
+/* Grid layout styles */
+.shelf-grid-view {
+  /* Grid layout is set via inline styles for dynamic columns */
+  position: relative;
+}
+
+.shelf-list-view {
+  position: relative;
+}
+
+/* Cards in grid layout */
+.grid-card {
+  /* Grid items automatically position themselves */
+  width: 100%;
+  max-width: 100%;
+  justify-self: center;
 }
 </style>

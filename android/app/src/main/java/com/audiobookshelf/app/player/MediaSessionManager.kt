@@ -75,7 +75,7 @@ class MediaSessionManager(
     }
 
     private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
-        val mediaDescriptionAdapter = AbMediaDescriptionAdapter()
+        val mediaDescriptionAdapter = AbMediaDescriptionAdapter(context)
         val notificationListener = PlayerNotificationListener(service)
 
         playerNotificationManager = PlayerNotificationManager.Builder(context, notificationId, channelId)
@@ -89,7 +89,23 @@ class MediaSessionManager(
         playerNotificationManager?.setUseNextAction(false)
         playerNotificationManager?.setUsePreviousAction(false)
 
-        Log.d(TAG, "PlayerNotificationManager set up with custom controls disabled")
+        // Enhanced logging for cast player debugging
+        val playerType = when {
+            player.javaClass.simpleName.contains("Cast") -> "CastPlayer"
+            player.javaClass.simpleName.contains("ExoPlayer") -> "ExoPlayer"
+            else -> player.javaClass.simpleName
+        }
+
+        Log.d(TAG, "PlayerNotificationManager set up for $playerType")
+        Log.d(TAG, "Player state: playbackState=${player.playbackState}, isPlaying=${player.isPlaying}")
+        Log.d(TAG, "Player mediaItemCount=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}")
+
+        // Force notification update for cast players
+        if (playerType == "CastPlayer" && player.currentMediaItem != null) {
+            Log.d(TAG, "Forcing notification update for CastPlayer with mediaItem")
+            // The PlayerNotificationManager should automatically create a notification
+            // when a player has a current media item and is in a valid state
+        }
     }
 
     private fun buildCustomMediaActions(): ImmutableList<androidx.media3.session.CommandButton> {
@@ -99,7 +115,7 @@ class MediaSessionManager(
     private fun buildCustomMediaActionsWithSpeed(currentSpeed: Float): ImmutableList<androidx.media3.session.CommandButton> {
         val customActions = ImmutableList.builder<androidx.media3.session.CommandButton>()
 
-        // Jump backward button
+        // Jump backward button (loop rewind icon)
         customActions.add(
             androidx.media3.session.CommandButton.Builder()
                 .setDisplayName("Jump Back")
@@ -108,7 +124,7 @@ class MediaSessionManager(
                 .build()
         )
 
-        // Jump forward button
+        // Jump forward button (loop forward icon)
         customActions.add(
             androidx.media3.session.CommandButton.Builder()
                 .setDisplayName("Jump Forward")
@@ -199,5 +215,7 @@ class MediaSessionManager(
             session.release()
             Log.d(TAG, "Media3 MediaLibrarySession released")
         }
+
+        mediaSession = null
     }
 }

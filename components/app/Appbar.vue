@@ -38,6 +38,8 @@
         <ui-audiobookshelf-logo :size="32" color="on-surface-variant" />
       </nuxt-link>
     </div>
+
+    <modals-cast-device-selection-modal ref="castDeviceModal" />
   </div>
 </template>
 
@@ -104,7 +106,7 @@ export default {
         this.$eventBus.$emit('cast-local-item')
         return
       }
-      AbsAudioPlayer.requestSession()
+      this.$refs.castDeviceModal.init()
     },
     clickShowSideDrawer() {
       this.$store.commit('setShowSideDrawer', true)

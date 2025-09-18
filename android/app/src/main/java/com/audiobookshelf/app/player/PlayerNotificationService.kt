@@ -129,16 +129,20 @@ class PlayerNotificationService : MediaLibraryService() {
 
   // Player management
   lateinit var playerManager: PlayerManager
-  // MIGRATION-DEFERRED: CAST lateinit var castPlayerManager: CastPlayerManager
+  lateinit var castPlayerManager: CastPlayerManager
   lateinit var networkConnectivityManager: NetworkConnectivityManager
   lateinit var mPlayer: ExoPlayer
   lateinit var currentPlayer: Player
   internal lateinit var rawPlayer: ExoPlayer // Direct access to underlying ExoPlayer when needed
   // NEW ARCHITECTURE: Use ExoPlayer directly instead of wrapper
-  // MIGRATION-DEFERRED: CAST var castPlayer: androidx.media3.ext.cast.CastPlayer? = null
+  val castPlayer: androidx.media3.cast.CastPlayer?
+    get() = castPlayerManager.castPlayer
 
   // New Media3 architecture components
   private lateinit var audiobookMediaSourceBuilder: AudiobookMediaSourceBuilder
+
+  // Public getter for CastPlayerManager access
+  fun getAudiobookMediaSourceBuilder(): AudiobookMediaSourceBuilder = audiobookMediaSourceBuilder
   private lateinit var audiobookProgressTracker: AudiobookProgressTracker
   private lateinit var chapterNavigationHelper: ChapterNavigationHelper
 
@@ -148,6 +152,7 @@ class PlayerNotificationService : MediaLibraryService() {
   private var notificationId = 10
   private var channelId = "audiobookshelf_channel"
   private var channelName = "Audiobookshelf Channel"
+  private var sessionActivityPendingIntent: PendingIntent? = null
 
   var currentPlaybackSession: PlaybackSession? = null
   private var initialPlaybackRate: Float? = null
@@ -288,7 +293,7 @@ class PlayerNotificationService : MediaLibraryService() {
     DeviceManager.widgetUpdater?.onPlayerChanged(this)
 
     playerManager.releasePlayer()
-    // MIGRATION-DEFERRED: CAST castPlayerManager.release()
+    castPlayerManager.release()
     // MIGRATION-TODO: mediaSession.release() - now handled by MediaSessionManager
     mediaSessionManager.release()
 
@@ -368,7 +373,7 @@ class PlayerNotificationService : MediaLibraryService() {
               createNotificationChannel(channelId, channelName)
             } else ""
 
-    val sessionActivityPendingIntent =
+    sessionActivityPendingIntent =
             packageManager?.getLaunchIntentForPackage(packageName)?.let { sessionIntent ->
               PendingIntent.getActivity(this, 0, sessionIntent, PendingIntent.FLAG_IMMUTABLE)
             }
@@ -379,8 +384,26 @@ class PlayerNotificationService : MediaLibraryService() {
     mediaSessionManager = MediaSessionManager(this, this, sessionCallback)
     // Note: MediaSession will be initialized after player creation
 
-    // MIGRATION-DEFERRED: CAST Initialize CastPlayerManager
-    // MIGRATION-DEFERRED: CAST castPlayerManager = CastPlayerManager(this)
+    // Initialize CastPlayerManager
+    castPlayerManager = CastPlayerManager(this)
+
+    // Initialize Cast Framework (isolate errors to prevent breaking MediaSession)
+    try {
+      val castContext = com.google.android.gms.cast.framework.CastContext.getSharedInstance(this)
+      castPlayerManager.initializeCastPlayer(castContext)
+      Log.d(tag, "Cast framework initialized successfully")
+
+      // Check if there's already an active cast session (thread-safe)
+      castPlayerManager.isConnectedSafe { isConnected ->
+        if (isConnected) {
+          Log.d(tag, "Existing cast session detected during service initialization")
+          // Don't switch immediately - wait until playback preparation
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to initialize Cast framework - continuing without cast", e)
+      // Don't let cast initialization failure break the whole service
+    }
 
     // Initialize NetworkConnectivityManager
     networkConnectivityManager = NetworkConnectivityManager(this, this)
@@ -418,8 +441,7 @@ class PlayerNotificationService : MediaLibraryService() {
     // sessionToken = mediaSessionManager.getCompatSessionToken()
     // Log.d(tag, "AALibrary: Session token set: $sessionToken")
 
-    // MIGRATION-DEFERRED: CAST Set cast player reference for backward compatibility
-    // MIGRATION-DEFERRED: CAST castPlayer = castPlayerManager.castPlayer
+    // Cast player is now accessed via castPlayerManager.castPlayer property
   }
 
   /*
@@ -428,8 +450,15 @@ class PlayerNotificationService : MediaLibraryService() {
   fun preparePlayer(
           playbackSession: PlaybackSession,
           playWhenReady: Boolean,
-          playbackRate: Float?
+          playbackRate: Float?,
+          skipCastCheck: Boolean = false
   ) {
+    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Called with session '${playbackSession.displayTitle}', playWhenReady=$playWhenReady, rate=$playbackRate")
+    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Current thread: ${Thread.currentThread().name}")
+    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Current player state before preparation: ${currentPlayer.playbackState}")
+    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Current media item count before preparation: ${currentPlayer.mediaItemCount}")
+    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - currentPlayer=$currentPlayer, castPlayer=$castPlayer")
+
     // If we are switching to a different playback session ensure the previous session is
     // finalized and synced (or queued) before starting the new one. This guarantees progress
     // for the previous item is saved remotely or queued if offline.
@@ -708,15 +737,27 @@ class PlayerNotificationService : MediaLibraryService() {
       */
 
       // NEW MEDIA3 ARCHITECTURE: Use MediaSource instead of MediaItems
-      Log.d(tag, "Using new Media3 MediaSource architecture for audiobook")
+      Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Building MediaSource for '${playbackSession.displayTitle}'")
 
       // Build the MediaSource using the new architecture
-      val mediaSource = audiobookMediaSourceBuilder.buildMediaSource(playbackSession)
-      if (mediaSource == null) {
-        Log.e(tag, "Failed to build MediaSource for playback session")
+      // Determine if we should build for cast based on the media player type
+      val forCast = playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST
+      val mediaSource = try {
+        audiobookMediaSourceBuilder.buildMediaSource(playbackSession, forCast)
+      } catch (e: Exception) {
+        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to build MediaSource: ${e.javaClass.simpleName}: ${e.message}")
+        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource build exception:", e)
         currentPlaybackSession = null
         return
       }
+
+      if (mediaSource == null) {
+        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource is null - failed to build")
+        currentPlaybackSession = null
+        return
+      }
+
+      Log.d("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource built successfully")
 
       // Update progress tracker with the playback session
       audiobookProgressTracker.updatePlaybackSession(playbackSession)
@@ -732,23 +773,73 @@ class PlayerNotificationService : MediaLibraryService() {
       // Set actions on Android Auto like jump forward/backward
       setMediaSessionConnectorCustomActions(playbackSession)
 
+      // Force check cast session state and switch if needed
+      forceCastCheck()
+
+      // Additional check if we should be using cast player for this specific session
+      // Use polling to handle delayed cast session readiness
+      if (!skipCastCheck) {
+        val canUseCast = castPlayerManager.canUseCastPlayer(playbackSession)
+        Log.d(tag, "Cast check - canUseCast=$canUseCast, isLocal=${playbackSession.isLocal}")
+
+        if (canUseCast && getMediaPlayer() == CastPlayerManager.PLAYER_EXO) {
+          Log.d(tag, "Checking cast session with polling for delayed readiness...")
+          castPlayerManager.checkCastSessionWithPolling(callback = { isCastReady ->
+            Log.d(tag, "Cast polling result - isCastReady=$isCastReady")
+            if (isCastReady) {
+              Log.d(tag, "Cast session is ready and can handle this session - switching to cast player")
+              switchToPlayer(true)
+
+              // Re-trigger preparation after switching to cast player
+              val updatedPlaybackSession = currentPlaybackSession
+              if (updatedPlaybackSession != null) {
+                Log.d(tag, "Re-preparing with cast player after successful switch")
+                preparePlayer(updatedPlaybackSession, playWhenReady, playbackRate, skipCastCheck = true)
+              }
+            } else {
+              Log.d(tag, "Cast session not ready after polling - continuing with ExoPlayer")
+            }
+          })
+        }
+      } else {
+        Log.d(tag, "Skipping cast check due to skipCastCheck=true")
+      }
+
       playbackSession.mediaPlayer = getMediaPlayer()
 
-      // MIGRATION-DEFERRED: CAST
-      /*
+      // Cast player logic - re-enabled for Media3 migration
       if (playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST && playbackSession.isLocal) {
         Log.w(tag, "Cannot cast local media item - switching player")
         currentPlaybackSession = null
-        switchToPlayer(false)
-        playbackSession.mediaPlayer = getMediaPlayer()
+        // TODO: Implement switchToPlayer for Media3
+        // switchToPlayer(false)
+        // For now, just log the issue and continue with local player
+        playbackSession.mediaPlayer = CastPlayerManager.PLAYER_EXO
       }
 
       if (playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST) {
         // If cast-player is the first player to be used
-        mediaSessionConnector.setPlayer(castPlayer)
-        playerNotificationManager.setPlayer(castPlayer)
+        Log.d(tag, "Setting up cast player for playback session")
+        val castPlayer = castPlayerManager.castPlayer
+        if (castPlayer != null) {
+          // For Media3, we need to reinitialize the MediaSession with the cast player
+          // Release the current session first
+          mediaSessionManager.release()
+
+          // Re-initialize with cast player
+          mediaSessionManager.initializeMediaSession(
+            notificationId,
+            channelId,
+            sessionActivityPendingIntent,
+            castPlayer
+          )
+
+          Log.d(tag, "Reinitialized MediaSession with cast player")
+        } else {
+          Log.e(tag, "Cast player is null - cannot switch to cast playback")
+          playbackSession.mediaPlayer = CastPlayerManager.PLAYER_EXO
+        }
       }
-      */
 
       currentPlaybackSession = playbackSession
       lastActiveQueueItemIndex = -1 // Reset when starting new playback session
@@ -813,8 +904,16 @@ class PlayerNotificationService : MediaLibraryService() {
         Log.d(tag, "NEW_ARCHITECTURE: Using Media3 MediaSource architecture (currentPlayer type: ${currentPlayer.javaClass.simpleName})")
 
         // Set the MediaSource to populate the timeline
-        Log.d(tag, "INITIAL_POSITION: Setting MediaSource")
-        rawPlayer.setMediaSource(mediaSource)
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Setting MediaSource on ExoPlayer")
+        try {
+          rawPlayer.setMediaSource(mediaSource)
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource set successfully")
+        } catch (e: Exception) {
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to set MediaSource: ${e.javaClass.simpleName}: ${e.message}")
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource set exception:", e)
+          currentPlaybackSession = null
+          return
+        }
 
         // Calculate initial position using the new progress tracker
         val startPosition = playbackSession.currentTimeMs
@@ -863,28 +962,89 @@ class PlayerNotificationService : MediaLibraryService() {
                 "Prepare complete for session ${currentPlaybackSession?.displayTitle} | ${currentPlayer.mediaItemCount}"
         )
 
-        // MIGRATION-DEFERRED: CAST
-        /*
-        // Cast player code is deferred during Media3 migration
-        if (castPlayer != null) {
-          val currentTrackIndex = playbackSession.getCurrentTrackIndex()
-          val currentTrackTime = playbackSession.getCurrentTrackTimeMs()
-          val mediaType = playbackSession.mediaType
-          Log.d(tag, "Loading cast player $currentTrackIndex $currentTrackTime $mediaType")
+        // ENHANCED DEBUG: Completion status logging
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Session prepared: '${currentPlaybackSession?.displayTitle}'")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Final media item count: ${currentPlayer.mediaItemCount}")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Final player state: ${currentPlayer.playbackState}")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - playWhenReady: ${currentPlayer.playWhenReady}")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Player prepared successfully")
 
-          castPlayerManager.loadCastPlayer(
-                  mediaItems,
-                  currentTrackIndex,
-                  currentTrackTime,
-                  playWhenReady,
-                  playbackRateToUse,
-                  mediaType
-          )
+        if (currentPlayer.mediaItemCount == 0) {
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - WARNING! Still no media items after full preparation!")
+        } else {
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Success! ${currentPlayer.mediaItemCount} media items available")
         }
-        */
 
-      } // Close the if (currentPlayer == chapterAwarePlayer || currentPlayer == mPlayer) block
-      } catch (e: Exception) {
+      } else if (currentPlayer == castPlayer) {
+        // CAST PLAYER PREPARATION PATH
+        Log.d(tag, "NEW_ARCHITECTURE: Using Cast player - preparing MediaItems instead of MediaSource")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Setting up Cast player with MediaItems")
+        
+        try {
+          // Create cast-specific MediaItems
+          val castMediaItems = castPlayerManager.createCastMediaItems(playbackSession)
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Created ${castMediaItems.size} Cast MediaItems")
+          
+          if (castMediaItems.isEmpty()) {
+            Log.e("NUXT_SKIP_DEBUG", "preparePlayer: CAST ERROR - No MediaItems created for Cast player")
+            currentPlaybackSession = null
+            return
+          }
+          
+          // Calculate initial position for Cast
+          val startPosition = playbackSession.currentTimeMs
+          val startIndex = getChapterIndexForTime(startPosition)
+          val chapterRelativePosition = startPosition - (getCurrentBookChapter()?.startMs ?: 0L)
+          
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Cast starting at index $startIndex, position ${chapterRelativePosition}ms")
+          
+          // Load the Cast player with MediaItems
+          castPlayerManager.loadCastPlayer(
+            mediaItems = castMediaItems,
+            startIndex = startIndex,
+            startPositionMs = chapterRelativePosition.coerceAtLeast(0L),
+            playWhenReady = playWhenReady
+          )
+          
+          // Set playback speed for Cast
+          currentPlayer.setPlaybackSpeed(playbackRateToUse)
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Cast playback speed set to $playbackRateToUse")
+          
+          // Log Cast preparation completion
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: CAST COMPLETION - MediaItems loaded: ${castMediaItems.size}")
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: CAST COMPLETION - Cast player prepared successfully")
+          
+        } catch (e: Exception) {
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: CAST EXCEPTION during preparation: ${e.javaClass.simpleName}: ${e.message}")
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: CAST EXCEPTION stack trace:", e)
+          currentPlaybackSession = null
+          return
+        }
+
+        // ENHANCED DEBUG: Completion status logging
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Session prepared: '${currentPlaybackSession?.displayTitle}'")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Final media item count: ${currentPlayer.mediaItemCount}")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Final player state: ${currentPlayer.playbackState}")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - playWhenReady: ${currentPlayer.playWhenReady}")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Cast player prepared successfully")
+
+        if (currentPlayer.mediaItemCount == 0) {
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - WARNING! Still no media items after Cast preparation!")
+        } else {
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: COMPLETION - Success! ${currentPlayer.mediaItemCount} media items available")
+        }
+
+      } else {
+        Log.w("NUXT_SKIP_DEBUG", "preparePlayer: UNKNOWN PLAYER TYPE - ${currentPlayer.javaClass.simpleName}")
+        Log.w("NUXT_SKIP_DEBUG", "preparePlayer: Expected either ExoPlayer or CastPlayer")
+      }
+
+      // MIGRATION-DEFERRED: CAST - This is now handled in the Cast player branch above
+      // Cast player MediaItems are loaded via castPlayerManager.loadCastPlayer() in the Cast branch
+
+    } catch (e: Exception) {
+        Log.e("NUXT_SKIP_DEBUG", "doPreparePlayer: EXCEPTION during preparation: ${e.javaClass.simpleName}: ${e.message}")
+        Log.e("NUXT_SKIP_DEBUG", "doPreparePlayer: EXCEPTION stack trace:", e)
         AbsLogger.error("PlayerNotificationService", "doPreparePlayer: Failed to prepare player session: ${e.message}")
         Log.e(tag, "Exception during player preparation", e)
         // Reset state and notify client of failure
@@ -893,7 +1053,7 @@ class PlayerNotificationService : MediaLibraryService() {
         queueSetForCurrentSession = false
         clientEventEmitter?.onPlaybackFailed("Failed to prepare media item: ${e.message}")
       }
-    }
+    } // End of doPreparePlayer function
 
     // If there's an active session and it's different from the new one, finalize it first.
     val previousSession = currentPlaybackSession
@@ -1039,29 +1199,81 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   // MIGRATION-DEFERRED: CAST
-  /*
+  /**
+   * Switches between cast player and local ExoPlayer for Media3
+   */
   fun switchToPlayer(useCastPlayer: Boolean) {
-    // Update the current player reference
-    currentPlayer = castPlayerManager.switchToPlayer(
-      useCastPlayer = useCastPlayer,
-      currentPlayer = currentPlayer,
-      mPlayer = mPlayer,
-      mediaSessionConnector = mediaSessionConnector,
-      playerNotificationManager = playerNotificationManager,
-      currentPlaybackSession = currentPlaybackSession,
-      mediaProgressSyncer = mediaProgressSyncer,
-      preparePlayerCallback = { session, startPlayer, playbackRate ->
-        preparePlayer(session, startPlayer, playbackRate)
-      },
-      onMediaPlayerChangedCallback = { mediaPlayer ->
-        clientEventEmitter?.onMediaPlayerChanged(mediaPlayer)
-      },
-      onPlayingUpdateCallback = { isPlaying ->
-        clientEventEmitter?.onPlayingUpdate(isPlaying)
+    Log.d(tag, "switchToPlayer: useCastPlayer=$useCastPlayer, currentPlayer=$currentPlayer, castPlayer=$castPlayer")
+
+    val wasPlaying = currentPlayer.isPlaying
+    val currentPosition = getCurrentTime()
+
+    val newPlayer = if (useCastPlayer) {
+      if (currentPlayer == castPlayer) {
+        Log.d(tag, "Already using cast player")
+        return
       }
-    )
+      Log.d(tag, "Switching to cast player")
+      castPlayer
+    } else {
+      if (currentPlayer == mPlayer) {
+        Log.d(tag, "Already using local player")
+        return
+      }
+      Log.d(tag, "Switching to local player")
+      mPlayer
+    }
+
+    if (newPlayer == null) {
+      Log.e(tag, "Cannot switch - target player is null")
+      return
+    }
+
+    // Stop current player
+    currentPlayer.stop()
+
+    // Update current player reference
+    currentPlayer = newPlayer
+
+    // For Media3, we need to recreate the MediaSession with the new player
+    // This is because Media3 MediaSession is bound to a specific player
+    mediaSessionManager.release()
+    mediaSessionManager.initializeMediaSession(notificationId, channelId, sessionActivityPendingIntent, currentPlayer)
+
+    // Notify of media player change
+    val mediaPlayerType = castPlayerManager.getMediaPlayer(currentPlayer)
+    clientEventEmitter?.onMediaPlayerChanged(mediaPlayerType)
+
+    // Resume playback with current session
+    currentPlaybackSession?.let { session ->
+      Log.d(tag, "Resuming playback on new player from position: ${currentPosition}ms")
+
+      if (useCastPlayer) {
+        // Create cast-specific MediaItems
+        val castMediaItems = castPlayerManager.createCastMediaItems(session)
+        val startIndex = getChapterIndexForTime(currentPosition)
+        val chapterRelativePosition = currentPosition - (getCurrentBookChapter()?.startMs ?: 0L)
+
+        castPlayerManager.loadCastPlayer(
+          mediaItems = castMediaItems,
+          startIndex = startIndex,
+          startPositionMs = chapterRelativePosition.coerceAtLeast(0L),
+          playWhenReady = wasPlaying
+        )
+      } else {
+        // Prepare local player with current session
+        preparePlayer(session, wasPlaying, null)
+      }
+    }
   }
-  */
+
+  /**
+   * Gets the chapter index for a given time position
+   */
+  private fun getChapterIndexForTime(timeMs: Long): Int {
+    val session = currentPlaybackSession ?: return 0
+    return session.getChapterIndexForTime(timeMs).coerceAtLeast(0)
+  }
 
   fun getCurrentTrackStartOffsetMs(): Long {
     // No longer using track-based offset - always 0 for chapter-per-MediaItem architecture
@@ -1359,15 +1571,29 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun seekPlayer(time: Long) {
-    currentPlayer ?: return
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer called with time: $time ms")
+
+    if (!::currentPlayer.isInitialized) {
+      Log.w("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: currentPlayer not initialized!")
+      return
+    }
+
+    currentPlayer ?: run {
+      Log.w("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: currentPlayer is null!")
+      return
+    }
 
     var timeToSeek = time
     Log.d(tag, "seekPlayer mediaCount = ${currentPlayer.mediaItemCount} | $timeToSeek")
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: mediaCount = ${currentPlayer.mediaItemCount}")
+
     if (timeToSeek < 0) {
       Log.w(tag, "seekPlayer invalid time $timeToSeek - setting to 0")
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: Invalid time $timeToSeek, correcting to 0")
       timeToSeek = 0L
     } else if (timeToSeek > getDuration()) {
       Log.w(tag, "seekPlayer invalid time $timeToSeek - setting to MAX - 2000")
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: Time $timeToSeek exceeds duration ${getDuration()}, correcting to ${getDuration() - 2000L}")
       timeToSeek = getDuration() - 2000L
     }
 
@@ -1375,12 +1601,15 @@ class PlayerNotificationService : MediaLibraryService() {
     if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
       // Use chapter-aware seeking for books with chapters
       Log.d(tag, "seekPlayer: Using chapter-aware seek to ${timeToSeek}ms")
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: Using chapter-aware seek to ${timeToSeek}ms")
       chapterNavigationHelper.seekToAbsolutePosition(timeToSeek)
     } else {
       // Direct seek for books without chapters (single track)
       Log.d(tag, "seekPlayer: Direct seek to ${timeToSeek}ms (single track)")
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: Direct seek to ${timeToSeek}ms (single track)")
       currentPlayer.seekTo(timeToSeek)
     }
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: Seek operation completed")
   }
 
   /**
@@ -1773,59 +2002,87 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun seekForward(amount: Long) {
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekForward called with amount: $amount ms")
     Log.d(tag, "seekForward: amount=$amount, expectingTrackTransition=$expectingTrackTransition")
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekForward: expectingTrackTransition=$expectingTrackTransition")
 
     // If we're expecting a track transition, add a small delay to let it complete
     if (expectingTrackTransition) {
       Log.d(tag, "seekForward: Track transition in progress, adding delay")
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekForward: Adding 100ms delay for track transition")
       // Post the seek to run after a short delay to allow track transition to complete
       android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
         performSeekForward(amount)
       }, 100) // 100ms delay should be enough for track transition
     } else {
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekForward: Calling performSeekForward immediately")
       performSeekForward(amount)
     }
   }
 
   private fun performSeekForward(amount: Long) {
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekForward called with amount: $amount ms")
+
     // Use chapter-aware seeking for books with chapters, direct position for books without
     val currentTime = if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekForward: Using chapter-aware position")
       // Use chapter-aware position calculation for books with chapters
       chapterNavigationHelper.getAbsolutePosition()
     } else {
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekForward: Using direct player position")
       // Direct position for books without chapters (single track)
       currentPlayer.currentPosition
     }
-    seekPlayer(currentTime + amount)
+
+    val targetTime = currentTime + amount
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekForward: currentTime=$currentTime, amount=$amount, targetTime=$targetTime")
+
+    seekPlayer(targetTime)
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekForward: Called seekPlayer with $targetTime, calling mediaProgressSyncer.seek()")
     mediaProgressSyncer.seek()
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekForward: Completed")
   }
 
   fun seekBackward(amount: Long) {
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekBackward called with amount: $amount ms")
     Log.d(tag, "seekBackward: amount=$amount, expectingTrackTransition=$expectingTrackTransition")
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekBackward: expectingTrackTransition=$expectingTrackTransition")
 
     // If we're expecting a track transition, add a small delay to let it complete
     if (expectingTrackTransition) {
       Log.d(tag, "seekBackward: Track transition in progress, adding delay")
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekBackward: Adding 100ms delay for track transition")
       // Post the seek to run after a short delay to allow track transition to complete
       android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
         performSeekBackward(amount)
       }, 100) // 100ms delay should be enough for track transition
     } else {
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekBackward: Calling performSeekBackward immediately")
       performSeekBackward(amount)
     }
   }
 
   private fun performSeekBackward(amount: Long) {
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekBackward called with amount: $amount ms")
+
     // Use chapter-aware seeking for books with chapters, direct position for books without
     val currentTime = if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekBackward: Using chapter-aware position")
       // Use chapter-aware position calculation for books with chapters
       chapterNavigationHelper.getAbsolutePosition()
     } else {
+      Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekBackward: Using direct player position")
       // Direct position for books without chapters (single track)
       currentPlayer.currentPosition
     }
-    seekPlayer(currentTime - amount)
+
+    val targetTime = currentTime - amount
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekBackward: currentTime=$currentTime, amount=$amount, targetTime=$targetTime")
+
+    seekPlayer(targetTime)
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekBackward: Called seekPlayer with $targetTime, calling mediaProgressSyncer.seek()")
     mediaProgressSyncer.seek()
+    Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.performSeekBackward: Completed")
   }
 
   fun cyclePlaybackSpeed() {
@@ -1995,8 +2252,31 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun getMediaPlayer(): String {
-    // MIGRATION-DEFERRED: CAST return castPlayerManager.getMediaPlayer(currentPlayer)
-    return CastManager.PLAYER_EXO // Temporarily always return ExoPlayer
+    val mediaPlayerType = castPlayerManager.getMediaPlayer(currentPlayer)
+    Log.d(tag, "getMediaPlayer: currentPlayer=${currentPlayer}, castPlayer=${castPlayer}, result=${mediaPlayerType}")
+    return mediaPlayerType
+  }
+
+  /**
+   * Force check cast session and switch if needed - for debugging
+   */
+  fun forceCastCheck() {
+    Log.w(tag, "====== FORCE CAST CHECK CALLED ======")
+    Log.d(tag, "forceCastCheck: Checking cast session state")
+    val isCastConnected = castPlayerManager.isConnected()
+    val currentMediaPlayerType = getMediaPlayer()
+    Log.d(tag, "forceCastCheck: isCastConnected=$isCastConnected, currentMediaPlayerType=$currentMediaPlayerType")
+    Log.d(tag, "forceCastCheck: currentPlayer=$currentPlayer, castPlayer=$castPlayer")
+
+    if (isCastConnected && currentMediaPlayerType == CastPlayerManager.PLAYER_EXO) {
+      Log.d(tag, "forceCastCheck: Cast is connected but using ExoPlayer - switching to cast")
+      switchToPlayer(true)
+    } else if (!isCastConnected && currentMediaPlayerType == CastPlayerManager.PLAYER_CAST) {
+      Log.d(tag, "forceCastCheck: Cast not connected but using cast player - switching to ExoPlayer")
+      switchToPlayer(false)
+    } else {
+      Log.d(tag, "forceCastCheck: Player state is already correct")
+    }
   }
 
   @SuppressLint("HardwareIds")

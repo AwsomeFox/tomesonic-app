@@ -354,5 +354,17 @@
   "ToastPodcastCreateSuccess": "Podcast created successfully",
   "ToastRSSFeedCloseFailed": "Failed to close RSS feed",
   "ToastRSSFeedCloseSuccess": "RSS feed closed",
-  "ToastStreamingNotAllowedOnCellular": "Streaming is not allowed on cellular data"
+  "ToastStreamingNotAllowedOnCellular": "Streaming is not allowed on cellular data",
+  "HeaderCastDevices": "Cast Devices",
+  "ButtonRefresh": "Refresh",
+  "ButtonClose": "Close",
+  "MessageDiscoveringCastDevices": "Discovering Cast devices...",
+  "MessageNoCastDevicesFound": "No Cast devices found",
+  "MessageEnsureCastDevicesOnNetwork": "Make sure your Cast devices are on the same network and powered on",
+  "MessageConnected": "Connected",
+  "ToastCastDeviceDiscoveryFailed": "Failed to discover Cast devices",
+  "ToastCastDeviceConnected": "Connected to {0}",
+  "ToastCastDeviceConnectionFailed": "Failed to connect to {0}",
+  "ToastCastDeviceDisconnected": "Disconnected from {0}",
+  "ToastCastDeviceDisconnectionFailed": "Failed to disconnect from {0}"
 }

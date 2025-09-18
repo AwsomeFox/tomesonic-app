@@ -1,7 +1,7 @@
 <template>
   <modals-modal v-model="show" :width="200" height="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" @click="show = false">
-      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%" @click.stop>
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
         <div class="px-6 py-4 border-b border-outline-variant">
           <h2 class="text-headline-small text-on-surface font-medium">{{ $strings.HeaderSleepTimer }}</h2>
