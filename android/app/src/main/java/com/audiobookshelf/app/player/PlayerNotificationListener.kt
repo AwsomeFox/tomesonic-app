@@ -26,23 +26,27 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     // For now, use the original notification
     val enhancedNotification = notification
 
-    if (onGoing && !isForegroundService) {
-      // Start foreground service
-      Log.d(tag, "Notification Posted $notificationId - Start Foreground | $notification")
+    if (onGoing) {
+      // Service should already be in foreground from onStartCommand, but ensure it's started
+      Log.d(tag, "Notification Posted $notificationId - Ensuring foreground service | onGoing=$onGoing")
       PlayerNotificationService.isClosed = false
 
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        playerNotificationService.startForeground(notificationId, enhancedNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+      if (!isForegroundService) {
+        // Fallback: Start foreground service if somehow not already started
+        Log.d(tag, "Starting foreground service from notification (fallback)")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          playerNotificationService.startForeground(notificationId, enhancedNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+          playerNotificationService.startForeground(notificationId, enhancedNotification)
+        }
+        isForegroundService = true
       } else {
-        playerNotificationService.startForeground(notificationId, enhancedNotification)
+        // Service is already in foreground, just update the notification
+        Log.d(tag, "Updating existing foreground notification $notificationId")
+        // The PlayerNotificationManager will automatically update the notification
       }
-      isForegroundService = true
-    } else if (onGoing && isForegroundService) {
-      // Service is already in foreground, just update the notification
-      Log.d(tag, "Notification posted $notificationId - Updating existing foreground notification")
-      // The PlayerNotificationManager will automatically update the notification
     } else {
-      Log.d(tag, "Notification posted $notificationId, not starting foreground - onGoing=$onGoing | isForegroundService=$isForegroundService")
+      Log.d(tag, "Notification posted $notificationId, not ongoing - onGoing=$onGoing | isForegroundService=$isForegroundService")
     }
   }
 

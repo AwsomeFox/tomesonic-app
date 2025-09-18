@@ -234,21 +234,19 @@ class PlayerNotificationService : MediaLibraryService() {
     isStarted = true
     Log.d(tag, "onStartCommand $startId")
 
-    // Call super first as required by Android
-    val result = super.onStartCommand(intent, flags, startId)
-
-    // Start foreground service immediately to prevent ANR
-    // This creates a basic notification that will be replaced by PlayerNotificationManager
-    if (!PlayerNotificationListener.isForegroundService) {
-      val notification = createBasicNotification()
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-      } else {
-        startForeground(notificationId, notification)
-      }
-      PlayerNotificationListener.isForegroundService = true
-      Log.d(tag, "Started foreground service with basic notification")
+    // CRITICAL: Start foreground service IMMEDIATELY to prevent ANR
+    // This must be called within 5 seconds of startForegroundService()
+    val notification = createBasicNotification()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+    } else {
+      startForeground(notificationId, notification)
     }
+    PlayerNotificationListener.isForegroundService = true
+    Log.d(tag, "Started foreground service immediately in onStartCommand to prevent ANR")
+
+    // Call super after starting foreground to ensure proper MediaLibraryService initialization
+    val result = super.onStartCommand(intent, flags, startId)
 
     return result
   }
