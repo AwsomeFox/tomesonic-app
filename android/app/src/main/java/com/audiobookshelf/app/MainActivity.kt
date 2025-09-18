@@ -258,10 +258,10 @@ class MainActivity : BridgeActivity() {
       }
     }
 
-    // Start the service as foreground service first, then bind to it
+    // Start the service (Media3 will promote to foreground when needed)
     Intent(this, PlayerNotificationService::class.java).also { intent ->
-      Log.d(tag, "Starting PlayerNotificationService as foreground service")
-      ContextCompat.startForegroundService(this, intent)
+      Log.d(tag, "Starting PlayerNotificationService")
+      startService(intent)
     }
 
     Intent(this, PlayerNotificationService::class.java).also { intent ->
@@ -282,10 +282,10 @@ class MainActivity : BridgeActivity() {
       return
     }
 
-    // Start the service
+    // Start the service (Media3 will promote to foreground when needed)
     Intent(this, PlayerNotificationService::class.java).also { intent ->
       Log.d(tag, "Starting PlayerNotificationService")
-      ContextCompat.startForegroundService(this, intent)
+      startService(intent)
     }
 
     // Bind to it

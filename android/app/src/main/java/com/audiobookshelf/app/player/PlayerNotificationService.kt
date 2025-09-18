@@ -234,19 +234,13 @@ class PlayerNotificationService : MediaLibraryService() {
     isStarted = true
     Log.d(tag, "onStartCommand $startId")
 
-    // CRITICAL: Start foreground service IMMEDIATELY to prevent ANR
-    // This must be called within 5 seconds of startForegroundService()
-    val notification = createBasicNotification()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-    } else {
-      startForeground(notificationId, notification)
-    }
-    PlayerNotificationListener.isForegroundService = true
-    Log.d(tag, "Started foreground service immediately in onStartCommand to prevent ANR")
-
-    // Call super after starting foreground to ensure proper MediaLibraryService initialization
+    // Call super first as required by Android
     val result = super.onStartCommand(intent, flags, startId)
+
+    // Media3 handles foreground service automatically through MediaSession
+    // We don't need to call startForeground() manually - Media3 will handle it
+    // when media starts playing and notifications are posted
+    Log.d(tag, "Service started - Media3 will handle foreground service automatically")
 
     return result
   }
@@ -289,6 +283,8 @@ class PlayerNotificationService : MediaLibraryService() {
     Log.d(tag, "onDestroy")
     isStarted = false
     isClosed = true
+    // Reset foreground service flag so new service instance can start properly
+    PlayerNotificationListener.isForegroundService = false
     DeviceManager.widgetUpdater?.onPlayerChanged(this)
 
     playerManager.releasePlayer()
@@ -453,9 +449,9 @@ class PlayerNotificationService : MediaLibraryService() {
 
       try {
       if (!isStarted) {
-        Log.i(tag, "preparePlayer: foreground service not started - Starting service --")
+        Log.i(tag, "preparePlayer: service not started - Starting service --")
         Intent(ctx, PlayerNotificationService::class.java).also { intent ->
-          ContextCompat.startForegroundService(ctx, intent)
+          ctx.startService(intent)
         }
       }
 

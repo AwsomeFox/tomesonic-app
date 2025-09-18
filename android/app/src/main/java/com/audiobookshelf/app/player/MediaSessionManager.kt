@@ -51,6 +51,8 @@ class MediaSessionManager(
     var mediaSession: MediaLibrarySession? = null
         private set
 
+    private var playerNotificationManager: PlayerNotificationManager? = null
+
     fun initializeMediaSession(
         notificationId: Int,
         channelId: String,
@@ -66,7 +68,28 @@ class MediaSessionManager(
 
         mediaSession = sessionBuilder.build()
 
-        Log.d(TAG, "Media3 MediaLibrarySession initialized successfully")
+        // Set up PlayerNotificationManager for Media3
+        setupPlayerNotificationManager(notificationId, channelId, player)
+
+        Log.d(TAG, "Media3 MediaLibrarySession and PlayerNotificationManager initialized successfully")
+    }
+
+    private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
+        val mediaDescriptionAdapter = AbMediaDescriptionAdapter()
+        val notificationListener = PlayerNotificationListener(service)
+
+        playerNotificationManager = PlayerNotificationManager.Builder(context, notificationId, channelId)
+            .setMediaDescriptionAdapter(mediaDescriptionAdapter)
+            .setNotificationListener(notificationListener)
+            .build()
+
+        playerNotificationManager?.setPlayer(player)
+        playerNotificationManager?.setUseRewindAction(false)
+        playerNotificationManager?.setUseFastForwardAction(false)
+        playerNotificationManager?.setUseNextAction(false)
+        playerNotificationManager?.setUsePreviousAction(false)
+
+        Log.d(TAG, "PlayerNotificationManager set up with custom controls disabled")
     }
 
     private fun buildCustomMediaActions(): ImmutableList<androidx.media3.session.CommandButton> {
@@ -169,6 +192,9 @@ class MediaSessionManager(
         SessionToken(context, ComponentName(context, service::class.java))
 
     fun release() {
+        playerNotificationManager?.setPlayer(null)
+        playerNotificationManager = null
+
         mediaSession?.let { session: MediaLibrarySession ->
             session.release()
             Log.d(TAG, "Media3 MediaLibrarySession released")
