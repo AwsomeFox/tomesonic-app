@@ -21,20 +21,14 @@ class AudiobookMediaItemConverter : MediaItemConverter {
 
         val mediaInfo = mediaQueueItem.media ?: throw IllegalArgumentException("MediaQueueItem must have MediaInfo")
 
-        // Parse the contentId to extract original URI and clipping info
+        // ContentId is now the actual URI - no parsing needed
         val contentId = mediaInfo.contentId
         val customData = mediaInfo.customData
 
-        // Check if this is a unique contentId with clipping info (contains #)
-        val originalUri = if (contentId.contains("#") && customData != null) {
-            // Extract original URI from custom data or parse from contentId
-            customData.optString("originalUri", contentId.substringBefore("#"))
-        } else {
-            contentId
-        }
+        Log.d("AudiobookConverter", "Converting Cast MediaInfo back to MediaItem - URI: $contentId")
 
         val mediaItemBuilder = MediaItem.Builder()
-            .setUri(originalUri)
+            .setUri(contentId)
 
         // Extract custom data if present
         if (customData != null) {
@@ -48,7 +42,7 @@ class AudiobookMediaItemConverter : MediaItemConverter {
                         .setEndPositionMs(endMs)
                         .build()
                 )
-                Log.d("AudiobookConverter", "Restored clipping config: ${startMs}ms to ${endMs}ms for URI: $originalUri")
+                Log.d("AudiobookConverter", "Restored clipping config: ${startMs}ms to ${endMs}ms for URI: $contentId")
             }
 
             // Restore mediaId if available
@@ -96,18 +90,13 @@ class AudiobookMediaItemConverter : MediaItemConverter {
 
         val clippingConfig = mediaItem.clippingConfiguration
 
-        // Generate a unique contentId for each chapter - this is crucial for Cast queue recognition
-        // Each chapter must have a distinct contentId or Cast treats them as duplicates
-        val uniqueContentId = if (clippingConfig != null) {
-            "${uri}#${clippingConfig.startPositionMs}-${clippingConfig.endPositionMs}"
-        } else {
-            uri
-        }
+        // Use the actual URI as contentId so Cast receiver can load the file directly
+        // Chapter uniqueness will be handled by the Cast framework via MediaQueueItem ordering
+        // and custom data timing information
+        Log.d("AudiobookConverter", "Using actual URI as contentId: $uri")
 
-        Log.d("AudiobookConverter", "Creating unique contentId: $uniqueContentId")
-
-        // Use the unique contentId - the Cast receiver will resolve this
-        val mediaInfoBuilder = MediaInfo.Builder(uniqueContentId)
+        // Use the actual URI - Cast receiver can load this directly
+        val mediaInfoBuilder = MediaInfo.Builder(uri)
             .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
 
         // Handle ClippingConfiguration - this is the key fix
@@ -117,8 +106,6 @@ class AudiobookMediaItemConverter : MediaItemConverter {
             // Pass chapter timing to cast device via custom data
             customData.put("startMs", clippingConfig.startPositionMs)
             customData.put("endMs", clippingConfig.endPositionMs)
-            // Store the original URI so the receiver can find the actual file
-            customData.put("originalUri", uri)
 
             // Set the stream duration to the chapter duration for proper UI display
             val chapterDurationMs = clippingConfig.endPositionMs - clippingConfig.startPositionMs
@@ -164,20 +151,16 @@ class AudiobookMediaItemConverter : MediaItemConverter {
         // Add Media Browse API configuration for cast receiver
         // This enables the cast receiver to browse libraries, collections, etc.
         val serverUrl = com.audiobookshelf.app.device.DeviceManager.serverAddress
-        val token = com.audiobookshelf.app.device.DeviceManager.token
 
-        Log.d("AudiobookConverter", "DeviceManager state - serverUrl: '$serverUrl', token present: ${token.isNotEmpty()}")
+        Log.d("AudiobookConverter", "DeviceManager state - serverUrl: '$serverUrl'")
         Log.d("AudiobookConverter", "DeviceManager isConnectedToServer: ${com.audiobookshelf.app.device.DeviceManager.isConnectedToServer}")
 
         if (serverUrl.isEmpty()) {
             Log.w("AudiobookConverter", "Server URL is empty - Cast receiver Media Browse API will not work")
         }
-        if (token.isEmpty()) {
-            Log.w("AudiobookConverter", "Token is empty - Cast receiver authentication will fail")
-        }
 
         customData.put("serverUrl", serverUrl)
-        customData.put("token", token)
+        // Note: Token authentication removed - v2.22.0+ uses session-based URLs
 
         // Extract libraryId from mediaId if available (format: libraryItemId_chapter_N)
         // For the Media Browse API, we need the library ID to browse content

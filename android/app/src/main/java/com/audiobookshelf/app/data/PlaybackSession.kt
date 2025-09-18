@@ -501,8 +501,12 @@ class PlaybackSession(
                     .setSubtitle(subtitleToUse)
                     .setAlbumTitle(displayAuthor)
                     .setDescription(displayAuthor)
-                    .setArtworkUri(coverUri)
+                    .setArtworkUri(coverUri) // Media3 BitmapLoader will handle automatic loading
                     .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+
+    // Note: Media3 1.8.0+ automatically handles artwork transmission to Bluetooth devices
+    // via AVRCP when MediaSession is properly configured. The BitmapLoader will load
+    // artwork from the URI and transmit it. Success depends on car's AVRCP version (1.6+ required).
 
     return metadataBuilder.build()
   }

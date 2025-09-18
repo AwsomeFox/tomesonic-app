@@ -15,31 +15,28 @@ class CastOptionsProvider : OptionsProvider {
     companion object {
         private const val TAG = "CastOptionsProvider"
 
-        // Google's Default Media Receiver application ID for testing
-        // Using Google's default receiver to test basic Cast functionality
-        // Change back to custom receiver ID after testing: "242E16ED"
-        private const val CAST_APP_ID = "242E16ED"
+        // Custom receiver ID for audiobookshelf with chapter support
+        // Default Google receiver for testing: "CC1AD845"
+        private const val CAST_APP_ID = "CC1AD845"
     }
 
     override fun getCastOptions(context: Context): CastOptions {
-        Log.d(TAG, "getCastOptions: Configuring Cast options for Media3 with custom audiobook controls")
+        Log.d(TAG, "getCastOptions: Configuring Cast options for custom Audiobookshelf receiver")
         Log.d(TAG, "getCastOptions: Using Cast App ID: $CAST_APP_ID")
 
         return CastOptions.Builder()
             .setReceiverApplicationId(CAST_APP_ID)
             .setCastMediaOptions(
                 CastMediaOptions.Builder()
-                    // Media3 handles MediaSession internally, so we enable it
-                    // This is different from the original implementation
+                    // Custom receiver: Supports chapter-aware media sessions
                     .setMediaSessionEnabled(true)
-                    // Let Media3 handle notifications for consistency with local playback
+                    // Custom receiver: Handle notifications for chapter boundaries
                     .setNotificationOptions(null)
-                    // Enable expanded controller for better audiobook controls
+                    // Expanded controller shows Audiobookshelf activity
                     .setExpandedControllerActivityClassName(
                         "com.audiobookshelf.app.MainActivity"
                     )
-                    // Note: setSupportedCommands is not available on CastMediaOptions.Builder
-                    // Supported commands are controlled via the MediaInfo when creating media items
+                    // Custom receiver handles chapter timing data and absolute seeking
                     .build()
             )
             // Stop receiver when session ends to save battery

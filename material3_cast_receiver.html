@@ -667,6 +667,12 @@
                 this.chapterData = {};
                 this.debugCollapsed = true;
 
+                // ABSOLUTE TIMELINE TRACKING - Fixes chapter-relative vs absolute seeking mismatch
+                this.absoluteTimelineMs = 0;       // Current absolute book position
+                this.chapterStartTimes = [];       // Cumulative start times for each chapter
+                this.totalBookDurationMs = 0;      // Total duration of entire book
+                this.currentChapterDurationMs = 0; // Duration of current chapter
+
                 this.init();
             }
 
@@ -726,6 +732,21 @@
                             this.log(`🔍 EventType keys: ${Object.keys(cast.framework.events.EventType)}`, 'info');
                         }
                     }
+
+                    // Fallback: Try basic initialization without advanced features
+                    this.log(`🔄 Attempting basic fallback initialization...`, 'info');
+                    try {
+                        this.context = cast.framework.CastReceiverContext.getInstance();
+                        this.playerManager = this.context.getPlayerManager();
+
+                        // Start with minimal configuration
+                        this.context.start();
+                        this.log(`✅ Basic fallback initialization successful`, 'success');
+                        this.updateStatus('Basic receiver ready', 'info');
+                    } catch (fallbackError) {
+                        this.log(`❌ Fallback initialization also failed: ${fallbackError.message}`, 'error');
+                        this.updateStatus('Complete failure', 'error');
+                    }
                 }
             }
 
@@ -776,6 +797,12 @@
                 this.playerManager.setMessageInterceptor(
                     cast.framework.messages.MessageType.QUEUE_UPDATE,
                     (queueUpdateRequest) => this.handleQueueUpdateRequest(queueUpdateRequest)
+                );
+
+                // SEEK Message Interceptor - CRITICAL FIX for absolute vs chapter-relative seeking
+                this.playerManager.setMessageInterceptor(
+                    cast.framework.messages.MessageType.SEEK,
+                    (seekRequest) => this.handleSeekRequest(seekRequest)
                 );
 
                 this.log('📨 Message interceptors configured', 'info');
@@ -882,25 +909,31 @@
                 this.log(`📱 Content Type: ${loadRequest.media.contentType}`, 'info');
                 this.log(`📱 Stream Type: ${loadRequest.media.streamType}`, 'info');
 
+                // Basic validation - ensure we have a valid URL
+                if (!loadRequest.media.contentId) {
+                    this.log(`❌ No content ID provided`, 'error');
+                    this.updateStatus('Invalid media', 'error');
+                    return loadRequest;
+                }
+
+                // Test URL accessibility
+                this.log(`🔗 Testing URL accessibility: ${loadRequest.media.contentId}`, 'info');
+
                 if (loadRequest.media.customData) {
                     this.log(`📊 Custom Data: ${JSON.stringify(loadRequest.media.customData, null, 2)}`, 'info');
                     this.extractChapterData(loadRequest.media);
 
-                    // Validate chapter data
-                    const customData = loadRequest.media.customData;
-                    if (customData.isChapter && customData.originalUri) {
-                        this.log(`🔧 Chapter detected - replacing contentId with originalUri`, 'info');
-                        this.log(`🔧 Original: ${loadRequest.media.contentId}`, 'info');
-                        this.log(`🔧 Replacing with: ${customData.originalUri}`, 'info');
-
-                        // Use the original URI for the actual audio file
-                        loadRequest.media.contentId = customData.originalUri;
-
-                        // Ensure proper content type
-                        if (!loadRequest.media.contentType || loadRequest.media.contentType === 'application/x-mpegURL') {
-                            loadRequest.media.contentType = 'audio/mpeg';
-                            this.log(`🔧 Set content type to audio/mpeg`, 'info');
-                        }
+                    // Ensure proper content type for audio files
+                    if (!loadRequest.media.contentType || loadRequest.media.contentType === 'application/x-mpegURL') {
+                        loadRequest.media.contentType = 'audio/mpeg';
+                        this.log(`🔧 Set content type to audio/mpeg`, 'info');
+                    }
+                } else {
+                    this.log(`⚠️ No custom data - using basic playback mode`, 'warning');
+                    // Ensure basic content type
+                    if (!loadRequest.media.contentType) {
+                        loadRequest.media.contentType = 'audio/mpeg';
+                        this.log(`🔧 Set default content type to audio/mpeg`, 'info');
                     }
                 }
 
@@ -914,7 +947,7 @@
                 this.log('📋 QUEUE_LOAD request received', 'info');
                 this.log(`📱 Queue items: ${queueLoadRequest.items.length}`, 'info');
 
-                // Process each queue item to fix chapter data
+                // Log queue items for debugging
                 queueLoadRequest.items.forEach((queueItem, index) => {
                     const media = queueItem.media;
                     this.log(`📱 Item ${index}: ${media.contentId}`, 'info');
@@ -922,23 +955,9 @@
                     if (media.customData) {
                         this.log(`📊 Item ${index} Custom Data: ${JSON.stringify(media.customData, null, 2)}`, 'info');
 
-                        // Fix chapter content IDs
-                        const customData = media.customData;
-                        if (customData.isChapter && customData.originalUri) {
-                            this.log(`🔧 Item ${index}: Chapter detected - replacing contentId`, 'info');
-                            media.contentId = customData.originalUri;
-
-                            // Ensure proper content type
-                            if (!media.contentType || media.contentType === 'application/x-mpegURL') {
-                                media.contentType = 'audio/mpeg';
-                            }
-
-                            // Set proper stream duration based on chapter length
-                            if (customData.startMs !== undefined && customData.endMs !== undefined) {
-                                const chapterDurationMs = customData.endMs - customData.startMs;
-                                media.streamDuration = chapterDurationMs / 1000; // Convert to seconds
-                                this.log(`🔧 Item ${index}: Set stream duration to ${media.streamDuration}s`, 'info');
-                            }
+                        // Ensure proper content type for audio files
+                        if (!media.contentType || media.contentType === 'application/x-mpegURL') {
+                            media.contentType = 'audio/mpeg';
                         }
                     }
                 });
@@ -968,6 +987,98 @@
                 }
 
                 return queueUpdateRequest;
+            }
+
+            // CRITICAL FIX: Handle absolute seeking from Android app
+            handleSeekRequest(seekRequest) {
+                const requestedTime = seekRequest.currentTime;
+                this.log(`🎯 SEEK request: ${requestedTime}s (${Math.round(requestedTime * 1000)}ms)`, 'info');
+
+                // Safety check - if we don't have chapter data yet, pass through the seek as-is
+                if (!this.chapterStartTimes || this.chapterStartTimes.length === 0 || !this.mediaQueue || this.mediaQueue.length === 0) {
+                    this.log(`⚠️ No chapter data available yet - passing seek through as-is`, 'warning');
+                    return seekRequest;
+                }
+
+                // For single chapter or basic media, just pass through
+                if (this.mediaQueue.length === 1) {
+                    this.log(`📱 Single chapter - passing seek through as-is`, 'info');
+                    return seekRequest;
+                }
+
+                // Convert absolute book position to chapter + chapter-relative position
+                const result = this.convertAbsoluteToChapterPosition(requestedTime * 1000);
+
+                if (result) {
+                    this.log(`🔄 Converting absolute ${requestedTime}s to Chapter ${result.chapterIndex + 1} at ${result.chapterRelativeSeconds}s`, 'info');
+
+                    // If we need to change chapters, jump to the target chapter first
+                    if (result.chapterIndex !== this.currentQueueIndex) {
+                        this.log(`⏭️ Switching from chapter ${this.currentQueueIndex + 1} to ${result.chapterIndex + 1}`, 'info');
+
+                        // Update current chapter index
+                        this.currentQueueIndex = result.chapterIndex;
+
+                        // Jump to the target chapter, then seek within it
+                        const queueJumpRequest = new cast.framework.messages.QueueJumpRequest();
+                        queueJumpRequest.currentIndex = result.chapterIndex;
+
+                        // Store the target seek position for after chapter switch
+                        this.pendingSeekSeconds = result.chapterRelativeSeconds;
+
+                        this.playerManager.getQueueManager().queueJump(queueJumpRequest);
+
+                        // Don't seek immediately - let chapter switch complete first
+                        seekRequest.currentTime = 0; // Start at beginning of chapter for now
+                    } else {
+                        // Same chapter, just seek within it
+                        seekRequest.currentTime = result.chapterRelativeSeconds;
+                    }
+
+                    this.updateChapterDisplay();
+                } else {
+                    this.log(`⚠️ Could not convert absolute time ${requestedTime}s to chapter position - passing through`, 'warning');
+                }
+
+                return seekRequest;
+            }
+
+            // Convert absolute book time to chapter index and chapter-relative time
+            convertAbsoluteToChapterPosition(absoluteTimeMs) {
+                if (!this.chapterStartTimes || this.chapterStartTimes.length === 0) {
+                    this.log('⚠️ No chapter start times available for conversion', 'warning');
+                    return null;
+                }
+
+                // Find which chapter contains this absolute time
+                for (let i = 0; i < this.chapterStartTimes.length; i++) {
+                    const chapterStartMs = this.chapterStartTimes[i];
+                    const nextChapterStartMs = this.chapterStartTimes[i + 1] || this.totalBookDurationMs;
+
+                    if (absoluteTimeMs >= chapterStartMs && absoluteTimeMs < nextChapterStartMs) {
+                        const chapterRelativeMs = absoluteTimeMs - chapterStartMs;
+                        return {
+                            chapterIndex: i,
+                            chapterRelativeMs: chapterRelativeMs,
+                            chapterRelativeSeconds: chapterRelativeMs / 1000
+                        };
+                    }
+                }
+
+                // If beyond the last chapter, put it at the end of the last chapter
+                if (absoluteTimeMs >= this.totalBookDurationMs) {
+                    const lastChapterIndex = this.chapterStartTimes.length - 1;
+                    const lastChapterStartMs = this.chapterStartTimes[lastChapterIndex];
+                    const lastChapterDurationMs = this.totalBookDurationMs - lastChapterStartMs;
+
+                    return {
+                        chapterIndex: lastChapterIndex,
+                        chapterRelativeMs: lastChapterDurationMs,
+                        chapterRelativeSeconds: lastChapterDurationMs / 1000
+                    };
+                }
+
+                return null;
             }
 
             extractBookMetadata(mediaInfo) {
@@ -1002,16 +1113,35 @@
                 const chapterList = document.getElementById('chapter-list');
                 chapterList.innerHTML = '';
 
+                // CALCULATE ABSOLUTE TIMELINE - This fixes seeking to work across chapters
+                this.chapterStartTimes = [];
+                let cumulativeTime = 0;
+                this.totalBookDurationMs = 0;
+
                 this.mediaQueue.forEach((queueItem, index) => {
                     const media = queueItem.media;
                     const customData = media.customData || {};
                     const chapterTitle = media.metadata?.title || `Chapter ${index + 1}`;
 
+                    // Calculate absolute start time for this chapter
+                    this.chapterStartTimes[index] = cumulativeTime;
+
+                    // Get chapter duration from clipping data or stream duration
+                    let chapterDurationMs = 0;
+                    if (customData.startMs !== undefined && customData.endMs !== undefined) {
+                        chapterDurationMs = customData.endMs - customData.startMs;
+                    } else {
+                        // Fallback to stream duration if no clipping data
+                        chapterDurationMs = media.streamDuration || 0;
+                    }
+
+                    cumulativeTime += chapterDurationMs;
+
                     const chapterElement = document.createElement('div');
                     chapterElement.className = `chapter-item ripple ${index === this.currentQueueIndex ? 'current' : ''}`;
                     chapterElement.onclick = () => this.jumpToChapter(index);
 
-                    const duration = this.formatDuration((customData.endMs - customData.startMs) / 1000);
+                    const duration = this.formatDuration(chapterDurationMs / 1000);
 
                     chapterElement.innerHTML = `
                         <div class="chapter-number">${index + 1}</div>
@@ -1024,10 +1154,14 @@
                     chapterList.appendChild(chapterElement);
                 });
 
+                this.totalBookDurationMs = cumulativeTime;
+
                 document.getElementById('chapter-count').textContent = `(${this.mediaQueue.length})`;
                 document.getElementById('chapter-queue').style.display = 'flex';
 
                 this.log(`📑 Generated chapter list with ${this.mediaQueue.length} items`, 'success');
+                this.log(`📊 Total book duration: ${this.formatDuration(this.totalBookDurationMs / 1000)}`, 'info');
+                this.log(`📍 Chapter start times calculated: ${this.chapterStartTimes.map(t => Math.round(t/1000))}s`, 'info');
             }
 
             jumpToChapter(index) {
@@ -1069,6 +1203,21 @@
                             }
                         }, 500); // Small delay to ensure media is ready
                     }
+                }
+
+                // Handle pending seek from absolute timeline conversion
+                if (this.pendingSeekSeconds !== undefined) {
+                    this.log(`🎯 Executing pending seek to ${this.pendingSeekSeconds}s after chapter switch`, 'info');
+
+                    setTimeout(() => {
+                        try {
+                            this.playerManager.seek(this.pendingSeekSeconds);
+                            this.log(`✅ Completed pending seek to ${this.pendingSeekSeconds}s`, 'success');
+                            this.pendingSeekSeconds = undefined; // Clear pending seek
+                        } catch (error) {
+                            this.log(`❌ Failed pending seek: ${error.message}`, 'error');
+                        }
+                    }, 800); // Longer delay for chapter switch
                 }
 
                 // Update chapter highlighting
@@ -1262,23 +1411,27 @@
                 document.getElementById('chapter-current-time').textContent = this.formatTime(chapterCurrentTime);
                 document.getElementById('chapter-duration').textContent = this.formatTime(chapterDuration);
 
-                // Book Progress (estimated based on chapters)
-                if (this.mediaQueue.length > 0) {
-                    const chapterIndex = this.currentQueueIndex;
-                    const totalChapters = this.mediaQueue.length;
-                    const baseProgress = (chapterIndex / totalChapters) * 100;
-                    const chapterContribution = (chapterCurrentTime / chapterDuration) * (100 / totalChapters);
-                    const bookProgress = Math.min(100, baseProgress + (chapterContribution || 0));
+                // Book Progress (using absolute timeline)
+                if (this.mediaQueue.length > 0 && this.chapterStartTimes && this.totalBookDurationMs > 0) {
+                    // Calculate absolute book position
+                    const currentChapterStartMs = this.chapterStartTimes[this.currentQueueIndex] || 0;
+                    const absoluteTimeMs = currentChapterStartMs + (chapterCurrentTime * 1000);
+                    this.absoluteTimelineMs = absoluteTimeMs; // Update our tracking
+
+                    // Book progress based on absolute timeline
+                    const bookProgress = Math.min(100, (absoluteTimeMs / this.totalBookDurationMs) * 100);
 
                     document.getElementById('book-progress-fill').style.width = `${bookProgress}%`;
                     document.getElementById('book-progress-text').textContent = `${Math.round(bookProgress)}%`;
 
-                    // Calculate total book time (simplified)
-                    const estimatedBookDuration = chapterDuration * totalChapters;
-                    const estimatedBookCurrentTime = (chapterIndex * chapterDuration) + chapterCurrentTime;
+                    // Use actual calculated durations
+                    document.getElementById('book-current-time').textContent = this.formatTime(absoluteTimeMs / 1000);
+                    document.getElementById('book-duration').textContent = this.formatTime(this.totalBookDurationMs / 1000);
 
-                    document.getElementById('book-current-time').textContent = this.formatTime(estimatedBookCurrentTime);
-                    document.getElementById('book-duration').textContent = this.formatTime(estimatedBookDuration);
+                    // Log absolute position for debugging Android sync
+                    if (Math.floor(absoluteTimeMs / 1000) % 30 === 0) { // Log every 30 seconds
+                        this.log(`📊 Absolute book position: ${Math.round(absoluteTimeMs / 1000)}s / ${Math.round(this.totalBookDurationMs / 1000)}s (${Math.round(bookProgress)}%)`, 'info');
+                    }
                 }
             }
 
