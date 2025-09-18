@@ -67,7 +67,8 @@
               <ui-icon icon="refresh" class="mr-1" />
               {{ $strings.ButtonRefresh }}
             </ui-btn>
-            <div v-else></div> <!-- Empty div to maintain layout -->
+            <div v-else></div>
+            <!-- Empty div to maintain layout -->
             <ui-btn size="sm" @click="show = false">
               {{ $strings.ButtonClose }}
             </ui-btn>
@@ -128,7 +129,6 @@ export default {
         setTimeout(() => {
           this.show = false
         }, 500)
-
       } catch (error) {
         console.error('Failed to connect to cast device:', error)
         this.$toast.error(this.$strings.ToastCastDeviceConnectionFailed.replace('{0}', device.name))
@@ -145,7 +145,6 @@ export default {
 
         // Refresh device list to update connection states after disconnect
         await this.refreshDevices()
-
       } catch (error) {
         console.error('Failed to disconnect from cast device:', error)
         this.$toast.error(this.$strings.ToastCastDeviceDisconnectionFailed.replace('{0}', device.name))

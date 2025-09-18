@@ -165,20 +165,20 @@ class AudiobookMediaItemConverter : MediaItemConverter {
         // This enables the cast receiver to browse libraries, collections, etc.
         val serverUrl = com.audiobookshelf.app.device.DeviceManager.serverAddress
         val token = com.audiobookshelf.app.device.DeviceManager.token
-        
+
         Log.d("AudiobookConverter", "DeviceManager state - serverUrl: '$serverUrl', token present: ${token.isNotEmpty()}")
         Log.d("AudiobookConverter", "DeviceManager isConnectedToServer: ${com.audiobookshelf.app.device.DeviceManager.isConnectedToServer}")
-        
+
         if (serverUrl.isEmpty()) {
             Log.w("AudiobookConverter", "Server URL is empty - Cast receiver Media Browse API will not work")
         }
         if (token.isEmpty()) {
             Log.w("AudiobookConverter", "Token is empty - Cast receiver authentication will fail")
         }
-        
+
         customData.put("serverUrl", serverUrl)
         customData.put("token", token)
-        
+
         // Extract libraryId from mediaId if available (format: libraryItemId_chapter_N)
         // For the Media Browse API, we need the library ID to browse content
         val mediaId = mediaItem.mediaId ?: ""

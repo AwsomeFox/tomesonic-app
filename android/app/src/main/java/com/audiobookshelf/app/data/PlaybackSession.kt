@@ -716,7 +716,7 @@ class PlaybackSession(
         putInt("skip_backward_ms", 10000) // 10 seconds
         putString("media_type", "audiobook")
         putBoolean("supports_speed_control", true)
-        
+
         // Add library ID for Media Browse API support in Cast receiver
         if (libraryItem?.libraryId != null) {
           putString("libraryId", libraryItem!!.libraryId)

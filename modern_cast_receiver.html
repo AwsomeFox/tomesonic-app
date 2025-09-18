@@ -276,28 +276,28 @@
             line-height: 1.4;
         }
 
-        .log-entry.info { 
-            color: #e0e0e0; 
+        .log-entry.info {
+            color: #e0e0e0;
             background: rgba(255,255,255,0.02);
         }
-        .log-entry.success { 
-            color: #4CAF50; 
+        .log-entry.success {
+            color: #4CAF50;
             background: rgba(76,175,80,0.1);
             border-left: 4px solid #4CAF50;
         }
-        .log-entry.warning { 
-            color: #ff9800; 
+        .log-entry.warning {
+            color: #ff9800;
             background: rgba(255,152,0,0.1);
             border-left: 4px solid #ff9800;
         }
-        .log-entry.error { 
-            color: #f44336; 
+        .log-entry.error {
+            color: #f44336;
             background: rgba(244,67,54,0.15);
             border-left: 4px solid #f44336;
             font-weight: bold;
         }
-        .log-entry.debug { 
-            color: #2196F3; 
+        .log-entry.debug {
+            color: #2196F3;
             background: rgba(33,150,243,0.05);
             font-size: 12px;
         }
@@ -404,7 +404,7 @@
     <!-- Quick Test Section for Development -->
     <div style="position: fixed; top: 20px; right: 20px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; max-width: 300px; display: none;" id="test-panel">
         <h4 style="color: #fff; margin-top: 0; font-size: 14px;">🧪 Quick URL Test</h4>
-        <input type="text" id="test-url" value="https://audiobookshelf.awsomefox.com/public/session/5b83663b-2834-459b-b007-c8e27df43d1d/track/1" 
+        <input type="text" id="test-url" value="https://audiobookshelf.awsomefox.com/public/session/5b83663b-2834-459b-b007-c8e27df43d1d/track/1"
                style="width: 100%; padding: 5px; margin: 5px 0; font-size: 11px; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px;">
         <div style="margin: 5px 0;">
             <button onclick="testQuickURL()" style="padding: 5px 10px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;">Test URL</button>
@@ -456,7 +456,7 @@
             const logEntry = document.createElement('div');
             logEntry.className = `log-entry ${type}`;
             logEntry.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
-            
+
             debugContent.appendChild(logEntry);
             debugContent.scrollTop = debugContent.scrollHeight;
 
@@ -482,7 +482,7 @@
         function toggleDebugPanel() {
             const debugPanel = document.getElementById('debug-panel');
             const debugContent = document.getElementById('debug-content');
-            
+
             if (debugContent.style.display === 'none') {
                 debugContent.style.display = 'block';
                 debugPanel.style.height = '40vh';
@@ -509,7 +509,7 @@
 
                 const url = `${AUDIOBOOKSHELF_CONFIG.serverUrl}${endpoint}`;
                 addLog(`🌐 API Request: ${url}`, 'debug');
-                
+
                 const headers = {
                     'Content-Type': 'application/json',
                     ...options.headers
@@ -544,7 +544,7 @@
         // Test API connectivity
         async function testAPIConnectivity() {
             addLog('🧪 Testing API connectivity...', 'info');
-            
+
             if (!AUDIOBOOKSHELF_CONFIG.serverUrl) {
                 addLog('❌ Cannot test API - no server URL configured', 'error');
                 return;
@@ -554,7 +554,7 @@
                 // Test the simplest endpoint first
                 await fetchFromAPI('/ping');
                 addLog('✅ API connectivity test passed - /ping endpoint working', 'success');
-                
+
                 // Test authenticated endpoint if token is available
                 if (AUDIOBOOKSHELF_CONFIG.token) {
                     try {
@@ -788,7 +788,7 @@
                 addLog('🗂️ Setting up Media Browse API support...', 'info');
 
                 const context = cast.framework.CastReceiverContext.getInstance();
-                
+
                 // Get MediaManager from context (not a constructor in Cast Framework v3)
                 mediaManager = context.getMediaManager();
 
@@ -1346,26 +1346,26 @@
                         // Test content URL accessibility for 905 error prevention
                         if (mediaInfo.contentId) {
                             addLog(`🔍 Testing content URL accessibility: ${mediaInfo.contentId}`, 'debug');
-                            
+
                             // Extract the actual URL to test (before any # fragments)
                             const urlToTest = mediaInfo.contentId.split('#')[0];
                             addLog(`🔗 Base URL to test: ${urlToTest}`, 'debug');
-                            
+
                             // Check if this is a public session URL (no auth needed)
                             const isPublicSession = urlToTest.includes('/public/session/');
                             addLog(`🔓 Public session URL: ${isPublicSession}`, 'debug');
-                            
+
                             // Enhanced accessibility check with comprehensive testing
                             const performDetailedURLTest = async () => {
                                 try {
                                     // Test 1: HEAD request (what Cast receiver does first)
                                     addLog(`📡 Test 1/4: HEAD request...`, 'info');
-                                    const headOptions = { 
+                                    const headOptions = {
                                         method: 'HEAD',
                                         mode: 'cors',
                                         credentials: 'omit'
                                     };
-                                    
+
                                     // For non-public URLs, add auth if available
                                     if (!isPublicSession && AUDIOBOOKSHELF_CONFIG.token) {
                                         headOptions.headers = {
@@ -1373,34 +1373,34 @@
                                         };
                                         addLog(`🔑 Adding auth header for non-public URL`, 'debug');
                                     }
-                                    
+
                                     const headResponse = await fetch(urlToTest, headOptions);
-                                    
+
                                     if (headResponse.ok) {
                                         addLog(`✅ HEAD successful: ${headResponse.status} ${headResponse.statusText}`, 'success');
-                                        
+
                                         // Log all response headers for comprehensive debugging
                                         addLog(`📋 Response headers:`, 'debug');
                                         for (const [key, value] of headResponse.headers.entries()) {
                                             addLog(`   ${key}: ${value}`, 'debug');
                                         }
-                                        
+
                                         // Validate critical headers
                                         const contentType = headResponse.headers.get('content-type');
                                         const contentLength = headResponse.headers.get('content-length');
                                         const corsOrigin = headResponse.headers.get('access-control-allow-origin');
-                                        
+
                                         if (contentType && contentType.startsWith('audio/')) {
                                             addLog(`🎵 Valid audio content type: ${contentType}`, 'success');
                                         } else {
                                             addLog(`⚠️ Unexpected content type: ${contentType || 'unknown'}`, 'warning');
                                         }
-                                        
+
                                         if (contentLength) {
                                             const sizeMB = Math.round(parseInt(contentLength) / 1024 / 1024);
                                             addLog(`📏 Content size: ${sizeMB}MB`, 'info');
                                         }
-                                        
+
                                         if (corsOrigin === '*') {
                                             addLog(`🌐 CORS properly configured for Cast`, 'success');
                                         } else if (corsOrigin) {
@@ -1408,11 +1408,11 @@
                                         } else {
                                             addLog(`❌ Missing CORS headers - may cause Cast failure`, 'error');
                                         }
-                                        
+
                                     } else {
                                         addLog(`❌ HEAD failed: ${headResponse.status} ${headResponse.statusText}`, 'error');
                                         addLog(`🔧 This WILL cause Error 905 (LOAD_FAILED)`, 'error');
-                                        
+
                                         // Get response body for 404 errors to understand what's happening
                                         if (headResponse.status === 404) {
                                             try {
@@ -1424,7 +1424,7 @@
                                         }
                                         return;
                                     }
-                                    
+
                                     // Test 2: CORS preflight for actual GET request
                                     addLog(`🌐 Test 2/4: CORS preflight...`, 'info');
                                     try {
@@ -1441,7 +1441,7 @@
                                     } catch (corsError) {
                                         addLog(`⚠️ CORS preflight failed: ${corsError.message}`, 'warning');
                                     }
-                                    
+
                                     // Test 3: Range request (simulates media loading)
                                     addLog(`📥 Test 3/4: Range request (simulating media loading)...`, 'info');
                                     try {
@@ -1452,27 +1452,27 @@
                                                 'Range': 'bytes=0-1023'
                                             }
                                         };
-                                        
+
                                         if (!isPublicSession && AUDIOBOOKSHELF_CONFIG.token) {
                                             rangeOptions.headers['Authorization'] = `Bearer ${AUDIOBOOKSHELF_CONFIG.token}`;
                                         }
-                                        
+
                                         const rangeResponse = await fetch(urlToTest, rangeOptions);
-                                        
+
                                         if (rangeResponse.ok || rangeResponse.status === 206) {
                                             addLog(`✅ Range request successful: ${rangeResponse.status}`, 'success');
-                                            
+
                                             // Read the sample content and analyze
                                             const sample = await rangeResponse.arrayBuffer();
                                             addLog(`📊 Downloaded ${sample.byteLength} bytes for analysis`, 'debug');
-                                            
+
                                             // Basic audio format detection
                                             const view = new Uint8Array(sample);
                                             if (view.length >= 8) {
-                                                const header = Array.from(view.slice(0, 8)).map(b => 
+                                                const header = Array.from(view.slice(0, 8)).map(b =>
                                                     b.toString(16).padStart(2, '0')).join(' ');
                                                 addLog(`🎵 File header bytes: ${header}`, 'debug');
-                                                
+
                                                 // Audio format detection
                                                 if (view[0] === 0xFF && (view[1] & 0xE0) === 0xE0) {
                                                     addLog(`🎵 Detected: MP3 format`, 'success');
@@ -1484,7 +1484,7 @@
                                                     addLog(`❓ Unknown audio format - may still work`, 'warning');
                                                 }
                                             }
-                                            
+
                                         } else {
                                             addLog(`❌ Range request failed: ${rangeResponse.status}`, 'error');
                                             addLog(`💡 Cast media loading uses range requests and will fail`, 'error');
@@ -1492,7 +1492,7 @@
                                     } catch (rangeError) {
                                         addLog(`💥 Range request error: ${rangeError.message}`, 'error');
                                     }
-                                    
+
                                     // Test 4: Full URL validation
                                     addLog(`🔍 Test 4/4: URL structure validation...`, 'info');
                                     try {
@@ -1501,7 +1501,7 @@
                                         addLog(`   Protocol: ${urlObj.protocol}`, 'debug');
                                         addLog(`   Host: ${urlObj.hostname}:${urlObj.port || 'default'}`, 'debug');
                                         addLog(`   Path: ${urlObj.pathname}`, 'debug');
-                                        
+
                                         // Validate session ID format if it's a public session
                                         if (isPublicSession) {
                                             const sessionMatch = urlObj.pathname.match(/\/public\/session\/([a-f0-9-]+)\//);
@@ -1518,9 +1518,9 @@
                                     } catch (urlError) {
                                         addLog(`❌ Invalid URL: ${urlError.message}`, 'error');
                                     }
-                                    
+
                                     addLog(`🏁 URL testing complete - check results above`, 'info');
-                                    
+
                                 } catch (error) {
                                     addLog(`💥 URL testing failed: ${error.message}`, 'error');
                                     addLog(`💡 Error type: ${error.name}`, 'error');
@@ -1529,7 +1529,7 @@
                                     }
                                 }
                             };
-                            
+
                             // Run the comprehensive test asynchronously
                             performDetailedURLTest();
                         }
@@ -1575,18 +1575,18 @@
                             if (customData.originalUri) {
                                 addLog(`🔗 Original content ID: ${mediaInfo.contentId}`, 'debug');
                                 addLog(`🔗 Replacing with custom URI: ${customData.originalUri}`, 'info');
-                                
+
                                 // Validate the original URI before using it
                                 try {
                                     new URL(customData.originalUri);
                                     loadRequest.media.contentId = customData.originalUri;
                                     addLog(`✅ Custom URI is valid and applied`, 'success');
-                                    
+
                                     // Log URI details for debugging
                                     const isPublicSession = customData.originalUri.includes('/public/session/');
                                     const hasSessionId = /\/public\/session\/([a-f0-9-]+)\//.test(customData.originalUri);
                                     addLog(`📋 URI analysis: public=${isPublicSession}, hasSessionId=${hasSessionId}`, 'debug');
-                                    
+
                                 } catch (urlError) {
                                     addLog(`❌ Invalid original URI: ${urlError.message}`, 'error');
                                     addLog(`🔧 Keeping original content ID: ${mediaInfo.contentId}`, 'warning');
@@ -1749,7 +1749,7 @@
                                             addLog('   3. Authentication required but not provided in URL', 'error');
                                             addLog('   4. Unsupported media format or codec', 'error');
                                             addLog('   5. Network connectivity issues', 'error');
-                                            
+
                                             // Log current media details for debugging
                                             const failedMedia = playerManager.getMediaInformation();
                                             if (failedMedia) {
@@ -1927,7 +1927,7 @@
             }
 
             addLog(`🧪 Quick testing URL: ${url}`, 'info');
-            
+
             try {
                 // Test HEAD request
                 const headResponse = await fetch(url, { method: 'HEAD', mode: 'cors' });
@@ -1952,7 +1952,7 @@
             }
 
             addLog(`🎵 Loading test URL directly into Cast receiver...`, 'info');
-            
+
             // Create a minimal media info object
             const mediaInfo = new cast.framework.messages.MediaInformation();
             mediaInfo.contentId = url;

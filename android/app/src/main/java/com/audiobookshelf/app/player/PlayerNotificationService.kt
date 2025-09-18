@@ -979,25 +979,25 @@ class PlayerNotificationService : MediaLibraryService() {
         // CAST PLAYER PREPARATION PATH
         Log.d(tag, "NEW_ARCHITECTURE: Using Cast player - preparing MediaItems instead of MediaSource")
         Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Setting up Cast player with MediaItems")
-        
+
         try {
           // Create cast-specific MediaItems
           val castMediaItems = castPlayerManager.createCastMediaItems(playbackSession)
           Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Created ${castMediaItems.size} Cast MediaItems")
-          
+
           if (castMediaItems.isEmpty()) {
             Log.e("NUXT_SKIP_DEBUG", "preparePlayer: CAST ERROR - No MediaItems created for Cast player")
             currentPlaybackSession = null
             return
           }
-          
+
           // Calculate initial position for Cast
           val startPosition = playbackSession.currentTimeMs
           val startIndex = getChapterIndexForTime(startPosition)
           val chapterRelativePosition = startPosition - (getCurrentBookChapter()?.startMs ?: 0L)
-          
+
           Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Cast starting at index $startIndex, position ${chapterRelativePosition}ms")
-          
+
           // Load the Cast player with MediaItems
           castPlayerManager.loadCastPlayer(
             mediaItems = castMediaItems,
@@ -1005,15 +1005,15 @@ class PlayerNotificationService : MediaLibraryService() {
             startPositionMs = chapterRelativePosition.coerceAtLeast(0L),
             playWhenReady = playWhenReady
           )
-          
+
           // Set playback speed for Cast
           currentPlayer.setPlaybackSpeed(playbackRateToUse)
           Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Cast playback speed set to $playbackRateToUse")
-          
+
           // Log Cast preparation completion
           Log.d("NUXT_SKIP_DEBUG", "preparePlayer: CAST COMPLETION - MediaItems loaded: ${castMediaItems.size}")
           Log.d("NUXT_SKIP_DEBUG", "preparePlayer: CAST COMPLETION - Cast player prepared successfully")
-          
+
         } catch (e: Exception) {
           Log.e("NUXT_SKIP_DEBUG", "preparePlayer: CAST EXCEPTION during preparation: ${e.javaClass.simpleName}: ${e.message}")
           Log.e("NUXT_SKIP_DEBUG", "preparePlayer: CAST EXCEPTION stack trace:", e)

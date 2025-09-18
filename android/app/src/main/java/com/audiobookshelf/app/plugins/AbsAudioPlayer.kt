@@ -567,7 +567,7 @@ class AbsAudioPlayer : Plugin() {
       val castOptions = castContext?.castOptions
       Log.d(tag, "CAST_DEBUG: Cast Context receiver app ID: ${castOptions?.receiverApplicationId}")
       Log.d(tag, "CAST_DEBUG: Expected app ID: 242E16ED")
-      
+
       if (castOptions?.receiverApplicationId != "242E16ED") {
         Log.e(tag, "CAST_DEBUG: *** MISMATCH! Cast Context is using wrong app ID: ${castOptions?.receiverApplicationId}")
         Log.e(tag, "CAST_DEBUG: *** This indicates Cast framework cache issue or CastOptionsProvider not being used")
