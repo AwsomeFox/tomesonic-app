@@ -1,5 +1,5 @@
 <template>
-  <span 
+  <span
     :style="{
       width: actualSize + 'px',
       height: actualSize + 'px',
