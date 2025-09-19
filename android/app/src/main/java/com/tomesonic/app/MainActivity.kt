@@ -166,6 +166,11 @@ class MainActivity : BridgeActivity() {
 
     // Ensure safe area insets are set when app resumes
     updateSafeAreaInsets()
+
+    // Add delayed retry to ensure WebView is fully ready
+    Handler(Looper.getMainLooper()).postDelayed({
+      updateSafeAreaInsets()
+    }, 200)
   }
 
   private fun updateSafeAreaInsets() {
@@ -199,6 +204,8 @@ class MainActivity : BridgeActivity() {
        document.documentElement.style.setProperty('--safe-area-inset-bottom', '${bottom}px');
        document.documentElement.style.setProperty('--safe-area-inset-left', '${left}px');
        document.documentElement.style.setProperty('--safe-area-inset-right', '${right}px');
+       document.documentElement.setAttribute('data-safe-area-ready', 'true');
+       console.log('[Android] Updated safe area insets on resume - top: ${top}px, bottom: ${bottom}px');
       """.trimIndent()
       webView.evaluateJavascript(js, null)
     }

@@ -3,7 +3,9 @@
 ## Build Commands
 
 ### Nuxt.js Static Site Generation
+
 To build the static files for the Nuxt.js application, use:
+
 ```bash
 npm run generate && npm cap sync android
 ```

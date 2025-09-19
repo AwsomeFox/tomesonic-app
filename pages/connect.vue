@@ -5,7 +5,7 @@
         <span class="material-symbols text-display-large text-on-surface">arrow_back</span>
       </nuxt-link>
       <div class="absolute top-0 left-0 w-full p-6 flex items-center flex-col justify-center z-0 short:hidden">
-        <ui-tomesonic-logo :size="80" color="on-surface" class="mb-2" />
+        <ui-tomesonic-app-icon :size="80" color="on-surface" class="mb-2" />
         <h1 class="text-headline-medium">TomeSonic</h1>
       </div>
       <p class="hidden absolute short:block top-1.5 left-12 p-2 text-headline-small">TomeSonic</p>

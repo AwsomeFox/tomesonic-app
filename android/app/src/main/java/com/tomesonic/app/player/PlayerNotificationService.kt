@@ -476,6 +476,13 @@ class PlayerNotificationService : MediaLibraryService() {
         return
       }
 
+      // Check if the session needs refresh before preparing player
+      if (playbackSession.needsSessionRefresh()) {
+        Log.d(tag, "Session needs refresh, requesting fresh session from server")
+        refreshPlaybackSession(playbackSession, playWhenReady, playbackRate)
+        return
+      }
+
       try {
       if (!isStarted) {
         Log.i(tag, "preparePlayer: service not started - Starting service --")
@@ -739,6 +746,14 @@ class PlayerNotificationService : MediaLibraryService() {
       // NEW MEDIA3 ARCHITECTURE: Use MediaSource instead of MediaItems
       Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Building MediaSource for '${playbackSession.displayTitle}'")
 
+      // Additional validation: Check for any signs of session expiry before building MediaSource
+      if (!playbackSession.isLocal && playbackSession.audioTracks.isNotEmpty()) {
+        val firstTrackUrl = playbackSession.audioTracks[0].contentUrl
+        if (firstTrackUrl.contains("session") && playbackSession.isLikelyExpired()) {
+          Log.w("NUXT_SKIP_DEBUG", "preparePlayer: Session appears expired but passed refresh check. URL: $firstTrackUrl")
+        }
+      }
+
       // Build the MediaSource using the new architecture
       // Determine if we should build for cast based on the media player type
       val forCast = playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST
@@ -747,6 +762,10 @@ class PlayerNotificationService : MediaLibraryService() {
       } catch (e: Exception) {
         Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to build MediaSource: ${e.javaClass.simpleName}: ${e.message}")
         Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource build exception:", e)
+        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Session info - isLocal: ${playbackSession.isLocal}, sessionId: ${playbackSession.id}")
+        if (!playbackSession.isLocal && playbackSession.audioTracks.isNotEmpty()) {
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: First track URL: ${playbackSession.audioTracks[0].contentUrl}")
+        }
         currentPlaybackSession = null
         return
       }
@@ -1100,6 +1119,52 @@ class PlayerNotificationService : MediaLibraryService() {
         lastActiveQueueItemIndex = -1
         queueSetForCurrentSession = false
         clientEventEmitter?.onPlaybackFailed("Failed to prepare media item: ${e.message}")
+      }
+    }
+  }
+
+  /**
+   * Refreshes an expired playback session by requesting a new session from the server
+   * while preserving the current playback position and state
+   */
+  private fun refreshPlaybackSession(
+    oldSession: PlaybackSession,
+    playWhenReady: Boolean,
+    playbackRate: Float?
+  ) {
+    Log.d(tag, "Refreshing expired session for: ${oldSession.displayTitle}")
+
+    // Create the request payload
+    val playItemRequestPayload = getPlayItemRequestPayload(false) // Never start playing during refresh
+
+    // Request a new session from the server
+    apiHandler.playLibraryItem(
+      oldSession.libraryItemId ?: "",
+      oldSession.episodeId,
+      playItemRequestPayload
+    ) { newSession ->
+      if (newSession != null) {
+        // Preserve the current playback position and other state from the old session
+        newSession.currentTime = oldSession.currentTime
+        newSession.timeListening = oldSession.timeListening
+        // Update timestamp to mark session as fresh
+        newSession.updatedAt = System.currentTimeMillis()
+
+        Log.d(tag, "Session refreshed successfully, continuing with playback at ${newSession.currentTime}s")
+
+        // Always ensure refreshed sessions start paused (unless in Android Auto)
+        val shouldPlay = isAndroidAuto && playWhenReady
+
+        // Continue with the new session by calling preparePlayer again (avoiding infinite recursion)
+        Handler(Looper.getMainLooper()).post {
+          // Call preparePlayer with the new session (it won't need refresh since it's fresh)
+          preparePlayer(newSession, shouldPlay, playbackRate, skipCastCheck = true)
+        }
+      } else {
+        Log.e(tag, "Failed to refresh session for ${oldSession.displayTitle}")
+        Handler(Looper.getMainLooper()).post {
+          clientEventEmitter?.onPlaybackFailed("Unable to refresh session. Please try again.")
+        }
       }
     }
   }

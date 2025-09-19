@@ -148,10 +148,13 @@ export default {
         // Base height for the navigation bar (56px is Material 3 standard)
         const baseHeight = 56
         // Add safe area inset
-        const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
+        const safeInsetStr = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '') || '0'
+        const safeInset = parseFloat(safeInsetStr) || 0
         const totalHeight = Math.min(baseHeight + safeInset, 80) // Cap at 80px
+
+        // Always set the base height (the safe area padding is handled separately in the template)
         document.documentElement.style.setProperty('--bottom-nav-height', `${baseHeight}px`)
-        console.log('[BookshelfNavBar] Set --bottom-nav-height to:', baseHeight, 'px')
+        console.log('[BookshelfNavBar] Set --bottom-nav-height to:', baseHeight, 'px with safe inset:', safeInset, 'px')
       } catch (e) {
         console.warn('[BookshelfNavBar] Error setting bottom nav height:', e)
         document.documentElement.style.setProperty('--bottom-nav-height', '56px')
@@ -174,8 +177,8 @@ export default {
     // This helps catch cases where the native code sets variables after component mount
     let checkCount = 0
     const periodicCheck = () => {
-      if (checkCount < 30) {
-        // Check for 3 seconds (30 * 100ms)
+      if (checkCount < 60) {
+        // Extended check for 6 seconds (60 * 100ms) to account for slower WebView init
         updateBottomNavHeight()
         checkCount++
         setTimeout(periodicCheck, 100)

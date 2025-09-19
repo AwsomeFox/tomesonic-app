@@ -138,13 +138,81 @@ class NetworkConnectivityManager(
 
                     // If connected to server, check if server has newer progress for same media
                     if (DeviceManager.checkConnectivity(context)) {
-                        service.checkServerSessionVsLocal(lastPlaybackSession, { shouldUseServer: Boolean, serverSession: PlaybackSession? ->
-                            val sessionToUse = if (shouldUseServer && serverSession != null) {
-                                serverSession
-                            } else {
-                                lastPlaybackSession
-                            }
+                        // For remote streaming, always request a fresh session to avoid expired URLs
+                        if (!lastPlaybackSession.isLocal) {
+                            Log.d("NetworkConnectivityManager", "Remote session detected, requesting fresh session from server")
 
+                            // Get fresh session from server, preserving position
+                            val playItemRequestPayload = service.getPlayItemRequestPayload(false)
+                            service.apiHandler.playLibraryItem(
+                                lastPlaybackSession.libraryItemId ?: "",
+                                lastPlaybackSession.episodeId,
+                                playItemRequestPayload
+                            ) { freshSession ->
+                                if (freshSession != null) {
+                                    // Check server progress vs local and use the latest position
+                                    service.checkServerSessionVsLocal(lastPlaybackSession, { shouldUseServer: Boolean, serverSession: PlaybackSession? ->
+                                        val positionToUse = if (shouldUseServer && serverSession != null) {
+                                            serverSession.currentTime
+                                        } else {
+                                            lastPlaybackSession.currentTime
+                                        }
+
+                                        // Apply the latest position to fresh session
+                                        freshSession.currentTime = positionToUse
+                                        freshSession.timeListening = lastPlaybackSession.timeListening
+
+                                        Log.d("NetworkConnectivityManager", "Using fresh session with position: ${freshSession.currentTime}s")
+
+                                        // Determine if we should start playing based on Android Auto mode
+                                        val shouldStartPlaying = service.isAndroidAuto
+                                        val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+
+                                        Handler(Looper.getMainLooper()).post {
+                                            if (service.mediaProgressSyncer.listeningTimerRunning) {
+                                                service.mediaProgressSyncer.stop {
+                                                    service.preparePlayer(freshSession, shouldStartPlaying, savedPlaybackSpeed)
+                                                }
+                                            } else {
+                                                service.mediaProgressSyncer.reset()
+                                                service.preparePlayer(freshSession, shouldStartPlaying, savedPlaybackSpeed)
+                                            }
+                                        }
+                                    })
+                                } else {
+                                    Log.e("NetworkConnectivityManager", "Failed to get fresh session, falling back to restoration via AbsAudioPlayer")
+                                    // Fall back to normal restoration flow which already handles this
+                                }
+                            }
+                        } else {
+                            // Local session - use existing logic
+                            service.checkServerSessionVsLocal(lastPlaybackSession, { shouldUseServer: Boolean, serverSession: PlaybackSession? ->
+                                val sessionToUse = if (shouldUseServer && serverSession != null) {
+                                    serverSession
+                                } else {
+                                    lastPlaybackSession
+                                }
+
+                                // Determine if we should start playing based on Android Auto mode
+                                val shouldStartPlaying = service.isAndroidAuto
+
+                                // Prepare the player with appropriate play state and saved playback speed
+                                val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+                                Handler(Looper.getMainLooper()).post {
+                                    if (service.mediaProgressSyncer.listeningTimerRunning) {
+                                        service.mediaProgressSyncer.stop {
+                                            service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
+                                        }
+                                    } else {
+                                        service.mediaProgressSyncer.reset()
+                                        service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
+                                    }
+                                }
+                            })
+                        }
+                    } else {
+                        // No connectivity, use local session only (remote sessions can't work without connectivity)
+                        if (lastPlaybackSession.isLocal) {
                             // Determine if we should start playing based on Android Auto mode
                             val shouldStartPlaying = service.isAndroidAuto
 
@@ -153,30 +221,15 @@ class NetworkConnectivityManager(
                             Handler(Looper.getMainLooper()).post {
                                 if (service.mediaProgressSyncer.listeningTimerRunning) {
                                     service.mediaProgressSyncer.stop {
-                                        service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
+                                        service.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                                     }
                                 } else {
                                     service.mediaProgressSyncer.reset()
-                                    service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
-                                }
-                            }
-                        })
-                    } else {
-                        // No connectivity, use local session
-                        // Determine if we should start playing based on Android Auto mode
-                        val shouldStartPlaying = service.isAndroidAuto
-
-                        // Prepare the player with appropriate play state and saved playback speed
-                        val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
-                        Handler(Looper.getMainLooper()).post {
-                            if (service.mediaProgressSyncer.listeningTimerRunning) {
-                                service.mediaProgressSyncer.stop {
                                     service.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                                 }
-                            } else {
-                                service.mediaProgressSyncer.reset()
-                                service.preparePlayer(lastPlaybackSession, shouldStartPlaying, savedPlaybackSpeed)
                             }
+                        } else {
+                            Log.d("NetworkConnectivityManager", "Remote session requires connectivity, skipping restoration")
                         }
                     }
                     return

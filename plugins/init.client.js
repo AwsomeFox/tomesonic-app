@@ -374,7 +374,7 @@ export default ({ store, app }, inject) => {
   // Ensure safe-area CSS variables are present and notify the document when ready.
   // Some WebView environments may not have them immediately available on first paint.
   const ensureSafeAreaVars = () => {
-    const maxAttempts = 50 // Increased from 20 to 50 (5 seconds total)
+    const maxAttempts = 100 // Increased to 100 attempts (10 seconds total)
     let attempts = 0
 
     function check() {
@@ -425,10 +425,19 @@ export default ({ store, app }, inject) => {
       // Set reasonable fallback values for Android devices
       const docStyle = document.documentElement.style
       if (!docStyle.getPropertyValue('--safe-area-inset-top')) {
-        docStyle.setProperty('--safe-area-inset-top', '24px') // Typical Android status bar
+        // Use more reliable fallback - check if device has status bar
+        const statusBarHeight = window.devicePixelRatio > 1 ? '28px' : '24px'
+        docStyle.setProperty('--safe-area-inset-top', statusBarHeight)
+        console.log('[Init] Set Android status bar fallback:', statusBarHeight)
       }
       if (!docStyle.getPropertyValue('--safe-area-inset-bottom')) {
         docStyle.setProperty('--safe-area-inset-bottom', '0px') // Will be updated by native
+      }
+      if (!docStyle.getPropertyValue('--safe-area-inset-left')) {
+        docStyle.setProperty('--safe-area-inset-left', '0px')
+      }
+      if (!docStyle.getPropertyValue('--safe-area-inset-right')) {
+        docStyle.setProperty('--safe-area-inset-right', '0px')
       }
     }
   } else {

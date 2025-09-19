@@ -22,7 +22,7 @@
 
     <div v-if="imageFailed" class="absolute top-0 left-0 right-0 bottom-0 w-full h-full bg-red-100" :style="{ padding: placeholderCoverPadding + 'rem' }">
       <div class="w-full h-full border-2 border-error flex flex-col items-center justify-center">
-        <ui-tomesonic-logo :size="64 * sizeMultiplier" color="error" class="mb-2" />
+        <ui-tomesonic-app-icon :size="64 * sizeMultiplier" color="error" class="mb-2" />
         <p class="text-centertext-error" :style="{ fontSize: titleFontSize + 'rem' }">Invalid Cover</p>
       </div>
     </div>
@@ -113,8 +113,8 @@ export default {
     },
     placeholderUrl() {
       // Material 3 book icon as SVG data URL
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg>`;
-      return `data:image/svg+xml;base64,${btoa(svg)}`;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg>`
+      return `data:image/svg+xml;base64,${btoa(svg)}`
     },
     fullCoverUrl() {
       if (this.isLocal) {

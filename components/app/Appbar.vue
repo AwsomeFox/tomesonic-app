@@ -7,7 +7,7 @@
 
       <!-- Logo/Back Navigation - back button takes menu button's position -->
       <nuxt-link v-show="!showBack && !user" to="/" class="mr-4 state-layer rounded-lg p-2 -m-2">
-        <ui-tomesonic-logo :size="32" color="on-surface-variant" />
+        <ui-tomesonic-app-icon :size="32" color="on-surface-variant" />
       </nuxt-link>
       <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="back" />
 
@@ -29,13 +29,13 @@
       <ui-icon-btn v-show="isCastAvailable && user" :icon="isCasting ? 'cast_connected' : 'cast'" variant="standard" color="on-surface-variant" size="medium" class="mx-1" @click="castClick" />
 
       <!-- Search Button -->
-      <nuxt-link v-if="user" to="/search" class="mx-1 block w-12 h-12 rounded-full flex items-center justify-center state-layer transition-all duration-200 ease-standard">
+      <nuxt-link v-if="user" to="/search" class="ml-1 mr-0 block w-12 h-12 rounded-full flex items-center justify-center state-layer transition-all duration-200 ease-standard">
         <span class="material-symbols text-on-surface-variant fill" style="font-size: 1.5rem">search</span>
       </nuxt-link>
 
       <!-- Logo moved to right when user is logged in -->
-      <nuxt-link v-if="user" to="/" class="ml-2 state-layer rounded-lg p-2 -m-2">
-        <ui-tomesonic-logo :size="32" color="on-surface-variant" />
+      <nuxt-link to="/" class="ml-0 w-15 h-15 flex items-center justify-center state-layer rounded-lg">
+        <ui-tomesonic-app-icon :size="32" color="on-surface-variant" />
       </nuxt-link>
     </div>
 
@@ -132,10 +132,20 @@ export default {
         const raw = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top') || ''
         const px = parseFloat(raw.replace('px', '')) || 0
         const cap = Math.min(Math.max(px, 0), 64) // cap at 64px to avoid excessive spacing
-        this.topPadding = `${cap}px`
-        console.log('[AppBar] Updated top padding to:', this.topPadding)
+
+        // Only update if we got a meaningful value or if we don't have any value yet
+        if (cap > 0 || !this.topPadding || this.topPadding === '0px') {
+          this.topPadding = `${cap}px`
+          console.log('[AppBar] Updated top padding to:', this.topPadding)
+        }
       } catch (e) {
-        this.topPadding = '0px'
+        // Set a reasonable fallback for Android devices if no value is available
+        if (!this.topPadding || this.topPadding === '0px') {
+          // Use device pixel ratio to estimate status bar height
+          const fallback = window.devicePixelRatio > 1 ? 28 : 24
+          this.topPadding = `${fallback}px`
+          console.log('[AppBar] Using fallback top padding:', this.topPadding)
+        }
       }
     }
 
@@ -156,8 +166,8 @@ export default {
     // This helps catch cases where the native code sets variables after component mount
     let checkCount = 0
     const periodicCheck = () => {
-      if (checkCount < 30) {
-        // Check for 3 seconds (30 * 100ms)
+      if (checkCount < 60) {
+        // Extended check for 6 seconds (60 * 100ms) to account for slower WebView init
         updateTopPadding()
         checkCount++
         setTimeout(periodicCheck, 100)

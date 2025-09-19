@@ -1,7 +1,7 @@
 <template>
   <div class="splash-screen">
     <div class="splash-content">
-      <ui-tomesonic-logo :size="logoSize" :color="logoColor" class="splash-logo" />
+      <ui-tomesonic-splash-icon :size="logoSize" class="splash-logo" />
       <h1 class="splash-title">TomeSonic</h1>
       <div v-if="showLoading" class="loading-indicator">
         <div class="loading-dots">

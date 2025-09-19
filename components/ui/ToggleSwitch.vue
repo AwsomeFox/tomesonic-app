@@ -58,7 +58,7 @@ export default {
 
       // Position
       if (this.toggleValue) {
-        classes.push('translate-x-5')
+        classes.push('translate-x-6_5')
       } else {
         classes.push('translate-x-0.5')
       }
@@ -126,7 +126,7 @@ export default {
   width: 3.25rem;
 }
 
-.translate-x-5 {
-  transform: translateX(1.25rem);
+.translate-x-6_5 {
+  transform: translateX(1.625rem);
 }
 </style>

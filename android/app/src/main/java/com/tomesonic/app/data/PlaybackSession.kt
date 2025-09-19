@@ -63,6 +63,11 @@ class PlaybackSession(
         var mediaPlayer: String?
 ) {
 
+  companion object {
+    // Session is considered expired after 30 minutes of inactivity
+    private const val SESSION_EXPIRY_TIME_MS = 30 * 60 * 1000L // 30 minutes
+  }
+
   @get:JsonIgnore
   val isHLS
     get() = playMethod == PLAYMETHOD_TRANSCODE
@@ -95,6 +100,37 @@ class PlaybackSession(
   @get:JsonIgnore
   val mediaItemId
     get() = if (episodeId.isNullOrEmpty()) libraryItemId ?: "" else "$libraryItemId-$episodeId"
+
+  /**
+   * Checks if this session might be expired based on the last update time
+   * This is used to determine if we should request a fresh session from the server
+   */
+  @JsonIgnore
+  fun isLikelyExpired(): Boolean {
+    // Don't check expiry for local items
+    if (isLocal) return false
+
+    val currentTime = System.currentTimeMillis()
+    val timeSinceLastUpdate = currentTime - updatedAt
+
+    return timeSinceLastUpdate > SESSION_EXPIRY_TIME_MS
+  }
+
+  /**
+   * Checks if this session needs to be refreshed for server streaming
+   * Returns true for remote sessions that may have expired URLs
+   */
+  @JsonIgnore
+  fun needsSessionRefresh(): Boolean {
+    // Only server sessions need refresh, not local
+    if (isLocal) return false
+
+    // If the session is likely expired, it needs refresh
+    if (isLikelyExpired()) return true
+
+    // If server connection config doesn't match current, needs refresh
+    return serverConnectionConfigId != DeviceManager.serverConnectionConfigId
+  }
 
   @JsonIgnore
   fun getCurrentTrackIndex(): Int {
