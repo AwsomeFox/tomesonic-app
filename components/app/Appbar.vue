@@ -7,7 +7,7 @@
 
       <!-- Logo/Back Navigation - back button takes menu button's position -->
       <nuxt-link v-show="!showBack && !user" to="/" class="mr-4 state-layer rounded-lg p-2 -m-2">
-        <ui-audiobookshelf-logo :size="32" color="on-surface-variant" />
+        <ui-tomesonic-logo :size="32" color="on-surface-variant" />
       </nuxt-link>
       <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="back" />
 
@@ -35,7 +35,7 @@
 
       <!-- Logo moved to right when user is logged in -->
       <nuxt-link v-if="user" to="/" class="ml-2 state-layer rounded-lg p-2 -m-2">
-        <ui-audiobookshelf-logo :size="32" color="on-surface-variant" />
+        <ui-tomesonic-logo :size="32" color="on-surface-variant" />
       </nuxt-link>
     </div>
 

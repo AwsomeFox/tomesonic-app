@@ -18,7 +18,7 @@
 
     <div v-if="imageFailed" class="absolute top-0 left-0 right-0 bottom-0 w-full h-full bg-red-100" :style="{ padding: placeholderCoverPadding + 'rem' }">
       <div class="w-full h-full border-2 border-error flex flex-col items-center justify-center">
-        <ui-audiobookshelf-logo :size="64 * sizeMultiplier" color="error" class="mb-2" />
+        <ui-tomesonic-logo :size="64 * sizeMultiplier" color="error" class="mb-2" />
         <p class="text-centertext-error" :style="{ fontSize: sizeMultiplier + 'rem' }">Invalid Cover</p>
       </div>
     </div>

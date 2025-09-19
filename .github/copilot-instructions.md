@@ -1,4 +1,4 @@
-# Audiobookshelf App - Copilot Instructions
+# TomeSonic App - Copilot Instructions
 
 ## Build Commands
 

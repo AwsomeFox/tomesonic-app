@@ -1,8 +1,8 @@
 <template>
   <div class="splash-screen">
     <div class="splash-content">
-      <ui-audiobookshelf-logo :size="logoSize" :color="logoColor" class="splash-logo" />
-      <h1 class="splash-title">audiobookshelf</h1>
+      <ui-tomesonic-logo :size="logoSize" :color="logoColor" class="splash-logo" />
+      <h1 class="splash-title">TomeSonic</h1>
       <div v-if="showLoading" class="loading-indicator">
         <div class="loading-dots">
           <span class="dot dot-1"></span>
