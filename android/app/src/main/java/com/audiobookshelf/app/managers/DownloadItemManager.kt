@@ -22,11 +22,13 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Manages download items and their parts. */
+@OptIn(DelicateCoroutinesApi::class)
 class DownloadItemManager(
         var downloadManager: DownloadManager,
         private var folderScanner: FolderScanner,

@@ -117,28 +117,25 @@ class MediaSessionManager(
 
         // Jump backward button (loop rewind icon)
         customActions.add(
-            androidx.media3.session.CommandButton.Builder()
+            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_SKIP_BACK)
                 .setDisplayName("Jump Back")
-                .setIconResId(R.drawable.exo_icon_rewind)
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
                 .build()
         )
 
         // Jump forward button (loop forward icon)
         customActions.add(
-            androidx.media3.session.CommandButton.Builder()
+            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_SKIP_FORWARD)
                 .setDisplayName("Jump Forward")
-                .setIconResId(R.drawable.exo_icon_fastforward)
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
                 .build()
         )
 
-        // Speed control button with dynamic icon
-        val speedIcon = getSpeedIcon(currentSpeed)
+        // Speed control button with predefined icon
+        // Note: Using predefined ICON_PLAYBACK_SPEED since custom icons require different approach
         customActions.add(
-            androidx.media3.session.CommandButton.Builder()
+            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_PLAYBACK_SPEED)
                 .setDisplayName("Speed")
-                .setIconResId(speedIcon)
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
                 .build()
         )

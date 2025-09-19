@@ -1,9 +1,5 @@
 import Vue from 'vue'
-import LazyBookCard from '@/components/cards/LazyBookCard'
 import LazyListBookCard from '@/components/cards/LazyListBookCard'
-import LazySeriesCard from '@/components/cards/LazySeriesCard'
-import LazyCollectionCard from '@/components/cards/LazyCollectionCard'
-import LazyPlaylistCard from '@/components/cards/LazyPlaylistCard'
 
 export default {
   data() {
@@ -15,10 +11,7 @@ export default {
   },
   methods: {
     getComponentClass() {
-      if (this.entityName === 'series') return Vue.extend(LazySeriesCard)
-      if (this.entityName === 'collections') return Vue.extend(LazyCollectionCard)
-      if (this.entityName === 'playlists') return Vue.extend(LazyPlaylistCard)
-      // Always use list view for books - removed card view option
+      // Always use LazyListBookCard for all entities since we force list view everywhere
       return Vue.extend(LazyListBookCard)
     },
     async mountEntityCard(index) {
@@ -36,30 +29,11 @@ export default {
         bookComponent.isHovering = false
         return
       }
-      var row = index % this.entitiesPerShelf
-
-      // For grid view (CSS Grid), we don't need manual positioning
-      var usesCssGrid = !this.showBookshelfListView && !this.altViewEnabled &&
-                       (this.entityName === 'series' || this.entityName === 'collections')
-
-      var shelfOffsetX = 0
+      // Since everything now uses list view, center the wider items within the shelf container
+      var availableWidth = this.bookshelfWidth - 32 // Container has px-4 padding (32px total)
+      var overflow = Math.max(0, this.entityWidth - availableWidth)
+      var shelfOffsetX = -overflow / 2 // Center by offsetting half the overflow to the left
       var shelfOffsetY = 4
-
-      if (this.showBookshelfListView || this.entityName === 'books' || this.entityName === 'series-books') {
-        // For list view and books, center the wider items within the shelf container
-        var availableWidth = this.bookshelfWidth - 32 // Container has px-4 padding (32px total)
-        var overflow = Math.max(0, this.entityWidth - availableWidth)
-        shelfOffsetX = -overflow / 2 // Center by offsetting half the overflow to the left
-        shelfOffsetY = this.showBookshelfListView ? 4 : 16
-      } else if (!usesCssGrid) {
-        // Legacy absolute positioning for playlists
-        var availableWidth = this.bookshelfWidth - 32 // Account for px-4 padding
-        var totalColumnsWidth = this.entitiesPerShelf * this.totalEntityCardWidth
-        var leftMargin = Math.max(0, (availableWidth - totalColumnsWidth) / 2)
-        shelfOffsetX = leftMargin + row * this.totalEntityCardWidth
-        shelfOffsetY = 16
-      }
-      // For CSS Grid (series, collections), positioning is handled by the grid layout
 
       var ComponentClass = this.getComponentClass()
       var props = {
@@ -91,14 +65,9 @@ export default {
       this.entityComponentRefs[index] = instance
       instance.$mount()
 
-      if (usesCssGrid) {
-        // For CSS Grid, just append without positioning - grid handles layout
-        instance.$el.classList.add('grid-card')
-      } else {
-        // Use absolute positioning for non-grid layouts
-        instance.$el.style.transform = `translate3d(${shelfOffsetX}px, ${shelfOffsetY}px, 0px)`
-        instance.$el.classList.add('absolute', 'top-0', 'left-0')
-      }
+      // Since everything uses list view now, always use absolute positioning
+      instance.$el.style.transform = `translate3d(${shelfOffsetX}px, ${shelfOffsetY}px, 0px)`
+      instance.$el.classList.add('absolute', 'top-0', 'left-0')
 
       shelfEl.appendChild(instance.$el)
 

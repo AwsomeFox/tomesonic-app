@@ -22,8 +22,7 @@
 
     <!-- Actual shelves -->
     <template v-for="shelf in totalShelves">
-      <div :key="shelf" class="w-full px-4" :class="showBookshelfListView || altViewEnabled ? 'bg-surface-dynamic shelf-list-view' : 'bookshelfRow bg-surface-dynamic shelf-grid-view'" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle">
-        <div v-if="!showBookshelfListView && !altViewEnabled" class="w-full absolute bottom-0 left-0 z-30 bookshelfDivider bg-outline-variant opacity-20" style="min-height: 2px" :class="`h-${shelfDividerHeightIndex}`" />
+      <div :key="shelf" class="w-full px-4 bg-surface-dynamic shelf-list-view" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle">
       </div>
     </template>
 
@@ -88,8 +87,8 @@ export default {
       return this.$store.state.globals.bookshelfListView
     },
     showBookshelfListView() {
-      // Always use list view for book entities - removed card view option
-      return this.isBookEntity
+      // Always use list view for all entities - cards only on home page
+      return true
     },
     sortingIgnorePrefix() {
       return this.$store.getters['getServerSetting']('sortingIgnorePrefix')
@@ -123,46 +122,22 @@ export default {
       return this.$store.getters['libraries/getBookCoverAspectRatio']
     },
     bookWidth() {
-      const availableWidth = window.innerWidth - 32 // Account for px-4 padding (16px each side)
-
-      // Determine optimal columns based on screen width and entity type
-      let targetColumns = this.getTargetColumnsForWidth(availableWidth)
-
-      // Calculate card width based on columns
-      const totalGaps = (targetColumns - 1) * 16 // 16px gap between cards
-      let cardWidth = Math.floor((availableWidth - totalGaps) / targetColumns)
-
-      // Ensure minimum width constraints
-      const minWidth = this.entityName === 'series' ? 160 : 120
-      const maxWidth = this.entityName === 'series' ? 200 : 160
-
-      cardWidth = Math.max(minWidth, Math.min(maxWidth, cardWidth))
-
-      if (this.isCoverSquareAspectRatio || this.entityName === 'playlists') return cardWidth * 1.6
-      return cardWidth
+      // Simplified since we only need this for home page card sizing now
+      // List view doesn't use this for sizing
+      const baseWidth = this.isCoverSquareAspectRatio ? 192 : 120
+      return baseWidth
     },
     bookHeight() {
       if (this.isCoverSquareAspectRatio || this.entityName === 'playlists') return this.bookWidth
       return this.bookWidth * 1.6
     },
     entityWidth() {
-      if (this.showBookshelfListView) return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
-
-      // For CSS Grid layouts (series, collections), cards fill their grid cells
-      const usesCssGrid = !this.showBookshelfListView && !this.altViewEnabled &&
-                         (this.entityName === 'series' || this.entityName === 'collections')
-
-      if (usesCssGrid) {
-        // Grid cards will size themselves based on the grid container
-        return this.bookWidth
-      }
-
-      if (this.isBookEntity || this.entityName === 'playlists') return this.bookWidth
-      return this.bookWidth * 2
+      // Always use list view width since we removed card view
+      return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
     },
     entityHeight() {
-      if (this.showBookshelfListView) return 88
-      return this.bookHeight
+      // Always use list view height since we removed card view
+      return 88
     },
     currentLibraryId() {
       return this.$store.state.libraries.currentLibraryId
@@ -181,13 +156,7 @@ export default {
     totalEntityCardWidth() {
       if (this.showBookshelfListView) return this.entityWidth
 
-      // For CSS Grid layouts, the gap is handled by the grid
-      const usesCssGrid = !this.showBookshelfListView && !this.altViewEnabled &&
-                         (this.entityName === 'series' || this.entityName === 'collections')
-
-      if (usesCssGrid) {
-        return this.entityWidth // No extra spacing needed for CSS Grid
-      }
+      // Since everything uses list view now, always return standard width
 
       // Use Material 3 spacing - 16px between cards for absolute positioned items
       return this.entityWidth + 16
@@ -200,39 +169,11 @@ export default {
       return this.entityWidth / baseSize
     },
     shelfContainerStyle() {
-      if (this.showBookshelfListView || this.altViewEnabled) {
-        return { height: this.shelfHeight + 'px' }
-      }
-
-      // For grid view, use CSS Grid
-      return {
-        height: this.shelfHeight + 'px',
-        display: 'grid',
-        gridTemplateColumns: `repeat(${this.entitiesPerShelf}, 1fr)`,
-        gap: '16px',
-        alignItems: 'start',
-        position: 'relative'
-      }
+      // Always use list view layout since we removed card view
+      return { height: this.shelfHeight + 'px' }
     }
   },
   methods: {
-    getTargetColumnsForWidth(availableWidth) {
-      // Responsive column logic for different screen sizes
-      if (this.entityName === 'series') {
-        // Series cards need more space
-        if (availableWidth >= 800) return 4      // Large screens: 4 columns
-        if (availableWidth >= 600) return 3      // Tablets: 3 columns
-        if (availableWidth >= 400) return 2      // Small tablets/large phones: 2 columns
-        return 1                                 // Small phones: 1 column
-      } else {
-        // Books and other entities can be smaller
-        if (availableWidth >= 900) return 5      // Large screens: 5 columns
-        if (availableWidth >= 700) return 4      // Medium screens: 4 columns
-        if (availableWidth >= 500) return 3      // Tablets: 3 columns
-        if (availableWidth >= 300) return 2      // Small screens: 2 columns
-        return 1                                 // Very small: 1 column
-      }
-    },
     clearFilter() {
       this.$store.dispatch('user/updateUserSettings', {
         mobileFilterBy: 'all'
@@ -761,11 +702,4 @@ export default {
   position: relative;
 }
 
-/* Cards in grid layout */
-.grid-card {
-  /* Grid items automatically position themselves */
-  width: 100%;
-  max-width: 100%;
-  justify-self: center;
-}
 </style>

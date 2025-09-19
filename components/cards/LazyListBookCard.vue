@@ -67,8 +67,8 @@
           </div>
         </div>
 
-        <!-- Enhanced progress indicator -->
-        <div v-if="!isPodcast && !collapsedSeries" class="absolute bottom-0 left-0 h-1.5 shadow-elevation-2 max-w-full z-10" :class="[itemIsFinished ? 'bg-tertiary' : 'bg-primary', squareAspectRatio ? 'rounded-bl-lg rounded-br-lg' : 'rounded-bl-xl rounded-br-xl']" :style="{ width: coverWidth * userProgressPercent + 'px' }"></div>
+        <!-- Enhanced progress indicator (only for playable items) -->
+        <div v-if="isLibraryItem && !isPodcast && !collapsedSeries" class="absolute bottom-0 left-0 h-1.5 shadow-elevation-2 max-w-full z-10" :class="[itemIsFinished ? 'bg-tertiary' : 'bg-primary', squareAspectRatio ? 'rounded-bl-lg rounded-br-lg' : 'rounded-bl-xl rounded-br-xl']" :style="{ width: coverWidth * userProgressPercent + 'px' }"></div>
       </div>
       <div class="flex-grow pl-4" :class="showPlayButton ? (localLibraryItem || isLocal ? 'pr-28' : 'pr-20') : 'pr-4'">
         <p class="whitespace-normal line-clamp-2 text-on-surface text-body-medium font-medium" :style="{ fontSize: 0.8 * sizeMultiplier + 'rem' }">
@@ -168,6 +168,50 @@ export default {
     _libraryItem() {
       return this.libraryItem || {}
     },
+    // Entity type detection
+    entityType() {
+      // Check parent page context first for more accurate detection
+      const parentEntityName = this.$parent?.entityName || this.$parent?.$parent?.entityName
+
+
+      if (parentEntityName === 'playlists') return 'playlist'
+      if (parentEntityName === 'series') return 'series'
+      if (parentEntityName === 'collections') return 'collection'
+      if (parentEntityName === 'authors') return 'author'
+
+      // Fallback to data structure detection
+      if (this._libraryItem.books) return 'series'
+
+      // Distinguish between collections and playlists by checking item structure
+      if (this._libraryItem.items) {
+        // Playlists have items with libraryItemId and libraryItem properties
+        // Collections have items that are directly library items (books property exists)
+        const firstItem = this._libraryItem.items[0]
+        if (firstItem && firstItem.libraryItemId && firstItem.libraryItem) {
+          return 'playlist'
+        } else {
+          return 'collection'
+        }
+      }
+
+      if (this._libraryItem.name && this._libraryItem.imagePath !== undefined) return 'author'
+      return 'libraryItem'
+    },
+    isSeriesEntity() {
+      return this.entityType === 'series'
+    },
+    isCollectionEntity() {
+      return this.entityType === 'collection'
+    },
+    isPlaylistEntity() {
+      return this.entityType === 'playlist'
+    },
+    isAuthorEntity() {
+      return this.entityType === 'author'
+    },
+    isLibraryItem() {
+      return this.entityType === 'libraryItem'
+    },
     isLocal() {
       return !!this._libraryItem.isLocal
     },
@@ -204,6 +248,33 @@ export default {
         if (this.libraryItem.coverContentUrl) return Capacitor.convertFileSrc(this.libraryItem.coverContentUrl)
         return this.placeholderUrl
       }
+
+      // Handle different entity types
+      if (this.isAuthorEntity) {
+        return this.store.getters['globals/getAuthorCoverSrc'](this._libraryItem, this.placeholderUrl)
+      }
+      if (this.isSeriesEntity) {
+        // Series uses the first book's cover
+        const firstBook = this._libraryItem.books?.[0]
+        if (firstBook) {
+          return this.store.getters['globals/getLibraryItemCoverSrc'](firstBook, this.placeholderUrl)
+        }
+      }
+      if (this.isCollectionEntity) {
+        // Collections use the first book's cover
+        const firstItem = this._libraryItem.books?.[0]
+        if (firstItem) {
+          return this.store.getters['globals/getLibraryItemCoverSrc'](firstItem, this.placeholderUrl)
+        }
+      }
+      if (this.isPlaylistEntity) {
+        // Playlists use the first item's library item cover
+        const firstPlaylistItem = this._libraryItem.items?.[0]
+        if (firstPlaylistItem?.libraryItem) {
+          return this.store.getters['globals/getLibraryItemCoverSrc'](firstPlaylistItem.libraryItem, this.placeholderUrl)
+        }
+      }
+
       return this.store.getters['globals/getLibraryItemCoverSrc'](this._libraryItem, this.placeholderUrl)
     },
     libraryItemId() {
@@ -269,11 +340,33 @@ export default {
       return this.collapsedSeries?.numBooks || 0
     },
     displayTitle() {
+      if (this.isSeriesEntity) return this._libraryItem.name || 'Untitled Series'
+      if (this.isCollectionEntity) return this._libraryItem.name || 'Untitled Collection'
+      if (this.isPlaylistEntity) return this._libraryItem.name || 'Untitled Playlist'
+      if (this.isAuthorEntity) return this._libraryItem.name || 'Unknown Author'
+
       const ignorePrefix = this.orderBy === 'media.metadata.title' && this.sortingIgnorePrefix
       if (this.collapsedSeries) return ignorePrefix ? this.collapsedSeries.nameIgnorePrefix : this.collapsedSeries.name
       return ignorePrefix ? this.mediaMetadata.titleIgnorePrefix : this.title
     },
     displayAuthor() {
+      if (this.isSeriesEntity) {
+        const bookCount = this._libraryItem.books ? this._libraryItem.books.length : 0
+        return `${bookCount} ${bookCount === 1 ? 'book' : 'books'}`
+      }
+      if (this.isCollectionEntity) {
+        const itemCount = this._libraryItem.books ? this._libraryItem.books.length : 0
+        return `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`
+      }
+      if (this.isPlaylistEntity) {
+        const itemCount = this._libraryItem.items ? this._libraryItem.items.length : 0
+        return `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`
+      }
+      if (this.isAuthorEntity) {
+        const bookCount = this._libraryItem.numBooks || 0
+        return `${bookCount} ${bookCount === 1 ? 'book' : 'books'}`
+      }
+
       if (this.isPodcast) return this.author
       if (this.collapsedSeries) return `${this.booksInSeries} books in series`
       if (this.orderBy === 'media.metadata.authorNameLF') return this.authorLF
@@ -324,7 +417,8 @@ export default {
       return !this.isSelectionMode && !this.showPlayButton && this.hasEbook
     },
     showPlayButton() {
-      return !this.isSelectionMode && !this.isMissing && !this.isInvalid && this.numTracks && !this.isPodcast
+      // Only show play button for actual library items (books/audiobooks), not series/collections/playlists/authors
+      return this.isLibraryItem && !this.isSelectionMode && !this.isMissing && !this.isInvalid && this.numTracks && !this.isPodcast
     },
     showSmallEBookIcon() {
       return !this.isSelectionMode && this.hasEbook
@@ -369,8 +463,20 @@ export default {
       } else {
         var router = this.$router || this.$nuxt.$router
         if (router) {
-          if (this.collapsedSeries) router.push(`/bookshelf/series/${this.collapsedSeries.id}`)
-          else router.push(`/item/${this.libraryItemId}`)
+          if (this.collapsedSeries) {
+            router.push(`/bookshelf/series/${this.collapsedSeries.id}`)
+          } else if (this.isSeriesEntity) {
+            router.push(`/bookshelf/series/${this.libraryItemId}`)
+          } else if (this.isCollectionEntity) {
+            router.push(`/collection/${this.libraryItemId}`)
+          } else if (this.isPlaylistEntity) {
+            router.push(`/playlist/${this.libraryItemId}`)
+          } else if (this.isAuthorEntity) {
+            // Authors don't have detail pages in mobile app, so do nothing for now
+            console.log('Author clicked:', this._libraryItem.name)
+          } else {
+            router.push(`/item/${this.libraryItemId}`)
+          }
         }
       }
     },

@@ -77,18 +77,25 @@ class MainActivity : BridgeActivity() {
     // Keep injecting CSS safe-area insets but DO NOT add margins so the webview
     // content draws behind the system bars (transparent nav/status bar)
     webView.setOnApplyWindowInsetsListener { v, insets ->
-      val (left, top, right, bottom) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        val sysInsets = insets.getInsets(WindowInsets.Type.systemBars())
-        Log.d(tag, "safe sysInsets: $sysInsets")
-        arrayOf(sysInsets.left, sysInsets.top, sysInsets.right, sysInsets.bottom)
+      // Use the modern WindowInsets API - works for API 23+
+      val sysInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        insets.getInsets(WindowInsets.Type.systemBars())
       } else {
-        arrayOf(
-          insets.systemWindowInsetLeft,
-          insets.systemWindowInsetTop,
-          insets.systemWindowInsetRight,
-          insets.systemWindowInsetBottom
-        )
+        // For API 23-29, use getInsets with fallback to deprecated methods
+        try {
+          insets.getInsets(WindowInsets.Type.systemBars())
+        } catch (e: Exception) {
+          // Fallback to stable insets for very old versions (API 24-29)
+          // Note: stableInsets is deprecated but needed for minSdk 24 compatibility
+          @Suppress("DEPRECATION")
+          insets.stableInsets?.let { stableInsets ->
+            android.graphics.Insets.of(stableInsets.left, stableInsets.top, stableInsets.right, stableInsets.bottom)
+          } ?: android.graphics.Insets.NONE
+        }
       }
+
+      Log.d(tag, "safe sysInsets: $sysInsets")
+      val (left, top, right, bottom) = arrayOf(sysInsets.left, sysInsets.top, sysInsets.right, sysInsets.bottom)
 
       // Inject as CSS variables so Nuxt pages can use env(safe-area-inset-*) or
       // the --safe-area-inset-* variables for layout while content stays full-bleed.
@@ -165,18 +172,25 @@ class MainActivity : BridgeActivity() {
     val webView: WebView = findViewById(R.id.webview)
     val insets = webView.rootWindowInsets
     if (insets != null) {
-      val (left, top, right, bottom) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        val sysInsets = insets.getInsets(WindowInsets.Type.systemBars())
-        Log.d(tag, "updateSafeAreaInsets sysInsets: $sysInsets")
-        arrayOf(sysInsets.left, sysInsets.top, sysInsets.right, sysInsets.bottom)
+      // Use the modern WindowInsets API consistently
+      val sysInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        insets.getInsets(WindowInsets.Type.systemBars())
       } else {
-        arrayOf(
-          insets.systemWindowInsetLeft,
-          insets.systemWindowInsetTop,
-          insets.systemWindowInsetRight,
-          insets.systemWindowInsetBottom
-        )
+        // For API 23-29, use getInsets with fallback to stable insets
+        try {
+          insets.getInsets(WindowInsets.Type.systemBars())
+        } catch (e: Exception) {
+          // Fallback to stable insets for compatibility (API 24-29)
+          // Note: stableInsets is deprecated but needed for minSdk 24 compatibility
+          @Suppress("DEPRECATION")
+          insets.stableInsets?.let { stableInsets ->
+            android.graphics.Insets.of(stableInsets.left, stableInsets.top, stableInsets.right, stableInsets.bottom)
+          } ?: android.graphics.Insets.NONE
+        }
       }
+
+      Log.d(tag, "updateSafeAreaInsets sysInsets: $sysInsets")
+      val (left, top, right, bottom) = arrayOf(sysInsets.left, sysInsets.top, sysInsets.right, sysInsets.bottom)
 
       // Inject as CSS variables so Nuxt pages can use env(safe-area-inset-*) or
       // the --safe-area-inset-* variables for layout while content stays full-bleed.

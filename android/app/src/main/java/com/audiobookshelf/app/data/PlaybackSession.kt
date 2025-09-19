@@ -2,6 +2,7 @@ package com.audiobookshelf.app.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
@@ -392,35 +393,56 @@ class PlaybackSession(
       // Note: In Android Auto for local cover images, setting the icon uri to a local path does not work (cover is blank)
       // so we create and set the bitmap here instead of letting AbMediaDescriptionAdapter handle it
       try {
-        val rawBitmap = if (Build.VERSION.SDK_INT < 28) {
-          MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-        } else {
+        val rawBitmap = if (Build.VERSION.SDK_INT >= 28) {
           val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
           ImageDecoder.decodeBitmap(source) { decoder, info, source ->
             decoder.setTargetSize(512, 512) // Use larger size for testing notification quality
             decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE) // Ensure high quality
           }
+        } else {
+          // For API 24-27, use BitmapFactory instead of deprecated getBitmap
+          try {
+            ctx.contentResolver.openInputStream(coverUri)?.use { inputStream ->
+              val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+              }
+              BitmapFactory.decodeStream(inputStream, null, options)
+
+              // Calculate inSampleSize for target size of 512px
+              options.inSampleSize = calculateInSampleSize(options, 512, 512)
+              options.inJustDecodeBounds = false
+
+              ctx.contentResolver.openInputStream(coverUri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
+              }
+            }
+          } catch (e: Exception) {
+            Log.e("PlaybackSession", "Error loading bitmap", e)
+            null
+          }
         }
 
         // Ensure bitmap is exactly 1024x1024 for high quality (larger to combat notification compression)
-        bitmap = if (rawBitmap.width != 1024 || rawBitmap.height != 1024) {
-          // Use Canvas-based scaling for better quality instead of createScaledBitmap
-          val scaledBitmap = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
-          val canvas = android.graphics.Canvas(scaledBitmap)
-          val paint = android.graphics.Paint().apply {
-            isAntiAlias = true
-            isFilterBitmap = true
-            isDither = false
+        bitmap = rawBitmap?.let { nonNullBitmap ->
+          if (nonNullBitmap.width != 1024 || nonNullBitmap.height != 1024) {
+            // Use Canvas-based scaling for better quality instead of createScaledBitmap
+            val scaledBitmap = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(scaledBitmap)
+            val paint = android.graphics.Paint().apply {
+              isAntiAlias = true
+              isFilterBitmap = true
+              isDither = false
+            }
+            val srcRect = android.graphics.Rect(0, 0, nonNullBitmap.width, nonNullBitmap.height)
+            val dstRect = android.graphics.Rect(0, 0, 1024, 1024)
+            canvas.drawBitmap(nonNullBitmap, srcRect, dstRect, paint)
+            nonNullBitmap.recycle() // Free memory
+            scaledBitmap
+          } else {
+            nonNullBitmap
           }
-          val srcRect = android.graphics.Rect(0, 0, rawBitmap.width, rawBitmap.height)
-          val dstRect = android.graphics.Rect(0, 0, 1024, 1024)
-          canvas.drawBitmap(rawBitmap, srcRect, dstRect, paint)
-          rawBitmap.recycle() // Free memory
-          scaledBitmap
-        } else {
-          rawBitmap
         }
-        descriptionBuilder.setIconBitmap(bitmap)
+        bitmap?.let { descriptionBuilder.setIconBitmap(it) }
       } catch (e: Exception) {
         Log.w("PlaybackSession", "Failed to load bitmap for local book: ${e.message}")
         descriptionBuilder.setIconUri(coverUri)
@@ -733,5 +755,21 @@ class PlaybackSession(
     }
 
     return metadataBuilder.build()
+  }
+
+  // Helper function to calculate sample size for efficient bitmap loading
+  private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+    val (height: Int, width: Int) = options.run { outHeight to outWidth }
+    var inSampleSize = 1
+
+    if (height > reqHeight || width > reqWidth) {
+      val halfHeight: Int = height / 2
+      val halfWidth: Int = width / 2
+
+      while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+        inSampleSize *= 2
+      }
+    }
+    return inSampleSize
   }
 }
