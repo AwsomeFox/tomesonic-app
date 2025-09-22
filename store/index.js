@@ -109,17 +109,14 @@ export const actions = {
     commit('setNetworkListenerInit', true)
 
     const status = await Network.getStatus()
-    console.log('Network status', status)
     commit('setNetworkStatus', status)
 
     Network.addListener('networkStatusChange', (status) => {
-      console.log('Network status changed', status.connected, status.connectionType)
       commit('setNetworkStatus', status)
     })
 
     AbsAudioPlayer.addListener('onNetworkMeteredChanged', (payload) => {
       const isUnmetered = payload.value
-      console.log('On network metered changed', isUnmetered)
       commit('setIsNetworkUnmetered', isUnmetered)
     })
   },
@@ -130,7 +127,6 @@ export const actions = {
 
     try {
       await this.$localStore.setLastPlaybackSession(state.currentPlaybackSession)
-      console.log('[Store] Saved current playback session to local storage')
     } catch (error) {
       console.error('[Store] Failed to save current playback session', error)
     }
@@ -141,19 +137,15 @@ export const actions = {
     try {
       const lastSession = await this.$localStore.getLastPlaybackSession()
       if (!lastSession) {
-        console.log('[Store] No last playback session found')
         return null
       }
 
-      console.log('[Store] Found last playback session:', lastSession.id, lastSession.displayTitle)
       return lastSession
     } catch (error) {
       console.error('[Store] Failed to load last playback session', error)
       return null
     }
-  },
-
-  // Compare local session with server session and determine which is more recent
+  }, // Compare local session with server session and determine which is more recent
   async compareAndResumeSession({ state, commit, dispatch }, { localSession, serverSession }) {
     if (!localSession && !serverSession) return null
 
@@ -166,7 +158,6 @@ export const actions = {
 
     if (!isSameMedia) {
       // Different media, prefer server session as it's likely more recent user action
-      console.log('[Store] Different media in local vs server session, using server session')
       return serverSession
     }
 
@@ -174,20 +165,13 @@ export const actions = {
     const localTime = localSession.updatedAt || localSession.startedAt || 0
     const serverTime = serverSession.updatedAt || serverSession.startedAt || 0
 
-    console.log('[Store] Comparing sessions:', {
-      local: { time: localTime, progress: localSession.currentTime },
-      server: { time: serverTime, progress: serverSession.currentTime }
-    })
-
     // If server is newer and has progressed further, use server
     if (serverTime > localTime && serverSession.currentTime > localSession.currentTime) {
-      console.log('[Store] Server session is newer and further ahead, using server session')
       return serverSession
     }
 
     // If local is newer or has progressed further, use local
     if (localTime >= serverTime || localSession.currentTime >= serverSession.currentTime) {
-      console.log('[Store] Local session is newer or further ahead, using local session')
       return localSession
     }
 

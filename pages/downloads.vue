@@ -62,7 +62,6 @@ export default {
     async init() {
       var items = (await this.$db.getLocalLibraryItems()) || []
       this.localLibraryItems = items.map((lmi) => {
-        console.log('Local library item', JSON.stringify(lmi))
         return {
           ...lmi,
           size: this.getSize(lmi),

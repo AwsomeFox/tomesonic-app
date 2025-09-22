@@ -14,6 +14,7 @@ import com.google.android.gms.cast.framework.CastSession
 import com.tomesonic.app.data.PlaybackSession
 import com.tomesonic.app.device.DeviceManager
 import com.tomesonic.app.player.mediasource.ChapterSegment
+import com.tomesonic.app.utils.MimeTypeUtil
 
 /**
  * Manages Media3 CastPlayer functionality and switching between cast and local players
@@ -33,6 +34,8 @@ class CastPlayerManager(
 
     private var castContext: CastContext? = null
     private var sessionAvailabilityListener: CastSessionAvailabilityListener? = null
+    private var positionUpdateHandler: android.os.Handler? = null
+    private var positionUpdateRunnable: Runnable? = null
 
     /**
      * Initializes the cast player with CastContext and custom MediaItemConverter
@@ -114,23 +117,16 @@ class CastPlayerManager(
     }
 
     /**
-     * Creates MediaItems for cast player using the exact same chapter segments as ExoPlayer
+     * Creates MediaItems for cast player using the new buildMediaItems method
      * This ensures cast player has identical timeline structure and metadata as local playback
      */
     fun createCastMediaItems(playbackSession: PlaybackSession): List<MediaItem> {
-        val mediaItems = mutableListOf<MediaItem>()
-
-        // Use the exact same chapter segments as AudiobookMediaSourceBuilder to ensure consistency
+        // Use the exact same MediaItem builder as local playback to ensure consistency
         // Use forCast=true to get server URIs appropriate for cast devices
         val audiobookBuilder = service.getAudiobookMediaSourceBuilder()
-        val chapterSegments = audiobookBuilder.getChapterSegments(playbackSession, forCast = true)
+        val mediaItems = audiobookBuilder.buildMediaItems(playbackSession, forCast = true)
 
-        Log.d(TAG, "Creating ${chapterSegments.size} MediaItems for cast using AudiobookMediaSourceBuilder segments")
-
-        chapterSegments.forEach { segment ->
-            val mediaItem = createSegmentMediaItem(playbackSession, segment)
-            mediaItems.add(mediaItem)
-        }
+        Log.d(TAG, "Created ${mediaItems.size} MediaItems for cast using AudiobookMediaSourceBuilder.buildMediaItems()")
 
         return mediaItems
     }
@@ -169,7 +165,7 @@ class CastPlayerManager(
         val mediaItemBuilder = MediaItem.Builder()
             .setUri(castUri)
             .setMediaId("${playbackSession.libraryItemId}_chapter_${segment.chapterIndex}")
-            .setMimeType(getMimeType(castUri.toString()))
+            .setMimeType(MimeTypeUtil.getMimeType(castUri.toString()))
             .setMediaMetadata(
                 playbackSession.createCastMediaMetadata(
                     track = containingTrack,
@@ -214,7 +210,10 @@ class CastPlayerManager(
                 } else {
                     "no clipping"
                 }
-                Log.d(TAG, "  [$index] $title - $clipInfo - URI: ${mediaItem.localConfiguration?.uri}")
+                val uri = mediaItem.localConfiguration?.uri
+                val mimeType = mediaItem.localConfiguration?.mimeType
+                Log.d(TAG, "  [$index] $title - $clipInfo - URI: $uri - MIME: $mimeType")
+                Log.d(TAG, "  [$index] Artwork URI: ${mediaItem.mediaMetadata.artworkUri}")
             }
 
             // Load the complete playlist at once - this creates the Cast queue
@@ -336,32 +335,57 @@ class CastPlayerManager(
         }
     }
 
+
     /**
-     * Gets the MIME type for an audio URL
+     * Start periodic position updates for Cast player synchronization
      */
-    private fun getMimeType(url: String): String {
-        return when {
-            url.contains(".mp3", ignoreCase = true) -> MimeTypes.AUDIO_MPEG
-            url.contains(".m4a", ignoreCase = true) -> MimeTypes.AUDIO_MP4
-            url.contains(".mp4", ignoreCase = true) -> MimeTypes.AUDIO_MP4
-            url.contains(".aac", ignoreCase = true) -> MimeTypes.AUDIO_AAC
-            url.contains(".flac", ignoreCase = true) -> "audio/flac"
-            url.contains(".ogg", ignoreCase = true) -> "audio/ogg"
-            url.contains(".wav", ignoreCase = true) -> "audio/wav"
-            url.contains(".m3u8", ignoreCase = true) -> MimeTypes.APPLICATION_M3U8
-            else -> MimeTypes.AUDIO_MPEG // Default to MP3 for unknown audio types
+    fun startPositionUpdates() {
+        if (positionUpdateHandler == null) {
+            positionUpdateHandler = android.os.Handler(android.os.Looper.getMainLooper())
         }
+
+        stopPositionUpdates() // Stop any existing updates
+
+        positionUpdateRunnable = object : Runnable {
+            override fun run() {
+                castPlayer?.let { player ->
+                    if (isConnected() && player.isPlaying) {
+                        // Trigger position update in the service
+                        service.notifyPositionUpdate()
+                        Log.v(TAG, "Cast position update: ${player.currentPosition}ms at mediaItem ${player.currentMediaItemIndex}")
+                    }
+                    // Schedule next update
+                    positionUpdateHandler?.postDelayed(this, 1000) // Update every second
+                }
+            }
+        }
+
+        positionUpdateHandler?.post(positionUpdateRunnable!!)
+        Log.d(TAG, "Started Cast position updates")
+    }
+
+    /**
+     * Stop periodic position updates
+     */
+    fun stopPositionUpdates() {
+        positionUpdateRunnable?.let { runnable ->
+            positionUpdateHandler?.removeCallbacks(runnable)
+        }
+        positionUpdateRunnable = null
+        Log.d(TAG, "Stopped Cast position updates")
     }
 
     /**
      * Releases cast player resources
      */
     fun release() {
+        stopPositionUpdates()
         sessionAvailabilityListener?.let { listener ->
             castPlayer?.setSessionAvailabilityListener(null)
         }
         castPlayer?.release()
         castPlayer = null
+        positionUpdateHandler = null
         Log.d(TAG, "Cast player released")
     }
 

@@ -7,6 +7,7 @@ import androidx.media3.common.MediaMetadata
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.cast.MediaMetadata as CastMediaMetadata
+import com.tomesonic.app.utils.MimeTypeUtil
 import org.json.JSONObject
 
 /**
@@ -98,6 +99,7 @@ class AudiobookMediaItemConverter : MediaItemConverter {
         // Use the actual URI - Cast receiver can load this directly
         val mediaInfoBuilder = MediaInfo.Builder(uri)
             .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+            .setContentType(MimeTypeUtil.getMimeType(uri))
 
         // Handle ClippingConfiguration - this is the key fix
         val customData = JSONObject()
@@ -124,7 +126,7 @@ class AudiobookMediaItemConverter : MediaItemConverter {
 
         // Build Cast MediaMetadata from Media3 metadata
         val media3Metadata = mediaItem.mediaMetadata
-        val castMetadata = CastMediaMetadata(CastMediaMetadata.MEDIA_TYPE_MUSIC_TRACK)
+        val castMetadata = CastMediaMetadata(CastMediaMetadata.MEDIA_TYPE_AUDIOBOOK_CHAPTER)
 
         media3Metadata.title?.let {
             castMetadata.putString(CastMediaMetadata.KEY_TITLE, it.toString())
@@ -134,6 +136,15 @@ class AudiobookMediaItemConverter : MediaItemConverter {
         }
         media3Metadata.albumTitle?.let {
             castMetadata.putString(CastMediaMetadata.KEY_ALBUM_TITLE, it.toString())
+        }
+
+        // Add artwork images for Cast receiver display
+        media3Metadata.artworkUri?.let { artworkUri ->
+            val image = com.google.android.gms.common.images.WebImage(
+                android.net.Uri.parse(artworkUri.toString())
+            )
+            castMetadata.addImage(image)
+            Log.d("AudiobookConverter", "Added artwork image to Cast metadata: $artworkUri")
         }
 
         // Add track information to custom data for proper playlist handling
@@ -192,4 +203,5 @@ class AudiobookMediaItemConverter : MediaItemConverter {
 
         return queueItem
     }
+
 }

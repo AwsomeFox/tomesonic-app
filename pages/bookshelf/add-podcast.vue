@@ -112,13 +112,11 @@ export default {
         console.error('Search request failed', error)
         return []
       })
-      console.log('Got results', results)
       this.results = results
       this.termSearched = term
       this.processing = false
     },
     async selectPodcast(podcast) {
-      console.log('Selected podcast', podcast)
       if (!podcast.feedUrl) {
         this.$toast.error('Invalid podcast - no feed')
         return
@@ -135,7 +133,6 @@ export default {
       this.selectedPodcastFeed = payload.podcast
       this.selectedPodcast = podcast
       this.showSelectedFeed = true
-      console.log('Got podcast feed', payload.podcast)
     },
     libraryChanged() {
       const libraryMediaType = this.$store.getters['libraries/getCurrentLibraryMediaType']

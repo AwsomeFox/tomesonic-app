@@ -41,29 +41,18 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
   ) {
     // Reset track transition flag on any position discontinuity
     if (playerNotificationService.expectingTrackTransition) {
-      Log.d(tag, "onPositionDiscontinuity: Resetting expectingTrackTransition flag")
       playerNotificationService.expectingTrackTransition = false
     }
 
     if (reason == Player.DISCONTINUITY_REASON_SEEK) {
       // If playing set seeking flag
-      Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying} reason=SEEK")
       playerNotificationService.mediaProgressSyncer.seek()
       lastPauseTime = 0 // When seeking while paused reset the auto-rewind
-    } else {
-      Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying}, reason=$reason")
     }
   }
 
   override fun onIsPlayingChanged(isPlaying: Boolean) {
-    Log.d(tag, "onIsPlayingChanged to $isPlaying | ${playerNotificationService.getMediaPlayer()} | playbackState=${playerNotificationService.currentPlayer.playbackState}")
-
     val player = playerNotificationService.currentPlayer
-
-    // ENHANCED DEBUG: Log detailed state information
-    Log.d(tag, "DETAILED_STATE: isPlaying=$isPlaying, playWhenReady=${player.playWhenReady}, playbackState=${player.playbackState}")
-    Log.d(tag, "DETAILED_STATE: mediaItemCount=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}")
-    Log.d(tag, "DETAILED_STATE: isLoading=${player.isLoading}, duration=${player.duration}, position=${player.currentPosition}")
 
     // Check for state inconsistencies that might indicate audio focus issues
     if (!isPlaying && player.playWhenReady && player.playbackState == Player.STATE_READY) {
@@ -81,7 +70,6 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       return
     }
     if (lazyIsPlaying == isPlaying) {
-      Log.d(tag, "onIsPlayingChanged: Lazy is playing $lazyIsPlaying is already set to this so ignoring")
       return
     }
 
@@ -91,39 +79,21 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
     DeviceManager.widgetUpdater?.onPlayerChanged(playerNotificationService)
 
     if (isPlaying) {
-      Log.d(tag, "SeekBackTime: Player is playing")
-      Log.d(tag, "SeekBackTime: isAndroidAuto=${playerNotificationService.isAndroidAuto}")
-      Log.d(tag, "SeekBackTime: lastPauseTime=$lastPauseTime")
-      Log.d(tag, "SeekBackTime: disableAutoRewind=${DeviceManager.deviceData.deviceSettings?.disableAutoRewind}")
-
       // Skip auto-rewind when Android Auto is connected to prevent unexpected position jumps
       if (playerNotificationService.isAndroidAuto) {
-        Log.d(tag, "SeekBackTime: Android Auto detected, skipping auto-rewind")
+        // Android Auto mode - skip auto-rewind
       } else if (lastPauseTime > 0 && DeviceManager.deviceData.deviceSettings?.disableAutoRewind != true) {
-        Log.d(tag, "SeekBackTime: playing started, checking if auto-rewind needed")
-
         // Only auto-rewind if paused for more than 10 seconds to avoid unnecessary seeks
         val pauseDuration = System.currentTimeMillis() - lastPauseTime
         if (pauseDuration > 10000) { // 10 seconds
           // Use the standard jump backward time configured by the user (default 10 seconds)
           val jumpBackwardTimeMs = DeviceManager.deviceData.deviceSettings?.jumpBackwardsTimeMs ?: 10000L
-          Log.d(tag, "SeekBackTime: Paused for ${pauseDuration}ms, auto-rewinding by ${jumpBackwardTimeMs}ms")
 
           // Use the same seekBackward method that manual navigation uses
           playerNotificationService.seekBackward(jumpBackwardTimeMs)
-        } else {
-          Log.d(tag, "SeekBackTime: Short pause (${pauseDuration}ms), skipping auto-rewind")
-        }
-      } else {
-        if (lastPauseTime <= 0) {
-          Log.d(tag, "SeekBackTime: No previous pause time, skipping auto-rewind")
-        }
-        if (DeviceManager.deviceData.deviceSettings?.disableAutoRewind == true) {
-          Log.d(tag, "SeekBackTime: Auto-rewind disabled in settings, skipping")
         }
       }
     } else {
-      Log.d(tag, "SeekBackTime: Player not playing set last pause time | playbackState=${player.playbackState}")
       lastPauseTime = System.currentTimeMillis()
     }
 

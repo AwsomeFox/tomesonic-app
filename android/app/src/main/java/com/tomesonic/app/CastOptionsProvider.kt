@@ -15,13 +15,13 @@ class CastOptionsProvider : OptionsProvider {
     companion object {
         private const val TAG = "CastOptionsProvider"
 
-        // Custom receiver ID for audiobookshelf with chapter support
-        // Default Google receiver for testing: "CC1AD845"
+        // Using Default Media Receiver for basic audiobook playback
+        // Custom receiver ID for advanced features: "242E16ED"
         private const val CAST_APP_ID = "CC1AD845"
     }
 
     override fun getCastOptions(context: Context): CastOptions {
-        Log.d(TAG, "getCastOptions: Configuring Cast options for custom Audiobookshelf receiver")
+        Log.d(TAG, "getCastOptions: Configuring Cast options for Default Media Receiver")
         Log.d(TAG, "getCastOptions: Using Cast App ID: $CAST_APP_ID")
 
         return CastOptions.Builder()

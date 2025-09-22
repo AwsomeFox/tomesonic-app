@@ -251,6 +251,33 @@ class PlaybackSession(
     val chapter: BookChapter?
   )
 
+  /**
+   * Check if the current session might be expired
+   * This helps avoid 404 errors when resuming sessions after app restarts
+   */
+  @JsonIgnore
+  fun isSessionExpired(): Boolean {
+    // If session ID is empty, consider it expired
+    if (id.isEmpty()) {
+      Log.d("PlaybackSession", "isSessionExpired: Session ID is empty")
+      return true
+    }
+
+    // Check if this session was started more than a reasonable time ago
+    // For safety, assume sessions might expire after extended periods
+    val currentTime = System.currentTimeMillis()
+    val sessionAgeHours = (currentTime - startedAt) / (1000 * 60 * 60)
+
+    // Consider sessions older than 6 hours as potentially expired
+    // This is conservative to avoid 404 errors on resume
+    val isOld = sessionAgeHours > 6
+    if (isOld) {
+      Log.d("PlaybackSession", "isSessionExpired: Session is ${sessionAgeHours} hours old, considering expired")
+    }
+
+    return isOld
+  }
+
   @JsonIgnore
   fun getNextTrackEndTime(): Long {
     val currentTrack = audioTracks[this.getNextTrackIndex()]
@@ -347,11 +374,24 @@ class PlaybackSession(
     // As of v2.22.0 tracks use a different endpoint
     // See: https://github.com/advplyr/audiobookshelf/pull/4263
     if (checkIsServerVersionGte("2.22.0")) {
+      val token = DeviceManager.token
       val uri = if (isDirectPlay) {
-        val publicSessionUri = "$serverAddress/public/session/$id/track/${audioTrack.index}"
-        Log.d("PlaybackSession", "getContentUri: Creating public session URI: $publicSessionUri")
-        Log.d("PlaybackSession", "getContentUri: Session details - id=$id, trackIndex=${audioTrack.index}, serverAddress=$serverAddress")
-        Uri.parse(publicSessionUri)
+        // Check if we have a valid session ID before using session-based URLs
+        if (id.isNotEmpty() && !isSessionExpired()) {
+          val publicSessionUri = "$serverAddress/public/session/$id/track/${audioTrack.index}"
+          Log.d("PlaybackSession", "getContentUri: Creating public session URI: $publicSessionUri")
+          Log.d("PlaybackSession", "getContentUri: Session details - id=$id, trackIndex=${audioTrack.index}, serverAddress=$serverAddress")
+          Uri.parse(publicSessionUri)
+        } else {
+          // Fallback to token-based URI for resumed/expired sessions
+          val fallbackUri = if (token.isNotEmpty()) {
+            "$serverAddress/api/items/$libraryItemId/file/${audioTrack.index}?token=$token"
+          } else {
+            "$serverAddress/api/items/$libraryItemId/file/${audioTrack.index}"
+          }
+          Log.d("PlaybackSession", "getContentUri: Session expired or empty, using fallback token URI: $fallbackUri")
+          Uri.parse(fallbackUri)
+        }
       } else {
         // Transcode uses HlsRouter on server
         val transcodeUri = "$serverAddress${audioTrack.contentUrl}"
@@ -383,27 +423,64 @@ class PlaybackSession(
       val serverLibraryItemId = localLibraryItem!!.libraryItemId!!
       Log.d("PlaybackSession", "getServerContentUri: local item, using serverLibraryItemId=$serverLibraryItemId")
 
-      // As of v2.22.0 tracks use a different endpoint
-      if (checkIsServerVersionGte("2.22.0")) {
-        // We need to construct a server session for this server item
-        val uri = "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}"
-        Log.d("PlaybackSession", "getServerContentUri: local item v2.22.0+ URI: $uri")
-        return Uri.parse(uri)
+      // For Cast compatibility, always include token regardless of server version
+      val token = DeviceManager.token
+      val uri = if (token.isNotEmpty()) {
+        "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}?token=$token"
       } else {
-        val uri = "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}?token=${DeviceManager.token}"
-        Log.d("PlaybackSession", "getServerContentUri: local item legacy URI: $uri")
-        return Uri.parse(uri)
+        "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}"
+      }
+      Log.d("PlaybackSession", "getServerContentUri: local item Cast-compatible URI: $uri")
+      return Uri.parse(uri)
+    }
+
+    // For server items, ensure Cast-compatible URLs with session expiry fallback
+    val token = DeviceManager.token
+
+    // For Cast, always use token-based authentication to avoid session expiry issues
+    val castCompatibleUri = if (token.isNotEmpty()) {
+      "$serverAddress/api/items/$libraryItemId/file/${audioTrack.index}?token=$token"
+    } else {
+      // Fallback to session-based URL if no token available
+      val serverUri = getContentUri(audioTrack)
+      val uriString = serverUri.toString()
+
+      if (uriString.contains("/public/session/") && isSessionExpired()) {
+        // Session might be expired, fallback to direct URL
+        Log.w("PlaybackSession", "getServerContentUri: Session potentially expired, using direct URL")
+        "$serverAddress/api/items/$libraryItemId/file/${audioTrack.index}"
+      } else {
+        uriString
       }
     }
 
-    // For server items, use the normal server URI
-    val serverUri = getContentUri(audioTrack)
-    Log.d("PlaybackSession", "getServerContentUri: server item URI: $serverUri")
-    return serverUri
+    Log.d("PlaybackSession", "getServerContentUri: Cast-compatible URI: $castCompatibleUri")
+    return Uri.parse(castCompatibleUri)
   }
 
   @JsonIgnore
   fun getMediaMetadataCompat(ctx: Context): MediaMetadataCompat {
+    // Helper function to get app icon as bitmap for notification
+    fun getAppIconBitmap(context: Context): Bitmap? {
+      return try {
+        val drawable = context.getDrawable(R.mipmap.ic_launcher)
+        drawable?.let {
+          val bitmap = Bitmap.createBitmap(
+            it.intrinsicWidth,
+            it.intrinsicHeight,
+            Bitmap.Config.ARGB_8888
+          )
+          val canvas = android.graphics.Canvas(bitmap)
+          it.setBounds(0, 0, canvas.width, canvas.height)
+          it.draw(canvas)
+          bitmap
+        }
+      } catch (e: Exception) {
+        Log.w("PlaybackSession", "Failed to load app icon: ${e.message}")
+        null
+      }
+    }
+
     val coverUri = getCoverUri(ctx)
     // Always use book metadata, never track metadata
     val nowPlayingTitle = displayTitle ?: "Audiobook"
@@ -478,15 +555,35 @@ class PlaybackSession(
             nonNullBitmap
           }
         }
-        bitmap?.let { descriptionBuilder.setIconBitmap(it) }
+        // Use app icon for description instead of book cover
+        val appIconBitmap = getAppIconBitmap(ctx)
+        if (appIconBitmap != null) {
+          descriptionBuilder.setIconBitmap(appIconBitmap)
+        } else {
+          val appIconUri = Uri.parse("android.resource://${ctx.packageName}/${R.mipmap.ic_launcher}")
+          descriptionBuilder.setIconUri(appIconUri)
+        }
       } catch (e: Exception) {
         Log.w("PlaybackSession", "Failed to load bitmap for local book: ${e.message}")
-        descriptionBuilder.setIconUri(coverUri)
+        // Fallback to app icon
+        val appIconBitmap = getAppIconBitmap(ctx)
+        if (appIconBitmap != null) {
+          descriptionBuilder.setIconBitmap(appIconBitmap)
+        } else {
+          val appIconUri = Uri.parse("android.resource://${ctx.packageName}/${R.mipmap.ic_launcher}")
+          descriptionBuilder.setIconUri(appIconUri)
+        }
       }
     } else {
-      // Server books: Use URI for Android Auto compatibility
-      Log.d("PlaybackSession", "Server book - using URI for Android Auto: $coverUri")
-      descriptionBuilder.setIconUri(coverUri)
+      // Server books: Use app icon instead of server URI
+      Log.d("PlaybackSession", "Server book - using app icon for notification")
+      val appIconBitmap = getAppIconBitmap(ctx)
+      if (appIconBitmap != null) {
+        descriptionBuilder.setIconBitmap(appIconBitmap)
+      } else {
+        val appIconUri = Uri.parse("android.resource://${ctx.packageName}/${R.mipmap.ic_launcher}")
+        descriptionBuilder.setIconUri(appIconUri)
+      }
     }
 
     val description = descriptionBuilder.build()
@@ -507,16 +604,18 @@ class PlaybackSession(
     // Set the description with proper bitmap/URI handling
     metadataBuilder.putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, description.mediaId)
 
-    // Also set bitmap in metadata keys for fallback
-    if (bitmap != null) {
-      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap)
-      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bitmap)
+    // Use app icon for notification instead of book cover
+    val appIconBitmap = getAppIconBitmap(ctx)
+    if (appIconBitmap != null) {
+      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, appIconBitmap)
+      metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, appIconBitmap)
     } else {
-      // Server books: Use URI approach
+      // Fallback to vector drawable resource
+      val appIconUri = Uri.parse("android.resource://${ctx.packageName}/${R.mipmap.ic_launcher}")
       metadataBuilder
-        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, coverUri.toString())
-        .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, coverUri.toString())
-        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, coverUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, appIconUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, appIconUri.toString())
+        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, appIconUri.toString())
     }
 
     val metadata = metadataBuilder.build()
@@ -736,12 +835,13 @@ class PlaybackSession(
       (track.duration * 1000).toLong()
     }
 
-    // Create artwork URI for cast
+    // Create artwork URI for cast - always include token for maximum compatibility
     val artworkUri = if (coverPath != null) {
-      if (checkIsServerVersionGte("2.17.0")) {
-        Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
+      val token = DeviceManager.token
+      if (token.isNotEmpty()) {
+        Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=$token")
       } else {
-        Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=${DeviceManager.token}")
+        Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
       }
     } else null
 

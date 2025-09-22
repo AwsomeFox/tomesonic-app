@@ -129,21 +129,16 @@ class MediaProgressSyncer(
                     if (mediaPlayerType == CastPlayerManager.PLAYER_CAST) {
                       // For cast players, send continuous progress updates since cast position
                       // events might not fire as frequently as local player events
-                      val duration = playerNotificationService.getDuration() / 1000.0 // Convert ms to seconds (now chapter duration for cast)
+                      val totalBookDurationSeconds = playerNotificationService.getDuration() / 1000.0 // Total book duration in seconds
 
-                      // For cast players with chapter-based MediaItems, use chapter-relative progress
-                      val currentTimeForCast = if (playerNotificationService.getCurrentBookChapter() != null) {
-                        // Use chapter-relative position for cast UI
-                        playerNotificationService.currentPlayer.currentPosition / 1000.0
-                      } else {
-                        // Fall back to absolute time for books without chapters
-                        currentTime
-                      }
+                      // For cast players, always use absolute book progress for Cast receiver UI
+                      // The Cast receiver should show overall book progress, not chapter progress
+                      val absoluteBookTimeSeconds = currentTime // This is already absolute time
 
                       playerNotificationService.clientEventEmitter?.onMetadata(
-                        PlaybackMetadata(duration, currentTimeForCast, PlayerState.READY)
+                        PlaybackMetadata(totalBookDurationSeconds, absoluteBookTimeSeconds, PlayerState.READY)
                       )
-                      Log.d(tag, "Sent cast progress update: chapter-relative=${currentTimeForCast}s/${duration}s, absolute=${currentTime}s")
+                      Log.d(tag, "Sent cast progress update: absolute=${absoluteBookTimeSeconds}s/${totalBookDurationSeconds}s (book progress)")
                     }
                   }
                 }
@@ -288,6 +283,33 @@ class MediaProgressSyncer(
     }
 
     MediaEventManager.seekEvent(currentPlaybackSession!!, null)
+  }
+
+  /**
+   * Updates position for Cast player progress synchronization
+   * Called periodically by Cast player position updates
+   */
+  fun onPositionUpdate() {
+    if (listeningTimerRunning) {
+      val newCurrentTime = playerNotificationService.getCurrentTimeSeconds()
+      val oldCurrentTime = currentPlaybackSession?.currentTime
+      currentPlaybackSession?.currentTime = newCurrentTime
+
+      // Only sync to UI/callbacks more frequently for Cast to keep UI responsive
+      val isCasting = playerNotificationService.currentPlayer == playerNotificationService.castPlayer
+      if (isCasting) {
+        // For Cast player, trigger UI updates more frequently
+        currentPlaybackSession?.let { playbackSession ->
+          val playbackMetadata = PlaybackMetadata(
+            playbackSession.duration,
+            newCurrentTime,
+            PlayerState.READY
+          )
+          playerNotificationService.clientEventEmitter?.onMetadata(playbackMetadata)
+        }
+        Log.v(tag, "onPositionUpdate [CAST]: Updated currentTime from ${oldCurrentTime}s to ${newCurrentTime}s")
+      }
+    }
   }
 
   // Currently unused

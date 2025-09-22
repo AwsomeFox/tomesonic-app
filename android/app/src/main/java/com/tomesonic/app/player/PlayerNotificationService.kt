@@ -178,7 +178,6 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun setUseChapterTrack(enabled: Boolean) {
-    Log.d(tag, "setUseChapterTrack: enabled=$enabled (reserved for future use)")
     useChapterTrack = enabled
     // Note: Android Auto and notifications always use chapter progress when chapters are available
   }
@@ -235,9 +234,7 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    Log.d(tag, "AABrowser: onStartCommand called with startId: $startId")
     isStarted = true
-    Log.d(tag, "onStartCommand $startId")
 
     // Call super first as required by Android
     val result = super.onStartCommand(intent, flags, startId)
@@ -245,14 +242,13 @@ class PlayerNotificationService : MediaLibraryService() {
     // Media3 handles foreground service automatically through MediaSession
     // We don't need to call startForeground() manually - Media3 will handle it
     // when media starts playing and notifications are posted
-    Log.d(tag, "Service started - Media3 will handle foreground service automatically")
 
     return result
   }
 
   @Deprecated("Deprecated in Java")
   override fun onStart(intent: Intent?, startId: Int) {
-    Log.d(tag, "onStart $startId")
+    // Override required by MediaBrowserServiceCompat
   }
 
   @RequiresApi(Build.VERSION_CODES.O)
@@ -285,7 +281,6 @@ class PlayerNotificationService : MediaLibraryService() {
   override fun onDestroy() {
     networkConnectivityManager.release()
 
-    Log.d(tag, "onDestroy")
     isStarted = false
     isClosed = true
     // Reset foreground service flag so new service instance can start properly
@@ -315,20 +310,16 @@ class PlayerNotificationService : MediaLibraryService() {
   // removing service when user swipe out our app
   override fun onTaskRemoved(rootIntent: Intent?) {
     super.onTaskRemoved(rootIntent)
-    Log.d(tag, "onTaskRemoved")
 
     // Keep the MediaBrowserService running for Android Auto even when app is closed
     if (isAndroidAuto) {
-      Log.d(tag, "onTaskRemoved: Keeping MediaBrowserService alive for Android Auto")
       // Don't call stopSelf() - let the service continue running for Android Auto
     } else {
       // If not being used by Android Auto, allow normal termination
-      Log.d(tag, "onTaskRemoved: Not in Android Auto mode, allowing normal termination")
     }
   }
 
   override fun onCreate() {
-    Log.d(tag, "AABrowser: PlayerNotificationService onCreate called")
     super.onCreate()
     ctx = this
 
@@ -350,7 +341,6 @@ class PlayerNotificationService : MediaLibraryService() {
     mediaProgressSyncer = MediaProgressSyncer(this, apiHandler)
 
     // Initialize shake sensor
-    Log.d(tag, "onCreate Register sensor listener ${mAccelerometer?.isWakeUpSensor}")
     initSensor()
 
     // Initialize media manager
@@ -379,7 +369,6 @@ class PlayerNotificationService : MediaLibraryService() {
             }
 
     // Initialize MediaSessionManager (preparation for player creation)
-    Log.d(tag, "AABrowser: Initializing MediaSessionManager")
     val sessionCallback = MediaLibrarySessionCallback(this)
     mediaSessionManager = MediaSessionManager(this, this, sessionCallback)
     // Note: MediaSession will be initialized after player creation
@@ -391,12 +380,10 @@ class PlayerNotificationService : MediaLibraryService() {
     try {
       val castContext = com.google.android.gms.cast.framework.CastContext.getSharedInstance(this)
       castPlayerManager.initializeCastPlayer(castContext)
-      Log.d(tag, "Cast framework initialized successfully")
 
       // Check if there's already an active cast session (thread-safe)
       castPlayerManager.isConnectedSafe { isConnected ->
         if (isConnected) {
-          Log.d(tag, "Existing cast session detected during service initialization")
           // Don't switch immediately - wait until playback preparation
         }
       }
@@ -453,12 +440,6 @@ class PlayerNotificationService : MediaLibraryService() {
           playbackRate: Float?,
           skipCastCheck: Boolean = false
   ) {
-    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Called with session '${playbackSession.displayTitle}', playWhenReady=$playWhenReady, rate=$playbackRate")
-    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Current thread: ${Thread.currentThread().name}")
-    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Current player state before preparation: ${currentPlayer.playbackState}")
-    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - Current media item count before preparation: ${currentPlayer.mediaItemCount}")
-    Log.d("NUXT_SKIP_DEBUG", "preparePlayer: ENTRY - currentPlayer=$currentPlayer, castPlayer=$castPlayer")
-
     // If we are switching to a different playback session ensure the previous session is
     // finalized and synced (or queued) before starting the new one. This guarantees progress
     // for the previous item is saved remotely or queued if offline.
@@ -754,14 +735,14 @@ class PlayerNotificationService : MediaLibraryService() {
         }
       }
 
-      // Build the MediaSource using the new architecture
+      // Build the MediaItems using the new architecture
       // Determine if we should build for cast based on the media player type
       val forCast = playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST
-      val mediaSource = try {
-        audiobookMediaSourceBuilder.buildMediaSource(playbackSession, forCast)
+      val mediaItems = try {
+        audiobookMediaSourceBuilder.buildMediaItems(playbackSession, forCast)
       } catch (e: Exception) {
-        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to build MediaSource: ${e.javaClass.simpleName}: ${e.message}")
-        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource build exception:", e)
+        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to build MediaItems: ${e.javaClass.simpleName}: ${e.message}")
+        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaItems build exception:", e)
         Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Session info - isLocal: ${playbackSession.isLocal}, sessionId: ${playbackSession.id}")
         if (!playbackSession.isLocal && playbackSession.audioTracks.isNotEmpty()) {
           Log.e("NUXT_SKIP_DEBUG", "preparePlayer: First track URL: ${playbackSession.audioTracks[0].contentUrl}")
@@ -770,13 +751,13 @@ class PlayerNotificationService : MediaLibraryService() {
         return
       }
 
-      if (mediaSource == null) {
-        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource is null - failed to build")
+      if (mediaItems.isEmpty()) {
+        Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaItems list is empty - failed to build")
         currentPlaybackSession = null
         return
       }
 
-      Log.d("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource built successfully")
+      Log.d("NUXT_SKIP_DEBUG", "preparePlayer: MediaItems built successfully (${mediaItems.size} items)")
 
       // Update progress tracker with the playback session
       audiobookProgressTracker.updatePlaybackSession(playbackSession)
@@ -917,34 +898,28 @@ class PlayerNotificationService : MediaLibraryService() {
 
       // CRITICAL FIX: Check if we're using local player (not cast)
       if (currentPlayer == rawPlayer || currentPlayer == mPlayer) {
-        // NEW MEDIA3 ARCHITECTURE: Use MediaSource with ConcatenatingMediaSource + ClippingMediaSource
+        // NEW MEDIA3 ARCHITECTURE: Use MediaItems with clipping configuration
         // This creates a unified timeline where each chapter is a separate MediaItem
-        AbsLogger.info("PlayerNotificationService", "preparePlayer: Setting up MediaSource for ${currentPlaybackSession?.mediaItemId}.")
-        Log.d(tag, "NEW_ARCHITECTURE: Using Media3 MediaSource architecture (currentPlayer type: ${currentPlayer.javaClass.simpleName})")
+        AbsLogger.info("PlayerNotificationService", "preparePlayer: Setting up MediaItems for ${currentPlaybackSession?.mediaItemId}.")
+        Log.d(tag, "NEW_ARCHITECTURE: Using Media3 MediaItem architecture (currentPlayer type: ${currentPlayer.javaClass.simpleName})")
 
-        // Set the MediaSource to populate the timeline
-        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Setting MediaSource on ExoPlayer")
+        // Calculate start position using the helper methods
+        val startMediaItemIndex = audiobookMediaSourceBuilder.calculateStartMediaItemIndex(playbackSession)
+        val startPositionMs = audiobookMediaSourceBuilder.calculateStartPositionInMediaItem(playbackSession)
+        
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Starting at MediaItem $startMediaItemIndex, position ${startPositionMs}ms")
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: POSITION_DEBUG - Absolute position: ${playbackSession.currentTimeMs}ms, Chapter-relative position: ${startPositionMs}ms")
+
+        // Set the MediaItems to populate the timeline
+        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Setting MediaItems on ExoPlayer")
         try {
-          rawPlayer.setMediaSource(mediaSource)
-          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource set successfully")
+          rawPlayer.setMediaItems(mediaItems, startMediaItemIndex, startPositionMs)
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: MediaItems set successfully (${mediaItems.size} items)")
         } catch (e: Exception) {
-          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to set MediaSource: ${e.javaClass.simpleName}: ${e.message}")
-          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaSource set exception:", e)
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to set MediaItems: ${e.javaClass.simpleName}: ${e.message}")
+          Log.e("NUXT_SKIP_DEBUG", "preparePlayer: MediaItems set exception:", e)
           currentPlaybackSession = null
           return
-        }
-
-        // Calculate initial position using the new progress tracker
-        val startPosition = playbackSession.currentTimeMs
-        Log.d(tag, "INITIAL_POSITION: Calculating initial position: ${startPosition}ms")
-
-        if (startPosition > 0) {
-          // Use the new progress tracker to seek to the correct position
-          Log.d(tag, "INITIAL_POSITION: Using AudiobookProgressTracker for positioning")
-          // Note: We'll seek after prepare() to ensure the timeline is ready
-        } else {
-          // Starting from beginning
-          Log.d(tag, "INITIAL_POSITION: Starting from beginning")
         }
 
         // ENHANCED DEBUG: Log state before setting playWhenReady
@@ -967,11 +942,9 @@ class PlayerNotificationService : MediaLibraryService() {
         Log.d(tag, "PREPARE_DEBUG: After prepare() - playbackState=${currentPlayer.playbackState}, isPlaying=${currentPlayer.isPlaying}, playWhenReady=${currentPlayer.playWhenReady}")
         Log.d(tag, "PREPARE_DEBUG: Expected behavior: prepare() should transition to BUFFERING then READY, and auto-start if playWhenReady=true")
 
-        // Now seek to the initial position using the new progress tracker
-        if (startPosition > 0) {
-          Log.d(tag, "SEEK_AFTER_PREPARE: Seeking to initial position ${startPosition}ms using AudiobookProgressTracker")
-          audiobookProgressTracker.seekToAbsolutePosition(startPosition)
-        }
+        // The MediaItems are already set with the correct start position, so no additional seeking is needed
+        // The setMediaItems() call above already positioned the player at the correct MediaItem and position
+        Log.d(tag, "POSITION_DEBUG: MediaItems set with startIndex=$startMediaItemIndex, startPosition=${startPositionMs}ms - no additional seeking needed")
 
         // Use PlayerManager debug method for comprehensive state logging
         playerManager.logPlayerState("IMMEDIATELY_AFTER_PREPARE")
@@ -1309,6 +1282,15 @@ class PlayerNotificationService : MediaLibraryService() {
     val mediaPlayerType = castPlayerManager.getMediaPlayer(currentPlayer)
     clientEventEmitter?.onMediaPlayerChanged(mediaPlayerType)
 
+    // Start/stop position updates based on player type
+    if (useCastPlayer) {
+      castPlayerManager.startPositionUpdates()
+      Log.d(tag, "Started Cast position updates")
+    } else {
+      castPlayerManager.stopPositionUpdates()
+      Log.d(tag, "Stopped Cast position updates")
+    }
+
     // Resume playback with current session
     currentPlaybackSession?.let { session ->
       Log.d(tag, "Resuming playback on new player from position: ${currentPosition}ms")
@@ -1325,6 +1307,11 @@ class PlayerNotificationService : MediaLibraryService() {
           startPositionMs = chapterRelativePosition.coerceAtLeast(0L),
           playWhenReady = wasPlaying
         )
+
+        // Synchronize playback speed with Cast player
+        val currentSpeed = mPlayer.playbackParameters.speed
+        Log.d(tag, "Synchronizing Cast player speed to current app speed: ${currentSpeed}")
+        castPlayerManager.setPlaybackSpeed(currentSpeed)
       } else {
         // Prepare local player with current session
         preparePlayer(session, wasPlaying, null)
@@ -1349,7 +1336,26 @@ class PlayerNotificationService : MediaLibraryService() {
     // Always return absolute position for progress syncing and server communication
     // Use AudiobookProgressTracker's absolute position method for the new architecture
     val absoluteTime = if (::chapterNavigationHelper.isInitialized) {
-      chapterNavigationHelper.getAbsolutePosition()
+      // For Cast player, ensure we get the correct absolute position
+      if (currentPlayer == castPlayer) {
+        // Cast player provides chapter-relative position, convert to absolute
+        val currentChapterIndex = currentPlayer.currentMediaItemIndex
+        val chapterRelativePos = currentPlayer.currentPosition
+        val session = currentPlaybackSession
+
+        if (session != null && currentChapterIndex >= 0 && currentChapterIndex < session.chapters.size) {
+          val currentChapter = session.chapters[currentChapterIndex]
+          val absolutePos = currentChapter.startMs + chapterRelativePos
+          Log.d(tag, "getCurrentTime [CAST]: chapter=${currentChapterIndex}, chapterPos=${chapterRelativePos}ms, absolutePos=${absolutePos}ms")
+          absolutePos
+        } else {
+          Log.w(tag, "getCurrentTime [CAST]: Unable to calculate absolute position, using chapter-relative: ${chapterRelativePos}ms")
+          chapterRelativePos
+        }
+      } else {
+        // Local player - use chapter navigation helper
+        chapterNavigationHelper.getAbsolutePosition()
+      }
     } else {
       rawPlayer?.currentPosition ?: 0L
     }
@@ -1359,7 +1365,8 @@ class PlayerNotificationService : MediaLibraryService() {
       val currentChapter = chapterNavigationHelper.getCurrentChapter()
       val currentChapterIndex = chapterNavigationHelper.getCurrentChapterIndex()
       val chapterRelativePos = currentPlayer.currentPosition // Native chapter-relative position
-      Log.d(tag, "getCurrentTime: absolute=${absoluteTime}ms (${absoluteTime/1000.0}s), chapter-relative=${chapterRelativePos}ms, chapterIndex=${currentChapterIndex}, chapter=${currentChapter?.title}")
+      val playerType = if (currentPlayer == castPlayer) "CAST" else "LOCAL"
+      Log.d(tag, "getCurrentTime [$playerType]: absolute=${absoluteTime}ms (${absoluteTime/1000.0}s), chapter-relative=${chapterRelativePos}ms, chapterIndex=${currentChapterIndex}, chapter=${currentChapter?.title}")
     } else {
       Log.d(tag, "getCurrentTime: absolute=${absoluteTime}ms (${absoluteTime/1000.0}s) [no chapters]")
     }
@@ -1369,6 +1376,14 @@ class PlayerNotificationService : MediaLibraryService() {
 
   fun getCurrentTimeSeconds(): Double {
     return getCurrentTime() / 1000.0
+  }
+
+  /**
+   * Notifies listeners of position updates, used by Cast player for progress synchronization
+   */
+  fun notifyPositionUpdate() {
+    // Trigger progress sync for Cast player
+    mediaProgressSyncer.onPositionUpdate()
   }
 
   /**
@@ -1667,7 +1682,27 @@ class PlayerNotificationService : MediaLibraryService() {
       // Use chapter-aware seeking for books with chapters
       Log.d(tag, "seekPlayer: Using chapter-aware seek to ${timeToSeek}ms")
       Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: Using chapter-aware seek to ${timeToSeek}ms")
-      chapterNavigationHelper.seekToAbsolutePosition(timeToSeek)
+
+      // Special handling for Cast player - ensure absolute position is converted correctly
+      if (currentPlayer == castPlayer) {
+        Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Converting absolute position ${timeToSeek}ms to chapter-relative")
+        val session = currentPlaybackSession
+        if (session != null) {
+          // Find target chapter for this absolute time
+          val targetChapterIndex = session.getChapterIndexForTime(timeToSeek)
+          if (targetChapterIndex >= 0 && targetChapterIndex < session.chapters.size) {
+            val targetChapter = session.chapters[targetChapterIndex]
+            val chapterRelativePosition = timeToSeek - targetChapter.startMs
+            Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Seeking to chapter $targetChapterIndex, position ${chapterRelativePosition}ms")
+            currentPlayer.seekTo(targetChapterIndex, chapterRelativePosition.coerceAtLeast(0L))
+          } else {
+            Log.w("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Invalid chapter index $targetChapterIndex for time ${timeToSeek}ms")
+          }
+        }
+      } else {
+        // Local player - use chapter navigation helper
+        chapterNavigationHelper.seekToAbsolutePosition(timeToSeek)
+      }
     } else {
       // Direct seek for books without chapters (single track)
       Log.d(tag, "seekPlayer: Direct seek to ${timeToSeek}ms (single track)")
@@ -2032,7 +2067,22 @@ class PlayerNotificationService : MediaLibraryService() {
 
   fun seekToNextChapter(): Boolean {
     return if (::chapterNavigationHelper.isInitialized) {
-      chapterNavigationHelper.seekToNextChapter()
+      if (currentPlayer == castPlayer) {
+        // Cast player - use direct MediaItem navigation
+        val currentIndex = currentPlayer.currentMediaItemIndex
+        val nextIndex = currentIndex + 1
+        if (nextIndex < currentPlayer.mediaItemCount) {
+          Log.d(tag, "seekToNextChapter [CAST]: Moving to chapter $nextIndex")
+          currentPlayer.seekToNext()
+          true
+        } else {
+          Log.d(tag, "seekToNextChapter [CAST]: Already at last chapter")
+          false
+        }
+      } else {
+        // Local player - use chapter navigation helper
+        chapterNavigationHelper.seekToNextChapter()
+      }
     } else {
       Log.w(tag, "ChapterNavigationHelper not initialized")
       false
@@ -2041,7 +2091,22 @@ class PlayerNotificationService : MediaLibraryService() {
 
   fun seekToPreviousChapter(): Boolean {
     return if (::chapterNavigationHelper.isInitialized) {
-      chapterNavigationHelper.seekToPreviousChapter()
+      if (currentPlayer == castPlayer) {
+        // Cast player - use direct MediaItem navigation
+        val currentIndex = currentPlayer.currentMediaItemIndex
+        val prevIndex = currentIndex - 1
+        if (prevIndex >= 0) {
+          Log.d(tag, "seekToPreviousChapter [CAST]: Moving to chapter $prevIndex")
+          currentPlayer.seekToPrevious()
+          true
+        } else {
+          Log.d(tag, "seekToPreviousChapter [CAST]: Already at first chapter")
+          false
+        }
+      } else {
+        // Local player - use chapter navigation helper
+        chapterNavigationHelper.seekToPreviousChapter()
+      }
     } else {
       Log.w(tag, "ChapterNavigationHelper not initialized")
       false

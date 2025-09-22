@@ -194,7 +194,6 @@ export default {
       if (mediaItemHistory.id !== this.mediaItemHistory.id) {
         return
       }
-      console.log('Media Item History updated')
 
       this.mediaItemHistory = mediaItemHistory
     }

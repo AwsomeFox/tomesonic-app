@@ -5,10 +5,7 @@
       <!-- Menu Button - hidden when back button is shown -->
       <ui-icon-btn v-if="!showBack" icon="menu" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="clickShowSideDrawer" />
 
-      <!-- Logo/Back Navigation - back button takes menu button's position -->
-      <nuxt-link v-show="!showBack && !user" to="/" class="mr-4 state-layer rounded-lg p-2 -m-2">
-        <ui-tomesonic-app-icon :size="32" color="on-surface-variant" />
-      </nuxt-link>
+      <!-- Back Navigation -->
       <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="back" />
 
       <!-- Library Selector -->
@@ -136,7 +133,6 @@ export default {
         // Only update if we got a meaningful value or if we don't have any value yet
         if (cap > 0 || !this.topPadding || this.topPadding === '0px') {
           this.topPadding = `${cap}px`
-          console.log('[AppBar] Updated top padding to:', this.topPadding)
         }
       } catch (e) {
         // Set a reasonable fallback for Android devices if no value is available
@@ -144,7 +140,6 @@ export default {
           // Use device pixel ratio to estimate status bar height
           const fallback = window.devicePixelRatio > 1 ? 28 : 24
           this.topPadding = `${fallback}px`
-          console.log('[AppBar] Using fallback top padding:', this.topPadding)
         }
       }
     }

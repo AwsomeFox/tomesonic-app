@@ -131,10 +131,10 @@ class MediaSessionManager(
                 .build()
         )
 
-        // Speed control button with predefined icon
-        // Note: Using predefined ICON_PLAYBACK_SPEED since custom icons require different approach
+        // Speed control button with speed-specific icon
         customActions.add(
-            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_PLAYBACK_SPEED)
+            androidx.media3.session.CommandButton.Builder()
+                .setIconResId(getSpeedIcon(currentSpeed))
                 .setDisplayName("Speed")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
                 .build()

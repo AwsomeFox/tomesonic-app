@@ -454,7 +454,6 @@ export default {
     },
     async connectToServer(config) {
       await this.$hapticsImpact()
-      console.log('[ServerConnectForm] connectToServer', config.address)
       this.processing = true
       this.serverConfig = {
         ...config
@@ -462,11 +461,9 @@ export default {
       this.showForm = true
       var success = await this.pingServerAddress(config.address)
       this.processing = false
-      console.log(`[ServerConnectForm] pingServer result ${success}`)
       if (!success) {
         this.showForm = false
         this.showAuth = false
-        console.log(`[ServerConnectForm] showForm ${this.showForm}`)
         return
       }
 
@@ -571,7 +568,6 @@ export default {
       }
       try {
         const response = await CapacitorHttp.get(options)
-        console.log('[ServerConnectForm] GET request response', response)
         if (response.status == 200) {
           return response
         } else {
@@ -599,7 +595,6 @@ export default {
         connectTimeout
       }
       const response = await CapacitorHttp.post(options)
-      console.log('[ServerConnectForm] POST request response', response)
       if (response.status >= 400) {
         throw new Error(response.data)
       } else {
@@ -795,7 +790,6 @@ export default {
         // Also for security reasons, we only retry when the https request did not
         //      return a http status code (so only retry when the TCP connection could not be established)
         if (shouldRetryWithHttp && typeof error.code !== 'number') {
-          console.log('[ServerConnectForm] https failed, trying to connect with http...')
           const validatedHttpUrl = this.validateServerUrl(address, 'http:')
           if (validatedHttpUrl) {
             return await this.getServerAddressStatus(validatedHttpUrl)
@@ -840,8 +834,6 @@ export default {
     },
     async setUserAndConnection({ user, userDefaultLibraryId, serverSettings, ereaderDevices }) {
       if (!user) return
-
-      console.log('Successfully logged in', JSON.stringify(user))
 
       this.$store.commit('setServerSettings', serverSettings)
       this.$store.commit('libraries/setEReaderDevices', ereaderDevices)
@@ -927,7 +919,6 @@ export default {
         }
         return false
       })
-      console.log('[ServerConnectForm] authRes=', authRes)
 
       this.processing = false
       return authRes
@@ -955,7 +946,6 @@ export default {
       }
 
       if (this.lastServerConnectionConfig) {
-        console.log('[ServerConnectForm] init with lastServerConnectionConfig', this.lastServerConnectionConfig)
         this.connectToServer(this.lastServerConnectionConfig)
       } else {
         this.showForm = !this.serverConnectionConfigs.length

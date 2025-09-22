@@ -32,13 +32,7 @@
     </div>
 
     <modals-dialog v-model="showDialog" :items="dialogItems" @action="dialogAction" />
-    <modals-confirm-dialog
-      v-model="showConfirmDialog"
-      :title="confirmDialogTitle"
-      :message="confirmDialogMessage"
-      @confirm="handleConfirm"
-      @cancel="handleCancel"
-    />
+    <modals-confirm-dialog v-model="showConfirmDialog" :title="confirmDialogTitle" :message="confirmDialogMessage" @confirm="handleConfirm" @cancel="handleCancel" />
   </div>
 </template>
 
@@ -104,7 +98,6 @@ export default {
       }
     },
     dialogAction(action) {
-      console.log('Dialog action', action)
       if (action == 'remove') {
         this.removeFolder()
       }
@@ -140,9 +133,7 @@ export default {
       this.folder = folder
 
       var items = (await this.$db.getLocalLibraryItemsInFolder(this.folderId)) || []
-      console.log('Init folder', this.folderId, items)
       this.localLibraryItems = items.map((lmi) => {
-        console.log('Local library item', JSON.stringify(lmi))
         return {
           ...lmi,
           coverPathSrc: lmi.coverContentUrl ? Capacitor.convertFileSrc(lmi.coverContentUrl) : null
@@ -151,7 +142,6 @@ export default {
     },
     newLocalLibraryItem(item) {
       if (item.folderId == this.folderId) {
-        console.log('New local library item', item.id)
         if (this.localLibraryItems.find((li) => li.id == item.id)) {
           console.warn('Item already added', item.id)
           return

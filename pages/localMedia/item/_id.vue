@@ -134,13 +134,7 @@
     </div>
 
     <modals-dialog v-model="showDialog" :items="dialogItems" @action="dialogAction" />
-    <modals-confirm-dialog
-      v-model="showConfirmDialog"
-      :title="confirmDialogTitle"
-      :message="confirmDialogMessage"
-      @confirm="handleConfirm"
-      @cancel="handleCancel"
-    />
+    <modals-confirm-dialog v-model="showConfirmDialog" :title="confirmDialogTitle" :message="confirmDialogMessage" @confirm="handleConfirm" @cancel="handleCancel" />
   </div>
 </template>
 
@@ -314,7 +308,6 @@ export default {
       var response = await this.$db.updateLocalTrackOrder(payload)
       if (response) {
         this.$toast.success('Library item updated')
-        console.log('updateLocal track order response', JSON.stringify(response))
         this.localLibraryItem = response
         this.audioTracksCopy = this.audioTracks.map((at) => ({ ...at }))
       } else {
@@ -360,7 +353,6 @@ export default {
       })
     },
     async dialogAction(action) {
-      console.log('Dialog action', action)
       await this.$hapticsImpact()
 
       if (action == 'delete') {

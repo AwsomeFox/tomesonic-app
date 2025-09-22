@@ -22,10 +22,12 @@ import androidx.media3.extractor.ogg.OggExtractor
 import com.tomesonic.app.data.AudioTrack
 import com.tomesonic.app.data.BookChapter
 import com.tomesonic.app.data.PlaybackSession
+import com.tomesonic.app.utils.MimeTypeUtil
 
 /**
- * Builds a Media3 MediaSource architecture for audiobooks using ConcatenatingMediaSource
- * with ClippingMediaSource for each chapter to create a single unified timeline.
+ * Builds MediaItem playlists for audiobooks with chapter-based playback.
+ * Uses MediaItem clipping configuration for modern Media3 compatibility.
+ * Maintains backward compatibility with MediaSource for existing code.
  */
 class AudiobookMediaSourceBuilder(private val context: Context) {
 
@@ -55,8 +57,58 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     fun getLastChapterSegments(): List<ChapterSegment> = lastChapterSegments
 
     /**
-     * Builds a complete MediaSource for an audiobook with chapter-based MediaItems
+     * Builds a list of MediaItems for an audiobook with chapter-based playback
+     * This is the preferred method for modern Media3 playback as it creates
+     * MediaItems with clipping configuration that work with all player types.
+     *
      * @param playbackSession The playback session containing audiobook data
+     * @param forCast Whether to build for cast (uses server URIs) or local playback
+     * @return List of MediaItems with clipping configuration for chapters
+     */
+    fun buildMediaItems(playbackSession: PlaybackSession, forCast: Boolean = false): List<MediaItem> {
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaItems: Building for '${playbackSession.displayTitle}' (forCast: $forCast)")
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaItems: ${playbackSession.audioTracks.size} audio tracks, ${playbackSession.chapters.size} chapters")
+
+        if (playbackSession.audioTracks.isEmpty()) {
+            Log.e("NUXT_SKIP_DEBUG", "buildMediaItems: No audio tracks found in playback session")
+            return emptyList()
+        }
+
+        // Log each audio track for format debugging
+        playbackSession.audioTracks.forEachIndexed { index, track ->
+            val uri = if (forCast) {
+                playbackSession.getServerContentUri(track)
+            } else {
+                playbackSession.getContentUri(track)
+            }
+            Log.d("NUXT_SKIP_DEBUG", "buildMediaItems: Track $index: '${track.title}' URI: $uri")
+        }
+
+        // Create chapter segments from the playback session
+        val chapterSegments = createChapterSegments(playbackSession, forCast)
+        if (chapterSegments.isEmpty()) {
+            Log.e("NUXT_SKIP_DEBUG", "buildMediaItems: No chapter segments could be created")
+            return emptyList()
+        }
+
+        // Store segments for external access
+        lastChapterSegments = chapterSegments
+
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaItems: Created ${chapterSegments.size} chapter segments")
+
+        // Build MediaItems with clipping configuration for each chapter
+        val mediaItems = chapterSegments.map { segment ->
+            createChapterMediaItem(segment, playbackSession)
+        }
+
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaItems: Successfully built ${mediaItems.size} MediaItems with chapter clipping")
+        return mediaItems
+    }
+
+    /**
+     * Builds a complete MediaSource for an audiobook with chapter-based MediaItems
+     * For backward compatibility - prefer using buildMediaItems() for new code.
+     * @param playbackSession The playbook session containing audiobook data
      * @param forCast Whether to build MediaSource for cast (uses server URIs) or local playback
      */
     fun buildMediaSource(playbackSession: PlaybackSession, forCast: Boolean = false): MediaSource? {
@@ -90,7 +142,8 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
         Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Created ${chapterSegments.size} chapter segments")
 
-        // Build the concatenating MediaSource
+        // Use the original ConcatenatingMediaSource for backward compatibility
+        // This maintains separate timeline windows for each chapter
         val concatenatingMediaSource = ConcatenatingMediaSource()
 
         chapterSegments.forEach { segment ->
@@ -109,7 +162,8 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
                     "(${segment.chapterStartMs}ms-${segment.chapterEndMs}ms, duration=${segment.durationMs}ms)")
         }
 
-        Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Successfully built ConcatenatingMediaSource with ${concatenatingMediaSource.size} chapters")
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Successfully built ConcatenatingMediaSource with ${chapterSegments.size} chapters")
+        Log.d("NUXT_SKIP_DEBUG", "buildMediaSource: Timeline will have ${chapterSegments.size} windows (one per chapter)")
         return concatenatingMediaSource
     }
 
@@ -253,16 +307,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         // Log detailed format information for debugging
         val audioFileUri = segment.audioFileUri
         val fileName = audioFileUri.lastPathSegment ?: audioFileUri.toString()
-        val detectedMimeType = when {
-            fileName.contains(".mp3", ignoreCase = true) -> MimeTypes.AUDIO_MPEG
-            fileName.contains(".m4a", ignoreCase = true) -> MimeTypes.AUDIO_MP4
-            fileName.contains(".mp4", ignoreCase = true) -> MimeTypes.AUDIO_MP4
-            fileName.contains(".aac", ignoreCase = true) -> MimeTypes.AUDIO_AAC
-            fileName.contains(".flac", ignoreCase = true) -> "audio/flac"
-            fileName.contains(".ogg", ignoreCase = true) -> "audio/ogg"
-            fileName.contains(".wav", ignoreCase = true) -> "audio/wav"
-            else -> "audio/unknown"
-        }
+        val detectedMimeType = MimeTypeUtil.getMimeType(fileName)
 
         Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: Creating MediaSource for chapter ${segment.chapterIndex}:")
         Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - URI: $audioFileUri")
@@ -277,11 +322,9 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             .setUri(segment.audioFileUri)
             .setMediaMetadata(createChapterMetadata(segment, playbackSession))
 
-        // Set MIME type if we can detect it to help the extractor
-        if (detectedMimeType != "audio/unknown") {
-            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - Setting MIME type hint: $detectedMimeType")
-            mediaItemBuilder.setMimeType(detectedMimeType)
-        }
+        // Set MIME type to help the extractor (centralized utility never returns "unknown")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource:   - Setting MIME type hint: $detectedMimeType (${MimeTypeUtil.getFormatName(detectedMimeType)})")
+        mediaItemBuilder.setMimeType(detectedMimeType)
 
         try {
             Log.d("NUXT_SKIP_DEBUG", "createChapterMediaSource: Creating ProgressiveMediaSource with enhanced extractors")
@@ -336,5 +379,131 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             .setDurationMs(segment.durationMs) // Set chapter duration for Android Auto timeline
             .setIsPlayable(true)
             .build()
+    }
+
+    /**
+     * Creates a MediaItem for a single chapter with clipping configuration
+     */
+    private fun createChapterMediaItem(
+        segment: ChapterSegment,
+        playbackSession: PlaybackSession
+    ): MediaItem {
+        val audioFileUri = segment.audioFileUri
+        val fileName = audioFileUri.lastPathSegment ?: audioFileUri.toString()
+        val detectedMimeType = MimeTypeUtil.getMimeType(fileName)
+
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem: Creating MediaItem for chapter ${segment.chapterIndex}:")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem:   - URI: $audioFileUri")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem:   - File: $fileName")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem:   - Detected MIME type: $detectedMimeType")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem:   - Spans entire file: ${segment.spansEntireFile}")
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem:   - Chapter range: ${segment.audioFileStartMs}ms - ${segment.audioFileEndMs}ms")
+
+        val mediaItemBuilder = MediaItem.Builder()
+            .setMediaId("${playbackSession.mediaItemId}_chapter_${segment.chapterIndex}")
+            .setUri(segment.audioFileUri)
+            .setMimeType(detectedMimeType)
+            .setMediaMetadata(createChapterMetadata(segment, playbackSession))
+
+        // Apply clipping configuration if the chapter doesn't span the entire file
+        if (!segment.spansEntireFile) {
+            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem: Applying clipping configuration: ${segment.audioFileStartMs}ms to ${segment.audioFileEndMs}ms")
+            val clippingConfig = MediaItem.ClippingConfiguration.Builder()
+                .setStartPositionMs(segment.audioFileStartMs)
+                .setEndPositionMs(segment.audioFileEndMs)
+                .setRelativeToDefaultPosition(false) // Use absolute positions in the file
+                .setStartsAtKeyFrame(false) // Don't force keyframe start for audio
+                .build()
+
+            mediaItemBuilder.setClippingConfiguration(clippingConfig)
+        } else {
+            Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem: Chapter ${segment.chapterIndex} spans entire file, no clipping needed")
+        }
+
+        val mediaItem = mediaItemBuilder.build()
+        Log.d("NUXT_SKIP_DEBUG", "createChapterMediaItem: MediaItem created successfully for chapter ${segment.chapterIndex}")
+        return mediaItem
+    }
+
+    /**
+     * Calculate which MediaItem index to start playback from based on current time
+     * Handles both chapter-based and track-based audiobooks
+     */
+    fun calculateStartMediaItemIndex(playbackSession: PlaybackSession): Int {
+        val currentTimeMs = playbackSession.currentTimeMs
+
+        // Chapter-based approach
+        if (playbackSession.chapters.isNotEmpty()) {
+            // Find the chapter that contains the current time
+            playbackSession.chapters.forEachIndexed { index, chapter ->
+                if (currentTimeMs >= chapter.startMs && currentTimeMs < chapter.endMs) {
+                    Log.d(TAG, "Starting at chapter $index for time ${currentTimeMs}ms")
+                    return index
+                }
+            }
+
+            // If no chapter found, check if we're past the last chapter
+            val lastChapter = playbackSession.chapters.last()
+            if (currentTimeMs >= lastChapter.endMs) {
+                Log.d(TAG, "Current time ${currentTimeMs}ms is past last chapter, starting at last chapter")
+                return playbackSession.chapters.size - 1
+            }
+
+            // Default to first chapter
+            Log.d(TAG, "Starting at first chapter (default)")
+            return 0
+        } else {
+            // Track-based approach: find which track contains the current time
+            playbackSession.audioTracks.forEachIndexed { index, track ->
+                val trackStartMs = track.startOffsetMs
+                val trackEndMs = track.startOffsetMs + (track.duration * 1000).toLong()
+                if (currentTimeMs >= trackStartMs && currentTimeMs < trackEndMs) {
+                    Log.d(TAG, "Starting at track $index for time ${currentTimeMs}ms")
+                    return index
+                }
+            }
+
+            // If past the last track
+            if (playbackSession.audioTracks.isNotEmpty()) {
+                val lastTrack = playbackSession.audioTracks.last()
+                val lastTrackEndMs = lastTrack.startOffsetMs + (lastTrack.duration * 1000).toLong()
+                if (currentTimeMs >= lastTrackEndMs) {
+                    Log.d(TAG, "Current time ${currentTimeMs}ms is past last track, starting at last track")
+                    return playbackSession.audioTracks.size - 1
+                }
+            }
+
+            // Default to first track
+            Log.d(TAG, "Starting at first track (default)")
+            return 0
+        }
+    }
+
+    /**
+     * Calculate the position within the MediaItem to start playback
+     * Handles both chapter-based and track-based audiobooks
+     */
+    fun calculateStartPositionInMediaItem(playbackSession: PlaybackSession): Long {
+        val currentTimeMs = playbackSession.currentTimeMs
+        val mediaItemIndex = calculateStartMediaItemIndex(playbackSession)
+
+        // Chapter-based approach
+        if (playbackSession.chapters.isNotEmpty() && mediaItemIndex < playbackSession.chapters.size) {
+            val chapter = playbackSession.chapters[mediaItemIndex]
+            // Position within the chapter
+            val positionInChapter = currentTimeMs - chapter.startMs
+            Log.d(TAG, "Starting at position ${positionInChapter}ms within chapter $mediaItemIndex")
+            return positionInChapter.coerceAtLeast(0)
+        } 
+        // Track-based approach
+        else if (playbackSession.audioTracks.isNotEmpty() && mediaItemIndex < playbackSession.audioTracks.size) {
+            val track = playbackSession.audioTracks[mediaItemIndex]
+            // Position within the track
+            val positionInTrack = currentTimeMs - track.startOffsetMs
+            Log.d(TAG, "Starting at position ${positionInTrack}ms within track $mediaItemIndex")
+            return positionInTrack.coerceAtLeast(0)
+        }
+
+        return 0
     }
 }

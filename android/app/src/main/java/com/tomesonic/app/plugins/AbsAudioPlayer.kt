@@ -566,9 +566,9 @@ class AbsAudioPlayer : Plugin() {
       // IMPORTANT: Debug the actual Cast options being used
       val castOptions = castContext?.castOptions
       Log.d(tag, "CAST_DEBUG: Cast Context receiver app ID: ${castOptions?.receiverApplicationId}")
-      Log.d(tag, "CAST_DEBUG: Expected app ID: 242E16ED")
+      Log.d(tag, "CAST_DEBUG: Expected app ID: CC1AD845")
 
-      if (castOptions?.receiverApplicationId != "242E16ED") {
+      if (castOptions?.receiverApplicationId != "CC1AD845") {
         Log.e(tag, "CAST_DEBUG: *** MISMATCH! Cast Context is using wrong app ID: ${castOptions?.receiverApplicationId}")
         Log.e(tag, "CAST_DEBUG: *** This indicates Cast framework cache issue or CastOptionsProvider not being used")
       } else {
@@ -635,7 +635,7 @@ class AbsAudioPlayer : Plugin() {
       mediaRouter = MediaRouter.getInstance(mainActivity)
 
       // Use the same Cast App ID as defined in CastOptionsProvider
-      val castAppId = "242E16ED" // Custom Audiobookshelf Cast Receiver
+      val castAppId = "CC1AD845" // Custom Audiobookshelf Cast Receiver
       mediaRouteSelector = MediaRouteSelector.Builder()
         .addControlCategory(CastMediaControlIntent.categoryForCast(castAppId))
         .build()
