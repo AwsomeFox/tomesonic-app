@@ -321,6 +321,12 @@ class CastPlayerManager(
             Log.d(TAG, "Setting Cast playback speed to $expectedSpeed after media load")
             player.setPlaybackSpeed(expectedSpeed)
 
+            // Explicit seek to ensure position is correctly restored (fixes position reset issues with styled receiver)
+            if (absolutePos.positionInTrackMs > 0) {
+                Log.d(TAG, "Explicitly seeking to position ${absolutePos.positionInTrackMs}ms to ensure position restoration")
+                player.seekTo(absolutePos.chapterIndex, absolutePos.positionInTrackMs)
+            }
+
             player.playWhenReady = playWhenReady
 
             Log.d(TAG, "Cast playlist loaded successfully with ${mediaItems.size} chapters")

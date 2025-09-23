@@ -156,12 +156,12 @@ class AudiobookMediaItemConverter : MediaItemConverter {
             castMetadata.putString(CastMediaMetadata.KEY_TITLE, it.toString())
         }
 
-        // Set author as subtitle - prefer bookAuthor from extras if available
+        // Set author as artist - prefer bookAuthor from extras if available
         val authorForSubtitle = customData.optString("bookAuthor").takeIf { it.isNotEmpty() }
             ?: media3Metadata.artist?.toString()
 
         authorForSubtitle?.let {
-            castMetadata.putString(CastMediaMetadata.KEY_SUBTITLE, it)
+            castMetadata.putString(CastMediaMetadata.KEY_ARTIST, it)
         }
 
         // Set book title as album (for grouping)

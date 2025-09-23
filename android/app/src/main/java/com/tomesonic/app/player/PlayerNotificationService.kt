@@ -65,6 +65,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
+import java.util.concurrent.TimeUnit
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -805,14 +806,20 @@ class PlayerNotificationService : MediaLibraryService() {
 
       playbackSession.mediaPlayer = getMediaPlayer()
 
-      // Cast player logic - re-enabled for Media3 migration
+      // Allow casting of local media with server equivalents
+      // Local items with server counterparts can be cast using server URLs
       if (playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST && playbackSession.isLocal) {
-        Log.w(tag, "Cannot cast local media item - switching player")
-        currentPlaybackSession = null
-        // TODO: Implement switchToPlayer for Media3
-        // switchToPlayer(false)
-        // For now, just log the issue and continue with local player
-        playbackSession.mediaPlayer = CastPlayerManager.PLAYER_EXO
+        val canCast = castPlayerManager.canUseCastPlayer(playbackSession)
+        if (!canCast) {
+          Log.w(tag, "Local media item has no server equivalent - cannot cast, switching to local player")
+          currentPlaybackSession = null
+          // TODO: Implement switchToPlayer for Media3
+          // switchToPlayer(false)
+          // For now, just log the issue and continue with local player
+          playbackSession.mediaPlayer = CastPlayerManager.PLAYER_EXO
+        } else {
+          Log.d(tag, "Local media item has server equivalent - proceeding with cast using server URLs")
+        }
       }
 
       if (playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST) {
@@ -904,7 +911,7 @@ class PlayerNotificationService : MediaLibraryService() {
         // Calculate start position using the helper methods
         val startMediaItemIndex = audiobookMediaSourceBuilder.calculateStartMediaItemIndex(playbackSession)
         val startPositionMs = audiobookMediaSourceBuilder.calculateStartPositionInMediaItem(playbackSession)
-        
+
         Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Starting at MediaItem $startMediaItemIndex, position ${startPositionMs}ms")
         Log.d("NUXT_SKIP_DEBUG", "preparePlayer: POSITION_DEBUG - Absolute position: ${playbackSession.currentTimeMs}ms, Chapter-relative position: ${startPositionMs}ms")
 
@@ -2931,6 +2938,10 @@ class PlayerNotificationService : MediaLibraryService() {
  */
 class MediaLibrarySessionCallback(private val service: PlayerNotificationService) : Callback {
 
+  // Cache for search results to avoid duplicating search between onSearch and onGetSearchResult
+  private var cachedSearchQuery: String = ""
+  private var cachedSearchResults: MutableList<MediaItem> = mutableListOf()
+
   companion object {
     const val AUTO_MEDIA_ROOT = "/"
     const val LIBRARIES_ROOT = "__LIBRARIES__"
@@ -2993,7 +3004,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         service.mediaManager.preloadAndroidAutoBrowsingData {
           Log.d("PlayerNotificationServ", "AALibrary: Pre-loading complete, data is now available for browsing")
 
-          // Create root media item for MediaLibraryService
+          // Create root media item for MediaLibraryService with search support
           val rootMediaItem = MediaItem.Builder()
             .setMediaId(AUTO_MEDIA_ROOT)
             .setMediaMetadata(
@@ -3002,6 +3013,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                 .setIsBrowsable(true)
                 .setIsPlayable(false)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .setExtras(Bundle().apply {
+                  putBoolean("android.media.browse.SEARCH_SUPPORTED", true)
+                })
                 .build()
             )
             .build()
@@ -3222,7 +3236,12 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         }
 
         RECENTLY_ROOT -> {
-          // Show libraries with recent items as browsable folders
+          Log.d("PlayerNotificationServ", "AALibrary: Getting recent items from cached data (synchronous)")
+
+          // Return cached data immediately - Media3 requires synchronous responses
+          val recentShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
+          val librariesWithRecent = mutableListOf<MediaItem>()
+
           if (!service.mediaManager.hasValidServerConnection()) {
             Log.w("PlayerNotificationServ", "AALibrary: No server connection for recent items")
             val noRecentItem = MediaItem.Builder()
@@ -3238,16 +3257,23 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
               )
               .build()
             future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
+          } else if (recentShelves.isEmpty() || !service.mediaManager.hasRecentShelvesLoaded()) {
+            Log.d("PlayerNotificationServ", "AALibrary: No recent data in cache, returning empty list")
+            val noDataItem = MediaItem.Builder()
+              .setMediaId("__NO_RECENT_DATA__")
+              .setMediaMetadata(
+                MediaMetadata.Builder()
+                  .setTitle("No recent items available")
+                  .setSubtitle("Data may still be loading")
+                  .setIsBrowsable(false)
+                  .setIsPlayable(false)
+                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.md_clock_outline))
+                  .build()
+              )
+              .build()
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noDataItem)), params))
           } else {
-            Log.d("PlayerNotificationServ", "AALibrary: Loading recent items organized by library")
-
-            // Load recent shelves synchronously for all libraries
-            service.mediaManager.loadRecentItemsSync()
-
-            // Get libraries that have recent items
-            val recentShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
-            val librariesWithRecent = mutableListOf<MediaItem>()
-
             Log.d("PlayerNotificationServ", "AALibrary: Found recent shelves for ${recentShelves.size} libraries")
 
             recentShelves.forEach { (libraryId, shelves) ->
@@ -3276,7 +3302,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                           .setIsBrowsable(true)
                           .setIsPlayable(false)
                           .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                          .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_recent))
+                          .setArtworkUri(getUriToAbsIconDrawable(service.applicationContext, library.icon))
                           .build()
                       )
                       .build()
@@ -3345,6 +3371,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           }
         }
 
+
         else -> {
           // Parse complex media IDs for hierarchical browsing (matching original implementation)
           when {
@@ -3403,37 +3430,73 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
               future.set(LibraryResult.ofItemList(ImmutableList.copyOf(recentItems), params))
             }
             parentId.startsWith("__LIBRARY__") -> {
-              // For library browsing, ensure we have the necessary data loaded first
+              // Handle library browsing synchronously using cached data
+              Log.d("PlayerNotificationServ", "AALibrary: Handling library browsing for $parentId (synchronous)")
+
               if (!service.mediaManager.hasValidServerConnection()) {
                 Log.w("PlayerNotificationServ", "AALibrary: No server connection for library browsing")
-                future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
+                val noConnectionItem = MediaItem.Builder()
+                  .setMediaId("__NO_CONNECTION__")
+                  .setMediaMetadata(
+                    MediaMetadata.Builder()
+                      .setTitle("No server connection")
+                      .setSubtitle("Connect to server to browse")
+                      .setIsBrowsable(false)
+                      .setIsPlayable(false)
+                      .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                      .build()
+                  )
+                  .build()
+                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noConnectionItem)), params))
               } else {
-                // Check if we need to wait for data loading based on the library browsing type
-                val needsDataLoading = needsDataLoadingForParentId(parentId)
-                if (needsDataLoading) {
-                  Log.d("PlayerNotificationServ", "AALibrary: Ensuring data is loaded for $parentId")
-                  ensureDataLoadedForBrowsing(parentId) {
-                    val children = handleLibraryBrowsing(parentId)
-                    future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
-                  }
-                } else {
-                  val children = handleLibraryBrowsing(parentId)
-                  future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
-                }
+                // Handle browsing using cached data only
+                val children = handleLibraryBrowsing(parentId)
+                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
               }
             }
             service.mediaManager.getIsLibrary(parentId) -> {
-              // Return library categories (Authors, Series, Collections, etc.)
+              // Return library categories (Authors, Series, Collections, etc.) synchronously
               val library = service.mediaManager.getLibrary(parentId)
               if (library != null) {
-                // Ensure the library has data loaded before showing categories
+                Log.d("PlayerNotificationServ", "AALibrary: Getting library categories for ${library.name} (synchronous)")
+
                 if (!service.mediaManager.hasValidServerConnection()) {
                   Log.w("PlayerNotificationServ", "AALibrary: No server connection for library categories")
-                  future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
+                  val noConnectionItem = MediaItem.Builder()
+                    .setMediaId("__NO_CONNECTION__")
+                    .setMediaMetadata(
+                      MediaMetadata.Builder()
+                        .setTitle("No server connection")
+                        .setSubtitle("Connect to server to browse library")
+                        .setIsBrowsable(false)
+                        .setIsPlayable(false)
+                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                        .build()
+                    )
+                    .build()
+                  future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noConnectionItem)), params))
                 } else {
-                  Log.d("PlayerNotificationServ", "AALibrary: Ensuring library data is loaded for ${library.name}")
-                  ensureLibraryDataLoaded(library) {
-                    val children = buildLibraryCategories(library)
+                  // Build categories from cached data immediately
+                  val children = buildLibraryCategories(library)
+
+                  if (children.isEmpty()) {
+                    Log.d("PlayerNotificationServ", "AALibrary: No cached data available for ${library.name}")
+                    val noDataItem = MediaItem.Builder()
+                      .setMediaId("__NO_LIBRARY_DATA__${library.id}")
+                      .setMediaMetadata(
+                        MediaMetadata.Builder()
+                          .setTitle("No categories available")
+                          .setSubtitle("Library data may still be loading")
+                          .setIsBrowsable(false)
+                          .setIsPlayable(false)
+                          .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                          .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.md_book_multiple_outline))
+                          .build()
+                      )
+                      .build()
+                    future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noDataItem)), params))
+                  } else {
+                    Log.d("PlayerNotificationServ", "AALibrary: Returning ${children.size} cached categories for ${library.name}")
                     future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
                   }
                 }
@@ -3604,24 +3667,52 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   }
 
   /**
+   * Load data from server synchronously with timeout
+   */
+  private fun <T> loadFromServerSync(
+    operation: ((T) -> Unit) -> Unit,
+    timeoutSeconds: Long = 5
+  ): T? {
+    val future = SettableFuture.create<T>()
+
+    try {
+      operation { result ->
+        future.set(result)
+      }
+      return future.get(timeoutSeconds, TimeUnit.SECONDS)
+    } catch (e: Exception) {
+      Log.w("PlayerNotificationServ", "Server load timeout or error", e)
+      return null
+    }
+  }
+
+  /**
    * Handle authors browsing with alphabetical grouping like original
    */
   private fun handleAuthorsBrowsing(libraryId: String, mediaIdParts: List<String>): MutableList<MediaItem> {
-    // Use cached authors if available
-    val cachedAuthors = service.mediaManager.getCachedAuthors(libraryId)
+    Log.d("PlayerNotificationServ", "AALibrary: Loading authors for library $libraryId from server")
+
+    // Load authors from server synchronously
+    val authors = loadFromServerSync<List<LibraryAuthorItem>>(
+      operation = { callback ->
+        service.mediaManager.loadAuthorsWithBooks(libraryId, callback)
+      }
+    ) ?: run {
+      Log.w("PlayerNotificationServ", "AALibrary: Failed to load authors from server for library $libraryId")
+      return mutableListOf()
+    }
 
     // If we have a letter filter (5th part), filter authors by starting letter
     if (mediaIdParts.size >= 5) {
       val letterFilter = mediaIdParts[4]
       Log.d("PlayerNotificationServ", "AALibrary: Filtering authors by letter: $letterFilter")
-      val filteredAuthors = cachedAuthors.filter { it.name.startsWith(letterFilter, ignoreCase = true) }
+      val filteredAuthors = authors.filter { it.name.startsWith(letterFilter, ignoreCase = true) }
       return filteredAuthors.map { author ->
         MediaItem.Builder()
           .setMediaId("__LIBRARY__${libraryId}__AUTHOR__${author.id}")
           .setMediaMetadata(
             MediaMetadata.Builder()
               .setTitle(author.name)
-              .setSubtitle("${author.bookCount ?: 0} books")
               .setIsBrowsable(true)
               .setIsPlayable(false)
               .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -3633,10 +3724,10 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
     // Check if we need alphabetical grouping (like original implementation)
     val browseLimit = 50 // Match original androidAutoBrowseLimitForGrouping
-    if (cachedAuthors.size > browseLimit && cachedAuthors.size > 1) {
+    if (authors.size > browseLimit && authors.size > 1) {
       // Group by first letter
-      val authorLetters = cachedAuthors.groupingBy { it.name.first().uppercaseChar() }.eachCount()
-      Log.d("PlayerNotificationServ", "AALibrary: Grouping ${cachedAuthors.size} authors alphabetically")
+      val authorLetters = authors.groupingBy { it.name.first().uppercaseChar() }.eachCount()
+      Log.d("PlayerNotificationServ", "AALibrary: Grouping ${authors.size} authors alphabetically")
       return authorLetters.map { (letter, count) ->
         MediaItem.Builder()
           .setMediaId("__LIBRARY__${libraryId}__AUTHORS__${letter}")
@@ -3654,14 +3745,13 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }
 
     // Return authors directly
-    Log.d("PlayerNotificationServ", "AALibrary: Returning ${cachedAuthors.size} authors directly")
-    return cachedAuthors.map { author ->
+    Log.d("PlayerNotificationServ", "AALibrary: Returning ${authors.size} authors directly")
+    return authors.map { author ->
       MediaItem.Builder()
         .setMediaId("__LIBRARY__${libraryId}__AUTHOR__${author.id}")
         .setMediaMetadata(
           MediaMetadata.Builder()
             .setTitle(author.name)
-            .setSubtitle("${author.bookCount ?: 0} books")
             .setIsBrowsable(true)
             .setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -3678,10 +3768,19 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     if (mediaIdParts.size < 5) return mutableListOf()
 
     val authorId = mediaIdParts[4]
-    Log.d("PlayerNotificationServ", "AALibrary: Getting books for author: $authorId")
+    Log.d("PlayerNotificationServ", "AALibrary: Loading books for author from server: $authorId")
 
-    // Get cached author books if available
-    val authorBooks = service.mediaManager.getCachedAuthorBooks(libraryId, authorId)
+    // Load author books from server synchronously
+    val authorBooks = loadFromServerSync<List<LibraryItem>>(
+      operation = { callback ->
+        service.mediaManager.loadAuthorBooksWithAudio(libraryId, authorId, callback)
+      }
+    ) ?: run {
+      Log.w("PlayerNotificationServ", "AALibrary: Failed to load author books from server for $authorId")
+      return mutableListOf()
+    }
+
+    Log.d("PlayerNotificationServ", "AALibrary: Loaded ${authorBooks.size} books for author $authorId from server")
 
     return authorBooks.map { book ->
       val progress = service.mediaManager.serverUserMediaProgress.find { it.libraryItemId == book.id }
@@ -3715,14 +3814,23 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
    * Handle series browsing with alphabetical grouping like original
    */
   private fun handleSeriesBrowsing(libraryId: String, mediaIdParts: List<String>): MutableList<MediaItem> {
-    // Use cached series if available
-    val cachedSeries = service.mediaManager.getCachedSeries(libraryId)
+    Log.d("PlayerNotificationServ", "AALibrary: Loading series for library $libraryId from server")
+
+    // Load series from server synchronously
+    val series = loadFromServerSync<List<LibrarySeriesItem>>(
+      operation = { callback ->
+        service.mediaManager.loadLibrarySeriesWithAudio(libraryId, callback)
+      }
+    ) ?: run {
+      Log.w("PlayerNotificationServ", "AALibrary: Failed to load series from server for library $libraryId")
+      return mutableListOf()
+    }
 
     // If we have a letter filter (5th part), filter series by starting letter
     if (mediaIdParts.size >= 5) {
       val letterFilter = mediaIdParts[4]
       Log.d("PlayerNotificationServ", "AALibrary: Filtering series by letter: $letterFilter")
-      val filteredSeries = cachedSeries.filter { it.name.startsWith(letterFilter, ignoreCase = true) }
+      val filteredSeries = series.filter { it.name.startsWith(letterFilter, ignoreCase = true) }
       return filteredSeries.map { series ->
         MediaItem.Builder()
           .setMediaId("__LIBRARY__${libraryId}__SERIES__${series.id}")
@@ -3741,10 +3849,10 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
     // Check if we need alphabetical grouping
     val browseLimit = 50
-    if (cachedSeries.size > browseLimit && cachedSeries.size > 1) {
+    if (series.size > browseLimit && series.size > 1) {
       // Group by first letter
-      val seriesLetters = cachedSeries.groupingBy { it.name.first().uppercaseChar() }.eachCount()
-      Log.d("PlayerNotificationServ", "AALibrary: Grouping ${cachedSeries.size} series alphabetically")
+      val seriesLetters = series.groupingBy { it.name.first().uppercaseChar() }.eachCount()
+      Log.d("PlayerNotificationServ", "AALibrary: Grouping ${series.size} series alphabetically")
       return seriesLetters.map { (letter, count) ->
         MediaItem.Builder()
           .setMediaId("__LIBRARY__${libraryId}__SERIES_LIST__${letter}")
@@ -3762,14 +3870,14 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }
 
     // Return series directly
-    Log.d("PlayerNotificationServ", "AALibrary: Returning ${cachedSeries.size} series directly")
-    return cachedSeries.map { series ->
+    Log.d("PlayerNotificationServ", "AALibrary: Returning ${series.size} series directly")
+    return series.map { seriesItem ->
       MediaItem.Builder()
-        .setMediaId("__LIBRARY__${libraryId}__SERIES__${series.id}")
+        .setMediaId("__LIBRARY__${libraryId}__SERIES__${seriesItem.id}")
         .setMediaMetadata(
           MediaMetadata.Builder()
-            .setTitle(series.name)
-            .setSubtitle("${series.audiobookCount} books")
+            .setTitle(seriesItem.name)
+            .setSubtitle("${seriesItem.audiobookCount} books")
             .setIsBrowsable(true)
             .setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -3786,10 +3894,19 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     if (mediaIdParts.size < 5) return mutableListOf()
 
     val seriesId = mediaIdParts[4]
-    Log.d("PlayerNotificationServ", "AALibrary: Getting books for series: $seriesId")
+    Log.d("PlayerNotificationServ", "AALibrary: Loading books for series from server: $seriesId")
 
-    // Get cached series books if available
-    val seriesBooks = service.mediaManager.getCachedSeriesBooks(libraryId, seriesId)
+    // Load series books from server synchronously
+    val seriesBooks = loadFromServerSync<List<LibraryItem>>(
+      operation = { callback ->
+        service.mediaManager.loadLibrarySeriesItemsWithAudio(libraryId, seriesId, callback)
+      }
+    ) ?: run {
+      Log.w("PlayerNotificationServ", "AALibrary: Failed to load series books from server for $seriesId")
+      return mutableListOf()
+    }
+
+    Log.d("PlayerNotificationServ", "AALibrary: Loaded ${seriesBooks.size} books for series $seriesId from server")
 
     return seriesBooks.map { book ->
       val progress = service.mediaManager.serverUserMediaProgress.find { it.libraryItemId == book.id }
@@ -3887,10 +4004,19 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
    * Handle discovery browsing like original
    */
   private fun handleDiscoveryBrowsing(libraryId: String): MutableList<MediaItem> {
-    // Use cached discovery items if available
-    val discoveryItems = service.mediaManager.getCachedDiscoveryItems(libraryId)
+    Log.d("PlayerNotificationServ", "AALibrary: Loading discovery items from server for library: $libraryId")
 
-    Log.d("PlayerNotificationServ", "AALibrary: Returning ${discoveryItems.size} discovery items")
+    // Load discovery items from server synchronously
+    val discoveryItems = loadFromServerSync<List<LibraryItem>>(
+      operation = { callback ->
+        service.mediaManager.loadLibraryDiscoveryBooksWithAudio(libraryId, callback)
+      }
+    ) ?: run {
+      Log.w("PlayerNotificationServ", "AALibrary: Failed to load discovery items from server for $libraryId")
+      return mutableListOf()
+    }
+
+    Log.d("PlayerNotificationServ", "AALibrary: Loaded ${discoveryItems.size} discovery items from server")
     return discoveryItems.map { book ->
       val progress = service.mediaManager.serverUserMediaProgress.find { it.libraryItemId == book.id }
       MediaItem.Builder()
@@ -4009,6 +4135,51 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }.toMutableList()
   }
 
+  override fun onSearch(
+    session: MediaLibrarySession,
+    browser: MediaSession.ControllerInfo,
+    query: String,
+    params: LibraryParams?
+  ): ListenableFuture<LibraryResult<Void>> {
+    Log.d("PlayerNotificationServ", "AALibrary: onSearch called with query: '$query'")
+
+    try {
+      // Validate the query
+      if (query.isBlank()) {
+        Log.w("PlayerNotificationServ", "AALibrary: Empty search query")
+        return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
+      }
+
+      Log.d("PlayerNotificationServ", "AALibrary: Search query accepted: '$query' - performing server search")
+
+      // Check server connection before attempting search
+      if (!service.mediaManager.hasValidServerConnection()) {
+        Log.w("PlayerNotificationServ", "AALibrary: No server connection, cannot perform search")
+        session.notifySearchResultChanged(browser, query, 0, params)
+        return Futures.immediateFuture(LibraryResult.ofVoid())
+      }
+
+      // Perform server search to get actual results
+      val searchResults = performServerSearch(query)
+      val resultCount = searchResults.size
+
+      // Cache results for onGetSearchResult
+      cachedSearchQuery = query
+      cachedSearchResults = searchResults
+
+      Log.d("PlayerNotificationServ", "AALibrary: Found ${resultCount} search results, notifying Android Auto")
+
+      // Notify Android Auto with the search result count
+      // This tells Android Auto that search results are available and triggers onGetSearchResult
+      session.notifySearchResultChanged(browser, query, resultCount, params)
+
+      return Futures.immediateFuture(LibraryResult.ofVoid())
+    } catch (e: Exception) {
+      Log.e("PlayerNotificationServ", "AALibrary: Error in onSearch", e)
+      return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN))
+    }
+  }
+
   override fun onGetSearchResult(
     session: MediaLibrarySession,
     browser: MediaSession.ControllerInfo,
@@ -4017,118 +4188,136 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     pageSize: Int,
     params: LibraryParams?
   ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-    Log.d("PlayerNotificationServ", "AALibrary: onGetSearchResult called with query: $query")
+    Log.d("PlayerNotificationServ", "AALibrary: onGetSearchResult called with query: '$query'")
     return try {
-      val searchResults = mutableListOf<MediaItem>()
-
-      // Search through server items in progress
-      service.mediaManager.serverItemsInProgress.forEach { itemInProgress ->
-        val libraryItem = itemInProgress.libraryItemWrapper as LibraryItem
-        if (libraryItem.title?.contains(query, ignoreCase = true) == true ||
-            libraryItem.authorName.contains(query, ignoreCase = true)) {
-          searchResults.add(
-            MediaItem.Builder()
-              .setMediaId(libraryItem.id)
-              .setMediaMetadata(
-                MediaMetadata.Builder()
-                  .setTitle(libraryItem.title ?: "Unknown Title")
-                  .setArtist(libraryItem.authorName)
-                  .setIsPlayable(true)
-                  .setIsBrowsable(false)
-                  .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                  .setArtworkUri(libraryItem.getCoverUri())
-                  .build()
-              )
-              .build()
-          )
-        }
+      // Return cached search results from onSearch
+      if (cachedSearchQuery == query) {
+        Log.d("PlayerNotificationServ", "AALibrary: Returning cached search results for query: '$query' (${cachedSearchResults.size} items)")
+        Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(cachedSearchResults), params))
+      } else {
+        Log.w("PlayerNotificationServ", "AALibrary: No cached results for query: '$query', returning empty list")
+        Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.of(), params))
       }
-
-      // Search through local items
-      val localBooks = DeviceManager.dbManager.getLocalLibraryItems("book")
-      localBooks.forEach { localItem ->
-        if (localItem.title?.contains(query, ignoreCase = true) == true ||
-            (localItem.media as? Book)?.metadata?.getAuthorDisplayName()?.contains(query, ignoreCase = true) == true) {
-          searchResults.add(
-            MediaItem.Builder()
-              .setMediaId(localItem.id) // Use the ID directly, it already has local prefix
-              .setMediaMetadata(
-                MediaMetadata.Builder()
-                  .setTitle(localItem.title ?: "Unknown Title")
-                  .setArtist((localItem.media as? Book)?.metadata?.getAuthorDisplayName() ?: "Unknown Author")
-                  .setIsPlayable(true)
-                  .setIsBrowsable(false)
-                  .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                  .setArtworkUri(localItem.getCoverUri(service))
-                  .build()
-              )
-              .build()
-          )
-        }
-      }
-
-      // Search through recent shelves
-      service.mediaManager.getAllCachedLibraryRecentShelves().values.forEach { shelves ->
-        shelves.forEach { shelf ->
-          when (shelf) {
-            is LibraryShelfBookEntity -> {
-              shelf.entities?.forEach { book ->
-                if (book.title.contains(query, ignoreCase = true) ||
-                    book.authorName.contains(query, ignoreCase = true)) {
-                  searchResults.add(
-                    MediaItem.Builder()
-                      .setMediaId(book.id)
-                      .setMediaMetadata(
-                        MediaMetadata.Builder()
-                          .setTitle(book.title)
-                          .setArtist(book.authorName)
-                          .setIsPlayable(true)
-                          .setIsBrowsable(false)
-                          .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                          .setArtworkUri(book.getCoverUri())
-                          .build()
-                      )
-                      .build()
-                  )
-                }
-              }
-            }
-            is LibraryShelfPodcastEntity -> {
-              shelf.entities?.forEach { podcast ->
-                if (podcast.title.contains(query, ignoreCase = true) ||
-                    podcast.authorName.contains(query, ignoreCase = true)) {
-                  searchResults.add(
-                    MediaItem.Builder()
-                      .setMediaId(podcast.id)
-                      .setMediaMetadata(
-                        MediaMetadata.Builder()
-                          .setTitle(podcast.title)
-                          .setArtist(podcast.authorName)
-                          .setIsPlayable(true)
-                          .setIsBrowsable(false)
-                          .setMediaType(MediaMetadata.MEDIA_TYPE_PODCAST)
-                          .setArtworkUri(podcast.getCoverUri())
-                          .build()
-                      )
-                      .build()
-                  )
-                }
-              }
-            }
-            else -> {
-              // Handle other shelf types or ignore
-            }
-          }
-        }
-      }
-
-      Log.d("PlayerNotificationServ", "AALibrary: Search found ${searchResults.size} results for query: $query")
-      Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(searchResults), params))
     } catch (e: Exception) {
       Log.e("PlayerNotificationServ", "Error in onGetSearchResult for query: $query", e)
       Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN))
     }
   }
+
+  // Search helper function that queries the server directly
+  private fun performServerSearch(query: String): MutableList<MediaItem> {
+    Log.d("PlayerNotificationServ", "AALibrary: Performing server search for query: '$query'")
+
+    val searchResults = mutableListOf<MediaItem>()
+    val libraries = service.mediaManager.serverLibraries
+
+    if (libraries.isEmpty()) {
+      Log.w("PlayerNotificationServ", "AALibrary: No server libraries available for search")
+      return searchResults
+    }
+
+    try {
+      // Search across all libraries synchronously using the helper function
+      libraries.forEach { library ->
+        Log.d("PlayerNotificationServ", "AALibrary: Searching library: ${library.name}")
+
+        val libraryResults = loadFromServerSync<LibraryItemSearchResultType?>(
+          operation = { callback ->
+            service.apiHandler.getSearchResults(library.id, query, callback)
+          }
+        )
+
+        libraryResults?.let { result ->
+          // Add books from search results
+          result.book?.forEach { bookResult ->
+            val book = bookResult.libraryItem
+            Log.d("PlayerNotificationServ", "AALibrary: Found server book: ${book.title}")
+            searchResults.add(
+              MediaItem.Builder()
+                .setMediaId(book.id)
+                .setMediaMetadata(
+                  MediaMetadata.Builder()
+                    .setTitle(book.title ?: "Unknown Title")
+                    .setArtist(book.authorName)
+                    .setIsPlayable(true)
+                    .setIsBrowsable(false)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                    .setArtworkUri(book.getCoverUri())
+                    .build()
+                )
+                .build()
+            )
+          }
+
+          // Add podcasts from search results
+          result.podcast?.forEach { podcastResult ->
+            val podcast = podcastResult.libraryItem
+            Log.d("PlayerNotificationServ", "AALibrary: Found server podcast: ${podcast.title}")
+            searchResults.add(
+              MediaItem.Builder()
+                .setMediaId(podcast.id)
+                .setMediaMetadata(
+                  MediaMetadata.Builder()
+                    .setTitle(podcast.title ?: "Unknown Title")
+                    .setArtist(podcast.authorName)
+                    .setIsPlayable(true)
+                    .setIsBrowsable(false)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_PODCAST)
+                    .setArtworkUri(podcast.getCoverUri())
+                    .build()
+                )
+                .build()
+            )
+          }
+
+          // Add authors from search results
+          result.authors?.forEach { author ->
+            Log.d("PlayerNotificationServ", "AALibrary: Found server author: ${author.name}")
+            searchResults.add(
+              MediaItem.Builder()
+                .setMediaId("__LIBRARY__${library.id}__AUTHOR__${author.id}")
+                .setMediaMetadata(
+                  MediaMetadata.Builder()
+                    .setTitle(author.name)
+                    .setIsPlayable(false)
+                    .setIsBrowsable(true)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                    .build()
+                )
+                .build()
+            )
+          }
+
+          // Add series from search results
+          result.series?.forEach { seriesResult ->
+            Log.d("PlayerNotificationServ", "AALibrary: Found server series: ${seriesResult.series.name}")
+            searchResults.add(
+              MediaItem.Builder()
+                .setMediaId("__LIBRARY__${library.id}__SERIES__${seriesResult.series.id}")
+                .setMediaMetadata(
+                  MediaMetadata.Builder()
+                    .setTitle(seriesResult.series.name)
+                    .setSubtitle("${seriesResult.series.audiobookCount} books")
+                    .setIsPlayable(false)
+                    .setIsBrowsable(true)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                    .build()
+                )
+                .build()
+            )
+          }
+        }
+      }
+
+      Log.d("PlayerNotificationServ", "AALibrary: Server search completed. Found ${searchResults.size} results for query: '$query'")
+
+    } catch (e: Exception) {
+      Log.e("PlayerNotificationServ", "Error performing server search for query: '$query'", e)
+    }
+
+    return searchResults
+  }
+
 
   override fun onCustomCommand(
     session: MediaSession,
@@ -4161,7 +4350,32 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ): ListenableFuture<MutableList<MediaItem>> {
     Log.d("PlayerNotificationServ", "AALibrary: onAddMediaItems called with ${mediaItems.size} items")
 
-    // Process each MediaItem and potentially start playback
+    // Check if this is a search request by looking for search query in request metadata
+    val firstItem = mediaItems.firstOrNull()
+    val searchQuery = firstItem?.requestMetadata?.searchQuery
+
+    if (!searchQuery.isNullOrBlank()) {
+      // This is a search request from Android Auto
+      Log.d("PlayerNotificationServ", "AALibrary: onAddMediaItems detected search query: '$searchQuery'")
+
+      try {
+        // Check if we have cached results for this query (from onSearch)
+        if (cachedSearchQuery == searchQuery) {
+          Log.d("PlayerNotificationServ", "AALibrary: onAddMediaItems returning cached search results: ${cachedSearchResults.size}")
+          return Futures.immediateFuture(cachedSearchResults.toMutableList())
+        } else {
+          // Perform fresh server search
+          val searchResults = performServerSearch(searchQuery)
+          Log.d("PlayerNotificationServ", "AALibrary: onAddMediaItems returning ${searchResults.size} fresh search results")
+          return Futures.immediateFuture(searchResults.toMutableList())
+        }
+      } catch (e: Exception) {
+        Log.e("PlayerNotificationServ", "Error handling search in onAddMediaItems for query: '$searchQuery'", e)
+        return Futures.immediateFuture(mutableListOf())
+      }
+    }
+
+    // Process each MediaItem for normal playback (not search)
     val processedItems = mediaItems.map { mediaItem ->
       val mediaId = mediaItem.mediaId
       Log.d("PlayerNotificationServ", "AALibrary: Processing MediaItem with ID: $mediaId")

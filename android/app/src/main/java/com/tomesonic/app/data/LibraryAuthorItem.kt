@@ -51,7 +51,7 @@ class LibraryAuthorItem(
       .setMediaId(mediaId)
       .setTitle(title)
       .setIconUri(getPortraitUri())
-      .setSubtitle("${bookCount} books")
+      .setSubtitle("Author")
       .setExtras(extras)
       .build()
   }

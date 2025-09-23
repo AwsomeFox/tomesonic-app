@@ -23,15 +23,23 @@
 export default {
   data() {
     return {
-      currentView: 'collections'
+      currentView: 'collections',
+      collectionsLoaded: false,
+      hasCollections: false
     }
   },
   computed: {
     userHasPlaylists() {
       return this.$store.state.libraries.numUserPlaylists
+    },
+    contentPaddingStyle() {
+      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
   mounted() {
+    // Listen for entity count updates from LazyBookshelf
+    this.$eventBus.$on('bookshelf-total-entities', this.onEntityCountUpdated)
+
     // Check if we should default to playlists view based on route query or user preference
     if (this.$route.query.view === 'playlists' && this.userHasPlaylists) {
       this.currentView = 'playlists'
@@ -40,6 +48,23 @@ export default {
       this.currentView = 'collections'
     }
     // Otherwise default to collections
+  },
+  beforeDestroy() {
+    this.$eventBus.$off('bookshelf-total-entities', this.onEntityCountUpdated)
+  },
+  methods: {
+    onEntityCountUpdated(totalEntities) {
+      // Only auto-switch if we're currently viewing collections and they just loaded
+      if (this.currentView === 'collections') {
+        this.collectionsLoaded = true
+        this.hasCollections = totalEntities > 0
+
+        // If no collections and user has playlists, auto-switch to playlists
+        if (!this.hasCollections && this.userHasPlaylists) {
+          this.currentView = 'playlists'
+        }
+      }
+    }
   },
   watch: {
     // Update URL query when view changes
@@ -50,11 +75,6 @@ export default {
           query: { ...this.$route.query, view: newView }
         })
       }
-    }
-  },
-  computed: {
-    contentPaddingStyle() {
-      return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   }
 }

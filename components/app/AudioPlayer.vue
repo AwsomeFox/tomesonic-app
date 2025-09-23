@@ -1664,8 +1664,25 @@ export default {
     onCastSessionDisconnected(data) {
       console.log('Cast session disconnected:', data)
       this.$toast.info('Cast session disconnected')
-      // Update store to reflect local playback
+
+      // Update store to reflect local playback FIRST
       this.$store.commit('setMediaPlayer', 'local-player')
+
+      // Check if we need to switch back to local content
+      // First check if session already has local library item
+      const sessionLocalLibraryItem = this.playbackSession?.localLibraryItem
+      const serverLibraryItemId = this.playbackSession?.libraryItemId || this.playbackSession?.serverLibraryItemId
+
+      if (sessionLocalLibraryItem) {
+        console.log('Found local library item in session, switching back to local content:', sessionLocalLibraryItem.id)
+        this.restoreLocalPlaybackFromSession(sessionLocalLibraryItem)
+      } else if (serverLibraryItemId) {
+        // Session doesn't have local item, but we have server ID - check if downloaded version exists
+        console.log('No local library item in session, checking for downloaded version of server item:', serverLibraryItemId)
+        this.checkForDownloadedVersion(serverLibraryItemId)
+      } else {
+        console.log('No local library item found and no server ID - cannot restore local playback')
+      }
     },
     onCastSessionFailed(data) {
       console.log('Cast session failed:', data)
@@ -1675,6 +1692,109 @@ export default {
       console.log('Cast session requested:', data)
       // Show the Cast device selection modal
       this.$refs.castDeviceModal.init()
+    },
+    async checkForDownloadedVersion(serverLibraryItemId) {
+      try {
+        // Query the database for a local library item that matches this server ID
+        const localLibraryItem = await this.$db.getLocalLibraryItemByLId(serverLibraryItemId)
+
+        if (localLibraryItem) {
+          console.log('Found downloaded version for server item:', serverLibraryItemId, '-> local:', localLibraryItem.id)
+          this.restoreLocalPlaybackFromLocalItem(localLibraryItem)
+        } else {
+          console.log('No downloaded version found for server item:', serverLibraryItemId, '- continuing with server playback')
+        }
+      } catch (error) {
+        console.error('Error checking for downloaded version:', error)
+        console.log('Failed to check for local version - continuing with server playback')
+      }
+    },
+    restoreLocalPlaybackFromSession(sessionLocalLibraryItem) {
+      const currentTime = this.currentTime || 0
+      const localEpisodeId = this.playbackSession?.localEpisodeId || null
+
+      // Determine library item ID - use local library item from session
+      let libraryItemId = sessionLocalLibraryItem.id
+      let serverLibraryItemId = this.playbackSession?.serverLibraryItemId || sessionLocalLibraryItem.libraryItemId || null
+      let selectedEpisodeId = localEpisodeId
+      let serverEpisodeId = this.playbackSession?.serverEpisodeId || null
+
+      console.log('Restoring local playback from session:', {
+        libraryItemId,
+        serverLibraryItemId,
+        episodeId: selectedEpisodeId,
+        serverEpisodeId,
+        currentTime,
+        sessionLocalItem: sessionLocalLibraryItem.id
+      })
+
+      this.executeLocalPlaybackRestore(libraryItemId, serverLibraryItemId, selectedEpisodeId, serverEpisodeId, currentTime)
+    },
+    restoreLocalPlaybackFromLocalItem(localLibraryItem) {
+      const currentTime = this.currentTime || 0
+      const serverEpisodeId = this.playbackSession?.episodeId || null
+
+      // Find matching local episode if this is a podcast
+      let localEpisodeId = null
+      if (serverEpisodeId && localLibraryItem.mediaType === 'podcast') {
+        const localEpisode = localLibraryItem.media.episodes?.find(ep => ep.serverEpisodeId === serverEpisodeId)
+        localEpisodeId = localEpisode?.id || null
+      }
+
+      console.log('Restoring local playback from found local item:', {
+        libraryItemId: localLibraryItem.id,
+        serverLibraryItemId: localLibraryItem.libraryItemId,
+        episodeId: localEpisodeId,
+        serverEpisodeId,
+        currentTime
+      })
+
+      this.executeLocalPlaybackRestore(
+        localLibraryItem.id,
+        localLibraryItem.libraryItemId,
+        localEpisodeId,
+        serverEpisodeId,
+        currentTime
+      )
+    },
+    executeLocalPlaybackRestore(libraryItemId, serverLibraryItemId, episodeId, serverEpisodeId, currentTime) {
+      // Add a delay to ensure cast session is fully disconnected and force local playback
+      const restoreLocalPlayback = () => {
+        // Double-check that we're not casting anymore
+        this.$store.commit('setMediaPlayer', 'local-player')
+
+        // Verify casting state is cleared
+        if (this.$store.state.isCasting) {
+          console.warn('Casting state still active, retrying in 500ms...')
+          setTimeout(restoreLocalPlayback, 500)
+          return
+        }
+
+        // Use the same event pattern as the book info screen
+        const playPayload = {
+          libraryItemId,
+          serverLibraryItemId,
+          startTime: currentTime
+        }
+
+        // Add episode info if applicable
+        if (episodeId) {
+          playPayload.episodeId = episodeId
+          if (serverEpisodeId) {
+            playPayload.serverEpisodeId = serverEpisodeId
+          }
+        }
+
+        console.log('Emitting play-item event for local restoration:', playPayload)
+        console.log('Library item ID for local playback:', libraryItemId)
+        console.log('Casting state cleared:', !this.$store.state.isCasting)
+        console.log('Expected to use local playback method (PlayMethod.LOCAL = 3)')
+
+        this.$eventBus.$emit('play-item', playPayload)
+      }
+
+      // Start the restoration process after a delay
+      setTimeout(restoreLocalPlayback, 1000)
     },
     onCastDeviceConnected(device) {
       console.log('Cast device connected from modal:', device)

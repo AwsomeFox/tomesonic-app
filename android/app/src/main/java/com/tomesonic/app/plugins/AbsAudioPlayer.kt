@@ -514,12 +514,13 @@ class AbsAudioPlayer : Plugin() {
               playbackRate
             )
           }
+          call.resolve(JSObject(jacksonMapper.writeValueAsString(playbackSession)))
         }
       } else {
         playerNotificationService.mediaProgressSyncer.reset()
         playerNotificationService.preparePlayer(playbackSession, true, playbackRate) // playWhenReady for local items
+        call.resolve(JSObject(jacksonMapper.writeValueAsString(playbackSession)))
       }
-      call.resolve(JSObject())
     } else {
       // Service not ready yet
       if (retryCount == 0) {
@@ -1234,6 +1235,64 @@ class AbsAudioPlayer : Plugin() {
     } catch (e: Exception) {
       Log.e(tag, "Error disconnecting from cast device", e)
       call.reject("Error disconnecting from cast device: ${e.message}")
+    }
+  }
+
+  @PluginMethod
+  fun refreshCastDevices(call: PluginCall) {
+    if (castContext == null || mediaRouter == null || mediaRouteSelector == null) {
+      Log.e(tag, "Cast Context or MediaRouter not initialized")
+      call.reject("Cast not available")
+      return
+    }
+
+    try {
+      activity.runOnUiThread {
+        try {
+          Log.d(tag, "Forcing cast device discovery by adding temporary callback")
+
+          // Create a temporary callback to trigger active discovery
+          val discoveryCallback = object : MediaRouter.Callback() {
+            override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
+              Log.d(tag, "Discovery callback: Route added - ${route.name}")
+            }
+
+            override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
+              Log.d(tag, "Discovery callback: Route removed - ${route.name}")
+            }
+
+            override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+              Log.d(tag, "Discovery callback: Route changed - ${route.name}")
+            }
+          }
+
+          // Add callback with CALLBACK_FLAG_PERFORM_ACTIVE_SCAN to trigger discovery
+          mediaRouter!!.addCallback(
+            mediaRouteSelector!!,
+            discoveryCallback,
+            MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN
+          )
+
+          // Remove the callback after a short delay to stop active scanning
+          // Active scanning is battery intensive so we only do it briefly
+          android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try {
+              mediaRouter!!.removeCallback(discoveryCallback)
+              Log.d(tag, "Removed discovery callback after scan period")
+            } catch (e: Exception) {
+              Log.e(tag, "Error removing discovery callback", e)
+            }
+          }, 3000) // 3 second active scan
+
+          call.resolve()
+        } catch (e: Exception) {
+          Log.e(tag, "Error during cast device discovery", e)
+          call.reject("Error during device discovery: ${e.message}")
+        }
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "Error refreshing cast devices", e)
+      call.reject("Error refreshing cast devices: ${e.message}")
     }
   }
 

@@ -566,17 +566,21 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       // Fetch data from server and add it to local "cache"
       apiHandler.getLibraryAuthors(libraryId) { authorItems ->
         Log.d(tag, "Authors with books loaded from server | Library $libraryId ")
-        // TO-DO: This check won't ensure that there is audiobooks. Current API won't offer ability to do so
+
+        // Filter authors that have any books at all (use server book count for now)
         var authorItemsWithBooks = authorItems.filter { li -> li.bookCount != null && li.bookCount!! > 0 }
         authorItemsWithBooks = authorItemsWithBooks.sortedBy { it.name }
+
         // Ensure that there is map for library
         cachedLibraryAuthors[libraryId] = mutableMapOf()
-        // Cache authors
+
+        // Cache authors (without loading individual books during init to avoid performance issues)
         authorItemsWithBooks.forEach {
           if (!cachedLibraryAuthors[libraryId]!!.containsKey(it.id)) {
             cachedLibraryAuthors[libraryId]!![it.id] = it
           }
         }
+
         cb(authorItemsWithBooks)
       }
     }
@@ -810,6 +814,22 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun hasRecentShelvesLoaded(): Boolean {
     return cachedLibraryRecentShelves.isNotEmpty() && cachedLibraryRecentShelves.values.any { it.isNotEmpty() }
+  }
+
+  /**
+   * Returns true if library has essential data cached for browsing (authors, series, collections, discovery)
+   */
+  fun hasLibraryDataCached(libraryId: String): Boolean {
+    return if (getLibrary(libraryId)?.mediaType == "podcast") {
+      // For podcast libraries, check if podcasts are cached
+      getCachedPodcasts(libraryId).isNotEmpty()
+    } else {
+      // For book libraries, check if any essential data is cached
+      getCachedAuthors(libraryId).isNotEmpty() ||
+      getCachedSeries(libraryId).isNotEmpty() ||
+      getCachedCollections(libraryId).isNotEmpty() ||
+      cachedLibraryDiscovery.containsKey(libraryId)
+    }
   }
 
   /**
@@ -1953,9 +1973,9 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   fun preloadAndroidAutoBrowsingData(cb: () -> Unit) {
     Log.d(tag, "AABrowser: Pre-loading essential browsing data")
 
-    // Check if we have a valid server connection before attempting to load data
-    if (!hasValidServerConnection()) {
-      Log.w(tag, "AABrowser: No valid server connection, skipping server data loading")
+    // Check basic server connection (not requiring libraries to be loaded)
+    if (!DeviceManager.isConnectedToServer) {
+      Log.w(tag, "AABrowser: No server connection available, skipping server data loading")
       cb()
       return
     }
@@ -1979,11 +1999,123 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   }
 
   private fun loadPersonalizedAndLibraryData(cb: () -> Unit) {
-    // First load personalized data (for recent items and continue listening)
-    Log.d(tag, "AABrowser: Loading personalized data for all libraries")
-    populatePersonalizedDataForAllLibraries {
-      Log.d(tag, "AABrowser: Personalized data loaded, now loading library browsing data")
-      preloadLibraryData(cb)
+    // Load essential data for Android Auto browsing: continue listening, recently added, and downloaded
+    Log.d(tag, "AABrowser: Loading essential data for Android Auto (continue, recent, downloaded)")
+
+    // Load libraries first, then essential browsing data
+    if (serverLibraries.isEmpty()) {
+      loadLibraries { libraries ->
+        Log.d(tag, "AABrowser: Loaded ${libraries.size} libraries, now loading essential browsing data")
+        loadEssentialBrowsingData(cb)
+      }
+    } else {
+      Log.d(tag, "AABrowser: Libraries already loaded, loading essential browsing data")
+      loadEssentialBrowsingData(cb)
+    }
+  }
+
+  private fun loadEssentialBrowsingData(cb: () -> Unit) {
+    var loadingCount = 0
+    var completedCount = 0
+
+    // Count what we need to load
+    loadingCount += 1 // Continue listening (progress items)
+    loadingCount += serverLibraries.size // Recently added data for each library
+    loadingCount += 1 // Downloaded books
+
+    // Count library categories to cache (but not the books within them)
+    serverLibraries.forEach { library ->
+      if (library.stats?.numAudioFiles ?: 0 > 0) {
+        if (library.mediaType == "podcast") {
+          loadingCount += 1 // Only podcasts for podcast libraries
+        } else {
+          loadingCount += 4 // authors, series, collections, discovery lists for book libraries
+        }
+      }
+    }
+
+    if (loadingCount == 0) {
+      Log.d(tag, "AABrowser: No essential data to load")
+      cb()
+      return
+    }
+
+    val checkComplete = {
+      completedCount++
+      Log.d(tag, "AABrowser: Completed $completedCount/$loadingCount essential loads")
+      if (completedCount >= loadingCount) {
+        Log.d(tag, "AABrowser: All essential browsing data loaded")
+        cb()
+      }
+    }
+
+    // Load continue listening items (progress data)
+    Log.d(tag, "AABrowser: Loading progress/continue listening data")
+    loadServerUserMediaProgress {
+      Log.d(tag, "AABrowser: Loaded continue listening data")
+      checkComplete()
+    }
+
+    // Load recently added data for each library
+    serverLibraries.forEach { library ->
+      Log.d(tag, "AABrowser: Loading recently added data for library: ${library.name}")
+      populatePersonalizedDataForLibrary(library.id) {
+        Log.d(tag, "AABrowser: Loaded recently added data for ${library.name}")
+        checkComplete()
+      }
+    }
+
+    // Load downloaded books
+    Log.d(tag, "AABrowser: Loading downloaded books data")
+    // This is already cached in localLibraryItems, just trigger the callback
+    checkComplete()
+
+    // Load library category lists for each library (but not the books within them)
+    serverLibraries.forEach { library ->
+      if (library.stats?.numAudioFiles ?: 0 > 0) {
+        if (library.mediaType == "podcast") {
+          Log.d(tag, "AABrowser: Loading podcasts list for library: ${library.name}")
+          loadLibraryPodcasts(library.id) {
+            Log.d(tag, "AABrowser: Loaded podcasts list for ${library.name}")
+            checkComplete()
+          }
+        } else {
+          Log.d(tag, "AABrowser: Loading category lists for library: ${library.name}")
+
+          loadAuthorsWithBooks(library.id) {
+            Log.d(tag, "AABrowser: Loaded authors list for ${library.name}")
+            checkComplete()
+          }
+
+          loadLibrarySeriesWithAudio(library.id) {
+            Log.d(tag, "AABrowser: Loaded series list for ${library.name}")
+            checkComplete()
+          }
+
+          loadLibraryCollectionsWithAudio(library.id) {
+            Log.d(tag, "AABrowser: Loaded collections list for ${library.name}")
+            checkComplete()
+          }
+
+          // Load discovery list (but not the individual books)
+          apiHandler.getLibraryPersonalized(library.id) { shelves ->
+            if (shelves != null) {
+              shelves.forEach { shelf ->
+                if (shelf.id == "discover" && shelf.type == "book") {
+                  if (!cachedLibraryDiscovery.containsKey(library.id)) {
+                    cachedLibraryDiscovery[library.id] = mutableListOf()
+                  }
+                  (shelf as LibraryShelfBookEntity).entities?.forEach {
+                    cachedLibraryDiscovery[library.id]!!.add(it)
+                  }
+                }
+              }
+            }
+            Log.d(tag, "AABrowser: Loaded discovery list for ${library.name}")
+            checkComplete()
+          }
+        }
+      }
     }
   }
 
@@ -2053,7 +2185,14 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   }
 
   /**
-   * Check if we have a valid server connection and libraries
+   * Check if we have a basic server connection (without requiring libraries)
+   */
+  fun hasServerConnection(): Boolean {
+    return DeviceManager.isConnectedToServer
+  }
+
+  /**
+   * Check if we have a valid server connection and libraries loaded
    */
   fun hasValidServerConnection(): Boolean {
     return DeviceManager.isConnectedToServer && serverLibraries.isNotEmpty()

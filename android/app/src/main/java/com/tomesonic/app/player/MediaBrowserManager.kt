@@ -472,9 +472,12 @@ class MediaBrowserManager(
         query: String,
         params: LibraryParams?
     ): ListenableFuture<LibraryResult<Void>> {
-        // MIGRATION-TODO: Convert search implementation to Media3 patterns
-        AbsLogger.info(tag, "onSearch: query: $query")
-        return Futures.immediateFuture(LibraryResult.ofVoid())
+        AbsLogger.info(tag, "LEGACY onSearch: query: $query")
+        return if (query.isBlank()) {
+            Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
+        } else {
+            Futures.immediateFuture(LibraryResult.ofVoid())
+        }
     }
 
     fun onGetSearchResult(
@@ -483,10 +486,100 @@ class MediaBrowserManager(
         pageSize: Int,
         params: LibraryParams?
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-        // MIGRATION-TODO: Convert search result implementation to Media3 patterns
-        AbsLogger.info(tag, "onGetSearchResult: query: $query")
-        val emptyList = ImmutableList.of<MediaItem>()
-        return Futures.immediateFuture(LibraryResult.ofItemList(emptyList, params))
+        AbsLogger.info(tag, "LEGACY onGetSearchResult: query: $query - IMPLEMENTING SEARCH")
+
+        // Implement search functionality in the legacy API
+        val searchResults = mutableListOf<MediaItem>()
+
+        try {
+            // Search through server items in progress
+            AbsLogger.info(tag, "LEGACY: Searching ${mediaManager.serverItemsInProgress.size} server items")
+            mediaManager.serverItemsInProgress.forEach { itemInProgress ->
+                val libraryItem = itemInProgress.libraryItemWrapper as LibraryItem
+                if (libraryItem.title?.contains(query, ignoreCase = true) == true ||
+                    libraryItem.authorName.contains(query, ignoreCase = true)) {
+                    AbsLogger.info(tag, "LEGACY: Found match in server items: ${libraryItem.title}")
+                    searchResults.add(
+                        MediaItem.Builder()
+                            .setMediaId(libraryItem.id)
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle(libraryItem.title ?: "Unknown Title")
+                                    .setArtist(libraryItem.authorName)
+                                    .setIsPlayable(true)
+                                    .setIsBrowsable(false)
+                                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                                    .build()
+                            )
+                            .build()
+                    )
+                }
+            }
+
+            // Search through recent shelves
+            val recentShelves = mediaManager.getAllCachedLibraryRecentShelves()
+            AbsLogger.info(tag, "LEGACY: Searching ${recentShelves.size} recent shelves")
+            recentShelves.values.forEach { shelves ->
+                shelves.forEach { shelf ->
+                    when (shelf) {
+                        is LibraryShelfBookEntity -> {
+                            shelf.entities?.forEach { book ->
+                                if (book.title.contains(query, ignoreCase = true) ||
+                                    book.authorName.contains(query, ignoreCase = true)) {
+                                    AbsLogger.info(tag, "LEGACY: Found match in recent books: ${book.title}")
+                                    searchResults.add(
+                                        MediaItem.Builder()
+                                            .setMediaId(book.id)
+                                            .setMediaMetadata(
+                                                MediaMetadata.Builder()
+                                                    .setTitle(book.title)
+                                                    .setArtist(book.authorName)
+                                                    .setIsPlayable(true)
+                                                    .setIsBrowsable(false)
+                                                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                                                    .build()
+                                            )
+                                            .build()
+                                    )
+                                }
+                            }
+                        }
+                        is LibraryShelfPodcastEntity -> {
+                            shelf.entities?.forEach { podcast ->
+                                if (podcast.title.contains(query, ignoreCase = true) ||
+                                    podcast.authorName.contains(query, ignoreCase = true)) {
+                                    AbsLogger.info(tag, "LEGACY: Found match in recent podcasts: ${podcast.title}")
+                                    searchResults.add(
+                                        MediaItem.Builder()
+                                            .setMediaId(podcast.id)
+                                            .setMediaMetadata(
+                                                MediaMetadata.Builder()
+                                                    .setTitle(podcast.title)
+                                                    .setArtist(podcast.authorName)
+                                                    .setIsPlayable(true)
+                                                    .setIsBrowsable(false)
+                                                    .setMediaType(MediaMetadata.MEDIA_TYPE_PODCAST)
+                                                    .build()
+                                            )
+                                            .build()
+                                    )
+                                }
+                            }
+                        }
+                        else -> {
+                            // Handle other shelf types (authors, series, episodes)
+                            AbsLogger.info(tag, "LEGACY: Skipping search for shelf type: ${shelf.javaClass.simpleName}")
+                        }
+                    }
+                }
+            }
+
+            AbsLogger.info(tag, "LEGACY onGetSearchResult: Found ${searchResults.size} results for query: '$query'")
+            return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(searchResults), params))
+        } catch (e: Exception) {
+            AbsLogger.error(tag, "LEGACY: Error in onGetSearchResult for query: $query - ${e.message}")
+            return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN))
+        }
     }
 
     // Helper method for Android Auto reloading
