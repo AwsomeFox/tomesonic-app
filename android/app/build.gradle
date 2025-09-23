@@ -32,6 +32,17 @@ android {
     freeCompilerArgs = ['-Xjvm-default=all']
   }
   compileSdk = rootProject.ext.compileSdkVersion
+
+  signingConfigs {
+    release {
+      if (project.hasProperty('MYAPP_UPLOAD_STORE_FILE')) {
+        storeFile file(MYAPP_UPLOAD_STORE_FILE)
+        storePassword MYAPP_UPLOAD_STORE_PASSWORD
+        keyAlias MYAPP_UPLOAD_KEY_ALIAS
+        keyPassword MYAPP_UPLOAD_KEY_PASSWORD
+      }
+    }
+  }
   defaultConfig {
     applicationId "com.tomesonic.app"
     minSdkVersion rootProject.ext.minSdkVersion
@@ -55,6 +66,7 @@ android {
       proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
     }
     release {
+      signingConfig signingConfigs.release
       minifyEnabled false
       proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
     }
