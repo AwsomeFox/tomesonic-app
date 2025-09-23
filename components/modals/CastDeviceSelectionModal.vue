@@ -31,7 +31,7 @@
           <!-- Device list -->
           <div v-else class="space-y-2">
             <div
-              v-for="device in castDevices"
+              v-for="device in sortedCastDevices"
               :key="device.id"
               class="flex items-center justify-between p-3 border border-outline-variant rounded-lg transition-colors"
               :class="{
@@ -90,6 +90,18 @@ export default {
       connectingDeviceId: null
     }
   },
+  computed: {
+    sortedCastDevices() {
+      // Sort devices so connected devices appear first
+      return [...this.castDevices].sort((a, b) => {
+        // Connected devices first
+        if (a.isConnected && !b.isConnected) return -1
+        if (!a.isConnected && b.isConnected) return 1
+        // Then sort by name alphabetically
+        return a.name.localeCompare(b.name)
+      })
+    }
+  },
   methods: {
     init() {
       this.show = true
@@ -98,6 +110,13 @@ export default {
     async refreshDevices() {
       this.loading = true
       try {
+        // First trigger active device discovery
+        await this.$nativeHttp.refreshCastDevices()
+        
+        // Wait a moment for discovery to find devices
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        
+        // Then get the updated device list
         const response = await this.$nativeHttp.getCastDevices()
         if (response?.devices) {
           this.castDevices = response.devices
@@ -105,7 +124,7 @@ export default {
           this.castDevices = []
         }
       } catch (error) {
-        console.error('Failed to get cast devices:', error)
+        console.error('Failed to refresh cast devices:', error)
         this.$toast.error(this.$strings.ToastCastDeviceDiscoveryFailed)
         this.castDevices = []
       }

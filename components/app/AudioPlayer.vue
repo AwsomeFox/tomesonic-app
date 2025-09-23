@@ -1664,8 +1664,60 @@ export default {
     onCastSessionDisconnected(data) {
       console.log('Cast session disconnected:', data)
       this.$toast.info('Cast session disconnected')
-      // Update store to reflect local playback
+      
+      // Update store to reflect local playback FIRST
       this.$store.commit('setMediaPlayer', 'local-player')
+      
+      // Check if we need to switch back to local content
+      if (this.localLibraryItem) {
+        console.log('Switching back to local content:', this.localLibraryItem.id)
+        // Get current playback position and episode if applicable
+        const currentTime = this.currentTime || 0
+        const episodeId = this.playbackSession?.localEpisodeId || null
+        
+        // Use the same logic as the book info screen for selecting library item ID
+        let libraryItemId = this.playbackSession?.libraryItemId || this.localLibraryItem.libraryItemId
+        let serverLibraryItemId = this.playbackSession?.serverLibraryItemId || null
+        let selectedEpisodeId = episodeId
+        let serverEpisodeId = this.playbackSession?.serverEpisodeId || null
+        
+        // For local items, we want to force local playback (not casting since we just disconnected)
+        // This mirrors the logic from pages/item/_id/index.vue play() method
+        if (this.localLibraryItem) {
+          libraryItemId = this.localLibraryItem.id
+          // Keep server references for proper session tracking
+          serverLibraryItemId = this.playbackSession?.serverLibraryItemId || null
+        }
+        
+        console.log('Using book info screen logic for local playback:', {
+          libraryItemId,
+          serverLibraryItemId,
+          episodeId: selectedEpisodeId,
+          serverEpisodeId,
+          currentTime
+        })
+        
+        // Add a small delay to ensure cast session is fully disconnected
+        setTimeout(() => {
+          // Use the same event pattern as the book info screen
+          const playPayload = {
+            libraryItemId,
+            serverLibraryItemId,
+            startTime: currentTime
+          }
+          
+          // Add episode info if applicable
+          if (selectedEpisodeId) {
+            playPayload.episodeId = selectedEpisodeId
+            if (serverEpisodeId) {
+              playPayload.serverEpisodeId = serverEpisodeId
+            }
+          }
+          
+          console.log('Emitting play-item event for local restoration:', playPayload)
+          this.$eventBus.$emit('play-item', playPayload)
+        }, 500) // 500ms delay to ensure cast cleanup
+      }
     },
     onCastSessionFailed(data) {
       console.log('Cast session failed:', data)

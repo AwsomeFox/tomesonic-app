@@ -168,11 +168,23 @@ export default {
       }
     },
     castLocalItem() {
-      if (!this.serverLibraryItemId) {
-        this.$toast.error(`Cannot cast locally downloaded media`)
+      // First check if serverLibraryItemId is already set
+      let serverLibraryItemId = this.serverLibraryItemId
+      let serverEpisodeId = this.serverEpisodeId
+      
+      // If not set, try to get it from the current playback session
+      if (!serverLibraryItemId && this.$store.state.currentPlaybackSession) {
+        const playbackSession = this.$store.state.currentPlaybackSession
+        serverLibraryItemId = playbackSession.libraryItemId
+        serverEpisodeId = playbackSession.episodeId
+      }
+      
+      if (!serverLibraryItemId) {
+        this.$toast.error(`Cannot cast locally downloaded media - no server equivalent found`)
       } else {
+        console.log('Casting local item with server ID:', serverLibraryItemId)
         // Change to server library item
-        this.playServerLibraryItemAndCast(this.serverLibraryItemId, this.serverEpisodeId)
+        this.playServerLibraryItemAndCast(serverLibraryItemId, serverEpisodeId)
       }
     },
     playServerLibraryItemAndCast(libraryItemId, episodeId) {
@@ -261,7 +273,8 @@ export default {
             if (!libraryItemId.startsWith('local')) {
               this.serverLibraryItemId = libraryItemId
             } else {
-              this.serverLibraryItemId = serverLibraryItemId
+              // For local items, use the server library item ID from the response
+              this.serverLibraryItemId = data.libraryItemId || serverLibraryItemId
             }
             if (episodeId && !episodeId.startsWith('local')) {
               this.serverEpisodeId = episodeId

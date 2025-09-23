@@ -355,7 +355,7 @@ export default {
           })
 
           // Append any local-only shelves that the server didn't return (keep same media type)
-          const localShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType && !cat.localOnly)
+          const localShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType)
           merged.push(...localShelves)
 
           // Replace shelves with merged result (many objects are the same references so DOM won't flash)
@@ -369,6 +369,13 @@ export default {
           this.isLoading = false
           this.firstLoad = false
           console.log('[categories] Server shelves merged', this.shelves.length, this.lastServerFetch)
+        } else {
+          // When offline, show local categories including local-only shelves
+          console.log('[categories] Offline - showing local shelves only')
+          this.shelves = localCategories
+          this.isLoading = false
+          this.firstLoad = false
+          console.log('[categories] Local shelves set (offline)', this.shelves.length, this.lastLocalFetch)
         }
       } finally {
         this.isFetchingCategories = false

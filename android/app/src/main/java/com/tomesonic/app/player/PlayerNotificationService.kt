@@ -805,14 +805,20 @@ class PlayerNotificationService : MediaLibraryService() {
 
       playbackSession.mediaPlayer = getMediaPlayer()
 
-      // Cast player logic - re-enabled for Media3 migration
+      // Allow casting of local media with server equivalents
+      // Local items with server counterparts can be cast using server URLs
       if (playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST && playbackSession.isLocal) {
-        Log.w(tag, "Cannot cast local media item - switching player")
-        currentPlaybackSession = null
-        // TODO: Implement switchToPlayer for Media3
-        // switchToPlayer(false)
-        // For now, just log the issue and continue with local player
-        playbackSession.mediaPlayer = CastPlayerManager.PLAYER_EXO
+        val canCast = castPlayerManager.canUseCastPlayer(playbackSession)
+        if (!canCast) {
+          Log.w(tag, "Local media item has no server equivalent - cannot cast, switching to local player")
+          currentPlaybackSession = null
+          // TODO: Implement switchToPlayer for Media3
+          // switchToPlayer(false)
+          // For now, just log the issue and continue with local player
+          playbackSession.mediaPlayer = CastPlayerManager.PLAYER_EXO
+        } else {
+          Log.d(tag, "Local media item has server equivalent - proceeding with cast using server URLs")
+        }
       }
 
       if (playbackSession.mediaPlayer == CastPlayerManager.PLAYER_CAST) {

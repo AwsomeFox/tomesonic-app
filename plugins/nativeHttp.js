@@ -239,6 +239,16 @@ export default function ({ store, $db, $socket }, inject) {
       }
     },
 
+    async refreshCastDevices() {
+      try {
+        const { AbsAudioPlayer } = await import('@/plugins/capacitor')
+        return await AbsAudioPlayer.refreshCastDevices()
+      } catch (error) {
+        console.error('[nativeHttp] Failed to refresh cast devices:', error)
+        throw error
+      }
+    },
+
     async connectToCastDevice(deviceId) {
       try {
         const { AbsAudioPlayer } = await import('@/plugins/capacitor')
