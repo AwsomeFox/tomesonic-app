@@ -1,32 +1,207 @@
 # TomeSonic Mobile App
 
-TomeSonic is a self-hosted audiobook and podcast server application.
+TomeSonic is a premium mobile companion for your AudiobookShelf server, bringing your personal audiobook library to Android and iOS with stunning Material You theming and advanced features.
+
+## ✨ Key Features
+
+### 🎧 AudiobookShelf Integration
+- Seamless connection to your self-hosted AudiobookShelf server
+- Access your entire audiobook library from anywhere
+- Secure, direct connection to your personal media server
+
+### 📱 Stream & Download
+- Stream audiobooks directly from your server for instant access
+- Download books locally for offline listening during commutes or travel
+- Smart download management with storage optimization
+- High-quality audio streaming with adaptive bitrate
+
+### 🎨 Beautiful Material You Design
+Experience a gorgeous interface that adapts to your device's color scheme. TomeSonic embraces Material You design language, automatically matching your phone's wallpaper colors for a cohesive, personalized look.
+
+### 📚 Comprehensive Library Management
+- Browse your collection by author, series, or genre
+- Advanced search and filtering capabilities
+- Bookmark your favorite moments with chapter navigation
+- Playlist creation and management
+- Precise seeking and chapter-based navigation
+
+### 📊 Detailed Statistics
+Track your audiobook journey with comprehensive listening analytics:
+- Daily and weekly listening time tracking
+- Books completed and progress monitoring
+- Listening streaks and achievements
+- Reading goals and milestone tracking
+
+### 🚗 Android Auto Ready
+Enjoy hands-free audiobook listening in your car:
+- Full Android Auto integration with voice commands
+- Car-optimized interface for safe browsing
+- Seamless transition between phone and car
+- Perfect for commutes and road trips
+
+### 📺 ChromeCast Support
+Cast your audiobooks to any ChromeCast-enabled device:
+- Stream to smart speakers and displays
+- Control playback from your phone
+- High-quality audio casting
+- Perfect for shared listening experiences
+
+### 🔄 Perfect Sync
+Your progress stays synchronized across all devices:
+- Real-time progress sync with your AudiobookShelf server
+- Resume exactly where you left off on any device
+- Bookmark and settings synchronization
+- Cross-platform continuity
+
+### ⚙️ Advanced Playback Features
+- Sleep timer with customizable fade-out
+- Variable playback speeds (0.5x to 3.0x)
+- Background playback with notification controls
+- Cellular data usage controls
+- Customizable interface themes
+
+## 📱 Download
 
 ### Android (beta)
-
-Get the Android app on the [Google Play Store](https://play.google.com/store/apps/details?id=com.audiobookshelf.app)
+Get the Android app on the [Google Play Store](https://play.google.com/store/apps/details?id=com.tomesonic.app)
 
 ### iOS (early beta)
-
 **Beta is currently full. Apple has a hard limit of 10k beta testers. Updates will be posted in Discord.**
 
 Using Test Flight: https://testflight.apple.com/join/wiic7QIW **_(beta is full)_**
 
+## 📸 Screenshots
+
+### 🏠 Home & Library
+<img alt="TomeSonic Home Screen" src="screenshots/tomesonic-home.png" width="300" />
+
+*Beautiful Material You theming that adapts to your device colors*
+
+### 🎵 Now Playing
+<img alt="TomeSonic Player" src="screenshots/tomesonic-player.png" width="300" />
+
+*Full-featured audio player with chapter navigation and playback controls*
+
+### 📚 Library Management
+<img alt="TomeSonic Library" src="screenshots/tomesonic-library.png" width="300" />
+
+*Comprehensive library browsing with search and filtering*
+
+### 📊 Listening Statistics
+<img alt="TomeSonic Statistics" src="screenshots/tomesonic-stats.png" width="300" />
+
+*Detailed analytics to track your audiobook journey*
+
+### 📱 Multiple Device Support
+Screenshots available for:
+- **Phone**: Samsung Galaxy S21 Ultra optimized interface
+- **Tablet**: Samsung Galaxy Tab S7 and HTC Nexus 9 layouts
+- **All devices**: Responsive design adapts to any screen size
+
+*Full screenshot galleries are available in the `screenshots/` directory organized by device type.*
+
 ---
 
-This is a fork of the original Audiobookshelf project. For the original project, visit [github.com/advplyr/audiobookshelf](https://github.com/advplyr/audiobookshelf) or [audiobookshelf.org](https://audiobookshelf.org)
+## About TomeSonic
 
-**Requires an Audiobookshelf server to connect with**
+TomeSonic is a mobile-focused fork of the excellent [AudiobookShelf](https://www.audiobookshelf.org) project created by [advplyr](https://github.com/advplyr). We're deeply grateful for the solid foundation and open-source community that AudiobookShelf provides.
 
-<img alt="Screenshot" src="https://github.com/AwsomeFox/tomesonic-app/raw/master/screenshots/DeviceDemoScreens.png" />
+### 🙏 Credits & Attribution
 
-## Contributing
+- **Original Project**: [AudiobookShelf](https://github.com/advplyr/audiobookshelf) by [advplyr](https://github.com/advplyr)
+- **Mobile Foundation**: Built upon the original AudiobookShelf mobile app
+- **Community**: Thanks to the AudiobookShelf community for localization, testing, and feedback
+- **Infrastructure**: [Weblate](https://hosted.weblate.org/engage/audiobookshelf/) for translation hosting
 
-This application is built using [NuxtJS](https://nuxtjs.org/) and [Capacitor](https://capacitorjs.com/) in order to run on both iOS and Android on the same code base.
+TomeSonic enhances the mobile experience with premium features and modern design while maintaining full compatibility with AudiobookShelf servers. For the complete AudiobookShelf ecosystem including server software, visit [audiobookshelf.org](https://audiobookshelf.org).
 
-### Localization
+**Requires an AudiobookShelf server to connect with**
 
-This fork utilizes the original Audiobookshelf localization infrastructure. Thank you to [Weblate](https://hosted.weblate.org/engage/audiobookshelf/) for hosting the localization infrastructure pro-bono. If you want to see TomeSonic in your language, please help localize the original project at [audiobookshelf.org](https://www.audiobookshelf.org/faq#how-do-i-help-with-translations).
+TomeSonic respects your privacy by connecting directly to YOUR AudiobookShelf server. No third-party tracking, no data collection - just you and your audiobooks.
+
+## 🚀 Recent Updates & Enhancements
+
+### Latest Features (v0.12.1-beta)
+- **🎨 Material You Dynamic Theming**: App colors automatically adapt to your wallpaper
+- **📺 Enhanced ChromeCast Support**: Improved casting reliability and device discovery
+- **🔄 Smart Progress Sync**: Seamless transitions between local and streaming playbook
+- **📱 Offline Mode**: Full offline support with automatic downloaded book detection
+- **🚗 Android Auto Integration**: Complete hands-free audiobook experience in your car
+- **📊 Advanced Statistics**: Comprehensive listening analytics and progress tracking
+- **⚡ Performance Improvements**: Faster loading, smoother navigation, optimized battery usage
+
+### Privacy & Open Source
+TomeSonic maintains the open-source spirit of AudiobookShelf while focusing on mobile excellence. All enhancements respect user privacy and maintain compatibility with standard AudiobookShelf servers.
+
+## 🚀 Quick Setup
+
+### For Users
+1. **Install AudiobookShelf Server**: Set up your AudiobookShelf server (v2.0+) following the [official guide](https://www.audiobookshelf.org/install)
+2. **Download TomeSonic**: Get the app from Google Play Store or TestFlight
+3. **Connect**: Enter your server URL and credentials
+4. **Enjoy**: Start streaming and downloading your audiobooks!
+
+### Server Requirements
+- AudiobookShelf server version 2.0 or higher
+- Network access to your server (local network or internet)
+- HTTPS recommended for external access
+
+---
+
+## 🛠️ Development
+
+This application is built using [NuxtJS](https://nuxtjs.org/) and [Capacitor](https://capacitorjs.com/) to run on both iOS and Android with a shared codebase.
+
+### Build System
+
+TomeSonic uses [Just](https://github.com/casey/just) for build automation. Key commands:
+
+```bash
+# Development workflow
+just build-nuxt          # Build Nuxt.js and sync Capacitor
+just run-debug          # Build, install, and run debug APK
+just run                # Full workflow with Android Auto
+
+# Version management  
+just version            # Show current version
+just bump-beta          # Bump to next beta (0.12.1-beta → 0.12.2-beta)
+just bump-version "1.0.0"  # Set specific version
+just sync-version       # Sync package.json version to Android
+
+# Android development
+just build              # Build Android APK
+just install-debug      # Install debug APK to device
+just android-logcat     # View Android logs
+```
+
+All commands automatically sync versions between `package.json` and Android `build.gradle`.
+
+### 🌍 Localization
+
+TomeSonic utilizes the original AudiobookShelf localization infrastructure. Thanks to [Weblate](https://hosted.weblate.org/engage/audiobookshelf/) for hosting the localization infrastructure pro-bono. To see TomeSonic in your language, please help localize the original project at [audiobookshelf.org](https://www.audiobookshelf.org/faq#how-do-i-help-with-translations).
+
+### 🤝 Contributing
+
+Contributions are welcome! TomeSonic maintains compatibility with AudiobookShelf while focusing on mobile enhancements:
+
+- **Bug Reports**: Submit issues via GitHub Issues
+- **Feature Requests**: Discuss new ideas in GitHub Discussions  
+- **Code Contributions**: Follow standard pull request workflow
+- **Localization**: Contribute translations via the AudiobookShelf Weblate project
+
+Please ensure any mobile-specific features maintain server compatibility and follow Material Design guidelines.
+
+---
+
+## 📋 Environment Setup
+
+### Prerequisites
+- **AudiobookShelf Server** (v2.0+) - [Installation Guide](https://www.audiobookshelf.org/install)
+- **Node.js** (version 20) - [Download](https://nodejs.org/)
+- **Android Studio** - [Download](https://developer.android.com/studio) (for Android development)
+- **Xcode** - [Mac App Store](https://apps.apple.com/app/xcode/id497799835) (for iOS development)
+
+---
 
 ### Windows Environment Setup for Android
 
