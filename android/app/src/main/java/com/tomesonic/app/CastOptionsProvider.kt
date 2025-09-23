@@ -6,37 +6,47 @@ import com.google.android.gms.cast.framework.CastOptions
 import com.google.android.gms.cast.framework.OptionsProvider
 import com.google.android.gms.cast.framework.SessionProvider
 import com.google.android.gms.cast.framework.media.CastMediaOptions
+import com.google.android.gms.cast.framework.media.MediaIntentReceiver
+import com.google.android.gms.cast.framework.media.NotificationOptions
 
 /**
  * CastOptionsProvider for Media3 integration with Audiobookshelf
- * Configures Cast Framework for chapter-based audiobook playback
+ * Configures Cast Framework for book-level audiobook playback with skip controls
  */
 class CastOptionsProvider : OptionsProvider {
     companion object {
         private const val TAG = "CastOptionsProvider"
-
-        // Using Default Media Receiver for basic audiobook playback
-        // Custom receiver ID for advanced features: "242E16ED"
-        private const val CAST_APP_ID = "CC1AD845"
     }
 
     override fun getCastOptions(context: Context): CastOptions {
-        Log.d(TAG, "getCastOptions: Configuring Cast options for Default Media Receiver")
-        Log.d(TAG, "getCastOptions: Using Cast App ID: $CAST_APP_ID")
+        // Get Cast App ID from string resources for centralized configuration
+        val castAppId = context.getString(R.string.cast_app_id)
+
+        Log.d(TAG, "getCastOptions: Configuring Cast options for styled receiver with skip controls")
+        Log.d(TAG, "getCastOptions: Using Cast App ID: $castAppId")
+
+        // Create notification options with skip controls for audiobooks
+        val notificationOptions = NotificationOptions.Builder()
+            .setActions(listOf(
+                MediaIntentReceiver.ACTION_REWIND,
+                MediaIntentReceiver.ACTION_TOGGLE_PLAYBACK,
+                MediaIntentReceiver.ACTION_FORWARD
+            ), intArrayOf(0, 1, 2))
+            .setSkipStepMs(30000) // 30 second skip for audiobooks
+            .build()
 
         return CastOptions.Builder()
-            .setReceiverApplicationId(CAST_APP_ID)
+            .setReceiverApplicationId(castAppId)
             .setCastMediaOptions(
                 CastMediaOptions.Builder()
-                    // Custom receiver: Supports chapter-aware media sessions
+                    // Enable media session for book-level playback
                     .setMediaSessionEnabled(true)
-                    // Custom receiver: Handle notifications for chapter boundaries
-                    .setNotificationOptions(null)
+                    // Add skip controls to notification
+                    .setNotificationOptions(notificationOptions)
                     // Expanded controller shows Audiobookshelf activity
                     .setExpandedControllerActivityClassName(
                         "com.tomesonic.app.MainActivity"
                     )
-                    // Custom receiver handles chapter timing data and absolute seeking
                     .build()
             )
             // Stop receiver when session ends to save battery

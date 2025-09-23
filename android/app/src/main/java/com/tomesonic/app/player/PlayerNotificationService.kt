@@ -131,10 +131,10 @@ class PlayerNotificationService : MediaLibraryService() {
   lateinit var playerManager: PlayerManager
   lateinit var castPlayerManager: CastPlayerManager
   lateinit var networkConnectivityManager: NetworkConnectivityManager
-  lateinit var mPlayer: ExoPlayer
+  // Simplified player management - single source of truth through MediaSession
+  val exoPlayer: ExoPlayer get() = playerManager.mPlayer
   lateinit var currentPlayer: Player
-  internal lateinit var rawPlayer: ExoPlayer // Direct access to underlying ExoPlayer when needed
-  // NEW ARCHITECTURE: Use ExoPlayer directly instead of wrapper
+    private set
   val castPlayer: androidx.media3.cast.CastPlayer?
     get() = castPlayerManager.castPlayer
 
@@ -400,17 +400,13 @@ class PlayerNotificationService : MediaLibraryService() {
     playerManager = PlayerManager(this, deviceSettings, this)
     playerManager.initializeExoPlayer()
 
-    // Set references for backward compatibility
-    mPlayer = playerManager.mPlayer
-    rawPlayer = playerManager.mPlayer // Use mPlayer directly since currentPlayer may be generic Player type
+    // Initialize current player
+    currentPlayer = exoPlayer
 
     // Initialize new Media3 architecture components
     audiobookMediaSourceBuilder = AudiobookMediaSourceBuilder(this)
-    audiobookProgressTracker = AudiobookProgressTracker(rawPlayer, currentPlaybackSession)
-    chapterNavigationHelper = ChapterNavigationHelper(rawPlayer, audiobookProgressTracker)
-
-    // NEW ARCHITECTURE: Use ExoPlayer directly instead of wrapper
-    currentPlayer = rawPlayer
+    audiobookProgressTracker = AudiobookProgressTracker(exoPlayer, currentPlaybackSession)
+    chapterNavigationHelper = ChapterNavigationHelper(exoPlayer, audiobookProgressTracker)
     Log.d(tag, "Initialized new Media3 MediaSource architecture with direct ExoPlayer usage")
 
     // Now initialize MediaSession with the direct ExoPlayer
@@ -767,8 +763,10 @@ class PlayerNotificationService : MediaLibraryService() {
       audiobookProgressTracker.setChapterSegments(chapterSegments)
       Log.d(tag, "Set ${chapterSegments.size} chapter segments in progress tracker")
 
-      val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: 1f
-      initialPlaybackRate = playbackRate
+      val playbackRateToUse = playbackRate ?: initialPlaybackRate ?: mediaManager.userSettingsPlaybackRate ?: 1f
+      initialPlaybackRate = playbackRate ?: mediaManager.userSettingsPlaybackRate
+
+      Log.d(tag, "preparePlayer: Speed calculation - provided: $playbackRate, initial: $initialPlaybackRate, userSettings: ${mediaManager.userSettingsPlaybackRate}, using: $playbackRateToUse")
 
       // Set actions on Android Auto like jump forward/backward
       setMediaSessionConnectorCustomActions(playbackSession)
@@ -897,7 +895,7 @@ class PlayerNotificationService : MediaLibraryService() {
       // MediaSource validation is already done above
 
       // CRITICAL FIX: Check if we're using local player (not cast)
-      if (currentPlayer == rawPlayer || currentPlayer == mPlayer) {
+      if (currentPlayer == exoPlayer) {
         // NEW MEDIA3 ARCHITECTURE: Use MediaItems with clipping configuration
         // This creates a unified timeline where each chapter is a separate MediaItem
         AbsLogger.info("PlayerNotificationService", "preparePlayer: Setting up MediaItems for ${currentPlaybackSession?.mediaItemId}.")
@@ -913,7 +911,7 @@ class PlayerNotificationService : MediaLibraryService() {
         // Set the MediaItems to populate the timeline
         Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Setting MediaItems on ExoPlayer")
         try {
-          rawPlayer.setMediaItems(mediaItems, startMediaItemIndex, startPositionMs)
+          exoPlayer.setMediaItems(mediaItems, startMediaItemIndex, startPositionMs)
           Log.d("NUXT_SKIP_DEBUG", "preparePlayer: MediaItems set successfully (${mediaItems.size} items)")
         } catch (e: Exception) {
           Log.e("NUXT_SKIP_DEBUG", "preparePlayer: Failed to set MediaItems: ${e.javaClass.simpleName}: ${e.message}")
@@ -990,12 +988,13 @@ class PlayerNotificationService : MediaLibraryService() {
 
           Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Cast starting at index $startIndex, position ${chapterRelativePosition}ms")
 
-          // Load the Cast player with MediaItems
+          // Load the Cast player with MediaItems using absolute positioning
           castPlayerManager.loadCastPlayer(
             mediaItems = castMediaItems,
             startIndex = startIndex,
-            startPositionMs = chapterRelativePosition.coerceAtLeast(0L),
-            playWhenReady = playWhenReady
+            startPositionMs = startPosition, // Use absolute position, not chapter-relative
+            playWhenReady = playWhenReady,
+            playbackSession = playbackSession
           )
 
           // Set playback speed for Cast
@@ -1243,8 +1242,13 @@ class PlayerNotificationService : MediaLibraryService() {
   fun switchToPlayer(useCastPlayer: Boolean) {
     Log.d(tag, "switchToPlayer: useCastPlayer=$useCastPlayer, currentPlayer=$currentPlayer, castPlayer=$castPlayer")
 
+    // Capture current state for seamless transfer
     val wasPlaying = currentPlayer.isPlaying
     val currentPosition = getCurrentTime()
+    val currentMediaItemIndex = currentPlayer.currentMediaItemIndex
+    val playbackSpeed = currentPlayer.playbackParameters.speed
+
+    Log.d(tag, "switchToPlayer: Capturing state - playing=$wasPlaying, position=${currentPosition}ms, mediaItemIndex=$currentMediaItemIndex, speed=$playbackSpeed")
 
     val newPlayer = if (useCastPlayer) {
       if (currentPlayer == castPlayer) {
@@ -1254,12 +1258,12 @@ class PlayerNotificationService : MediaLibraryService() {
       Log.d(tag, "Switching to cast player")
       castPlayer
     } else {
-      if (currentPlayer == mPlayer) {
+      if (currentPlayer == exoPlayer) {
         Log.d(tag, "Already using local player")
         return
       }
       Log.d(tag, "Switching to local player")
-      mPlayer
+      exoPlayer
     }
 
     if (newPlayer == null) {
@@ -1267,16 +1271,16 @@ class PlayerNotificationService : MediaLibraryService() {
       return
     }
 
-    // Stop current player
-    currentPlayer.stop()
+    // Pause current player gracefully instead of stopping
+    if (wasPlaying) {
+      currentPlayer.pause()
+    }
 
     // Update current player reference
     currentPlayer = newPlayer
 
-    // For Media3, we need to recreate the MediaSession with the new player
-    // This is because Media3 MediaSession is bound to a specific player
-    mediaSessionManager.release()
-    mediaSessionManager.initializeMediaSession(notificationId, channelId, sessionActivityPendingIntent, currentPlayer)
+    // Update MediaSession with new player
+    mediaSessionManager.updatePlayer(newPlayer)
 
     // Notify of media player change
     val mediaPlayerType = castPlayerManager.getMediaPlayer(currentPlayer)
@@ -1304,17 +1308,27 @@ class PlayerNotificationService : MediaLibraryService() {
         castPlayerManager.loadCastPlayer(
           mediaItems = castMediaItems,
           startIndex = startIndex,
-          startPositionMs = chapterRelativePosition.coerceAtLeast(0L),
-          playWhenReady = wasPlaying
+          startPositionMs = currentPosition, // Use absolute position for Cast
+          playWhenReady = wasPlaying,
+          playbackSession = session
         )
 
         // Synchronize playback speed with Cast player
-        val currentSpeed = mPlayer.playbackParameters.speed
+        val currentSpeed = exoPlayer.playbackParameters.speed
         Log.d(tag, "Synchronizing Cast player speed to current app speed: ${currentSpeed}")
         castPlayerManager.setPlaybackSpeed(currentSpeed)
       } else {
-        // Prepare local player with current session
+        // Prepare local player with current session and preserved state
+        Log.d(tag, "Switching from Cast to local player - preserving position: ${currentPosition}ms and speed: ${playbackSpeed}")
+
+        // Update session current time to match Cast player position
+        session.currentTime = currentPosition / 1000.0 // Convert ms to seconds
+
         preparePlayer(session, wasPlaying, null)
+
+        // Synchronize playback speed with local player after preparation
+        Log.d(tag, "Synchronizing local player speed to Cast player speed: ${playbackSpeed}")
+        setPlaybackSpeed(playbackSpeed)
       }
     }
   }
@@ -1338,26 +1352,27 @@ class PlayerNotificationService : MediaLibraryService() {
     val absoluteTime = if (::chapterNavigationHelper.isInitialized) {
       // For Cast player, ensure we get the correct absolute position
       if (currentPlayer == castPlayer) {
-        // Cast player provides chapter-relative position, convert to absolute
-        val currentChapterIndex = currentPlayer.currentMediaItemIndex
-        val chapterRelativePos = currentPlayer.currentPosition
+        // Cast player provides track-relative position, convert to absolute
+        val currentTrackIndex = currentPlayer.currentMediaItemIndex
+        val trackRelativePos = currentPlayer.currentPosition
         val session = currentPlaybackSession
 
-        if (session != null && currentChapterIndex >= 0 && currentChapterIndex < session.chapters.size) {
-          val currentChapter = session.chapters[currentChapterIndex]
-          val absolutePos = currentChapter.startMs + chapterRelativePos
-          Log.d(tag, "getCurrentTime [CAST]: chapter=${currentChapterIndex}, chapterPos=${chapterRelativePos}ms, absolutePos=${absolutePos}ms")
+        if (session != null && currentTrackIndex >= 0 && currentTrackIndex < session.audioTracks.size) {
+          val currentTrack = session.audioTracks[currentTrackIndex]
+          val absolutePos = currentTrack.startOffsetMs + trackRelativePos
+          Log.d(tag, "getCurrentTime [CAST]: track=${currentTrackIndex}, trackPos=${trackRelativePos}ms, absolutePos=${absolutePos}ms")
+          Log.d(tag, "getCurrentTime [CAST]: absolute=${absolutePos}ms (${absolutePos/1000.0}s), track-relative=${trackRelativePos}ms, trackIndex=${currentTrackIndex}, track=${currentTrack.title}")
           absolutePos
         } else {
-          Log.w(tag, "getCurrentTime [CAST]: Unable to calculate absolute position, using chapter-relative: ${chapterRelativePos}ms")
-          chapterRelativePos
+          Log.w(tag, "getCurrentTime [CAST]: Unable to calculate absolute position, using track-relative: ${trackRelativePos}ms")
+          trackRelativePos
         }
       } else {
         // Local player - use chapter navigation helper
         chapterNavigationHelper.getAbsolutePosition()
       }
     } else {
-      rawPlayer?.currentPosition ?: 0L
+      exoPlayer.currentPosition
     }
 
     // Add debug logging to track progress syncing issues
@@ -1501,16 +1516,12 @@ class PlayerNotificationService : MediaLibraryService() {
                 playbackSession.episodeId,
                 serverConnectionConfig
         ) { mediaProgress ->
-          if (mediaProgress != null &&
-                          mediaProgress.lastUpdate > playbackSession.updatedAt &&
-                          mediaProgress.currentTime != playbackSession.currentTime
-          ) {
-            // Only sync from server progress if this is initial session establishment
-            // This prevents server progress from overwriting local progress during normal playback
-            if (mediaProgressSyncer.isInitialSessionEstablishment) {
+          if (mediaProgress != null && mediaProgress.currentTime != playbackSession.currentTime) {
+            // Use improved sync logic to determine if server progress should override local
+            if (mediaProgressSyncer.shouldUseServerProgress(mediaProgress, playbackSession)) {
               Log.d(
                       tag,
-                      "checkCurrentSessionProgress: Initial session - Media progress was updated since last play time updating from ${playbackSession.currentTime} to ${mediaProgress.currentTime}"
+                      "checkCurrentSessionProgress: Server progress is more recent and significant - updating from ${playbackSession.currentTime} to ${mediaProgress.currentTime}"
               )
               mediaProgressSyncer.syncFromServerProgress(mediaProgress)
 
@@ -1537,7 +1548,7 @@ class PlayerNotificationService : MediaLibraryService() {
             } else {
               Log.d(
                       tag,
-                      "checkCurrentSessionProgress: Ongoing session - Ignoring server progress update to preserve local progress (server: ${mediaProgress.currentTime}, local: ${playbackSession.currentTime})"
+                      "checkCurrentSessionProgress: Server progress not significant enough to override local progress (server: ${mediaProgress.currentTime}, local: ${playbackSession.currentTime})"
               )
             }
           } else {
@@ -1683,20 +1694,26 @@ class PlayerNotificationService : MediaLibraryService() {
       Log.d(tag, "seekPlayer: Using chapter-aware seek to ${timeToSeek}ms")
       Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer: Using chapter-aware seek to ${timeToSeek}ms")
 
-      // Special handling for Cast player - ensure absolute position is converted correctly
+      // Special handling for Cast player - use track-based positioning
       if (currentPlayer == castPlayer) {
-        Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Converting absolute position ${timeToSeek}ms to chapter-relative")
+        Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Converting absolute position ${timeToSeek}ms to track-relative")
         val session = currentPlaybackSession
         if (session != null) {
-          // Find target chapter for this absolute time
-          val targetChapterIndex = session.getChapterIndexForTime(timeToSeek)
-          if (targetChapterIndex >= 0 && targetChapterIndex < session.chapters.size) {
-            val targetChapter = session.chapters[targetChapterIndex]
-            val chapterRelativePosition = timeToSeek - targetChapter.startMs
-            Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Seeking to chapter $targetChapterIndex, position ${chapterRelativePosition}ms")
-            currentPlayer.seekTo(targetChapterIndex, chapterRelativePosition.coerceAtLeast(0L))
+          // Find target track for this absolute time (tracks, not chapters)
+          val targetTrackIndex = session.audioTracks.indexOfFirst { track ->
+            val trackStartMs = track.startOffsetMs
+            val trackEndMs = track.startOffsetMs + track.durationMs
+            timeToSeek >= trackStartMs && timeToSeek < trackEndMs
+          }
+
+          if (targetTrackIndex >= 0 && targetTrackIndex < session.audioTracks.size) {
+            val targetTrack = session.audioTracks[targetTrackIndex]
+            val trackRelativePosition = timeToSeek - targetTrack.startOffsetMs
+            Log.d("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Seeking to track $targetTrackIndex, position ${trackRelativePosition}ms")
+            currentPlayer.seekTo(targetTrackIndex, trackRelativePosition.coerceAtLeast(0L))
           } else {
-            Log.w("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Invalid chapter index $targetChapterIndex for time ${timeToSeek}ms")
+            Log.w("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Invalid track index $targetTrackIndex for time ${timeToSeek}ms")
+            Log.w("NUXT_SKIP_DEBUG", "PlayerNotificationService.seekPlayer [CAST]: Cannot seek to time ${timeToSeek}ms - no matching track found")
           }
         }
       } else {
@@ -1732,9 +1749,16 @@ class PlayerNotificationService : MediaLibraryService() {
     }
 
     try {
-      // Use ChapterNavigationHelper for chapter navigation
-      Log.d(tag, "navigateToChapter: Using ChapterNavigationHelper for chapter navigation")
-      chapterNavigationHelper.seekToChapter(chapterIndex)
+      // Check if we're using Cast player
+      if (currentPlayer == castPlayerManager.castPlayer) {
+        // Use Cast-specific chapter seeking
+        Log.d(tag, "navigateToChapter: Using Cast player chapter navigation")
+        castPlayerManager.seekToChapter(chapterIndex, 0L, session)
+      } else {
+        // Use ChapterNavigationHelper for local ExoPlayer navigation
+        Log.d(tag, "navigateToChapter: Using ChapterNavigationHelper for local player navigation")
+        chapterNavigationHelper.seekToChapter(chapterIndex)
+      }
 
       // Update the tracked navigation index immediately for skip operations
       currentNavigationIndex = chapterIndex
@@ -1742,7 +1766,7 @@ class PlayerNotificationService : MediaLibraryService() {
       // Update notification metadata for the new chapter
       updateNotificationMetadata(chapterIndex)
 
-      Log.d(tag, "navigateToChapter: Successfully navigated to chapter $chapterIndex using ChapterNavigationHelper")
+      Log.d(tag, "navigateToChapter: Successfully navigated to chapter $chapterIndex")
     } catch (e: Exception) {
       Log.e(tag, "navigateToChapter: Error navigating to chapter $chapterIndex", e)
     }
@@ -2116,19 +2140,35 @@ class PlayerNotificationService : MediaLibraryService() {
   fun jumpForward() {
     Log.d(tag, "jumpForward: Using chapter-aware jumping with ${deviceSettings.jumpForwardTimeMs}ms")
 
-    // Use AudiobookProgressTracker for chapter-aware jumping
-    val currentAbsolutePosition = audiobookProgressTracker.getCurrentAbsolutePosition()
-    val newPosition = currentAbsolutePosition + deviceSettings.jumpForwardTimeMs
-    audiobookProgressTracker.seekToAbsolutePosition(newPosition)
+    // Check if we're using Cast player
+    val currentSession = currentPlaybackSession
+    if (currentSession != null && currentPlayer == castPlayerManager.castPlayer) {
+      // Use Cast-specific jumping with absolute positioning
+      Log.d(tag, "jumpForward: Using Cast player with absolute positioning")
+      castPlayerManager.skipForward(deviceSettings.jumpForwardTimeMs, currentSession)
+    } else {
+      // Use AudiobookProgressTracker for local ExoPlayer chapter-aware jumping
+      val currentAbsolutePosition = audiobookProgressTracker.getCurrentAbsolutePosition()
+      val newPosition = currentAbsolutePosition + deviceSettings.jumpForwardTimeMs
+      audiobookProgressTracker.seekToAbsolutePosition(newPosition)
+    }
   }
 
   fun jumpBackward() {
     Log.d(tag, "jumpBackward: Using chapter-aware jumping with ${deviceSettings.jumpBackwardsTimeMs}ms")
 
-    // Use AudiobookProgressTracker for chapter-aware jumping
-    val currentAbsolutePosition = audiobookProgressTracker.getCurrentAbsolutePosition()
-    val newPosition = (currentAbsolutePosition - deviceSettings.jumpBackwardsTimeMs).coerceAtLeast(0)
-    audiobookProgressTracker.seekToAbsolutePosition(newPosition)
+    // Check if we're using Cast player
+    val currentSession = currentPlaybackSession
+    if (currentSession != null && currentPlayer == castPlayerManager.castPlayer) {
+      // Use Cast-specific jumping with absolute positioning
+      Log.d(tag, "jumpBackward: Using Cast player with absolute positioning")
+      castPlayerManager.skipBackward(deviceSettings.jumpBackwardsTimeMs, currentSession)
+    } else {
+      // Use AudiobookProgressTracker for local ExoPlayer chapter-aware jumping
+      val currentAbsolutePosition = audiobookProgressTracker.getCurrentAbsolutePosition()
+      val newPosition = (currentAbsolutePosition - deviceSettings.jumpBackwardsTimeMs).coerceAtLeast(0)
+      audiobookProgressTracker.seekToAbsolutePosition(newPosition)
+    }
   }
 
   fun seekForward(amount: Long) {
@@ -2316,11 +2356,22 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   fun setPlaybackSpeed(speed: Float) {
+    Log.d(tag, "setPlaybackSpeed: Setting speed to $speed")
     mediaManager.userSettingsPlaybackRate = speed
+
+    // Set speed on the current player
     currentPlayer.setPlaybackSpeed(speed)
+
+    // If current player is Cast, also explicitly call Cast manager for additional synchronization
+    if (currentPlayer == castPlayerManager.castPlayer) {
+      Log.d(tag, "setPlaybackSpeed: Also synchronizing with Cast player manager")
+      castPlayerManager.setPlaybackSpeed(speed)
+    }
 
     // Refresh Android Auto actions
     mediaProgressSyncer.currentPlaybackSession?.let { setMediaSessionConnectorCustomActions(it) }
+
+    Log.d(tag, "setPlaybackSpeed: Speed updated successfully")
   }
 
   fun closePlayback(calledOnError: Boolean? = false) {
@@ -4491,4 +4542,5 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       authorName
     }
   }
+
 }

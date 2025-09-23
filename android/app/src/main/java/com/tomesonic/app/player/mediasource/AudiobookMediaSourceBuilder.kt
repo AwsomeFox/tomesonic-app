@@ -229,7 +229,20 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
                 // Calculate the chapter's position within the audio file
                 val chapterStartInFile = chapter.startMs - containingTrack.startOffsetMs
-                val chapterEndInFile = chapter.endMs - containingTrack.startOffsetMs
+                var chapterEndInFile = chapter.endMs - containingTrack.startOffsetMs
+
+                // Add buffer to prevent premature chapter transitions near end
+                // Only add buffer if this isn't the last chapter and the chapter doesn't span entire file
+                val isLastChapter = index == playbackSession.chapters.size - 1
+                val trackEndMs = (containingTrack.duration * 1000).toLong()
+                val chapterSpansEntireFile = chapterStartInFile <= 100 && chapterEndInFile >= trackEndMs - 100
+
+                if (!isLastChapter && !chapterSpansEntireFile && chapterEndInFile < trackEndMs) {
+                    // Add 200ms buffer to prevent skipping the end of chapters
+                    // But don't exceed the actual track duration
+                    chapterEndInFile = minOf(chapterEndInFile + 200, trackEndMs)
+                    Log.d(TAG, "Added 200ms buffer to chapter $index end time to prevent skipping")
+                }
 
                 segments.add(
                     ChapterSegment(
@@ -240,7 +253,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
                         chapterEndMs = chapter.endMs,
                         audioFileStartMs = chapterStartInFile,
                         audioFileEndMs = chapterEndInFile,
-                        audioFileDurationMs = (containingTrack.duration * 1000).toLong()
+                        audioFileDurationMs = trackEndMs
                     )
                 )
 

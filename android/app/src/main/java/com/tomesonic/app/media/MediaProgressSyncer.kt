@@ -44,6 +44,7 @@ class MediaProgressSyncer(
   var currentPlaybackSession: PlaybackSession? = null // copy of pb session currently syncing
   var currentLocalMediaProgress: LocalMediaProgress? = null
   var isInitialSessionEstablishment: Boolean = true // Track if this is the first time establishing a session
+  private var lastPauseTime: Long = 0 // Track when playback was paused to determine if this is a resume vs new session
 
   private val currentDisplayTitle
     get() = currentPlaybackSession?.displayTitle ?: "Unset"
@@ -65,15 +66,25 @@ class MediaProgressSyncer(
         Log.d(tag, "start: Set last sync time 0 $lastSyncTime")
         failedSyncs = 0
         isInitialSessionEstablishment = true // New session, reset establishment flag
+        lastPauseTime = 0 // Reset pause tracking
       } else {
-        isInitialSessionEstablishment = false // Continuing existing session
+        // Check if this is a resume after a short pause vs initial session establishment
+        val currentTime = System.currentTimeMillis()
+        val timeSincePause = if (lastPauseTime > 0) currentTime - lastPauseTime else Long.MAX_VALUE
+        isInitialSessionEstablishment = timeSincePause > 30000 // Only consider initial if paused > 30 seconds
+        Log.d(tag, "start: Continuing session, time since pause: ${timeSincePause}ms, isInitial: $isInitialSessionEstablishment")
         return
       }
     } else if (playbackSession.id != currentSessionId) {
       currentLocalMediaProgress = null
       isInitialSessionEstablishment = true // New session
+      lastPauseTime = 0 // Reset pause tracking
     } else {
-      isInitialSessionEstablishment = false // Same session
+      // Same session - check if this is after a significant pause
+      val currentTime = System.currentTimeMillis()
+      val timeSincePause = if (lastPauseTime > 0) currentTime - lastPauseTime else Long.MAX_VALUE
+      isInitialSessionEstablishment = timeSincePause > 30000 // Only consider initial if paused > 30 seconds
+      Log.d(tag, "start: Same session, time since pause: ${timeSincePause}ms, isInitial: $isInitialSessionEstablishment")
     }
 
     listeningTimerRunning = true
@@ -223,7 +234,8 @@ class MediaProgressSyncer(
     listeningTimerTask?.cancel()
     listeningTimerTask = null
     listeningTimerRunning = false
-    Log.d(tag, "pause: Pausing progress syncer for $currentDisplayTitle")
+    lastPauseTime = System.currentTimeMillis() // Track pause time for resume detection
+    Log.d(tag, "pause: Pausing progress syncer for $currentDisplayTitle at ${lastPauseTime}")
     Log.d(tag, "pause: Last sync time $lastSyncTime")
 
     val currentTime = playerNotificationService.getCurrentTimeSeconds()
@@ -409,11 +421,10 @@ class MediaProgressSyncer(
                   cb(SyncResult(true, syncSuccess, errorMsg))
                 }
               } else {
-                // Compare timestamps and progress; only send if local is newer or further
-                val localMoreRecent = it.updatedAt > serverProgress.lastUpdate
-                val localFurther = it.progress > serverProgress.progress || it.currentTime > serverProgress.currentTime
+                // Use improved comparison logic that considers both timestamps and progress
+                val shouldSendLocalProgress = shouldSendLocalProgressToServer(it, serverProgress)
 
-                if (localMoreRecent && localFurther) {
+                if (shouldSendLocalProgress) {
                   apiHandler.sendLocalProgressSync(it) { syncSuccess, errorMsg ->
                     if (syncSuccess) {
                       failedSyncs = 0
@@ -516,10 +527,77 @@ class MediaProgressSyncer(
     }
   }
 
+  /**
+   * Determines if server progress should override local progress
+   * Takes into account timestamp differences, progress differences, and session state
+   */
+  fun shouldUseServerProgress(serverProgress: MediaProgress, localProgress: PlaybackSession): Boolean {
+    val timeDifference = serverProgress.lastUpdate - localProgress.updatedAt
+    val progressDifference = serverProgress.progress - localProgress.progress
+    val timeDifferenceSeconds = timeDifference / 1000.0
+
+    Log.d(tag, "shouldUseServerProgress: Server time=${serverProgress.lastUpdate}, Local time=${localProgress.updatedAt}")
+    Log.d(tag, "shouldUseServerProgress: Server progress=${serverProgress.progress}, Local progress=${localProgress.progress}")
+    Log.d(tag, "shouldUseServerProgress: Time diff=${timeDifferenceSeconds}s, Progress diff=${progressDifference}")
+    Log.d(tag, "shouldUseServerProgress: Initial session=${isInitialSessionEstablishment}")
+
+    // If this is not an initial session establishment, be very conservative
+    if (!isInitialSessionEstablishment) {
+      Log.d(tag, "shouldUseServerProgress: Not initial session - preserving local progress")
+      return false
+    }
+
+    // For initial sessions, only use server progress if:
+    // 1. Server timestamp is significantly newer (more than 30 seconds)
+    // 2. AND either server progress is significantly ahead OR timestamps are very different
+    val serverIsSignificantlyNewer = timeDifferenceSeconds > 30
+    val serverProgressIsAhead = progressDifference > 0.001 // More than 0.1% ahead
+    val timestampVeryDifferent = Math.abs(timeDifferenceSeconds) > 60 // More than 1 minute difference
+
+    val shouldUse = serverIsSignificantlyNewer && (serverProgressIsAhead || timestampVeryDifferent)
+
+    Log.d(tag, "shouldUseServerProgress: ServerNewer=$serverIsSignificantlyNewer, ProgressAhead=$serverProgressIsAhead, TimestampDiff=$timestampVeryDifferent")
+    Log.d(tag, "shouldUseServerProgress: Result=$shouldUse")
+
+    return shouldUse
+  }
+
+  /**
+   * Determines if local progress should be sent to server, considering both timestamps and absolute progress
+   */
+  private fun shouldSendLocalProgressToServer(localSession: PlaybackSession, serverProgress: MediaProgress): Boolean {
+    val timeDifference = localSession.updatedAt - serverProgress.lastUpdate
+    val progressDifference = localSession.progress - serverProgress.progress
+    val timeDifferenceSeconds = timeDifference / 1000.0
+    val currentTimeDifference = localSession.currentTime - serverProgress.currentTime
+
+    Log.d(tag, "shouldSendLocalProgressToServer: Local time=${localSession.updatedAt}, Server time=${serverProgress.lastUpdate}")
+    Log.d(tag, "shouldSendLocalProgressToServer: Local progress=${localSession.progress}, Server progress=${serverProgress.progress}")
+    Log.d(tag, "shouldSendLocalProgressToServer: Local currentTime=${localSession.currentTime}, Server currentTime=${serverProgress.currentTime}")
+    Log.d(tag, "shouldSendLocalProgressToServer: Time diff=${timeDifferenceSeconds}s, Progress diff=${progressDifference}")
+
+    // Send local progress if:
+    // 1. Local timestamp is newer AND (local progress is ahead OR local is significantly more recent)
+    // 2. OR local progress is significantly ahead regardless of timestamp (to handle clock sync issues)
+    val localIsNewer = timeDifferenceSeconds > 0
+    val localProgressIsAhead = progressDifference > 0.001 || currentTimeDifference > 30 // 30 seconds ahead in absolute time
+    val localIsSignificantlyNewer = timeDifferenceSeconds > 30 // More than 30 seconds newer
+    val localIsSignificantlyAhead = progressDifference > 0.01 // More than 1% ahead in progress
+
+    val shouldSend = (localIsNewer && (localProgressIsAhead || localIsSignificantlyNewer)) || localIsSignificantlyAhead
+
+    Log.d(tag, "shouldSendLocalProgressToServer: LocalNewer=$localIsNewer, ProgressAhead=$localProgressIsAhead")
+    Log.d(tag, "shouldSendLocalProgressToServer: SignificantlyNewer=$localIsSignificantlyNewer, SignificantlyAhead=$localIsSignificantlyAhead")
+    Log.d(tag, "shouldSendLocalProgressToServer: Result=$shouldSend")
+
+    return shouldSend
+  }
+
   fun reset() {
     currentPlaybackSession = null
     currentLocalMediaProgress = null
     lastSyncTime = 0L
+    lastPauseTime = 0L
     Log.d(tag, "reset: Set last sync time 0 $lastSyncTime")
     failedSyncs = 0
     isInitialSessionEstablishment = true

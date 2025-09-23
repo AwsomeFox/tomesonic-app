@@ -413,9 +413,14 @@ class PlaybackSession(
    */
   @JsonIgnore
   fun getServerContentUri(audioTrack: AudioTrack): Uri {
-    Log.d("PlaybackSession", "getServerContentUri: forcing server URI for cast")
+    Log.d("PlaybackSession", "getServerContentUri: generating Cast-compatible server URI")
     Log.d("PlaybackSession", "getServerContentUri: session details - id=$id, serverAddress=$serverAddress, isLocal=$isLocal")
     Log.d("PlaybackSession", "getServerContentUri: audioTrack - index=${audioTrack.index}, contentUrl=${audioTrack.contentUrl}")
+
+    val token = DeviceManager.token
+    if (token.isEmpty()) {
+      Log.w("PlaybackSession", "getServerContentUri: No token available - Cast may fail")
+    }
 
     // For downloaded books, we need to use the server equivalent
     if (isLocal && localLibraryItem != null && !localLibraryItem!!.libraryItemId.isNullOrEmpty()) {
@@ -423,39 +428,30 @@ class PlaybackSession(
       val serverLibraryItemId = localLibraryItem!!.libraryItemId!!
       Log.d("PlaybackSession", "getServerContentUri: local item, using serverLibraryItemId=$serverLibraryItemId")
 
-      // For Cast compatibility, always include token regardless of server version
-      val token = DeviceManager.token
-      val uri = if (token.isNotEmpty()) {
-        "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}?token=$token"
+      // For Cast, always use the contentUrl approach with token for reliability
+      // The /api/items/{id}/file/{index} endpoint may not be universally supported
+      val castUri = if (token.isNotEmpty()) {
+        "$serverAddress${audioTrack.contentUrl}?token=$token"
       } else {
-        "$serverAddress/api/items/$serverLibraryItemId/file/${audioTrack.index}"
+        "$serverAddress${audioTrack.contentUrl}"
       }
-      Log.d("PlaybackSession", "getServerContentUri: local item Cast-compatible URI: $uri")
-      return Uri.parse(uri)
+
+      Log.d("PlaybackSession", "getServerContentUri: local item Cast URI: $castUri")
+      return Uri.parse(castUri)
     }
 
-    // For server items, ensure Cast-compatible URLs with session expiry fallback
-    val token = DeviceManager.token
+    // For server items, always use token-based authentication for Cast reliability
 
-    // For Cast, always use token-based authentication to avoid session expiry issues
-    val castCompatibleUri = if (token.isNotEmpty()) {
-      "$serverAddress/api/items/$libraryItemId/file/${audioTrack.index}?token=$token"
+    // For Cast, always use the contentUrl approach with token for reliability
+    // The /api/items/{id}/file/{index} endpoint may not be universally supported
+    val castUri = if (token.isNotEmpty()) {
+      "$serverAddress${audioTrack.contentUrl}?token=$token"
     } else {
-      // Fallback to session-based URL if no token available
-      val serverUri = getContentUri(audioTrack)
-      val uriString = serverUri.toString()
-
-      if (uriString.contains("/public/session/") && isSessionExpired()) {
-        // Session might be expired, fallback to direct URL
-        Log.w("PlaybackSession", "getServerContentUri: Session potentially expired, using direct URL")
-        "$serverAddress/api/items/$libraryItemId/file/${audioTrack.index}"
-      } else {
-        uriString
-      }
+      "$serverAddress${audioTrack.contentUrl}"
     }
 
-    Log.d("PlaybackSession", "getServerContentUri: Cast-compatible URI: $castCompatibleUri")
-    return Uri.parse(castCompatibleUri)
+    Log.d("PlaybackSession", "getServerContentUri: server item Cast URI: $castUri")
+    return Uri.parse(castUri)
   }
 
   @JsonIgnore

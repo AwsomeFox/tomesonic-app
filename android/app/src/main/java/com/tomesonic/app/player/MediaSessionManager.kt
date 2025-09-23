@@ -204,6 +204,20 @@ class MediaSessionManager(
         // Return Media3 SessionToken
         SessionToken(context, ComponentName(context, service::class.java))
 
+    /**
+     * Updates the MediaSession with a new player without recreating the session
+     */
+    fun updatePlayer(newPlayer: Player) {
+        Log.d(TAG, "updatePlayer: Switching to new player type: ${newPlayer.javaClass.simpleName}")
+
+        // Update notification manager with new player
+        playerNotificationManager?.setPlayer(newPlayer)
+
+        // The MediaSession itself doesn't need to be recreated in Media3
+        // The playerNotificationManager handles the player switch seamlessly
+        Log.d(TAG, "updatePlayer: Player updated successfully")
+    }
+
     fun release() {
         playerNotificationManager?.setPlayer(null)
         playerNotificationManager = null

@@ -4,6 +4,12 @@
     <string name="title_activity_main">TomeSonic</string>
     <string name="package_name">com.tomesonic.app</string>
     <string name="custom_url_scheme">tomesonic</string>
+    <!-- custom receriver -->
+    <!-- <string name="cast_app_id">242E16ED</string> -->
+    <!-- default receiver -->
+    <string name="cast_app_id">CC1AD845</string>
+    <!-- styled receiver -->
+    <!-- <string name="cast_app_id">D887A434</string> -->
     <string name="add_widget">Add widget</string>
     <string name="app_widget_description">Simple widget for TomeSonic playback</string>
     <string name="action_jump_forward">Jump Forward</string>

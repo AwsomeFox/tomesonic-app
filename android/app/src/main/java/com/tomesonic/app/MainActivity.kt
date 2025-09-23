@@ -26,6 +26,9 @@ import com.google.common.util.concurrent.Futures
 import java.util.concurrent.ExecutionException
 import com.anggrayudi.storage.SimpleStorage
 import com.anggrayudi.storage.SimpleStorageHelper
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastState
+import com.google.android.gms.cast.framework.CastStateListener
 import com.tomesonic.app.managers.DbManager
 import com.tomesonic.app.player.PlayerNotificationService
 import com.tomesonic.app.plugins.AbsAudioPlayer
@@ -69,6 +72,9 @@ class MainActivity : BridgeActivity() {
 
     super.onCreate(savedInstanceState)
     Log.d(tag, "onCreate")
+
+    // Initialize Cast SDK
+    initializeCast()
 
   // Enable edge-to-edge so the webview can render behind the system bars.
   // See: https://developer.android.com/develop/ui/views/layout/edge-to-edge
@@ -355,5 +361,40 @@ class MainActivity : BridgeActivity() {
     grantResults.forEach { Log.d(tag, "GRANTREUSLTS $it") }
     // Mandatory for Activity, but not for Fragment & ComponentActivity
     storageHelper.onRequestPermissionsResult(requestCode, permissions, grantResults)
+  }
+
+  /**
+   * Initialize Google Cast SDK
+   */
+  private fun initializeCast() {
+    try {
+      Log.d(tag, "Initializing Google Cast SDK...")
+
+      // Initialize CastContext - this will use our CastOptionsProvider
+      val castContext = CastContext.getSharedInstance(this)
+
+      // Add cast state listener to monitor cast availability
+      castContext.addCastStateListener { state ->
+        when (state) {
+          CastState.NO_DEVICES_AVAILABLE -> {
+            Log.d(tag, "Cast: No devices available")
+          }
+          CastState.NOT_CONNECTED -> {
+            Log.d(tag, "Cast: Not connected")
+          }
+          CastState.CONNECTING -> {
+            Log.d(tag, "Cast: Connecting...")
+          }
+          CastState.CONNECTED -> {
+            Log.d(tag, "Cast: Connected!")
+          }
+        }
+      }
+
+      Log.d(tag, "Cast SDK initialized successfully with app ID: ${castContext.castOptions.receiverApplicationId}")
+
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to initialize Cast SDK", e)
+    }
   }
 }

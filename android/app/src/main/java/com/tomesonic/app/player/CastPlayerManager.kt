@@ -62,7 +62,7 @@ class CastPlayerManager(
      */
     fun switchToPlayer(useCastPlayer: Boolean): Player? {
         val currentPlayer = service.currentPlayer
-        val exoPlayer = service.rawPlayer
+        val exoPlayer = service.exoPlayer
 
         if (useCastPlayer) {
             if (currentPlayer == castPlayer) {
@@ -117,19 +117,110 @@ class CastPlayerManager(
     }
 
     /**
-     * Creates MediaItems for cast player using the new buildMediaItems method
-     * This ensures cast player has identical timeline structure and metadata as local playback
+     * Creates MediaItems for Cast with absolute positioning across full tracks
+     * Uses one MediaItem per audio track (not per chapter) for absolute seeking
      */
     fun createCastMediaItems(playbackSession: PlaybackSession): List<MediaItem> {
-        // Use the exact same MediaItem builder as local playback to ensure consistency
-        // Use forCast=true to get server URIs appropriate for cast devices
-        val audiobookBuilder = service.getAudiobookMediaSourceBuilder()
-        val mediaItems = audiobookBuilder.buildMediaItems(playbackSession, forCast = true)
+        val mediaItems = mutableListOf<MediaItem>()
 
-        Log.d(TAG, "Created ${mediaItems.size} MediaItems for cast using AudiobookMediaSourceBuilder.buildMediaItems()")
+        // Create one MediaItem per audio track (not per chapter) for absolute positioning
+        // This allows seeking across the entire book using absolute timestamps
+        playbackSession.audioTracks.forEachIndexed { trackIndex, track ->
+            val trackItem = createTrackMediaItem(playbackSession, track, trackIndex)
+            mediaItems.add(trackItem)
+        }
+
+        Log.d(TAG, "Created ${mediaItems.size} track MediaItems for Cast absolute positioning: ${playbackSession.displayTitle}")
+        Log.d(TAG, "  Total book duration: ${calculateTotalBookDuration(playbackSession)}s")
+        Log.d(TAG, "  Total chapters: ${playbackSession.chapters.size}")
+        Log.d(TAG, "  Total tracks: ${playbackSession.audioTracks.size}")
 
         return mediaItems
     }
+
+    /**
+     * Creates a MediaItem for a specific audio track with book-level display metadata
+     * This enables absolute positioning across the entire book
+     */
+    private fun createTrackMediaItem(
+        playbackSession: PlaybackSession,
+        track: com.tomesonic.app.data.AudioTrack,
+        trackIndex: Int
+    ): MediaItem {
+        val castUri = playbackSession.getServerContentUri(track)
+
+        // Use book-level info for display
+        val bookTitle = playbackSession.displayTitle ?: "Unknown Book"
+        val bookAuthor = playbackSession.displayAuthor ?: "Unknown Author"
+        val fullTrackDurationMs = (track.duration * 1000).toLong()
+
+        // Create metadata that shows book info with full track duration for absolute positioning
+        val metadataBuilder = MediaMetadata.Builder()
+            .setTitle(bookTitle) // Show book title
+            .setArtist(bookAuthor) // Show author
+            .setAlbumTitle(bookTitle) // Show book as album
+            .setDurationMs(fullTrackDurationMs) // Full track duration for absolute positioning
+            .setTrackNumber(trackIndex + 1) // Track number
+            .setTotalTrackCount(playbackSession.audioTracks.size) // Total tracks
+
+        // Add book cover artwork (consistent across all tracks)
+        playbackSession.coverPath?.let {
+            val coverUri = if (playbackSession.checkIsServerVersionGte("2.17.0")) {
+                Uri.parse("${playbackSession.serverAddress}/api/items/${playbackSession.libraryItemId}/cover")
+            } else {
+                Uri.parse("${playbackSession.serverAddress}/api/items/${playbackSession.libraryItemId}/cover?token=${com.tomesonic.app.device.DeviceManager.token}")
+            }
+            metadataBuilder.setArtworkUri(coverUri)
+        }
+
+        // Add track-specific extras for absolute positioning
+        val extras = android.os.Bundle()
+        extras.putString("bookId", playbackSession.libraryItemId ?: "unknown")
+        extras.putString("bookTitle", bookTitle)
+        extras.putString("bookAuthor", bookAuthor)
+        extras.putInt("trackIndex", trackIndex)
+        extras.putInt("totalTracks", playbackSession.audioTracks.size)
+        extras.putInt("totalChapters", playbackSession.chapters.size)
+        extras.putLong("trackStartOffsetMs", track.startOffsetMs)
+        extras.putLong("trackDurationMs", fullTrackDurationMs)
+
+        // Add chapter information for this track
+        val chaptersInTrack = playbackSession.chapters.filter { chapter ->
+            val chapterStartMs = (chapter.start * 1000).toLong()
+            val chapterEndMs = (chapter.end * 1000).toLong()
+            val trackEndMs = track.startOffsetMs + fullTrackDurationMs
+            chapterStartMs >= track.startOffsetMs && chapterStartMs < trackEndMs
+        }
+        extras.putInt("chaptersInTrack", chaptersInTrack.size)
+
+        metadataBuilder.setExtras(extras)
+
+        val mediaItem = MediaItem.Builder()
+            .setUri(castUri) // Full track URI for Cast compatibility
+            .setMediaId("${playbackSession.libraryItemId}_track_${trackIndex}") // Track-specific ID
+            .setMediaMetadata(metadataBuilder.build())
+            .build()
+
+        Log.d(TAG, "Created track MediaItem for track $trackIndex")
+        Log.d(TAG, "  Display as: '$bookTitle' by $bookAuthor")
+        Log.d(TAG, "  Track duration: ${fullTrackDurationMs}ms, URI: $castUri")
+        Log.d(TAG, "  Track offset: ${track.startOffsetMs}ms, chapters in track: ${chaptersInTrack.size}")
+
+        return mediaItem
+    }
+
+    /**
+     * Calculate total duration of the book across all chapters
+     */
+    private fun calculateTotalBookDuration(playbackSession: PlaybackSession): Double {
+        return if (playbackSession.chapters.isNotEmpty()) {
+            playbackSession.chapters.last().end
+        } else {
+            // Fallback: sum all track durations
+            playbackSession.audioTracks.sumOf { it.duration }
+        }
+    }
+
 
     /**
      * Finds the audio track that contains the given time position
@@ -142,83 +233,94 @@ class CastPlayerManager(
     }
 
     /**
-     * Creates a MediaItem from a chapter segment with proper metadata and clipping
-     * CastPlayer properly supports ClippingConfiguration, so we use the same approach as ExoPlayer
-     * but with server URIs for cast compatibility
+     * Calculates absolute position for Cast playbook with chapter-based MediaItems
+     * Converts absolute book time to chapter index and position within the track
      */
-    private fun createSegmentMediaItem(
-        playbackSession: PlaybackSession,
-        segment: ChapterSegment
-    ): MediaItem {
-        // Get the chapter object if available
-        val chapter = if (segment.chapterIndex < playbackSession.chapters.size) {
-            playbackSession.chapters[segment.chapterIndex]
-        } else null
+    fun calculateAbsolutePosition(playbackSession: PlaybackSession, currentPosition: Long): AbsolutePosition {
+        // Find which chapter contains the current absolute position
+        for ((chapterIndex, chapter) in playbackSession.chapters.withIndex()) {
+            val chapterStartMs = (chapter.start * 1000).toLong()
+            val chapterEndMs = (chapter.end * 1000).toLong()
 
-        // Find the corresponding audio track
-        val containingTrack = findTrackContainingTime(playbackSession, segment.chapterStartMs)
-            ?: playbackSession.audioTracks.first()
+            if (currentPosition >= chapterStartMs && currentPosition < chapterEndMs) {
+                // Find the track containing this chapter
+                val containingTrack = findTrackContainingTime(playbackSession, chapterStartMs)
+                    ?: playbackSession.audioTracks.first()
 
-        // For cast, ensure we use server content URI even if the segment originally used local URI
-        val castUri = playbackSession.getServerContentUri(containingTrack)
+                // Calculate position within the track (absolute track position, not chapter-relative)
+                val positionInTrackMs = currentPosition - containingTrack.startOffsetMs
 
-        val mediaItemBuilder = MediaItem.Builder()
-            .setUri(castUri)
-            .setMediaId("${playbackSession.libraryItemId}_chapter_${segment.chapterIndex}")
-            .setMimeType(MimeTypeUtil.getMimeType(castUri.toString()))
-            .setMediaMetadata(
-                playbackSession.createCastMediaMetadata(
-                    track = containingTrack,
-                    chapter = chapter,
-                    chapterIndex = segment.chapterIndex
+                return AbsolutePosition(
+                    chapterIndex = chapterIndex,
+                    positionInTrackMs = positionInTrackMs,
+                    track = containingTrack
                 )
-            )
-
-        // Add clipping configuration - CastPlayer properly supports this
-        if (segment.audioFileStartMs != 0L || segment.audioFileEndMs != segment.audioFileDurationMs) {
-            mediaItemBuilder.setClippingConfiguration(
-                MediaItem.ClippingConfiguration.Builder()
-                    .setStartPositionMs(segment.audioFileStartMs)
-                    .setEndPositionMs(segment.audioFileEndMs)
-                    .build()
-            )
+            }
         }
 
-        return mediaItemBuilder.build()
+        // Position is beyond the last chapter, use last chapter
+        val lastChapter = playbackSession.chapters.lastOrNull()
+        return if (lastChapter != null) {
+            val lastChapterIndex = playbackSession.chapters.size - 1
+            val containingTrack = findTrackContainingTime(playbackSession, (lastChapter.start * 1000).toLong())
+                ?: playbackSession.audioTracks.last()
+            val positionInTrackMs = (lastChapter.end * 1000).toLong() - containingTrack.startOffsetMs
+
+            AbsolutePosition(
+                chapterIndex = lastChapterIndex,
+                positionInTrackMs = positionInTrackMs,
+                track = containingTrack
+            )
+        } else {
+            // Fallback: no chapters, use first track
+            AbsolutePosition(0, currentPosition, playbackSession.audioTracks.first())
+        }
     }
 
+    data class AbsolutePosition(
+        val chapterIndex: Int, // Chapter index instead of track index
+        val positionInTrackMs: Long,
+        val track: com.tomesonic.app.data.AudioTrack
+    )
+
     /**
-     * Loads media into cast player using MediaItems
+     * Loads media into cast player using MediaItems with absolute positioning
      */
     fun loadCastPlayer(
         mediaItems: List<MediaItem>,
         startIndex: Int,
         startPositionMs: Long,
-        playWhenReady: Boolean
+        playWhenReady: Boolean,
+        playbackSession: PlaybackSession
     ) {
         castPlayer?.let { player ->
-            Log.d(TAG, "Loading ${mediaItems.size} MediaItems into cast player as a complete playlist")
-            Log.d(TAG, "Starting at index $startIndex, position ${startPositionMs}ms, playWhenReady=$playWhenReady")
+            // Calculate absolute position for Cast playback
+            val absolutePos = calculateAbsolutePosition(playbackSession, startPositionMs)
 
-            // Log each MediaItem being loaded to verify playlist structure
+            Log.d(TAG, "Loading ${mediaItems.size} Cast MediaItems (chapters with absolute positioning)")
+            Log.d(TAG, "Converting book position ${startPositionMs}ms to absolute position:")
+            Log.d(TAG, "  Chapter index: ${absolutePos.chapterIndex}")
+            Log.d(TAG, "  Position in track: ${absolutePos.positionInTrackMs}ms")
+            Log.d(TAG, "  Track: ${absolutePos.track.contentUrl}")
+
+            // Log each MediaItem being loaded
             mediaItems.forEachIndexed { index, mediaItem ->
                 val title = mediaItem.mediaMetadata.title ?: "Chapter ${index + 1}"
-                val hasClipping = mediaItem.clippingConfiguration != null
-                val clipInfo = if (hasClipping) {
-                    val clip = mediaItem.clippingConfiguration!!
-                    "clipped ${clip.startPositionMs}-${clip.endPositionMs}ms"
-                } else {
-                    "no clipping"
-                }
                 val uri = mediaItem.localConfiguration?.uri
                 val mimeType = mediaItem.localConfiguration?.mimeType
-                Log.d(TAG, "  [$index] $title - $clipInfo - URI: $uri - MIME: $mimeType")
+                Log.d(TAG, "  [$index] $title - full track URI (no clipping) - URI: $uri - MIME: $mimeType")
                 Log.d(TAG, "  [$index] Artwork URI: ${mediaItem.mediaMetadata.artworkUri}")
             }
 
-            // Load the complete playlist at once - this creates the Cast queue
-            player.setMediaItems(mediaItems, startIndex, startPositionMs)
+            // Load playlist starting at the correct chapter with absolute position in track
+            player.setMediaItems(mediaItems, absolutePos.chapterIndex, absolutePos.positionInTrackMs)
             player.prepare()
+
+            // Ensure playback speed is set correctly after loading media
+            val expectedSpeed = service.mediaManager.userSettingsPlaybackRate ?: 1f
+            Log.d(TAG, "Setting Cast playback speed to $expectedSpeed after media load")
+            player.setPlaybackSpeed(expectedSpeed)
+
             player.playWhenReady = playWhenReady
 
             Log.d(TAG, "Cast playlist loaded successfully with ${mediaItems.size} chapters")
@@ -304,37 +406,149 @@ class CastPlayerManager(
             if (isConnected()) {
                 Log.d(TAG, "Setting cast player speed to $speed")
                 player.setPlaybackSpeed(speed)
+            } else {
+                Log.d(TAG, "Cast session not connected yet, will retry setting speed to $speed in 500ms")
+                // Retry setting speed after a short delay to allow Cast session to establish
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (isConnected()) {
+                        Log.d(TAG, "Retry: Setting cast player speed to $speed")
+                        player.setPlaybackSpeed(speed)
+                    } else {
+                        Log.w(TAG, "Retry failed: Cast session still not connected after delay, speed not set")
+                    }
+                }, 500) // 500ms delay should be enough for Cast session to establish
             }
         }
     }
 
     /**
      * Sends a skip forward command to the cast receiver
+     * Uses PlayerNotificationService to get accurate current position
      */
-    fun skipForward(skipTimeMs: Long = 30000) {
+    fun skipForward(skipTimeMs: Long = 30000, playbackSession: PlaybackSession) {
         castPlayer?.let { player ->
             if (isConnected()) {
-                Log.d(TAG, "Sending skip forward command to cast receiver: ${skipTimeMs}ms")
-                val currentPosition = player.currentPosition
-                player.seekTo(currentPosition + skipTimeMs)
+                Log.d(TAG, "Skip forward: ${skipTimeMs}ms from current position")
+
+                try {
+                    // Get current absolute position in the book using PlayerNotificationService
+                    val currentAbsolutePositionMs = service.getCurrentTime()
+                    val newAbsolutePositionMs = currentAbsolutePositionMs + skipTimeMs
+
+                    Log.d(TAG, "Skip forward: ${currentAbsolutePositionMs}ms -> ${newAbsolutePositionMs}ms")
+
+                    // Use the same seeking mechanism as the frontend to ensure consistency
+                    service.seekPlayer(newAbsolutePositionMs)
+
+                    Log.d(TAG, "Skip forward command completed successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Skip forward failed: ${e.message}", e)
+                }
             }
         }
     }
 
     /**
      * Sends a skip backward command to the cast receiver
+     * Uses PlayerNotificationService to get accurate current position
      */
-    fun skipBackward(skipTimeMs: Long = 10000) {
+    fun skipBackward(skipTimeMs: Long = 10000, playbackSession: PlaybackSession) {
         castPlayer?.let { player ->
             if (isConnected()) {
-                Log.d(TAG, "Sending skip backward command to cast receiver: ${skipTimeMs}ms")
-                val currentPosition = player.currentPosition
-                val newPosition = maxOf(0, currentPosition - skipTimeMs)
-                player.seekTo(newPosition)
+                Log.d(TAG, "Skip backward: ${skipTimeMs}ms from current position")
+
+                try {
+                    // Get current absolute position in the book using PlayerNotificationService
+                    val currentAbsolutePositionMs = service.getCurrentTime()
+                    val newAbsolutePositionMs = (currentAbsolutePositionMs - skipTimeMs).coerceAtLeast(0L)
+
+                    Log.d(TAG, "Skip backward: ${currentAbsolutePositionMs}ms -> ${newAbsolutePositionMs}ms")
+
+                    // Use the same seeking mechanism as the frontend to ensure consistency
+                    service.seekPlayer(newAbsolutePositionMs)
+
+                    Log.d(TAG, "Skip backward command completed successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Skip backward failed: ${e.message}", e)
+                }
             }
         }
     }
 
+    /**
+     * Gets the current absolute position in the book for Cast player
+     */
+    private fun getCurrentAbsolutePosition(playbackSession: PlaybackSession): Long {
+        castPlayer?.let { player ->
+            val currentChapterIndex = player.currentMediaItemIndex
+            val positionInTrackMs = player.currentPosition
+
+            if (currentChapterIndex >= 0 && currentChapterIndex < playbackSession.chapters.size) {
+                val currentChapter = playbackSession.chapters[currentChapterIndex]
+                val chapterStartMs = (currentChapter.start * 1000).toLong()
+
+                // Find the track containing this chapter
+                val containingTrack = findTrackContainingTime(playbackSession, chapterStartMs)
+                    ?: playbackSession.audioTracks.first()
+
+                // Convert track position back to absolute book position
+                val absolutePosition = containingTrack.startOffsetMs + positionInTrackMs
+
+                Log.d(TAG, "Current absolute position: chapter $currentChapterIndex, track pos ${positionInTrackMs}ms = ${absolutePosition}ms absolute")
+                return absolutePosition
+            }
+        }
+        return 0L
+    }
+
+    /**
+     * Seeks to an absolute position in the book, handling chapter transitions
+     */
+    private fun seekToAbsolutePosition(absolutePositionMs: Long, playbackSession: PlaybackSession) {
+        val targetPosition = calculateAbsolutePosition(playbackSession, absolutePositionMs)
+
+        castPlayer?.let { player ->
+            if (targetPosition.chapterIndex != player.currentMediaItemIndex) {
+                // Need to change chapters
+                Log.d(TAG, "Absolute seek requires chapter change: ${player.currentMediaItemIndex} -> ${targetPosition.chapterIndex}")
+
+                // Jump to the target chapter first
+                player.seekTo(targetPosition.chapterIndex, targetPosition.positionInTrackMs)
+            } else {
+                // Same chapter, just seek within it
+                Log.d(TAG, "Absolute seek within same chapter: ${targetPosition.positionInTrackMs}ms")
+                player.seekTo(targetPosition.positionInTrackMs)
+            }
+        }
+    }
+
+    /**
+     * Seeks to a specific chapter and position (for Nuxt UI integration)
+     */
+    fun seekToChapter(chapterIndex: Int, positionInChapterMs: Long = 0L, playbackSession: PlaybackSession) {
+        if (chapterIndex < 0 || chapterIndex >= playbackSession.chapters.size) {
+            Log.w(TAG, "Invalid chapter index: $chapterIndex")
+            return
+        }
+
+        castPlayer?.let { player ->
+            if (isConnected()) {
+                val chapter = playbackSession.chapters[chapterIndex]
+                val chapterStartMs = (chapter.start * 1000).toLong()
+
+                // Find the track containing this chapter
+                val containingTrack = findTrackContainingTime(playbackSession, chapterStartMs)
+                    ?: playbackSession.audioTracks.first()
+
+                // Calculate position within the track
+                val positionInTrackMs = (chapterStartMs - containingTrack.startOffsetMs) + positionInChapterMs
+
+                Log.d(TAG, "Seeking to chapter $chapterIndex at ${positionInChapterMs}ms (track position: ${positionInTrackMs}ms)")
+
+                player.seekTo(chapterIndex, positionInTrackMs)
+            }
+        }
+    }
 
     /**
      * Start periodic position updates for Cast player synchronization
@@ -353,6 +567,14 @@ class CastPlayerManager(
                         // Trigger position update in the service
                         service.notifyPositionUpdate()
                         Log.v(TAG, "Cast position update: ${player.currentPosition}ms at mediaItem ${player.currentMediaItemIndex}")
+
+                        // Safety check: ensure playback speed is correct during playback
+                        val expectedSpeed = service.mediaManager.userSettingsPlaybackRate ?: 1f
+                        val currentSpeed = player.playbackParameters.speed
+                        if (Math.abs(currentSpeed - expectedSpeed) > 0.01f) { // Allow small floating point differences
+                            Log.w(TAG, "Cast speed mismatch detected: current=$currentSpeed, expected=$expectedSpeed, correcting...")
+                            player.setPlaybackSpeed(expectedSpeed)
+                        }
                     }
                     // Schedule next update
                     positionUpdateHandler?.postDelayed(this, 1000) // Update every second
@@ -395,14 +617,29 @@ class CastPlayerManager(
     private inner class CastSessionAvailabilityListener : SessionAvailabilityListener {
         override fun onCastSessionAvailable() {
             Log.w(TAG, "===== CAST SESSION AVAILABLE TRIGGERED =====")
-            Log.d(TAG, "Cast session available - switching to cast player")
+            Log.d(TAG, "Cast session available - checking compatibility and switching to cast player")
             Log.d(TAG, "onCastSessionAvailable: isConnected=${isConnected()}, castPlayer=${castPlayer}")
-            // Switch to cast player when cast session becomes available
-            service.switchToPlayer(true)
+
+            val currentSession = service.currentPlaybackSession
+            if (currentSession != null) {
+                val canCast = canUseCastPlayer(currentSession)
+                Log.d(TAG, "onCastSessionAvailable: Current session can be cast: $canCast")
+
+                if (canCast) {
+                    // Switch to cast player when cast session becomes available and session is compatible
+                    service.switchToPlayer(true)
+                } else {
+                    Log.w(TAG, "onCastSessionAvailable: Current session cannot be cast - remaining on local player")
+                }
+            } else {
+                Log.d(TAG, "onCastSessionAvailable: No active session - no switch needed")
+            }
         }
 
         override fun onCastSessionUnavailable() {
-            Log.d(TAG, "Cast session unavailable - switching to local player")
+            Log.d(TAG, "Cast session unavailable - switching back to local player")
+            Log.d(TAG, "onCastSessionUnavailable: Preserving playback state during switch")
+
             // Switch back to local player when cast session becomes unavailable
             service.switchToPlayer(false)
         }

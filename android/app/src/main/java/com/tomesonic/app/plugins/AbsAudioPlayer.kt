@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.tomesonic.app.MainActivity
+import com.tomesonic.app.R
 import com.tomesonic.app.data.*
 import com.tomesonic.app.device.DeviceManager
 import com.tomesonic.app.media.MediaEventManager
@@ -565,14 +566,15 @@ class AbsAudioPlayer : Plugin() {
 
       // IMPORTANT: Debug the actual Cast options being used
       val castOptions = castContext?.castOptions
+      val expectedCastAppId = mainActivity.getString(R.string.cast_app_id)
       Log.d(tag, "CAST_DEBUG: Cast Context receiver app ID: ${castOptions?.receiverApplicationId}")
-      Log.d(tag, "CAST_DEBUG: Expected app ID: CC1AD845")
+      Log.d(tag, "CAST_DEBUG: Expected app ID: $expectedCastAppId")
 
-      if (castOptions?.receiverApplicationId != "CC1AD845") {
+      if (castOptions?.receiverApplicationId != expectedCastAppId) {
         Log.e(tag, "CAST_DEBUG: *** MISMATCH! Cast Context is using wrong app ID: ${castOptions?.receiverApplicationId}")
         Log.e(tag, "CAST_DEBUG: *** This indicates Cast framework cache issue or CastOptionsProvider not being used")
       } else {
-        Log.d(tag, "CAST_DEBUG: Cast Context is using correct custom app ID")
+        Log.d(tag, "CAST_DEBUG: Cast Context is using correct test app ID")
       }
 
       // Add cast session state debugging
@@ -634,8 +636,8 @@ class AbsAudioPlayer : Plugin() {
       })      // Initialize MediaRouter for device discovery
       mediaRouter = MediaRouter.getInstance(mainActivity)
 
-      // Use the same Cast App ID as defined in CastOptionsProvider
-      val castAppId = "CC1AD845" // Custom Audiobookshelf Cast Receiver
+      // Use the same Cast App ID as defined in string resources
+      val castAppId = mainActivity.getString(R.string.cast_app_id)
       mediaRouteSelector = MediaRouteSelector.Builder()
         .addControlCategory(CastMediaControlIntent.categoryForCast(castAppId))
         .build()
@@ -657,9 +659,12 @@ class AbsAudioPlayer : Plugin() {
         Log.d(tag, "Cast session manager: ${castContext?.sessionManager}")
         Log.d(tag, "Current cast session: ${castContext?.sessionManager?.currentCastSession}")
 
-        if (isCastAvailable != isAvailable) {
-          isCastAvailable = isAvailable
-          emit("onCastAvailableUpdate", isAvailable)
+        // TEMPORARY: Always keep Cast enabled for testing
+        val forceEnabled = true
+        if (isCastAvailable != forceEnabled) {
+          isCastAvailable = forceEnabled
+          Log.d(tag, "FORCE ENABLED for testing - Cast availability forced to: $forceEnabled")
+          emit("onCastAvailableUpdate", forceEnabled)
         }
       }
 
@@ -710,8 +715,11 @@ class AbsAudioPlayer : Plugin() {
 
       // Initial cast availability check
       castContext?.let { context ->
-        isCastAvailable = context.castState != CastState.NO_DEVICES_AVAILABLE
-        Log.d(tag, "Initial cast availability: $isCastAvailable (state: ${context.castState})")
+        val realAvailability = context.castState != CastState.NO_DEVICES_AVAILABLE
+        // TEMPORARY: Force Cast availability for testing
+        isCastAvailable = true  // Force enable for testing
+        Log.d(tag, "Initial cast availability: $realAvailability (state: ${context.castState})")
+        Log.d(tag, "FORCE ENABLED for testing - isCastAvailable set to: $isCastAvailable")
         emit("onCastAvailableUpdate", isCastAvailable)
       }
 
@@ -988,8 +996,8 @@ class AbsAudioPlayer : Plugin() {
     val amount:Int = call.getInt("value", 0) ?: 0
     Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekForward called with amount: $amount seconds")
     Handler(Looper.getMainLooper()).post {
-      Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekForward: Calling playerNotificationService.seekForward with ${amount * 1000L}ms")
-      playerNotificationService.seekForward(amount * 1000L) // convert to ms
+      Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekForward: Using working jumpForward method instead of broken seekForward")
+      playerNotificationService.jumpForward() // Use the working method that notification buttons use
       call.resolve()
     }
   }
@@ -999,8 +1007,8 @@ class AbsAudioPlayer : Plugin() {
     val amount:Int = call.getInt("value", 0) ?: 0 // Value in seconds
     Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekBackward called with amount: $amount seconds")
     Handler(Looper.getMainLooper()).post {
-      Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekBackward: Calling playerNotificationService.seekBackward with ${amount * 1000L}ms")
-      playerNotificationService.seekBackward(amount * 1000L) // convert to ms
+      Log.d("NUXT_SKIP_DEBUG", "AbsAudioPlayer.seekBackward: Using working jumpBackward method instead of broken seekBackward")
+      playerNotificationService.jumpBackward() // Use the working method that notification buttons use
       call.resolve()
     }
   }
