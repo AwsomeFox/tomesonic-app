@@ -1,11 +1,5 @@
 <template>
-  <div 
-    ref="card" 
-    :id="`series-card-${index}`" 
-    :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" 
-    class="material-3-card rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" 
-    @click="clickCard"
-  >
+  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
     <!-- Cover image container - fills entire card (first in DOM, lowest z-index) -->
     <div class="cover-container absolute inset-0 z-0">
       <!-- Loading placeholder -->
@@ -14,17 +8,7 @@
       </div>
 
       <!-- Group cover for series -->
-      <covers-group-cover
-        v-if="seriesMount && bookItems.length"
-        :id="seriesMount.id"
-        :name="seriesName"
-        :book-items="bookItems"
-        :width="width"
-        :height="height"
-        :book-cover-aspect-ratio="bookCoverAspectRatio"
-        class="w-full h-full"
-        @ready="imageReady = true"
-      />
+      <covers-group-cover v-if="seriesMount && bookItems.length" :id="seriesMount.id" :name="seriesName" :book-items="bookItems" :width="width" :height="height" :book-cover-aspect-ratio="bookCoverAspectRatio" class="w-full h-full" @ready="imageReady = true" />
 
       <!-- Material Symbol placeholder for empty series -->
       <div v-else-if="seriesMount" class="w-full h-full absolute inset-0 flex items-center justify-center bg-surface-container z-5">
@@ -67,23 +51,9 @@
       <div v-else class="relative rounded-full backdrop-blur-sm bg-surface-container bg-opacity-80 border-2 border-outline-variant border-opacity-40 shadow-elevation-3" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
         <!-- Background circle (subtle) -->
         <svg class="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-          <path
-            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-            fill="none"
-            stroke="rgba(var(--md-sys-color-outline-variant), 0.3)"
-            stroke-width="2"
-            stroke-dasharray="100, 100"
-          />
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(var(--md-sys-color-outline-variant), 0.3)" stroke-width="2" stroke-dasharray="100, 100" />
           <!-- Progress circle -->
-          <path
-            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-            fill="none"
-            stroke="rgb(var(--md-sys-color-primary))"
-            stroke-width="3"
-            stroke-linecap="round"
-            :stroke-dasharray="`${seriesProgressPercent * 100}, 100`"
-            class="transition-all duration-300 ease-out"
-          />
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgb(var(--md-sys-color-primary))" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${seriesProgressPercent * 100}, 100`" class="transition-all duration-300 ease-out" />
         </svg>
       </div>
     </div>
@@ -133,25 +103,23 @@ export default {
     },
     seriesProgressPercent() {
       if (!this.bookItems.length) return 0
-      
+
       let totalProgress = 0
       let booksWithProgress = 0
-      
-      this.bookItems.forEach(book => {
+
+      this.bookItems.forEach((book) => {
         if (book.userMediaProgress) {
           totalProgress += book.userMediaProgress.progress || 0
           booksWithProgress++
         }
       })
-      
+
       if (booksWithProgress === 0) return 0
       return totalProgress / booksWithProgress
     },
     seriesIsFinished() {
       if (!this.bookItems.length) return false
-      return this.bookItems.every(book => 
-        book.userMediaProgress && book.userMediaProgress.isFinished
-      )
+      return this.bookItems.every((book) => book.userMediaProgress && book.userMediaProgress.isFinished)
     }
   },
   methods: {

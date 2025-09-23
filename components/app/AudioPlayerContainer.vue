@@ -171,14 +171,14 @@ export default {
       // First check if serverLibraryItemId is already set
       let serverLibraryItemId = this.serverLibraryItemId
       let serverEpisodeId = this.serverEpisodeId
-      
+
       // If not set, try to get it from the current playback session
       if (!serverLibraryItemId && this.$store.state.currentPlaybackSession) {
         const playbackSession = this.$store.state.currentPlaybackSession
         serverLibraryItemId = playbackSession.libraryItemId
         serverEpisodeId = playbackSession.episodeId
       }
-      
+
       if (!serverLibraryItemId) {
         this.$toast.error(`Cannot cast locally downloaded media - no server equivalent found`)
       } else {

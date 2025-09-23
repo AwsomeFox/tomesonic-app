@@ -39,7 +39,7 @@ export default {
   mounted() {
     // Listen for entity count updates from LazyBookshelf
     this.$eventBus.$on('bookshelf-total-entities', this.onEntityCountUpdated)
-    
+
     // Check if we should default to playlists view based on route query or user preference
     if (this.$route.query.view === 'playlists' && this.userHasPlaylists) {
       this.currentView = 'playlists'
@@ -58,7 +58,7 @@ export default {
       if (this.currentView === 'collections') {
         this.collectionsLoaded = true
         this.hasCollections = totalEntities > 0
-        
+
         // If no collections and user has playlists, auto-switch to playlists
         if (!this.hasCollections && this.userHasPlaylists) {
           this.currentView = 'playlists'

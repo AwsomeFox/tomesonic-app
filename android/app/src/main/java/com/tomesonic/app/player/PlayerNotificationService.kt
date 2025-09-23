@@ -910,7 +910,7 @@ class PlayerNotificationService : MediaLibraryService() {
         // Calculate start position using the helper methods
         val startMediaItemIndex = audiobookMediaSourceBuilder.calculateStartMediaItemIndex(playbackSession)
         val startPositionMs = audiobookMediaSourceBuilder.calculateStartPositionInMediaItem(playbackSession)
-        
+
         Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Starting at MediaItem $startMediaItemIndex, position ${startPositionMs}ms")
         Log.d("NUXT_SKIP_DEBUG", "preparePlayer: POSITION_DEBUG - Absolute position: ${playbackSession.currentTimeMs}ms, Chapter-relative position: ${startPositionMs}ms")
 

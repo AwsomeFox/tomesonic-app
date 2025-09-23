@@ -1250,17 +1250,17 @@ class AbsAudioPlayer : Plugin() {
       activity.runOnUiThread {
         try {
           Log.d(tag, "Forcing cast device discovery by adding temporary callback")
-          
+
           // Create a temporary callback to trigger active discovery
           val discoveryCallback = object : MediaRouter.Callback() {
             override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
               Log.d(tag, "Discovery callback: Route added - ${route.name}")
             }
-            
+
             override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
               Log.d(tag, "Discovery callback: Route removed - ${route.name}")
             }
-            
+
             override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
               Log.d(tag, "Discovery callback: Route changed - ${route.name}")
             }
@@ -1268,8 +1268,8 @@ class AbsAudioPlayer : Plugin() {
 
           // Add callback with CALLBACK_FLAG_PERFORM_ACTIVE_SCAN to trigger discovery
           mediaRouter!!.addCallback(
-            mediaRouteSelector!!, 
-            discoveryCallback, 
+            mediaRouteSelector!!,
+            discoveryCallback,
             MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN
           )
 

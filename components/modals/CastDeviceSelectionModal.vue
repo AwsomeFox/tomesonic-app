@@ -112,10 +112,10 @@ export default {
       try {
         // First trigger active device discovery
         await this.$nativeHttp.refreshCastDevices()
-        
+
         // Wait a moment for discovery to find devices
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+
         // Then get the updated device list
         const response = await this.$nativeHttp.getCastDevices()
         if (response?.devices) {
