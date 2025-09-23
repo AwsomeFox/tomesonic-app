@@ -87,12 +87,12 @@ sync-version:
 version:
 	@node -e "console.log(require('./package.json').version)"
 
-# Bump patch version (e.g., 0.12.1-beta -> 0.12.2-beta) 
+# Bump patch version (e.g., 0.12.1-beta -> 0.12.2-beta)
 # Note: npm version patch on prerelease removes suffix, use bump-version for custom versions
 bump-patch:
 	@just bump-version patch
 
-# Bump minor version (e.g., 0.12.1-beta -> 0.13.0-beta)  
+# Bump minor version (e.g., 0.12.1-beta -> 0.13.0-beta)
 bump-minor:
 	@just bump-version minor
 
