@@ -13,7 +13,12 @@
     "ionic:build": "npm run build",
     "ionic:serve": "npm run dev",
     "devlive": "ionic cap run -l --external --port=1337",
-    "sync-version": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); const gradlePath = './android/app/build.gradle'; let gradle = fs.readFileSync(gradlePath, 'utf8'); gradle = gradle.replace(/versionName \\\"[^\\\"]*\\\"/g, 'versionName \\\"' + pkg.version + '\\\"'); fs.writeFileSync(gradlePath, gradle); console.log('✓ Synced version', pkg.version, 'to android/app/build.gradle');\""
+    "sync-version": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); const gradlePath = './android/app/build.gradle'; let gradle = fs.readFileSync(gradlePath, 'utf8'); gradle = gradle.replace(/versionName \\\"[^\\\"]*\\\"/g, 'versionName \\\"' + pkg.version + '\\\"'); fs.writeFileSync(gradlePath, gradle); console.log('✓ Synced version', pkg.version, 'to android/app/build.gradle');\"",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^7.1.0",
@@ -49,7 +54,9 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.3",
+    "@playwright/test": "^1.55.1",
     "autoprefixer": "^10.4.17",
+    "playwright": "^1.55.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17"
   }
