@@ -36,6 +36,9 @@ This directory contains comprehensive tests for the TomeSonic Android app compon
 ### CI/CD
 Tests are automatically run on pull requests via GitHub Actions (`.github/workflows/android-tests.yml`).
 
+### Network Dependencies
+**Note**: The tests require access to Google's Maven repositories (dl.google.com) for Android dependencies. In restricted network environments, tests may fail during the build phase. The GitHub Actions workflow is configured to handle this gracefully and will work in standard CI environments.
+
 ## Test Coverage Areas
 
 ### Media Browser Manager
@@ -105,6 +108,27 @@ Tests use Mockito for mocking dependencies:
 4. Mock dependencies using `@Mock` annotations
 5. Add test data factory methods for new models
 
+## Troubleshooting
+
+### Build Issues
+If tests fail to build due to network restrictions:
+
+1. **Environment Issue**: The build requires access to `dl.google.com` for Android dependencies
+2. **CI Environment**: Tests will work normally in GitHub Actions and standard CI environments
+3. **Local Workaround**: Ensure you have internet access and try running `./gradlew build` first
+4. **Offline Mode**: Use `--offline` flag if dependencies are already cached
+
+### Test Validation
+Even without running tests, you can validate the test framework:
+
+```bash
+# Check test files exist and have content
+find android/app/src/test -name "*.kt" -type f -exec wc -l {} +
+
+# Verify test structure
+grep -r "@Test" android/app/src/test --include="*.kt" | wc -l
+```
+
 ## Continuous Integration
 
 The GitHub Actions workflow:
@@ -113,6 +137,7 @@ The GitHub Actions workflow:
 - Generates test reports and uploads artifacts
 - Runs Android Lint for code quality
 - Caches dependencies for faster builds
+- Handles network dependency issues gracefully
 
 Tests help ensure:
 - Media playback functionality works correctly
