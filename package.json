@@ -14,11 +14,16 @@
     "ionic:serve": "npm run dev",
     "devlive": "ionic cap run -l --external --port=1337",
     "sync-version": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); const gradlePath = './android/app/build.gradle'; let gradle = fs.readFileSync(gradlePath, 'utf8'); gradle = gradle.replace(/versionName \\\"[^\\\"]*\\\"/g, 'versionName \\\"' + pkg.version + '\\\"'); fs.writeFileSync(gradlePath, gradle); console.log('✓ Synced version', pkg.version, 'to android/app/build.gradle');\"",
-    "test": "playwright test",
-    "test:headed": "playwright test --headed",
-    "test:ui": "playwright test --ui",
-    "test:debug": "playwright test --debug",
-    "test:report": "playwright show-report"
+    "test": "node scripts/test-runner.js",
+    "test:raw": "playwright test --project=chromium",
+    "test:all": "PLAYWRIGHT_ALL_BROWSERS=1 playwright test",
+    "test:headed": "playwright test --project=chromium --headed",
+    "test:ui": "playwright test --project=chromium --ui",
+    "test:debug": "playwright test --project=chromium --debug",
+    "test:report": "playwright show-report",
+    "test:install": "npx playwright install chromium",
+    "test:install-all": "npx playwright install",
+    "test:basic": "playwright test basic-functionality.spec.js --project=chromium"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^7.1.0",

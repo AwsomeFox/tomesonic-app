@@ -2,6 +2,56 @@
 
 This directory contains end-to-end tests for the TomeSonic Nuxt.js application using Playwright.
 
+## 🚀 Quick Start
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Install browser (required)
+npm run test:install
+
+# 3. Run tests
+npm run test
+```
+
+## 🔧 Troubleshooting "Tests Never Finish"
+
+If your tests hang or never complete, try these solutions in order:
+
+### Solution 1: Install Browsers
+```bash
+npm run test:install
+```
+
+### Solution 2: Run Basic Test First
+```bash
+npm run test:basic
+```
+
+### Solution 3: Manual Browser Installation
+```bash
+npx playwright install chromium --with-deps
+```
+
+### Solution 4: Check Environment
+```bash
+# Verify Playwright is working
+npx playwright --version
+
+# Check if browsers are installed
+ls ~/.cache/ms-playwright/
+
+# Test without dev server
+npx playwright test basic-functionality.spec.js
+```
+
+### Solution 5: Network Issues
+If browser downloads fail due to firewall/proxy:
+1. Check corporate network restrictions
+2. Try different network connection
+3. Use alternative installation methods in CI/CD
+
 ## Test Overview
 
 The test suite covers the following areas:

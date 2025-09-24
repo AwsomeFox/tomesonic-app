@@ -2,6 +2,81 @@
 
 This document provides instructions for setting up and running Playwright tests for the TomeSonic Nuxt.js application.
 
+## Quick Start
+
+### 1. Install Dependencies
+```bash
+npm install
+```
+
+### 2. Install Playwright Browser (Required)
+```bash
+# Install just Chromium (recommended for getting started)
+npm run test:install
+
+# OR install all browsers (takes longer)
+npm run test:install-all
+```
+
+### 3. Run Tests
+```bash
+# Basic test (Chromium only)
+npm run test
+
+# Test with visible browser (for debugging)
+npm run test:headed
+
+# Test all browsers (requires all browsers installed)
+npm run test:all
+```
+
+## Troubleshooting Common Issues
+
+### ❌ "Tests never finish" or "Tests hang"
+
+**Most likely cause**: Playwright browsers are not installed.
+
+**Solution**:
+```bash
+# Install just Chromium browser
+npm run test:install
+
+# Then try running tests again
+npm run test
+```
+
+**Alternative Solutions**:
+1. If the above doesn't work, try installing system dependencies:
+   ```bash
+   npx playwright install-deps
+   npm run test:install
+   ```
+
+2. Run tests without the dev server to isolate issues:
+   ```bash
+   npx playwright test basic-functionality.spec.js --config=playwright.config.minimal.js
+   ```
+
+### ❌ "Cannot find module '@playwright/test'"
+
+**Solution**: Reinstall dependencies
+```bash
+rm -rf node_modules package-lock.json
+npm install
+npm run test:install
+```
+
+### ❌ "Dev server failed to start"
+
+**Solution**: The tests will automatically start the Nuxt dev server, but if there are issues:
+```bash
+# Start dev server manually in another terminal
+npm run dev
+
+# Then run tests with reuse server option
+npm run test
+```
+
 ## Installation
 
 ### 1. Install Playwright package
