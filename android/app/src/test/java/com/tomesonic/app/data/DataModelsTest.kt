@@ -1,5 +1,6 @@
 package com.tomesonic.app.data
 
+import com.tomesonic.app.testutils.TestDataFactory
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -14,89 +15,72 @@ import kotlin.test.assertTrue
 class DataModelsTest {
 
     @Test
-    fun `LibraryItem initializes with default values`() {
-        val libraryItem = LibraryItem()
+    fun `LibraryItem initializes with proper values`() {
+        val libraryItem = TestDataFactory.createTestLibraryItem()
         
         assertNotNull(libraryItem)
-        assertEquals("", libraryItem.id)
-        assertEquals("", libraryItem.mediaType)
+        assertEquals("test-item-1", libraryItem.id)
+        assertEquals("book", libraryItem.mediaType)
+        assertEquals("Test Item", libraryItem.title)
     }
 
     @Test
     fun `LibraryItem with book media type`() {
-        val book = Book().apply {
-            title = "Test Book"
-            author = "Test Author"
+        val book = TestDataFactory.createTestBook(
+            title = "Test Book",
+            author = "Test Author",
             duration = 7200.0 // 2 hours
-        }
+        )
         
-        val libraryItem = LibraryItem().apply {
-            id = "book-1"
-            mediaType = "book"
+        val libraryItem = TestDataFactory.createTestLibraryItem(
+            id = "book-1",
+            mediaType = "book",
             media = book
-            title = "Test Book"
-        }
+        )
         
         assertEquals("book", libraryItem.mediaType)
         assertEquals("Test Book", libraryItem.title)
-        assertEquals("Test Book", (libraryItem.media as Book).title)
+        assertEquals("Test Book", (libraryItem.media as Book).metadata.title)
         assertEquals(7200.0, (libraryItem.media as Book).duration)
     }
 
     @Test
     fun `LibraryItem with podcast media type`() {
-        val podcast = Podcast().apply {
+        val podcast = TestDataFactory.createTestPodcast(
             title = "Test Podcast"
-            description = "A test podcast"
-        }
+        )
         
-        val libraryItem = LibraryItem().apply {
-            id = "podcast-1"
-            mediaType = "podcast"
+        val libraryItem = TestDataFactory.createTestLibraryItem(
+            id = "podcast-1",
+            mediaType = "podcast", 
             media = podcast
-            title = "Test Podcast"
-        }
+        )
         
         assertEquals("podcast", libraryItem.mediaType)
         assertEquals("Test Podcast", libraryItem.title)
-        assertEquals("Test Podcast", (libraryItem.media as Podcast).title)
+        assertEquals("Test Podcast", (libraryItem.media as Podcast).metadata.title)
     }
 
     @Test
     fun `Book with chapters`() {
-        val chapter1 = BookChapter().apply {
-            id = "ch1"
-            title = "Chapter 1"
-            startTime = 0.0
-            endTime = 1800.0 // 30 minutes
-        }
-        
-        val chapter2 = BookChapter().apply {
-            id = "ch2"
-            title = "Chapter 2"
-            startTime = 1800.0
-            endTime = 3600.0 // 30 minutes
-        }
-        
-        val book = Book().apply {
-            title = "Multi-Chapter Book"
-            chapters = listOf(chapter1, chapter2)
-        }
+        val book = TestDataFactory.createTestBook(
+            title = "Multi-Chapter Book",
+            numChapters = 2
+        )
         
         assertEquals(2, book.chapters?.size)
         assertEquals("Chapter 1", book.chapters?.get(0)?.title)
-        assertEquals(1800.0, book.chapters?.get(1)?.startTime)
+        assertEquals(1800.0, book.chapters?.get(1)?.start)
     }
 
     @Test
     fun `MediaProgress tracks playback state`() {
-        val progress = MediaProgress().apply {
-            id = "progress-1"
-            currentTime = 1500.0
-            progress = 0.25
-            duration = 6000.0
+        val progress = TestDataFactory.createTestMediaProgress(
+            currentTime = 1500.0,
+            progress = 0.25,
+            duration = 6000.0,
             isFinished = false
-        }
+        )
         
         assertEquals(0.25, progress.progress)
         assertEquals(1500.0, progress.currentTime)
@@ -106,53 +90,38 @@ class DataModelsTest {
 
     @Test
     fun `Library with statistics`() {
-        val stats = LibraryStats().apply {
-            totalItems = 100
-            totalAuthors = 25
-            totalGenres = 10
-            totalDuration = 360000.0 // 100 hours
-            numAudioFiles = 500
-        }
-        
-        val library = Library().apply {
-            id = "lib-1"
-            name = "Main Library"
-            mediaType = "book"
-            stats = stats
-        }
+        val library = TestDataFactory.createTestLibrary(
+            name = "Main Library",
+            mediaType = "book",
+            numItems = 100
+        )
         
         assertEquals("Main Library", library.name)
         assertEquals("book", library.mediaType)
         assertEquals(100, library.stats?.totalItems)
-        assertEquals(500, library.stats?.numAudioFiles)
+        assertEquals(1500, library.stats?.numAudioFiles)
     }
 
     @Test
     fun `LocalLibraryItem for offline content`() {
-        val localBook = Book().apply {
-            title = "Downloaded Book"
-            duration = 3600.0
-        }
-        
-        val localItem = LocalLibraryItem().apply {
-            id = "local-1"
+        val localItem = TestDataFactory.createTestLocalLibraryItem(
+            id = "local-1",
+            title = "Downloaded Book",
             mediaType = "book"
-            media = localBook
-            title = "Downloaded Book"
-        }
+        )
         
         assertEquals("book", localItem.mediaType)
         assertEquals("Downloaded Book", localItem.title)
-        assertEquals(3600.0, (localItem.media as Book).duration)
+        assertTrue(localItem.isLocal)
     }
 
     @Test
     fun `Collection groups library items`() {
-        val collection = Collection().apply {
-            id = "collection-1"
-            name = "Favorite Books"
+        val collection = TestDataFactory.createTestCollection(
+            id = "collection-1",
+            name = "Favorite Books",
             description = "My favorite books collection"
-        }
+        )
         
         assertEquals("collection-1", collection.id)
         assertEquals("Favorite Books", collection.name)
@@ -160,43 +129,59 @@ class DataModelsTest {
     }
 
     @Test
-    fun `UserProgress combines media progress and settings`() {
-        val userProgress = UserProgress().apply {
-            libraryItemId = "item-1"
-            currentTime = 2400.0
-            progress = 0.4
-            isFinished = false
-        }
-        
-        assertEquals("item-1", userProgress.libraryItemId)
-        assertEquals(0.4, userProgress.progress)
-        assertFalse(userProgress.isFinished)
-    }
-
-    @Test
     fun `PodcastEpisode with metadata`() {
-        val episode = PodcastEpisode().apply {
-            id = "ep-1"
-            title = "Episode 1"
-            description = "First episode"
-            duration = 2700.0 // 45 minutes
-            publishedAt = 1640995200000 // Jan 1, 2022
-        }
+        val podcast = TestDataFactory.createTestPodcast(
+            title = "Test Podcast",
+            numEpisodes = 1
+        )
         
+        val episode = podcast.episodes?.get(0)
+        assertNotNull(episode)
         assertEquals("Episode 1", episode.title)
-        assertEquals(2700.0, episode.duration)
-        assertEquals(1640995200000, episode.publishedAt)
+        assertEquals(2100.0, episode.duration) // 35 minutes
     }
 
     @Test
-    fun `Author with library reference`() {
-        val author = Author().apply {
-            id = "author-1"
+    fun `Author with proper data`() {
+        val author = TestDataFactory.createTestAuthor(
+            id = "author-1",
             name = "John Doe"
-            libraryId = "lib-1"
-        }
+        )
         
         assertEquals("John Doe", author.name)
-        assertEquals("lib-1", author.libraryId)
+        assertEquals("author-1", author.id)
+    }
+
+    @Test
+    fun `Book without chapters`() {
+        val book = TestDataFactory.createTestBook(
+            title = "No Chapter Book",
+            numChapters = 0
+        )
+        
+        assertTrue(book.chapters?.isEmpty() == true)
+    }
+
+    @Test
+    fun `Multiple library items can be created`() {
+        val items = TestDataFactory.createTestLibraryItems(3, "book")
+        
+        assertEquals(3, items.size)
+        assertEquals("Test Item 1", items[0].title)
+        assertEquals("Test Item 2", items[1].title)
+        assertEquals("Test Item 3", items[2].title)
+    }
+
+    @Test
+    fun `Android Auto test data structure`() {
+        val (libraries, libraryItems, collections) = TestDataFactory.createAndroidAutoTestData()
+        
+        assertEquals(2, libraries.size)
+        assertEquals(3, libraryItems.size)
+        assertEquals(2, collections.size)
+        
+        // Verify library types
+        assertTrue(libraries.any { it.mediaType == "book" })
+        assertTrue(libraries.any { it.mediaType == "podcast" })
     }
 }

@@ -9,6 +9,7 @@ import com.tomesonic.app.media.MediaManager
 import com.tomesonic.app.player.MediaBrowserManager
 import com.tomesonic.app.player.PlayerNotificationService
 import com.tomesonic.app.server.ApiHandler
+import com.tomesonic.app.testutils.TestDataFactory
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -56,27 +57,20 @@ class TomesonicIntegrationTest {
 
     @Test
     fun libraryItemCreationTest() {
-        // Test creating various library items
-        val book = Book().apply {
-            title = "Integration Test Book"
-            author = "Test Author"
-            duration = 7200.0
-            chapters = listOf(
-                BookChapter().apply {
-                    id = "ch1"
-                    title = "Chapter 1"
-                    startTime = 0.0
-                    endTime = 3600.0
-                }
-            )
-        }
+        // Test creating various library items using test factory
+        val book = TestDataFactory.createTestBook(
+            title = "Integration Test Book",
+            author = "Test Author",
+            duration = 7200.0,
+            numChapters = 1
+        )
         
-        val libraryItem = LibraryItem().apply {
-            id = "test-book-1"
-            mediaType = "book"
+        val libraryItem = TestDataFactory.createTestLibraryItem(
+            id = "test-book-1",
+            title = book.metadata.title,
+            mediaType = "book",
             media = book
-            title = book.title
-        }
+        )
         
         assertEquals("book", libraryItem.mediaType)
         assertEquals("Integration Test Book", libraryItem.title)
@@ -85,30 +79,17 @@ class TomesonicIntegrationTest {
 
     @Test
     fun podcastCreationTest() {
-        val episode1 = PodcastEpisode().apply {
-            id = "ep1"
-            title = "Episode 1"
-            duration = 1800.0
-        }
+        val podcast = TestDataFactory.createTestPodcast(
+            title = "Integration Test Podcast",
+            numEpisodes = 2
+        )
         
-        val episode2 = PodcastEpisode().apply {
-            id = "ep2"
-            title = "Episode 2"
-            duration = 2100.0
-        }
-        
-        val podcast = Podcast().apply {
-            title = "Integration Test Podcast"
-            description = "A test podcast for integration testing"
-            episodes = listOf(episode1, episode2)
-        }
-        
-        val libraryItem = LibraryItem().apply {
-            id = "test-podcast-1"
-            mediaType = "podcast"
+        val libraryItem = TestDataFactory.createTestLibraryItem(
+            id = "test-podcast-1",
+            title = podcast.metadata.title,
+            mediaType = "podcast",
             media = podcast
-            title = podcast.title
-        }
+        )
         
         assertEquals("podcast", libraryItem.mediaType)
         assertEquals(2, (libraryItem.media as Podcast).episodes?.size)
@@ -117,14 +98,13 @@ class TomesonicIntegrationTest {
     @Test
     fun mediaProgressTrackingTest() {
         // Test media progress tracking functionality
-        val progress = MediaProgress().apply {
-            id = "progress-1"
-            libraryItemId = "test-item"
-            currentTime = 1500.0
-            progress = 0.25
-            duration = 6000.0
+        val progress = TestDataFactory.createTestMediaProgress(
+            libraryItemId = "test-item",
+            currentTime = 1500.0,
+            progress = 0.25,
+            duration = 6000.0,
             isFinished = false
-        }
+        )
         
         assertEquals("test-item", progress.libraryItemId)
         assertEquals(0.25, progress.progress)
@@ -133,32 +113,24 @@ class TomesonicIntegrationTest {
 
     @Test
     fun libraryStatsTest() {
-        val stats = LibraryStats().apply {
-            totalItems = 50
-            totalAuthors = 15
-            totalGenres = 8
-            totalDuration = 180000.0
-            numAudioFiles = 200
-        }
-        
-        val library = Library().apply {
-            id = "integration-lib"
-            name = "Integration Test Library"
-            mediaType = "book"
-            stats = stats
-        }
+        val library = TestDataFactory.createTestLibrary(
+            id = "integration-lib",
+            name = "Integration Test Library",
+            mediaType = "book",
+            numItems = 50
+        )
         
         assertEquals(50, library.stats?.totalItems)
-        assertEquals(200, library.stats?.numAudioFiles)
+        assertEquals(750, library.stats?.numAudioFiles)
     }
 
     @Test
     fun collectionManagementTest() {
-        val collection = Collection().apply {
-            id = "test-collection"
-            name = "Integration Test Collection"
+        val collection = TestDataFactory.createTestCollection(
+            id = "test-collection",
+            name = "Integration Test Collection",
             description = "Collection for testing"
-        }
+        )
         
         assertEquals("test-collection", collection.id)
         assertEquals("Integration Test Collection", collection.name)
@@ -167,35 +139,15 @@ class TomesonicIntegrationTest {
     @Test
     fun localLibraryItemTest() {
         // Test local (downloaded) content handling
-        val localBook = Book().apply {
-            title = "Downloaded Book"
-            duration = 4500.0
-        }
-        
-        val localItem = LocalLibraryItem().apply {
-            id = "local-book-1"
+        val localItem = TestDataFactory.createTestLocalLibraryItem(
+            id = "local-book-1",
+            title = "Downloaded Book",
             mediaType = "book"
-            media = localBook
-            title = localBook.title
-        }
+        )
         
         assertEquals("book", localItem.mediaType)
         assertEquals("Downloaded Book", localItem.title)
-    }
-
-    @Test
-    fun userProgressTest() {
-        val userProgress = UserProgress().apply {
-            libraryItemId = "test-book"
-            currentTime = 3000.0
-            progress = 0.6
-            isFinished = false
-            lastUpdate = System.currentTimeMillis()
-        }
-        
-        assertEquals("test-book", userProgress.libraryItemId)
-        assertEquals(0.6, userProgress.progress)
-        assertTrue(userProgress.lastUpdate > 0)
+        assertTrue(localItem.isLocal)
     }
 
     @Test
@@ -203,12 +155,12 @@ class TomesonicIntegrationTest {
         // Test MediaManager with some mock data
         val mediaManager = MediaManager(apiHandler, context)
         
-        // Mock some library data
-        val library = Library().apply {
-            id = "mock-lib-1"
-            name = "Mock Library"
+        // Mock some library data using test factory
+        val library = TestDataFactory.createTestLibrary(
+            id = "mock-lib-1",
+            name = "Mock Library",
             mediaType = "book"
-        }
+        )
         
         mediaManager.serverLibraries.add(library)
         
@@ -218,13 +170,29 @@ class TomesonicIntegrationTest {
 
     @Test
     fun authorDataTest() {
-        val author = Author().apply {
-            id = "author-1"
+        val author = TestDataFactory.createTestAuthor(
+            id = "author-1",
             name = "John Smith"
-            libraryId = "lib-1"
-        }
+        )
         
         assertEquals("John Smith", author.name)
-        assertEquals("lib-1", author.libraryId)
+        assertEquals("author-1", author.id)
+    }
+
+    @Test
+    fun androidAutoTestDataIntegration() {
+        val (libraries, libraryItems, collections) = TestDataFactory.createAndroidAutoTestData()
+        
+        // Verify the data structure is correct
+        assertEquals(2, libraries.size)
+        assertEquals(3, libraryItems.size)
+        assertEquals(2, collections.size)
+        
+        // Test that we have both book and podcast libraries
+        val bookLibraries = libraries.filter { it.mediaType == "book" }
+        val podcastLibraries = libraries.filter { it.mediaType == "podcast" }
+        
+        assertEquals(1, bookLibraries.size)
+        assertEquals(1, podcastLibraries.size)
     }
 }
