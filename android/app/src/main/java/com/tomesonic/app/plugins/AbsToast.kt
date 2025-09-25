@@ -19,24 +19,7 @@ class AbsToast : Plugin() {
         val duration = call.getString("duration", "short") ?: "short"
         val position = call.getString("position", "bottom") ?: "bottom"
 
-        val toastDuration = when (duration.lowercase()) {
-            "long" -> Toast.LENGTH_LONG
-            else -> Toast.LENGTH_SHORT
-        }
-
-        activity.runOnUiThread {
-            val toast = Toast.makeText(context, message, toastDuration)
-
-            // Set toast position if specified
-            when (position.lowercase()) {
-                "top" -> toast.setGravity(android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
-                "center" -> toast.setGravity(android.view.Gravity.CENTER, 0, 0)
-                "bottom" -> toast.setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
-            }
-
-            toast.show()
-        }
-
+        showToastWithMessage(message, duration, position)
         call.resolve()
     }
 
@@ -50,7 +33,7 @@ class AbsToast : Plugin() {
         val duration = call.getString("duration", "short") ?: "short"
         val prefixedMessage = "✓ $message"
 
-        showToastWithMessage(prefixedMessage, duration)
+        showToastWithMessage(prefixedMessage, duration, "bottom")
         call.resolve()
     }
 
@@ -64,7 +47,7 @@ class AbsToast : Plugin() {
         val duration = call.getString("duration", "short") ?: "short"
         val prefixedMessage = "✗ $message"
 
-        showToastWithMessage(prefixedMessage, duration)
+        showToastWithMessage(prefixedMessage, duration, "bottom")
         call.resolve()
     }
 
@@ -78,7 +61,7 @@ class AbsToast : Plugin() {
         val duration = call.getString("duration", "short") ?: "short"
         val prefixedMessage = "⚠ $message"
 
-        showToastWithMessage(prefixedMessage, duration)
+        showToastWithMessage(prefixedMessage, duration, "bottom")
         call.resolve()
     }
 
@@ -92,11 +75,11 @@ class AbsToast : Plugin() {
         val duration = call.getString("duration", "short") ?: "short"
         val prefixedMessage = "ℹ $message"
 
-        showToastWithMessage(prefixedMessage, duration)
+        showToastWithMessage(prefixedMessage, duration, "bottom")
         call.resolve()
     }
 
-    private fun showToastWithMessage(message: String, duration: String) {
+    private fun showToastWithMessage(message: String, duration: String, position: String = "bottom") {
         val toastDuration = when (duration.lowercase()) {
             "long" -> Toast.LENGTH_LONG
             else -> Toast.LENGTH_SHORT
@@ -104,7 +87,15 @@ class AbsToast : Plugin() {
 
         activity.runOnUiThread {
             val toast = Toast.makeText(context, message, toastDuration)
-            toast.setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
+
+            // Set toast position if specified
+            when (position.lowercase()) {
+                "top" -> toast.setGravity(android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
+                "center" -> toast.setGravity(android.view.Gravity.CENTER, 0, 0)
+                "bottom" -> toast.setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
+                else -> toast.setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
+            }
+
             toast.show()
         }
     }
