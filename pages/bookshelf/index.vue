@@ -1,7 +1,7 @@
 <template>
   <div class="w-full h-full min-h-full relative">
     <!-- Proper-sized Material 3 skeleton cards to match actual book card dimensions -->
-    <div v-if="isLoading && !shelves.length" class="w-full px-4 py-4">
+    <div v-if="showingSkeleton" class="w-full px-4 py-4">
       <div class="grid grid-cols-2 gap-8">
         <div
           v-for="n in 8"
@@ -51,9 +51,10 @@ export default {
       lastServerFetchLibraryId: null,
       lastLocalFetch: 0,
       localLibraryItems: [],
-      isLoading: false,
+      isLoading: true,
       isFetchingCategories: false,
-      firstLoad: true
+      firstLoad: true,
+      showingSkeleton: true
     }
   },
   watch: {
@@ -179,21 +180,7 @@ export default {
         }
       })
 
-      // Local continue listening shelves, only shown offline
-      if (booksContinueListening.length) {
-        categories.push({
-          id: 'local-books-continue',
-          label: this.$strings.LabelContinueBooks,
-          type: 'book',
-          localOnly: true,
-          entities: booksContinueListening.sort((a, b) => {
-            if (a.progress && b.progress) {
-              return b.progress.lastUpdate > a.progress.lastUpdate ? 1 : -1
-            }
-            return 0
-          })
-        })
-      }
+      // Continue listening episodes shelf (podcasts only)
       if (podcastEpisodesContinueListening.length) {
         categories.push({
           id: 'local-episodes-continue',
@@ -209,13 +196,24 @@ export default {
         })
       }
 
-      // Local books and local podcast shelves
+      // Merged local books shelf (continue listening books first, then other local books)
       if (books.length) {
-        categories.push({
-          id: 'local-books',
-          label: this.$strings.LabelLocalBooks,
-          type: 'book',
-          entities: books.sort((a, b) => {
+        // Get books that are NOT in continue listening (no progress or finished)
+        const otherBooks = books.filter(book => {
+          return !book.progress || book.progress.isFinished || book.progress.progress === 0
+        })
+
+        // Combine continue listening books first, then other books
+        const allBooksEntities = [
+          // Continue listening books sorted by most recent activity
+          ...booksContinueListening.sort((a, b) => {
+            if (a.progress && b.progress) {
+              return b.progress.lastUpdate > a.progress.lastUpdate ? 1 : -1
+            }
+            return 0
+          }),
+          // Other books sorted with finished books at the end
+          ...otherBooks.sort((a, b) => {
             if (a.progress && a.progress.isFinished) return 1
             else if (b.progress && b.progress.isFinished) return -1
             else if (a.progress && b.progress) {
@@ -223,6 +221,13 @@ export default {
             }
             return 0
           })
+        ]
+
+        categories.push({
+          id: 'local-books',
+          label: this.$strings.LabelLocalBooks,
+          type: 'book',
+          entities: allBooksEntities
         })
       }
       if (podcasts.length) {
@@ -270,24 +275,22 @@ export default {
           }
         }
 
+        // Only show skeleton if we have no content yet, otherwise keep existing content during load
+        if (!this.shelves.length) {
+          this.showingSkeleton = true
+        }
         this.isLoading = true
 
-        // Set local library items first. On first overall app load we keep the
-        // skeleton visible and defer immediately rendering local shelves until the
-        // server timeout; for subsequent loads, render local shelves immediately.
+        // Set local library items first. On all loads, wait for server response or timeout
+        // before showing local shelves to prevent flash of local content.
         this.localLibraryItems = await this.$db.getLocalLibraryItems()
         const localCategories = this.getLocalMediaItemCategories()
-        if (!this.firstLoad) {
-          this.shelves = localCategories
-          console.log('[categories] Local shelves set (subsequent render)', this.shelves.length, this.lastLocalFetch)
-        } else {
-          console.log('[categories] Local categories computed (first load)', localCategories.length, this.lastLocalFetch)
-        }
+        console.log('[categories] Local categories computed', localCategories.length, this.lastLocalFetch)
 
         if (isConnectedToServerWithInternet) {
-          // Perform the server request but wait a short time before forcing a
+          // Perform the server request but wait 5 seconds before forcing a
           // fallback so local shelves remain visible and we avoid a flash.
-          const serverTimeoutMs = 2500
+          const serverTimeoutMs = 5000
           const serverRequest = this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/personalized?minified=1&include=rssfeed,numEpisodesIncomplete`, { connectTimeout: 10000 }).catch((error) => {
             console.error('[categories] Failed to fetch categories', error)
             return []
@@ -299,15 +302,66 @@ export default {
           // If timed out, categoriesOrTimeout === '__timeout__', otherwise it's the categories array
           let categories = categoriesOrTimeout === '__timeout__' ? null : categoriesOrTimeout
 
-          // If server hasn't responded yet, keep local shelves visible; we'll await the final server result
+          // If server hasn't responded within 5 seconds, show local shelves and await final server result in background
           if (categories === null) {
-            console.log('[categories] Server request timed out, keeping local shelves visible and waiting in background')
+            console.log('[categories] Server request timed out, showing local shelves and waiting in background')
+            // Show local shelves immediately since server timed out
+            this.shelves = localCategories
+            this.showingSkeleton = false
+            this.isLoading = false
+            // Show toast notification that we're using local data while server request continues
+            this.$toast.info(this.$strings.MessageUsingLocalDataServerSlow || 'Using local data while server loads')
             // Continue to await the actual server request in background
             try {
               categories = await serverRequest
+              // If server eventually responds, merge the data
+              if (categories && categories.length) {
+                const serverCats = categories.map((cat) => {
+                  if (cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') {
+                    cat.entities = cat.entities.map((entity) => {
+                      const localLibraryItem = this.localLibraryItems.find((lli) => {
+                        return lli.libraryItemId == entity.id
+                      })
+                      if (localLibraryItem) {
+                        entity.localLibraryItem = localLibraryItem
+                      }
+                      return entity
+                    })
+                  }
+                  return cat
+                })
+
+                // Merge server results with already-visible local shelves
+                const merged = []
+                serverCats.forEach((scat) => {
+                  const existing = this.shelves.find((s) => s && s.id === scat.id)
+                  if (existing) {
+                    existing.label = scat.label
+                    existing.type = scat.type
+                    existing._updating = true
+                    existing.entities = scat.entities
+                    merged.push(existing)
+                  } else {
+                    merged.push(scat)
+                  }
+                })
+
+                const localShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType)
+                merged.push(...localShelves)
+
+                this.shelves = merged
+                setTimeout(() => {
+                  this.shelves.forEach((s) => {
+                    if (s && s._updating) s._updating = false
+                  })
+                }, 700)
+                this.firstLoad = false
+                console.log('[categories] Server shelves merged after timeout', this.shelves.length, this.lastServerFetch)
+              }
             } catch (err) {
-              categories = []
+              console.log('[categories] Server request failed after timeout, keeping local shelves')
             }
+            return
           }
 
           if (!categories || !categories.length) {
@@ -316,6 +370,7 @@ export default {
             this.lastServerFetch = 0
             this.lastLocalFetch = Date.now()
             this.shelves = localCategories
+            this.showingSkeleton = false
             this.isLoading = false
             console.log('[categories] Local shelves set from failure', this.shelves.length, this.lastLocalFetch)
             return
@@ -360,6 +415,7 @@ export default {
 
           // Replace shelves with merged result (many objects are the same references so DOM won't flash)
           this.shelves = merged
+          this.showingSkeleton = false
           // Clear updating flags after the shelf animation finishes
           setTimeout(() => {
             this.shelves.forEach((s) => {
@@ -372,10 +428,23 @@ export default {
         } else {
           // When offline, show local categories including local-only shelves
           console.log('[categories] Offline - showing local shelves only')
-          this.shelves = localCategories
-          this.isLoading = false
-          this.firstLoad = false
-          console.log('[categories] Local shelves set (offline)', this.shelves.length, this.lastLocalFetch)
+
+          if (this.firstLoad) {
+            // On first load when offline, show skeleton briefly before showing local books
+            setTimeout(() => {
+              this.shelves = localCategories
+              this.showingSkeleton = false
+              this.isLoading = false
+              this.firstLoad = false
+              console.log('[categories] Local shelves set (offline after brief delay)', this.shelves.length, this.lastLocalFetch)
+            }, 500)
+          } else {
+            // On subsequent loads when offline, show local books immediately
+            this.shelves = localCategories
+            this.showingSkeleton = false
+            this.isLoading = false
+            console.log('[categories] Local shelves set (offline)', this.shelves.length, this.lastLocalFetch)
+          }
         }
       } finally {
         this.isFetchingCategories = false
@@ -384,6 +453,11 @@ export default {
     libraryChanged() {
       if (this.currentLibraryId) {
         console.log(`[categories] libraryChanged so fetching categories`)
+        // Reset loading state when library changes
+        this.showingSkeleton = true
+        this.isLoading = true
+        this.firstLoad = true
+        this.shelves = []
         this.fetchCategories()
       }
     },

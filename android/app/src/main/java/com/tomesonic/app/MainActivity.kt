@@ -36,7 +36,7 @@ import com.tomesonic.app.plugins.AbsDatabase
 import com.tomesonic.app.plugins.AbsDownloader
 import com.tomesonic.app.plugins.AbsFileSystem
 import com.tomesonic.app.plugins.AbsLogger
-// import com.tomesonic.app.plugins.AbsToast
+import com.tomesonic.app.plugins.AbsToast
 import com.tomesonic.app.plugins.DynamicColorPlugin
 import com.getcapacitor.BridgeActivity
 
@@ -67,7 +67,7 @@ class MainActivity : BridgeActivity() {
     registerPlugin(AbsFileSystem::class.java)
     registerPlugin(AbsDatabase::class.java)
     registerPlugin(AbsLogger::class.java)
-    // registerPlugin(AbsToast::class.java)
+    registerPlugin(AbsToast::class.java)
     registerPlugin(DynamicColorPlugin::class.java)
 
     super.onCreate(savedInstanceState)
