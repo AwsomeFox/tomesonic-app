@@ -73,31 +73,11 @@ jobs:
           sed -i "s/__DATE__/$(date)/g" index.html
           sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/g" index.html
           sed -i "s/__APK__/$(ls *apk)/g" index.html
-
-          # Create a README.md file to explain the GitHub Pages deployment
-          cat > README.md << 'EOL'
-# TomeSonic GitHub Pages
-
-This directory contains:
-1. The latest test build of the TomeSonic app
-2. Documentation for the TomeSonic project
-
-## Test Build
-
-The latest test build is automatically generated from the master branch. This is intended for testing purposes only.
-
-## Documentation
-
-The documentation in this directory is preserved during deployments and includes:
-- Privacy Policy
-- Feature Graphics Template
-- Other documentation files from the `/docs` directory
-EOL
-
-          # Add dynamic content to the README
-          echo "" >> README.md
-          echo "Last updated: $(date)" >> README.md
-          echo "Commit: $(git rev-parse --short HEAD)" >> README.md
+          
+          # Copy the README template and add dynamic content
+          cp ../.github/README-template.md README.md
+          # Use double quotes to allow newline interpretation in the replacement
+          sed -i "s|<!-- DYNAMIC_CONTENT -->|Last updated: $(date)\\nCommit: $(git rev-parse --short HEAD)|g" README.md
 
       - name: upload test page artifact
         uses: actions/upload-pages-artifact@v3
