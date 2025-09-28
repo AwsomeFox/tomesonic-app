@@ -47,10 +47,25 @@ jobs:
 
       - name: prepare test page ressources
         run: |
+          # Create the deployment directory
           mkdir ghpages
+          
+          # Copy test app files
           cp android/app/build/outputs/apk/debug/*apk ghpages/
           cp static/Logo.png ghpages/logo.png
           cp .github/testing-page-template.html ghpages/index.html
+          
+          # Preserve existing documentation from the docs directory
+          if [ -d "docs" ] && [ "$(ls -A docs)" ]; then
+            echo "Copying documentation from docs directory..."
+            cp -r docs/* ghpages/
+          else
+            echo "No documentation found in docs directory."
+          fi
+          
+          # List the contents of the deployment directory
+          echo "Contents of ghpages directory:"
+          ls -la ghpages/
 
       - name: build test page
         working-directory: ghpages
@@ -58,6 +73,29 @@ jobs:
           sed -i "s/__DATE__/$(date)/g" index.html
           sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/g" index.html
           sed -i "s/__APK__/$(ls *apk)/g" index.html
+          
+          # Create a README.md file to explain the GitHub Pages deployment
+          cat > README.md << EOF
+# TomeSonic GitHub Pages
+
+This directory contains:
+1. The latest test build of the TomeSonic app
+2. Documentation for the TomeSonic project
+
+## Test Build
+
+The latest test build is automatically generated from the master branch. This is intended for testing purposes only.
+
+## Documentation
+
+The documentation in this directory is preserved during deployments and includes:
+- Privacy Policy
+- Feature Graphics Template
+- Other documentation files from the \`/docs\` directory
+
+Last updated: $(date)
+Commit: $(git rev-parse --short HEAD)
+EOF
 
       - name: upload test page artifact
         uses: actions/upload-pages-artifact@v3

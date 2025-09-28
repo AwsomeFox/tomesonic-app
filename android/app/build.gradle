@@ -47,8 +47,8 @@ android {
     applicationId "com.tomesonic.app"
     minSdkVersion rootProject.ext.minSdkVersion
     targetSdkVersion rootProject.ext.targetSdkVersion
-    versionCode 115
-    versionName "0.12.3-beta"
+    versionCode 117
+    versionName "0.12.4-beta"
     testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     manifestPlaceholders = [
       "appAuthRedirectScheme": "com.tomesonic.app"
