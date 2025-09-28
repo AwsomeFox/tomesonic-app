@@ -45,39 +45,101 @@ jobs:
           name="audiobookshelf-${build}.apk"
           mv -v app-debug.apk "${name}"
 
-      - name: prepare test page ressources
+      - name: prepare GitHub Pages resources
         run: |
-          # Create the deployment directory
-          mkdir ghpages
-
-          # Copy test app files
-          cp android/app/build/outputs/apk/debug/*apk ghpages/
-          cp static/Logo.png ghpages/logo.png
-          cp .github/testing-page-template.html ghpages/index.html
-
-          # Preserve existing documentation from the docs directory
+          # Create the main deployment directory
+          mkdir -p ghpages
+          
+          # Create subdirectories for organized structure
+          mkdir -p ghpages/test
+          mkdir -p ghpages/docs
+          
+          # Set up the test page directory
+          cp android/app/build/outputs/apk/debug/*apk ghpages/test/
+          cp static/Logo.png ghpages/test/logo.png
+          cp .github/testing-page-template.html ghpages/test/index.html
+          
+          # Copy documentation to the docs directory
           if [ -d "docs" ] && [ "$(ls -A docs)" ]; then
             echo "Copying documentation from docs directory..."
-            cp -r docs/* ghpages/
+            cp -r docs/* ghpages/docs/
           else
             echo "No documentation found in docs directory."
           fi
-
+          
+          # Create index files for the docs directory if they don't exist
+          if [ ! -f "ghpages/docs/index.html" ]; then
+            echo "Creating docs index.html..."
+            cat > ghpages/docs/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TomeSonic Documentation</title>
+  <style>
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem; }
+    h1 { color: #333; }
+    a { color: #0066cc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .file-list { margin-top: 1rem; }
+    .file-list li { margin-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>TomeSonic Documentation</h1>
+  <p>Available documentation:</p>
+  <ul class="file-list">
+    <li><a href="privacy-policy.html">Privacy Policy</a></li>
+    <li><a href="feature-graphic-template.html">Feature Graphic Template</a></li>
+  </ul>
+  <p><a href="/">Back to Home</a></p>
+</body>
+</html>
+EOF
+          fi
+          
           # List the contents of the deployment directory
           echo "Contents of ghpages directory:"
           ls -la ghpages/
+          echo "Contents of test directory:"
+          ls -la ghpages/test/
+          echo "Contents of docs directory:"
+          ls -la ghpages/docs/
 
-      - name: build test page
-        working-directory: ghpages
+      - name: build pages
         run: |
+          # Update the test page
+          cd ghpages/test
           sed -i "s/__DATE__/$(date)/g" index.html
           sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/g" index.html
           sed -i "s/__APK__/$(ls *apk)/g" index.html
           
-          # Copy the README template and add dynamic content
-          cp ../.github/README-template.md README.md
-          # Use double quotes to allow newline interpretation in the replacement
+          # Create test directory README
+          cp ../../.github/TEST-README-template.md README.md
+          # Add dynamic content to test README
           sed -i "s|<!-- DYNAMIC_CONTENT -->|Last updated: $(date)\\nCommit: $(git rev-parse --short HEAD)|g" README.md
+          
+          # Create root README
+          cd ../..
+          cp .github/ROOT-README-template.md ghpages/README.md
+          # Add dynamic content to root README
+          sed -i "s|<!-- DYNAMIC_CONTENT -->|\\n\\n---\\n\\nLast updated: $(date)\\nCommit: $(git rev-parse --short HEAD)|g" ghpages/README.md
+          
+          # Create root index.html that redirects to README.md
+          cat > ghpages/index.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="0;url=https://github.com/AwsomeFox/audiobookshelf-app">
+  <title>TomeSonic</title>
+</head>
+<body>
+  <p>Redirecting to <a href="https://github.com/AwsomeFox/audiobookshelf-app">GitHub Repository</a>...</p>
+</body>
+</html>
+EOF
 
       - name: upload test page artifact
         uses: actions/upload-pages-artifact@v3
