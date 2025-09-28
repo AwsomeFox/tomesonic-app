@@ -49,12 +49,12 @@ jobs:
         run: |
           # Create the deployment directory
           mkdir ghpages
-          
+
           # Copy test app files
           cp android/app/build/outputs/apk/debug/*apk ghpages/
           cp static/Logo.png ghpages/logo.png
           cp .github/testing-page-template.html ghpages/index.html
-          
+
           # Preserve existing documentation from the docs directory
           if [ -d "docs" ] && [ "$(ls -A docs)" ]; then
             echo "Copying documentation from docs directory..."
@@ -62,7 +62,7 @@ jobs:
           else
             echo "No documentation found in docs directory."
           fi
-          
+
           # List the contents of the deployment directory
           echo "Contents of ghpages directory:"
           ls -la ghpages/
@@ -73,9 +73,9 @@ jobs:
           sed -i "s/__DATE__/$(date)/g" index.html
           sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/g" index.html
           sed -i "s/__APK__/$(ls *apk)/g" index.html
-          
+
           # Create a README.md file to explain the GitHub Pages deployment
-          cat > README.md << EOF
+          cat > README.md << 'EOL'
 # TomeSonic GitHub Pages
 
 This directory contains:
@@ -91,11 +91,13 @@ The latest test build is automatically generated from the master branch. This is
 The documentation in this directory is preserved during deployments and includes:
 - Privacy Policy
 - Feature Graphics Template
-- Other documentation files from the \`/docs\` directory
+- Other documentation files from the `/docs` directory
+EOL
 
-Last updated: $(date)
-Commit: $(git rev-parse --short HEAD)
-EOF
+          # Add dynamic content to the README
+          echo "" >> README.md
+          echo "Last updated: $(date)" >> README.md
+          echo "Commit: $(git rev-parse --short HEAD)" >> README.md
 
       - name: upload test page artifact
         uses: actions/upload-pages-artifact@v3
