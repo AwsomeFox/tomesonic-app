@@ -70,8 +70,7 @@ jobs:
           # Create index files for the docs directory if they don't exist
           if [ ! -f "ghpages/docs/index.html" ]; then
             echo "Creating docs index.html..."
-            cp ../.github/docs-index-template.html ghpages/docs/index.html
-          fi
+            cp .github/docs-index-template.html ghpages/docs/index.html || cp ${ROOT_DIR}/.github/docs-index-template.html ghpages/docs/index.html
           fi
 
           # List the contents of the deployment directory
@@ -82,25 +81,37 @@ jobs:
           echo "Contents of docs directory:"
           ls -la ghpages/docs/
 
+      - name: debug directories
+        run: |
+          echo "Current directory: $(pwd)"
+          echo "Template files in .github directory:"
+          ls -la .github/
+          echo "Contents of workspace root:"
+          ls -la
+
       - name: build pages
         run: |
+          # Save the absolute path to the root directory
+          ROOT_DIR=$(pwd)
           # Update the test page
           cd ghpages/test
           sed -i "s/__DATE__/$(date)/g" index.html
           sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/g" index.html
           sed -i "s/__APK__/$(ls *apk)/g" index.html
-          
+
           # Create test directory README
-          cp ../../.github/TEST-README-template.md README.md
+          cp ${ROOT_DIR}/.github/TEST-README-template.md README.md
           # Add dynamic content to test README
           sed -i "s|<!-- DYNAMIC_CONTENT -->|Last updated: $(date)\\nCommit: $(git rev-parse --short HEAD)|g" README.md
           cd ..
-          
+
           # Create root README (from the ghpages directory)
-          cp ../.github/ROOT-README-template.md README.md
+          cp ${ROOT_DIR}/.github/ROOT-README-template.md README.md
           # Add dynamic content to root README
-          sed -i "s|<!-- DYNAMIC_CONTENT -->|\\n\\n---\\n\\nLast updated: $(date)\\nCommit: $(git rev-parse --short HEAD)|g" README.md          # Create root index.html that redirects to the GitHub repository
-          cp .github/root-index-template.html ghpages/index.html
+          sed -i "s|<!-- DYNAMIC_CONTENT -->|\\n\\n---\\n\\nLast updated: $(date)\\nCommit: $(git rev-parse --short HEAD)|g" README.md
+          
+          # Create root index.html that redirects to the GitHub repository
+          cp ${ROOT_DIR}/.github/root-index-template.html index.html
 
       - name: upload test page artifact
         uses: actions/upload-pages-artifact@v3
