@@ -109,7 +109,7 @@ jobs:
           cp ${ROOT_DIR}/.github/ROOT-README-template.md README.md
           # Add dynamic content to root README
           sed -i "s|<!-- DYNAMIC_CONTENT -->|\\n\\n---\\n\\nLast updated: $(date)\\nCommit: $(git rev-parse --short HEAD)|g" README.md
-          
+
           # Create root index.html that redirects to the GitHub repository
           cp ${ROOT_DIR}/.github/root-index-template.html index.html
 

@@ -308,9 +308,10 @@ class AbsAudioPlayer : Plugin() {
                   val shouldUseServerProgress = shouldUseServerProgress(localPlaybackSession, latestProgress)
 
                   if (shouldUseServerProgress) {
-                    // Override the current time with the server progress to sync position
+                    // Server progress is total book progress - use it directly for chapter-based architecture
+                    // The MediaSource builder will handle converting this to proper chapter/track positioning
                     localPlaybackSession.currentTime = latestProgress.currentTime
-                    Log.d(tag, "Using server progress: ${latestProgress.currentTime}s (newer/farther than local)")
+                    Log.d(tag, "Using server progress: ${latestProgress.currentTime}s (total book progress - newer/farther than local)")
                   } else {
                     Log.d(tag, "Using local progress: ${localPlaybackSession.currentTime}s (server progress not newer/farther)")
                   }
@@ -376,9 +377,10 @@ class AbsAudioPlayer : Plugin() {
                             val shouldUseServerProgress = shouldUseServerProgress(playbackSession, latestProgress)
 
                             if (shouldUseServerProgress) {
-                              // Override the current time with the saved progress
+                              // Server progress is total book progress - use it directly for chapter-based architecture
+                              // The MediaSource builder will handle converting this to proper chapter/track positioning
                               playbackSession.currentTime = latestProgress.currentTime
-                              Log.d(tag, "Using server progress: ${latestProgress.currentTime}s (newer/farther than local)")
+                              Log.d(tag, "Using server progress: ${latestProgress.currentTime}s (total book progress - newer/farther than local)")
                             } else {
                               Log.d(tag, "Using local progress: ${playbackSession.currentTime}s (server progress not newer/farther)")
                             }

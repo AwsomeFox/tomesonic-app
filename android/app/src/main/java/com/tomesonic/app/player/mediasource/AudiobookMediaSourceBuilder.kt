@@ -231,17 +231,25 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
                 val chapterStartInFile = chapter.startMs - containingTrack.startOffsetMs
                 var chapterEndInFile = chapter.endMs - containingTrack.startOffsetMs
 
-                // Add buffer to prevent premature chapter transitions near end
+                // Add buffer to prevent premature chapter transitions near boundaries
                 // Only add buffer if this isn't the last chapter and the chapter doesn't span entire file
                 val isLastChapter = index == playbackSession.chapters.size - 1
                 val trackEndMs = (containingTrack.duration * 1000).toLong()
                 val chapterSpansEntireFile = chapterStartInFile <= 100 && chapterEndInFile >= trackEndMs - 100
 
                 if (!isLastChapter && !chapterSpansEntireFile && chapterEndInFile < trackEndMs) {
-                    // Add 200ms buffer to prevent skipping the end of chapters
+                    // Add 500ms buffer to prevent skipping the end of chapters (increased from 200ms)
                     // But don't exceed the actual track duration
-                    chapterEndInFile = minOf(chapterEndInFile + 200, trackEndMs)
-                    Log.d(TAG, "Added 200ms buffer to chapter $index end time to prevent skipping")
+                    chapterEndInFile = minOf(chapterEndInFile + 500, trackEndMs)
+                    Log.d(TAG, "Added 500ms buffer to chapter $index end time to prevent skipping")
+                }
+
+                // Add small buffer at chapter start to prevent immediate skips when transitioning
+                val chapterStartBuffer = if (index > 0) 100L else 0L
+                val adjustedChapterStartInFile = maxOf(0L, chapterStartInFile - chapterStartBuffer)
+
+                if (chapterStartBuffer > 0) {
+                    Log.d(TAG, "Added ${chapterStartBuffer}ms buffer to chapter $index start time to prevent immediate skips")
                 }
 
                 segments.add(
@@ -251,7 +259,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
                         audioFileUri = audioFileUri,
                         chapterStartMs = chapter.startMs,
                         chapterEndMs = chapter.endMs,
-                        audioFileStartMs = chapterStartInFile,
+                        audioFileStartMs = adjustedChapterStartInFile,
                         audioFileEndMs = chapterEndInFile,
                         audioFileDurationMs = trackEndMs
                     )

@@ -164,6 +164,7 @@ class PlayerNotificationService : MediaLibraryService() {
   private var queueSetForCurrentSession = false
   internal var expectingTrackTransition = false // Flag to track when we're waiting for a track change to complete
 
+
   internal var isAndroidAuto = false
 
   // The following are used for the shake detection
@@ -435,7 +436,8 @@ class PlayerNotificationService : MediaLibraryService() {
           playbackSession: PlaybackSession,
           playWhenReady: Boolean,
           playbackRate: Float?,
-          skipCastCheck: Boolean = false
+          skipCastCheck: Boolean = false,
+          skipInitialSeek: Boolean = false
   ) {
     // If we are switching to a different playback session ensure the previous session is
     // finalized and synced (or queued) before starting the new one. This guarantees progress
@@ -452,6 +454,28 @@ class PlayerNotificationService : MediaLibraryService() {
           doPreparePlayer(playbackSession, playWhenReady, playbackRate)
         }
         return
+      }
+
+      // Check if we're re-preparing during active playback
+      val isCurrentlyPlaying = currentPlayer.isPlaying
+      val hasCurrentSession = currentPlaybackSession != null
+      val isSameSession = hasCurrentSession && currentPlaybackSession?.id == playbackSession.id
+
+      if (isCurrentlyPlaying && isSameSession) {
+        Log.w(tag, "preparePlayer: WARNING - Re-preparing same session during active playback!")
+        Log.w(tag, "preparePlayer: This may cause unexpected position jumps")
+        Log.w(tag, "preparePlayer: Current position: ${getCurrentTime()}ms, Session position: ${playbackSession.currentTimeMs}ms")
+
+        // If the position differs significantly, preserve the current player position
+        val currentPlayerPos = getCurrentTime()
+        val sessionPos = playbackSession.currentTimeMs
+        val posDiff = Math.abs(currentPlayerPos - sessionPos)
+
+        if (posDiff > 5000) { // More than 5 seconds difference
+          Log.w(tag, "preparePlayer: Large position difference detected (${posDiff}ms)")
+          Log.w(tag, "preparePlayer: Preserving current player position to prevent chapter skip")
+          playbackSession.currentTime = currentPlayerPos / 1000.0
+        }
       }
 
       // Check if the session needs refresh before preparing player
@@ -485,241 +509,9 @@ class PlayerNotificationService : MediaLibraryService() {
       // First set the basic metadata
       val metadata = playbackSession.getMediaMetadataCompat(ctx)
       Log.d(tag, "Android Auto: Setting initial metadata with bitmap: ${metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-      // MIGRATION-TODO: Convert to Media3 MediaMetadata
-      // mediaSessionManager.setMetadata(metadata)
 
-      // Store the original metadata for later use (to preserve after queue changes)
       var originalMetadata = metadata
       Log.d(tag, "Android Auto: Stored original metadata with bitmap: ${originalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-
-      // MIGRATION: Android Auto queue management temporarily disabled during Media3 migration
-      // TODO: Reimplement Android Auto queue support using Media3 APIs
-      /*
-      // Build MediaSession queue from chapters/tracks so Android Auto shows actual navigation list
-      try {
-        val chapterQueue: MutableList<android.support.v4.media.session.MediaSessionCompat.QueueItem> = mutableListOf()
-
-        // Cache bitmap once for all queue items and metadata (local books only)
-        var sharedCachedBitmap: Bitmap? = null
-        val coverUri = playbackSession.getCoverUri(ctx)
-        Log.d(tag, "Android Auto: Loading shared bitmap - Cover URI: $coverUri")
-        Log.d(tag, "Android Auto: Local library item cover content URL: ${playbackSession.localLibraryItem?.coverContentUrl}")
-
-        if (playbackSession.localLibraryItem?.coverContentUrl != null) {
-          try {
-            Log.d(tag, "Android Auto: Attempting to load shared bitmap with high quality processing")
-            val rawBitmap = if (Build.VERSION.SDK_INT < 28) {
-              Log.d(tag, "Android Auto: Using MediaStore for shared bitmap (API < 28)")
-              MediaStore.Images.Media.getBitmap(ctx.contentResolver, coverUri)
-            } else {
-              Log.d(tag, "Android Auto: Using ImageDecoder for shared bitmap (API >= 28)")
-              val source: ImageDecoder.Source = ImageDecoder.createSource(ctx.contentResolver, coverUri)
-              ImageDecoder.decodeBitmap(source) { decoder, info, source ->
-                decoder.setTargetSize(512, 512) // 320dp optimal size for notifications
-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
-              }
-            }
-
-            // Ensure bitmap is exactly 512x512 for optimal notification quality
-            sharedCachedBitmap = if (rawBitmap.width != 512 || rawBitmap.height != 512) {
-              Log.d(tag, "Android Auto: Scaling bitmap from ${rawBitmap.width}x${rawBitmap.height} to 512x512")
-              // Use Canvas-based scaling for better quality instead of createScaledBitmap
-              val scaledBitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
-              val canvas = android.graphics.Canvas(scaledBitmap)
-              val paint = android.graphics.Paint().apply {
-                isAntiAlias = true
-                isFilterBitmap = true
-                isDither = false
-              }
-              val srcRect = android.graphics.Rect(0, 0, rawBitmap.width, rawBitmap.height)
-              val dstRect = android.graphics.Rect(0, 0, 512, 512)
-              canvas.drawBitmap(rawBitmap, srcRect, dstRect, paint)
-              rawBitmap.recycle() // Free memory
-              scaledBitmap
-            } else {
-              Log.d(tag, "Android Auto: Bitmap already 512x512, using as-is")
-              rawBitmap
-            }
-
-            if (sharedCachedBitmap != null) {
-              Log.d(tag, "Android Auto: Shared bitmap loaded successfully - Size: ${sharedCachedBitmap.width}x${sharedCachedBitmap.height}, Bytes: ${sharedCachedBitmap.byteCount}")
-            } else {
-              Log.w(tag, "Android Auto: Shared bitmap is null after processing")
-            }
-          } catch (e: Exception) {
-            Log.w(tag, "Android Auto: Failed to load shared cached bitmap: ${e.message}")
-            Log.w(tag, "Android Auto: Exception type: ${e.javaClass.simpleName}")
-            e.printStackTrace()
-          }
-        } else {
-          Log.w(tag, "Android Auto: No cover content URL for shared bitmap loading")
-        }
-
-        if (playbackSession.chapters.isNotEmpty()) {
-          Log.d(tag, "Android Auto: Building chapter queue. Number of chapters: ${playbackSession.chapters.size}")
-
-          // Create consistent subtitle format: "Book Title • Author"
-          val queueSubtitle = run {
-            val title = playbackSession.displayTitle ?: "Audiobook"
-            val author = playbackSession.displayAuthor
-            if (!author.isNullOrBlank()) "$title • $author" else title
-          }
-
-          for ((idx, chapter) in playbackSession.chapters.withIndex()) {
-            Log.d(tag, "Android Auto: Adding chapter $idx: ${chapter.title ?: "Chapter ${idx + 1}"}")
-
-            val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
-              .setMediaId("chapter_$idx")
-              .setTitle(chapter.title ?: "Chapter ${idx + 1}")
-              .setSubtitle(queueSubtitle)
-              .setIconUri(coverUri)
-              .apply {
-                sharedCachedBitmap?.let { setIconBitmap(it) }
-              }
-              .build()
-            val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, idx.toLong())
-            chapterQueue.add(queueItem)
-          }
-
-          // Update metadata to reflect current chapter
-          val currentChapterIndex = getCurrentChapterIndex()
-          if (currentChapterIndex >= 0 && currentChapterIndex < playbackSession.chapters.size) {
-            val currentChapter = playbackSession.chapters[currentChapterIndex]
-
-            // Create chapter description with proper bitmap handling for Android Auto
-            val coverUri = playbackSession.getCoverUri(ctx)
-            val chapterDescriptionBuilder = android.support.v4.media.MediaDescriptionCompat.Builder()
-              .setMediaId("chapter_$currentChapterIndex")
-              .setTitle(currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
-              .setSubtitle(queueSubtitle)
-              .setDescription(playbackSession.displayAuthor)
-
-          // Use shared cached bitmap or fallback to original description approach
-          if (sharedCachedBitmap != null) {
-            Log.d(tag, "Android Auto: Setting shared bitmap on chapter description - Size: ${sharedCachedBitmap.width}x${sharedCachedBitmap.height}")
-            chapterDescriptionBuilder.setIconBitmap(sharedCachedBitmap)
-          } else {
-            Log.w(tag, "Android Auto: No shared bitmap available for chapter description")
-            val originalDescription = metadata.description
-            if (originalDescription.iconBitmap != null) {
-              Log.d(tag, "Android Auto: Using original description bitmap for chapter - Size: ${originalDescription.iconBitmap?.width}x${originalDescription.iconBitmap?.height}")
-              chapterDescriptionBuilder.setIconBitmap(originalDescription.iconBitmap)
-            } else {
-              Log.w(tag, "Android Auto: No fallback bitmap available for chapter description")
-              chapterDescriptionBuilder.setIconUri(originalDescription.iconUri ?: coverUri)
-            }
-          }
-
-          val chapterDescription = chapterDescriptionBuilder.build()
-
-            val chapterMetadata = MediaMetadataCompat.Builder(metadata)
-              .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "chapter_$currentChapterIndex")
-              .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
-              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, currentChapter.title ?: "Chapter ${currentChapterIndex + 1}")
-              // Preserve the original subtitle (Book Title • Author format)
-              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE))
-              // Preserve cover images
-              .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI))
-              .putString(MediaMetadataCompat.METADATA_KEY_ART_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_ART_URI))
-              .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, metadata.getString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI))
-              .apply {
-                // Preserve existing bitmaps or use shared cached bitmap
-                val existingBitmap = metadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) ?: sharedCachedBitmap
-                if (existingBitmap != null) {
-                  putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, existingBitmap)
-                  putBitmap(MediaMetadataCompat.METADATA_KEY_ART, existingBitmap)
-                }
-              }
-              .build()
-
-            // Set the description with proper bitmap/URI handling using reflection
-            try {
-              val descriptionField = MediaMetadataCompat::class.java.getDeclaredField("mDescription")
-              descriptionField.isAccessible = true
-              descriptionField.set(chapterMetadata, chapterDescription)
-            } catch (e: Exception) {
-              Log.w(tag, "Failed to set chapter description with iconBitmap: ${e.message}")
-            }
-
-            Log.d(tag, "Android Auto: Setting chapter metadata for chapter $currentChapterIndex: ${currentChapter.title}")
-            // MIGRATION-TODO: Convert to Media3 MediaMetadata
-            // mediaSessionManager.setMetadata(chapterMetadata)
-          }
-        } else {
-          Log.d(tag, "Android Auto: Book without chapters, creating single track queue")
-          // Book without chapters - create one queue item using book metadata
-          // For single track books, title is the book title and subtitle is just the author
-          val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
-            .setMediaId("book_single_track")
-            .setTitle(playbackSession.displayTitle ?: "Audiobook")
-            .setSubtitle(playbackSession.displayAuthor ?: "")
-            .setDescription(playbackSession.displayAuthor)
-            .setIconUri(coverUri)
-            .apply {
-              sharedCachedBitmap?.let { setIconBitmap(it) }
-            }
-            .build()
-          val queueItem = android.support.v4.media.session.MediaSessionCompat.QueueItem(desc, 0L)
-          chapterQueue.add(queueItem)
-        }
-
-        if (chapterQueue.isNotEmpty()) {
-          // Set queue to ensure MediaSessionConnector is ready
-          Handler(Looper.getMainLooper()).post {
-            // Check if queue has already been set for this session
-            if (queueSetForCurrentSession) {
-              Log.d(tag, "Android Auto: Queue already set for current session, skipping")
-              return@post
-            }
-
-            Log.d(tag, "Android Auto: Setting queue on MediaSession with ${chapterQueue.size} items")
-
-            // Preserve current metadata before setting queue (this might be chapter/track specific)
-            // MIGRATION-TODO: Convert to Media3 metadata access
-            val currentMetadata = null // mediaSessionManager.getCurrentMetadata()
-            Log.d(tag, "Android Auto: Current metadata before queue set: null (migration in progress)")
-            Log.d(tag, "Android Auto: Current metadata has bitmap: false (migration in progress)")
-
-            // MIGRATION-TODO: Convert to Media3 queue management
-            // mediaSessionManager.setQueue(chapterQueue)
-            Log.d(tag, "Android Auto: Queue set successfully with ${chapterQueue?.size ?: 0} items")
-
-            // Mark queue as set for this session
-            queueSetForCurrentSession = true
-
-            // Re-set metadata after queue change to prevent it from being cleared
-            // Always use originalMetadata which has the bitmap, don't use currentMetadata as it might not have the bitmap
-            val metadataToRestore = originalMetadata
-            Log.d(tag, "Android Auto: Restoring metadata: ${metadataToRestore.getString(MediaMetadataCompat.METADATA_KEY_TITLE)}")
-            Log.d(tag, "Android Auto: Restoring metadata has bitmap: ${metadataToRestore.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-            Log.d(tag, "Android Auto: originalMetadata bitmap: ${originalMetadata.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART) != null}")
-
-            // Set metadata immediately after queue
-            // MIGRATION-TODO: Convert to Media3 MediaMetadata
-            // mediaSessionManager.setMetadata(metadataToRestore)
-            Log.d(tag, "Android Auto: Re-set metadata after queue change")
-
-            // Verify the queue was set
-            // MIGRATION-TODO: Convert to Media3 queue access
-            val setQueue = null // mediaSessionManager.getCurrentQueue()
-            Log.d(tag, "Android Auto: Queue verification - size: 0 (migration in progress)")
-
-            // Set initial active queue item based on current playback position
-            val currentIndex = if (playbackSession.chapters.isNotEmpty()) {
-              getCurrentChapterIndex()
-            } else {
-              playbackSession.getCurrentTrackIndex()
-            }
-            Log.d(tag, "Android Auto: Current index: $currentIndex")
-            if (currentIndex >= 0) {
-              updateNavigationState(currentIndex)
-            }
-          }
-        }
-      } catch (e: Exception) {
-        Log.e(tag, "Failed to set queue: ${e.localizedMessage}")
-      }
-      */
 
       // NEW MEDIA3 ARCHITECTURE: Use MediaSource instead of MediaItems
       Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Building MediaSource for '${playbackSession.displayTitle}'")
@@ -909,11 +701,20 @@ class PlayerNotificationService : MediaLibraryService() {
         Log.d(tag, "NEW_ARCHITECTURE: Using Media3 MediaItem architecture (currentPlayer type: ${currentPlayer.javaClass.simpleName})")
 
         // Calculate start position using the helper methods
-        val startMediaItemIndex = audiobookMediaSourceBuilder.calculateStartMediaItemIndex(playbackSession)
-        val startPositionMs = audiobookMediaSourceBuilder.calculateStartPositionInMediaItem(playbackSession)
+        val startMediaItemIndex: Int
+        val startPositionMs: Long
 
-        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Starting at MediaItem $startMediaItemIndex, position ${startPositionMs}ms")
-        Log.d("NUXT_SKIP_DEBUG", "preparePlayer: POSITION_DEBUG - Absolute position: ${playbackSession.currentTimeMs}ms, Chapter-relative position: ${startPositionMs}ms")
+        if (skipInitialSeek) {
+          // When skipping initial seek, start at the beginning
+          startMediaItemIndex = 0
+          startPositionMs = 0L
+          Log.d(tag, "preparePlayer: skipInitialSeek=true, starting at beginning (0, 0)")
+        } else {
+          startMediaItemIndex = audiobookMediaSourceBuilder.calculateStartMediaItemIndex(playbackSession)
+          startPositionMs = audiobookMediaSourceBuilder.calculateStartPositionInMediaItem(playbackSession)
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Starting at MediaItem $startMediaItemIndex, position ${startPositionMs}ms")
+          Log.d("NUXT_SKIP_DEBUG", "preparePlayer: POSITION_DEBUG - Absolute position: ${playbackSession.currentTimeMs}ms, Chapter-relative position: ${startPositionMs}ms")
+        }
 
         // Set the MediaItems to populate the timeline
         Log.d("NUXT_SKIP_DEBUG", "preparePlayer: Setting MediaItems on ExoPlayer")
@@ -1353,7 +1154,10 @@ class PlayerNotificationService : MediaLibraryService() {
     return 0L
   }
 
+
+
   fun getCurrentTime(): Long {
+
     // Always return absolute position for progress syncing and server communication
     // Use AudiobookProgressTracker's absolute position method for the new architecture
     val absoluteTime = if (::chapterNavigationHelper.isInitialized) {
@@ -1381,6 +1185,8 @@ class PlayerNotificationService : MediaLibraryService() {
     } else {
       exoPlayer.currentPosition
     }
+
+
 
     // Add debug logging to track progress syncing issues
     if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
@@ -1490,130 +1296,6 @@ class PlayerNotificationService : MediaLibraryService() {
     return getNextBookChapter()?.endMs ?: currentPlaybackSession?.getNextTrackEndTime()
   }
 
-  // Called from PlayerListener play event
-  // check with server if progress has updated since last play and sync progress update
-  fun checkCurrentSessionProgress(seekBackTime: Long): Boolean {
-    if (currentPlaybackSession == null) return true
-
-    mediaProgressSyncer.currentPlaybackSession?.let { playbackSession ->
-      if (!DeviceManager.checkConnectivity(ctx)) {
-        return true // carry on
-      }
-
-      if (playbackSession.isLocal) {
-
-        // Make sure this connection config exists
-        val serverConnectionConfig =
-                DeviceManager.getServerConnectionConfig(playbackSession.serverConnectionConfigId)
-        if (serverConnectionConfig == null) {
-          Log.d(
-                  tag,
-                  "checkCurrentSessionProgress: Local library item server connection config is not saved ${playbackSession.serverConnectionConfigId}"
-          )
-          return true // carry on
-        }
-
-        // Local playback session check if server has updated media progress
-        Log.d(
-                tag,
-                "checkCurrentSessionProgress: Checking if local media progress was updated on server"
-        )
-        apiHandler.getMediaProgress(
-                playbackSession.libraryItemId!!,
-                playbackSession.episodeId,
-                serverConnectionConfig
-        ) { mediaProgress ->
-          if (mediaProgress != null && mediaProgress.currentTime != playbackSession.currentTime) {
-            // Use improved sync logic to determine if server progress should override local
-            if (mediaProgressSyncer.shouldUseServerProgress(mediaProgress, playbackSession)) {
-              Log.d(
-                      tag,
-                      "checkCurrentSessionProgress: Server progress is more recent and significant - updating from ${playbackSession.currentTime} to ${mediaProgress.currentTime}"
-              )
-              mediaProgressSyncer.syncFromServerProgress(mediaProgress)
-
-              // Update current playback session stored in PNS since MediaProgressSyncer version is a
-              // copy
-              mediaProgressSyncer.currentPlaybackSession?.let { updatedPlaybackSession ->
-                currentPlaybackSession = updatedPlaybackSession
-              }
-
-              Handler(Looper.getMainLooper()).post {
-                // Seek to the updated server position, not the old local position
-                val updatedPosition = mediaProgressSyncer.currentPlaybackSession?.currentTimeMs ?: (mediaProgress.currentTime * 1000).toLong()
-                Log.d(tag, "checkCurrentSessionProgress: Seeking to server position ${updatedPosition}ms instead of local ${playbackSession.currentTimeMs}ms")
-                seekPlayer(updatedPosition)
-                // Should already be playing
-                currentPlayer.volume = 1F // Volume on sleep timer might have decreased this
-                currentPlaybackSession?.let {
-                  mediaProgressSyncer.play(it)
-                  // Start chapter change monitoring with new helper
-                  startChapterChangeMonitoring()
-                }
-                clientEventEmitter?.onPlayingUpdate(true)
-              }
-            } else {
-              Log.d(
-                      tag,
-                      "checkCurrentSessionProgress: Server progress not significant enough to override local progress (server: ${mediaProgress.currentTime}, local: ${playbackSession.currentTime})"
-              )
-            }
-          } else {
-            Handler(Looper.getMainLooper()).post {
-              if (seekBackTime > 0L) {
-                seekBackward(seekBackTime)
-              }
-
-              // Should already be playing
-              currentPlayer.volume = 1F // Volume on sleep timer might have decreased this
-              mediaProgressSyncer.currentPlaybackSession?.let { playbackSession ->
-                mediaProgressSyncer.play(playbackSession)
-                // Start chapter change monitoring with new helper
-                startChapterChangeMonitoring()
-              }
-              clientEventEmitter?.onPlayingUpdate(true)
-            }
-          }
-        }
-      } else {
-        // Streaming from server so check if playback session still exists on server
-        Log.d(
-                tag,
-                "checkCurrentSessionProgress: Checking if playback session ${playbackSession.id} for server stream is still available"
-        )
-        apiHandler.getPlaybackSession(playbackSession.id) {
-          if (it == null) {
-            Log.d(
-                    tag,
-                    "checkCurrentSessionProgress: Playback session does not exist on server - start new playback session"
-            )
-
-            Handler(Looper.getMainLooper()).post {
-              currentPlayer.pause()
-              startNewPlaybackSession()
-            }
-          } else {
-            Log.d(tag, "checkCurrentSessionProgress: Playback session still available on server")
-            Handler(Looper.getMainLooper()).post {
-              if (seekBackTime > 0L) {
-                seekBackward(seekBackTime)
-              }
-
-              currentPlayer.volume = 1F // Volume on sleep timer might have decreased this
-              mediaProgressSyncer.currentPlaybackSession?.let { playbackSession ->
-                mediaProgressSyncer.play(playbackSession)
-                // Start chapter change monitoring with new helper
-                startChapterChangeMonitoring()
-              }
-
-              clientEventEmitter?.onPlayingUpdate(true)
-            }
-          }
-        }
-      }
-    }
-    return false
-  }
 
   fun play() {
     Log.d(tag, "play(): Method called")
@@ -1737,6 +1419,38 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   /**
+   * Seek to an absolute time position in the audiobook (in seconds).
+   * This method correctly handles chapter-based playlists by calculating the appropriate
+   * chapter index and chapter-relative position from the absolute book position.
+   *
+   * @param absoluteTimeSeconds The absolute position in seconds within the entire audiobook
+   */
+  fun seekToAbsoluteTime(absoluteTimeSeconds: Double) {
+    val absoluteTimeMs = (absoluteTimeSeconds * 1000).toLong()
+    Log.d(tag, "seekToAbsoluteTime: Seeking to absolute time ${absoluteTimeSeconds}s (${absoluteTimeMs}ms)")
+
+    if (currentPlayer == null) {
+      Log.w(tag, "seekToAbsoluteTime: currentPlayer is null")
+      return
+    }
+
+    // Check if we're using chapter-based navigation
+    if (::chapterNavigationHelper.isInitialized && chapterNavigationHelper.hasChapters()) {
+      Log.d(tag, "seekToAbsoluteTime: Using chapter-aware navigation")
+
+      // Use the AudiobookProgressTracker's seekToAbsolutePosition which handles
+      // chapter calculation correctly
+      chapterNavigationHelper.seekToAbsolutePosition(absoluteTimeMs)
+    } else {
+      // Single track - just seek directly
+      Log.d(tag, "seekToAbsoluteTime: Direct seek (single track)")
+      currentPlayer.seekTo(absoluteTimeMs)
+    }
+
+    Log.d(tag, "seekToAbsoluteTime: Seek operation completed")
+  }
+
+  /**
    * Unified navigation method: Navigate to a specific chapter by index
    * This is the primary navigation method used by both UI and Android Auto
    *
@@ -1755,6 +1469,7 @@ class PlayerNotificationService : MediaLibraryService() {
       return
     }
 
+
     try {
       // Check if we're using Cast player
       if (currentPlayer == castPlayerManager.castPlayer) {
@@ -1772,6 +1487,7 @@ class PlayerNotificationService : MediaLibraryService() {
 
       // Update notification metadata for the new chapter
       updateNotificationMetadata(chapterIndex)
+
 
       Log.d(tag, "navigateToChapter: Successfully navigated to chapter $chapterIndex")
     } catch (e: Exception) {
@@ -2098,7 +1814,8 @@ class PlayerNotificationService : MediaLibraryService() {
 
   fun seekToNextChapter(): Boolean {
     return if (::chapterNavigationHelper.isInitialized) {
-      if (currentPlayer == castPlayer) {
+
+      val result = if (currentPlayer == castPlayer) {
         // Cast player - use direct MediaItem navigation
         val currentIndex = currentPlayer.currentMediaItemIndex
         val nextIndex = currentIndex + 1
@@ -2114,6 +1831,10 @@ class PlayerNotificationService : MediaLibraryService() {
         // Local player - use chapter navigation helper
         chapterNavigationHelper.seekToNextChapter()
       }
+
+      // Schedule end of chapter transition protection
+
+      result
     } else {
       Log.w(tag, "ChapterNavigationHelper not initialized")
       false
@@ -2122,7 +1843,8 @@ class PlayerNotificationService : MediaLibraryService() {
 
   fun seekToPreviousChapter(): Boolean {
     return if (::chapterNavigationHelper.isInitialized) {
-      if (currentPlayer == castPlayer) {
+
+      val result = if (currentPlayer == castPlayer) {
         // Cast player - use direct MediaItem navigation
         val currentIndex = currentPlayer.currentMediaItemIndex
         val prevIndex = currentIndex - 1
@@ -2138,6 +1860,10 @@ class PlayerNotificationService : MediaLibraryService() {
         // Local player - use chapter navigation helper
         chapterNavigationHelper.seekToPreviousChapter()
       }
+
+      // Schedule end of chapter transition protection
+
+      result
     } else {
       Log.w(tag, "ChapterNavigationHelper not initialized")
       false
@@ -2317,28 +2043,21 @@ class PlayerNotificationService : MediaLibraryService() {
         if (!author.isNullOrBlank()) "$title • $author" else title
       }
 
-      // For Media3, update the current MediaItem's metadata
-      val currentMediaItem = currentPlayer?.currentMediaItem
-      if (currentMediaItem != null) {
-        // Create new MediaMetadata with chapter-aware title and subtitle
-        val updatedMetadata = currentMediaItem.mediaMetadata.buildUpon()
-          .setTitle(displayTitle)
-          .setDisplayTitle(displayTitle)
-          .setSubtitle(displaySubtitle)
-          .setAlbumTitle(displaySubtitle)
-          .build()
+      // For Media3, update the MediaSession metadata WITHOUT modifying the playlist
+      // CRITICAL FIX: Do NOT remove/add MediaItems during playback as this causes
+      // PLAYLIST_CHANGED events which reset the playback position to 0
 
-        // Create updated MediaItem with new metadata
-        val updatedMediaItem = currentMediaItem.buildUpon()
-          .setMediaMetadata(updatedMetadata)
-          .build()
+      // Instead, update the MediaSession metadata directly through MediaSessionManager
+      // This updates the notification without disrupting playback
+      mediaSessionManager.updateChapterMetadata(
+        chapterTitle = displayTitle,
+        chapterDuration = currentChapter?.let { it.endMs - it.startMs } ?: 0L,
+        bookTitle = session.displayTitle ?: "",
+        author = session.displayAuthor,
+        bitmap = null // Bitmap is already set during preparePlayer
+      )
 
-        // Replace the current MediaItem (this will update the notification)
-        val currentIndex = currentPlayer?.currentMediaItemIndex ?: 0
-        currentPlayer?.removeMediaItem(currentIndex)
-        currentPlayer?.addMediaItem(currentIndex, updatedMediaItem)
-        Log.d(tag, "updateNotificationMetadata: Replaced MediaItem at index $currentIndex - Title: '$displayTitle', Subtitle: '$displaySubtitle'")
-      }
+      Log.d(tag, "updateNotificationMetadata: Updated MediaSession metadata - Title: '$displayTitle', Subtitle: '$displaySubtitle'")
 
       // Also update any legacy MediaSessionCompat metadata if present
       // This ensures compatibility with older notification systems
@@ -2864,6 +2583,75 @@ class PlayerNotificationService : MediaLibraryService() {
       session.notifyChildrenChanged(MediaLibrarySessionCallback.AUTO_MEDIA_ROOT, 0, null)
     }
   }
+
+  /**
+   * Try to automatically resume the last playback session when Android Auto connects
+   * This helps ensure that when opening the app in Android Auto, playback will resume
+   * from the last session instead of requiring manual selection from the browser
+   */
+  fun tryResumeLastSessionForAndroidAuto() {
+    try {
+      // Check if we already have an active session - don't resume if already playing
+      if (currentPlaybackSession != null) {
+        Log.d(tag, "tryResumeLastSessionForAndroidAuto: Active session already exists, skipping auto-resume")
+        return
+      }
+
+      val lastSession = DeviceManager.deviceData.lastPlaybackSession
+      if (lastSession != null) {
+        // Check if session has meaningful progress (not at the very beginning)
+        val progress = lastSession.currentTime / lastSession.duration
+        if (progress > 0.01) {
+          Log.d(tag, "tryResumeLastSessionForAndroidAuto: Found resumable session '${lastSession.displayTitle}' at ${progress * 100}% (${lastSession.currentTime}s/${lastSession.duration}s)")
+
+          // CRITICAL FIX: Store the absolute current time before preparing player
+          // This prevents the coordinate system mismatch issue
+          val absoluteCurrentTime = lastSession.currentTime
+          Log.d(tag, "tryResumeLastSessionForAndroidAuto: Stored absolute time: ${absoluteCurrentTime}s")
+
+          // Make sure this runs on the main thread as ExoPlayer requires it
+          Handler(Looper.getMainLooper()).post {
+            try {
+              val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
+              // Start playback immediately since we're in Android Auto mode
+              val shouldStartPlaying = true
+
+              Log.d(tag, "tryResumeLastSessionForAndroidAuto: Preparing player with skipInitialSeek=true")
+              // Prepare the player but skip the initial seek - we'll do it manually after the player is ready
+              preparePlayer(lastSession, shouldStartPlaying, savedPlaybackSpeed, skipInitialSeek = true)
+
+              // Wait for the player to be ready, then seek to the correct absolute position
+              // This ensures the chapter calculation is done correctly
+              Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                  if (currentPlayer.playbackState == Player.STATE_READY ||
+                      currentPlayer.playbackState == Player.STATE_BUFFERING) {
+                    Log.d(tag, "tryResumeLastSessionForAndroidAuto: Player ready, seeking to absolute time ${absoluteCurrentTime}s")
+                    seekToAbsoluteTime(absoluteCurrentTime)
+                    Log.d(tag, "tryResumeLastSessionForAndroidAuto: Successfully resumed and seeked to correct position")
+                  } else {
+                    Log.w(tag, "tryResumeLastSessionForAndroidAuto: Player not ready after delay (state: ${currentPlayer.playbackState})")
+                  }
+                } catch (e: Exception) {
+                  Log.e(tag, "tryResumeLastSessionForAndroidAuto: Failed to seek after player ready", e)
+                }
+              }, 500) // 500ms delay to ensure player is ready
+
+              Log.d(tag, "tryResumeLastSessionForAndroidAuto: Player preparation initiated")
+            } catch (e: Exception) {
+              Log.e(tag, "tryResumeLastSessionForAndroidAuto: Failed to resume session", e)
+            }
+          }
+        } else {
+          Log.d(tag, "tryResumeLastSessionForAndroidAuto: Session found but progress too low: ${progress * 100}%")
+        }
+      } else {
+        Log.d(tag, "tryResumeLastSessionForAndroidAuto: No last playback session found")
+      }
+    } catch (e: Exception) {
+      Log.e(tag, "tryResumeLastSessionForAndroidAuto: Error trying to auto-resume", e)
+    }
+  }
 }
 
 // Simple callback for MediaLibrarySession that delegates to MediaBrowserManager methods
@@ -2985,6 +2773,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     } else {
       Log.d("PlayerNotificationServ", "AALibrary: Client ${browser.packageName} allowed, proceeding with onGetLibraryRoot")
       service.isAndroidAuto = true
+
+      // Try to resume last playback session when Android Auto connects
+      service.tryResumeLastSessionForAndroidAuto()
 
       // Create a future that will be completed when data loading is done
       val future = SettableFuture.create<LibraryResult<MediaItem>>()
@@ -4341,6 +4132,35 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       }
     }
     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+  }
+
+  /**
+   * Intercept player commands from bluetooth/external controls and redirect skip commands
+   * to jump forward/backward instead of skipping to next/previous items in queue
+   */
+  override fun onPlayerCommandRequest(
+    session: MediaSession,
+    controller: MediaSession.ControllerInfo,
+    playerCommand: Int
+  ): Int {
+    return when (playerCommand) {
+      Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_NEXT -> {
+        // Intercept next track command from bluetooth and redirect to jump forward
+        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to next, redirecting to jump forward")
+        service.jumpForward()
+        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+      }
+      Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, Player.COMMAND_SEEK_TO_PREVIOUS -> {
+        // Intercept previous track command from bluetooth and redirect to jump backward
+        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to previous, redirecting to jump backward")
+        service.jumpBackward()
+        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+      }
+      else -> {
+        // Allow all other commands to execute normally
+        super.onPlayerCommandRequest(session, controller, playerCommand)
+      }
+    }
   }
 
   override fun onAddMediaItems(
