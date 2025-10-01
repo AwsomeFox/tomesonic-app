@@ -304,7 +304,15 @@ class MediaProgressSyncer(
   fun onPositionUpdate() {
     if (listeningTimerRunning) {
       val newCurrentTime = playerNotificationService.getCurrentTimeSeconds()
-      val oldCurrentTime = currentPlaybackSession?.currentTime
+      val oldCurrentTime = currentPlaybackSession?.currentTime ?: 0.0
+
+      // Validate position update to prevent cast position reporting issues
+      val timeDiff = Math.abs(newCurrentTime - oldCurrentTime)
+      if (oldCurrentTime > 0 && timeDiff > 60.0) { // >60s jump
+        Log.w(tag, "onPositionUpdate: Suspicious position jump detected, skipping update. Previous: ${oldCurrentTime}s, Current: ${newCurrentTime}s")
+        return
+      }
+
       currentPlaybackSession?.currentTime = newCurrentTime
 
       // Only sync to UI/callbacks more frequently for Cast to keep UI responsive
@@ -351,6 +359,8 @@ class MediaProgressSyncer(
     if (diffSinceLastSync < 1000L) {
       return cb(null)
     }
+
+
     val listeningTimeToAdd = diffSinceLastSync / 1000L
 
     val syncData = MediaProgressSyncData(listeningTimeToAdd, currentPlaybackDuration, currentTime)

@@ -32,7 +32,7 @@
       </div>
     </div>
 
-    <div class="w-full" :class="{ 'py-3': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }" :style="contentPaddingStyle">
+    <div v-if="!showingSkeleton" class="w-full" :class="{ 'py-3': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }" :style="contentPaddingStyle">
       <template v-for="(shelf, index) in shelves">
         <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :style="{ zIndex: shelves.length - index }" :class="[{ 'shelf-updating': shelf._updating }, 'shelf-item', `shelf-delay-${Math.min(index, 6)}`]" />
       </template>
@@ -54,7 +54,8 @@ export default {
       isLoading: true,
       isFetchingCategories: false,
       firstLoad: true,
-      showingSkeleton: true
+      showingSkeleton: true,
+      initialConnectionWaitComplete: false
     }
   },
   watch: {
@@ -63,11 +64,19 @@ export default {
       console.log(`[categories] Network changed to ${newVal} - fetch categories. ${this.lastServerFetch}/${this.lastLocalFetch}`)
 
       if (newVal) {
-        // Fetch right away the first time network connects
+        // Fetch right away the first time network connects during initial load
         if (this.isFirstNetworkConnection) {
           this.isFirstNetworkConnection = false
           console.log(`[categories] networkConnected true first network connection. lastServerFetch=${this.lastServerFetch}`)
-          this.fetchCategories()
+
+          // If we already showed local books and haven't fetched from server, refetch now
+          if (this.lastServerFetch === 0 && this.shelves.length > 0) {
+            console.log('[categories] Already showed local books, now fetching from server')
+            this.fetchCategories()
+          } else if (this.shelves.length === 0) {
+            // No shelves yet, this is probably during initial mount delay
+            console.log('[categories] No shelves yet, mounted will handle fetch')
+          }
           return
         }
 
@@ -79,6 +88,40 @@ export default {
       } else {
         console.log(`[categories] networkConnected false so fetching categories`)
         this.fetchCategories()
+      }
+    },
+    user(newVal, oldVal) {
+      // When user becomes available (login/connection), refetch if we previously showed local-only
+      if (newVal && !oldVal && this.networkConnected && this.currentLibraryId && this.initialConnectionWaitComplete) {
+        console.log('[categories] User became available after initial wait, checking if refetch needed')
+        // Only refetch if we haven't fetched from server yet (showed local-only)
+        if (this.lastServerFetch === 0 && this.shelves.length > 0) {
+          console.log('[categories] Refetching from server now that user is available')
+          this.fetchCategories()
+        } else {
+          console.log('[categories] Server fetch already done or in progress, skipping')
+        }
+      }
+    },
+    currentLibraryId(newVal, oldVal) {
+      // When library ID changes (but not on initial load)
+      if (newVal && oldVal && newVal !== oldVal) {
+        console.log('[categories] Library ID switched from', oldVal, 'to', newVal, '- resetting and refetching')
+        // Reset state for new library (actual switch)
+        this.showingSkeleton = true
+        this.isLoading = true
+        this.firstLoad = true
+        this.shelves = []
+        this.fetchCategories()
+      } else if (newVal && !oldVal && this.user && this.networkConnected && this.initialConnectionWaitComplete) {
+        // Library ID became available for the first time AND we have user + network (after initial wait)
+        console.log('[categories] Library ID became available on initial load:', newVal)
+        // If we showed local books first, try to fetch from server now (without resetting UI)
+        if (this.lastServerFetch === 0 && this.shelves.length > 0) {
+          console.log('[categories] Have local books, now fetching from server')
+          // Don't reset shelves, just fetch in background
+          this.fetchCategories()
+        }
       }
     }
   },
@@ -199,7 +242,7 @@ export default {
       // Merged local books shelf (continue listening books first, then other local books)
       if (books.length) {
         // Get books that are NOT in continue listening (no progress or finished)
-        const otherBooks = books.filter(book => {
+        const otherBooks = books.filter((book) => {
           return !book.progress || book.progress.isFinished || book.progress.progress === 0
         })
 
@@ -242,7 +285,7 @@ export default {
       return categories
     },
     async fetchCategories() {
-      console.log(`[categories] fetchCategories networkConnected=${this.networkConnected}, lastServerFetch=${this.lastServerFetch}, lastLocalFetch=${this.lastLocalFetch}`)
+      console.log(`[categories] fetchCategories networkConnected=${this.networkConnected}, user=${!!this.user}, currentLibraryId=${this.currentLibraryId}, lastServerFetch=${this.lastServerFetch}, lastLocalFetch=${this.lastLocalFetch}`)
 
       if (this.isFetchingCategories) {
         console.log('[categories] fetchCategories already in progress, skipping')
@@ -251,11 +294,15 @@ export default {
       this.isFetchingCategories = true
 
       try {
-        // TODO: Find a better way to keep the shelf up-to-date with local vs server library because this is a disaster
+        // Check connection status once at the start and use it consistently throughout
         const isConnectedToServerWithInternet = this.user && this.currentLibraryId && this.networkConnected
+        console.log(`[categories] isConnectedToServerWithInternet=${isConnectedToServerWithInternet}`)
+
+        // Check if we should skip this fetch (too soon after last fetch)
         if (isConnectedToServerWithInternet) {
           if (this.lastServerFetch && Date.now() - this.lastServerFetch < 5000 && this.lastServerFetchLibraryId == this.currentLibraryId) {
             console.log(`[categories] fetchCategories server fetch was ${Date.now() - this.lastServerFetch}ms ago so not doing it.`)
+            this.isFetchingCategories = false
             return
           } else {
             console.log(`[categories] fetchCategories fetching from server. Last was ${this.lastServerFetch ? Date.now() - this.lastServerFetch + 'ms' : 'Never'} ago. lastServerFetchLibraryId=${this.lastServerFetchLibraryId} and currentLibraryId=${this.currentLibraryId}`)
@@ -266,6 +313,7 @@ export default {
         } else {
           if (this.lastLocalFetch && Date.now() - this.lastLocalFetch < 5000) {
             console.log(`[categories] fetchCategories local fetch was ${Date.now() - this.lastLocalFetch}ms ago so not doing it.`)
+            this.isFetchingCategories = false
             return
           } else {
             console.log(`[categories] fetchCategories fetching from local. Last was ${this.lastLocalFetch ? Date.now() - this.lastLocalFetch + 'ms' : 'Never'} ago`)
@@ -281,170 +329,115 @@ export default {
         }
         this.isLoading = true
 
-        // Set local library items first. On all loads, wait for server response or timeout
-        // before showing local shelves to prevent flash of local content.
+        // Load local library items first
         this.localLibraryItems = await this.$db.getLocalLibraryItems()
         const localCategories = this.getLocalMediaItemCategories()
-        console.log('[categories] Local categories computed', localCategories.length, this.lastLocalFetch)
+        console.log('[categories] Local categories computed', localCategories.length, 'isConnectedToServerWithInternet=', isConnectedToServerWithInternet)
 
         if (isConnectedToServerWithInternet) {
-          // Perform the server request but wait 5 seconds before forcing a
-          // fallback so local shelves remain visible and we avoid a flash.
+          // Wait up to 5 seconds for server books to load
           const serverTimeoutMs = 5000
           const serverRequest = this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/personalized?minified=1&include=rssfeed,numEpisodesIncomplete`, { connectTimeout: 10000 }).catch((error) => {
             console.error('[categories] Failed to fetch categories', error)
-            return []
+            return null
           })
 
           const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('__timeout__'), serverTimeoutMs))
           const categoriesOrTimeout = await Promise.race([serverRequest, timeoutPromise])
 
-          // If timed out, categoriesOrTimeout === '__timeout__', otherwise it's the categories array
-          let categories = categoriesOrTimeout === '__timeout__' ? null : categoriesOrTimeout
-
-          // If server hasn't responded within 5 seconds, show local shelves and await final server result in background
-          if (categories === null) {
-            console.log('[categories] Server request timed out, showing local shelves and waiting in background')
-            // Show local shelves immediately since server timed out
-            this.shelves = localCategories
-            this.showingSkeleton = false
-            this.isLoading = false
-            // Show toast notification that we're using local data while server request continues
-            this.$toast.info(this.$strings.MessageUsingLocalDataServerSlow || 'Using local data while server loads')
-            // Continue to await the actual server request in background
-            try {
-              categories = await serverRequest
-              // If server eventually responds, merge the data
-              if (categories && categories.length) {
-                const serverCats = categories.map((cat) => {
-                  if (cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') {
-                    cat.entities = cat.entities.map((entity) => {
-                      const localLibraryItem = this.localLibraryItems.find((lli) => {
-                        return lli.libraryItemId == entity.id
-                      })
-                      if (localLibraryItem) {
-                        entity.localLibraryItem = localLibraryItem
-                      }
-                      return entity
-                    })
-                  }
-                  return cat
-                })
-
-                // Merge server results with already-visible local shelves
-                const merged = []
-                serverCats.forEach((scat) => {
-                  const existing = this.shelves.find((s) => s && s.id === scat.id)
-                  if (existing) {
-                    existing.label = scat.label
-                    existing.type = scat.type
-                    existing._updating = true
-                    existing.entities = scat.entities
-                    merged.push(existing)
-                  } else {
-                    merged.push(scat)
-                  }
-                })
-
-                const localShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType)
-                merged.push(...localShelves)
-
-                this.shelves = merged
-                setTimeout(() => {
-                  this.shelves.forEach((s) => {
-                    if (s && s._updating) s._updating = false
+          // Helper function to merge local items with server categories
+          const mergeLocalWithServerCategories = (serverCategories) => {
+            return serverCategories.map((cat) => {
+              if (cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') {
+                cat.entities = cat.entities.map((entity) => {
+                  const localLibraryItem = this.localLibraryItems.find((lli) => {
+                    return lli.libraryItemId == entity.id
                   })
-                }, 700)
-                this.firstLoad = false
-                console.log('[categories] Server shelves merged after timeout', this.shelves.length, this.lastServerFetch)
-              }
-            } catch (err) {
-              console.log('[categories] Server request failed after timeout, keeping local shelves')
-            }
-            return
-          }
-
-          if (!categories || !categories.length) {
-            // Server returned no categories or request failed -> fall back to local shelves
-            console.warn(`[categories] Failed to get server categories so using local categories`)
-            this.lastServerFetch = 0
-            this.lastLocalFetch = Date.now()
-            this.shelves = localCategories
-            this.showingSkeleton = false
-            this.isLoading = false
-            console.log('[categories] Local shelves set from failure', this.shelves.length, this.lastLocalFetch)
-            return
-          }
-
-          // Map localLibraryItem to server entities
-          const serverCats = categories.map((cat) => {
-            if (cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') {
-              cat.entities = cat.entities.map((entity) => {
-                const localLibraryItem = this.localLibraryItems.find((lli) => {
-                  return lli.libraryItemId == entity.id
+                  if (localLibraryItem) {
+                    entity.localLibraryItem = localLibraryItem
+                  }
+                  return entity
                 })
-                if (localLibraryItem) {
-                  entity.localLibraryItem = localLibraryItem
-                }
-                return entity
-              })
-            }
-            return cat
-          })
-
-          // Merge server results into the already-rendered local shelves to avoid flash.
-          const merged = []
-          serverCats.forEach((scat) => {
-            const existing = this.shelves.find((s) => s && s.id === scat.id)
-            if (existing) {
-              // Mutate existing shelf object so the DOM node is preserved.
-              existing.label = scat.label
-              existing.type = scat.type
-              // Mark as updating so CSS can animate the change
-              existing._updating = true
-              existing.entities = scat.entities
-              merged.push(existing)
-            } else {
-              merged.push(scat)
-            }
-          })
-
-          // Append any local-only shelves that the server didn't return (keep same media type)
-          const localShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType)
-          merged.push(...localShelves)
-
-          // Replace shelves with merged result (many objects are the same references so DOM won't flash)
-          this.shelves = merged
-          this.showingSkeleton = false
-          // Clear updating flags after the shelf animation finishes
-          setTimeout(() => {
-            this.shelves.forEach((s) => {
-              if (s && s._updating) s._updating = false
+              }
+              return cat
             })
-          }, 700)
+          }
+
+          // Helper function to combine server and local-only shelves
+          const combineServerAndLocalShelves = (serverCats) => {
+            const localOnlyShelves = localCategories.filter((cat) => !serverCats.find((sc) => sc.id === cat.id) && cat.type === this.currentLibraryMediaType)
+            return [...serverCats, ...localOnlyShelves]
+          }
+
+          // Case 1: Server responded before timeout
+          if (categoriesOrTimeout !== '__timeout__' && categoriesOrTimeout && categoriesOrTimeout.length) {
+            console.log('[categories] Server responded before timeout, displaying combined results immediately')
+            const serverCats = mergeLocalWithServerCategories(categoriesOrTimeout)
+            const combinedShelves = combineServerAndLocalShelves(serverCats)
+
+            // Update all state together to prevent flash of local content
+            // Set flags first to ensure skeleton stays visible during shelf assignment
+            this.isLoading = false
+            this.firstLoad = false
+            // Now update shelves and hide skeleton in same tick
+            this.shelves = combinedShelves
+            this.showingSkeleton = false
+            console.log('[categories] Combined server + local shelves displayed', this.shelves.length, this.lastServerFetch)
+            return
+          }
+
+          // Case 2: Timeout occurred, show local books only
+          console.log('[categories] Server request timed out (5s), displaying local shelves')
+          this.shelves = localCategories
+          this.showingSkeleton = false
           this.isLoading = false
           this.firstLoad = false
-          console.log('[categories] Server shelves merged', this.shelves.length, this.lastServerFetch)
-        } else {
-          // When offline, show local categories including local-only shelves
-          console.log('[categories] Offline - showing local shelves only')
 
-          if (this.firstLoad) {
-            // On first load when offline, show skeleton briefly before showing local books
-            setTimeout(() => {
-              this.shelves = localCategories
-              this.showingSkeleton = false
-              this.isLoading = false
-              this.firstLoad = false
-              console.log('[categories] Local shelves set (offline after brief delay)', this.shelves.length, this.lastLocalFetch)
-            }, 500)
+          // Continue waiting for server response in background (if timeout occurred)
+          if (categoriesOrTimeout === '__timeout__') {
+            console.log('[categories] Waiting for server response in background...')
+            try {
+              const categories = await serverRequest
+
+              // Case 3: Server eventually responded after timeout
+              if (categories && categories.length) {
+                console.log('[categories] Server responded after timeout, silently merging results')
+                const serverCats = mergeLocalWithServerCategories(categories)
+
+                // Smoothly merge server results without causing visible reload
+                // Only update shelves that exist in server response
+                serverCats.forEach((scat) => {
+                  const existingShelf = this.shelves.find((s) => s && s.id === scat.id)
+                  if (existingShelf) {
+                    // Update existing shelf in-place to avoid DOM re-render flash
+                    existingShelf.label = scat.label
+                    existingShelf.type = scat.type
+                    existingShelf.entities = scat.entities
+                  } else {
+                    // Add new server-only shelf
+                    this.shelves.push(scat)
+                  }
+                })
+
+                console.log('[categories] Server shelves silently merged after timeout', this.shelves.length)
+              }
+            } catch (err) {
+              console.log('[categories] Server request failed after timeout, keeping local shelves only')
+            }
           } else {
-            // On subsequent loads when offline, show local books immediately
-            this.shelves = localCategories
-            this.showingSkeleton = false
-            this.isLoading = false
-            console.log('[categories] Local shelves set (offline)', this.shelves.length, this.lastLocalFetch)
+            // Server responded but with empty/invalid data
+            console.warn('[categories] Server returned empty/invalid data, using local shelves only')
           }
+        } else {
+          // When offline or user/library not ready, show local categories
+          console.log('[categories] Offline or not connected - showing local shelves only')
+
+          // Show local books immediately (no need for delay)
+          this.shelves = localCategories
+          this.showingSkeleton = false
+          this.isLoading = false
+          this.firstLoad = false
+          console.log('[categories] Local shelves set (offline/not connected)', this.shelves.length, this.lastLocalFetch)
         }
       } finally {
         this.isFetchingCategories = false
@@ -515,6 +508,17 @@ export default {
 
     this.initListeners()
     await this.$store.dispatch('globals/loadLocalMediaProgress')
+
+    // Wait briefly for connection/user/library to be established on first load
+    // This prevents showing local books then immediately switching to server books
+    if (this.firstLoad) {
+      console.log('[categories] First load - waiting briefly (500ms) for connection to establish')
+      console.log(`[categories] Before wait: networkConnected=${this.networkConnected}, user=${!!this.user}, libraryId=${this.currentLibraryId}`)
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      console.log(`[categories] After wait: networkConnected=${this.networkConnected}, user=${!!this.user}, libraryId=${this.currentLibraryId}`)
+      this.initialConnectionWaitComplete = true
+    }
+
     console.log(`[categories] mounted so fetching categories`)
     this.fetchCategories()
   },

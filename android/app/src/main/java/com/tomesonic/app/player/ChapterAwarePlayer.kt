@@ -29,6 +29,10 @@ class ChapterAwarePlayer(
     private var chapterChangeListener: ((BookChapter?) -> Unit)? = null
     private var lastKnownPosition: Long = 0L
 
+    // Chapter transition debouncing to prevent rapid successive transitions
+    private var lastChapterTransitionTime: Long = 0L
+    private var isInChapterTransition: Boolean = false
+
     // Manage listeners registered with this wrapper
     private val wrapperListeners = mutableListOf<Player.Listener>()
     private var forwardingListener: Player.Listener? = null
@@ -42,6 +46,8 @@ class ChapterAwarePlayer(
         private const val POSITION_CHANGE_THRESHOLD = 2000L
         // Minimum time to keep startup phase active (prevents premature chapter logic during preparation)
         private const val STARTUP_PHASE_DURATION = 3000L
+        // Minimum time between chapter transitions to prevent rapid skipping (500ms)
+        private const val CHAPTER_TRANSITION_COOLDOWN = 500L
     }
 
     init {
@@ -337,9 +343,26 @@ class ChapterAwarePlayer(
             val previousChapterIndex = currentChapterIndex
             val newChapterIndex = session.chapters.indexOf(chapter)
             if (newChapterIndex != previousChapterIndex && previousChapterIndex != -1) {
-                Log.i(tag, "CHAPTER TRANSITION: Changed from chapter $previousChapterIndex to chapter $newChapterIndex ('${chapter.title}')")
-                currentChapterIndex = newChapterIndex
-                chapterChangeListener?.invoke(chapter)
+                val currentTime = System.currentTimeMillis()
+                val timeSinceLastTransition = currentTime - lastChapterTransitionTime
+
+                // Apply debouncing to prevent rapid chapter transitions
+                if (timeSinceLastTransition >= CHAPTER_TRANSITION_COOLDOWN && !isInChapterTransition) {
+                    Log.i(tag, "CHAPTER TRANSITION: Changed from chapter $previousChapterIndex to chapter $newChapterIndex ('${chapter.title}')")
+
+                    isInChapterTransition = true
+                    lastChapterTransitionTime = currentTime
+                    currentChapterIndex = newChapterIndex
+                    chapterChangeListener?.invoke(chapter)
+
+                    // Clear transition flag after cooldown
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        isInChapterTransition = false
+                        Log.d(tag, "Chapter transition cooldown ended")
+                    }, CHAPTER_TRANSITION_COOLDOWN)
+                } else {
+                    Log.d(tag, "Chapter transition debounced: too soon since last transition (${timeSinceLastTransition}ms < ${CHAPTER_TRANSITION_COOLDOWN}ms)")
+                }
             } else if (currentChapterIndex == -1) {
                 // First time setting current chapter
                 currentChapterIndex = newChapterIndex

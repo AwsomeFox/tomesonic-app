@@ -164,18 +164,43 @@ class NetworkConnectivityManager(
 
                                         Log.d("NetworkConnectivityManager", "Using fresh session with position: ${freshSession.currentTime}s")
 
-                                        // Determine if we should start playing based on Android Auto mode
-                                        val shouldStartPlaying = service.isAndroidAuto
-                                        val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+                                        // Check if the player is actively playing
+                                        val isActivelyPlaying = service.currentPlayer.isPlaying
+                                        val currentPosition = if (isActivelyPlaying) service.getCurrentTime() else -1L
+
+                                        Log.d("NetworkConnectivityManager", "Player active: $isActivelyPlaying, current position: ${currentPosition}ms")
 
                                         Handler(Looper.getMainLooper()).post {
-                                            if (service.mediaProgressSyncer.listeningTimerRunning) {
-                                                service.mediaProgressSyncer.stop {
+                                            if (isActivelyPlaying) {
+                                                // During active playback, just update the session URLs without re-preparing
+                                                Log.d("NetworkConnectivityManager", "Player is actively playing - updating session without re-preparation")
+
+                                                // Preserve the current playing position by updating the fresh session
+                                                if (currentPosition >= 0) {
+                                                    freshSession.currentTime = currentPosition / 1000.0 // Convert ms to seconds
+                                                    Log.d("NetworkConnectivityManager", "Preserved current position: ${freshSession.currentTime}s")
+                                                }
+
+                                                // Update the current session reference without stopping playback
+                                                service.currentPlaybackSession = freshSession
+                                                service.mediaProgressSyncer.currentPlaybackSession = freshSession
+
+                                                Log.d("NetworkConnectivityManager", "Session updated without interrupting playback")
+                                            } else {
+                                                // Player is not actively playing, safe to re-prepare
+                                                Log.d("NetworkConnectivityManager", "Player is not playing - safe to re-prepare")
+
+                                                val shouldStartPlaying = service.isAndroidAuto
+                                                val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+
+                                                if (service.mediaProgressSyncer.listeningTimerRunning) {
+                                                    service.mediaProgressSyncer.stop {
+                                                        service.preparePlayer(freshSession, shouldStartPlaying, savedPlaybackSpeed)
+                                                    }
+                                                } else {
+                                                    service.mediaProgressSyncer.reset()
                                                     service.preparePlayer(freshSession, shouldStartPlaying, savedPlaybackSpeed)
                                                 }
-                                            } else {
-                                                service.mediaProgressSyncer.reset()
-                                                service.preparePlayer(freshSession, shouldStartPlaying, savedPlaybackSpeed)
                                             }
                                         }
                                     })
@@ -193,19 +218,43 @@ class NetworkConnectivityManager(
                                     lastPlaybackSession
                                 }
 
-                                // Determine if we should start playing based on Android Auto mode
-                                val shouldStartPlaying = service.isAndroidAuto
+                                // Check if the player is actively playing
+                                val isActivelyPlaying = service.currentPlayer.isPlaying
+                                val currentPosition = if (isActivelyPlaying) service.getCurrentTime() else -1L
 
-                                // Prepare the player with appropriate play state and saved playback speed
-                                val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+                                Log.d("NetworkConnectivityManager", "Local session - Player active: $isActivelyPlaying, current position: ${currentPosition}ms")
+
                                 Handler(Looper.getMainLooper()).post {
-                                    if (service.mediaProgressSyncer.listeningTimerRunning) {
-                                        service.mediaProgressSyncer.stop {
+                                    if (isActivelyPlaying) {
+                                        // During active playback, just update the session without re-preparing
+                                        Log.d("NetworkConnectivityManager", "Local session - Player is actively playing - updating session without re-preparation")
+
+                                        // Preserve the current playing position by updating the session
+                                        if (currentPosition >= 0) {
+                                            sessionToUse.currentTime = currentPosition / 1000.0 // Convert ms to seconds
+                                            Log.d("NetworkConnectivityManager", "Local session - Preserved current position: ${sessionToUse.currentTime}s")
+                                        }
+
+                                        // Update the current session reference without stopping playback
+                                        service.currentPlaybackSession = sessionToUse
+                                        service.mediaProgressSyncer.currentPlaybackSession = sessionToUse
+
+                                        Log.d("NetworkConnectivityManager", "Local session - Session updated without interrupting playback")
+                                    } else {
+                                        // Player is not actively playing, safe to re-prepare
+                                        Log.d("NetworkConnectivityManager", "Local session - Player is not playing - safe to re-prepare")
+
+                                        val shouldStartPlaying = service.isAndroidAuto
+                                        val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+
+                                        if (service.mediaProgressSyncer.listeningTimerRunning) {
+                                            service.mediaProgressSyncer.stop {
+                                                service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
+                                            }
+                                        } else {
+                                            service.mediaProgressSyncer.reset()
                                             service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
                                         }
-                                    } else {
-                                        service.mediaProgressSyncer.reset()
-                                        service.preparePlayer(sessionToUse, shouldStartPlaying, savedPlaybackSpeed)
                                     }
                                 }
                             })
