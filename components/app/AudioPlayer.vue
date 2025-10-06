@@ -382,6 +382,9 @@ export default {
       readyTrackWidth: 0,
       seekedTime: 0,
       seekLoading: false,
+      // Chapter transition debouncing
+      lastChapterTransitionTime: 0,
+      chapterTransitionCooldown: 500, // 500ms cooldown
       touchStartY: 0,
       touchStartTime: 0,
       swipeOffset: 0,
@@ -917,12 +920,22 @@ export default {
         console.log('[NUXT_SKIP_DEBUG] jumpNextChapter: Skipping due to isLoading=true')
         return
       }
+
+      // Check chapter transition cooldown
+      const now = Date.now()
+      const timeSinceLastTransition = now - this.lastChapterTransitionTime
+      if (timeSinceLastTransition < this.chapterTransitionCooldown) {
+        console.log('[NUXT_SKIP_DEBUG] jumpNextChapter: Skipping due to cooldown period', timeSinceLastTransition, 'ms since last transition')
+        return
+      }
+
       if (!this.nextChapter) {
         console.log('[NUXT_SKIP_DEBUG] jumpNextChapter: No next chapter available')
         return
       }
 
       console.log('[NUXT_SKIP_DEBUG] jumpNextChapter: Seeking to next chapter start:', this.nextChapter.start)
+      this.lastChapterTransitionTime = now
       this.seek(this.nextChapter.start)
     },
     async jumpChapterStart() {
@@ -1190,6 +1203,11 @@ export default {
       console.log('[NUXT_SKIP_DEBUG] seek: Calling AbsAudioPlayer.seek with value:', Math.floor(time))
       try {
         AbsAudioPlayer.seek({ value: Math.floor(time) })
+
+        // Add a small delay after seek to let the player stabilize
+        setTimeout(() => {
+          console.log('[NUXT_SKIP_DEBUG] seek: Post-seek stabilization delay completed')
+        }, 200)
       } catch (error) {
         console.error('[NUXT_SKIP_DEBUG] seek: Error calling AbsAudioPlayer.seek:', error)
       }

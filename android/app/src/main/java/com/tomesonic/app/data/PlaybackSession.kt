@@ -328,16 +328,32 @@ class PlaybackSession(
                         coverUri.toFile()
                 )
 
-        // Grant URI permissions to Android Auto packages so they can access the content
+        // Grant URI permissions to Android Auto and System UI so they can access the content
         try {
-          val androidAutoPackages = arrayOf(
+          val packagesNeedingPermission = arrayOf(
             ANDROID_AUTO_PKG_NAME,
             ANDROID_AUTO_SIMULATOR_PKG_NAME,
-            ANDROID_AUTOMOTIVE_PKG_NAME
+            ANDROID_AUTOMOTIVE_PKG_NAME,
+            "com.android.systemui" // Required for media notifications
           )
 
-          for (packageName in androidAutoPackages) {
-            ctx.grantUriPermission(packageName, coverUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          val packageManager = ctx.packageManager
+          for (packageName in packagesNeedingPermission) {
+            try {
+              // Check if package exists before granting permission to avoid AppOps warnings
+              if (packageName == "com.android.systemui") {
+                // System UI always exists, grant directly
+                ctx.grantUriPermission(packageName, coverUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+              } else {
+                // Check if package is installed before granting
+                packageManager.getPackageInfo(packageName, 0)
+                ctx.grantUriPermission(packageName, coverUri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+              }
+            } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+              // Package not installed, skip
+            } catch (se: SecurityException) {
+              // Silently ignore SecurityException - already have permission
+            }
           }
         } catch (e: Exception) {
           Log.w("PlaybackSession", "getCoverUri - Failed to grant URI permissions: ${e.message}")
