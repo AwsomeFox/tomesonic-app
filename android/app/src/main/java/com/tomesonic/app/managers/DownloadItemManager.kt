@@ -41,6 +41,9 @@ class DownloadItemManager(
           jacksonObjectMapper()
                   .enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS.mappedFeature())
 
+  // Download notification manager for background download notifications
+  private val downloadNotificationManager = DownloadNotificationManager(mainActivity)
+
   enum class DownloadCheckStatus {
     InProgress,
     Successful,
@@ -51,6 +54,10 @@ class DownloadItemManager(
           mutableListOf() // All pending and downloading items
   var currentDownloadItemParts: MutableList<DownloadItemPart> =
           mutableListOf() // Item parts currently being downloaded
+
+  private var completedDownloadsCount = 0
+  private var failedDownloadsCount = 0
+  private var lastCompletedItemTitle: String? = null
 
   interface DownloadEventEmitter {
     fun onDownloadItem(downloadItem: DownloadItem)
@@ -74,6 +81,10 @@ class DownloadItemManager(
 
     downloadItemQueue.add(downloadItem)
     clientEventEmitter.onDownloadItem(downloadItem)
+
+    // Show initial download notification
+    updateDownloadNotification()
+
     checkUpdateDownloadQueue()
   }
 
@@ -156,6 +167,9 @@ class DownloadItemManager(
       Log.d(tag, "Starting watching downloads")
       isDownloading = true
 
+      // Show initial notification when download watching starts
+      updateDownloadNotification()
+
       while (currentDownloadItemParts.isNotEmpty()) {
         val itemParts = currentDownloadItemParts.filter { !it.isMoving }
         for (downloadItemPart in itemParts) {
@@ -187,6 +201,9 @@ class DownloadItemManager(
       downloadItem?.let { checkDownloadItemFinished(it) }
       currentDownloadItemParts.remove(downloadItemPart)
     }
+
+    // Update notification with progress
+    updateDownloadNotification()
   }
 
   /** Handles an external download part. */
@@ -197,6 +214,9 @@ class DownloadItemManager(
     // Will move to final destination, remove current item parts, and check if download item is
     // finished
     handleDownloadItemPartCheck(downloadCheckStatus, downloadItemPart)
+
+    // Update notification with progress
+    updateDownloadNotification()
   }
 
   /** Checks the status of a download item part. */
@@ -347,6 +367,15 @@ class DownloadItemManager(
     if (downloadItem.isDownloadFinished) {
       Log.i(tag, "Download Item finished ${downloadItem.media.metadata.title}")
 
+      // Track completion - check if any parts failed
+      val hasFailed = downloadItem.downloadItemParts.any { it.failed }
+      if (hasFailed) {
+        failedDownloadsCount++
+      } else {
+        completedDownloadsCount++
+        lastCompletedItemTitle = downloadItem.itemTitle
+      }
+
       GlobalScope.launch(Dispatchers.IO) {
         folderScanner.scanDownloadItem(downloadItem) { downloadItemScanResult ->
           Log.d(
@@ -377,9 +406,96 @@ class DownloadItemManager(
             clientEventEmitter.onDownloadItemComplete(jsobj)
             downloadItemQueue.remove(downloadItem)
             DeviceManager.dbManager.removeDownloadItem(downloadItem.id)
+
+            // Show completion notification if queue is empty
+            if (downloadItemQueue.isEmpty() && currentDownloadItemParts.isEmpty()) {
+              showFinalNotification()
+            }
           }
         }
       }
+    }
+  }
+
+  /**
+   * Updates the download notification with current progress
+   */
+  private fun updateDownloadNotification() {
+    if (downloadItemQueue.isEmpty() && !isDownloading) {
+      Log.d(tag, "updateDownloadNotification: Queue is empty and not downloading, dismissing notification")
+      downloadNotificationManager.dismissNotification()
+      return
+    }
+
+    if (downloadItemQueue.isEmpty()) {
+      Log.d(tag, "updateDownloadNotification: Queue is empty, not showing notification")
+      return
+    }
+
+    val currentItem = downloadItemQueue.firstOrNull()
+    val totalItems = downloadItemQueue.size + completedDownloadsCount + failedDownloadsCount
+    val completedItems = completedDownloadsCount + failedDownloadsCount
+
+    Log.d(tag, "updateDownloadNotification: Updating notification for ${currentItem?.itemTitle}, totalItems=$totalItems, completedItems=$completedItems")
+
+    // Calculate overall progress for current item
+    val currentProgress = if (currentItem != null) {
+      val totalParts = currentItem.downloadItemParts.size
+      val completedParts = currentItem.downloadItemParts.count { it.completed || it.moved }
+      val inProgressParts = currentDownloadItemParts.filter { it.downloadItemId == currentItem.id }
+
+      if (totalParts > 0) {
+        val baseProgress = (completedParts * 100) / totalParts
+        val inProgressContribution = inProgressParts.sumOf { it.progress.toInt() } / totalParts
+        (baseProgress + inProgressContribution).coerceIn(0, 100)
+      } else {
+        0
+      }
+    } else {
+      0
+    }
+
+    downloadNotificationManager.showDownloadNotification(
+      currentItem,
+      totalItems,
+      completedItems,
+      currentProgress
+    )
+  }
+
+  /**
+   * Shows final completion notification when all downloads are done
+   */
+  private fun showFinalNotification() {
+    if (completedDownloadsCount == 0 && failedDownloadsCount == 0) {
+      downloadNotificationManager.dismissNotification()
+      return
+    }
+
+    val totalCompleted = completedDownloadsCount + failedDownloadsCount
+
+    if (totalCompleted == 1) {
+      // Single item completed - show simple completion message
+      val itemTitle = lastCompletedItemTitle ?: "Download"
+      val success = failedDownloadsCount == 0
+      downloadNotificationManager.showCompletionNotification(itemTitle, success)
+    } else {
+      // Multiple items completed - show summary
+      downloadNotificationManager.showMultipleCompletionNotification(
+        completedDownloadsCount,
+        failedDownloadsCount
+      )
+    }
+
+    // Reset counters
+    completedDownloadsCount = 0
+    failedDownloadsCount = 0
+    lastCompletedItemTitle = null
+
+    // Auto-dismiss after a shorter delay (3 seconds) - user can tap to dismiss immediately
+    GlobalScope.launch(Dispatchers.Main) {
+      delay(3000) // 3 seconds
+      downloadNotificationManager.dismissNotification()
     }
   }
 }

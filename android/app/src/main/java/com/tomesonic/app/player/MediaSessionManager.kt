@@ -68,10 +68,7 @@ class MediaSessionManager(
 
         mediaSession = sessionBuilder.build()
 
-        // Set up PlayerNotificationManager for Media3
-        setupPlayerNotificationManager(notificationId, channelId, player)
-
-        Log.d(TAG, "Media3 MediaLibrarySession and PlayerNotificationManager initialized successfully")
+        Log.d(TAG, "Media3 MediaLibrarySession initialized (notification via MediaNotificationProvider)")
     }
 
     private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
@@ -81,6 +78,7 @@ class MediaSessionManager(
         playerNotificationManager = PlayerNotificationManager.Builder(context, notificationId, channelId)
             .setMediaDescriptionAdapter(mediaDescriptionAdapter)
             .setNotificationListener(notificationListener)
+            .setSmallIconResourceId(R.drawable.abs_audiobookshelf)  // Set TomeSonic icon
             .build()
 
         playerNotificationManager?.setPlayer(player)
@@ -137,6 +135,22 @@ class MediaSessionManager(
                 .setIconResId(getSpeedIcon(currentSpeed))
                 .setDisplayName("Speed")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
+                .build()
+        )
+
+        // Skip to previous chapter button (previous track icon)
+        customActions.add(
+            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_PREVIOUS)
+                .setDisplayName("Previous Chapter")
+                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS, Bundle.EMPTY))
+                .build()
+        )
+
+        // Skip to next chapter button (next track icon)
+        customActions.add(
+            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_NEXT)
+                .setDisplayName("Next Chapter")
+                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT, Bundle.EMPTY))
                 .build()
         )
 
@@ -210,18 +224,13 @@ class MediaSessionManager(
     fun updatePlayer(newPlayer: Player) {
         Log.d(TAG, "updatePlayer: Switching to new player type: ${newPlayer.javaClass.simpleName}")
 
-        // Update notification manager with new player
-        playerNotificationManager?.setPlayer(newPlayer)
+        // Update MediaSession player
+        mediaSession?.player = newPlayer
 
-        // The MediaSession itself doesn't need to be recreated in Media3
-        // The playerNotificationManager handles the player switch seamlessly
         Log.d(TAG, "updatePlayer: Player updated successfully")
     }
 
     fun release() {
-        playerNotificationManager?.setPlayer(null)
-        playerNotificationManager = null
-
         mediaSession?.let { session: MediaLibrarySession ->
             session.release()
             Log.d(TAG, "Media3 MediaLibrarySession released")

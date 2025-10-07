@@ -55,9 +55,16 @@ class MainActivity : BridgeActivity() {
   val storage = SimpleStorage(this)
 
   val REQUEST_PERMISSIONS = 1
-  var PERMISSIONS_ALL = arrayOf(
-    Manifest.permission.READ_EXTERNAL_STORAGE
-  )
+  var PERMISSIONS_ALL = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    arrayOf(
+      Manifest.permission.READ_EXTERNAL_STORAGE,
+      Manifest.permission.POST_NOTIFICATIONS
+    )
+  } else {
+    arrayOf(
+      Manifest.permission.READ_EXTERNAL_STORAGE
+    )
+  }
 
   public override fun onCreate(savedInstanceState: Bundle?) {
     DbManager.initialize(applicationContext)

@@ -2,11 +2,19 @@
   <!-- Android 12+ Dynamic Colors Theme -->
   <style name="AppTheme" parent="Theme.Material3.DynamicColors.DayNight">
     <!-- Use system dynamic colors -->
+    <!-- Material 3 Expressive dialogs with rounded corners -->
+    <item name="android:alertDialogTheme">@style/ThemeOverlay.TomeSonic.MaterialAlertDialog</item>
+    <item name="alertDialogTheme">@style/ThemeOverlay.TomeSonic.MaterialAlertDialog</item>
+    <item name="materialAlertDialogTheme">@style/ThemeOverlay.TomeSonic.MaterialAlertDialog</item>
   </style>
 
   <style name="AppTheme.NoActionBar" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar">
     <item name="windowActionBar">false</item>
     <item name="windowNoTitle">true</item>
+    <!-- Material 3 Expressive dialogs with rounded corners -->
+    <item name="android:alertDialogTheme">@style/ThemeOverlay.TomeSonic.MaterialAlertDialog</item>
+    <item name="alertDialogTheme">@style/ThemeOverlay.TomeSonic.MaterialAlertDialog</item>
+    <item name="materialAlertDialogTheme">@style/ThemeOverlay.TomeSonic.MaterialAlertDialog</item>
   <!-- Transparent system bars for immersive, edge-to-edge content -->
   <item name="android:statusBarColor">@android:color/transparent</item>
   <item name="android:navigationBarColor">@android:color/transparent</item>

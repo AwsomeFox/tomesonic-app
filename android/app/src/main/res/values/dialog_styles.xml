@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 Expressive Dialog Theme with Extra Rounded Corners -->
+    <style name="ThemeOverlay.TomeSonic.MaterialAlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <!-- Larger corner radius for expressive style (28dp) -->
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.TomeSonic.Dialog.Rounded</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.TomeSonic.Dialog.Rounded</item>
+        
+        <!-- Text styles -->
+        <item name="materialAlertDialogTitleTextStyle">@style/MaterialAlertDialog.TomeSonic.Title.Text</item>
+        <item name="materialAlertDialogBodyTextStyle">@style/MaterialAlertDialog.TomeSonic.Body.Text</item>
+        
+        <!-- Use dynamic Material You colors -->
+        <item name="android:colorBackground">@android:color/system_neutral1_900</item>
+        <item name="backgroundTint">@android:color/system_neutral1_900</item>
+        
+        <!-- Button style -->
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.Material3.Button.TextButton.Dialog</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.Material3.Button.TextButton.Dialog</item>
+    </style>
+
+    <!-- Extra rounded corners for expressive design (28dp for Material 3 Expressive) -->
+    <style name="ShapeAppearance.TomeSonic.Dialog.Rounded" parent="ShapeAppearance.Material3.Corner.Large">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">28dp</item>
+        <item name="cornerFamilyTopLeft">rounded</item>
+        <item name="cornerFamilyTopRight">rounded</item>
+        <item name="cornerFamilyBottomLeft">rounded</item>
+        <item name="cornerFamilyBottomRight">rounded</item>
+        <item name="cornerSizeTopLeft">28dp</item>
+        <item name="cornerSizeTopRight">28dp</item>
+        <item name="cornerSizeBottomLeft">28dp</item>
+        <item name="cornerSizeBottomRight">28dp</item>
+    </style>
+
+    <!-- Title text style - use dynamic colors -->
+    <style name="MaterialAlertDialog.TomeSonic.Title.Text" parent="MaterialAlertDialog.Material3.Title.Text">
+        <item name="android:textSize">22sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@android:color/system_neutral1_10</item>
+    </style>
+
+    <!-- Body text style - use dynamic colors -->
+    <style name="MaterialAlertDialog.TomeSonic.Body.Text" parent="MaterialAlertDialog.Material3.Body.Text">
+        <item name="android:textColor">@android:color/system_neutral1_10</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+</resources>

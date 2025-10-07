@@ -78,7 +78,11 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.ui.PlayerNotificationManager
+import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaNotification
+import androidx.media3.session.CommandButton
 import com.tomesonic.app.player.ChapterNavigationHelper
+import android.os.Build
 import java.util.*
 import kotlin.concurrent.schedule
 import kotlinx.coroutines.runBlocking
@@ -96,6 +100,8 @@ class PlayerNotificationService : MediaLibraryService() {
     const val CUSTOM_ACTION_JUMP_BACKWARD = "jump_backward"
     const val CUSTOM_ACTION_JUMP_FORWARD = "jump_forward"
     const val CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED = "change_playback_speed"
+    const val CUSTOM_ACTION_SKIP_TO_NEXT = "skip_to_next"
+    const val CUSTOM_ACTION_SKIP_TO_PREVIOUS = "skip_to_previous"
   }
 
   private val tag = "PlayerNotificationServ"
@@ -323,6 +329,12 @@ class PlayerNotificationService : MediaLibraryService() {
 
   override fun onCreate() {
     super.onCreate()
+
+    // Set up notification provider - icon is configured via AndroidManifest.xml meta-data
+    val notificationProvider = DefaultMediaNotificationProvider.Builder(this)
+      .build()
+    setMediaNotificationProvider(notificationProvider)
+
     ctx = this
 
     // Initialize Paper
@@ -2500,6 +2512,13 @@ class PlayerNotificationService : MediaLibraryService() {
     }
   }
 
+  // Required for Media3 to properly start foreground service
+  @RequiresApi(Build.VERSION_CODES.Q)
+  override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+    super.onUpdateNotification(session, startInForegroundRequired)
+    // Media3 handles the foreground service automatically
+  }
+
   /**
    * Checks if server has a newer session for the same media compared to local session
    */
@@ -4130,6 +4149,14 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         Log.d("PlayerNotificationServ", "Media3: CHANGE_PLAYBACK_SPEED -> calling cyclePlaybackSpeed()")
         service.cyclePlaybackSpeed()
       }
+      PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT -> {
+        Log.d("PlayerNotificationServ", "Media3: SKIP_TO_NEXT -> calling seekToNextChapter()")
+        service.seekToNextChapter()
+      }
+      PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS -> {
+        Log.d("PlayerNotificationServ", "Media3: SKIP_TO_PREVIOUS -> calling seekToPreviousChapter()")
+        service.seekToPreviousChapter()
+      }
     }
     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
   }
@@ -4137,6 +4164,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   /**
    * Intercept player commands from bluetooth/external controls and redirect skip commands
    * to jump forward/backward instead of skipping to next/previous items in queue
+   * Also intercept SEEK_BACK/SEEK_FORWARD to use our custom jump amounts
    */
   override fun onPlayerCommandRequest(
     session: MediaSession,
@@ -4145,14 +4173,26 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ): Int {
     return when (playerCommand) {
       Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_NEXT -> {
-        // Intercept next track command from bluetooth and redirect to jump forward
-        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to next, redirecting to jump forward")
+        // Intercept next track command from bluetooth/car and redirect to jump forward
+        Log.d("PlayerNotificationServ", "External Control: Intercepting skip to next, redirecting to jump forward")
         service.jumpForward()
         SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
       }
       Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, Player.COMMAND_SEEK_TO_PREVIOUS -> {
-        // Intercept previous track command from bluetooth and redirect to jump backward
-        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to previous, redirecting to jump backward")
+        // Intercept previous track command from bluetooth/car and redirect to jump backward
+        Log.d("PlayerNotificationServ", "External Control: Intercepting skip to previous, redirecting to jump backward")
+        service.jumpBackward()
+        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+      }
+      Player.COMMAND_SEEK_FORWARD -> {
+        // Intercept seek forward from bluetooth/car to use our custom jump amount
+        Log.d("PlayerNotificationServ", "External Control: Intercepting seek forward, redirecting to jump forward")
+        service.jumpForward()
+        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+      }
+      Player.COMMAND_SEEK_BACK -> {
+        // Intercept seek back from bluetooth/car to use our custom jump amount
+        Log.d("PlayerNotificationServ", "External Control: Intercepting seek back, redirecting to jump backward")
         service.jumpBackward()
         SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
       }
@@ -4399,33 +4439,49 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
   override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
     val connectionResult = super.onConnect(session, controller)
-    val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
-    val availablePlayerCommands = connectionResult.availablePlayerCommands.buildUpon()
 
-    // Add custom session commands
+    // Build custom session commands from scratch
+    val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
+    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT, Bundle.EMPTY))
+    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS, Bundle.EMPTY))
 
-    // CRITICAL: Disable default Android Auto skip buttons to prevent duplicates
-    // This is equivalent to the original setUseNextAction(false) and setUsePreviousAction(false)
-    availablePlayerCommands.remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-    availablePlayerCommands.remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-
-    // Enable only the commands we want for Android Auto compatibility
-    availablePlayerCommands.add(Player.COMMAND_SEEK_BACK)
-    availablePlayerCommands.add(Player.COMMAND_SEEK_FORWARD)
-    availablePlayerCommands.add(Player.COMMAND_SET_SPEED_AND_PITCH)
-    availablePlayerCommands.add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
-
-    // Keep standard playback controls
-    availablePlayerCommands.add(Player.COMMAND_PLAY_PAUSE)
-    availablePlayerCommands.add(Player.COMMAND_PREPARE)
-    availablePlayerCommands.add(Player.COMMAND_STOP)
+    // Build player commands explicitly to control Android Auto and Bluetooth behavior
+    // Start from an empty builder to have full control over which commands are available
+    val availablePlayerCommands = Player.Commands.Builder()
+      // Core playback controls
+      .add(Player.COMMAND_PLAY_PAUSE)
+      .add(Player.COMMAND_PREPARE)
+      .add(Player.COMMAND_STOP)
+      // Seek controls
+      .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+      .add(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
+      // Speed control
+      .add(Player.COMMAND_SET_SPEED_AND_PITCH)
+      // Audio attributes
+      .add(Player.COMMAND_SET_VOLUME)
+      .add(Player.COMMAND_ADJUST_DEVICE_VOLUME)
+      // Media metadata
+      .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+      .add(Player.COMMAND_GET_TIMELINE)
+      .add(Player.COMMAND_GET_MEDIA_ITEMS_METADATA)
+      .add(Player.COMMAND_GET_METADATA)
+      // Track selection
+      .add(Player.COMMAND_GET_TRACKS)
+      .add(Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS)
+      // EXPLICITLY OMITTED to force use of custom commands intercepted in onPlayerCommandRequest:
+      // - Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM (would skip chapters)
+      // - Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM (would skip chapters)
+      // - Player.COMMAND_SEEK_BACK (we intercept to use custom jump amount)
+      // - Player.COMMAND_SEEK_FORWARD (we intercept to use custom jump amount)
+      // All of these are intercepted in onPlayerCommandRequest and redirected to jumpForward/jumpBackward
+      .build()
 
     return MediaSession.ConnectionResult.accept(
       availableSessionCommands.build(),
-      availablePlayerCommands.build()
+      availablePlayerCommands
     )
   }
 

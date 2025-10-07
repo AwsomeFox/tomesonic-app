@@ -12,6 +12,8 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!-- Required for download notifications on Android 13+ -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -38,10 +40,10 @@
             android:resource="@xml/media_player_widget_info" />
         </receiver>
 
-        <!-- Used by Android Auto -->
+        <!-- Used by Android Auto and Media Notifications -->
         <meta-data
             android:name="com.google.android.gms.car.notification.SmallIcon"
-            android:resource="@drawable/icon" />
+            android:resource="@mipmap/ic_launcher_monochrome" />
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
@@ -106,6 +108,10 @@
                 <!-- Media3 MediaLibraryService for modern Android -->
                 <action android:name="androidx.media3.session.MediaLibraryService" />
             </intent-filter>
+            <!-- Custom notification icon for Media3 -->
+            <meta-data
+                android:name="androidx.media3.session.MediaLibraryService.smallIcon"
+                android:resource="@mipmap/ic_launcher_monochrome" />
         </service>
 
         <provider
