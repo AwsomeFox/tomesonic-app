@@ -5,15 +5,15 @@
         <!-- Larger corner radius for expressive style (28dp) -->
         <item name="shapeAppearanceOverlay">@style/ShapeAppearance.TomeSonic.Dialog.Rounded</item>
         <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.TomeSonic.Dialog.Rounded</item>
-        
+
         <!-- Text styles -->
         <item name="materialAlertDialogTitleTextStyle">@style/MaterialAlertDialog.TomeSonic.Title.Text</item>
         <item name="materialAlertDialogBodyTextStyle">@style/MaterialAlertDialog.TomeSonic.Body.Text</item>
-        
+
         <!-- Use dynamic Material You colors -->
         <item name="android:colorBackground">@android:color/system_neutral1_900</item>
         <item name="backgroundTint">@android:color/system_neutral1_900</item>
-        
+
         <!-- Button style -->
         <item name="buttonBarPositiveButtonStyle">@style/Widget.Material3.Button.TextButton.Dialog</item>
         <item name="buttonBarNegativeButtonStyle">@style/Widget.Material3.Button.TextButton.Dialog</item>
