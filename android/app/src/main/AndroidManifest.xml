@@ -7,6 +7,8 @@
     <!-- Permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -97,6 +99,12 @@
             </intent-filter>
         </receiver>
 
+        <receiver android:name=".services.DownloadCancelReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.tomesonic.app.ACTION_CANCEL_DOWNLOAD" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".player.PlayerNotificationService"
             android:enabled="true"
@@ -112,6 +120,13 @@
             <meta-data
                 android:name="androidx.media3.session.MediaLibraryService.smallIcon"
                 android:resource="@mipmap/ic_launcher_monochrome" />
+        </service>
+
+        <service
+            android:name=".services.DownloadService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync">
         </service>
 
         <provider

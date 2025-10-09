@@ -1,8 +1,12 @@
 package com.tomesonic.app.plugins
 
 import android.app.DownloadManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.os.Environment
+import android.os.IBinder
 import android.util.Log
 import com.tomesonic.app.MainActivity
 import com.tomesonic.app.data.*
@@ -12,6 +16,7 @@ import com.tomesonic.app.models.DownloadItem
 import com.tomesonic.app.models.DownloadItemPart
 import com.tomesonic.app.server.ApiHandler
 import com.tomesonic.app.managers.DownloadItemManager
+import com.tomesonic.app.services.DownloadService
 import com.fasterxml.jackson.core.json.JsonReadFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.getcapacitor.JSObject
@@ -32,6 +37,28 @@ class AbsDownloader : Plugin() {
   lateinit var folderScanner: FolderScanner
   lateinit var downloadItemManager: DownloadItemManager
 
+  // Service connection for DownloadService
+  private var downloadService: DownloadService? = null
+  private var isServiceBound = false
+
+  private val serviceConnection = object : ServiceConnection {
+    override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+      Log.d(tag, "DownloadService connected")
+      val binder = service as DownloadService.LocalBinder
+      downloadService = binder.getService()
+      downloadService?.setDownloadManager(downloadItemManager)
+      downloadItemManager.downloadService = downloadService
+      isServiceBound = true
+    }
+
+    override fun onServiceDisconnected(name: ComponentName?) {
+      Log.d(tag, "DownloadService disconnected")
+      downloadService = null
+      downloadItemManager.downloadService = null
+      isServiceBound = false
+    }
+  }
+
   private val clientEventEmitter = (object : DownloadItemManager.DownloadEventEmitter {
     override fun onDownloadItem(downloadItem:DownloadItem) {
       notifyListeners("onDownloadItem", JSObject(jacksonMapper.writeValueAsString(downloadItem)))
@@ -50,6 +77,26 @@ class AbsDownloader : Plugin() {
     folderScanner = FolderScanner(mainActivity)
     apiHandler = ApiHandler(mainActivity)
     downloadItemManager = DownloadItemManager(downloadManager, folderScanner, mainActivity, clientEventEmitter)
+
+    // Bind to download service if it's already running
+    if (DownloadService.isRunning) {
+      bindToDownloadService()
+    }
+  }
+
+  override fun handleOnDestroy() {
+    super.handleOnDestroy()
+
+    // Unbind from service but don't stop it - downloads should continue
+    if (isServiceBound) {
+      mainActivity.unbindService(serviceConnection)
+      isServiceBound = false
+    }
+  }
+
+  private fun bindToDownloadService() {
+    val intent = Intent(mainActivity, DownloadService::class.java)
+    mainActivity.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
   }
 
   @PluginMethod
@@ -222,6 +269,7 @@ class AbsDownloader : Plugin() {
           downloadItem.downloadItemParts.add(downloadItemPart)
         }
 
+        ensureServiceBound()
         downloadItemManager.addDownloadItem(downloadItem)
       }
     } else {
@@ -269,7 +317,55 @@ class AbsDownloader : Plugin() {
         }
       }
 
+      ensureServiceBound()
       downloadItemManager.addDownloadItem(downloadItem)
+    }
+  }
+
+  /**
+   * Cancels a specific download
+   */
+  @PluginMethod
+  fun cancelDownload(call: PluginCall) {
+    val libraryItemId = call.data.getString("libraryItemId")
+    val episodeId = call.data.getString("episodeId")
+
+    if (libraryItemId == null) {
+      call.reject("libraryItemId is required")
+      return
+    }
+
+    val downloadId = if (episodeId.isNullOrEmpty() || episodeId == "null") {
+      libraryItemId
+    } else {
+      "$libraryItemId-$episodeId"
+    }
+
+    Log.d(tag, "Cancelling download: $downloadId")
+    downloadItemManager.cancelDownload(downloadId)
+    call.resolve()
+  }
+
+  /**
+   * Cancels all active downloads
+   */
+  @PluginMethod
+  fun cancelAllDownloads(call: PluginCall) {
+    Log.d(tag, "Cancelling all downloads")
+    downloadItemManager.cancelAllDownloads()
+    call.resolve()
+  }
+
+  /**
+   * Ensures the download service is bound before starting downloads
+   */
+  private fun ensureServiceBound() {
+    if (!isServiceBound && !DownloadService.isRunning) {
+      // Service will be started by DownloadItemManager, but bind to it
+      bindToDownloadService()
+    } else if (DownloadService.isRunning && !isServiceBound) {
+      // Service is running but not bound, bind to it
+      bindToDownloadService()
     }
   }
 }

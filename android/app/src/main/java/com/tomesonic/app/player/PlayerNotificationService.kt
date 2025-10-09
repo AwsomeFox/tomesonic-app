@@ -4185,13 +4185,13 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
       }
       Player.COMMAND_SEEK_FORWARD -> {
-        // Intercept seek forward from bluetooth/car to use our custom jump amount
+        // Intercept seek forward (including KEYCODE_MEDIA_FAST_FORWARD) to use our custom jump amount
         Log.d("PlayerNotificationServ", "External Control: Intercepting seek forward, redirecting to jump forward")
         service.jumpForward()
         SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
       }
       Player.COMMAND_SEEK_BACK -> {
-        // Intercept seek back from bluetooth/car to use our custom jump amount
+        // Intercept seek back (including KEYCODE_MEDIA_REWIND) to use our custom jump amount
         Log.d("PlayerNotificationServ", "External Control: Intercepting seek back, redirecting to jump backward")
         service.jumpBackward()
         SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
@@ -4458,6 +4458,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       // Seek controls
       .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
       .add(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
+      .add(Player.COMMAND_SEEK_FORWARD) // For KEYCODE_MEDIA_FAST_FORWARD - intercepted and redirected
+      .add(Player.COMMAND_SEEK_BACK) // For KEYCODE_MEDIA_REWIND - intercepted and redirected
       // Speed control
       .add(Player.COMMAND_SET_SPEED_AND_PITCH)
       // Audio attributes
@@ -4471,12 +4473,24 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       // Track selection
       .add(Player.COMMAND_GET_TRACKS)
       .add(Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS)
+      // Media item management - REQUIRED for Android Auto to add/set media items
+      .add(Player.COMMAND_CHANGE_MEDIA_ITEMS)
+      .add(Player.COMMAND_SET_MEDIA_ITEM)
+      .add(Player.COMMAND_SEEK_TO_MEDIA_ITEM)
+      // Device volume commands
+      .add(Player.COMMAND_GET_DEVICE_VOLUME)
+      .add(Player.COMMAND_SET_DEVICE_VOLUME)
+      .add(Player.COMMAND_SET_DEVICE_VOLUME_WITH_FLAGS)
+      // Audio attributes
+      .add(Player.COMMAND_GET_AUDIO_ATTRIBUTES)
+      .add(Player.COMMAND_SET_AUDIO_ATTRIBUTES)
+      // Player release
+      .add(Player.COMMAND_RELEASE)
       // EXPLICITLY OMITTED to force use of custom commands intercepted in onPlayerCommandRequest:
       // - Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM (would skip chapters)
       // - Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM (would skip chapters)
-      // - Player.COMMAND_SEEK_BACK (we intercept to use custom jump amount)
-      // - Player.COMMAND_SEEK_FORWARD (we intercept to use custom jump amount)
-      // All of these are intercepted in onPlayerCommandRequest and redirected to jumpForward/jumpBackward
+      // Note: COMMAND_SEEK_FORWARD and COMMAND_SEEK_BACK are ENABLED but intercepted in
+      // onPlayerCommandRequest to redirect to jumpForward/jumpBackward with custom amounts
       .build()
 
     return MediaSession.ConnectionResult.accept(

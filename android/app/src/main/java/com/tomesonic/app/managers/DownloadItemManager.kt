@@ -15,6 +15,7 @@ import com.tomesonic.app.device.DeviceManager
 import com.tomesonic.app.device.FolderScanner
 import com.tomesonic.app.models.DownloadItem
 import com.tomesonic.app.models.DownloadItemPart
+import com.tomesonic.app.services.DownloadService
 import com.fasterxml.jackson.core.json.JsonReadFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.getcapacitor.JSObject
@@ -23,7 +24,9 @@ import java.io.FileOutputStream
 import java.util.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -43,6 +46,12 @@ class DownloadItemManager(
 
   // Download notification manager for background download notifications
   private val downloadNotificationManager = DownloadNotificationManager(mainActivity)
+
+  // Coroutine scope for downloads - uses application lifecycle instead of GlobalScope
+  private val downloadScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+  // Reference to download service (set when service is bound)
+  var downloadService: DownloadService? = null
 
   enum class DownloadCheckStatus {
     InProgress,
@@ -82,8 +91,13 @@ class DownloadItemManager(
     downloadItemQueue.add(downloadItem)
     clientEventEmitter.onDownloadItem(downloadItem)
 
-    // Show initial download notification
-    updateDownloadNotification()
+    // Start download service if not already running
+    if (!DownloadService.isRunning) {
+      DownloadService.start(mainActivity)
+    }
+
+    // Show initial service notification
+    updateServiceNotification()
 
     checkUpdateDownloadQueue()
   }
@@ -163,12 +177,12 @@ class DownloadItemManager(
   private fun startWatchingDownloads() {
     if (isDownloading) return // Already watching
 
-    GlobalScope.launch(Dispatchers.IO) {
+    downloadScope.launch {
       Log.d(tag, "Starting watching downloads")
       isDownloading = true
 
-      // Show initial notification when download watching starts
-      updateDownloadNotification()
+      // Show initial service notification when download watching starts
+      updateServiceNotification()
 
       while (currentDownloadItemParts.isNotEmpty()) {
         val itemParts = currentDownloadItemParts.filter { !it.isMoving }
@@ -189,6 +203,9 @@ class DownloadItemManager(
 
       Log.d(tag, "Finished watching downloads")
       isDownloading = false
+
+      // Stop download service when all downloads are complete
+      downloadService?.stopServiceIfNoDownloads()
     }
   }
 
@@ -202,8 +219,8 @@ class DownloadItemManager(
       currentDownloadItemParts.remove(downloadItemPart)
     }
 
-    // Update notification with progress
-    updateDownloadNotification()
+    // Update service notification with progress
+    updateServiceNotification()
   }
 
   /** Handles an external download part. */
@@ -215,8 +232,8 @@ class DownloadItemManager(
     // finished
     handleDownloadItemPartCheck(downloadCheckStatus, downloadItemPart)
 
-    // Update notification with progress
-    updateDownloadNotification()
+    // Update service notification with progress
+    updateServiceNotification()
   }
 
   /** Checks the status of a download item part. */
@@ -376,7 +393,7 @@ class DownloadItemManager(
         lastCompletedItemTitle = downloadItem.itemTitle
       }
 
-      GlobalScope.launch(Dispatchers.IO) {
+      downloadScope.launch {
         folderScanner.scanDownloadItem(downloadItem) { downloadItemScanResult ->
           Log.d(
                   tag,
@@ -418,17 +435,16 @@ class DownloadItemManager(
   }
 
   /**
-   * Updates the download notification with current progress
+   * Updates the service notification with current progress
    */
-  private fun updateDownloadNotification() {
+  private fun updateServiceNotification() {
     if (downloadItemQueue.isEmpty() && !isDownloading) {
-      Log.d(tag, "updateDownloadNotification: Queue is empty and not downloading, dismissing notification")
-      downloadNotificationManager.dismissNotification()
+      Log.d(tag, "updateServiceNotification: Queue is empty and not downloading")
       return
     }
 
     if (downloadItemQueue.isEmpty()) {
-      Log.d(tag, "updateDownloadNotification: Queue is empty, not showing notification")
+      Log.d(tag, "updateServiceNotification: Queue is empty, not showing notification")
       return
     }
 
@@ -436,7 +452,7 @@ class DownloadItemManager(
     val totalItems = downloadItemQueue.size + completedDownloadsCount + failedDownloadsCount
     val completedItems = completedDownloadsCount + failedDownloadsCount
 
-    Log.d(tag, "updateDownloadNotification: Updating notification for ${currentItem?.itemTitle}, totalItems=$totalItems, completedItems=$completedItems")
+    Log.d(tag, "updateServiceNotification: Updating notification for ${currentItem?.itemTitle}, totalItems=$totalItems, completedItems=$completedItems")
 
     // Calculate overall progress for current item
     val currentProgress = if (currentItem != null) {
@@ -455,12 +471,15 @@ class DownloadItemManager(
       0
     }
 
-    downloadNotificationManager.showDownloadNotification(
-      currentItem,
-      totalItems,
-      completedItems,
-      currentProgress
-    )
+    // Build content text with item info
+    val contentText = if (totalItems > 1) {
+      "${currentItem?.itemTitle} • Item $completedItems of $totalItems"
+    } else {
+      currentItem?.itemTitle ?: "Downloading..."
+    }
+
+    // Update the download service notification
+    downloadService?.updateNotification(contentText, currentProgress)
   }
 
   /**
@@ -468,7 +487,6 @@ class DownloadItemManager(
    */
   private fun showFinalNotification() {
     if (completedDownloadsCount == 0 && failedDownloadsCount == 0) {
-      downloadNotificationManager.dismissNotification()
       return
     }
 
@@ -492,10 +510,113 @@ class DownloadItemManager(
     failedDownloadsCount = 0
     lastCompletedItemTitle = null
 
-    // Auto-dismiss after a shorter delay (3 seconds) - user can tap to dismiss immediately
-    GlobalScope.launch(Dispatchers.Main) {
+    // Auto-dismiss completion notification after a shorter delay
+    downloadScope.launch {
       delay(3000) // 3 seconds
       downloadNotificationManager.dismissNotification()
     }
+  }
+
+  /**
+   * Cancels all active downloads
+   */
+  fun cancelAllDownloads() {
+    Log.d(tag, "Cancelling all downloads")
+
+    // Cancel all downloads in Android's DownloadManager
+    currentDownloadItemParts.forEach { part ->
+      part.downloadId?.let { downloadId ->
+        try {
+          downloadManager.remove(downloadId)
+          Log.d(tag, "Cancelled download ID: $downloadId for ${part.filename}")
+        } catch (e: Exception) {
+          Log.e(tag, "Error cancelling download: ${e.message}")
+        }
+      }
+    }
+
+    // Clear all queues
+    currentDownloadItemParts.clear()
+
+    // Remove all download items from database and notify UI
+    downloadItemQueue.forEach { downloadItem ->
+      DeviceManager.dbManager.removeDownloadItem(downloadItem.id)
+
+      // Notify UI that download was cancelled
+      downloadScope.launch(Dispatchers.Main) {
+        val jsobj = JSObject().apply {
+          put("libraryItemId", downloadItem.id)
+          put("cancelled", true)
+        }
+        clientEventEmitter.onDownloadItemComplete(jsobj)
+      }
+    }
+
+    downloadItemQueue.clear()
+
+    // Reset counters
+    completedDownloadsCount = 0
+    failedDownloadsCount = 0
+    lastCompletedItemTitle = null
+
+    Log.d(tag, "All downloads cancelled")
+  }
+
+  /**
+   * Cancels a specific download item
+   */
+  fun cancelDownload(downloadItemId: String) {
+    Log.d(tag, "Cancelling download: $downloadItemId")
+
+    val downloadItem = downloadItemQueue.find { it.id == downloadItemId }
+    if (downloadItem == null) {
+      Log.w(tag, "Download item not found: $downloadItemId")
+      return
+    }
+
+    // Cancel all parts of this download item
+    val parts = currentDownloadItemParts.filter { it.downloadItemId == downloadItemId }
+    parts.forEach { part ->
+      part.downloadId?.let { downloadId ->
+        try {
+          downloadManager.remove(downloadId)
+          Log.d(tag, "Cancelled download ID: $downloadId for ${part.filename}")
+        } catch (e: Exception) {
+          Log.e(tag, "Error cancelling download: ${e.message}")
+        }
+      }
+      currentDownloadItemParts.remove(part)
+    }
+
+    // Remove from queue and database
+    downloadItemQueue.remove(downloadItem)
+    DeviceManager.dbManager.removeDownloadItem(downloadItemId)
+
+    // Notify UI that download was cancelled
+    downloadScope.launch(Dispatchers.Main) {
+      val jsobj = JSObject().apply {
+        put("libraryItemId", downloadItemId)
+        put("cancelled", true)
+      }
+      clientEventEmitter.onDownloadItemComplete(jsobj)
+    }
+
+    // Update notification or stop service if no more downloads
+    if (downloadItemQueue.isEmpty() && currentDownloadItemParts.isEmpty()) {
+      downloadService?.stopServiceIfNoDownloads()
+    } else {
+      updateServiceNotification()
+    }
+
+    Log.d(tag, "Download cancelled: $downloadItemId")
+  }
+
+  /**
+   * Cleanup method to cancel all ongoing operations
+   */
+  fun cleanup() {
+    // Note: Don't cancel the scope here as downloads should continue
+    // Just release the reference to the service
+    downloadService = null
   }
 }
