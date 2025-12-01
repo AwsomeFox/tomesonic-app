@@ -2785,31 +2785,30 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       var isCompleted = false
       val completionLock = Object()
 
-      // Helper function to create and return the root media item
-      fun createRootMediaItem(): MediaItem {
-        return MediaItem.Builder()
-          .setMediaId(AUTO_MEDIA_ROOT)
-          .setMediaMetadata(
-            MediaMetadata.Builder()
-              .setTitle("Audiobookshelf")
-              .setIsBrowsable(true)
-              .setIsPlayable(false)
-              .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-              .setExtras(Bundle().apply {
-                putBoolean("android.media.browse.SEARCH_SUPPORTED", true)
-              })
-              .build()
-          )
-          .build()
-      }
+      // Create the root media item once and reuse it
+      val rootMediaItem = MediaItem.Builder()
+        .setMediaId(AUTO_MEDIA_ROOT)
+        .setMediaMetadata(
+          MediaMetadata.Builder()
+            .setTitle("Audiobookshelf")
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            .setExtras(Bundle().apply {
+              putBoolean("android.media.browse.SEARCH_SUPPORTED", true)
+            })
+            .build()
+        )
+        .build()
 
       // Helper function to safely complete the future
-      fun safeComplete(logMessage: String) {
+      // Note: Uses variables from enclosing scope but they are kept minimal and short-lived
+      val safeComplete: (String) -> Unit = { logMessage ->
         synchronized(completionLock) {
           if (!isCompleted) {
             isCompleted = true
             Log.d("PlayerNotificationServ", "AALibrary: $logMessage")
-            future.set(LibraryResult.ofItem(createRootMediaItem(), params))
+            future.set(LibraryResult.ofItem(rootMediaItem, params))
           }
         }
       }
