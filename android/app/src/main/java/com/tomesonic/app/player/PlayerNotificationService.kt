@@ -2777,42 +2777,73 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       // Try to resume last playback session when Android Auto connects
       service.tryResumeLastSessionForAndroidAuto()
 
-      // Create a future that will be completed when data loading is done
+      // Create a future that will be completed when data loading is done or timeout occurs
       val future = SettableFuture.create<LibraryResult<MediaItem>>()
 
-      // Ensure server connection is established before checking validity
-      Log.d("PlayerNotificationServ", "AALibrary: Ensuring server connection is established")
+      // Timeout for Android Auto library loading (5 seconds to avoid blocking UI)
+      val ANDROID_AUTO_LOAD_TIMEOUT_MS = 5000L
+      var isCompleted = false
+      val completionLock = Object()
+
+      // Helper function to create and return the root media item
+      fun createRootMediaItem(): MediaItem {
+        return MediaItem.Builder()
+          .setMediaId(AUTO_MEDIA_ROOT)
+          .setMediaMetadata(
+            MediaMetadata.Builder()
+              .setTitle("Audiobookshelf")
+              .setIsBrowsable(true)
+              .setIsPlayable(false)
+              .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+              .setExtras(Bundle().apply {
+                putBoolean("android.media.browse.SEARCH_SUPPORTED", true)
+              })
+              .build()
+          )
+          .build()
+      }
+
+      // Helper function to safely complete the future
+      fun safeComplete(logMessage: String) {
+        synchronized(completionLock) {
+          if (!isCompleted) {
+            isCompleted = true
+            Log.d("PlayerNotificationServ", "AALibrary: $logMessage")
+            future.set(LibraryResult.ofItem(createRootMediaItem(), params))
+          }
+        }
+      }
+
+      // Set up a timeout handler - this ensures we don't block the UI on poor connections
+      Handler(Looper.getMainLooper()).postDelayed({
+        synchronized(completionLock) {
+          if (!isCompleted) {
+            Log.w("PlayerNotificationServ", "AALibrary: Timeout waiting for server data - returning root with local content only")
+            safeComplete("Timeout reached - showing local content, server data will load in background")
+            
+            // Continue loading server data in background for future browsing
+            Log.d("PlayerNotificationServ", "AALibrary: Continuing server data load in background after timeout")
+          }
+        }
+      }, ANDROID_AUTO_LOAD_TIMEOUT_MS)
+
+      // Start loading server data
+      Log.d("PlayerNotificationServ", "AALibrary: Starting server connection and data pre-load (with ${ANDROID_AUTO_LOAD_TIMEOUT_MS}ms timeout)")
       service.mediaManager.ensureServerConnectionForAndroidAuto {
         // Check if we have a valid server connection after ensuring connection
         if (!service.mediaManager.hasValidServerConnection()) {
           Log.w("PlayerNotificationServ", "AALibrary: No valid server connection, will show local content only")
+          // Complete immediately if no server connection - local content is always available
+          safeComplete("No server connection - showing local content only")
         } else {
           Log.d("PlayerNotificationServ", "AALibrary: Valid server connection established")
-        }
-
-        // Aggressively pre-load essential browsing data for better performance
-        Log.d("PlayerNotificationServ", "AALibrary: Triggering immediate data pre-load for Android Auto")
-        service.mediaManager.preloadAndroidAutoBrowsingData {
-          Log.d("PlayerNotificationServ", "AALibrary: Pre-loading complete, data is now available for browsing")
-
-          // Create root media item for MediaLibraryService with search support
-          val rootMediaItem = MediaItem.Builder()
-            .setMediaId(AUTO_MEDIA_ROOT)
-            .setMediaMetadata(
-              MediaMetadata.Builder()
-                .setTitle("Audiobookshelf")
-                .setIsBrowsable(true)
-                .setIsPlayable(false)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                .setExtras(Bundle().apply {
-                  putBoolean("android.media.browse.SEARCH_SUPPORTED", true)
-                })
-                .build()
-            )
-            .build()
-
-          // Only complete the future after data is loaded
-          future.set(LibraryResult.ofItem(rootMediaItem, params))
+          
+          // Pre-load browsing data in background
+          Log.d("PlayerNotificationServ", "AALibrary: Triggering data pre-load for Android Auto")
+          service.mediaManager.preloadAndroidAutoBrowsingData {
+            Log.d("PlayerNotificationServ", "AALibrary: Pre-loading complete, data is now available for browsing")
+            safeComplete("Pre-loading complete - data is now available for browsing")
+          }
         }
       }
 
