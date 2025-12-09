@@ -317,11 +317,10 @@ class MediaBrowserManager(
                 }
                 RECENTLY_ROOT -> {
                     // Return recent items from cached library recent shelves (only accessible if hasValidConnection)
+                    val recentItems = mutableListOf<MediaItem>()
                     if (!hasValidConnection) {
                         Log.w(tag, "onGetChildren: Attempted to access recently added without valid connection")
-                        mutableListOf()
                     } else {
-                        val recentItems = mutableListOf<MediaItem>()
                         Log.d(tag, "Getting recent items from ${mediaManager.getAllCachedLibraryRecentShelves().size} libraries")
                         mediaManager.getAllCachedLibraryRecentShelves().values.forEach { shelves ->
                             shelves.forEach { shelf ->
@@ -366,6 +365,7 @@ class MediaBrowserManager(
                                 }
                             }
                         }
+                    }
                     }
                     Log.d(tag, "Found ${recentItems.size} recent items")
                     recentItems

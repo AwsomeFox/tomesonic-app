@@ -7,6 +7,7 @@ export const state = () => ({
   accessToken: null,
   serverConnectionConfig: null,
   usedSsoForLogin: false, // Track if user logged in via SSO
+  tokenVerificationIntervalId: null, // Store interval ID for cleanup
   settings: {
     mobileOrderBy: 'addedAt',
     mobileOrderDesc: true,
@@ -211,7 +212,8 @@ export const actions = {
       const updatedConfig = {
         ...state.serverConnectionConfig,
         token: userResponseData.user.accessToken,
-        refreshToken: userResponseData.user.refreshToken || refreshToken // Keep old refresh token if new one not provided
+        // Some servers may not return a new refresh token in the response, so we preserve the existing one to maintain authentication
+        refreshToken: userResponseData.user.refreshToken || refreshToken
       }
 
       // Save updated config to secure storage, persists refresh token in secure storage
@@ -240,9 +242,7 @@ export const actions = {
         console.warn('[user] Socket not available, cannot re-authenticate')
       }
 
-      if (savedConfig) {
-        commit('setServerConnectionConfig', savedConfig)
-      }
+      commit('setServerConnectionConfig', savedConfig)
 
       await AbsLogger.info({ tag: 'user', message: `Successfully refreshed tokens for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
       return userResponseData.user.accessToken
@@ -270,7 +270,13 @@ export const actions = {
     console.log('[user] Refresh token verified successfully')
     return true
   },
-  async startTokenVerification({ dispatch, state }) {
+  async startTokenVerification({ dispatch, state, commit }) {
+    // Clear any existing interval first
+    if (state.tokenVerificationIntervalId) {
+      clearInterval(state.tokenVerificationIntervalId)
+      commit('setTokenVerificationIntervalId', null)
+    }
+
     // Start periodic verification of refresh token (every 30 minutes)
     const VERIFICATION_INTERVAL = 30 * 60 * 1000 // 30 minutes
 
@@ -297,7 +303,8 @@ export const actions = {
 
     // Then run periodically
     if (typeof window !== 'undefined') {
-      setInterval(verifyPeriodically, VERIFICATION_INTERVAL)
+      const intervalId = setInterval(verifyPeriodically, VERIFICATION_INTERVAL)
+      commit('setTokenVerificationIntervalId', intervalId)
     }
   }
 }
@@ -309,6 +316,11 @@ export const mutations = {
     state.accessToken = null
     state.serverConnectionConfig = null
     state.usedSsoForLogin = false
+    // Clear token verification interval on logout
+    if (state.tokenVerificationIntervalId) {
+      clearInterval(state.tokenVerificationIntervalId)
+      state.tokenVerificationIntervalId = null
+    }
   },
   setUser(state, user) {
     state.user = user
@@ -318,6 +330,9 @@ export const mutations = {
   },
   setUsedSsoForLogin(state, usedSso) {
     state.usedSsoForLogin = usedSso
+  },
+  setTokenVerificationIntervalId(state, intervalId) {
+    state.tokenVerificationIntervalId = intervalId
   },
   removeMediaProgress(state, id) {
     if (!state.user) return
