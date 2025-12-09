@@ -122,6 +122,7 @@ export default {
       showForm: false,
       showAddCustomHeaders: false,
       authMethods: [],
+      ssoReauthRequired: false, // Track if SSO re-auth is needed
       oauth: {
         state: null,
         verifier: null,
@@ -429,7 +430,7 @@ export default {
           payload.user.refreshToken = user.refreshToken
         }
 
-        this.setUserAndConnection(payload)
+        this.setUserAndConnection(payload, true) // true indicates SSO login
       } catch (error) {
         console.error('[SSO] Error in exchangeCodeForToken: ', error)
         this.$toast.error(`SSO error: ${error.message || error}`)
@@ -832,7 +833,7 @@ export default {
         this.setUserAndConnection(payload)
       }
     },
-    async setUserAndConnection({ user, userDefaultLibraryId, serverSettings, ereaderDevices }) {
+    async setUserAndConnection({ user, userDefaultLibraryId, serverSettings, ereaderDevices }, usedSso = false) {
       if (!user) return
 
       this.$store.commit('setServerSettings', serverSettings)
@@ -890,6 +891,7 @@ export default {
       this.$store.commit('user/setUser', user)
       this.$store.commit('user/setAccessToken', serverConnectionConfig.token)
       this.$store.commit('user/setServerConnectionConfig', serverConnectionConfig)
+      this.$store.commit('user/setUsedSsoForLogin', usedSso)
 
       this.$socket.connect(this.serverConfig.address, this.serverConfig.token)
       this.$router.replace('/bookshelf')
@@ -931,6 +933,17 @@ export default {
       }
     },
     init() {
+      // Handle SSO re-authentication required
+      if (this.$route.query.ssoReauth === 'true' && this.lastServerConnectionConfig) {
+        this.ssoReauthRequired = true
+        this.serverConfig = { ...this.lastServerConnectionConfig }
+        this.showForm = true
+        this.error = 'Session expired. Please log in again using SSO.'
+        // Fetch server status to get auth methods
+        this.submit()
+        return
+      }
+
       // Handle force re-login for servers using new JWT auth but still using an old token in the server config
       if (this.$route.query.error === 'oldAuthToken' && this.$route.query.serverConnectionConfigId) {
         this.serverConfig = this.serverConnectionConfigs.find((scc) => scc.id === this.$route.query.serverConnectionConfigId)

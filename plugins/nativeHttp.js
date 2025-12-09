@@ -71,7 +71,7 @@ export default function ({ store, $db, $socket }, inject) {
         // Get refresh token from secure storage
         const refreshToken = await $db.getRefreshToken(serverConnectionConfig.id)
         if (!refreshToken) {
-          console.error('[nativeHttp] No refresh token available')
+          console.error('[nativeHttp] No refresh token available for server config:', serverConnectionConfig.id)
           throw new Error('No refresh token available')
         }
 
@@ -82,8 +82,19 @@ export default function ({ store, $db, $socket }, inject) {
           throw new Error('Failed to refresh access token')
         }
 
+        // Keep the old refresh token if new one is not provided
+        if (!newTokens.refreshToken) {
+          newTokens.refreshToken = refreshToken
+        }
+
         // Update the store with new tokens
         await this.updateTokens(newTokens, serverConnectionConfig)
+
+        // Verify the refresh token was actually saved
+        const verifyToken = await $db.getRefreshToken(serverConnectionConfig.id)
+        if (!verifyToken) {
+          console.error('[nativeHttp] Refresh token verification failed after save')
+        }
 
         // Retry the original request with the new token
         console.log('[nativeHttp] Retrying original request with new token...')
@@ -211,6 +222,9 @@ export default function ({ store, $db, $socket }, inject) {
       try {
         console.log('[nativeHttp] Handling refresh failure - logging out user')
 
+        // Check if user logged in via SSO
+        const usedSso = store.getters['user/getUsedSsoForLogin']
+
         // Clear store
         await store.dispatch('user/logout')
 
@@ -219,9 +233,14 @@ export default function ({ store, $db, $socket }, inject) {
           await $db.clearRefreshToken(serverConnectionConfigId)
         }
 
+        // If user used SSO, redirect with a flag to show SSO re-login option
         // Redirect to login page
         if (window.location.pathname !== '/connect') {
-          window.location.href = '/connect'
+          if (usedSso) {
+            window.location.href = '/connect?ssoReauth=true'
+          } else {
+            window.location.href = '/connect'
+          }
         }
       } catch (error) {
         console.error('[nativeHttp] Failed to handle refresh failure:', error)

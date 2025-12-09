@@ -6,6 +6,7 @@ export const state = () => ({
   user: null,
   accessToken: null,
   serverConnectionConfig: null,
+  usedSsoForLogin: false, // Track if user logged in via SSO
   settings: {
     mobileOrderBy: 'addedAt',
     mobileOrderDesc: true,
@@ -31,6 +32,9 @@ export const getters = {
   },
   getServerConfigName: (state) => {
     return state.serverConnectionConfig?.name || null
+  },
+  getUsedSsoForLogin: (state) => {
+    return state.usedSsoForLogin
   },
   getUserMediaProgress:
     (state) =>
@@ -166,59 +170,87 @@ export const actions = {
     await AbsLogger.info({ tag: 'user', message: `Logged out from server ${state.serverConnectionConfig?.name || 'Not connected'}` })
   },
   async refreshToken({ getters, commit, state }) {
-    const refreshToken = await this.$db.getRefreshToken(getters.getServerConnectionConfigId)
+    const serverConnectionConfigId = getters.getServerConnectionConfigId
+    const refreshToken = await this.$db.getRefreshToken(serverConnectionConfigId)
     if (!refreshToken) {
-      console.error('No refresh token found')
+      console.error('[user] No refresh token found for server config:', serverConnectionConfigId)
+      await AbsLogger.error({ tag: 'user', message: `No refresh token found for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
       return null
     }
 
     const serverAddress = getters.getServerAddress
-
-    const response = await CapacitorHttp.post({
-      url: `${serverAddress}/auth/refresh`,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-refresh-token': refreshToken
-      },
-      data: {}
-    })
-
-    if (response.status !== 200) {
-      console.error('[user] Token refresh request failed:', response.status)
+    if (!serverAddress) {
+      console.error('[user] No server address available for token refresh')
       return null
     }
 
-    const userResponseData = response.data
-    if (!userResponseData.user?.accessToken) {
-      console.error('[user] No access token in refresh response')
+    try {
+      const response = await CapacitorHttp.post({
+        url: `${serverAddress}/auth/refresh`,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-refresh-token': refreshToken
+        },
+        data: {}
+      })
+
+      if (response.status !== 200) {
+        console.error('[user] Token refresh request failed:', response.status)
+        await AbsLogger.error({ tag: 'user', message: `Token refresh failed with status ${response.status} for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        return null
+      }
+
+      const userResponseData = response.data
+      if (!userResponseData.user?.accessToken) {
+        console.error('[user] No access token in refresh response')
+        await AbsLogger.error({ tag: 'user', message: `No access token in refresh response for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        return null
+      }
+
+      // Update the config with new tokens
+      const updatedConfig = {
+        ...state.serverConnectionConfig,
+        token: userResponseData.user.accessToken,
+        refreshToken: userResponseData.user.refreshToken || refreshToken // Keep old refresh token if new one not provided
+      }
+
+      // Save updated config to secure storage, persists refresh token in secure storage
+      const savedConfig = await this.$db.setServerConnectionConfig(updatedConfig)
+
+      if (!savedConfig) {
+        console.error('[user] Failed to save updated server connection config')
+        await AbsLogger.error({ tag: 'user', message: `Failed to save updated tokens for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        return null
+      }
+
+      // Verify the refresh token was actually saved
+      const verifyToken = await this.$db.getRefreshToken(serverConnectionConfigId)
+      if (!verifyToken) {
+        console.error('[user] Refresh token verification failed after save')
+        await AbsLogger.error({ tag: 'user', message: `Refresh token verification failed after save for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+      }
+
+      // Update the store
+      commit('setAccessToken', userResponseData.user.accessToken)
+
+      // Re-authenticate socket if necessary
+      if (this.$socket?.connected && !this.$socket.isAuthenticated) {
+        this.$socket.sendAuthenticate()
+      } else if (!this.$socket) {
+        console.warn('[user] Socket not available, cannot re-authenticate')
+      }
+
+      if (savedConfig) {
+        commit('setServerConnectionConfig', savedConfig)
+      }
+
+      await AbsLogger.info({ tag: 'user', message: `Successfully refreshed tokens for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+      return userResponseData.user.accessToken
+    } catch (error) {
+      console.error('[user] Token refresh error:', error)
+      await AbsLogger.error({ tag: 'user', message: `Token refresh error for server ${state.serverConnectionConfig?.name || 'Unknown'}: ${error.message || error}` })
       return null
     }
-
-    // Update the config with new tokens
-    const updatedConfig = {
-      ...state.serverConnectionConfig,
-      token: userResponseData.user.accessToken,
-      refreshToken: userResponseData.user.refreshToken
-    }
-
-    // Save updated config to secure storage, persists refresh token in secure storage
-    const savedConfig = await this.$db.setServerConnectionConfig(updatedConfig)
-
-    // Update the store
-    commit('setAccessToken', userResponseData.user.accessToken)
-
-    // Re-authenticate socket if necessary
-    if (this.$socket?.connected && !this.$socket.isAuthenticated) {
-      this.$socket.sendAuthenticate()
-    } else if (!this.$socket) {
-      console.warn('[user] Socket not available, cannot re-authenticate')
-    }
-
-    if (savedConfig) {
-      commit('setServerConnectionConfig', savedConfig)
-    }
-
-    return userResponseData.user.accessToken
   }
 }
 
@@ -227,12 +259,16 @@ export const mutations = {
     state.user = null
     state.accessToken = null
     state.serverConnectionConfig = null
+    state.usedSsoForLogin = false
   },
   setUser(state, user) {
     state.user = user
   },
   setAccessToken(state, accessToken) {
     state.accessToken = accessToken
+  },
+  setUsedSsoForLogin(state, usedSso) {
+    state.usedSsoForLogin = usedSso
   },
   removeMediaProgress(state, id) {
     if (!state.user) return

@@ -23,6 +23,9 @@ export default function ({ $axios, store, $db }) {
     try {
       console.log('[axios] Handling refresh failure - logging out user')
 
+      // Check if user logged in via SSO
+      const usedSso = store.getters['user/getUsedSsoForLogin']
+
       // Clear store
       await store.dispatch('user/logout')
 
@@ -31,8 +34,13 @@ export default function ({ $axios, store, $db }) {
         await $db.clearRefreshToken(serverConnectionConfigId)
       }
 
+      // If user used SSO, redirect with a flag to show SSO re-login option
       if (window.location.pathname !== '/connect') {
-        window.location.href = '/connect'
+        if (usedSso) {
+          window.location.href = '/connect?ssoReauth=true'
+        } else {
+          window.location.href = '/connect'
+        }
       }
     } catch (error) {
       console.error('[axios] Failed to handle refresh failure:', error)
