@@ -893,6 +893,9 @@ export default {
       this.$store.commit('user/setServerConnectionConfig', serverConnectionConfig)
       this.$store.commit('user/setUsedSsoForLogin', usedSso)
 
+      // Start periodic token verification
+      this.$store.dispatch('user/startTokenVerification')
+
       this.$socket.connect(this.serverConfig.address, this.serverConfig.token)
       this.$router.replace('/bookshelf')
     },

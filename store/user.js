@@ -251,8 +251,57 @@ export const actions = {
       await AbsLogger.error({ tag: 'user', message: `Token refresh error for server ${state.serverConnectionConfig?.name || 'Unknown'}: ${error.message || error}` })
       return null
     }
+  },
+  async verifyRefreshToken({ getters, state }) {
+    // Verify that refresh token exists in secure storage
+    const serverConnectionConfigId = getters.getServerConnectionConfigId
+    if (!serverConnectionConfigId) {
+      console.warn('[user] No server connection config ID to verify refresh token')
+      return false
+    }
+
+    const refreshToken = await this.$db.getRefreshToken(serverConnectionConfigId)
+    if (!refreshToken) {
+      console.error('[user] Refresh token missing from secure storage for server:', serverConnectionConfigId)
+      await AbsLogger.error({ tag: 'user', message: `Refresh token missing from secure storage for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+      return false
+    }
+
+    console.log('[user] Refresh token verified successfully')
+    return true
+  },
+  async startTokenVerification({ dispatch, state }) {
+    // Start periodic verification of refresh token (every 30 minutes)
+    const VERIFICATION_INTERVAL = 30 * 60 * 1000 // 30 minutes
+
+    const verifyPeriodically = async () => {
+      if (!state.user || !state.serverConnectionConfig) {
+        // User not logged in, skip verification
+        return
+      }
+
+      const hasRefreshToken = await dispatch('verifyRefreshToken')
+      if (!hasRefreshToken && state.user) {
+        // Refresh token is missing, but user is still logged in
+        // This shouldn't happen in normal circumstances
+        console.error('[user] Refresh token missing during periodic verification')
+        await AbsLogger.error({ tag: 'user', message: `Periodic verification detected missing refresh token for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        
+        // We could potentially trigger a re-login flow here, but for now just log it
+        // The next API call that requires refresh will trigger the re-login flow
+      }
+    }
+
+    // Run immediately
+    await verifyPeriodically()
+
+    // Then run periodically
+    if (typeof window !== 'undefined') {
+      setInterval(verifyPeriodically, VERIFICATION_INTERVAL)
+    }
   }
 }
+
 
 export const mutations = {
   logout(state) {
