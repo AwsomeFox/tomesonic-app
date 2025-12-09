@@ -2,6 +2,11 @@ import { Browser } from '@capacitor/browser'
 import { AbsLogger } from '@/plugins/capacitor'
 import { CapacitorHttp } from '@capacitor/core'
 
+// Refresh token verification interval (30 minutes)
+// This interval is chosen to balance between detecting token loss early
+// and not putting unnecessary load on the system
+const TOKEN_VERIFICATION_INTERVAL_MS = 30 * 60 * 1000
+
 export const state = () => ({
   user: null,
   accessToken: null,
@@ -212,7 +217,11 @@ export const actions = {
       const updatedConfig = {
         ...state.serverConnectionConfig,
         token: userResponseData.user.accessToken,
-        // Some servers may not return a new refresh token in the response, so we preserve the existing one to maintain authentication
+        // Some servers may not return a new refresh token in the response, so we preserve the existing one to maintain authentication.
+        // This is safe because:
+        // 1. The refresh token is only used for obtaining new access tokens
+        // 2. If the refresh token is compromised, the server can invalidate it
+        // 3. Preserving it prevents unnecessary re-authentication when the server doesn't rotate refresh tokens
         refreshToken: userResponseData.user.refreshToken || refreshToken
       }
 
@@ -277,9 +286,6 @@ export const actions = {
       commit('setTokenVerificationIntervalId', null)
     }
 
-    // Start periodic verification of refresh token (every 30 minutes)
-    const VERIFICATION_INTERVAL = 30 * 60 * 1000 // 30 minutes
-
     const verifyPeriodically = async () => {
       if (!state.user || !state.serverConnectionConfig) {
         // User not logged in, skip verification
@@ -303,7 +309,7 @@ export const actions = {
 
     // Then run periodically
     if (typeof window !== 'undefined') {
-      const intervalId = setInterval(verifyPeriodically, VERIFICATION_INTERVAL)
+      const intervalId = setInterval(verifyPeriodically, TOKEN_VERIFICATION_INTERVAL_MS)
       commit('setTokenVerificationIntervalId', intervalId)
     }
   }
