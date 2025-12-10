@@ -91,3 +91,6 @@ sw.*
 
 /resources/
 /android/app/release/
+
+# Kotlin build artifacts
+/android/.kotlin/
