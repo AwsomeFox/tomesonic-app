@@ -272,7 +272,7 @@ class MediaBrowserManager(
 
                     // If no valid connection, log a warning
                     if (!hasValidConnection) {
-                        AbsLogger.warn(tag, "onGetChildren: No valid server connection. Only showing local books in Android Auto.")
+                        Log.w(tag, "onGetChildren: No valid server connection. Only showing local books in Android Auto.")
                     }
 
                     rootItems
