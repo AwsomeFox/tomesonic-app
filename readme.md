@@ -234,6 +234,25 @@ winget install -e --id OpenJS.NodeJS --version 20.11.0;
 
 Your Windows environment should now be set up and ready to proceed!
 
+### GitHub Codespaces Environment Setup
+
+GitHub Codespaces provides a pre-configured development environment with all necessary tools already installed, making it the fastest way to start developing TomeSonic.
+
+**✅ Pre-configured in Codespaces:**
+- Node.js (version 20)
+- Android SDK and tools  
+- Git and development utilities
+- All required dependencies
+
+**🚀 Quick Start:**
+
+1. **Open in Codespaces**: Click the "Code" button on GitHub and select "Open with Codespaces"
+2. **Wait for setup**: The container will automatically configure (~2-3 minutes)
+3. **You're ready!** Skip directly to the development workflow below
+
+**📱 Note for Mobile Testing:**
+While Codespaces excels for development, you'll need a physical device or local emulator for testing. Use the build commands to generate APKs that can be downloaded and tested on your device.
+
 ### Mac Environment Setup for Android
 
 Required Software:
@@ -256,6 +275,81 @@ brew install android-studio node cocoapods
 </details>
 
 ### Start working on the Android app
+
+#### For GitHub Codespaces Users
+
+If you're using GitHub Codespaces, the environment is already set up! Simply run:
+
+```shell
+# Install Just (build automation tool)
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# Install dependencies (if not already installed)
+npm install
+
+# Generate static web app
+npm run generate
+
+# Sync with Android project
+npx cap sync android
+
+# Build for Android (generates APK for download/testing)
+# Note: If 'just build' fails with "Illegal option -o pipefail", use this alternative:
+cd android && ./gradlew assembleDebug
+```
+
+**📱 Testing on Device:**
+Since Codespaces runs in the cloud, you can't directly install to a device. Use these approaches:
+- **Download APK**: After building, download the generated APK from the workspace
+- **GitHub Releases**: Latest APKs are available in [GitHub Releases](https://github.com/AwsomeFox/tomesonic-app/releases)
+- **Local Development**: For device testing, consider cloning to a local environment
+- **GitHub Actions**: Automated builds are available in the Actions tab
+
+---
+
+## 🚀 Release Process
+
+TomeSonic uses an automated release pipeline that handles building, signing, and distributing updates across multiple channels.
+
+### 📋 Release Workflow
+
+1. **🔄 Version Management**: 
+   ```bash
+   # Bump version (updates package.json and Android gradle)
+   just bump-version "1.0.0"        # Specific version
+   just bump-beta                    # Next beta (0.12.1-beta → 0.12.2-beta)
+   just release                      # Remove beta suffix
+   ```
+
+2. **🏷️ Create Release**: 
+   ```bash
+   git add -A
+   git commit -m "Release v1.0.0"
+   git tag v1.0.0
+   git push origin master --tags
+   ```
+
+3. **🤖 Automated Deployment**:
+   - **GitHub Release**: APK automatically built and attached to release
+   - **Play Store**: Signed AAB deployed to internal track (then promoted)
+   - **GitHub Pages**: Test APK available for beta testers
+
+### 📱 Distribution Channels
+
+- **🏪 Play Store**: Production releases via Google Play Console
+- **🧪 GitHub Releases**: Beta/test APKs for direct download
+- **🌐 GitHub Pages**: Latest development builds at [your-github-pages-url]
+- **📋 Actions Artifacts**: Development builds from pull requests
+
+### 🔐 Signing & Security
+
+- **Debug builds**: Self-signed for development/testing
+- **Release builds**: Properly signed with upload keystore for Play Store
+- **Secrets**: Keystore and credentials managed via GitHub Secrets
+
+#### For Local Development
 
 Clone or fork the project from terminal or powershell and `cd` into the project directory.
 
