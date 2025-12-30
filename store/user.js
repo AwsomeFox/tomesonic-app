@@ -2,10 +2,17 @@ import { Browser } from '@capacitor/browser'
 import { AbsLogger } from '@/plugins/capacitor'
 import { CapacitorHttp } from '@capacitor/core'
 
+// Refresh token verification interval (30 minutes)
+// This interval is chosen to balance between detecting token loss early
+// and not putting unnecessary load on the system
+const TOKEN_VERIFICATION_INTERVAL_MS = 30 * 60 * 1000
+
 export const state = () => ({
   user: null,
   accessToken: null,
   serverConnectionConfig: null,
+  usedSsoForLogin: false, // Track if user logged in via SSO
+  tokenVerificationIntervalId: null, // Store interval ID for cleanup
   settings: {
     mobileOrderBy: 'addedAt',
     mobileOrderDesc: true,
@@ -31,6 +38,9 @@ export const getters = {
   },
   getServerConfigName: (state) => {
     return state.serverConnectionConfig?.name || null
+  },
+  getUsedSsoForLogin: (state) => {
+    return state.usedSsoForLogin
   },
   getUserMediaProgress:
     (state) =>
@@ -166,73 +176,169 @@ export const actions = {
     await AbsLogger.info({ tag: 'user', message: `Logged out from server ${state.serverConnectionConfig?.name || 'Not connected'}` })
   },
   async refreshToken({ getters, commit, state }) {
-    const refreshToken = await this.$db.getRefreshToken(getters.getServerConnectionConfigId)
+    const serverConnectionConfigId = getters.getServerConnectionConfigId
+    const refreshToken = await this.$db.getRefreshToken(serverConnectionConfigId)
     if (!refreshToken) {
-      console.error('No refresh token found')
+      console.error('[user] No refresh token found for server config:', serverConnectionConfigId)
+      await AbsLogger.error({ tag: 'user', message: `No refresh token found for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
       return null
     }
 
     const serverAddress = getters.getServerAddress
-
-    const response = await CapacitorHttp.post({
-      url: `${serverAddress}/auth/refresh`,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-refresh-token': refreshToken
-      },
-      data: {}
-    })
-
-    if (response.status !== 200) {
-      console.error('[user] Token refresh request failed:', response.status)
+    if (!serverAddress) {
+      console.error('[user] No server address available for token refresh')
       return null
     }
 
-    const userResponseData = response.data
-    if (!userResponseData.user?.accessToken) {
-      console.error('[user] No access token in refresh response')
-      return null
-    }
+    try {
+      const response = await CapacitorHttp.post({
+        url: `${serverAddress}/auth/refresh`,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-refresh-token': refreshToken
+        },
+        data: {}
+      })
 
-    // Update the config with new tokens
-    const updatedConfig = {
-      ...state.serverConnectionConfig,
-      token: userResponseData.user.accessToken,
-      refreshToken: userResponseData.user.refreshToken
-    }
+      if (response.status !== 200) {
+        console.error('[user] Token refresh request failed:', response.status)
+        await AbsLogger.error({ tag: 'user', message: `Token refresh failed with status ${response.status} for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        return null
+      }
 
-    // Save updated config to secure storage, persists refresh token in secure storage
-    const savedConfig = await this.$db.setServerConnectionConfig(updatedConfig)
+      const userResponseData = response.data
+      if (!userResponseData.user?.accessToken) {
+        console.error('[user] No access token in refresh response')
+        await AbsLogger.error({ tag: 'user', message: `No access token in refresh response for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        return null
+      }
 
-    // Update the store
-    commit('setAccessToken', userResponseData.user.accessToken)
+      // Update the config with new tokens
+      const updatedConfig = {
+        ...state.serverConnectionConfig,
+        token: userResponseData.user.accessToken,
+        // Some servers may not return a new refresh token in the response, so we preserve the existing one to maintain authentication.
+        // This is safe because:
+        // 1. The refresh token is only used for obtaining new access tokens
+        // 2. If the refresh token is compromised, the server can invalidate it
+        // 3. Preserving it prevents unnecessary re-authentication when the server doesn't rotate refresh tokens
+        refreshToken: userResponseData.user.refreshToken || refreshToken
+      }
 
-    // Re-authenticate socket if necessary
-    if (this.$socket?.connected && !this.$socket.isAuthenticated) {
-      this.$socket.sendAuthenticate()
-    } else if (!this.$socket) {
-      console.warn('[user] Socket not available, cannot re-authenticate')
-    }
+      // Save updated config to secure storage, persists refresh token in secure storage
+      const savedConfig = await this.$db.setServerConnectionConfig(updatedConfig)
 
-    if (savedConfig) {
+      if (!savedConfig) {
+        console.error('[user] Failed to save updated server connection config')
+        await AbsLogger.error({ tag: 'user', message: `Failed to save updated tokens for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        return null
+      }
+
+      // Verify the refresh token was actually saved
+      const verifyToken = await this.$db.getRefreshToken(serverConnectionConfigId)
+      if (!verifyToken) {
+        console.error('[user] Refresh token verification failed after save')
+        await AbsLogger.error({ tag: 'user', message: `Refresh token verification failed after save for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+      }
+
+      // Update the store
+      commit('setAccessToken', userResponseData.user.accessToken)
+
+      // Re-authenticate socket if necessary
+      if (this.$socket?.connected && !this.$socket.isAuthenticated) {
+        this.$socket.sendAuthenticate()
+      } else if (!this.$socket) {
+        console.warn('[user] Socket not available, cannot re-authenticate')
+      }
+
       commit('setServerConnectionConfig', savedConfig)
+
+      await AbsLogger.info({ tag: 'user', message: `Successfully refreshed tokens for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+      return userResponseData.user.accessToken
+    } catch (error) {
+      console.error('[user] Token refresh error:', error)
+      await AbsLogger.error({ tag: 'user', message: `Token refresh error for server ${state.serverConnectionConfig?.name || 'Unknown'}: ${error.message || error}` })
+      return null
+    }
+  },
+  async verifyRefreshToken({ getters, state }) {
+    // Verify that refresh token exists in secure storage
+    const serverConnectionConfigId = getters.getServerConnectionConfigId
+    if (!serverConnectionConfigId) {
+      console.warn('[user] No server connection config ID to verify refresh token')
+      return false
     }
 
-    return userResponseData.user.accessToken
+    const refreshToken = await this.$db.getRefreshToken(serverConnectionConfigId)
+    if (!refreshToken) {
+      console.error('[user] Refresh token missing from secure storage for server:', serverConnectionConfigId)
+      await AbsLogger.error({ tag: 'user', message: `Refresh token missing from secure storage for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+      return false
+    }
+
+    console.log('[user] Refresh token verified successfully')
+    return true
+  },
+  async startTokenVerification({ dispatch, state, commit }) {
+    // Clear any existing interval first
+    if (state.tokenVerificationIntervalId) {
+      clearInterval(state.tokenVerificationIntervalId)
+      commit('setTokenVerificationIntervalId', null)
+    }
+
+    const verifyPeriodically = async () => {
+      if (!state.user || !state.serverConnectionConfig) {
+        // User not logged in, skip verification
+        return
+      }
+
+      const hasRefreshToken = await dispatch('verifyRefreshToken')
+      if (!hasRefreshToken && state.user) {
+        // Refresh token is missing, but user is still logged in
+        // This shouldn't happen in normal circumstances
+        console.error('[user] Refresh token missing during periodic verification')
+        await AbsLogger.error({ tag: 'user', message: `Periodic verification detected missing refresh token for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
+        
+        // We could potentially trigger a re-login flow here, but for now just log it
+        // The next API call that requires refresh will trigger the re-login flow
+      }
+    }
+
+    // Run immediately
+    await verifyPeriodically()
+
+    // Then run periodically
+    if (typeof window !== 'undefined') {
+      const intervalId = setInterval(verifyPeriodically, TOKEN_VERIFICATION_INTERVAL_MS)
+      commit('setTokenVerificationIntervalId', intervalId)
+    }
   }
 }
+
 
 export const mutations = {
   logout(state) {
     state.user = null
     state.accessToken = null
     state.serverConnectionConfig = null
+    state.usedSsoForLogin = false
+    // Clear token verification interval on logout
+    if (state.tokenVerificationIntervalId) {
+      clearInterval(state.tokenVerificationIntervalId)
+      state.tokenVerificationIntervalId = null
+    }
   },
   setUser(state, user) {
     state.user = user
   },
   setAccessToken(state, accessToken) {
     state.accessToken = accessToken
+  },
+  setUsedSsoForLogin(state, usedSso) {
+    state.usedSsoForLogin = usedSso
+  },
+  setTokenVerificationIntervalId(state, intervalId) {
+    state.tokenVerificationIntervalId = intervalId
   },
   removeMediaProgress(state, id) {
     if (!state.user) return

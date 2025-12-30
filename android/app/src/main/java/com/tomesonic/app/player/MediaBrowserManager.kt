@@ -190,6 +190,9 @@ class MediaBrowserManager(
         AbsLogger.info(tag, "onGetChildren: parentId: $parentId (${DeviceManager.serverConnectionConfigString})")
 
         return try {
+            // Check if we have a valid server connection and token
+            val hasValidConnection = !DeviceManager.serverAddress.isNullOrEmpty() && !DeviceManager.token.isNullOrEmpty()
+            
             // Initialize browse tree if not already done
             initializeBrowseTree()
 
@@ -198,39 +201,42 @@ class MediaBrowserManager(
                     // Return root categories
                     val rootItems = mutableListOf<MediaItem>()
 
-                    // Continue reading root
-                    rootItems.add(
-                        MediaItem.Builder()
-                            .setMediaId(CONTINUE_ROOT)
-                            .setMediaMetadata(
-                                MediaMetadata.Builder()
-                                    .setTitle("Continue Listening")
-                                    .setIsBrowsable(true)
-                                    .setIsPlayable(false)
-                                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                                    .setArtworkUri(getUriToDrawable(ctx, R.drawable.ic_play))
-                                    .build()
-                            )
-                            .build()
-                    )
+                    // If we have a valid connection, show all categories
+                    if (hasValidConnection) {
+                        // Continue reading root
+                        rootItems.add(
+                            MediaItem.Builder()
+                                .setMediaId(CONTINUE_ROOT)
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder()
+                                        .setTitle("Continue Listening")
+                                        .setIsBrowsable(true)
+                                        .setIsPlayable(false)
+                                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                                        .setArtworkUri(getUriToDrawable(ctx, R.drawable.ic_play))
+                                        .build()
+                                )
+                                .build()
+                        )
 
-                    // Recent root
-                    rootItems.add(
-                        MediaItem.Builder()
-                            .setMediaId(RECENTLY_ROOT)
-                            .setMediaMetadata(
-                                MediaMetadata.Builder()
-                                    .setTitle("Recently Added")
-                                    .setIsBrowsable(true)
-                                    .setIsPlayable(false)
-                                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                                    .setArtworkUri(getUriToDrawable(ctx, R.drawable.ic_recent))
-                                    .build()
-                            )
-                            .build()
-                    )
+                        // Recent root
+                        rootItems.add(
+                            MediaItem.Builder()
+                                .setMediaId(RECENTLY_ROOT)
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder()
+                                        .setTitle("Recently Added")
+                                        .setIsBrowsable(true)
+                                        .setIsPlayable(false)
+                                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                                        .setArtworkUri(getUriToDrawable(ctx, R.drawable.ic_recent))
+                                        .build()
+                                )
+                                .build()
+                        )
+                    }
 
-                    // Local books root
+                    // Always show local books root (even when offline or no valid token)
                     rootItems.add(
                         MediaItem.Builder()
                             .setMediaId(LOCAL_ROOT)
@@ -246,58 +252,78 @@ class MediaBrowserManager(
                             .build()
                     )
 
-                    // Libraries root
-                    rootItems.add(
-                        MediaItem.Builder()
-                            .setMediaId(LIBRARIES_ROOT)
-                            .setMediaMetadata(
-                                MediaMetadata.Builder()
-                                    .setTitle("Libraries")
-                                    .setIsBrowsable(true)
-                                    .setIsPlayable(false)
-                                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                                    .setArtworkUri(getUriToDrawable(ctx, R.drawable.ic_library))
-                                    .build()
-                            )
-                            .build()
-                    )
+                    // Only show libraries if we have a valid connection
+                    if (hasValidConnection) {
+                        rootItems.add(
+                            MediaItem.Builder()
+                                .setMediaId(LIBRARIES_ROOT)
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder()
+                                        .setTitle("Libraries")
+                                        .setIsBrowsable(true)
+                                        .setIsPlayable(false)
+                                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                                        .setArtworkUri(getUriToDrawable(ctx, R.drawable.ic_library))
+                                        .build()
+                                )
+                                .build()
+                        )
+                    }
+
+                    // If no valid connection, log a warning
+                    if (!hasValidConnection) {
+                        Log.w(tag, "onGetChildren: No valid server connection. Only showing local books in Android Auto.")
+                    }
 
                     rootItems
                 }
                 LIBRARIES_ROOT -> {
-                    // Return list of libraries
-                    mediaManager.serverLibraries.map { library ->
-                        library.getMediaItem(ctx)
-                    }.toMutableList()
+                    // Return list of libraries (only accessible if hasValidConnection)
+                    if (!hasValidConnection) {
+                        Log.w(tag, "onGetChildren: Attempted to access libraries without valid connection")
+                        mutableListOf()
+                    } else {
+                        mediaManager.serverLibraries.map { library ->
+                            library.getMediaItem(ctx)
+                        }.toMutableList()
+                    }
                 }
                 CONTINUE_ROOT -> {
-                    // Return items in progress
-                    Log.d(tag, "Getting continue items: ${mediaManager.serverItemsInProgress.size} items")
-                    mediaManager.serverItemsInProgress.map { itemInProgress ->
-                        val libraryItem = itemInProgress.libraryItemWrapper as LibraryItem
-                        val isBrowsable = shouldBookBeBrowsable(libraryItem)
+                    // Return items in progress (only accessible if hasValidConnection)
+                    if (!hasValidConnection) {
+                        Log.w(tag, "onGetChildren: Attempted to access continue listening without valid connection")
+                        mutableListOf()
+                    } else {
+                        Log.d(tag, "Getting continue items: ${mediaManager.serverItemsInProgress.size} items")
+                        mediaManager.serverItemsInProgress.map { itemInProgress ->
+                            val libraryItem = itemInProgress.libraryItemWrapper as LibraryItem
+                            val isBrowsable = shouldBookBeBrowsable(libraryItem)
 
-                        // Create MediaItem for item in progress
-                        MediaItem.Builder()
-                            .setMediaId(libraryItem.id)
-                            .setMediaMetadata(
-                                MediaMetadata.Builder()
-                                    .setTitle(libraryItem.title ?: "Unknown Title")
-                                    .setArtist(libraryItem.authorName ?: "Unknown Author")
-                                    .setIsPlayable(!isBrowsable)
-                                    .setIsBrowsable(isBrowsable)
-                                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                                    .build()
-                            )
-                            .build()
-                    }.toMutableList()
+                            // Create MediaItem for item in progress
+                            MediaItem.Builder()
+                                .setMediaId(libraryItem.id)
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder()
+                                        .setTitle(libraryItem.title ?: "Unknown Title")
+                                        .setArtist(libraryItem.authorName ?: "Unknown Author")
+                                        .setIsPlayable(!isBrowsable)
+                                        .setIsBrowsable(isBrowsable)
+                                        .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                                        .build()
+                                )
+                                .build()
+                        }.toMutableList()
+                    }
                 }
                 RECENTLY_ROOT -> {
-                    // Return recent items from cached library recent shelves
+                    // Return recent items from cached library recent shelves (only accessible if hasValidConnection)
                     val recentItems = mutableListOf<MediaItem>()
-                    Log.d(tag, "Getting recent items from ${mediaManager.getAllCachedLibraryRecentShelves().size} libraries")
-                    mediaManager.getAllCachedLibraryRecentShelves().values.forEach { shelves ->
-                        shelves.forEach { shelf ->
+                    if (!hasValidConnection) {
+                        Log.w(tag, "onGetChildren: Attempted to access recently added without valid connection")
+                    } else {
+                        Log.d(tag, "Getting recent items from ${mediaManager.getAllCachedLibraryRecentShelves().size} libraries")
+                        mediaManager.getAllCachedLibraryRecentShelves().values.forEach { shelves ->
+                            shelves.forEach { shelf ->
                             when (shelf) {
                                 is LibraryShelfBookEntity -> {
                                     shelf.entities?.forEach { libraryItem ->
@@ -339,6 +365,7 @@ class MediaBrowserManager(
                                 }
                             }
                         }
+                    }
                     }
                     Log.d(tag, "Found ${recentItems.size} recent items")
                     recentItems
