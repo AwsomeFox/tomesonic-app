@@ -13,6 +13,7 @@ import java.util.*
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
 import org.json.JSONObject
 import kotlin.coroutines.resume
@@ -1030,12 +1031,16 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
   /**
    * Load items in progress synchronously for Android Auto
+   * Uses a timeout to prevent blocking indefinitely on poor connections
    */
   fun loadItemsInProgressSync(): List<ItemInProgress> {
     val future = SettableFuture.create<List<ItemInProgress>>()
     val combinedItems = mutableListOf<ItemInProgress>()
+    
+    // Timeout for loading items in progress (3 seconds to avoid blocking UI)
+    val ITEMS_IN_PROGRESS_TIMEOUT_SECONDS = 3L
 
-    // First, get local books with progress
+    // First, get local books with progress (this is fast and always available)
     val localBooksWithProgress = getLocalBooksWithProgress()
     Log.d(tag, "AABrowser: Found ${localBooksWithProgress.size} local books with progress")
 
@@ -1074,7 +1079,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         }
       }
     } else {
-      Log.d(tag, "AABrowser: No cached server items, trying to load from API")
+      Log.d(tag, "AABrowser: No cached server items, trying to load from API with ${ITEMS_IN_PROGRESS_TIMEOUT_SECONDS}s timeout")
       apiHandler.getAllItemsInProgress { itemsInProgress ->
         val filteredItemsInProgress = itemsInProgress.filter {
           val libraryItem = it.libraryItemWrapper as LibraryItem
@@ -1106,7 +1111,12 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       }
 
       return try {
-        future.get()
+        // Use timeout to prevent blocking indefinitely on poor connections
+        future.get(ITEMS_IN_PROGRESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+      } catch (e: java.util.concurrent.TimeoutException) {
+        Log.w(tag, "AABrowser: Timeout loading server items in progress after ${ITEMS_IN_PROGRESS_TIMEOUT_SECONDS}s, returning local items only")
+        // Return local items only if server times out - server data will be loaded in background
+        combinedItems.sortedByDescending { it.progressLastUpdate }
       } catch (e: Exception) {
         Log.e(tag, "AABrowser: Error loading server items in progress, returning local items only", e)
         // Return local items only if server fails
@@ -1412,73 +1422,89 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     return mediaProgress
   }
 
+  /**
+   * Check and set valid server connection config for Android Auto
+   * Uses a timeout to prevent blocking indefinitely on poor connections
+   */
   private fun checkSetValidServerConnectionConfig(cb: (Boolean) -> Unit) = runBlocking {
+    // Timeout for server connection validation (10 seconds to allow trying multiple configs)
+    val SERVER_CONNECTION_TIMEOUT_MS = 10000L
+    
     Log.d(tag, "checkSetValidServerConnectionConfig | serverConfigIdUsed=$serverConfigIdUsed | lastServerConnectionConfigId=${DeviceManager.deviceData.lastServerConnectionConfigId}")
     Log.d(tag, "checkSetValidServerConnectionConfig | DeviceManager.serverConnectionConfig=${DeviceManager.serverConnectionConfig?.name}")
     Log.d(tag, "checkSetValidServerConnectionConfig | DeviceManager.isConnectedToServer=${DeviceManager.isConnectedToServer}")
 
-    coroutineScope {
-      if (!DeviceManager.checkConnectivity(ctx)) {
-        serverUserMediaProgress = mutableListOf()
-        Log.d(tag, "checkSetValidServerConnectionConfig: No connectivity")
-        cb(false)
-      } else if (DeviceManager.deviceData.lastServerConnectionConfigId.isNullOrBlank()) { // If in offline mode last server connection config is unset
-        serverUserMediaProgress = mutableListOf()
-        Log.d(tag, "checkSetValidServerConnectionConfig: No last server connection config")
-        Log.d(tag, "checkSetValidServerConnectionConfig: Available server configs: ${DeviceManager.deviceData.serverConnectionConfigs.size}")
-        cb(false)
-      } else {
-        var hasValidConn = false
-        var lookupMediaProgress = true
-
-        if (!serverConfigIdUsed.isNullOrEmpty() && serverConfigLastPing > 0L && System.currentTimeMillis() - serverConfigLastPing < 5000) {
-            Log.d(tag, "checkSetValidServerConnectionConfig last ping less than a 5 seconds ago")
-          hasValidConn = true
-          lookupMediaProgress = false
-        } else {
+    val result = withTimeoutOrNull(SERVER_CONNECTION_TIMEOUT_MS) {
+      coroutineScope {
+        if (!DeviceManager.checkConnectivity(ctx)) {
           serverUserMediaProgress = mutableListOf()
-        }
+          Log.d(tag, "checkSetValidServerConnectionConfig: No connectivity")
+          return@coroutineScope false
+        } else if (DeviceManager.deviceData.lastServerConnectionConfigId.isNullOrBlank()) { // If in offline mode last server connection config is unset
+          serverUserMediaProgress = mutableListOf()
+          Log.d(tag, "checkSetValidServerConnectionConfig: No last server connection config")
+          Log.d(tag, "checkSetValidServerConnectionConfig: Available server configs: ${DeviceManager.deviceData.serverConnectionConfigs.size}")
+          return@coroutineScope false
+        } else {
+          var hasValidConn = false
+          var lookupMediaProgress = true
 
-        if (!hasValidConn) {
-          // First check if the current selected config is pingable
-          DeviceManager.serverConnectionConfig?.let {
-            hasValidConn = checkServerConnection(it)
-            Log.d(
-              tag,
-              "checkSetValidServerConnectionConfig: Current config ${DeviceManager.serverAddress} is pingable? $hasValidConn"
-            )
+          if (!serverConfigIdUsed.isNullOrEmpty() && serverConfigLastPing > 0L && System.currentTimeMillis() - serverConfigLastPing < 5000) {
+              Log.d(tag, "checkSetValidServerConnectionConfig last ping less than a 5 seconds ago")
+            hasValidConn = true
+            lookupMediaProgress = false
+          } else {
+            serverUserMediaProgress = mutableListOf()
           }
-        }
 
-        if (!hasValidConn) {
-          // Loop through available configs and check if can connect
-          for (config: ServerConnectionConfig in DeviceManager.deviceData.serverConnectionConfigs) {
-            val result = checkServerConnection(config)
-
-            if (result) {
-              hasValidConn = true
-              DeviceManager.serverConnectionConfig = config
-              Log.d(tag, "checkSetValidServerConnectionConfig: Set server connection config ${DeviceManager.serverConnectionConfigId}")
-              break
-            }
-          }
-        }
-
-        if (hasValidConn) {
-          serverConfigLastPing = System.currentTimeMillis()
-
-          if (lookupMediaProgress) {
-            Log.d(tag, "Has valid conn now get user media progress")
+          if (!hasValidConn) {
+            // First check if the current selected config is pingable
             DeviceManager.serverConnectionConfig?.let {
-              serverUserMediaProgress = authorize(it)
+              hasValidConn = checkServerConnection(it)
+              Log.d(
+                tag,
+                "checkSetValidServerConnectionConfig: Current config ${DeviceManager.serverAddress} is pingable? $hasValidConn"
+              )
             }
           }
-        }
 
-        cb(hasValidConn)
+          if (!hasValidConn) {
+            // Loop through available configs and check if can connect
+            for (config: ServerConnectionConfig in DeviceManager.deviceData.serverConnectionConfigs) {
+              val result = checkServerConnection(config)
+
+              if (result) {
+                hasValidConn = true
+                DeviceManager.serverConnectionConfig = config
+                Log.d(tag, "checkSetValidServerConnectionConfig: Set server connection config ${DeviceManager.serverConnectionConfigId}")
+                break
+              }
+            }
+          }
+
+          if (hasValidConn) {
+            serverConfigLastPing = System.currentTimeMillis()
+
+            if (lookupMediaProgress) {
+              Log.d(tag, "Has valid conn now get user media progress")
+              DeviceManager.serverConnectionConfig?.let {
+                serverUserMediaProgress = authorize(it)
+              }
+            }
+          }
+
+          return@coroutineScope hasValidConn
+        }
       }
     }
 
+    // If timeout occurred (result is null), treat as no connection
+    if (result == null) {
+      Log.w(tag, "checkSetValidServerConnectionConfig: Timeout after ${SERVER_CONNECTION_TIMEOUT_MS}ms, treating as no connection")
+      cb(false)
+    } else {
+      cb(result)
+    }
   }
 
   fun loadServerUserMediaProgress(cb: () -> Unit) {
@@ -2017,6 +2043,11 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   private fun loadEssentialBrowsingData(cb: () -> Unit) {
     var loadingCount = 0
     var completedCount = 0
+    var isCompleted = false
+    val completionLock = Object()
+    
+    // Timeout for loading essential browsing data (15 seconds total)
+    val ESSENTIAL_DATA_LOAD_TIMEOUT_MS = 15000L
 
     // Count what we need to load
     loadingCount += 1 // Continue listening (progress items)
@@ -2040,12 +2071,34 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       return
     }
 
+    // Helper function to safely complete the callback
+    val safeComplete = { logMessage: String ->
+      synchronized(completionLock) {
+        if (!isCompleted) {
+          isCompleted = true
+          Log.d(tag, "AABrowser: $logMessage")
+          cb()
+        }
+      }
+    }
+
+    // Set up a timeout handler to prevent indefinite blocking
+    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+      synchronized(completionLock) {
+        if (!isCompleted) {
+          Log.w(tag, "AABrowser: Timeout loading essential data after ${ESSENTIAL_DATA_LOAD_TIMEOUT_MS}ms (completed $completedCount/$loadingCount)")
+          safeComplete("Timeout - returning with partially loaded data")
+        }
+      }
+    }, ESSENTIAL_DATA_LOAD_TIMEOUT_MS)
+
     val checkComplete = {
-      completedCount++
-      Log.d(tag, "AABrowser: Completed $completedCount/$loadingCount essential loads")
-      if (completedCount >= loadingCount) {
-        Log.d(tag, "AABrowser: All essential browsing data loaded")
-        cb()
+      synchronized(completionLock) {
+        completedCount++
+        Log.d(tag, "AABrowser: Completed $completedCount/$loadingCount essential loads")
+        if (completedCount >= loadingCount && !isCompleted) {
+          safeComplete("All essential browsing data loaded")
+        }
       }
     }
 
