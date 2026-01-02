@@ -7,12 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       track:
-        description: 'Release track (internal, alpha, beta, production)'
+        description: 'Release track (internal, closed, alpha, beta, production)'
         required: true
         default: 'internal'
         type: choice
         options:
           - internal
+          - closed
           - alpha
           - beta
           - production
@@ -67,7 +68,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
           packageName: com.tomesonic.app
           releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ github.event.inputs.track || 'internal' }}
+          track: ${{ github.event.inputs.track || 'closed' }}
           status: completed
           inAppUpdatePriority: 2
 
