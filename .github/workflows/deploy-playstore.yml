@@ -9,11 +9,10 @@ on:
       track:
         description: 'Release track (internal, closed, alpha, beta, production)'
         required: true
-        default: 'internal'
+        default: 'alpha'
         type: choice
         options:
           - internal
-          - closed
           - alpha
           - beta
           - production
@@ -68,7 +67,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
           packageName: com.tomesonic.app
           releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
-          track: ${{ github.event.inputs.track || 'closed' }}
+          track: ${{ github.event.inputs.track || 'alpha' }}
           status: completed
           inAppUpdatePriority: 2
 
