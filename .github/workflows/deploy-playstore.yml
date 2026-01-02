@@ -57,7 +57,7 @@ jobs:
       - name: Build App Bundle
         run: ./android/gradlew bundleRelease -p android --no-daemon
         env:
-          MYAPP_UPLOAD_STORE_FILE: upload-keystore.jks
+          MYAPP_UPLOAD_STORE_FILE: app/upload-keystore.jks
           MYAPP_UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
           MYAPP_UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
           MYAPP_UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}

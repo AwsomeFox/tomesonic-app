@@ -81,7 +81,7 @@ bump-version VERSION:
 
 sync-version:
 	@echo "Syncing version from package.json to android/app/build.gradle"
-	@node -e "const pkg = require('./package.json'); const fs = require('fs'); const gradlePath = './android/app/build.gradle'; let gradle = fs.readFileSync(gradlePath, 'utf8'); gradle = gradle.replace(/versionName \"[^\"]*\"/, 'versionName \"' + pkg.version + '\"'); fs.writeFileSync(gradlePath, gradle); console.log('✓ Synced version', pkg.version, 'to android/app/build.gradle');"
+	@node -e "const pkg = require('./package.json'); const fs = require('fs'); const gradlePath = './android/app/build.gradle'; let gradle = fs.readFileSync(gradlePath, 'utf8'); const version = pkg.version.replace(/-beta.*|-alpha.*|-rc.*/, ''); const parts = version.split('.').map(Number); const versionCode = parts[0] * 10000 + parts[1] * 100 + parts[2]; gradle = gradle.replace(/versionCode \\d+/, 'versionCode ' + versionCode); gradle = gradle.replace(/versionName \\\"[^\\\"]*\\\"/, 'versionName \\\"' + pkg.version + '\\\"'); fs.writeFileSync(gradlePath, gradle); console.log('✓ Synced version', pkg.version, 'and versionCode', versionCode, 'to android/app/build.gradle');"
 
 # Show current version
 version:
