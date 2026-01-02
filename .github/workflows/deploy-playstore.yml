@@ -55,12 +55,12 @@ jobs:
           echo "${{ secrets.UPLOAD_KEYSTORE_BASE64 }}" | base64 -d > android/app/upload-keystore.jks
 
       - name: Build App Bundle
-        run: ./android/gradlew bundleRelease -p android --no-daemon
-        env:
-          MYAPP_UPLOAD_STORE_FILE: app/upload-keystore.jks
-          MYAPP_UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
-          MYAPP_UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
-          MYAPP_UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: |
+          ./android/gradlew bundleRelease -p android --no-daemon \
+            -PMYAPP_UPLOAD_STORE_FILE=app/upload-keystore.jks \
+            -PMYAPP_UPLOAD_STORE_PASSWORD="${{ secrets.UPLOAD_STORE_PASSWORD }}" \
+            -PMYAPP_UPLOAD_KEY_ALIAS="${{ secrets.UPLOAD_KEY_ALIAS }}" \
+            -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.UPLOAD_KEY_PASSWORD }}"
 
       - name: Upload to Play Store
         uses: r0adkll/upload-google-play@v1.1.3
