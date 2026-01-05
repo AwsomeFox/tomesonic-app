@@ -472,6 +472,13 @@ class ApiHandler(var ctx:Context) {
   fun getLibraries(cb: (List<Library>) -> Unit) {
     val mapper = jacksonMapper
     getRequest("/api/libraries?include=stats", null,null) {
+      // Check for errors first
+      if (it.has("error")) {
+        Log.e(tag, "getLibraries error: ${it.getString("error")}")
+        cb(emptyList())
+        return@getRequest
+      }
+
       val libraries = mutableListOf<Library>()
 
       var array = JSONArray()

@@ -1,6 +1,6 @@
 {
   "name": "tomesonic-app",
-  "version": "0.12.8-beta",
+  "version": "0.12.9-beta",
   "author": "AwsomeFox",
   "scripts": {
     "dev": "nuxt --hostname 0.0.0.0 --port 1337",

@@ -96,6 +96,8 @@ class PlayerNotificationService : MediaLibraryService() {
     const val CUSTOM_ACTION_JUMP_BACKWARD = "jump_backward"
     const val CUSTOM_ACTION_JUMP_FORWARD = "jump_forward"
     const val CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED = "change_playback_speed"
+    const val CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER = "skip_to_previous_chapter"
+    const val CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER = "skip_to_next_chapter"
   }
 
   private val tag = "PlayerNotificationServ"
@@ -2585,9 +2587,13 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   /**
-   * Try to automatically resume the last playback session when Android Auto connects
-   * This helps ensure that when opening the app in Android Auto, playback will resume
-   * from the last session instead of requiring manual selection from the browser
+   * Try to automatically resume the last playback session when Android Auto connects.
+   *
+   * IMPORTANT: This will ONLY auto-play if this app was the last one playing in Android Auto.
+   * This prevents the app from interrupting other media apps when the user opens Android Auto.
+   *
+   * The app is marked as "last player" when playback starts while in Android Auto mode,
+   * and this state is cleared when playback stops or another app takes over audio focus.
    */
   fun tryResumeLastSessionForAndroidAuto() {
     try {
@@ -2597,12 +2603,21 @@ class PlayerNotificationService : MediaLibraryService() {
         return
       }
 
+      // CRITICAL: Only auto-resume if this app was the last one playing in Android Auto
+      // This prevents interrupting other media apps like Spotify, Google Podcasts, etc.
+      if (!DeviceManager.wasLastAndroidAutoPlayer()) {
+        Log.d(tag, "tryResumeLastSessionForAndroidAuto: This app was NOT the last player in Android Auto, skipping auto-resume")
+        Log.d(tag, "tryResumeLastSessionForAndroidAuto: User must manually select content to start playback")
+        return
+      }
+
       val lastSession = DeviceManager.deviceData.lastPlaybackSession
       if (lastSession != null) {
         // Check if session has meaningful progress (not at the very beginning)
         val progress = lastSession.currentTime / lastSession.duration
         if (progress > 0.01) {
           Log.d(tag, "tryResumeLastSessionForAndroidAuto: Found resumable session '${lastSession.displayTitle}' at ${progress * 100}% (${lastSession.currentTime}s/${lastSession.duration}s)")
+          Log.d(tag, "tryResumeLastSessionForAndroidAuto: This app WAS the last Android Auto player, proceeding with auto-resume")
 
           // CRITICAL FIX: Store the absolute current time before preparing player
           // This prevents the coordinate system mismatch issue
@@ -2613,7 +2628,7 @@ class PlayerNotificationService : MediaLibraryService() {
           Handler(Looper.getMainLooper()).post {
             try {
               val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
-              // Start playback immediately since we're in Android Auto mode
+              // Start playback immediately since we're in Android Auto mode AND we were the last player
               val shouldStartPlaying = true
 
               Log.d(tag, "tryResumeLastSessionForAndroidAuto: Preparing player with skipInitialSeek=true")
@@ -2774,23 +2789,17 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       Log.d("PlayerNotificationServ", "AALibrary: Client ${browser.packageName} allowed, proceeding with onGetLibraryRoot")
       service.isAndroidAuto = true
 
-      // Try to resume last playback session when Android Auto connects
-      service.tryResumeLastSessionForAndroidAuto()
+      // Start auto-resume in background - don't block library loading
+      Handler(Looper.getMainLooper()).post {
+        service.tryResumeLastSessionForAndroidAuto()
+      }
 
-      // Create a future that will be completed when data loading is done or timeout occurs
-      val future = SettableFuture.create<LibraryResult<MediaItem>>()
-
-      // Timeout for Android Auto library loading (5 seconds to avoid blocking UI)
-      val ANDROID_AUTO_LOAD_TIMEOUT_MS = 5000L
-      var isCompleted = false
-      val completionLock = Object()
-
-      // Create the root media item once and reuse it
+      // Create the root media item
       val rootMediaItem = MediaItem.Builder()
         .setMediaId(AUTO_MEDIA_ROOT)
         .setMediaMetadata(
           MediaMetadata.Builder()
-            .setTitle("Audiobookshelf")
+            .setTitle("TomeSonic")
             .setIsBrowsable(true)
             .setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -2801,52 +2810,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         )
         .build()
 
-      // Helper function to safely complete the future
-      // Note: Uses variables from enclosing scope but they are kept minimal and short-lived
-      val safeComplete: (String) -> Unit = { logMessage ->
-        synchronized(completionLock) {
-          if (!isCompleted) {
-            isCompleted = true
-            Log.d("PlayerNotificationServ", "AALibrary: $logMessage")
-            future.set(LibraryResult.ofItem(rootMediaItem, params))
-          }
-        }
-      }
-
-      // Set up a timeout handler - this ensures we don't block the UI on poor connections
-      Handler(Looper.getMainLooper()).postDelayed({
-        synchronized(completionLock) {
-          if (!isCompleted) {
-            Log.w("PlayerNotificationServ", "AALibrary: Timeout waiting for server data - returning root with local content only")
-            safeComplete("Timeout reached - showing local content, server data will load in background")
-            
-            // Continue loading server data in background for future browsing
-            Log.d("PlayerNotificationServ", "AALibrary: Continuing server data load in background after timeout")
-          }
-        }
-      }, ANDROID_AUTO_LOAD_TIMEOUT_MS)
-
-      // Start loading server data
-      Log.d("PlayerNotificationServ", "AALibrary: Starting server connection and data pre-load (with ${ANDROID_AUTO_LOAD_TIMEOUT_MS}ms timeout)")
-      service.mediaManager.ensureServerConnectionForAndroidAuto {
-        // Check if we have a valid server connection after ensuring connection
-        if (!service.mediaManager.hasValidServerConnection()) {
-          Log.w("PlayerNotificationServ", "AALibrary: No valid server connection, will show local content only")
-          // Complete immediately if no server connection - local content is always available
-          safeComplete("No server connection - showing local content only")
-        } else {
-          Log.d("PlayerNotificationServ", "AALibrary: Valid server connection established")
-          
-          // Pre-load browsing data in background
-          Log.d("PlayerNotificationServ", "AALibrary: Triggering data pre-load for Android Auto")
-          service.mediaManager.preloadAndroidAutoBrowsingData {
-            Log.d("PlayerNotificationServ", "AALibrary: Pre-loading complete, data is now available for browsing")
-            safeComplete("Pre-loading complete - data is now available for browsing")
-          }
-        }
-      }
-
-      future
+      // Return root immediately - libraries will load asynchronously in onGetChildren
+      Log.d("PlayerNotificationServ", "AALibrary: Returning root immediately")
+      Futures.immediateFuture(LibraryResult.ofItem(rootMediaItem, params))
     }
   }
 
@@ -2936,44 +2902,13 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         }
 
         LIBRARIES_ROOT -> {
-          // Return libraries synchronously
-          val audioLibraries = service.mediaManager.getLibrariesWithAudio()
+          // Load libraries asynchronously - Android Auto shows loading indicator while waiting
+          loadLibrariesAsync(future, params)
+        }
 
-          if (audioLibraries.isEmpty()) {
-            Log.w("PlayerNotificationServ", "AALibrary: No libraries with audio content available")
-            val noLibrariesItem = MediaItem.Builder()
-              .setMediaId("__NO_LIBRARIES__")
-              .setMediaMetadata(
-                MediaMetadata.Builder()
-                  .setTitle("No libraries available")
-                  .setSubtitle("Connect to server or check library content")
-                  .setIsBrowsable(false)
-                  .setIsPlayable(false)
-                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .build()
-              )
-              .build()
-            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noLibrariesItem)), params))
-          } else {
-            Log.d("PlayerNotificationServ", "AALibrary: Returning ${audioLibraries.size} libraries")
-            val libraryItems = audioLibraries.map { library ->
-              // Use the library's icon but add subtitle with book count for Android Auto
-              MediaItem.Builder()
-                .setMediaId(library.id)
-                .setMediaMetadata(
-                  MediaMetadata.Builder()
-                    .setTitle(library.name)
-                    .setSubtitle("${library.stats?.totalItems ?: 0} books")
-                    .setIsBrowsable(true)
-                    .setIsPlayable(false)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                    .setArtworkUri(getUriToAbsIconDrawable(service.applicationContext, library.icon))
-                    .build()
-                )
-                .build()
-            }
-            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(libraryItems), params))
-          }
+        RECENTLY_ROOT -> {
+          // Load recent items asynchronously
+          loadRecentItemsAsync(future, params)
         }
 
         CONTINUE_ROOT -> {
@@ -3053,102 +2988,6 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                 .build()
             }
             future.set(LibraryResult.ofItemList(ImmutableList.copyOf(continueItems), params))
-          }
-        }
-
-        RECENTLY_ROOT -> {
-          Log.d("PlayerNotificationServ", "AALibrary: Getting recent items from cached data (synchronous)")
-
-          // Return cached data immediately - Media3 requires synchronous responses
-          val recentShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
-          val librariesWithRecent = mutableListOf<MediaItem>()
-
-          if (!service.mediaManager.hasValidServerConnection()) {
-            Log.w("PlayerNotificationServ", "AALibrary: No server connection for recent items")
-            val noRecentItem = MediaItem.Builder()
-              .setMediaId("__NO_RECENT__")
-              .setMediaMetadata(
-                MediaMetadata.Builder()
-                  .setTitle("No recent items")
-                  .setSubtitle("Connect to server to see recent items")
-                  .setIsBrowsable(false)
-                  .setIsPlayable(false)
-                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .build()
-              )
-              .build()
-            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
-          } else if (recentShelves.isEmpty() || !service.mediaManager.hasRecentShelvesLoaded()) {
-            Log.d("PlayerNotificationServ", "AALibrary: No recent data in cache, returning empty list")
-            val noDataItem = MediaItem.Builder()
-              .setMediaId("__NO_RECENT_DATA__")
-              .setMediaMetadata(
-                MediaMetadata.Builder()
-                  .setTitle("No recent items available")
-                  .setSubtitle("Data may still be loading")
-                  .setIsBrowsable(false)
-                  .setIsPlayable(false)
-                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.md_clock_outline))
-                  .build()
-              )
-              .build()
-            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noDataItem)), params))
-          } else {
-            Log.d("PlayerNotificationServ", "AALibrary: Found recent shelves for ${recentShelves.size} libraries")
-
-            recentShelves.forEach { (libraryId, shelves) ->
-              val library = service.mediaManager.getLibrary(libraryId)
-              if (library != null) {
-                // Count recent items in this library
-                var itemCount = 0
-                shelves.forEach { shelf ->
-                  when (shelf) {
-                    is LibraryShelfBookEntity -> itemCount += shelf.entities?.size ?: 0
-                    is LibraryShelfPodcastEntity -> itemCount += shelf.entities?.size ?: 0
-                    else -> {
-                      // Handle other shelf types (authors, series, episodes)
-                    }
-                  }
-                }
-
-                if (itemCount > 0) {
-                  librariesWithRecent.add(
-                    MediaItem.Builder()
-                      .setMediaId("__RECENT_LIBRARY__${library.id}")
-                      .setMediaMetadata(
-                        MediaMetadata.Builder()
-                          .setTitle(library.name)
-                          .setSubtitle("$itemCount recent items")
-                          .setIsBrowsable(true)
-                          .setIsPlayable(false)
-                          .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                          .setArtworkUri(getUriToAbsIconDrawable(service.applicationContext, library.icon))
-                          .build()
-                      )
-                      .build()
-                  )
-                }
-              }
-            }
-
-            if (librariesWithRecent.isEmpty()) {
-              val noRecentItem = MediaItem.Builder()
-                .setMediaId("__NO_RECENT__")
-                .setMediaMetadata(
-                  MediaMetadata.Builder()
-                    .setTitle("No recent items")
-                    .setSubtitle("Recent additions will appear here")
-                    .setIsBrowsable(false)
-                    .setIsPlayable(false)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                    .build()
-                )
-                .build()
-              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
-            } else {
-              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(librariesWithRecent), params))
-            }
           }
         }
 
@@ -3956,6 +3795,249 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }.toMutableList()
   }
 
+  /**
+   * Load libraries asynchronously for Android Auto.
+   * Uses a timeout to ensure we don't hang indefinitely.
+   */
+  private fun loadLibrariesAsync(
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    val TIMEOUT_MS = 8000L
+    Log.d("PlayerNotificationServ", "AALibrary: Loading libraries asynchronously (timeout: ${TIMEOUT_MS}ms)")
+
+    // Check if we already have libraries cached
+    val cachedLibraries = service.mediaManager.getLibrariesWithAudio()
+    if (cachedLibraries.isNotEmpty()) {
+      Log.d("PlayerNotificationServ", "AALibrary: Using ${cachedLibraries.size} cached libraries")
+      future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildLibraryItems(cachedLibraries)), params))
+      return
+    }
+
+    // Set timeout - if loading takes too long, return empty state
+    val timeoutHandler = Handler(Looper.getMainLooper())
+    val timeoutRunnable = Runnable {
+      if (!future.isDone) {
+        Log.w("PlayerNotificationServ", "AALibrary: Library loading timed out after ${TIMEOUT_MS}ms")
+        val noLibrariesItem = MediaItem.Builder()
+          .setMediaId("__NO_LIBRARIES__")
+          .setMediaMetadata(
+            MediaMetadata.Builder()
+              .setTitle("Unable to connect")
+              .setSubtitle("Check server connection and try again")
+              .setIsBrowsable(false)
+              .setIsPlayable(false)
+              .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+              .build()
+          )
+          .build()
+        future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noLibrariesItem)), params))
+      }
+    }
+    timeoutHandler.postDelayed(timeoutRunnable, TIMEOUT_MS)
+
+    // First ensure we have a valid server connection, then load libraries
+    service.mediaManager.ensureServerConnectionForAndroidAuto {
+      Log.d("PlayerNotificationServ", "AALibrary: Server connection check complete, loading libraries")
+      service.mediaManager.loadLibrariesAsync { libraries ->
+        timeoutHandler.removeCallbacks(timeoutRunnable)
+        if (!future.isDone) {
+          val audioLibraries = libraries.filter { (it.stats?.numAudioFiles ?: 0) > 0 }
+          if (audioLibraries.isEmpty()) {
+            Log.w("PlayerNotificationServ", "AALibrary: No libraries with audio content")
+            val noLibrariesItem = MediaItem.Builder()
+              .setMediaId("__NO_LIBRARIES__")
+              .setMediaMetadata(
+                MediaMetadata.Builder()
+                  .setTitle("No libraries available")
+                  .setSubtitle("No audiobook libraries found on server")
+                  .setIsBrowsable(false)
+                  .setIsPlayable(false)
+                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                  .build()
+              )
+              .build()
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noLibrariesItem)), params))
+          } else {
+            Log.d("PlayerNotificationServ", "AALibrary: Loaded ${audioLibraries.size} libraries")
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildLibraryItems(audioLibraries)), params))
+          }
+        }
+      }
+    }
+  }
+
+  private fun buildLibraryItems(libraries: List<Library>): List<MediaItem> {
+    return libraries.map { library ->
+      MediaItem.Builder()
+        .setMediaId(library.id)
+        .setMediaMetadata(
+          MediaMetadata.Builder()
+            .setTitle(library.name)
+            .setSubtitle("${library.stats?.totalItems ?: 0} books")
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            .setArtworkUri(getUriToAbsIconDrawable(service.applicationContext, library.icon))
+            .build()
+        )
+        .build()
+    }
+  }
+
+  /**
+   * Load recent items asynchronously for Android Auto.
+   */
+  private fun loadRecentItemsAsync(
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    val TIMEOUT_MS = 10000L
+    Log.d("PlayerNotificationServ", "AALibrary: Loading recent items asynchronously (timeout: ${TIMEOUT_MS}ms)")
+
+    // Check if we already have recent shelves cached
+    val cachedShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
+    if (cachedShelves.isNotEmpty() && service.mediaManager.hasRecentShelvesLoaded()) {
+      Log.d("PlayerNotificationServ", "AALibrary: Using cached recent shelves (${cachedShelves.size} libraries)")
+      future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildRecentItems(cachedShelves)), params))
+      return
+    }
+
+    // Set timeout
+    val timeoutHandler = Handler(Looper.getMainLooper())
+    val timeoutRunnable = Runnable {
+      if (!future.isDone) {
+        Log.w("PlayerNotificationServ", "AALibrary: Recent items loading timed out after ${TIMEOUT_MS}ms")
+        val noRecentItem = MediaItem.Builder()
+          .setMediaId("__NO_RECENT__")
+          .setMediaMetadata(
+            MediaMetadata.Builder()
+              .setTitle("Unable to load")
+              .setSubtitle("Check server connection and try again")
+              .setIsBrowsable(false)
+              .setIsPlayable(false)
+              .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+              .build()
+          )
+          .build()
+        future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
+      }
+    }
+    timeoutHandler.postDelayed(timeoutRunnable, TIMEOUT_MS)
+
+    // First ensure we have a valid server connection and libraries
+    service.mediaManager.ensureServerConnectionForAndroidAuto {
+      Log.d("PlayerNotificationServ", "AALibrary: Server connection check complete, loading libraries then personalization")
+
+      // Need to load libraries first, then populate personalized data
+      service.mediaManager.loadLibrariesAsync { libraries ->
+        if (libraries.isEmpty()) {
+          timeoutHandler.removeCallbacks(timeoutRunnable)
+          if (!future.isDone) {
+            Log.w("PlayerNotificationServ", "AALibrary: No libraries available for recent items")
+            val noRecentItem = MediaItem.Builder()
+              .setMediaId("__NO_RECENT__")
+              .setMediaMetadata(
+                MediaMetadata.Builder()
+                  .setTitle("No libraries available")
+                  .setSubtitle("Connect to server to see recent items")
+                  .setIsBrowsable(false)
+                  .setIsPlayable(false)
+                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                  .build()
+              )
+              .build()
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
+          }
+          return@loadLibrariesAsync
+        }
+
+        Log.d("PlayerNotificationServ", "AALibrary: Loaded ${libraries.size} libraries, now loading personalized data")
+
+        // Now load personalized data for all libraries (this populates cachedLibraryRecentShelves)
+        service.mediaManager.populatePersonalizedDataForAllLibraries {
+          timeoutHandler.removeCallbacks(timeoutRunnable)
+          if (!future.isDone) {
+            val shelves = service.mediaManager.getAllCachedLibraryRecentShelves()
+            Log.d("PlayerNotificationServ", "AALibrary: Loaded personalized data, ${shelves.size} libraries with recent items")
+            if (shelves.isEmpty()) {
+              val noRecentItem = MediaItem.Builder()
+                .setMediaId("__NO_RECENT__")
+                .setMediaMetadata(
+                  MediaMetadata.Builder()
+                    .setTitle("No recent items")
+                    .setSubtitle("Recent additions will appear here")
+                    .setIsBrowsable(false)
+                    .setIsPlayable(false)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                    .build()
+                )
+                .build()
+              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
+            } else {
+              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildRecentItems(shelves)), params))
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private fun buildRecentItems(recentShelves: Map<String, MutableList<LibraryShelfType>>): List<MediaItem> {
+    val librariesWithRecent = mutableListOf<MediaItem>()
+
+    recentShelves.forEach { (libraryId, shelves) ->
+      val library = service.mediaManager.getLibrary(libraryId)
+      if (library != null) {
+        var itemCount = 0
+        shelves.forEach { shelf ->
+          when (shelf) {
+            is LibraryShelfBookEntity -> itemCount += shelf.entities?.size ?: 0
+            is LibraryShelfPodcastEntity -> itemCount += shelf.entities?.size ?: 0
+            else -> {}
+          }
+        }
+
+        if (itemCount > 0) {
+          librariesWithRecent.add(
+            MediaItem.Builder()
+              .setMediaId("__RECENT_LIBRARY__${library.id}")
+              .setMediaMetadata(
+                MediaMetadata.Builder()
+                  .setTitle(library.name)
+                  .setSubtitle("$itemCount recent items")
+                  .setIsBrowsable(true)
+                  .setIsPlayable(false)
+                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                  .setArtworkUri(getUriToAbsIconDrawable(service.applicationContext, library.icon))
+                  .build()
+              )
+              .build()
+          )
+        }
+      }
+    }
+
+    return if (librariesWithRecent.isEmpty()) {
+      listOf(
+        MediaItem.Builder()
+          .setMediaId("__NO_RECENT__")
+          .setMediaMetadata(
+            MediaMetadata.Builder()
+              .setTitle("No recent items")
+              .setSubtitle("Recent additions will appear here")
+              .setIsBrowsable(false)
+              .setIsPlayable(false)
+              .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+              .build()
+          )
+          .build()
+      )
+    } else {
+      librariesWithRecent
+    }
+  }
+
   override fun onSearch(
     session: MediaLibrarySession,
     browser: MediaSession.ControllerInfo,
@@ -4160,13 +4242,22 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         Log.d("PlayerNotificationServ", "Media3: CHANGE_PLAYBACK_SPEED -> calling cyclePlaybackSpeed()")
         service.cyclePlaybackSpeed()
       }
+      PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER -> {
+        Log.d("PlayerNotificationServ", "Media3: SKIP_TO_PREVIOUS_CHAPTER -> calling seekToPreviousChapter()")
+        service.seekToPreviousChapter()
+      }
+      PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER -> {
+        Log.d("PlayerNotificationServ", "Media3: SKIP_TO_NEXT_CHAPTER -> calling seekToNextChapter()")
+        service.seekToNextChapter()
+      }
     }
     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
   }
 
   /**
-   * Intercept player commands from bluetooth/external controls and redirect skip commands
-   * to jump forward/backward instead of skipping to next/previous items in queue
+   * Intercept player commands from bluetooth/external controls and Android Auto hardware buttons.
+   * Redirect skip next/previous commands to jump forward/backward (30s seek) instead of
+   * skipping to next/previous items in queue.
    */
   override fun onPlayerCommandRequest(
     session: MediaSession,
@@ -4175,16 +4266,18 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ): Int {
     return when (playerCommand) {
       Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_NEXT -> {
-        // Intercept next track command from bluetooth and redirect to jump forward
-        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to next, redirecting to jump forward")
+        // Intercept next track command from bluetooth/Android Auto and redirect to jump forward
+        Log.d("PlayerNotificationServ", "Hardware control: Intercepting skip to next, redirecting to jump forward")
         service.jumpForward()
-        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+        // Return error to prevent the default skip-to-next behavior from executing
+        SessionResult.RESULT_ERROR_NOT_SUPPORTED
       }
       Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, Player.COMMAND_SEEK_TO_PREVIOUS -> {
-        // Intercept previous track command from bluetooth and redirect to jump backward
-        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to previous, redirecting to jump backward")
+        // Intercept previous track command from bluetooth/Android Auto and redirect to jump backward
+        Log.d("PlayerNotificationServ", "Hardware control: Intercepting skip to previous, redirecting to jump backward")
         service.jumpBackward()
-        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+        // Return error to prevent the default skip-to-previous behavior from executing
+        SessionResult.RESULT_ERROR_NOT_SUPPORTED
       }
       else -> {
         // Allow all other commands to execute normally
@@ -4436,6 +4529,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
+    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER, Bundle.EMPTY))
+    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER, Bundle.EMPTY))
 
     // CRITICAL: Disable default Android Auto skip buttons to prevent duplicates
     // This is equivalent to the original setUseNextAction(false) and setUsePreviousAction(false)

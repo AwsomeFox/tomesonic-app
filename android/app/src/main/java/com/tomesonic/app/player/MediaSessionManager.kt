@@ -18,6 +18,7 @@ import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
@@ -66,12 +67,47 @@ class MediaSessionManager(
         // Enable custom commands and actions for Android Auto
         sessionBuilder.setCustomLayout(buildCustomMediaActions())
 
+        // Set media button preferences for Android Auto compact player
+        // This determines which buttons appear in the mini player widget
+        // BACK slot (left of play) -> Jump backward
+        // FORWARD slot (right of play) -> Jump forward
+        sessionBuilder.setMediaButtonPreferences(buildMediaButtonPreferences())
+
         mediaSession = sessionBuilder.build()
 
         // Set up PlayerNotificationManager for Media3
         setupPlayerNotificationManager(notificationId, channelId, player)
 
         Log.d(TAG, "Media3 MediaLibrarySession and PlayerNotificationManager initialized successfully")
+    }
+
+    /**
+     * Build media button preferences for Android Auto compact player.
+     * This puts the seek back/forward buttons closest to the play button
+     * instead of the default skip to previous/next track buttons.
+     */
+    private fun buildMediaButtonPreferences(): ImmutableList<CommandButton> {
+        val buttons = ImmutableList.builder<CommandButton>()
+
+        // Back slot (left of play button) - Jump backward by configured time
+        buttons.add(
+            CommandButton.Builder(CommandButton.ICON_SKIP_BACK)
+                .setDisplayName("Jump Back")
+                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
+                .setSlots(CommandButton.SLOT_BACK)
+                .build()
+        )
+
+        // Forward slot (right of play button) - Jump forward by configured time
+        buttons.add(
+            CommandButton.Builder(CommandButton.ICON_SKIP_FORWARD)
+                .setDisplayName("Jump Forward")
+                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
+                .setSlots(CommandButton.SLOT_FORWARD)
+                .build()
+        )
+
+        return buttons.build()
     }
 
     private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
@@ -115,7 +151,7 @@ class MediaSessionManager(
     private fun buildCustomMediaActionsWithSpeed(currentSpeed: Float): ImmutableList<androidx.media3.session.CommandButton> {
         val customActions = ImmutableList.builder<androidx.media3.session.CommandButton>()
 
-        // Jump backward button (loop rewind icon)
+        // Jump backward button (time skip) - closest to play on left side
         customActions.add(
             androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_SKIP_BACK)
                 .setDisplayName("Jump Back")
@@ -123,7 +159,7 @@ class MediaSessionManager(
                 .build()
         )
 
-        // Jump forward button (loop forward icon)
+        // Jump forward button (time skip) - closest to play on right side
         customActions.add(
             androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_SKIP_FORWARD)
                 .setDisplayName("Jump Forward")
@@ -137,6 +173,22 @@ class MediaSessionManager(
                 .setIconResId(getSpeedIcon(currentSpeed))
                 .setDisplayName("Speed")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
+                .build()
+        )
+
+        // Previous chapter button (after speed)
+        customActions.add(
+            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_PREVIOUS)
+                .setDisplayName("Previous Chapter")
+                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER, Bundle.EMPTY))
+                .build()
+        )
+
+        // Next chapter button (after speed)
+        customActions.add(
+            androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_NEXT)
+                .setDisplayName("Next Chapter")
+                .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER, Bundle.EMPTY))
                 .build()
         )
 
