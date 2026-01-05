@@ -167,9 +167,10 @@ export default {
       }
 
       if (!serverConfig) {
-        // No last server config set
+        // No last server config set - redirect to server management screen
         this.attemptingConnection = false
-        AbsLogger.info({ tag: 'default', message: 'attemptConnection: No last server config set' })
+        AbsLogger.info({ tag: 'default', message: 'attemptConnection: No last server config set - redirecting to connect' })
+        this.$router.replace('/connect')
         return
       }
 
@@ -189,6 +190,9 @@ export default {
 
       if (!authRes) {
         this.attemptingConnection = false
+        // Auth failed - redirect to server management screen to let user reconnect
+        AbsLogger.info({ tag: 'default', message: 'attemptConnection: Auth failed - redirecting to connect' })
+        this.$router.replace('/connect')
         return
       }
 
