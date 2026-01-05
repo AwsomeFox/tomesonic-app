@@ -1965,7 +1965,10 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
   /**
    * Ensure server connection is established for Android Auto
-   * This is specifically for Android Auto initialization to check and establish server connection
+   * This is specifically for Android Auto initialization to check and establish server connection.
+   * 
+   * IMPORTANT: This runs the connection check on a background thread to prevent blocking
+   * the main thread/Android Auto UI. The callback is always called on the main thread.
    */
   fun ensureServerConnectionForAndroidAuto(cb: () -> Unit) {
     Log.d(tag, "AABrowser: Ensuring server connection for Android Auto")
@@ -1977,19 +1980,34 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       return
     }
 
-    // Initialize persisted data first
+    // Initialize persisted data first (fast, local operation)
     initializePersistedData()
 
-    // Try to establish server connection
-    checkSetValidServerConnectionConfig { isConnected ->
-      if (isConnected) {
-        serverConfigIdUsed = DeviceManager.serverConnectionConfigId
-        Log.d(tag, "AABrowser: Server connection established for Android Auto - config id=$serverConfigIdUsed")
-      } else {
-        Log.d(tag, "AABrowser: No server connection available for Android Auto")
+    // Run the potentially blocking server connection check on a background thread
+    // to prevent blocking the main thread and Android Auto UI
+    Thread {
+      try {
+        Log.d(tag, "AABrowser: Starting server connection check on background thread")
+        checkSetValidServerConnectionConfig { isConnected ->
+          if (isConnected) {
+            serverConfigIdUsed = DeviceManager.serverConnectionConfigId
+            Log.d(tag, "AABrowser: Server connection established for Android Auto - config id=$serverConfigIdUsed")
+          } else {
+            Log.d(tag, "AABrowser: No server connection available for Android Auto")
+          }
+          // Call callback on main thread
+          android.os.Handler(android.os.Looper.getMainLooper()).post {
+            cb()
+          }
+        }
+      } catch (e: Exception) {
+        Log.e(tag, "AABrowser: Error checking server connection", e)
+        // Call callback on main thread even on error
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+          cb()
+        }
       }
-      cb()
-    }
+    }.start()
   }
 
   /**

@@ -224,6 +224,37 @@ object DeviceManager {
   }
 
   /**
+   * Marks this app as the last active player in Android Auto.
+   * Call this when playback starts in Android Auto.
+   */
+  fun setWasLastAndroidAutoPlayer(wasLastPlayer: Boolean) {
+    Log.d(tag, "setWasLastAndroidAutoPlayer: $wasLastPlayer")
+    deviceData.wasLastAndroidAutoPlayer = wasLastPlayer
+    if (wasLastPlayer) {
+      deviceData.lastAndroidAutoPlaybackTimestamp = System.currentTimeMillis()
+    }
+    dbManager.saveDeviceData(deviceData)
+  }
+
+  /**
+   * Checks if this app was the last one playing in Android Auto.
+   * Used to determine if we should auto-resume when Android Auto reconnects.
+   */
+  fun wasLastAndroidAutoPlayer(): Boolean {
+    return deviceData.wasLastAndroidAutoPlayer
+  }
+
+  /**
+   * Clears the Android Auto last player state.
+   * Call this when another app takes over playback or when the user explicitly stops.
+   */
+  fun clearAndroidAutoLastPlayerState() {
+    Log.d(tag, "clearAndroidAutoLastPlayerState: Clearing Android Auto last player state")
+    deviceData.wasLastAndroidAutoPlayer = false
+    dbManager.saveDeviceData(deviceData)
+  }
+
+  /**
    * Initializes the widget updater.
    * @param context The context to use for initializing the widget updater.
    */
