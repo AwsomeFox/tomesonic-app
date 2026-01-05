@@ -1036,7 +1036,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   fun loadItemsInProgressSync(): List<ItemInProgress> {
     val future = SettableFuture.create<List<ItemInProgress>>()
     val combinedItems = mutableListOf<ItemInProgress>()
-    
+
     // Timeout for loading items in progress (3 seconds to avoid blocking UI)
     val ITEMS_IN_PROGRESS_TIMEOUT_SECONDS = 3L
 
@@ -1429,7 +1429,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   private fun checkSetValidServerConnectionConfig(cb: (Boolean) -> Unit) = runBlocking {
     // Timeout for server connection validation (10 seconds to allow trying multiple configs)
     val SERVER_CONNECTION_TIMEOUT_MS = 10000L
-    
+
     Log.d(tag, "checkSetValidServerConnectionConfig | serverConfigIdUsed=$serverConfigIdUsed | lastServerConnectionConfigId=${DeviceManager.deviceData.lastServerConnectionConfigId}")
     Log.d(tag, "checkSetValidServerConnectionConfig | DeviceManager.serverConnectionConfig=${DeviceManager.serverConnectionConfig?.name}")
     Log.d(tag, "checkSetValidServerConnectionConfig | DeviceManager.isConnectedToServer=${DeviceManager.isConnectedToServer}")
@@ -1966,7 +1966,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   /**
    * Ensure server connection is established for Android Auto
    * This is specifically for Android Auto initialization to check and establish server connection.
-   * 
+   *
    * IMPORTANT: This runs the connection check on a background thread to prevent blocking
    * the main thread/Android Auto UI. The callback is always called on the main thread.
    */
@@ -2063,7 +2063,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     var completedCount = 0
     var isCompleted = false
     val completionLock = Object()
-    
+
     // Timeout for loading essential browsing data (15 seconds total)
     val ESSENTIAL_DATA_LOAD_TIMEOUT_MS = 15000L
 

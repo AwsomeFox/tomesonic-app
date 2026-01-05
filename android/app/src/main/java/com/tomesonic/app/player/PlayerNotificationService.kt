@@ -2586,10 +2586,10 @@ class PlayerNotificationService : MediaLibraryService() {
 
   /**
    * Try to automatically resume the last playback session when Android Auto connects.
-   * 
+   *
    * IMPORTANT: This will ONLY auto-play if this app was the last one playing in Android Auto.
    * This prevents the app from interrupting other media apps when the user opens Android Auto.
-   * 
+   *
    * The app is marked as "last player" when playback starts while in Android Auto mode,
    * and this state is cleared when playback stops or another app takes over audio focus.
    */
@@ -3803,7 +3803,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ) {
     val TIMEOUT_MS = 5000L
     Log.d("PlayerNotificationServ", "AALibrary: Loading libraries asynchronously (timeout: ${TIMEOUT_MS}ms)")
-    
+
     // Check if we already have libraries cached
     val cachedLibraries = service.mediaManager.getLibrariesWithAudio()
     if (cachedLibraries.isNotEmpty()) {
@@ -3811,7 +3811,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildLibraryItems(cachedLibraries)), params))
       return
     }
-    
+
     // Set timeout - if loading takes too long, return empty state
     val timeoutHandler = Handler(Looper.getMainLooper())
     val timeoutRunnable = Runnable {
@@ -3833,7 +3833,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       }
     }
     timeoutHandler.postDelayed(timeoutRunnable, TIMEOUT_MS)
-    
+
     // Load libraries from server
     service.mediaManager.loadLibrariesAsync { libraries ->
       timeoutHandler.removeCallbacks(timeoutRunnable)
@@ -3861,7 +3861,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       }
     }
   }
-  
+
   private fun buildLibraryItems(libraries: List<Library>): List<MediaItem> {
     return libraries.map { library ->
       MediaItem.Builder()
@@ -3879,7 +3879,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         .build()
     }
   }
-  
+
   /**
    * Load recent items asynchronously for Android Auto.
    */
@@ -3889,7 +3889,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ) {
     val TIMEOUT_MS = 5000L
     Log.d("PlayerNotificationServ", "AALibrary: Loading recent items asynchronously (timeout: ${TIMEOUT_MS}ms)")
-    
+
     // Check if we already have recent shelves cached
     val cachedShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
     if (cachedShelves.isNotEmpty() && service.mediaManager.hasRecentShelvesLoaded()) {
@@ -3897,7 +3897,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildRecentItems(cachedShelves)), params))
       return
     }
-    
+
     // Set timeout
     val timeoutHandler = Handler(Looper.getMainLooper())
     val timeoutRunnable = Runnable {
@@ -3919,7 +3919,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       }
     }
     timeoutHandler.postDelayed(timeoutRunnable, TIMEOUT_MS)
-    
+
     // Use existing loadRecentItemsAsync method
     service.mediaManager.loadRecentItemsAsync { recentItems ->
       timeoutHandler.removeCallbacks(timeoutRunnable)
@@ -3946,10 +3946,10 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       }
     }
   }
-  
+
   private fun buildRecentItems(recentShelves: Map<String, MutableList<LibraryShelfType>>): List<MediaItem> {
     val librariesWithRecent = mutableListOf<MediaItem>()
-    
+
     recentShelves.forEach { (libraryId, shelves) ->
       val library = service.mediaManager.getLibrary(libraryId)
       if (library != null) {
@@ -3961,7 +3961,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
             else -> {}
           }
         }
-        
+
         if (itemCount > 0) {
           librariesWithRecent.add(
             MediaItem.Builder()
@@ -3981,7 +3981,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         }
       }
     }
-    
+
     return if (librariesWithRecent.isEmpty()) {
       listOf(
         MediaItem.Builder()
