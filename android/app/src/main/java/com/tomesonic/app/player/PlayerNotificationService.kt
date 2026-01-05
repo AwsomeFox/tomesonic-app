@@ -96,6 +96,8 @@ class PlayerNotificationService : MediaLibraryService() {
     const val CUSTOM_ACTION_JUMP_BACKWARD = "jump_backward"
     const val CUSTOM_ACTION_JUMP_FORWARD = "jump_forward"
     const val CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED = "change_playback_speed"
+    const val CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER = "skip_to_previous_chapter"
+    const val CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER = "skip_to_next_chapter"
   }
 
   private val tag = "PlayerNotificationServ"
@@ -3801,7 +3803,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
     params: LibraryParams?
   ) {
-    val TIMEOUT_MS = 5000L
+    val TIMEOUT_MS = 8000L
     Log.d("PlayerNotificationServ", "AALibrary: Loading libraries asynchronously (timeout: ${TIMEOUT_MS}ms)")
 
     // Check if we already have libraries cached
@@ -3834,29 +3836,32 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }
     timeoutHandler.postDelayed(timeoutRunnable, TIMEOUT_MS)
 
-    // Load libraries from server
-    service.mediaManager.loadLibrariesAsync { libraries ->
-      timeoutHandler.removeCallbacks(timeoutRunnable)
-      if (!future.isDone) {
-        val audioLibraries = libraries.filter { (it.stats?.numAudioFiles ?: 0) > 0 }
-        if (audioLibraries.isEmpty()) {
-          Log.w("PlayerNotificationServ", "AALibrary: No libraries with audio content")
-          val noLibrariesItem = MediaItem.Builder()
-            .setMediaId("__NO_LIBRARIES__")
-            .setMediaMetadata(
-              MediaMetadata.Builder()
-                .setTitle("No libraries available")
-                .setSubtitle("No audiobook libraries found on server")
-                .setIsBrowsable(false)
-                .setIsPlayable(false)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                .build()
-            )
-            .build()
-          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noLibrariesItem)), params))
-        } else {
-          Log.d("PlayerNotificationServ", "AALibrary: Loaded ${audioLibraries.size} libraries")
-          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildLibraryItems(audioLibraries)), params))
+    // First ensure we have a valid server connection, then load libraries
+    service.mediaManager.ensureServerConnectionForAndroidAuto {
+      Log.d("PlayerNotificationServ", "AALibrary: Server connection check complete, loading libraries")
+      service.mediaManager.loadLibrariesAsync { libraries ->
+        timeoutHandler.removeCallbacks(timeoutRunnable)
+        if (!future.isDone) {
+          val audioLibraries = libraries.filter { (it.stats?.numAudioFiles ?: 0) > 0 }
+          if (audioLibraries.isEmpty()) {
+            Log.w("PlayerNotificationServ", "AALibrary: No libraries with audio content")
+            val noLibrariesItem = MediaItem.Builder()
+              .setMediaId("__NO_LIBRARIES__")
+              .setMediaMetadata(
+                MediaMetadata.Builder()
+                  .setTitle("No libraries available")
+                  .setSubtitle("No audiobook libraries found on server")
+                  .setIsBrowsable(false)
+                  .setIsPlayable(false)
+                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                  .build()
+              )
+              .build()
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noLibrariesItem)), params))
+          } else {
+            Log.d("PlayerNotificationServ", "AALibrary: Loaded ${audioLibraries.size} libraries")
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildLibraryItems(audioLibraries)), params))
+          }
         }
       }
     }
@@ -3887,13 +3892,13 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
     params: LibraryParams?
   ) {
-    val TIMEOUT_MS = 5000L
+    val TIMEOUT_MS = 10000L
     Log.d("PlayerNotificationServ", "AALibrary: Loading recent items asynchronously (timeout: ${TIMEOUT_MS}ms)")
 
     // Check if we already have recent shelves cached
     val cachedShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
     if (cachedShelves.isNotEmpty() && service.mediaManager.hasRecentShelvesLoaded()) {
-      Log.d("PlayerNotificationServ", "AALibrary: Using cached recent shelves")
+      Log.d("PlayerNotificationServ", "AALibrary: Using cached recent shelves (${cachedShelves.size} libraries)")
       future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildRecentItems(cachedShelves)), params))
       return
     }
@@ -3920,28 +3925,59 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }
     timeoutHandler.postDelayed(timeoutRunnable, TIMEOUT_MS)
 
-    // Use existing loadRecentItemsAsync method
-    service.mediaManager.loadRecentItemsAsync { recentItems ->
-      timeoutHandler.removeCallbacks(timeoutRunnable)
-      if (!future.isDone) {
-        // After loading, check the cached shelves again
-        val shelves = service.mediaManager.getAllCachedLibraryRecentShelves()
-        if (shelves.isEmpty()) {
-          val noRecentItem = MediaItem.Builder()
-            .setMediaId("__NO_RECENT__")
-            .setMediaMetadata(
-              MediaMetadata.Builder()
-                .setTitle("No recent items")
-                .setSubtitle("Recent additions will appear here")
-                .setIsBrowsable(false)
-                .setIsPlayable(false)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+    // First ensure we have a valid server connection and libraries
+    service.mediaManager.ensureServerConnectionForAndroidAuto {
+      Log.d("PlayerNotificationServ", "AALibrary: Server connection check complete, loading libraries then personalization")
+
+      // Need to load libraries first, then populate personalized data
+      service.mediaManager.loadLibrariesAsync { libraries ->
+        if (libraries.isEmpty()) {
+          timeoutHandler.removeCallbacks(timeoutRunnable)
+          if (!future.isDone) {
+            Log.w("PlayerNotificationServ", "AALibrary: No libraries available for recent items")
+            val noRecentItem = MediaItem.Builder()
+              .setMediaId("__NO_RECENT__")
+              .setMediaMetadata(
+                MediaMetadata.Builder()
+                  .setTitle("No libraries available")
+                  .setSubtitle("Connect to server to see recent items")
+                  .setIsBrowsable(false)
+                  .setIsPlayable(false)
+                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                  .build()
+              )
+              .build()
+            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
+          }
+          return@loadLibrariesAsync
+        }
+
+        Log.d("PlayerNotificationServ", "AALibrary: Loaded ${libraries.size} libraries, now loading personalized data")
+
+        // Now load personalized data for all libraries (this populates cachedLibraryRecentShelves)
+        service.mediaManager.populatePersonalizedDataForAllLibraries {
+          timeoutHandler.removeCallbacks(timeoutRunnable)
+          if (!future.isDone) {
+            val shelves = service.mediaManager.getAllCachedLibraryRecentShelves()
+            Log.d("PlayerNotificationServ", "AALibrary: Loaded personalized data, ${shelves.size} libraries with recent items")
+            if (shelves.isEmpty()) {
+              val noRecentItem = MediaItem.Builder()
+                .setMediaId("__NO_RECENT__")
+                .setMediaMetadata(
+                  MediaMetadata.Builder()
+                    .setTitle("No recent items")
+                    .setSubtitle("Recent additions will appear here")
+                    .setIsBrowsable(false)
+                    .setIsPlayable(false)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                    .build()
+                )
                 .build()
-            )
-            .build()
-          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
-        } else {
-          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildRecentItems(shelves)), params))
+              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noRecentItem)), params))
+            } else {
+              future.set(LibraryResult.ofItemList(ImmutableList.copyOf(buildRecentItems(shelves)), params))
+            }
+          }
         }
       }
     }
@@ -4206,13 +4242,22 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         Log.d("PlayerNotificationServ", "Media3: CHANGE_PLAYBACK_SPEED -> calling cyclePlaybackSpeed()")
         service.cyclePlaybackSpeed()
       }
+      PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER -> {
+        Log.d("PlayerNotificationServ", "Media3: SKIP_TO_PREVIOUS_CHAPTER -> calling seekToPreviousChapter()")
+        service.seekToPreviousChapter()
+      }
+      PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER -> {
+        Log.d("PlayerNotificationServ", "Media3: SKIP_TO_NEXT_CHAPTER -> calling seekToNextChapter()")
+        service.seekToNextChapter()
+      }
     }
     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
   }
 
   /**
-   * Intercept player commands from bluetooth/external controls and redirect skip commands
-   * to jump forward/backward instead of skipping to next/previous items in queue
+   * Intercept player commands from bluetooth/external controls and Android Auto hardware buttons.
+   * Redirect skip next/previous commands to jump forward/backward (30s seek) instead of
+   * skipping to next/previous items in queue.
    */
   override fun onPlayerCommandRequest(
     session: MediaSession,
@@ -4221,16 +4266,18 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ): Int {
     return when (playerCommand) {
       Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_NEXT -> {
-        // Intercept next track command from bluetooth and redirect to jump forward
-        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to next, redirecting to jump forward")
+        // Intercept next track command from bluetooth/Android Auto and redirect to jump forward
+        Log.d("PlayerNotificationServ", "Hardware control: Intercepting skip to next, redirecting to jump forward")
         service.jumpForward()
-        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+        // Return error to prevent the default skip-to-next behavior from executing
+        SessionResult.RESULT_ERROR_NOT_SUPPORTED
       }
       Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, Player.COMMAND_SEEK_TO_PREVIOUS -> {
-        // Intercept previous track command from bluetooth and redirect to jump backward
-        Log.d("PlayerNotificationServ", "Bluetooth: Intercepting skip to previous, redirecting to jump backward")
+        // Intercept previous track command from bluetooth/Android Auto and redirect to jump backward
+        Log.d("PlayerNotificationServ", "Hardware control: Intercepting skip to previous, redirecting to jump backward")
         service.jumpBackward()
-        SessionResult.RESULT_SUCCESS // Return success to indicate we handled it
+        // Return error to prevent the default skip-to-previous behavior from executing
+        SessionResult.RESULT_ERROR_NOT_SUPPORTED
       }
       else -> {
         // Allow all other commands to execute normally
@@ -4482,6 +4529,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
+    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER, Bundle.EMPTY))
+    availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER, Bundle.EMPTY))
 
     // CRITICAL: Disable default Android Auto skip buttons to prevent duplicates
     // This is equivalent to the original setUseNextAction(false) and setUsePreviousAction(false)
