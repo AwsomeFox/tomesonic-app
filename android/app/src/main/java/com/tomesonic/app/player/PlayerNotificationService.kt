@@ -1316,7 +1316,7 @@ class PlayerNotificationService : MediaLibraryService() {
       Log.d(tag, "play(): No current session but have pending resume session - preparing it now")
       val sessionToResume = pendingResumeSession!!
       pendingResumeSession = null // Clear it to prevent re-triggering
-      
+
       val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
       preparePlayer(sessionToResume, true, savedPlaybackSpeed)
       return // preparePlayer will handle starting playback
@@ -2679,12 +2679,12 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
   /**
    * Media3's standard callback for playback resumption - Android Auto and system media controls.
-   * 
+   *
    * This is called when:
    * - A Bluetooth device sends a play command (car connecting, headphones, etc.)
    * - Android System UI's playback resumption feature is triggered
    * - Android Auto requests playback resumption
-   * 
+   *
    * Returning media items here allows the system to automatically resume playback.
    */
   override fun onPlaybackResumption(
@@ -2692,9 +2692,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     controller: MediaSession.ControllerInfo
   ): ListenableFuture<MediaItemsWithStartPosition> {
     Log.d("PlayerNotificationServ", "onPlaybackResumption: Called by ${controller.packageName}")
-    
+
     val future = SettableFuture.create<MediaItemsWithStartPosition>()
-    
+
     // Run on main thread for thread safety
     Handler(Looper.getMainLooper()).post {
       try {
@@ -2704,14 +2704,14 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           service.isAndroidAuto = true
           Log.d("PlayerNotificationServ", "onPlaybackResumption: Detected Android Auto client")
         }
-        
+
         // Try to get the last playback session
         val lastSession = DeviceManager.deviceData.lastPlaybackSession
-        
+
         if (lastSession != null && lastSession.duration > 0) {
           val progress = lastSession.currentTime / lastSession.duration
           Log.d("PlayerNotificationServ", "onPlaybackResumption: Found last session '${lastSession.displayTitle}' at ${(progress * 100).toInt()}%")
-          
+
           // Build a MediaItem from the last session
           val mediaItem = MediaItem.Builder()
             .setMediaId(lastSession.libraryItemId ?: lastSession.id)
@@ -2724,14 +2724,14 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                 .build()
             )
             .build()
-          
+
           // Calculate start position in milliseconds
           val startPositionMs = (lastSession.currentTime * 1000).toLong()
           Log.d("PlayerNotificationServ", "onPlaybackResumption: Resuming at position ${startPositionMs}ms")
-          
+
           // Store session for use when play command arrives
           service.pendingResumeSession = lastSession
-          
+
           future.set(
             MediaItemsWithStartPosition(
               listOf(mediaItem),
@@ -2749,7 +2749,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
       }
     }
-    
+
     return future
   }
 
