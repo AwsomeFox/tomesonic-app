@@ -75,18 +75,6 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
     lazyIsPlaying = isPlaying
 
-    // Track Android Auto last player state for proper resume behavior
-    // This ensures we only auto-resume if this app was the last one playing in Android Auto
-    if (playerNotificationService.isAndroidAuto) {
-      if (isPlaying) {
-        // Mark this app as the last Android Auto player when playback starts
-        Log.d(tag, "onIsPlayingChanged: Marking app as last Android Auto player (isPlaying=true)")
-        DeviceManager.setWasLastAndroidAutoPlayer(true)
-      }
-      // Note: We don't clear the state when pausing/stopping since the user might resume
-      // The state is cleared when another app takes over audio focus (handled by audio focus listener)
-    }
-
     // Update widget
     DeviceManager.widgetUpdater?.onPlayerChanged(playerNotificationService)
 
@@ -208,9 +196,6 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
   /**
    * Handle playWhenReady changes to detect audio focus loss.
-   * This is important for Android Auto to know when another app takes over playback.
-   * When we lose audio focus to another app, we should clear the "last Android Auto player" state
-   * so we don't auto-resume when Android Auto reconnects.
    */
   override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
     val reasonString = when (reason) {
@@ -222,12 +207,5 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       else -> "UNKNOWN($reason)"
     }
     Log.d(tag, "onPlayWhenReadyChanged: playWhenReady=$playWhenReady, reason=$reasonString")
-
-    // If we lost audio focus (another app took over), clear the Android Auto last player state
-    // This ensures we don't auto-resume when Android Auto reconnects if another app is now playing
-    if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) {
-      Log.d(tag, "onPlayWhenReadyChanged: Audio focus lost to another app, clearing Android Auto last player state")
-      DeviceManager.clearAndroidAutoLastPlayerState()
-    }
   }
 }

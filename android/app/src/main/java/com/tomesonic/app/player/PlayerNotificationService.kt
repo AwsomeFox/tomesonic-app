@@ -61,6 +61,7 @@ import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -166,6 +167,8 @@ class PlayerNotificationService : MediaLibraryService() {
   private var queueSetForCurrentSession = false
   internal var expectingTrackTransition = false // Flag to track when we're waiting for a track change to complete
 
+  // Session to resume when onPlaybackResumption triggers playback
+  internal var pendingResumeSession: PlaybackSession? = null
 
   internal var isAndroidAuto = false
 
@@ -1306,6 +1309,17 @@ class PlayerNotificationService : MediaLibraryService() {
     if (currentPlayer.isPlaying) {
       Log.d(tag, "Already playing")
       return
+    }
+
+    // Handle pending resume session from onPlaybackResumption callback
+    if (currentPlaybackSession == null && pendingResumeSession != null) {
+      Log.d(tag, "play(): No current session but have pending resume session - preparing it now")
+      val sessionToResume = pendingResumeSession!!
+      pendingResumeSession = null // Clear it to prevent re-triggering
+      
+      val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
+      preparePlayer(sessionToResume, true, savedPlaybackSpeed)
+      return // preparePlayer will handle starting playback
     }
 
     // Check if we have a valid playback session and media prepared
@@ -2585,88 +2599,6 @@ class PlayerNotificationService : MediaLibraryService() {
       session.notifyChildrenChanged(MediaLibrarySessionCallback.AUTO_MEDIA_ROOT, 0, null)
     }
   }
-
-  /**
-   * Try to automatically resume the last playback session when Android Auto connects.
-   *
-   * IMPORTANT: This will ONLY auto-play if this app was the last one playing in Android Auto.
-   * This prevents the app from interrupting other media apps when the user opens Android Auto.
-   *
-   * The app is marked as "last player" when playback starts while in Android Auto mode,
-   * and this state is cleared when playback stops or another app takes over audio focus.
-   */
-  fun tryResumeLastSessionForAndroidAuto() {
-    try {
-      // Check if we already have an active session - don't resume if already playing
-      if (currentPlaybackSession != null) {
-        Log.d(tag, "tryResumeLastSessionForAndroidAuto: Active session already exists, skipping auto-resume")
-        return
-      }
-
-      // CRITICAL: Only auto-resume if this app was the last one playing in Android Auto
-      // This prevents interrupting other media apps like Spotify, Google Podcasts, etc.
-      if (!DeviceManager.wasLastAndroidAutoPlayer()) {
-        Log.d(tag, "tryResumeLastSessionForAndroidAuto: This app was NOT the last player in Android Auto, skipping auto-resume")
-        Log.d(tag, "tryResumeLastSessionForAndroidAuto: User must manually select content to start playback")
-        return
-      }
-
-      val lastSession = DeviceManager.deviceData.lastPlaybackSession
-      if (lastSession != null) {
-        // Check if session has meaningful progress (not at the very beginning)
-        val progress = lastSession.currentTime / lastSession.duration
-        if (progress > 0.01) {
-          Log.d(tag, "tryResumeLastSessionForAndroidAuto: Found resumable session '${lastSession.displayTitle}' at ${progress * 100}% (${lastSession.currentTime}s/${lastSession.duration}s)")
-          Log.d(tag, "tryResumeLastSessionForAndroidAuto: This app WAS the last Android Auto player, proceeding with auto-resume")
-
-          // CRITICAL FIX: Store the absolute current time before preparing player
-          // This prevents the coordinate system mismatch issue
-          val absoluteCurrentTime = lastSession.currentTime
-          Log.d(tag, "tryResumeLastSessionForAndroidAuto: Stored absolute time: ${absoluteCurrentTime}s")
-
-          // Make sure this runs on the main thread as ExoPlayer requires it
-          Handler(Looper.getMainLooper()).post {
-            try {
-              val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
-              // Start playback immediately since we're in Android Auto mode AND we were the last player
-              val shouldStartPlaying = true
-
-              Log.d(tag, "tryResumeLastSessionForAndroidAuto: Preparing player with skipInitialSeek=true")
-              // Prepare the player but skip the initial seek - we'll do it manually after the player is ready
-              preparePlayer(lastSession, shouldStartPlaying, savedPlaybackSpeed, skipInitialSeek = true)
-
-              // Wait for the player to be ready, then seek to the correct absolute position
-              // This ensures the chapter calculation is done correctly
-              Handler(Looper.getMainLooper()).postDelayed({
-                try {
-                  if (currentPlayer.playbackState == Player.STATE_READY ||
-                      currentPlayer.playbackState == Player.STATE_BUFFERING) {
-                    Log.d(tag, "tryResumeLastSessionForAndroidAuto: Player ready, seeking to absolute time ${absoluteCurrentTime}s")
-                    seekToAbsoluteTime(absoluteCurrentTime)
-                    Log.d(tag, "tryResumeLastSessionForAndroidAuto: Successfully resumed and seeked to correct position")
-                  } else {
-                    Log.w(tag, "tryResumeLastSessionForAndroidAuto: Player not ready after delay (state: ${currentPlayer.playbackState})")
-                  }
-                } catch (e: Exception) {
-                  Log.e(tag, "tryResumeLastSessionForAndroidAuto: Failed to seek after player ready", e)
-                }
-              }, 500) // 500ms delay to ensure player is ready
-
-              Log.d(tag, "tryResumeLastSessionForAndroidAuto: Player preparation initiated")
-            } catch (e: Exception) {
-              Log.e(tag, "tryResumeLastSessionForAndroidAuto: Failed to resume session", e)
-            }
-          }
-        } else {
-          Log.d(tag, "tryResumeLastSessionForAndroidAuto: Session found but progress too low: ${progress * 100}%")
-        }
-      } else {
-        Log.d(tag, "tryResumeLastSessionForAndroidAuto: No last playback session found")
-      }
-    } catch (e: Exception) {
-      Log.e(tag, "tryResumeLastSessionForAndroidAuto: Error trying to auto-resume", e)
-    }
-  }
 }
 
 // Simple callback for MediaLibrarySession that delegates to MediaBrowserManager methods
@@ -2745,6 +2677,82 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   private var cachedSearchQuery: String = ""
   private var cachedSearchResults: MutableList<MediaItem> = mutableListOf()
 
+  /**
+   * Media3's standard callback for playback resumption - Android Auto and system media controls.
+   * 
+   * This is called when:
+   * - A Bluetooth device sends a play command (car connecting, headphones, etc.)
+   * - Android System UI's playback resumption feature is triggered
+   * - Android Auto requests playback resumption
+   * 
+   * Returning media items here allows the system to automatically resume playback.
+   */
+  override fun onPlaybackResumption(
+    mediaSession: MediaSession,
+    controller: MediaSession.ControllerInfo
+  ): ListenableFuture<MediaItemsWithStartPosition> {
+    Log.d("PlayerNotificationServ", "onPlaybackResumption: Called by ${controller.packageName}")
+    
+    val future = SettableFuture.create<MediaItemsWithStartPosition>()
+    
+    // Run on main thread for thread safety
+    Handler(Looper.getMainLooper()).post {
+      try {
+        // Mark as Android Auto mode if applicable
+        val packageName = controller.packageName
+        if (packageName.contains("gearhead") || packageName.contains("android.auto") || packageName.contains("googlequicksearchbox")) {
+          service.isAndroidAuto = true
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Detected Android Auto client")
+        }
+        
+        // Try to get the last playback session
+        val lastSession = DeviceManager.deviceData.lastPlaybackSession
+        
+        if (lastSession != null && lastSession.duration > 0) {
+          val progress = lastSession.currentTime / lastSession.duration
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Found last session '${lastSession.displayTitle}' at ${(progress * 100).toInt()}%")
+          
+          // Build a MediaItem from the last session
+          val mediaItem = MediaItem.Builder()
+            .setMediaId(lastSession.libraryItemId ?: lastSession.id)
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle(lastSession.displayTitle ?: "Unknown")
+                .setArtist(lastSession.displayAuthor ?: "")
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .build()
+            )
+            .build()
+          
+          // Calculate start position in milliseconds
+          val startPositionMs = (lastSession.currentTime * 1000).toLong()
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Resuming at position ${startPositionMs}ms")
+          
+          // Store session for use when play command arrives
+          service.pendingResumeSession = lastSession
+          
+          future.set(
+            MediaItemsWithStartPosition(
+              listOf(mediaItem),
+              0, // Start index
+              startPositionMs
+            )
+          )
+        } else {
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: No resumable session found")
+          // Return empty - no playback resumption available
+          future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+        }
+      } catch (e: Exception) {
+        Log.e("PlayerNotificationServ", "onPlaybackResumption: Error", e)
+        future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+      }
+    }
+    
+    return future
+  }
+
   companion object {
     const val AUTO_MEDIA_ROOT = "/"
     const val LIBRARIES_ROOT = "__LIBRARIES__"
@@ -2789,10 +2797,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       Log.d("PlayerNotificationServ", "AALibrary: Client ${browser.packageName} allowed, proceeding with onGetLibraryRoot")
       service.isAndroidAuto = true
 
-      // Start auto-resume in background - don't block library loading
-      Handler(Looper.getMainLooper()).post {
-        service.tryResumeLastSessionForAndroidAuto()
-      }
+      // Note: Playback resumption is now handled by onPlaybackResumption callback
+      // which is the proper Media3 way to handle Android Auto automatic playback resumption
 
       // Create the root media item
       val rootMediaItem = MediaItem.Builder()

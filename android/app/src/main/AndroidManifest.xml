@@ -89,7 +89,8 @@
             </intent-filter>
         </activity>
 
-        <receiver android:name="androidx.media.session.MediaButtonReceiver" android:exported="true">
+        <!-- Media3 MediaButtonReceiver for playback resumption and media button handling -->
+        <receiver android:name="androidx.media3.session.MediaButtonReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>

@@ -209,12 +209,7 @@ data class DeviceData(
   var serverConnectionConfigs:MutableList<ServerConnectionConfig>,
   var lastServerConnectionConfigId:String?,
   var deviceSettings: DeviceSettings?,
-  var lastPlaybackSession: PlaybackSession?,
-  // Track if this app was the last one playing in Android Auto
-  // This is used to determine if we should auto-resume when Android Auto connects
-  var wasLastAndroidAutoPlayer: Boolean = false,
-  // Timestamp of when playback last stopped in Android Auto (for additional checks)
-  var lastAndroidAutoPlaybackTimestamp: Long = 0L
+  var lastPlaybackSession: PlaybackSession?
 ) {
   @JsonIgnore
   fun getLastServerConnectionConfig(): ServerConnectionConfig? {
