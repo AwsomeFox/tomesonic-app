@@ -1,6 +1,6 @@
 <template>
-  <div>
-    <div id="bookshelf" class="w-full h-full p-4 overflow-y-auto library-scroll-container" :style="contentPaddingStyle">
+  <div class="w-full h-full overflow-y-auto">
+    <div id="bookshelf" class="w-full p-4 library-scroll-container" :style="contentPaddingStyle">
       <div class="flex flex-wrap justify-center">
         <template v-for="author in authors">
           <cards-author-card :key="author.id" :author="author" :width="cardWidth" :height="cardHeight" class="p-2" />

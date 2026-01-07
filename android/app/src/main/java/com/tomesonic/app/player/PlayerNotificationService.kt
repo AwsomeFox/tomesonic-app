@@ -167,9 +167,6 @@ class PlayerNotificationService : MediaLibraryService() {
   private var queueSetForCurrentSession = false
   internal var expectingTrackTransition = false // Flag to track when we're waiting for a track change to complete
 
-  // Session to resume when onPlaybackResumption triggers playback
-  internal var pendingResumeSession: PlaybackSession? = null
-
   internal var isAndroidAuto = false
 
   // The following are used for the shake detection
@@ -1309,17 +1306,6 @@ class PlayerNotificationService : MediaLibraryService() {
     if (currentPlayer.isPlaying) {
       Log.d(tag, "Already playing")
       return
-    }
-
-    // Handle pending resume session from onPlaybackResumption callback
-    if (currentPlaybackSession == null && pendingResumeSession != null) {
-      Log.d(tag, "play(): No current session but have pending resume session - preparing it now")
-      val sessionToResume = pendingResumeSession!!
-      pendingResumeSession = null // Clear it to prevent re-triggering
-
-      val savedPlaybackSpeed = mediaManager.getSavedPlaybackRate()
-      preparePlayer(sessionToResume, true, savedPlaybackSpeed)
-      return // preparePlayer will handle starting playback
     }
 
     // Check if we have a valid playback session and media prepared
@@ -2685,7 +2671,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
    * - Android System UI's playback resumption feature is triggered
    * - Android Auto requests playback resumption
    *
-   * Returning media items here allows the system to automatically resume playback.
+   * This callback should prepare the player and return the media items.
+   * Media3 will then automatically start playback.
    */
   override fun onPlaybackResumption(
     mediaSession: MediaSession,
@@ -2712,7 +2699,18 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           val progress = lastSession.currentTime / lastSession.duration
           Log.d("PlayerNotificationServ", "onPlaybackResumption: Found last session '${lastSession.displayTitle}' at ${(progress * 100).toInt()}%")
 
-          // Build a MediaItem from the last session
+          // Calculate start position in milliseconds
+          val startPositionMs = (lastSession.currentTime * 1000).toLong()
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Will resume at position ${startPositionMs}ms")
+
+          // CRITICAL: Actually prepare the player with the session
+          // Media3 expects us to prepare the player here, then it will start playback
+          val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+          
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Preparing player with playWhenReady=true")
+          service.preparePlayer(lastSession, true, savedPlaybackSpeed)
+
+          // Build a MediaItem from the last session for the return value
           val mediaItem = MediaItem.Builder()
             .setMediaId(lastSession.libraryItemId ?: lastSession.id)
             .setMediaMetadata(
@@ -2725,13 +2723,6 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
             )
             .build()
 
-          // Calculate start position in milliseconds
-          val startPositionMs = (lastSession.currentTime * 1000).toLong()
-          Log.d("PlayerNotificationServ", "onPlaybackResumption: Resuming at position ${startPositionMs}ms")
-
-          // Store session for use when play command arrives
-          service.pendingResumeSession = lastSession
-
           future.set(
             MediaItemsWithStartPosition(
               listOf(mediaItem),
@@ -2739,6 +2730,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
               startPositionMs
             )
           )
+          
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Player prepared and future set")
         } else {
           Log.d("PlayerNotificationServ", "onPlaybackResumption: No resumable session found")
           // Return empty - no playback resumption available
