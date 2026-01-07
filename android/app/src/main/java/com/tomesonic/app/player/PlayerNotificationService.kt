@@ -2706,7 +2706,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           // CRITICAL: Actually prepare the player with the session
           // Media3 expects us to prepare the player here, then it will start playback
           val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
-          
+
           Log.d("PlayerNotificationServ", "onPlaybackResumption: Preparing player with playWhenReady=true")
           service.preparePlayer(lastSession, true, savedPlaybackSpeed)
 
@@ -2730,7 +2730,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
               startPositionMs
             )
           )
-          
+
           Log.d("PlayerNotificationServ", "onPlaybackResumption: Player prepared and future set")
         } else {
           Log.d("PlayerNotificationServ", "onPlaybackResumption: No resumable session found")
