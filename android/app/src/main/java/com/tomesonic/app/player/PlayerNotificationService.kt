@@ -2692,58 +2692,249 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           Log.d("PlayerNotificationServ", "onPlaybackResumption: Detected Android Auto client")
         }
 
-        // Try to get the last playback session
-        val lastSession = DeviceManager.deviceData.lastPlaybackSession
+        // CRITICAL: Attempt to re-establish server connection first (for Android Auto)
+        service.apiHandler.attemptReconnection { reconnected ->
+          Handler(Looper.getMainLooper()).post {
+            if (reconnected) {
+              Log.d("PlayerNotificationServ", "onPlaybackResumption: Server reconnection successful")
+            } else {
+              Log.w("PlayerNotificationServ", "onPlaybackResumption: Server reconnection failed, will use local session if available")
+            }
 
-        if (lastSession != null && lastSession.duration > 0) {
-          val progress = lastSession.currentTime / lastSession.duration
-          Log.d("PlayerNotificationServ", "onPlaybackResumption: Found last session '${lastSession.displayTitle}' at ${(progress * 100).toInt()}%")
-
-          // Calculate start position in milliseconds
-          val startPositionMs = (lastSession.currentTime * 1000).toLong()
-          Log.d("PlayerNotificationServ", "onPlaybackResumption: Will resume at position ${startPositionMs}ms")
-
-          // CRITICAL: Actually prepare the player with the session
-          // Media3 expects us to prepare the player here, then it will start playback
-          val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
-
-          Log.d("PlayerNotificationServ", "onPlaybackResumption: Preparing player with playWhenReady=true")
-          service.preparePlayer(lastSession, true, savedPlaybackSpeed)
-
-          // Build a MediaItem from the last session for the return value
-          val mediaItem = MediaItem.Builder()
-            .setMediaId(lastSession.libraryItemId ?: lastSession.id)
-            .setMediaMetadata(
-              MediaMetadata.Builder()
-                .setTitle(lastSession.displayTitle ?: "Unknown")
-                .setArtist(lastSession.displayAuthor ?: "")
-                .setIsPlayable(true)
-                .setIsBrowsable(false)
-                .build()
-            )
-            .build()
-
-          future.set(
-            MediaItemsWithStartPosition(
-              listOf(mediaItem),
-              0, // Start index
-              startPositionMs
-            )
-          )
-
-          Log.d("PlayerNotificationServ", "onPlaybackResumption: Player prepared and future set")
-        } else {
-          Log.d("PlayerNotificationServ", "onPlaybackResumption: No resumable session found")
-          // Return empty - no playback resumption available
-          future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+            // Now try to get the best session for playback
+            resumePlaybackWithBestSession(future, reconnected)
+          }
         }
+
       } catch (e: Exception) {
         Log.e("PlayerNotificationServ", "onPlaybackResumption: Error", e)
-        future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+        // Try fallback to local session even on exception
+        tryLocalFallback(future)
       }
     }
 
     return future
+  }
+
+  /**
+   * Resumes playback with the best available session.
+   * Priority: 1) Last session (local or server), 2) Server latest progress, 3) Local books with progress
+   */
+  private fun resumePlaybackWithBestSession(future: SettableFuture<MediaItemsWithStartPosition>, serverConnected: Boolean) {
+    // Try to get the last playback session
+    val lastSession = DeviceManager.deviceData.lastPlaybackSession
+
+    if (lastSession != null && lastSession.duration > 0) {
+      val progress = lastSession.currentTime / lastSession.duration
+      Log.d("PlayerNotificationServ", "onPlaybackResumption: Found last session '${lastSession.displayTitle}' at ${(progress * 100).toInt()}%")
+
+      // Check if this is a server session that needs fresh URLs
+      if (!lastSession.isLocal && serverConnected) {
+        Log.d("PlayerNotificationServ", "onPlaybackResumption: Server session detected, requesting fresh session")
+        refreshAndResumeServerSession(lastSession, future)
+      } else if (lastSession.isLocal) {
+        // Local session - can play directly
+        Log.d("PlayerNotificationServ", "onPlaybackResumption: Local session, starting directly")
+        startPlayback(lastSession, future)
+      } else {
+        // Server session but not connected - check if we have a local equivalent
+        Log.d("PlayerNotificationServ", "onPlaybackResumption: Server session but no connection, checking for local fallback")
+        val localEquivalent = DeviceManager.dbManager.getLocalLibraryItemByLId(lastSession.libraryItemId ?: "")
+
+        if (localEquivalent != null) {
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Found local equivalent for server item")
+          val deviceInfo = service.getDeviceInfo()
+          val localSession = localEquivalent.getPlaybackSession(null, deviceInfo)
+          // Preserve the progress from the server session
+          localSession.currentTime = lastSession.currentTime
+          startPlayback(localSession, future)
+        } else {
+          Log.w("PlayerNotificationServ", "onPlaybackResumption: No local fallback available")
+          // Return empty - no playback available without network
+          future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+        }
+      }
+    } else {
+      // No last session - try to find something to play
+      Log.d("PlayerNotificationServ", "onPlaybackResumption: No last session, looking for alternatives")
+      tryAlternativePlayback(future, serverConnected)
+    }
+  }
+
+  /**
+   * Refresh a server session and resume playback
+   */
+  private fun refreshAndResumeServerSession(oldSession: PlaybackSession, future: SettableFuture<MediaItemsWithStartPosition>) {
+    val playItemRequestPayload = service.getPlayItemRequestPayload(false)
+
+    service.apiHandler.playLibraryItem(
+      oldSession.libraryItemId ?: "",
+      oldSession.episodeId,
+      playItemRequestPayload
+    ) { freshSession ->
+      Handler(Looper.getMainLooper()).post {
+        if (freshSession != null) {
+          // Check server progress vs local and use the latest
+          val serverProgress = service.mediaManager.serverUserMediaProgress.find {
+            it.libraryItemId == oldSession.libraryItemId
+          }
+
+          val positionToUse = if (serverProgress != null && serverProgress.lastUpdate > oldSession.updatedAt) {
+            Log.d("PlayerNotificationServ", "onPlaybackResumption: Using server progress (newer)")
+            serverProgress.currentTime
+          } else {
+            Log.d("PlayerNotificationServ", "onPlaybackResumption: Using local session progress")
+            oldSession.currentTime
+          }
+
+          freshSession.currentTime = positionToUse
+          freshSession.timeListening = oldSession.timeListening
+
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: Fresh session obtained, resuming at ${freshSession.currentTime}s")
+          startPlayback(freshSession, future)
+        } else {
+          Log.e("PlayerNotificationServ", "onPlaybackResumption: Failed to get fresh session, trying local fallback")
+
+          // Try local fallback
+          val localEquivalent = DeviceManager.dbManager.getLocalLibraryItemByLId(oldSession.libraryItemId ?: "")
+          if (localEquivalent != null) {
+            val deviceInfo = service.getDeviceInfo()
+            val localSession = localEquivalent.getPlaybackSession(null, deviceInfo)
+            localSession.currentTime = oldSession.currentTime
+            startPlayback(localSession, future)
+          } else {
+            Log.e("PlayerNotificationServ", "onPlaybackResumption: No fallback available")
+            future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Start playback with a session and set the future
+   */
+  private fun startPlayback(session: PlaybackSession, future: SettableFuture<MediaItemsWithStartPosition>) {
+    val startPositionMs = (session.currentTime * 1000).toLong()
+    val savedPlaybackSpeed = service.mediaManager.getSavedPlaybackRate()
+
+    Log.d("PlayerNotificationServ", "onPlaybackResumption: Preparing player with playWhenReady=true at ${startPositionMs}ms")
+    service.preparePlayer(session, true, savedPlaybackSpeed)
+
+    // Build a MediaItem from the session for the return value
+    val mediaItem = MediaItem.Builder()
+      .setMediaId(session.libraryItemId ?: session.id)
+      .setMediaMetadata(
+        MediaMetadata.Builder()
+          .setTitle(session.displayTitle ?: "Unknown")
+          .setArtist(session.displayAuthor ?: "")
+          .setIsPlayable(true)
+          .setIsBrowsable(false)
+          .build()
+      )
+      .build()
+
+    future.set(
+      MediaItemsWithStartPosition(
+        listOf(mediaItem),
+        0, // Start index
+        startPositionMs
+      )
+    )
+
+    Log.d("PlayerNotificationServ", "onPlaybackResumption: Player prepared and future set")
+  }
+
+  /**
+   * Try to find alternative playback options when no last session exists
+   */
+  private fun tryAlternativePlayback(future: SettableFuture<MediaItemsWithStartPosition>, serverConnected: Boolean) {
+    // Check for local books with progress
+    val localBooksWithProgress = service.mediaManager.getLocalBooksWithProgress()
+    if (localBooksWithProgress.isNotEmpty()) {
+      Log.d("PlayerNotificationServ", "onPlaybackResumption: Found ${localBooksWithProgress.size} local books with progress")
+      val mostRecent = localBooksWithProgress.first()
+      val deviceInfo = service.getDeviceInfo()
+      val localSession = mostRecent.getPlaybackSession(null, deviceInfo)
+
+      // Get the progress for this item
+      val libraryItemId = mostRecent.libraryItemId ?: mostRecent.id
+      val localProgress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId)
+      if (localProgress != null) {
+        localSession.currentTime = localProgress.currentTime
+      }
+
+      startPlayback(localSession, future)
+      return
+    }
+
+    // If server is connected, try to get latest progress from server
+    if (serverConnected) {
+      Log.d("PlayerNotificationServ", "onPlaybackResumption: Checking server for latest progress")
+      service.apiHandler.getCurrentUser { user ->
+        Handler(Looper.getMainLooper()).post {
+          if (user != null && user.mediaProgress.isNotEmpty()) {
+            val latestProgress = user.mediaProgress.maxByOrNull { it.lastUpdate }
+            if (latestProgress != null && latestProgress.currentTime > 0) {
+              Log.d("PlayerNotificationServ", "onPlaybackResumption: Found server progress for ${latestProgress.libraryItemId}")
+
+              // Check if we have this item locally
+              val localItem = DeviceManager.dbManager.getLocalLibraryItemByLId(latestProgress.libraryItemId)
+              if (localItem != null) {
+                val deviceInfo = service.getDeviceInfo()
+                val localSession = localItem.getPlaybackSession(null, deviceInfo)
+                localSession.currentTime = latestProgress.currentTime
+                startPlayback(localSession, future)
+                return@post
+              }
+
+              // Try to stream from server
+              val playItemRequestPayload = service.getPlayItemRequestPayload(false)
+              service.apiHandler.playLibraryItem(latestProgress.libraryItemId, latestProgress.episodeId, playItemRequestPayload) { session ->
+                Handler(Looper.getMainLooper()).post {
+                  if (session != null) {
+                    session.currentTime = latestProgress.currentTime
+                    startPlayback(session, future)
+                  } else {
+                    Log.w("PlayerNotificationServ", "onPlaybackResumption: Failed to create server session")
+                    future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+                  }
+                }
+              }
+              return@post
+            }
+          }
+
+          Log.d("PlayerNotificationServ", "onPlaybackResumption: No resumable content found")
+          future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+        }
+      }
+    } else {
+      Log.d("PlayerNotificationServ", "onPlaybackResumption: No resumable content found")
+      future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+    }
+  }
+
+  /**
+   * Try to fallback to local content on error
+   */
+  private fun tryLocalFallback(future: SettableFuture<MediaItemsWithStartPosition>) {
+    val localBooksWithProgress = service.mediaManager.getLocalBooksWithProgress()
+    if (localBooksWithProgress.isNotEmpty()) {
+      val mostRecent = localBooksWithProgress.first()
+      val deviceInfo = service.getDeviceInfo()
+      val localSession = mostRecent.getPlaybackSession(null, deviceInfo)
+
+      val libraryItemId = mostRecent.libraryItemId ?: mostRecent.id
+      val localProgress = DeviceManager.dbManager.getLocalMediaProgress(libraryItemId)
+      if (localProgress != null) {
+        localSession.currentTime = localProgress.currentTime
+      }
+
+      startPlayback(localSession, future)
+    } else {
+      future.set(MediaItemsWithStartPosition(emptyList(), 0, 0))
+    }
   }
 
   companion object {
@@ -2776,6 +2967,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     return VALID_MEDIA_BROWSERS.contains(packageName)
   }
 
+  // Track if we've already initiated proactive reconnection this session
+  private var androidAutoReconnectionAttempted = false
+
       override fun onGetLibraryRoot(
     session: MediaLibrarySession,
     browser: MediaSession.ControllerInfo,
@@ -2790,8 +2984,31 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       Log.d("PlayerNotificationServ", "AALibrary: Client ${browser.packageName} allowed, proceeding with onGetLibraryRoot")
       service.isAndroidAuto = true
 
-      // Note: Playback resumption is now handled by onPlaybackResumption callback
-      // which is the proper Media3 way to handle Android Auto automatic playback resumption
+      // CRITICAL: Proactively attempt server reconnection when Android Auto starts
+      // This ensures we have valid tokens before any browsing operations
+      if (!androidAutoReconnectionAttempted) {
+        androidAutoReconnectionAttempted = true
+        Log.d("PlayerNotificationServ", "AALibrary: Initiating proactive server reconnection")
+
+        service.apiHandler.attemptReconnection { reconnected ->
+          if (reconnected) {
+            Log.d("PlayerNotificationServ", "AALibrary: Proactive reconnection successful")
+            // Preload essential data for faster browsing
+            preloadAndroidAutoData()
+          } else {
+            Log.w("PlayerNotificationServ", "AALibrary: Proactive reconnection failed, will use cached/local data")
+            // Still try to load persisted data for offline browsing
+            service.mediaManager.checkResetServerItems()
+          }
+
+          // Notify Android Auto that data may have changed
+          try {
+            session.notifyChildrenChanged(AUTO_MEDIA_ROOT, 0, null)
+          } catch (e: Exception) {
+            Log.e("PlayerNotificationServ", "AALibrary: Error notifying children changed: ${e.message}")
+          }
+        }
+      }
 
       // Create the root media item
       val rootMediaItem = MediaItem.Builder()
@@ -2812,6 +3029,36 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       // Return root immediately - libraries will load asynchronously in onGetChildren
       Log.d("PlayerNotificationServ", "AALibrary: Returning root immediately")
       Futures.immediateFuture(LibraryResult.ofItem(rootMediaItem, params))
+    }
+  }
+
+  /**
+   * Preload essential data for Android Auto browsing performance
+   */
+  private fun preloadAndroidAutoData() {
+    Log.d("PlayerNotificationServ", "AALibrary: Preloading Android Auto data")
+
+    // Load libraries in background
+    service.mediaManager.loadLibrariesAsync { libraries ->
+      Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${libraries.size} libraries")
+
+      // Load user media progress for accurate progress display
+      service.mediaManager.loadServerUserMediaProgress {
+        Log.d("PlayerNotificationServ", "AALibrary: Preloaded user media progress")
+      }
+
+      // Load items in progress
+      service.mediaManager.loadItemsInProgressForAllLibraries { itemsInProgress ->
+        Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${itemsInProgress.size} items in progress")
+      }
+
+      // Preload personalized data for faster browsing
+      service.mediaManager.populatePersonalizedDataForAllLibraries {
+        Log.d("PlayerNotificationServ", "AALibrary: Preloaded personalized data for all libraries")
+
+        // Mark first load as done - Android Auto will pick up the changes on next browse request
+        service.networkConnectivityManager.setFirstLoadDone(true)
+      }
     }
   }
 

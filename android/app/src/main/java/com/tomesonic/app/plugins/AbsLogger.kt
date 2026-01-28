@@ -44,6 +44,10 @@ class AbsLogger : Plugin() {
       Log.i("AbsLogger", message)
       log("info", tag, message)
     }
+    fun warn(tag:String, message:String) {
+      Log.w("AbsLogger", message)
+      log("warn", tag, message)
+    }
     fun error(tag:String, message:String) {
       Log.e("AbsLogger", message)
       log("error", tag, message)

@@ -418,43 +418,166 @@ class ApiHandler(var ctx:Context) {
 
   /**
    * Handles the case when token refresh fails
-   * This will clear the current session and notify the callback
+   * IMPORTANT: For Android Auto compatibility, we DON'T clear credentials on first failure.
+   * Instead, we allow cached/local data to continue working and only notify the frontend.
+   * This prevents Android Auto from losing access to local books and cached data.
    *
    * @param callback The callback to return the error
    */
   private fun handleRefreshFailure(callback: (JSObject) -> Unit) {
     try {
-      Log.d(tag, "handleRefreshFailure: Token refresh failed, clearing session")
+      Log.d(tag, "handleRefreshFailure: Token refresh failed - keeping credentials for retry")
+      AbsLogger.warn(tag, "handleRefreshFailure: Token refresh failed for server ${DeviceManager.serverConnectionConfigString}. Credentials preserved for Android Auto compatibility.")
 
-      // Clear the current server connection
-      DeviceManager.serverConnectionConfig = null
-      DeviceManager.deviceData.lastServerConnectionConfigId = null
-      DeviceManager.dbManager.saveDeviceData(DeviceManager.deviceData)
+      // IMPORTANT: Do NOT clear credentials here - this causes Android Auto to lose access
+      // The user can still use local content and cached data while offline
+      // Credentials will be cleared only when user explicitly logs out or re-authenticates
 
-      // Remove refresh token from secure storage
-      val serverConnectionConfigId = DeviceManager.serverConnectionConfigId
-      if (serverConnectionConfigId.isNotEmpty()) {
-        secureStorage.removeRefreshToken(serverConnectionConfigId)
-      }
-
+      // Track the failure but don't destroy the session
       val errorObj = JSObject()
-      errorObj.put("error", "Authentication failed - please login again")
+      errorObj.put("error", "Authentication refresh failed - local content still available")
+      errorObj.put("canRetry", true) // Signal that retry is possible
       callback(errorObj)
 
       if (checkAbsDatabaseNotifyListenersInitted()) {
         val tokenJsObject = JSObject()
         tokenJsObject.put("error", "Token refresh failed")
+        tokenJsObject.put("canRetry", true)
+        tokenJsObject.put("serverAddress", DeviceManager.serverAddress)
         absDatabaseNotifyListeners("onTokenRefreshFailure", tokenJsObject)
       } else {
-        // Can happen if Webview is never run
-        Log.i(tag, "AbsDatabaseNotifyListeners is not initialized so cannot send token refresh failure notification")
+        // This is common for Android Auto - Webview may not be initialized
+        Log.i(tag, "handleRefreshFailure: Webview not initialized - this is normal for Android Auto")
       }
     } catch (e: Exception) {
       Log.e(tag, "handleRefreshFailure: Error during failure handling", e)
       val errorObj = JSObject()
-      errorObj.put("error", "Authentication failed")
+      errorObj.put("error", "Authentication failed - local content still available")
+      errorObj.put("canRetry", true)
       callback(errorObj)
     }
+  }
+
+  /**
+   * Attempts to reconnect to the server using the stored refresh token.
+   * This is called proactively by Android Auto before browsing operations.
+   *
+   * @param cb Callback with success status and optional new access token
+   */
+  fun attemptReconnection(cb: (Boolean) -> Unit) {
+    val serverConnectionConfigId = DeviceManager.serverConnectionConfigId
+    if (serverConnectionConfigId.isEmpty()) {
+      Log.w(tag, "attemptReconnection: No server connection config available")
+
+      // Try to restore from last server connection config
+      val lastConfig = DeviceManager.deviceData.getLastServerConnectionConfig()
+      if (lastConfig != null) {
+        Log.d(tag, "attemptReconnection: Found last server config, restoring: ${lastConfig.name}")
+        DeviceManager.serverConnectionConfig = lastConfig
+        DeviceManager.deviceData.lastServerConnectionConfigId = lastConfig.id
+        DeviceManager.dbManager.saveDeviceData(DeviceManager.deviceData)
+
+        // Now try reconnection with restored config
+        attemptReconnection(cb)
+        return
+      }
+
+      cb(false)
+      return
+    }
+
+    Log.d(tag, "attemptReconnection: Attempting to reconnect to server ${DeviceManager.serverConnectionConfigString}")
+
+    // First, try a simple ping to see if connection is valid
+    val currentConfig = DeviceManager.serverConnectionConfig
+    if (currentConfig == null) {
+      Log.w(tag, "attemptReconnection: Server config is null")
+      cb(false)
+      return
+    }
+
+    pingServer(currentConfig) { pingSuccess ->
+      if (pingSuccess) {
+        Log.d(tag, "attemptReconnection: Server ping successful, connection is valid")
+        cb(true)
+      } else {
+        Log.d(tag, "attemptReconnection: Server ping failed, attempting token refresh")
+
+        // Try to refresh the token
+        val refreshToken = secureStorage.getRefreshToken(serverConnectionConfigId)
+        if (refreshToken.isNullOrEmpty()) {
+          Log.w(tag, "attemptReconnection: No refresh token available")
+          cb(false)
+          return@pingServer
+        }
+
+        // Attempt token refresh
+        refreshTokenAndReconnect(currentConfig, refreshToken, cb)
+      }
+    }
+  }
+
+  /**
+   * Refreshes the auth token and reconnects to the server
+   */
+  private fun refreshTokenAndReconnect(config: ServerConnectionConfig, refreshToken: String, cb: (Boolean) -> Unit) {
+    val refreshEndpoint = "${config.address}/auth/refresh"
+    val refreshRequest = Request.Builder()
+      .url(refreshEndpoint)
+      .addHeader("x-refresh-token", refreshToken)
+      .addHeader("Content-Type", "application/json")
+      .post(EMPTY_REQUEST)
+      .build()
+
+    defaultClient.newCall(refreshRequest).enqueue(object : Callback {
+      override fun onFailure(call: Call, e: IOException) {
+        Log.e(tag, "refreshTokenAndReconnect: Failed to connect to refresh endpoint", e)
+        cb(false)
+      }
+
+      override fun onResponse(call: Call, response: Response) {
+        response.use {
+          if (!it.isSuccessful) {
+            Log.e(tag, "refreshTokenAndReconnect: Refresh request failed with status ${it.code}")
+            cb(false)
+            return
+          }
+
+          try {
+            val bodyString = it.body!!.string()
+            val responseJson = JSONObject(bodyString)
+            val userObj = responseJson.optJSONObject("user")
+
+            if (userObj == null) {
+              Log.e(tag, "refreshTokenAndReconnect: No user object in refresh response")
+              cb(false)
+              return
+            }
+
+            val newAccessToken = userObj.optString("accessToken")
+            val newRefreshToken = userObj.optString("refreshToken")
+
+            if (newAccessToken.isEmpty()) {
+              Log.e(tag, "refreshTokenAndReconnect: No access token in refresh response")
+              cb(false)
+              return
+            }
+
+            Log.d(tag, "refreshTokenAndReconnect: Successfully obtained new access token")
+
+            // Update tokens
+            updateTokens(newAccessToken, newRefreshToken.ifEmpty { refreshToken }, config.id)
+
+            AbsLogger.info(tag, "refreshTokenAndReconnect: Successfully reconnected to server ${config.name}")
+            cb(true)
+
+          } catch (e: Exception) {
+            Log.e(tag, "refreshTokenAndReconnect: Failed to parse refresh response", e)
+            cb(false)
+          }
+        }
+      }
+    })
   }
 
   fun getCurrentUser(cb: (User?) -> Unit) {

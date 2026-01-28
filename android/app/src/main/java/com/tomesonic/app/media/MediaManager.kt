@@ -1032,13 +1032,15 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   /**
    * Load items in progress synchronously for Android Auto
    * Uses a timeout to prevent blocking indefinitely on poor connections
+   * Improved for Android Auto: Returns local items immediately if server is slow,
+   * then triggers background refresh and notifies Android Auto when complete.
    */
   fun loadItemsInProgressSync(): List<ItemInProgress> {
     val future = SettableFuture.create<List<ItemInProgress>>()
     val combinedItems = mutableListOf<ItemInProgress>()
 
-    // Timeout for loading items in progress (3 seconds to avoid blocking UI)
-    val ITEMS_IN_PROGRESS_TIMEOUT_SECONDS = 3L
+    // Increased timeout for better reliability (was 3 seconds, now 6 seconds)
+    val ITEMS_IN_PROGRESS_TIMEOUT_SECONDS = 6L
 
     // First, get local books with progress (this is fast and always available)
     val localBooksWithProgress = getLocalBooksWithProgress()
@@ -1078,6 +1080,9 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
           combinedItems.add(serverItem)
         }
       }
+
+      // Also trigger a background refresh to get latest data
+      triggerBackgroundProgressRefresh()
     } else {
       Log.d(tag, "AABrowser: No cached server items, trying to load from API with ${ITEMS_IN_PROGRESS_TIMEOUT_SECONDS}s timeout")
       apiHandler.getAllItemsInProgress { itemsInProgress ->
@@ -1088,6 +1093,9 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
         serverItemsInProgress = filteredItemsInProgress
         Log.d(tag, "AABrowser: Loaded ${filteredItemsInProgress.size} server items in progress")
+
+        // Also load and cache user media progress for accurate progress display
+        loadServerUserMediaProgress {}
 
         // Merge server items with existing local items, avoiding duplicates
         filteredItemsInProgress.forEach { serverItem ->
@@ -1108,6 +1116,9 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         // Sort by last played time (most recent first)
         val sortedItems = combinedItems.sortedByDescending { it.progressLastUpdate }
         future.set(sortedItems)
+
+        // Notify Android Auto listeners that data is now available
+        notifyAndroidAutoDataReady()
       }
 
       return try {
@@ -1116,6 +1127,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       } catch (e: java.util.concurrent.TimeoutException) {
         Log.w(tag, "AABrowser: Timeout loading server items in progress after ${ITEMS_IN_PROGRESS_TIMEOUT_SECONDS}s, returning local items only")
         // Return local items only if server times out - server data will be loaded in background
+        // and notifyAndroidAutoDataReady() will be called when it's available
         combinedItems.sortedByDescending { it.progressLastUpdate }
       } catch (e: Exception) {
         Log.e(tag, "AABrowser: Error loading server items in progress, returning local items only", e)
@@ -1126,6 +1138,52 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
     // Sort by last played time (most recent first) and return
     return combinedItems.sortedByDescending { it.progressLastUpdate }
+  }
+
+  /**
+   * Trigger a background refresh of items in progress
+   * This is called even when we have cached data to ensure freshness
+   */
+  private fun triggerBackgroundProgressRefresh() {
+    if (!DeviceManager.isConnectedToServer || !DeviceManager.checkConnectivity(ctx)) {
+      Log.d(tag, "AABrowser: Skipping background refresh - no server connection")
+      return
+    }
+
+    Log.d(tag, "AABrowser: Triggering background refresh of items in progress")
+    apiHandler.getAllItemsInProgress { itemsInProgress ->
+      val filteredItemsInProgress = itemsInProgress.filter {
+        val libraryItem = it.libraryItemWrapper as LibraryItem
+        libraryItem.checkHasTracks()
+      }
+
+      val previousCount = serverItemsInProgress.size
+      serverItemsInProgress = filteredItemsInProgress
+
+      Log.d(tag, "AABrowser: Background refresh complete - had $previousCount, now ${filteredItemsInProgress.size} items")
+
+      // If the count changed or data is different, notify Android Auto
+      if (filteredItemsInProgress.size != previousCount) {
+        notifyAndroidAutoDataReady()
+      }
+    }
+
+    // Also refresh user media progress for accurate progress display
+    loadServerUserMediaProgress {}
+  }
+
+  /**
+   * Notify Android Auto listeners that data has been refreshed
+   */
+  private fun notifyAndroidAutoDataReady() {
+    Log.d(tag, "AABrowser: Notifying Android Auto listeners of data update")
+    androidAutoLoadListeners.forEach { listener ->
+      try {
+        listener()
+      } catch (e: Exception) {
+        Log.e(tag, "AABrowser: Error calling Android Auto listener: ${e.localizedMessage}")
+      }
+    }
   }
 
   /**
