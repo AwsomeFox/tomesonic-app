@@ -18,15 +18,17 @@ import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.media3.common.Player
 import androidx.media3.common.util.BitmapLoader
+import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
-import com.bumptech.glide.Glide
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.MoreExecutors
 import com.tomesonic.app.R
 import com.tomesonic.app.data.PlaybackSession
 import java.util.concurrent.Callable
@@ -81,39 +83,21 @@ class MediaSessionManager(
         // Running a second PlayerNotificationManager alongside causes the bridge
         // to pick up a notification without a session token attached, which is
         // why Wear OS was showing no artwork before.
+        // Use Media3's recommended CacheBitmapLoader(DataSourceBitmapLoader) so
+        // covers are fetched at native resolution (no forced downscale) and cached.
+        // This gives the system notification, lock screen, and Wear OS card the
+        // highest-quality artwork the server provides; Media3 itself handles any
+        // size limiting needed for IPC to controllers.
         if (bitmapLoaderExecutor == null || bitmapLoaderExecutor?.isShutdown == true) {
             bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
         }
-        val loaderExecutor = bitmapLoaderExecutor!!
-
-        val sessionBitmapLoader = object : BitmapLoader {
-            override fun supportsMimeType(mimeType: String) = mimeType.startsWith("image/")
-
-            override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
-                Futures.submit(
-                    Callable {
-                        BitmapFactory.decodeByteArray(data, 0, data.size)
-                            ?: throw IllegalStateException("decodeBitmap failed for artworkData")
-                    },
-                    loaderExecutor
-                )
-
-            override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
-                Futures.submit(
-                    Callable {
-                        Log.d(TAG, "Session BitmapLoader: loading artwork for uri=$uri")
-                        val bitmap = Glide.with(context)
-                            .asBitmap()
-                            .load(uri)
-                            .override(1024, 1024)
-                            .submit()
-                            .get(10, TimeUnit.SECONDS)
-                        Log.d(TAG, "Session BitmapLoader: loaded bitmap ${bitmap.width}x${bitmap.height} for uri=$uri")
-                        bitmap
-                    },
-                    loaderExecutor
-                )
-        }
+        val listeningExecutor = MoreExecutors.listeningDecorator(bitmapLoaderExecutor!!)
+        val sessionBitmapLoader: BitmapLoader = CacheBitmapLoader(
+            DataSourceBitmapLoader(
+                listeningExecutor,
+                androidx.media3.datasource.DefaultDataSource.Factory(context)
+            )
+        )
 
         val sessionBuilder = MediaLibrarySession.Builder(context, player, callback)
         sessionBuilder.setBitmapLoader(sessionBitmapLoader)

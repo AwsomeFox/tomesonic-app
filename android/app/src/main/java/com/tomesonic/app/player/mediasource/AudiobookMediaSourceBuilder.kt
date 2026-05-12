@@ -412,9 +412,11 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         val chapter = playbackSession.chapters.getOrNull(segment.chapterIndex)
         val baseMetadata = playbackSession.getExoMediaMetadata(context, null, chapter, segment.chapterIndex)
 
-        val artworkData = getArtworkDataForUri(baseMetadata.artworkUri)
-
-        // Create a new metadata builder using the library metadata fields
+        // Intentionally do NOT embed artworkData here. Media3's notification provider
+        // prefers artworkData bytes when present, which means we'd be capping the
+        // notification's cover quality to whatever we re-encode here. By leaving
+        // only artworkUri, the session's BitmapLoader fetches the cover at its
+        // native resolution for the phone notification and Wear OS card.
         val builder = MediaMetadata.Builder()
             .setTitle(baseMetadata.title)
             .setSubtitle(baseMetadata.subtitle)
@@ -427,10 +429,6 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             .setTrackNumber(segment.chapterIndex + 1)
             .setDurationMs(segment.durationMs) // Set chapter duration for Android Auto timeline
             .setIsPlayable(true)
-
-        artworkData?.let {
-            builder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
-        }
 
         return builder.build()
     }
