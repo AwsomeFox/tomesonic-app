@@ -351,14 +351,11 @@ class PlayerNotificationService : MediaLibraryService() {
     mediaManager = MediaManager(apiHandler, ctx)
 
     // Register listener so we refresh the MediaBrowser when MediaManager finishes loading Android Auto data
-    mediaManager.registerAndroidAutoLoadListener {
-      try {
-  // Notify Android Auto that the browse tree changed so recents/continue items appear.
-  // Use the MediaLibrarySession notifyChildrenChanged when available.
-  // notifyChildrenChanged(root: String, page: Int, params: LibraryParams?)
-  mediaSessionManager.mediaSession?.notifyChildrenChanged("/", 0, null)
-      } catch (e: Exception) {
-        Log.e(tag, "Error notifying children changed from mediaManager listener: ${e.localizedMessage}")
+    mediaManager.registerAndroidAutoLoadListener { parentIds ->
+      if (parentIds.isEmpty()) {
+        notifyAndroidAutoBrowseChanged(MediaLibrarySessionCallback.AUTO_MEDIA_ROOT)
+      } else {
+        notifyAndroidAutoBrowseChanged(*parentIds.toTypedArray())
       }
     }
 
@@ -429,6 +426,31 @@ class PlayerNotificationService : MediaLibraryService() {
     // Log.d(tag, "AALibrary: Session token set: $sessionToken")
 
     // Cast player is now accessed via castPlayerManager.castPlayer property
+  }
+
+  fun notifyAndroidAutoBrowseChanged(vararg parentIds: String) {
+    val idsToRefresh = if (parentIds.isEmpty()) {
+      listOf(MediaLibrarySessionCallback.AUTO_MEDIA_ROOT)
+    } else {
+      parentIds.toList().distinct()
+    }
+
+    Handler(Looper.getMainLooper()).post {
+      val session = mediaSessionManager.mediaSession
+      if (session == null) {
+        Log.d(tag, "notifyAndroidAutoBrowseChanged: Media session not ready for ${idsToRefresh.joinToString()}")
+        return@post
+      }
+
+      idsToRefresh.forEach { parentId ->
+        try {
+          session.notifyChildrenChanged(parentId, 0, null)
+          Log.d(tag, "notifyAndroidAutoBrowseChanged: Notified parentId=$parentId")
+        } catch (e: Exception) {
+          Log.e(tag, "notifyAndroidAutoBrowseChanged: Failed for parentId=$parentId", e)
+        }
+      }
+    }
   }
 
   /*
@@ -2487,7 +2509,7 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   //
-  // MEDIA BROWSER STUFF (ANDROID AUTO) - delegated to MediaBrowserManager
+  // MEDIA BROWSER STUFF (ANDROID AUTO) - handled by MediaLibrarySessionCallback below
   //
 
   // MIGRATION: MediaBrowserServiceCompat → MediaLibraryService callbacks
@@ -2587,7 +2609,6 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 }
 
-// Simple callback for MediaLibrarySession that delegates to MediaBrowserManager methods
 /**
  * Media3 MediaLibrarySessionCallback - Complete Android Auto Media Browser Implementation
  *
@@ -2658,6 +2679,11 @@ class PlayerNotificationService : MediaLibraryService() {
  * while working within Media3's synchronous callback constraints.
  */
 class MediaLibrarySessionCallback(private val service: PlayerNotificationService) : Callback {
+
+  // Bounded thread pool shared across all async browse paths (Continue, deep library nodes).
+  // Using a fixed pool of 4 threads prevents unbounded thread creation when Android Auto calls
+  // onGetChildren frequently on a slow connection.
+  private val androidAutoBrowseExecutor = java.util.concurrent.Executors.newFixedThreadPool(4)
 
   // Cache for search results to avoid duplicating search between onSearch and onGetSearchResult
   private var cachedSearchQuery: String = ""
@@ -2967,8 +2993,10 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     return VALID_MEDIA_BROWSERS.contains(packageName)
   }
 
-  // Track if we've already initiated proactive reconnection this session
-  private var androidAutoReconnectionAttempted = false
+  private var androidAutoReconnectInProgress = false
+  private var lastAndroidAutoReconnectAttemptMs = 0L
+  private val androidAutoReconnectRetryIntervalMs = 15000L
+  private val androidAutoReconnectLock = Any()
 
       override fun onGetLibraryRoot(
     session: MediaLibrarySession,
@@ -2984,13 +3012,27 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       Log.d("PlayerNotificationServ", "AALibrary: Client ${browser.packageName} allowed, proceeding with onGetLibraryRoot")
       service.isAndroidAuto = true
 
-      // CRITICAL: Proactively attempt server reconnection when Android Auto starts
-      // This ensures we have valid tokens before any browsing operations
-      if (!androidAutoReconnectionAttempted) {
-        androidAutoReconnectionAttempted = true
+      // Proactively attempt server reconnection with bounded retry cadence.
+      val now = System.currentTimeMillis()
+      val shouldAttemptReconnect = synchronized(androidAutoReconnectLock) {
+        val canAttempt =
+          !androidAutoReconnectInProgress &&
+            (now - lastAndroidAutoReconnectAttemptMs >= androidAutoReconnectRetryIntervalMs ||
+              !service.mediaManager.hasValidServerConnection())
+        if (canAttempt) {
+          androidAutoReconnectInProgress = true
+          lastAndroidAutoReconnectAttemptMs = now
+        }
+        canAttempt
+      }
+
+      if (shouldAttemptReconnect) {
         Log.d("PlayerNotificationServ", "AALibrary: Initiating proactive server reconnection")
 
         service.apiHandler.attemptReconnection { reconnected ->
+          synchronized(androidAutoReconnectLock) {
+            androidAutoReconnectInProgress = false
+          }
           if (reconnected) {
             Log.d("PlayerNotificationServ", "AALibrary: Proactive reconnection successful")
             // Preload essential data for faster browsing
@@ -3002,12 +3044,10 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           }
 
           // Notify Android Auto that data may have changed
-          try {
-            session.notifyChildrenChanged(AUTO_MEDIA_ROOT, 0, null)
-          } catch (e: Exception) {
-            Log.e("PlayerNotificationServ", "AALibrary: Error notifying children changed: ${e.message}")
-          }
+          service.notifyAndroidAutoBrowseChanged(AUTO_MEDIA_ROOT)
         }
+      } else {
+        Log.d("PlayerNotificationServ", "AALibrary: Skipping reconnect attempt due to active cooldown")
       }
 
       // Create the root media item
@@ -3038,19 +3078,28 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   private fun preloadAndroidAutoData() {
     Log.d("PlayerNotificationServ", "AALibrary: Preloading Android Auto data")
 
+    // Load user media progress immediately so continue metadata can refresh as soon as possible.
+    service.mediaManager.loadServerUserMediaProgress {
+      Log.d("PlayerNotificationServ", "AALibrary: Preloaded user media progress")
+      service.notifyAndroidAutoBrowseChanged(CONTINUE_ROOT)
+    }
+
+    // Continue listening does not depend on library discovery, so load it in parallel.
+    service.mediaManager.loadItemsInProgressForAllLibraries { itemsInProgress ->
+      Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${itemsInProgress.size} items in progress")
+      service.notifyAndroidAutoBrowseChanged(
+        AUTO_MEDIA_ROOT,
+        CONTINUE_ROOT
+      )
+    }
+
     // Load libraries in background
     service.mediaManager.loadLibrariesAsync { libraries ->
       Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${libraries.size} libraries")
-
-      // Load user media progress for accurate progress display
-      service.mediaManager.loadServerUserMediaProgress {
-        Log.d("PlayerNotificationServ", "AALibrary: Preloaded user media progress")
-      }
-
-      // Load items in progress
-      service.mediaManager.loadItemsInProgressForAllLibraries { itemsInProgress ->
-        Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${itemsInProgress.size} items in progress")
-      }
+      service.notifyAndroidAutoBrowseChanged(
+        AUTO_MEDIA_ROOT,
+        LIBRARIES_ROOT
+      )
 
       // Preload personalized data for faster browsing
       service.mediaManager.populatePersonalizedDataForAllLibraries {
@@ -3058,6 +3107,11 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
         // Mark first load as done - Android Auto will pick up the changes on next browse request
         service.networkConnectivityManager.setFirstLoadDone(true)
+        service.notifyAndroidAutoBrowseChanged(
+          AUTO_MEDIA_ROOT,
+          RECENTLY_ROOT,
+          LIBRARIES_ROOT
+        )
       }
     }
   }
@@ -3158,83 +3212,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         }
 
         CONTINUE_ROOT -> {
-          // Always try to load items in progress (includes both server and local items)
-          Log.d("PlayerNotificationServ", "AALibrary: Loading items in progress for Android Auto (server + local)")
-          val itemsInProgress = service.mediaManager.loadItemsInProgressSync()
-          Log.d("PlayerNotificationServ", "Getting continue items: ${itemsInProgress.size} items")
-
-          if (itemsInProgress.isEmpty()) {
-            val noItemsItem = MediaItem.Builder()
-              .setMediaId("__NO_CONTINUE__")
-              .setMediaMetadata(
-                MediaMetadata.Builder()
-                  .setTitle("No items in progress")
-                  .setSubtitle("Start listening to see items here")
-                  .setIsBrowsable(false)
-                  .setIsPlayable(false)
-                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .build()
-              )
-              .build()
-            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noItemsItem)), params))
-          } else {
-            val continueItems = itemsInProgress.map { itemInProgress ->
-              val wrapper = itemInProgress.libraryItemWrapper
-              val (id, title, authorName) = when (wrapper) {
-                is LibraryItem -> Triple(wrapper.id, wrapper.title, wrapper.authorName)
-                is LocalLibraryItem -> Triple(
-                  wrapper.libraryItemId ?: wrapper.id,
-                  wrapper.title ?: "Unknown Title",
-                  wrapper.authorName ?: "Unknown Author"
-                )
-                else -> Triple("unknown", "Unknown Title", "Unknown Author")
-              }
-
-              val artworkUri = when (wrapper) {
-                is LibraryItem -> wrapper.getCoverUri()
-                is LocalLibraryItem -> wrapper.getCoverUri(service)
-                else -> null
-              }
-
-              val progressPercent = service.mediaManager.getProgressPercentage(
-                id ?: "unknown",
-                itemInProgress.episode?.id
-              )
-
-              // Check if this item is downloaded locally (for server books)
-              val isDownloaded = when (wrapper) {
-                is LocalLibraryItem -> true // Already local
-                is LibraryItem -> {
-                  // Check if this server book has a local download
-                  DeviceManager.dbManager.getLocalLibraryItemByLId(wrapper.id) != null
-                }
-                else -> false
-              }
-
-              val authorWithProgress = if (progressPercent > 0) {
-                val downloadIcon = if (isDownloaded) "⤋ " else ""
-                "$downloadIcon$authorName • ${progressPercent}%"
-              } else {
-                val downloadIcon = if (isDownloaded) "⤋ " else ""
-                "$downloadIcon$authorName"
-              }
-
-              MediaItem.Builder()
-                .setMediaId(id ?: "unknown")
-                .setMediaMetadata(
-                  MediaMetadata.Builder()
-                    .setTitle(title ?: "Unknown Title")
-                    .setArtist(authorWithProgress)
-                    .setIsPlayable(true)
-                    .setIsBrowsable(false)
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
-                    .setArtworkUri(artworkUri)
-                    .build()
-                )
-                .build()
-            }
-            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(continueItems), params))
-          }
+          // Load continue items in a worker thread to avoid blocking browse callback threads.
+          loadContinueItemsAsync(future, params)
         }
 
         LOCAL_ROOT -> {
@@ -3337,7 +3316,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
             }
             parentId.startsWith("__LIBRARY__") -> {
               // Handle library browsing synchronously using cached data
-              Log.d("PlayerNotificationServ", "AALibrary: Handling library browsing for $parentId (synchronous)")
+              Log.d("PlayerNotificationServ", "AALibrary: Handling library browsing for $parentId")
 
               if (!service.mediaManager.hasValidServerConnection()) {
                 Log.w("PlayerNotificationServ", "AALibrary: No server connection for library browsing")
@@ -3355,9 +3334,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                   .build()
                 future.set(LibraryResult.ofItemList(ImmutableList.copyOf(listOf(noConnectionItem)), params))
               } else {
-                // Handle browsing using cached data only
-                val children = handleLibraryBrowsing(parentId)
-                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
+                // Run potentially expensive library loading off the callback thread.
+                handleLibraryBrowsingAsync(parentId, future, params)
               }
             }
             service.mediaManager.getIsLibrary(parentId) -> {
@@ -3410,13 +3388,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                 future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
               }
             }
-            // Handle podcast episodes - when user selects a specific podcast
-            parentId.length == 22 && !parentId.startsWith("local_") -> { // Server podcast IDs are typically 22 chars
-              Log.d("PlayerNotificationServ", "AALibrary: Checking if $parentId is a podcast for episodes")
-              val podcast = service.mediaManager.getCachedPodcasts("").find { it.id == parentId }
-                ?: service.mediaManager.serverLibraries.flatMap { library ->
-                  service.mediaManager.getCachedPodcasts(library.id)
-                }.find { it.id == parentId }
+            // Handle podcast episodes - only if the selected id matches a cached podcast item.
+            !parentId.startsWith("local_") -> {
+              val podcast = service.mediaManager.findCachedPodcastById(parentId)
 
               if (podcast?.mediaType == "podcast") {
                 Log.d("PlayerNotificationServ", "AALibrary: Getting episodes for podcast: ${podcast.title}")
@@ -3589,6 +3563,107 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     } catch (e: Exception) {
       Log.w("PlayerNotificationServ", "Server load timeout or error", e)
       return null
+    }
+  }
+
+  private fun loadContinueItemsAsync(
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    androidAutoBrowseExecutor.execute {
+      Log.d("PlayerNotificationServ", "AALibrary: Loading items in progress for Android Auto (server + local)")
+      val itemsInProgress = service.mediaManager.loadItemsInProgressSync()
+      Log.d("PlayerNotificationServ", "AALibrary: Continue items loaded count=${itemsInProgress.size}")
+
+      val resultItems = if (itemsInProgress.isEmpty()) {
+        listOf(
+          MediaItem.Builder()
+            .setMediaId("__NO_CONTINUE__")
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle("No items in progress")
+                .setSubtitle("Start listening to see items here")
+                .setIsBrowsable(false)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .build()
+            )
+            .build()
+        )
+      } else {
+        itemsInProgress.map { itemInProgress ->
+          val wrapper = itemInProgress.libraryItemWrapper
+          val (id, title, authorName) = when (wrapper) {
+            is LibraryItem -> Triple(wrapper.id, wrapper.title, wrapper.authorName)
+            is LocalLibraryItem -> Triple(
+              wrapper.libraryItemId ?: wrapper.id,
+              wrapper.title ?: "Unknown Title",
+              wrapper.authorName ?: "Unknown Author"
+            )
+            else -> Triple("unknown", "Unknown Title", "Unknown Author")
+          }
+
+          val artworkUri = when (wrapper) {
+            is LibraryItem -> wrapper.getCoverUri()
+            is LocalLibraryItem -> wrapper.getCoverUri(service)
+            else -> null
+          }
+
+          val progressPercent = service.mediaManager.getProgressPercentage(
+            id ?: "unknown",
+            itemInProgress.episode?.id
+          )
+
+          val isDownloaded = when (wrapper) {
+            is LocalLibraryItem -> true
+            is LibraryItem -> DeviceManager.dbManager.getLocalLibraryItemByLId(wrapper.id) != null
+            else -> false
+          }
+
+          val authorWithProgress = if (progressPercent > 0) {
+            val downloadIcon = if (isDownloaded) "⤋ " else ""
+            "$downloadIcon$authorName • ${progressPercent}%"
+          } else {
+            val downloadIcon = if (isDownloaded) "⤋ " else ""
+            "$downloadIcon$authorName"
+          }
+
+          MediaItem.Builder()
+            .setMediaId(id ?: "unknown")
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle(title ?: "Unknown Title")
+                .setArtist(authorWithProgress)
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                .setArtworkUri(artworkUri)
+                .build()
+            )
+            .build()
+        }
+      }
+
+      Handler(Looper.getMainLooper()).post {
+        if (!future.isDone) {
+          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(resultItems), params))
+        }
+      }
+    }
+  }
+
+  private fun handleLibraryBrowsingAsync(
+    parentId: String,
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    androidAutoBrowseExecutor.execute {
+      val children = handleLibraryBrowsing(parentId)
+      Handler(Looper.getMainLooper()).post {
+        if (!future.isDone) {
+          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
+        }
+      }
     }
   }
 
@@ -4659,7 +4734,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         libraryItemWrapper = service.mediaManager.getFirstItem()
       }
       mediaId.contains("_chapter_") -> {
-        // Handle chapter-specific media ID from MediaBrowserManager
+        // Handle chapter-specific media ID
         val parts = mediaId.split("_chapter_")
         val bookId = parts[0]
         val chapterIndex = parts.getOrNull(1)?.toIntOrNull()
