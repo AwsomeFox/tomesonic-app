@@ -365,6 +365,23 @@ class PlayerNotificationService : MediaLibraryService() {
               createNotificationChannel(channelId, channelName)
             } else ""
 
+    // Configure Media3's built-in notification provider so the foreground MediaStyle
+    // notification (auto-posted by MediaLibraryService) uses our channel + small icon.
+    // This notification is properly linked to the MediaSession, which is what the
+    // Wear OS notification bridge and Android system media controls need in order
+    // to render artwork (loaded via the session's BitmapLoader).
+    try {
+      val notificationProvider =
+          androidx.media3.session.DefaultMediaNotificationProvider.Builder(this)
+              .setNotificationId(notificationId)
+              .setChannelId(channelId)
+              .build()
+      notificationProvider.setSmallIcon(R.drawable.abs_audiobookshelf)
+      setMediaNotificationProvider(notificationProvider)
+    } catch (e: Exception) {
+      Log.w(tag, "Failed to install DefaultMediaNotificationProvider: ${e.message}")
+    }
+
     sessionActivityPendingIntent =
             packageManager?.getLaunchIntentForPackage(packageName)?.let { sessionIntent ->
               PendingIntent.getActivity(this, 0, sessionIntent, PendingIntent.FLAG_IMMUTABLE)

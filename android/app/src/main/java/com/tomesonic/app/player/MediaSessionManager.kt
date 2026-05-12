@@ -16,7 +16,6 @@ import android.provider.MediaStore
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.session.CommandButton
@@ -24,7 +23,6 @@ import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
-import androidx.media3.ui.PlayerNotificationManager
 import com.bumptech.glide.Glide
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -60,8 +58,6 @@ class MediaSessionManager(
     var mediaSession: MediaLibrarySession? = null
         private set
 
-    private var playerNotificationManager: PlayerNotificationManager? = null
-    private var mediaDescriptionAdapter: AbMediaDescriptionAdapter? = null
     private var bitmapLoaderExecutor: ExecutorService? = null
 
     fun initializeMediaSession(
@@ -71,10 +67,20 @@ class MediaSessionManager(
         player: Player
     ) {
         // Create Media3 MediaLibrarySession with a Glide-backed BitmapLoader.
-        // This is the critical path for Wear OS artwork: the watch connects as a
-        // MediaController, reads MediaMetadata.artworkUri, then asks the session's
-        // BitmapLoader to resolve it. Without a BitmapLoader the watch only has the
-        // URI string and cannot authenticate against the server to fetch the image.
+        // This is the critical path for Wear OS artwork: the watch (or any
+        // MediaController, including the system media controls) asks the session's
+        // BitmapLoader to resolve MediaMetadata.artworkUri. Without a BitmapLoader
+        // the controller has no way to fetch high-resolution artwork from a remote
+        // server URI.
+        //
+        // We deliberately do NOT instantiate a PlayerNotificationManager here.
+        // MediaLibraryService already publishes a proper MediaStyle foreground
+        // notification through DefaultMediaNotificationProvider; that notification
+        // links to this session, which is what the Wear OS notification bridge
+        // (and Android system media controls) require to display artwork.
+        // Running a second PlayerNotificationManager alongside causes the bridge
+        // to pick up a notification without a session token attached, which is
+        // why Wear OS was showing no artwork before.
         if (bitmapLoaderExecutor == null || bitmapLoaderExecutor?.isShutdown == true) {
             bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
         }
@@ -124,10 +130,7 @@ class MediaSessionManager(
 
         mediaSession = sessionBuilder.build()
 
-        // Set up PlayerNotificationManager for Media3
-        setupPlayerNotificationManager(notificationId, channelId, player)
-
-        Log.d(TAG, "Media3 MediaLibrarySession and PlayerNotificationManager initialized successfully")
+        Log.d(TAG, "Media3 MediaLibrarySession initialized (notifications handled by MediaLibraryService)")
     }
 
     /**
@@ -157,45 +160,6 @@ class MediaSessionManager(
         )
 
         return buttons.build()
-    }
-
-    private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
-        val adapter = AbMediaDescriptionAdapter(service)
-        mediaDescriptionAdapter = adapter
-        val notificationListener = PlayerNotificationListener(service)
-
-        playerNotificationManager = PlayerNotificationManager.Builder(context, notificationId, channelId)
-            .setMediaDescriptionAdapter(adapter)
-            .setNotificationListener(notificationListener)
-            .build()
-
-        playerNotificationManager?.setPlayer(player)
-        playerNotificationManager?.setUseRewindAction(false)
-        playerNotificationManager?.setUseFastForwardAction(false)
-        playerNotificationManager?.setUseNextAction(false)
-        playerNotificationManager?.setUsePreviousAction(false)
-        // Wear OS bridge is more reliable when media notifications are explicitly public/high.
-        playerNotificationManager?.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        playerNotificationManager?.setPriority(NotificationCompat.PRIORITY_HIGH)
-        playerNotificationManager?.setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
-
-        // Enhanced logging for cast player debugging
-        val playerType = when {
-            player.javaClass.simpleName.contains("Cast") -> "CastPlayer"
-            player.javaClass.simpleName.contains("ExoPlayer") -> "ExoPlayer"
-            else -> player.javaClass.simpleName
-        }
-
-        Log.d(TAG, "PlayerNotificationManager set up for $playerType")
-        Log.d(TAG, "Player state: playbackState=${player.playbackState}, isPlaying=${player.isPlaying}")
-        Log.d(TAG, "Player mediaItemCount=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}")
-
-        // Force notification update for cast players
-        if (playerType == "CastPlayer" && player.currentMediaItem != null) {
-            Log.d(TAG, "Forcing notification update for CastPlayer with mediaItem")
-            // The PlayerNotificationManager should automatically create a notification
-            // when a player has a current media item and is in a valid state
-        }
     }
 
     private fun buildCustomMediaActions(): ImmutableList<androidx.media3.session.CommandButton> {
@@ -316,21 +280,15 @@ class MediaSessionManager(
     fun updatePlayer(newPlayer: Player) {
         Log.d(TAG, "updatePlayer: Switching to new player type: ${newPlayer.javaClass.simpleName}")
 
-        // Update notification manager with new player
-        playerNotificationManager?.setPlayer(newPlayer)
-
-        // The MediaSession itself doesn't need to be recreated in Media3
-        // The playerNotificationManager handles the player switch seamlessly
+        // MediaLibraryService's built-in DefaultMediaNotificationProvider follows the
+        // session's player automatically, so we don't need to wire the new player into
+        // a separate notification manager here.
         Log.d(TAG, "updatePlayer: Player updated successfully")
     }
 
     fun release() {
         bitmapLoaderExecutor?.shutdownNow()
         bitmapLoaderExecutor = null
-        mediaDescriptionAdapter?.release()
-        mediaDescriptionAdapter = null
-        playerNotificationManager?.setPlayer(null)
-        playerNotificationManager = null
 
         mediaSession?.let { session: MediaLibrarySession ->
             session.release()
