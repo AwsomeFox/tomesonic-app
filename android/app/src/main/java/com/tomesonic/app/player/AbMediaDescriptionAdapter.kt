@@ -26,8 +26,9 @@ class AbMediaDescriptionAdapter(
 
     companion object {
         private const val TAG = "AbMediaDescriptionAdapter"
-        // Max size for notification artwork – keeps memory bounded
-        private const val ART_SIZE_PX = 512
+        // 1024px gives the system room to downscale cleanly on high-density screens
+        // and satisfies Wear OS minimum size requirements for media card backgrounds.
+        private const val ART_SIZE_PX = 1024
     }
 
     private var currentIconUri: Uri? = null
