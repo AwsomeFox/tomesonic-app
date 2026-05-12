@@ -1,6 +1,7 @@
 package com.tomesonic.app.player
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -8,8 +9,6 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.media3.ui.PlayerNotificationManager
 
 class PlayerNotificationListener(var playerNotificationService:PlayerNotificationService) : PlayerNotificationManager.NotificationListener {
@@ -46,7 +45,8 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
       // Service is already in foreground, just update the notification
       Log.d(tag, "Notification posted $notificationId - Service already foreground, notification will be updated automatically")
       if (enhancedNotification !== notification) {
-        NotificationManagerCompat.from(playerNotificationService).notify(notificationId, enhancedNotification)
+        val notificationManager = playerNotificationService.getSystemService(NotificationManager::class.java)
+        notificationManager?.notify(notificationId, enhancedNotification)
       }
     } else {
       Log.d(tag, "Notification posted $notificationId, not ongoing - onGoing=$onGoing | isForegroundService=$isForegroundService")
@@ -57,11 +57,11 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     val largeIconBitmap = extractLargeIconBitmap(notification) ?: return notification
 
     return try {
-      val wearableExtender = NotificationCompat.WearableExtender()
+      val wearableExtender = Notification.WearableExtender()
         .setHintShowBackgroundOnly(true)
         .setBackground(largeIconBitmap)
 
-      NotificationCompat.Builder.recoverBuilder(playerNotificationService, notification)
+      Notification.Builder.recoverBuilder(playerNotificationService, notification)
         .extend(wearableExtender)
         .build()
     } catch (e: Exception) {
