@@ -34,6 +34,7 @@ import com.tomesonic.app.data.PlaybackSession
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 // MIGRATION-BACKUP: ExoPlayer2 Implementation (commented out for reference)
 /*
@@ -80,7 +81,7 @@ class MediaSessionManager(
         val loaderExecutor = bitmapLoaderExecutor!!
 
         val sessionBitmapLoader = object : BitmapLoader {
-            override fun supportsMimeType(mimeType: String) = false
+            override fun supportsMimeType(mimeType: String) = mimeType.startsWith("image/")
 
             override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
                 Futures.submit(
@@ -96,7 +97,7 @@ class MediaSessionManager(
                             .load(uri)
                             .override(1024, 1024)
                             .submit()
-                            .get()
+                            .get(10, TimeUnit.SECONDS)
                     },
                     loaderExecutor
                 )

@@ -18,6 +18,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
 class AbMediaDescriptionAdapter(
@@ -179,10 +180,9 @@ class AbMediaDescriptionAdapter(
                                     inJustDecodeBounds = true
                                 }
                                 BitmapFactory.decodeStream(stream, null, opts)
-                                opts.inSampleSize = maxOf(
-                                    opts.outWidth / ART_SIZE_PX,
-                                    opts.outHeight / ART_SIZE_PX
-                                ).coerceAtLeast(1)
+                                val widthRatio = kotlin.math.ceil(opts.outWidth.toDouble() / ART_SIZE_PX.toDouble()).toInt()
+                                val heightRatio = kotlin.math.ceil(opts.outHeight.toDouble() / ART_SIZE_PX.toDouble()).toInt()
+                                opts.inSampleSize = maxOf(widthRatio, heightRatio).coerceAtLeast(1)
                                 opts.inJustDecodeBounds = false
                                 service.contentResolver.openInputStream(uri)?.use {
                                     BitmapFactory.decodeStream(it, null, opts)
@@ -191,12 +191,14 @@ class AbMediaDescriptionAdapter(
                         }
                     }
                     "http", "https" -> {
-                        Glide.with(service)
-                            .asBitmap()
-                            .load(uri)
-                            .override(ART_SIZE_PX, ART_SIZE_PX)
-                            .submit()
-                            .get()
+                        runInterruptible {
+                            Glide.with(service)
+                                .asBitmap()
+                                .load(uri)
+                                .override(ART_SIZE_PX, ART_SIZE_PX)
+                                .submit()
+                                .get()
+                        }
                     }
                     else -> null
                 }
