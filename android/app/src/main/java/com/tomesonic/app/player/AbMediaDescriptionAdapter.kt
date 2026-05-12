@@ -12,7 +12,7 @@ import android.util.Log
 import com.tomesonic.app.MainActivity
 
 class AbMediaDescriptionAdapter(
-    private val context: Context
+    private val service: PlayerNotificationService
 ) : PlayerNotificationManager.MediaDescriptionAdapter {
 
     companion object {
@@ -20,11 +20,11 @@ class AbMediaDescriptionAdapter(
     }
 
     override fun createCurrentContentIntent(player: Player): PendingIntent? {
-        val intent = Intent(context, MainActivity::class.java).apply {
+        val intent = Intent(service, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         return PendingIntent.getActivity(
-            context,
+            service,
             0,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -34,11 +34,14 @@ class AbMediaDescriptionAdapter(
     override fun getCurrentContentText(player: Player): CharSequence {
         val currentMediaItem = player.currentMediaItem
         val metadata = currentMediaItem?.mediaMetadata
+        val playbackSession = service.currentPlaybackSession
 
         return when {
             metadata?.artist != null -> metadata.artist.toString()
             metadata?.albumArtist != null -> metadata.albumArtist.toString()
             metadata?.subtitle != null -> metadata.subtitle.toString()
+            !playbackSession?.displayAuthor.isNullOrBlank() -> playbackSession!!.displayAuthor!!
+            !playbackSession?.displayTitle.isNullOrBlank() -> playbackSession!!.displayTitle!!
             else -> ""
         }.also {
             Log.d(TAG, "getCurrentContentText: '$it' (mediaItem=${currentMediaItem != null}, metadata=${metadata != null})")
@@ -48,10 +51,12 @@ class AbMediaDescriptionAdapter(
     override fun getCurrentContentTitle(player: Player): CharSequence {
         val currentMediaItem = player.currentMediaItem
         val metadata = currentMediaItem?.mediaMetadata
+        val playbackSession = service.currentPlaybackSession
 
         return when {
             metadata?.title != null -> metadata.title.toString()
             metadata?.displayTitle != null -> metadata.displayTitle.toString()
+            !playbackSession?.displayTitle.isNullOrBlank() -> playbackSession!!.displayTitle!!
             currentMediaItem?.mediaId != null -> "Audiobook"
             else -> "Unknown"
         }.also {

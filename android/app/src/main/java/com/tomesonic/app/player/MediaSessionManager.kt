@@ -111,7 +111,7 @@ class MediaSessionManager(
     }
 
     private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
-        val mediaDescriptionAdapter = AbMediaDescriptionAdapter(context)
+        val mediaDescriptionAdapter = AbMediaDescriptionAdapter(service)
         val notificationListener = PlayerNotificationListener(service)
 
         playerNotificationManager = PlayerNotificationManager.Builder(context, notificationId, channelId)
