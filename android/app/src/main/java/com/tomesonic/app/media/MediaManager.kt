@@ -23,7 +23,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   val tag = "MediaManager"
 
   // Listeners for Android Auto load completion events
-  private var androidAutoLoadListeners: MutableList<() -> Unit> = mutableListOf()
+  private var androidAutoLoadListeners: MutableList<(Set<String>) -> Unit> = mutableListOf()
 
   private var serverLibraryItems = mutableListOf<LibraryItem>() // Store all items here
 
@@ -88,7 +88,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
           }
 
           // Load cached author items
-          val authorKeys = DeviceManager.dbManager.getAllKeys().filter { it.startsWith("${serverConfigId}_${libraryId}_author_") && !it.contains("_series_") }
+          val authorKeys = DeviceManager.dbManager.getAllCachedLibraryItemKeys().filter { it.startsWith("${serverConfigId}_${libraryId}_author_") && !it.contains("_series_") }
           authorKeys.forEach { cacheKey ->
             val authorId = cacheKey.substringAfter("${serverConfigId}_${libraryId}_author_")
             val cachedAuthorItems = DeviceManager.dbManager.getCachedLibraryItems(serverConfigId, "${libraryId}_author_${authorId}")
@@ -107,7 +107,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
           }
 
           // Load cached series items
-          val seriesKeys = DeviceManager.dbManager.getAllKeys().filter { it.startsWith("${serverConfigId}_") && !it.contains("_author_") && !it.contains("_series_") }
+          val seriesKeys = DeviceManager.dbManager.getAllCachedSeriesKeys().filter { it.startsWith("${serverConfigId}_") }
           seriesKeys.forEach { cacheKey ->
             // Extract seriesId from cache key (format: serverConfigId_seriesId)
             val seriesId = cacheKey.substringAfter("${serverConfigId}_")
@@ -685,7 +685,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         val libraryItemsFromAuthorWithAudio = libraryItemsWithAudio.filter { li -> li.authorName.indexOf(authorName, ignoreCase = true) >= 0 }
 
         val sortedLibraryItemsWithAudio = sortSeriesBooks(libraryItemsFromAuthorWithAudio)
-        cachedLibraryAuthorSeriesItems[libraryId]!![authorId] = sortedLibraryItemsWithAudio
+        cachedLibraryAuthorSeriesItems[libraryId]!![authorSeriesKey] = sortedLibraryItemsWithAudio
 
         sortedLibraryItemsWithAudio.forEach { libraryItem ->
           if (serverLibraryItems.find { li -> li.id == libraryItem.id } == null) {
@@ -980,23 +980,17 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         }
 
         // Notify Android Auto listeners that libraries have been loaded
-        androidAutoLoadListeners.forEach { listener ->
-          try {
-            listener()
-          } catch (e: Exception) {
-            Log.e(tag, "AABrowser: androidAutoLoadListener error: ${e.localizedMessage}")
-          }
-        }
+        notifyAndroidAutoDataReady("/", "__LIBRARIES__")
         cb(serverLibraries)
       }
     }
   }
 
-  fun registerAndroidAutoLoadListener(listener: () -> Unit) {
+  fun registerAndroidAutoLoadListener(listener: (Set<String>) -> Unit) {
     androidAutoLoadListeners.add(listener)
   }
 
-  fun unregisterAndroidAutoLoadListener(listener: () -> Unit) {
+  fun unregisterAndroidAutoLoadListener(listener: (Set<String>) -> Unit) {
     androidAutoLoadListeners.remove(listener)
   }
 
@@ -1068,7 +1062,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       // Add server items, but avoid duplicates (prefer server progress over local for same item)
       serverItemsInProgress.forEach { serverItem ->
         val existingLocalIndex = combinedItems.indexOfFirst {
-          it.libraryItemWrapper.id == serverItem.libraryItemWrapper.id
+          getCanonicalProgressItemId(it) == getCanonicalProgressItemId(serverItem)
         }
 
         if (existingLocalIndex >= 0) {
@@ -1100,7 +1094,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         // Merge server items with existing local items, avoiding duplicates
         filteredItemsInProgress.forEach { serverItem ->
           val existingLocalIndex = combinedItems.indexOfFirst {
-            it.libraryItemWrapper.id == serverItem.libraryItemWrapper.id
+            getCanonicalProgressItemId(it) == getCanonicalProgressItemId(serverItem)
           }
 
           if (existingLocalIndex >= 0) {
@@ -1118,7 +1112,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         future.set(sortedItems)
 
         // Notify Android Auto listeners that data is now available
-        notifyAndroidAutoDataReady()
+        notifyAndroidAutoDataReady("/", "__CONTINUE__")
       }
 
       return try {
@@ -1164,7 +1158,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
       // If the count changed or data is different, notify Android Auto
       if (filteredItemsInProgress.size != previousCount) {
-        notifyAndroidAutoDataReady()
+        notifyAndroidAutoDataReady("/", "__CONTINUE__")
       }
     }
 
@@ -1175,14 +1169,23 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   /**
    * Notify Android Auto listeners that data has been refreshed
    */
-  private fun notifyAndroidAutoDataReady() {
+  private fun notifyAndroidAutoDataReady(vararg parentIds: String) {
+    val parentSet = parentIds.filter { it.isNotBlank() }.toSet()
     Log.d(tag, "AABrowser: Notifying Android Auto listeners of data update")
-    androidAutoLoadListeners.forEach { listener ->
+    androidAutoLoadListeners.toList().forEach { listener ->
       try {
-        listener()
+        listener(parentSet)
       } catch (e: Exception) {
         Log.e(tag, "AABrowser: Error calling Android Auto listener: ${e.localizedMessage}")
       }
+    }
+  }
+
+  private fun getCanonicalProgressItemId(itemInProgress: ItemInProgress): String {
+    return when (val wrapper = itemInProgress.libraryItemWrapper) {
+      is LocalLibraryItem -> wrapper.libraryItemId ?: wrapper.id
+      is LibraryItem -> wrapper.id
+      else -> wrapper.id
     }
   }
 
@@ -1947,6 +1950,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached collections for $libraryId, triggering load")
       loadLibraryCollectionsWithAudio(libraryId) { collections ->
         Log.d(tag, "AABrowser: Loaded ${collections.size} collections for $libraryId")
+        notifyAndroidAutoDataReady("__LIBRARY__${libraryId}__COLLECTIONS")
       }
       return emptyList()
     }
@@ -1963,6 +1967,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached collection books for $libraryId/$collectionId, triggering load")
       loadLibraryCollectionBooksWithAudio(libraryId, collectionId) { books ->
         Log.d(tag, "AABrowser: Loaded ${books.size} books for collection $collectionId")
+        notifyAndroidAutoDataReady("__LIBRARY__${libraryId}__COLLECTION__${collectionId}")
       }
       return emptyList()
     }
@@ -1980,6 +1985,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached discovery for $libraryId, triggering load")
       loadLibraryDiscoveryBooksWithAudio(libraryId) { books ->
         Log.d(tag, "AABrowser: Loaded ${books.size} discovery books for $libraryId")
+        notifyAndroidAutoDataReady("__LIBRARY__${libraryId}__DISCOVERY")
       }
       return emptyList()
     }
@@ -1997,6 +2003,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached podcasts for $libraryId, triggering load")
       loadLibraryPodcasts(libraryId) { podcasts ->
         Log.d(tag, "AABrowser: Loaded ${podcasts?.size ?: 0} podcasts for $libraryId")
+        notifyAndroidAutoDataReady(libraryId)
       }
       return emptyList()
     }
@@ -2008,7 +2015,24 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun getCachedAuthorSeriesBooks(libraryId: String, authorId: String, seriesId: String): List<LibraryItem> {
     val authorSeriesKey = "$authorId|$seriesId"
-    return cachedLibraryAuthorSeriesItems[libraryId]?.get(authorSeriesKey) ?: emptyList()
+    val libraryAuthorSeriesCache = cachedLibraryAuthorSeriesItems[libraryId]
+    if (libraryAuthorSeriesCache?.containsKey(authorSeriesKey) == true) {
+      return libraryAuthorSeriesCache[authorSeriesKey] ?: emptyList()
+    }
+
+    Log.d(tag, "AABrowser: No cached author series books for $libraryId/$authorSeriesKey, triggering load")
+    loadAuthorSeriesBooksWithAudio(libraryId, authorId, seriesId) { books ->
+      Log.d(tag, "AABrowser: Loaded ${books.size} author series books for $authorSeriesKey")
+      notifyAndroidAutoDataReady("__LIBRARY__${libraryId}__AUTHOR_SERIES__${authorId}__${seriesId}")
+    }
+    return emptyList()
+  }
+
+  fun findCachedPodcastById(podcastId: String): LibraryItem? {
+    cachedLibraryPodcasts.values.forEach { podcastsByLibrary ->
+      podcastsByLibrary[podcastId]?.let { return it }
+    }
+    return null
   }
 
   /**
