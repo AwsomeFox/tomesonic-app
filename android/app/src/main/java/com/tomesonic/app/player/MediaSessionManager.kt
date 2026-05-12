@@ -5,7 +5,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -13,20 +15,24 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
-// MIGRATION: Remove MediaSessionCompat - now using Media3 MediaSession
-// import android.support.v4.media.session.MediaSessionCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
+import androidx.media3.common.util.BitmapLoader
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerNotificationManager
+import com.bumptech.glide.Glide
 import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import com.tomesonic.app.R
 import com.tomesonic.app.data.PlaybackSession
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 
 // MIGRATION-BACKUP: ExoPlayer2 Implementation (commented out for reference)
 /*
@@ -61,8 +67,37 @@ class MediaSessionManager(
         sessionActivityPendingIntent: PendingIntent?,
         player: Player
     ) {
-        // Create Media3 MediaLibrarySession
+        // Create Media3 MediaLibrarySession with a Glide-backed BitmapLoader.
+        // This is the critical path for Wear OS artwork: the watch connects as a
+        // MediaController, reads MediaMetadata.artworkUri, then asks the session's
+        // BitmapLoader to resolve it. Without a BitmapLoader the watch only has the
+        // URI string and cannot authenticate against the server to fetch the image.
+        val bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
+        val sessionBitmapLoader = object : BitmapLoader {
+            override fun supportsMimeType(mimeType: String) = false
+
+            override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
+                Futures.submit(
+                    Callable { BitmapFactory.decodeByteArray(data, 0, data.size) },
+                    bitmapLoaderExecutor
+                )
+
+            override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
+                Futures.submit(
+                    Callable {
+                        Glide.with(context)
+                            .asBitmap()
+                            .load(uri)
+                            .override(1024, 1024)
+                            .submit()
+                            .get()
+                    },
+                    bitmapLoaderExecutor
+                )
+        }
+
         val sessionBuilder = MediaLibrarySession.Builder(context, player, callback)
+        sessionBuilder.setBitmapLoader(sessionBitmapLoader)
         sessionActivityPendingIntent?.let { sessionBuilder.setSessionActivity(it) }
 
         // Enable custom commands and actions for Android Auto
