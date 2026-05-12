@@ -85,7 +85,10 @@ class MediaSessionManager(
 
             override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
                 Futures.submit(
-                    Callable { BitmapFactory.decodeByteArray(data, 0, data.size) },
+                    Callable {
+                        BitmapFactory.decodeByteArray(data, 0, data.size)
+                            ?: throw IllegalStateException("decodeBitmap failed for artworkData")
+                    },
                     loaderExecutor
                 )
 

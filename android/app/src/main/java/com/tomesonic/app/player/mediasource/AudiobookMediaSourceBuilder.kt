@@ -2,7 +2,10 @@ package com.tomesonic.app.player.mediasource
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -20,13 +23,11 @@ import androidx.media3.extractor.mp4.Mp4Extractor
 import androidx.media3.extractor.wav.WavExtractor
 import androidx.media3.extractor.flac.FlacExtractor
 import androidx.media3.extractor.ogg.OggExtractor
-import com.bumptech.glide.Glide
 import com.tomesonic.app.data.AudioTrack
 import com.tomesonic.app.data.BookChapter
 import com.tomesonic.app.data.PlaybackSession
 import com.tomesonic.app.utils.MimeTypeUtil
 import java.io.ByteArrayOutputStream
-import java.util.concurrent.TimeUnit
 
 /**
  * Builds MediaItem playlists for audiobooks with chapter-based playback.
@@ -38,7 +39,6 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     companion object {
         private const val TAG = "AudiobookMediaSourceBuilder"
         private const val ARTWORK_SIZE_PX = 1024
-        private const val ARTWORK_LOAD_TIMEOUT_SECONDS = 8L
     }
 
     private val dataSourceFactory by lazy {
@@ -434,13 +434,25 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     }
 
     private fun loadArtworkBytes(uri: Uri): ByteArray? {
+        // Do not block on network during player preparation. We only embed bytes
+        // when artwork is already local/content-based; HTTP(S) stays URI-only and
+        // is resolved through the MediaSession BitmapLoader path.
+        if (uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)) {
+            return null
+        }
+
         return try {
-            val bitmap = Glide.with(context)
-                .asBitmap()
-                .load(uri)
-                .override(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
-                .submit()
-                .get(ARTWORK_LOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val source = ImageDecoder.createSource(context.contentResolver, uri)
+                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                    decoder.setTargetSize(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+                }
+            } else {
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it)
+                } ?: return null
+            }
 
             val output = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)

@@ -20,6 +20,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 class AbMediaDescriptionAdapter(
     private val service: PlayerNotificationService
@@ -197,7 +198,7 @@ class AbMediaDescriptionAdapter(
                                 .load(uri)
                                 .override(ART_SIZE_PX, ART_SIZE_PX)
                                 .submit()
-                                .get()
+                                .get(10, TimeUnit.SECONDS)
                         }
                     }
                     else -> null
