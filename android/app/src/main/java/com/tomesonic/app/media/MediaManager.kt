@@ -685,7 +685,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         val libraryItemsFromAuthorWithAudio = libraryItemsWithAudio.filter { li -> li.authorName.indexOf(authorName, ignoreCase = true) >= 0 }
 
         val sortedLibraryItemsWithAudio = sortSeriesBooks(libraryItemsFromAuthorWithAudio)
-        cachedLibraryAuthorSeriesItems[libraryId]!![authorId] = sortedLibraryItemsWithAudio
+        cachedLibraryAuthorSeriesItems[libraryId]!![authorSeriesKey] = sortedLibraryItemsWithAudio
 
         sortedLibraryItemsWithAudio.forEach { libraryItem ->
           if (serverLibraryItems.find { li -> li.id == libraryItem.id } == null) {
@@ -1947,6 +1947,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached collections for $libraryId, triggering load")
       loadLibraryCollectionsWithAudio(libraryId) { collections ->
         Log.d(tag, "AABrowser: Loaded ${collections.size} collections for $libraryId")
+        notifyAndroidAutoDataReady()
       }
       return emptyList()
     }
@@ -1963,6 +1964,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached collection books for $libraryId/$collectionId, triggering load")
       loadLibraryCollectionBooksWithAudio(libraryId, collectionId) { books ->
         Log.d(tag, "AABrowser: Loaded ${books.size} books for collection $collectionId")
+        notifyAndroidAutoDataReady()
       }
       return emptyList()
     }
@@ -1980,6 +1982,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached discovery for $libraryId, triggering load")
       loadLibraryDiscoveryBooksWithAudio(libraryId) { books ->
         Log.d(tag, "AABrowser: Loaded ${books.size} discovery books for $libraryId")
+        notifyAndroidAutoDataReady()
       }
       return emptyList()
     }
@@ -1997,6 +2000,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       Log.d(tag, "AABrowser: No cached podcasts for $libraryId, triggering load")
       loadLibraryPodcasts(libraryId) { podcasts ->
         Log.d(tag, "AABrowser: Loaded ${podcasts?.size ?: 0} podcasts for $libraryId")
+        notifyAndroidAutoDataReady()
       }
       return emptyList()
     }
@@ -2008,7 +2012,16 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
    */
   fun getCachedAuthorSeriesBooks(libraryId: String, authorId: String, seriesId: String): List<LibraryItem> {
     val authorSeriesKey = "$authorId|$seriesId"
-    return cachedLibraryAuthorSeriesItems[libraryId]?.get(authorSeriesKey) ?: emptyList()
+    val cached = cachedLibraryAuthorSeriesItems[libraryId]?.get(authorSeriesKey)
+    if (cached.isNullOrEmpty()) {
+      Log.d(tag, "AABrowser: No cached author series books for $libraryId/$authorSeriesKey, triggering load")
+      loadAuthorSeriesBooksWithAudio(libraryId, authorId, seriesId) { books ->
+        Log.d(tag, "AABrowser: Loaded ${books.size} author series books for $authorSeriesKey")
+        notifyAndroidAutoDataReady()
+      }
+      return emptyList()
+    }
+    return cached
   }
 
   /**

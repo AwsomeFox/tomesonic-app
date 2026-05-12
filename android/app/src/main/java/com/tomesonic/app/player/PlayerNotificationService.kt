@@ -352,14 +352,12 @@ class PlayerNotificationService : MediaLibraryService() {
 
     // Register listener so we refresh the MediaBrowser when MediaManager finishes loading Android Auto data
     mediaManager.registerAndroidAutoLoadListener {
-      try {
-  // Notify Android Auto that the browse tree changed so recents/continue items appear.
-  // Use the MediaLibrarySession notifyChildrenChanged when available.
-  // notifyChildrenChanged(root: String, page: Int, params: LibraryParams?)
-  mediaSessionManager.mediaSession?.notifyChildrenChanged("/", 0, null)
-      } catch (e: Exception) {
-        Log.e(tag, "Error notifying children changed from mediaManager listener: ${e.localizedMessage}")
-      }
+      notifyAndroidAutoBrowseChanged(
+        MediaLibrarySessionCallback.AUTO_MEDIA_ROOT,
+        MediaLibrarySessionCallback.LIBRARIES_ROOT,
+        MediaLibrarySessionCallback.RECENTLY_ROOT,
+        MediaLibrarySessionCallback.CONTINUE_ROOT
+      )
     }
 
     channelId =
@@ -429,6 +427,31 @@ class PlayerNotificationService : MediaLibraryService() {
     // Log.d(tag, "AALibrary: Session token set: $sessionToken")
 
     // Cast player is now accessed via castPlayerManager.castPlayer property
+  }
+
+  fun notifyAndroidAutoBrowseChanged(vararg parentIds: String) {
+    val idsToRefresh = if (parentIds.isEmpty()) {
+      listOf(MediaLibrarySessionCallback.AUTO_MEDIA_ROOT)
+    } else {
+      parentIds.toList().distinct()
+    }
+
+    Handler(Looper.getMainLooper()).post {
+      val session = mediaSessionManager.mediaSession
+      if (session == null) {
+        Log.d(tag, "notifyAndroidAutoBrowseChanged: Media session not ready for ${idsToRefresh.joinToString()}")
+        return@post
+      }
+
+      idsToRefresh.forEach { parentId ->
+        try {
+          session.notifyChildrenChanged(parentId, 0, null)
+          Log.d(tag, "notifyAndroidAutoBrowseChanged: Notified parentId=$parentId")
+        } catch (e: Exception) {
+          Log.e(tag, "notifyAndroidAutoBrowseChanged: Failed for parentId=$parentId", e)
+        }
+      }
+    }
   }
 
   /*
@@ -3002,11 +3025,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           }
 
           // Notify Android Auto that data may have changed
-          try {
-            session.notifyChildrenChanged(AUTO_MEDIA_ROOT, 0, null)
-          } catch (e: Exception) {
-            Log.e("PlayerNotificationServ", "AALibrary: Error notifying children changed: ${e.message}")
-          }
+          service.notifyAndroidAutoBrowseChanged(AUTO_MEDIA_ROOT)
         }
       }
 
@@ -3038,19 +3057,28 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   private fun preloadAndroidAutoData() {
     Log.d("PlayerNotificationServ", "AALibrary: Preloading Android Auto data")
 
+    // Load user media progress immediately so continue metadata can refresh as soon as possible.
+    service.mediaManager.loadServerUserMediaProgress {
+      Log.d("PlayerNotificationServ", "AALibrary: Preloaded user media progress")
+      service.notifyAndroidAutoBrowseChanged(CONTINUE_ROOT)
+    }
+
+    // Continue listening does not depend on library discovery, so load it in parallel.
+    service.mediaManager.loadItemsInProgressForAllLibraries { itemsInProgress ->
+      Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${itemsInProgress.size} items in progress")
+      service.notifyAndroidAutoBrowseChanged(
+        AUTO_MEDIA_ROOT,
+        CONTINUE_ROOT
+      )
+    }
+
     // Load libraries in background
     service.mediaManager.loadLibrariesAsync { libraries ->
       Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${libraries.size} libraries")
-
-      // Load user media progress for accurate progress display
-      service.mediaManager.loadServerUserMediaProgress {
-        Log.d("PlayerNotificationServ", "AALibrary: Preloaded user media progress")
-      }
-
-      // Load items in progress
-      service.mediaManager.loadItemsInProgressForAllLibraries { itemsInProgress ->
-        Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${itemsInProgress.size} items in progress")
-      }
+      service.notifyAndroidAutoBrowseChanged(
+        AUTO_MEDIA_ROOT,
+        LIBRARIES_ROOT
+      )
 
       // Preload personalized data for faster browsing
       service.mediaManager.populatePersonalizedDataForAllLibraries {
@@ -3058,6 +3086,11 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
         // Mark first load as done - Android Auto will pick up the changes on next browse request
         service.networkConnectivityManager.setFirstLoadDone(true)
+        service.notifyAndroidAutoBrowseChanged(
+          AUTO_MEDIA_ROOT,
+          RECENTLY_ROOT,
+          LIBRARIES_ROOT
+        )
       }
     }
   }

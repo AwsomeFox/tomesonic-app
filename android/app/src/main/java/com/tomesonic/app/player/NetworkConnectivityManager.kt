@@ -80,16 +80,24 @@ class NetworkConnectivityManager(
      * Handles network restoration - forces Android Auto reload and syncs local sessions
      */
     private fun handleNetworkRestored() {
+        val shouldRefreshAndroidAuto = service.isBrowseTreeInitialized() && firstLoadDone
+
         // Force android auto loading if libraries are empty.
         // Lack of network connectivity is most likely reason for libraries being empty
-        if (service.isBrowseTreeInitialized() &&
-            firstLoadDone &&
+        if (shouldRefreshAndroidAuto &&
             service.mediaManager.serverLibraries.isEmpty()
         ) {
             Log.d("NetworkConnectivityManager", "AALibrary: Network restored and libraries empty - setting forceReloadingAndroidAuto to true")
             forceReloadingAndroidAuto = true
-            // MIGRATION: MediaLibraryService doesn't have notifyChildrenChanged
-            // service.notifyChildrenChanged("/")
+        }
+
+        if (shouldRefreshAndroidAuto) {
+            service.notifyAndroidAutoBrowseChanged(
+                MediaLibrarySessionCallback.AUTO_MEDIA_ROOT,
+                MediaLibrarySessionCallback.LIBRARIES_ROOT,
+                MediaLibrarySessionCallback.RECENTLY_ROOT,
+                MediaLibrarySessionCallback.CONTINUE_ROOT
+            )
         }
 
         // Send any queued local progress syncs when network is restored
