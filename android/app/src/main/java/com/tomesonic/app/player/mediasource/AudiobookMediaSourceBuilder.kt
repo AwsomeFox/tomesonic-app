@@ -1,6 +1,7 @@
 package com.tomesonic.app.player.mediasource
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
 import androidx.media3.common.C
@@ -19,10 +20,13 @@ import androidx.media3.extractor.mp4.Mp4Extractor
 import androidx.media3.extractor.wav.WavExtractor
 import androidx.media3.extractor.flac.FlacExtractor
 import androidx.media3.extractor.ogg.OggExtractor
+import com.bumptech.glide.Glide
 import com.tomesonic.app.data.AudioTrack
 import com.tomesonic.app.data.BookChapter
 import com.tomesonic.app.data.PlaybackSession
 import com.tomesonic.app.utils.MimeTypeUtil
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.TimeUnit
 
 /**
  * Builds MediaItem playlists for audiobooks with chapter-based playback.
@@ -33,6 +37,8 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
     companion object {
         private const val TAG = "AudiobookMediaSourceBuilder"
+        private const val ARTWORK_SIZE_PX = 1024
+        private const val ARTWORK_LOAD_TIMEOUT_SECONDS = 8L
     }
 
     private val dataSourceFactory by lazy {
@@ -50,6 +56,8 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
     // Store the last created chapter segments for external access
     private var lastChapterSegments: List<ChapterSegment> = emptyList()
+    private var cachedArtworkUri: Uri? = null
+    private var cachedArtworkData: ByteArray? = null
 
     /**
      * Get the chapter segments from the last built MediaSource
@@ -386,8 +394,10 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         val chapter = playbackSession.chapters.getOrNull(segment.chapterIndex)
         val baseMetadata = playbackSession.getExoMediaMetadata(context, null, chapter, segment.chapterIndex)
 
+        val artworkData = getArtworkDataForUri(baseMetadata.artworkUri)
+
         // Create a new metadata builder using the library metadata fields
-        return MediaMetadata.Builder()
+        val builder = MediaMetadata.Builder()
             .setTitle(baseMetadata.title)
             .setSubtitle(baseMetadata.subtitle)
             .setArtist(baseMetadata.artist)
@@ -399,7 +409,46 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             .setTrackNumber(segment.chapterIndex + 1)
             .setDurationMs(segment.durationMs) // Set chapter duration for Android Auto timeline
             .setIsPlayable(true)
-            .build()
+
+        artworkData?.let {
+            builder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+        }
+
+        return builder.build()
+    }
+
+    private fun getArtworkDataForUri(uri: Uri?): ByteArray? {
+        if (uri == null) return null
+
+        if (cachedArtworkUri == uri && cachedArtworkData != null) {
+            return cachedArtworkData
+        }
+
+        val bytes = loadArtworkBytes(uri)
+        if (bytes != null) {
+            cachedArtworkUri = uri
+            cachedArtworkData = bytes
+        }
+
+        return bytes
+    }
+
+    private fun loadArtworkBytes(uri: Uri): ByteArray? {
+        return try {
+            val bitmap = Glide.with(context)
+                .asBitmap()
+                .load(uri)
+                .override(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+                .submit()
+                .get(ARTWORK_LOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+
+            val output = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)
+            output.toByteArray()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load artwork bytes for metadata uri=$uri", e)
+            null
+        }
     }
 
     /**
