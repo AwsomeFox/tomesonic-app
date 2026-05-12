@@ -32,6 +32,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.tomesonic.app.R
 import com.tomesonic.app.data.PlaybackSession
 import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 // MIGRATION-BACKUP: ExoPlayer2 Implementation (commented out for reference)
@@ -60,6 +61,7 @@ class MediaSessionManager(
 
     private var playerNotificationManager: PlayerNotificationManager? = null
     private var mediaDescriptionAdapter: AbMediaDescriptionAdapter? = null
+    private var bitmapLoaderExecutor: ExecutorService? = null
 
     fun initializeMediaSession(
         notificationId: Int,
@@ -72,14 +74,18 @@ class MediaSessionManager(
         // MediaController, reads MediaMetadata.artworkUri, then asks the session's
         // BitmapLoader to resolve it. Without a BitmapLoader the watch only has the
         // URI string and cannot authenticate against the server to fetch the image.
-        val bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
+        if (bitmapLoaderExecutor == null || bitmapLoaderExecutor?.isShutdown == true) {
+            bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
+        }
+        val loaderExecutor = bitmapLoaderExecutor!!
+
         val sessionBitmapLoader = object : BitmapLoader {
             override fun supportsMimeType(mimeType: String) = false
 
             override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
                 Futures.submit(
                     Callable { BitmapFactory.decodeByteArray(data, 0, data.size) },
-                    bitmapLoaderExecutor
+                    loaderExecutor
                 )
 
             override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
@@ -92,7 +98,7 @@ class MediaSessionManager(
                             .submit()
                             .get()
                     },
-                    bitmapLoaderExecutor
+                    loaderExecutor
                 )
         }
 
@@ -308,6 +314,8 @@ class MediaSessionManager(
     }
 
     fun release() {
+        bitmapLoaderExecutor?.shutdownNow()
+        bitmapLoaderExecutor = null
         mediaDescriptionAdapter?.release()
         mediaDescriptionAdapter = null
         playerNotificationManager?.setPlayer(null)

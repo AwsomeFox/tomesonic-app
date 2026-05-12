@@ -29,6 +29,7 @@ class AbMediaDescriptionAdapter(
         // 1024px gives the system room to downscale cleanly on high-density screens
         // and satisfies Wear OS minimum size requirements for media card backgrounds.
         private const val ART_SIZE_PX = 1024
+        private const val RETRY_BACKOFF_MS = 15_000L
     }
 
     private var currentIconUri: Uri? = null
@@ -36,6 +37,8 @@ class AbMediaDescriptionAdapter(
     private val scopeJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.Main + scopeJob)
     private var loadArtworkJob: Job? = null
+    private var failedIconUri: Uri? = null
+    private var lastFailureAtMs: Long = 0L
 
     /** Call from MediaSessionManager.release() to cancel any in-flight IO. */
     fun release() {
@@ -120,6 +123,13 @@ class AbMediaDescriptionAdapter(
             return null
         }
 
+        if (failedIconUri == artworkUri) {
+            val elapsed = System.currentTimeMillis() - lastFailureAtMs
+            if (elapsed < RETRY_BACKOFF_MS) {
+                return null
+            }
+        }
+
         if (currentIconUri == artworkUri && currentBitmap != null) {
             return currentBitmap
         }
@@ -130,6 +140,8 @@ class AbMediaDescriptionAdapter(
             loadArtworkJob?.cancel()
             currentBitmap = null
             currentIconUri = artworkUri
+            failedIconUri = null
+            lastFailureAtMs = 0L
         } else if (loadArtworkJob?.isActive == true) {
             // Same URI, load already in progress – let it complete
             return null
@@ -139,7 +151,12 @@ class AbMediaDescriptionAdapter(
             val bitmap = resolveArtworkUri(artworkUri)
             if (bitmap != null && currentIconUri == artworkUri) {
                 currentBitmap = bitmap
+                failedIconUri = null
+                lastFailureAtMs = 0L
                 callback.onBitmap(bitmap)
+            } else if (currentIconUri == artworkUri) {
+                failedIconUri = artworkUri
+                lastFailureAtMs = System.currentTimeMillis()
             }
         }
 
