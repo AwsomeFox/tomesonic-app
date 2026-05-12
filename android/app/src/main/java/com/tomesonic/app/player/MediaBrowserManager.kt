@@ -1,3 +1,6 @@
+// DEPRECATED: This class is dead code. The active Android Auto browse implementation lives
+// entirely in MediaLibrarySessionCallback inside PlayerNotificationService.kt.
+// MediaBrowserManager is never instantiated at runtime and should be removed in a future cleanup.
 package com.tomesonic.app.player
 
 import android.content.Context

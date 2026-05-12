@@ -462,57 +462,138 @@ class ApiHandler(var ctx:Context) {
    * Attempts to reconnect to the server using the stored refresh token.
    * This is called proactively by Android Auto before browsing operations.
    *
-   * @param cb Callback with success status and optional new access token
+   * Retry strategy:
+   *   - First ensures a config is available (restores from last known if needed).
+   *   - Pings the current config; on success returns immediately.
+   *   - On ping failure attempts a token refresh.
+   *   - If the current config has no refresh token, tries each alternative saved config.
+   *   - The whole sequence is retried up to MAX_RETRIES times with exponential back-off
+   *     capped at MAX_RETRY_DELAY_MS to absorb transient post-wake network flakiness.
+   *
+   * @param cb Callback with success status
    */
   fun attemptReconnection(cb: (Boolean) -> Unit) {
-    val serverConnectionConfigId = DeviceManager.serverConnectionConfigId
-    if (serverConnectionConfigId.isEmpty()) {
-      Log.w(tag, "attemptReconnection: No server connection config available")
+    val MAX_RETRIES = 3
+    val BASE_RETRY_DELAY_MS = 1000L
+    val MAX_RETRY_DELAY_MS = 4000L
 
-      // Try to restore from last server connection config
-      val lastConfig = DeviceManager.deviceData.getLastServerConnectionConfig()
-      if (lastConfig != null) {
-        Log.d(tag, "attemptReconnection: Found last server config, restoring: ${lastConfig.name}")
-        DeviceManager.serverConnectionConfig = lastConfig
-        DeviceManager.deviceData.lastServerConnectionConfigId = lastConfig.id
-        DeviceManager.dbManager.saveDeviceData(DeviceManager.deviceData)
-
-        // Now try reconnection with restored config
-        attemptReconnection(cb)
+    fun doAttempt(retriesLeft: Int) {
+      // Ensure we have a config to work with.
+      val serverConnectionConfigId = DeviceManager.serverConnectionConfigId
+      if (serverConnectionConfigId.isEmpty()) {
+        val lastConfig = DeviceManager.deviceData.getLastServerConnectionConfig()
+        if (lastConfig != null) {
+          Log.d(tag, "attemptReconnection: Restoring last server config: ${lastConfig.name}")
+          DeviceManager.serverConnectionConfig = lastConfig
+          DeviceManager.deviceData.lastServerConnectionConfigId = lastConfig.id
+          DeviceManager.dbManager.saveDeviceData(DeviceManager.deviceData)
+          doAttempt(retriesLeft)
+          return
+        }
+        Log.w(tag, "attemptReconnection: No server connection config available")
+        cb(false)
         return
       }
 
-      cb(false)
-      return
-    }
+      val currentConfig = DeviceManager.serverConnectionConfig
+      if (currentConfig == null) {
+        Log.w(tag, "attemptReconnection: Server config object is null")
+        cb(false)
+        return
+      }
 
-    Log.d(tag, "attemptReconnection: Attempting to reconnect to server ${DeviceManager.serverConnectionConfigString}")
-
-    // First, try a simple ping to see if connection is valid
-    val currentConfig = DeviceManager.serverConnectionConfig
-    if (currentConfig == null) {
-      Log.w(tag, "attemptReconnection: Server config is null")
-      cb(false)
-      return
-    }
-
-    pingServer(currentConfig) { pingSuccess ->
-      if (pingSuccess) {
-        Log.d(tag, "attemptReconnection: Server ping successful, connection is valid")
-        cb(true)
-      } else {
-        Log.d(tag, "attemptReconnection: Server ping failed, attempting token refresh")
-
-        // Try to refresh the token
-        val refreshToken = secureStorage.getRefreshToken(serverConnectionConfigId)
-        if (refreshToken.isNullOrEmpty()) {
-          Log.w(tag, "attemptReconnection: No refresh token available")
-          cb(false)
+      Log.d(tag, "attemptReconnection: Pinging server (retriesLeft=$retriesLeft): ${currentConfig.address}")
+      pingServer(currentConfig) { pingSuccess ->
+        if (pingSuccess) {
+          Log.d(tag, "attemptReconnection: Ping succeeded")
+          cb(true)
           return@pingServer
         }
 
-        // Attempt token refresh
-        refreshTokenAndReconnect(currentConfig, refreshToken, cb)
+        Log.d(tag, "attemptReconnection: Ping failed, trying token refresh")
+        val refreshToken = secureStorage.getRefreshToken(serverConnectionConfigId)
+        if (!refreshToken.isNullOrEmpty()) {
+          refreshTokenAndReconnect(currentConfig, refreshToken) { refreshed ->
+            if (refreshed) {
+              cb(true)
+              return@refreshTokenAndReconnect
+            }
+            retryOrFallback(retriesLeft, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS, cb, ::doAttempt)
+          }
+        } else {
+          // No refresh token for current config – try alternative saved configs.
+          Log.d(tag, "attemptReconnection: No refresh token for current config, trying alternatives")
+          val allConfigs = DeviceManager.deviceData.serverConnectionConfigs
+            ?: emptyList<ServerConnectionConfig>()
+          val alternatives = allConfigs.filter { it.id != serverConnectionConfigId }
+          tryAlternativeConfigs(alternatives, 0) { altSuccess ->
+            if (altSuccess) {
+              cb(true)
+            } else {
+              retryOrFallback(retriesLeft, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS, cb, ::doAttempt)
+            }
+          }
+        }
+      }
+    }
+
+    doAttempt(MAX_RETRIES)
+  }
+
+  /**
+   * Sleeps for an exponentially increasing delay then retries [doAttempt], or gives up.
+   */
+  private fun retryOrFallback(
+    retriesLeft: Int,
+    baseDelayMs: Long,
+    maxDelayMs: Long,
+    cb: (Boolean) -> Unit,
+    doAttempt: (Int) -> Unit
+  ) {
+    if (retriesLeft <= 0) {
+      Log.w(tag, "attemptReconnection: All retries exhausted")
+      cb(false)
+      return
+    }
+    val attempt = 4 - retriesLeft // 1, 2, 3
+    val delayMs = minOf(baseDelayMs * (1L shl attempt), maxDelayMs)
+    Log.d(tag, "attemptReconnection: Retrying in ${delayMs}ms (retriesLeft=${retriesLeft - 1})")
+    Thread {
+      Thread.sleep(delayMs)
+      doAttempt(retriesLeft - 1)
+    }.start()
+  }
+
+  /**
+   * Iterates alternative saved server configs and attempts token refresh for each.
+   * Activates the first one that succeeds.
+   */
+  private fun tryAlternativeConfigs(
+    configs: List<ServerConnectionConfig>,
+    index: Int,
+    cb: (Boolean) -> Unit
+  ) {
+    if (index >= configs.size) {
+      cb(false)
+      return
+    }
+    val config = configs[index]
+    val refreshToken = secureStorage.getRefreshToken(config.id)
+    if (refreshToken.isNullOrEmpty()) {
+      tryAlternativeConfigs(configs, index + 1, cb)
+      return
+    }
+    Log.d(tag, "attemptReconnection: Trying alternative config ${config.name}")
+    refreshTokenAndReconnect(config, refreshToken) { success ->
+      if (success) {
+        // Activate this config as the current connection.
+        DeviceManager.serverConnectionConfig = config
+        DeviceManager.deviceData.lastServerConnectionConfigId = config.id
+        DeviceManager.dbManager.saveDeviceData(DeviceManager.deviceData)
+        Log.d(tag, "attemptReconnection: Switched to alternative config ${config.name}")
+        cb(true)
+      } else {
+        tryAlternativeConfigs(configs, index + 1, cb)
       }
     }
   }

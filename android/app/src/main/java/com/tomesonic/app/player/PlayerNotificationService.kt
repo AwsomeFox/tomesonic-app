@@ -2509,7 +2509,7 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 
   //
-  // MEDIA BROWSER STUFF (ANDROID AUTO) - delegated to MediaBrowserManager
+  // MEDIA BROWSER STUFF (ANDROID AUTO) - handled by MediaLibrarySessionCallback below
   //
 
   // MIGRATION: MediaBrowserServiceCompat → MediaLibraryService callbacks
@@ -2609,7 +2609,6 @@ class PlayerNotificationService : MediaLibraryService() {
   }
 }
 
-// Simple callback for MediaLibrarySession that delegates to MediaBrowserManager methods
 /**
  * Media3 MediaLibrarySessionCallback - Complete Android Auto Media Browser Implementation
  *
@@ -4730,7 +4729,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         libraryItemWrapper = service.mediaManager.getFirstItem()
       }
       mediaId.contains("_chapter_") -> {
-        // Handle chapter-specific media ID from MediaBrowserManager
+        // Handle chapter-specific media ID
         val parts = mediaId.split("_chapter_")
         val bookId = parts[0]
         val chapterIndex = parts.getOrNull(1)?.toIntOrNull()
