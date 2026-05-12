@@ -27,7 +27,6 @@ class NetworkConnectivityManager(
     var hasNetworkConnectivity = false // Not 100% reliable has internet
 
     private var connectivityManager: ConnectivityManager? = null
-    private var forceReloadingAndroidAuto = false
     private var firstLoadDone = false
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -87,8 +86,7 @@ class NetworkConnectivityManager(
         if (shouldRefreshAndroidAuto &&
             service.mediaManager.serverLibraries.isEmpty()
         ) {
-            Log.d("NetworkConnectivityManager", "AALibrary: Network restored and libraries empty - setting forceReloadingAndroidAuto to true")
-            forceReloadingAndroidAuto = true
+            Log.d("NetworkConnectivityManager", "AALibrary: Network restored and libraries empty - triggering browse refresh")
         }
 
         if (shouldRefreshAndroidAuto) {

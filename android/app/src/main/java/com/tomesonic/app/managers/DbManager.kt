@@ -368,4 +368,12 @@ class DbManager {
     allKeys.addAll(Paper.book("cachedSeriesItems").allKeys)
     return allKeys
   }
+
+  fun getAllCachedLibraryItemKeys(): List<String> {
+    return Paper.book("cachedLibraryItems").allKeys
+  }
+
+  fun getAllCachedSeriesKeys(): List<String> {
+    return Paper.book("cachedSeriesItems").allKeys
+  }
 }
