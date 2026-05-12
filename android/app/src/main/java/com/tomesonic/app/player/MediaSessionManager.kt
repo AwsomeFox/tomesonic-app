@@ -53,6 +53,7 @@ class MediaSessionManager(
         private set
 
     private var playerNotificationManager: PlayerNotificationManager? = null
+    private var mediaDescriptionAdapter: AbMediaDescriptionAdapter? = null
 
     fun initializeMediaSession(
         notificationId: Int,
@@ -111,11 +112,12 @@ class MediaSessionManager(
     }
 
     private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
-        val mediaDescriptionAdapter = AbMediaDescriptionAdapter(service)
+        val adapter = AbMediaDescriptionAdapter(service)
+        mediaDescriptionAdapter = adapter
         val notificationListener = PlayerNotificationListener(service)
 
         playerNotificationManager = PlayerNotificationManager.Builder(context, notificationId, channelId)
-            .setMediaDescriptionAdapter(mediaDescriptionAdapter)
+            .setMediaDescriptionAdapter(adapter)
             .setNotificationListener(notificationListener)
             .build()
 
@@ -271,6 +273,8 @@ class MediaSessionManager(
     }
 
     fun release() {
+        mediaDescriptionAdapter?.release()
+        mediaDescriptionAdapter = null
         playerNotificationManager?.setPlayer(null)
         playerNotificationManager = null
 

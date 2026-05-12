@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -25,12 +26,23 @@ class AbMediaDescriptionAdapter(
 
     companion object {
         private const val TAG = "AbMediaDescriptionAdapter"
+        // Max size for notification artwork – keeps memory bounded
+        private const val ART_SIZE_PX = 512
     }
 
     private var currentIconUri: Uri? = null
     private var currentBitmap: Bitmap? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val scopeJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(Dispatchers.Main + scopeJob)
     private var loadArtworkJob: Job? = null
+
+    /** Call from MediaSessionManager.release() to cancel any in-flight IO. */
+    fun release() {
+        loadArtworkJob?.cancel()
+        serviceScope.cancel()
+        currentBitmap = null
+        currentIconUri = null
+    }
 
     override fun createCurrentContentIntent(player: Player): PendingIntent? {
         val intent = Intent(service, MainActivity::class.java).apply {
@@ -111,13 +123,17 @@ class AbMediaDescriptionAdapter(
             return currentBitmap
         }
 
-        loadArtworkJob?.cancel()
-        if (currentIconUri != artworkUri && currentBitmap != null) {
-            currentBitmap?.recycle()
+        // Only cancel/restart when URI actually changes; this prevents a cancel loop
+        // when PlayerNotificationManager polls repeatedly during the same load.
+        if (currentIconUri != artworkUri) {
+            loadArtworkJob?.cancel()
             currentBitmap = null
+            currentIconUri = artworkUri
+        } else if (loadArtworkJob?.isActive == true) {
+            // Same URI, load already in progress – let it complete
+            return null
         }
 
-        currentIconUri = artworkUri
         loadArtworkJob = serviceScope.launch {
             val bitmap = resolveArtworkUri(artworkUri)
             if (bitmap != null && currentIconUri == artworkUri) {
@@ -136,10 +152,23 @@ class AbMediaDescriptionAdapter(
                     "content", "file", "android.resource" -> {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                             val source = ImageDecoder.createSource(service.contentResolver, uri)
-                            ImageDecoder.decodeBitmap(source)
+                            ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                                decoder.setTargetSize(ART_SIZE_PX, ART_SIZE_PX)
+                            }
                         } else {
-                            service.contentResolver.openInputStream(uri)?.use {
-                                BitmapFactory.decodeStream(it)
+                            service.contentResolver.openInputStream(uri)?.use { stream ->
+                                val opts = BitmapFactory.Options().apply {
+                                    inJustDecodeBounds = true
+                                }
+                                BitmapFactory.decodeStream(stream, null, opts)
+                                opts.inSampleSize = maxOf(
+                                    opts.outWidth / ART_SIZE_PX,
+                                    opts.outHeight / ART_SIZE_PX
+                                ).coerceAtLeast(1)
+                                opts.inJustDecodeBounds = false
+                                service.contentResolver.openInputStream(uri)?.use {
+                                    BitmapFactory.decodeStream(it, null, opts)
+                                }
                             }
                         }
                     }
@@ -147,6 +176,7 @@ class AbMediaDescriptionAdapter(
                         Glide.with(service)
                             .asBitmap()
                             .load(uri)
+                            .override(ART_SIZE_PX, ART_SIZE_PX)
                             .submit()
                             .get()
                     }
