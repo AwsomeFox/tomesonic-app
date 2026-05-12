@@ -23,11 +23,15 @@ import androidx.media3.extractor.mp4.Mp4Extractor
 import androidx.media3.extractor.wav.WavExtractor
 import androidx.media3.extractor.flac.FlacExtractor
 import androidx.media3.extractor.ogg.OggExtractor
+import com.bumptech.glide.Glide
 import com.tomesonic.app.data.AudioTrack
 import com.tomesonic.app.data.BookChapter
 import com.tomesonic.app.data.PlaybackSession
 import com.tomesonic.app.utils.MimeTypeUtil
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Builds MediaItem playlists for audiobooks with chapter-based playback.
@@ -58,11 +62,25 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     private var lastChapterSegments: List<ChapterSegment> = emptyList()
     private var cachedArtworkUri: Uri? = null
     private var cachedArtworkData: ByteArray? = null
+    private var artworkLoadInProgressUri: Uri? = null
+    private var artworkLoadExecutor: ExecutorService? = null
+    private val artworkCacheLock = Any()
 
     /**
      * Get the chapter segments from the last built MediaSource
      */
     fun getLastChapterSegments(): List<ChapterSegment> = lastChapterSegments
+
+    fun release() {
+        artworkLoadExecutor?.shutdownNow()
+        artworkLoadExecutor = null
+
+        synchronized(artworkCacheLock) {
+            cachedArtworkUri = null
+            cachedArtworkData = null
+            artworkLoadInProgressUri = null
+        }
+    }
 
     /**
      * Builds a list of MediaItems for an audiobook with chapter-based playback
@@ -420,47 +438,124 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     private fun getArtworkDataForUri(uri: Uri?): ByteArray? {
         if (uri == null) return null
 
-        if (cachedArtworkUri == uri && cachedArtworkData != null) {
-            return cachedArtworkData
+        synchronized(artworkCacheLock) {
+            if (cachedArtworkUri == uri && cachedArtworkData != null) {
+                Log.d(TAG, "Reusing cached artwork bytes for uri=$uri (${cachedArtworkData?.size ?: 0} bytes)")
+                return cachedArtworkData
+            }
+
+            if (artworkLoadInProgressUri == uri) {
+                Log.d(TAG, "Artwork load already in progress for uri=$uri")
+                return null
+            }
         }
 
+        Log.d(TAG, "Loading artwork bytes for uri=$uri")
         val bytes = loadArtworkBytes(uri)
         if (bytes != null) {
-            cachedArtworkUri = uri
-            cachedArtworkData = bytes
+            synchronized(artworkCacheLock) {
+                cachedArtworkUri = uri
+                cachedArtworkData = bytes
+            }
+            Log.d(TAG, "Cached artwork bytes for uri=$uri (${bytes.size} bytes)")
+        } else {
+            if (artworkLoadInProgressUri == uri) {
+                Log.d(TAG, "Artwork prefetch started for uri=$uri; metadata will rely on artworkUri until cache is ready")
+            } else {
+                Log.d(TAG, "Artwork bytes still unavailable for uri=$uri; metadata will rely on artworkUri")
+            }
         }
 
         return bytes
     }
 
     private fun loadArtworkBytes(uri: Uri): ByteArray? {
-        // Do not block on network during player preparation. We only embed bytes
-        // when artwork is already local/content-based; HTTP(S) stays URI-only and
-        // is resolved through the MediaSession BitmapLoader path.
-        if (uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)) {
-            return null
-        }
-
         return try {
-            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val source = ImageDecoder.createSource(context.contentResolver, uri)
-                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                    decoder.setTargetSize(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
-                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
-                }
-            } else {
-                context.contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it)
-                } ?: return null
+            synchronized(artworkCacheLock) {
+                artworkLoadInProgressUri = uri
             }
+            ensureArtworkExecutor().submit {
+                try {
+                    val bitmap = when (uri.scheme?.lowercase()) {
+                        "http", "https" -> Glide.with(context)
+                            .asBitmap()
+                            .load(uri)
+                            .override(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+                            .submit()
+                            .get(10, TimeUnit.SECONDS)
 
-            val output = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)
-            output.toByteArray()
+                        else -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                val source = ImageDecoder.createSource(context.contentResolver, uri)
+                                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                                    decoder.setTargetSize(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+                                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+                                }
+                            } else {
+                                context.contentResolver.openInputStream(uri)?.use {
+                                    BitmapFactory.decodeStream(it)
+                                }
+                            }
+                        }
+                    }
+
+                    if (bitmap == null) {
+                        Log.w(TAG, "Artwork bitmap decode returned null for uri=$uri")
+                        return@submit
+                    }
+
+                    val normalizedBitmap = normalizeArtworkBitmap(bitmap)
+                    val output = ByteArrayOutputStream()
+                    normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)
+                    synchronized(artworkCacheLock) {
+                        cachedArtworkUri = uri
+                        cachedArtworkData = output.toByteArray()
+                    }
+                    Log.d(TAG, "Prefetched artwork bitmap for uri=$uri (${normalizedBitmap.width}x${normalizedBitmap.height}, ${cachedArtworkData?.size ?: 0} bytes)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Prefetch failed for artwork uri=$uri", e)
+                } finally {
+                    synchronized(artworkCacheLock) {
+                        if (artworkLoadInProgressUri == uri) {
+                            artworkLoadInProgressUri = null
+                        }
+                    }
+                }
+            }
+            null
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load artwork bytes for metadata uri=$uri", e)
             null
         }
+    }
+
+    private fun ensureArtworkExecutor(): ExecutorService {
+        if (artworkLoadExecutor == null || artworkLoadExecutor?.isShutdown == true) {
+            artworkLoadExecutor = Executors.newSingleThreadExecutor()
+        }
+
+        return artworkLoadExecutor!!
+    }
+
+    private fun normalizeArtworkBitmap(bitmap: Bitmap): Bitmap {
+        if (bitmap.width == ARTWORK_SIZE_PX && bitmap.height == ARTWORK_SIZE_PX) {
+            return bitmap
+        }
+
+        val scaledBitmap = Bitmap.createBitmap(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(scaledBitmap)
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            isFilterBitmap = true
+            isDither = false
+        }
+        val srcRect = android.graphics.Rect(0, 0, bitmap.width, bitmap.height)
+        val dstRect = android.graphics.Rect(0, 0, ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+        canvas.drawBitmap(bitmap, srcRect, dstRect, paint)
+        if (bitmap != scaledBitmap) {
+            bitmap.recycle()
+        }
+        return scaledBitmap
     }
 
     /**

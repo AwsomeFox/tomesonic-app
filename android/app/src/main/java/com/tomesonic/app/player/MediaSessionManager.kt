@@ -95,12 +95,15 @@ class MediaSessionManager(
             override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
                 Futures.submit(
                     Callable {
-                        Glide.with(context)
+                        Log.d(TAG, "Session BitmapLoader: loading artwork for uri=$uri")
+                        val bitmap = Glide.with(context)
                             .asBitmap()
                             .load(uri)
                             .override(1024, 1024)
                             .submit()
                             .get(10, TimeUnit.SECONDS)
+                        Log.d(TAG, "Session BitmapLoader: loaded bitmap ${bitmap.width}x${bitmap.height} for uri=$uri")
+                        bitmap
                     },
                     loaderExecutor
                 )

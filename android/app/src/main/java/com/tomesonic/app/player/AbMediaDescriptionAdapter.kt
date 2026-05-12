@@ -110,11 +110,17 @@ class AbMediaDescriptionAdapter(
             TAG,
             "getCurrentLargeIcon: artworkData=${artworkData != null}, artworkUri=${artworkUri != null}"
         )
+        Log.d(
+            TAG,
+            "getCurrentLargeIcon: mediaId=${player.currentMediaItem?.mediaId}, title=${metadata?.title}, displayTitle=${metadata?.displayTitle}, uri=${artworkUri}"
+        )
 
         // Use in-memory artwork when available for immediate notification rendering.
         if (artworkData != null) {
             return try {
-                BitmapFactory.decodeByteArray(artworkData, 0, artworkData.size)
+                val bitmap = BitmapFactory.decodeByteArray(artworkData, 0, artworkData.size)
+                Log.d(TAG, "getCurrentLargeIcon: using embedded artworkData bitmap ${bitmap?.width}x${bitmap?.height}")
+                bitmap
             } catch (e: Exception) {
                 Log.w(TAG, "getCurrentLargeIcon: failed decoding artworkData", e)
                 null
@@ -155,10 +161,12 @@ class AbMediaDescriptionAdapter(
                 currentBitmap = bitmap
                 failedIconUri = null
                 lastFailureAtMs = 0L
+                Log.d(TAG, "getCurrentLargeIcon: resolved bitmap ${bitmap.width}x${bitmap.height} for uri=$artworkUri")
                 callback.onBitmap(bitmap)
             } else if (currentIconUri == artworkUri) {
                 failedIconUri = artworkUri
                 lastFailureAtMs = System.currentTimeMillis()
+                Log.w(TAG, "getCurrentLargeIcon: bitmap resolution failed for uri=$artworkUri")
             }
         }
 

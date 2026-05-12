@@ -295,6 +295,7 @@ class PlayerNotificationService : MediaLibraryService() {
     castPlayerManager.release()
     // MIGRATION-TODO: mediaSession.release() - now handled by MediaSessionManager
     mediaSessionManager.release()
+    audiobookMediaSourceBuilder.release()
 
     // Release ChapterAwarePlayer resources
     // Clean up new architecture components - no wrapper to release
