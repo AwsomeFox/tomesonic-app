@@ -167,6 +167,10 @@ class MediaSessionManager(
         playerNotificationManager?.setUseFastForwardAction(false)
         playerNotificationManager?.setUseNextAction(false)
         playerNotificationManager?.setUsePreviousAction(false)
+        // Wear OS bridge is more reliable when media notifications are explicitly public/high.
+        playerNotificationManager?.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        playerNotificationManager?.setPriority(NotificationCompat.PRIORITY_HIGH)
+        playerNotificationManager?.setBadgeIconType(NotificationCompat.BADGE_ICON_NONE)
 
         // Enhanced logging for cast player debugging
         val playerType = when {
