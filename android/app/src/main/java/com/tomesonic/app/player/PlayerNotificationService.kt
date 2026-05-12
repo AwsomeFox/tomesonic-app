@@ -2680,6 +2680,11 @@ class PlayerNotificationService : MediaLibraryService() {
  */
 class MediaLibrarySessionCallback(private val service: PlayerNotificationService) : Callback {
 
+  // Bounded thread pool shared across all async browse paths (Continue, deep library nodes).
+  // Using a fixed pool of 4 threads prevents unbounded thread creation when Android Auto calls
+  // onGetChildren frequently on a slow connection.
+  private val androidAutoBrowseExecutor = java.util.concurrent.Executors.newFixedThreadPool(4)
+
   // Cache for search results to avoid duplicating search between onSearch and onGetSearchResult
   private var cachedSearchQuery: String = ""
   private var cachedSearchResults: MutableList<MediaItem> = mutableListOf()
@@ -3565,7 +3570,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
     params: LibraryParams?
   ) {
-    Thread {
+    androidAutoBrowseExecutor.execute {
       Log.d("PlayerNotificationServ", "AALibrary: Loading items in progress for Android Auto (server + local)")
       val itemsInProgress = service.mediaManager.loadItemsInProgressSync()
       Log.d("PlayerNotificationServ", "AALibrary: Continue items loaded count=${itemsInProgress.size}")
@@ -3644,7 +3649,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
           future.set(LibraryResult.ofItemList(ImmutableList.copyOf(resultItems), params))
         }
       }
-    }.start()
+    }
   }
 
   private fun handleLibraryBrowsingAsync(
@@ -3652,14 +3657,14 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
     params: LibraryParams?
   ) {
-    Thread {
+    androidAutoBrowseExecutor.execute {
       val children = handleLibraryBrowsing(parentId)
       Handler(Looper.getMainLooper()).post {
         if (!future.isDone) {
           future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
         }
       }
-    }.start()
+    }
   }
 
   /**

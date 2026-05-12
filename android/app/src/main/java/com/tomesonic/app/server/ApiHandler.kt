@@ -518,7 +518,7 @@ class ApiHandler(var ctx:Context) {
               cb(true)
               return@refreshTokenAndReconnect
             }
-            retryOrFallback(retriesLeft, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS, cb, ::doAttempt)
+            retryOrFallback(retriesLeft, MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS, cb, ::doAttempt)
           }
         } else {
           // No refresh token for current config – try alternative saved configs.
@@ -530,7 +530,7 @@ class ApiHandler(var ctx:Context) {
             if (altSuccess) {
               cb(true)
             } else {
-              retryOrFallback(retriesLeft, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS, cb, ::doAttempt)
+              retryOrFallback(retriesLeft, MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS, cb, ::doAttempt)
             }
           }
         }
@@ -541,10 +541,14 @@ class ApiHandler(var ctx:Context) {
   }
 
   /**
-   * Sleeps for an exponentially increasing delay then retries [doAttempt], or gives up.
+   * Schedules an exponentially back-off retry of [doAttempt], or gives up when
+   * [retriesLeft] reaches zero.  The back-off exponent is derived from
+   * [maxRetries] so the math stays correct regardless of how many retries are
+   * configured.
    */
   private fun retryOrFallback(
     retriesLeft: Int,
+    maxRetries: Int,
     baseDelayMs: Long,
     maxDelayMs: Long,
     cb: (Boolean) -> Unit,
@@ -555,7 +559,7 @@ class ApiHandler(var ctx:Context) {
       cb(false)
       return
     }
-    val attempt = 4 - retriesLeft // 1, 2, 3
+    val attempt = maxRetries - retriesLeft + 1 // 1, 2, … maxRetries
     val delayMs = minOf(baseDelayMs * (1L shl attempt), maxDelayMs)
     Log.d(tag, "attemptReconnection: Retrying in ${delayMs}ms (retriesLeft=${retriesLeft - 1})")
     Thread {
