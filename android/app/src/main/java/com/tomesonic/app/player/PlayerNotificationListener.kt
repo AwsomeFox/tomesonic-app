@@ -2,8 +2,14 @@ package com.tomesonic.app.player
 
 import android.app.Notification
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.media3.ui.PlayerNotificationManager
 
 class PlayerNotificationListener(var playerNotificationService:PlayerNotificationService) : PlayerNotificationManager.NotificationListener {
@@ -17,14 +23,7 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     notificationId: Int,
     notification: Notification,
     onGoing: Boolean) {
-
-    // TODO: Add WearableExtender for better Wear OS support
-    // val wearableExtender = NotificationCompat.WearableExtender()
-    //   .setHintShowBackgroundOnly(true)
-    //   .setBackground(notification.getLargeIcon())
-
-    // For now, use the original notification
-    val enhancedNotification = notification
+    val enhancedNotification = buildWearEnhancedNotification(notification)
 
     if (onGoing && !isForegroundService) {
       // Start foreground service when media notification is posted
@@ -46,10 +45,68 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     } else if (onGoing && isForegroundService) {
       // Service is already in foreground, just update the notification
       Log.d(tag, "Notification posted $notificationId - Service already foreground, notification will be updated automatically")
-      // The PlayerNotificationManager will automatically update the notification
-      // We don't need to call startForeground again
+      if (enhancedNotification !== notification) {
+        NotificationManagerCompat.from(playerNotificationService).notify(notificationId, enhancedNotification)
+      }
     } else {
       Log.d(tag, "Notification posted $notificationId, not ongoing - onGoing=$onGoing | isForegroundService=$isForegroundService")
+    }
+  }
+
+  private fun buildWearEnhancedNotification(notification: Notification): Notification {
+    val largeIconBitmap = extractLargeIconBitmap(notification) ?: return notification
+
+    return try {
+      val wearableExtender = NotificationCompat.WearableExtender()
+        .setHintShowBackgroundOnly(true)
+        .setBackground(largeIconBitmap)
+
+      NotificationCompat.Builder.recoverBuilder(playerNotificationService, notification)
+        .extend(wearableExtender)
+        .build()
+    } catch (e: Exception) {
+      Log.w(tag, "Failed to apply WearableExtender background: ${e.message}")
+      notification
+    }
+  }
+
+  private fun extractLargeIconBitmap(notification: Notification): Bitmap? {
+    val extras = notification.extras ?: return null
+
+    return try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        extras.getParcelable(Notification.EXTRA_LARGE_ICON, Bitmap::class.java)
+          ?: extras.getParcelable(Notification.EXTRA_LARGE_ICON_BIG, Bitmap::class.java)
+          ?: notification.getLargeIcon()?.toBitmapSafe()
+      } else {
+        @Suppress("DEPRECATION")
+        (extras.getParcelable(Notification.EXTRA_LARGE_ICON) as? Bitmap)
+          ?: (extras.getParcelable(Notification.EXTRA_LARGE_ICON_BIG) as? Bitmap)
+          ?: notification.getLargeIcon()?.toBitmapSafe()
+      }
+    } catch (e: Exception) {
+      Log.w(tag, "Failed to read large icon bitmap from notification extras: ${e.message}")
+      null
+    }
+  }
+
+  private fun Icon.toBitmapSafe(): Bitmap? {
+    return try {
+      val drawable = loadDrawable(playerNotificationService) ?: return null
+      if (drawable is BitmapDrawable && drawable.bitmap != null) {
+        drawable.bitmap
+      } else {
+        val width = drawable.intrinsicWidth.coerceAtLeast(1)
+        val height = drawable.intrinsicHeight.coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        bitmap
+      }
+    } catch (e: Exception) {
+      Log.w(tag, "Failed to convert Icon to Bitmap: ${e.message}")
+      null
     }
   }
 

@@ -1,15 +1,23 @@
 package com.tomesonic.app.player
 
 import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.net.Uri
+import android.os.Build
 import androidx.media3.ui.PlayerNotificationManager
 import androidx.media3.common.Player
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import android.util.Log
 import com.tomesonic.app.MainActivity
+import com.bumptech.glide.Glide
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class AbMediaDescriptionAdapter(
     private val service: PlayerNotificationService
@@ -18,6 +26,11 @@ class AbMediaDescriptionAdapter(
     companion object {
         private const val TAG = "AbMediaDescriptionAdapter"
     }
+
+    private var currentIconUri: Uri? = null
+    private var currentBitmap: Bitmap? = null
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var loadArtworkJob: Job? = null
 
     override fun createCurrentContentIntent(player: Player): PendingIntent? {
         val intent = Intent(service, MainActivity::class.java).apply {
@@ -35,13 +48,15 @@ class AbMediaDescriptionAdapter(
         val currentMediaItem = player.currentMediaItem
         val metadata = currentMediaItem?.mediaMetadata
         val playbackSession = service.currentPlaybackSession
+        val sessionAuthor = playbackSession?.displayAuthor?.takeIf { it.isNotBlank() }
+        val sessionTitle = playbackSession?.displayTitle?.takeIf { it.isNotBlank() }
 
         return when {
             metadata?.artist != null -> metadata.artist.toString()
             metadata?.albumArtist != null -> metadata.albumArtist.toString()
             metadata?.subtitle != null -> metadata.subtitle.toString()
-            !playbackSession?.displayAuthor.isNullOrBlank() -> playbackSession!!.displayAuthor!!
-            !playbackSession?.displayTitle.isNullOrBlank() -> playbackSession!!.displayTitle!!
+            sessionAuthor != null -> sessionAuthor
+            sessionTitle != null -> sessionTitle
             else -> ""
         }.also {
             Log.d(TAG, "getCurrentContentText: '$it' (mediaItem=${currentMediaItem != null}, metadata=${metadata != null})")
@@ -52,11 +67,12 @@ class AbMediaDescriptionAdapter(
         val currentMediaItem = player.currentMediaItem
         val metadata = currentMediaItem?.mediaMetadata
         val playbackSession = service.currentPlaybackSession
+        val sessionTitle = playbackSession?.displayTitle?.takeIf { it.isNotBlank() }
 
         return when {
             metadata?.title != null -> metadata.title.toString()
             metadata?.displayTitle != null -> metadata.displayTitle.toString()
-            !playbackSession?.displayTitle.isNullOrBlank() -> playbackSession!!.displayTitle!!
+            sessionTitle != null -> sessionTitle
             currentMediaItem?.mediaId != null -> "Audiobook"
             else -> "Unknown"
         }.also {
@@ -68,13 +84,78 @@ class AbMediaDescriptionAdapter(
         player: Player,
         callback: PlayerNotificationManager.BitmapCallback
     ): Bitmap? {
-        val currentMediaItem = player.currentMediaItem
-        val artworkData = currentMediaItem?.mediaMetadata?.artworkData
+        val metadata = player.currentMediaItem?.mediaMetadata
+        val artworkData = metadata?.artworkData
+        val artworkUri = metadata?.artworkUri ?: service.currentPlaybackSession?.getCoverUri(service)
 
-        Log.d(TAG, "getCurrentLargeIcon: mediaItem=${currentMediaItem != null}, artworkData=${artworkData != null}")
+        Log.d(
+            TAG,
+            "getCurrentLargeIcon: artworkData=${artworkData != null}, artworkUri=${artworkUri != null}"
+        )
 
-        // If artwork is available in metadata, return it
-        // Otherwise let the PlayerNotificationManager handle async loading
+        // Use in-memory artwork when available for immediate notification rendering.
+        if (artworkData != null) {
+            return try {
+                BitmapFactory.decodeByteArray(artworkData, 0, artworkData.size)
+            } catch (e: Exception) {
+                Log.w(TAG, "getCurrentLargeIcon: failed decoding artworkData", e)
+                null
+            }
+        }
+
+        if (artworkUri == null) {
+            return null
+        }
+
+        if (currentIconUri == artworkUri && currentBitmap != null) {
+            return currentBitmap
+        }
+
+        loadArtworkJob?.cancel()
+        if (currentIconUri != artworkUri && currentBitmap != null) {
+            currentBitmap?.recycle()
+            currentBitmap = null
+        }
+
+        currentIconUri = artworkUri
+        loadArtworkJob = serviceScope.launch {
+            val bitmap = resolveArtworkUri(artworkUri)
+            if (bitmap != null && currentIconUri == artworkUri) {
+                currentBitmap = bitmap
+                callback.onBitmap(bitmap)
+            }
+        }
+
         return null
+    }
+
+    private suspend fun resolveArtworkUri(uri: Uri): Bitmap? {
+        return withContext(Dispatchers.IO) {
+            try {
+                when (uri.scheme?.lowercase()) {
+                    "content", "file", "android.resource" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            val source = ImageDecoder.createSource(service.contentResolver, uri)
+                            ImageDecoder.decodeBitmap(source)
+                        } else {
+                            service.contentResolver.openInputStream(uri)?.use {
+                                BitmapFactory.decodeStream(it)
+                            }
+                        }
+                    }
+                    "http", "https" -> {
+                        Glide.with(service)
+                            .asBitmap()
+                            .load(uri)
+                            .submit()
+                            .get()
+                    }
+                    else -> null
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "resolveArtworkUri: failed for uri=$uri", e)
+                null
+            }
+        }
     }
 }
