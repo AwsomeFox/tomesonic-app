@@ -42,7 +42,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
     companion object {
         private const val TAG = "AudiobookMediaSourceBuilder"
-        private const val ARTWORK_SIZE_PX = 1024
+        private const val ARTWORK_SIZE_PX = 400
     }
 
     private val dataSourceFactory by lazy {
@@ -417,6 +417,10 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         // notification's cover quality to whatever we re-encode here. By leaving
         // only artworkUri, the session's BitmapLoader fetches the cover at its
         // native resolution for the phone notification and Wear OS card.
+
+        // UPDATE: Adding artworkData (small) for better compatibility with Wear OS bridge
+        val artworkData = getArtworkDataForUri(baseMetadata.artworkUri)
+
         val builder = MediaMetadata.Builder()
             .setTitle(baseMetadata.title)
             .setSubtitle(baseMetadata.subtitle)
@@ -425,6 +429,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             .setAlbumTitle(baseMetadata.albumTitle)
             .setDescription(baseMetadata.description)
             .setArtworkUri(baseMetadata.artworkUri) // This includes the library cover image
+            .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
             .setMediaType(baseMetadata.mediaType)
             .setTrackNumber(segment.chapterIndex + 1)
             .setDurationMs(segment.durationMs) // Set chapter duration for Android Auto timeline
@@ -433,7 +438,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         return builder.build()
     }
 
-    private fun getArtworkDataForUri(uri: Uri?): ByteArray? {
+    internal fun getArtworkDataForUri(uri: Uri?): ByteArray? {
         if (uri == null) return null
 
         synchronized(artworkCacheLock) {
@@ -504,7 +509,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
                     val normalizedBitmap = normalizeArtworkBitmap(bitmap)
                     val output = ByteArrayOutputStream()
-                    normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)
+                    normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, 80, output)
                     synchronized(artworkCacheLock) {
                         cachedArtworkUri = uri
                         cachedArtworkData = output.toByteArray()
@@ -669,7 +674,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             val positionInChapter = currentTimeMs - chapter.startMs
             Log.d(TAG, "Starting at position ${positionInChapter}ms within chapter $mediaItemIndex")
             return positionInChapter.coerceAtLeast(0)
-        } 
+        }
         // Track-based approach
         else if (playbackSession.audioTracks.isNotEmpty() && mediaItemIndex < playbackSession.audioTracks.size) {
             val track = playbackSession.audioTracks[mediaItemIndex]

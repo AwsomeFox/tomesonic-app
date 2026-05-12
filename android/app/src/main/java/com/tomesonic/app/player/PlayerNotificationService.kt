@@ -695,12 +695,14 @@ class PlayerNotificationService : MediaLibraryService() {
         // Update MediaSession metadata when chapter changes
         if (chapter != null) {
           val chapterDuration = chapter.endMs - chapter.startMs
+          val coverUri = playbackSession.getCoverUri(ctx)
           mediaSessionManager.updateChapterMetadata(
             chapterTitle = chapter.title ?: "Chapter ${chapterIndex + 1}",
             chapterDuration = chapterDuration,
             bookTitle = playbackSession.displayTitle ?: "",
             author = playbackSession.displayAuthor,
-            bitmap = null // TODO: Load chapter artwork if available
+            artworkUri = coverUri,
+            artworkData = audiobookMediaSourceBuilder.getArtworkDataForUri(coverUri)
           )
         }
       }
@@ -710,12 +712,14 @@ class PlayerNotificationService : MediaLibraryService() {
       if (currentChapter != null) {
         val chapterDuration = currentChapter.endMs - currentChapter.startMs
         val chapterIndex = chapterNavigationHelper.getCurrentChapterIndex()
+        val coverUri = playbackSession.getCoverUri(ctx)
         mediaSessionManager.updateChapterMetadata(
           chapterTitle = currentChapter.title ?: "Chapter ${chapterIndex + 1}",
           chapterDuration = chapterDuration,
           bookTitle = playbackSession.displayTitle ?: "",
           author = playbackSession.displayAuthor,
-          bitmap = null // TODO: Load chapter artwork if available
+          artworkUri = coverUri,
+          artworkData = audiobookMediaSourceBuilder.getArtworkDataForUri(coverUri)
         )
         Log.d(tag, "Set initial chapter metadata: ${currentChapter.title}, duration=${chapterDuration}ms")
       }
@@ -2091,12 +2095,14 @@ class PlayerNotificationService : MediaLibraryService() {
 
       // Instead, update the MediaSession metadata directly through MediaSessionManager
       // This updates the notification without disrupting playback
+      val coverUri = session.getCoverUri(ctx)
       mediaSessionManager.updateChapterMetadata(
         chapterTitle = displayTitle,
         chapterDuration = currentChapter?.let { it.endMs - it.startMs } ?: 0L,
         bookTitle = session.displayTitle ?: "",
         author = session.displayAuthor,
-        bitmap = null // Bitmap is already set during preparePlayer
+        artworkUri = coverUri,
+        artworkData = audiobookMediaSourceBuilder.getArtworkDataForUri(coverUri)
       )
 
       Log.d(tag, "updateNotificationMetadata: Updated MediaSession metadata - Title: '$displayTitle', Subtitle: '$displaySubtitle'")
@@ -2532,7 +2538,7 @@ class PlayerNotificationService : MediaLibraryService() {
 
   // MIGRATION: MediaBrowserServiceCompat → MediaLibraryService callbacks
   override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
-    Log.d(tag, "AALibrary: onGetSession called by ${controllerInfo.packageName}")
+    Log.d(tag, "AALibrary: onGetSession called by package=${controllerInfo.packageName}, connectionHints=${controllerInfo.connectionHints}")
     return if (::mediaSessionManager.isInitialized) {
       Log.d(tag, "AALibrary: MediaSessionManager is initialized, returning MediaLibrarySession")
       mediaSessionManager.mediaSession
@@ -3008,6 +3014,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   }
 
   private fun isValidClient(packageName: String): Boolean {
+    Log.d("PlayerNotificationServ", "AALibrary: isValidClient check for package: $packageName")
     return VALID_MEDIA_BROWSERS.contains(packageName)
   }
 
@@ -3021,7 +3028,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     browser: MediaSession.ControllerInfo,
     params: LibraryParams?
   ): ListenableFuture<LibraryResult<MediaItem>> {
-    Log.d("PlayerNotificationServ", "AALibrary: onGetLibraryRoot called by ${browser.packageName}")
+    Log.d("PlayerNotificationServ", "AALibrary: onGetLibraryRoot called by package=${browser.packageName}, connectionHints=${browser.connectionHints}")
 
     return if (!isValidClient(browser.packageName)) {
       Log.d("PlayerNotificationServ", "AALibrary: Client ${browser.packageName} not allowed to access media browser")
@@ -4860,6 +4867,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   }
 
   override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+    Log.d("PlayerNotificationServ", "AABrowser: onConnect from package=${controller.packageName}, connectionHints=${controller.connectionHints}")
     val connectionResult = super.onConnect(session, controller)
     val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
     val availablePlayerCommands = connectionResult.availablePlayerCommands.buildUpon()
@@ -4887,10 +4895,35 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     availablePlayerCommands.add(Player.COMMAND_PREPARE)
     availablePlayerCommands.add(Player.COMMAND_STOP)
 
+    // Explicitly add commands related to metadata and playlist which might be needed for rich notifications
+    availablePlayerCommands.add(Player.COMMAND_GET_METADATA)
+    availablePlayerCommands.add(Player.COMMAND_GET_TIMELINE)
+
     return MediaSession.ConnectionResult.accept(
       availableSessionCommands.build(),
       availablePlayerCommands.build()
     )
+  }
+
+  override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
+    Log.d("PlayerNotificationServ", "AABrowser: onPostConnect from package=${controller.packageName}")
+
+    // If it's a known media browser (like Wear OS or Android Auto),
+    // proactively push the current timeline/metadata to ensure it's synced.
+    if (isValidClient(controller.packageName)) {
+        Log.d("PlayerNotificationServ", "AABrowser: Proactively invalidating session for ${controller.packageName}")
+        // This triggers a refresh of the session state for this specific controller
+        session.broadcastCustomCommand(SessionCommand("androidx.media3.session.COMMAND_INVALIDATE_MEDIA_SESSION", Bundle.EMPTY), Bundle.EMPTY)
+    }
+  }
+
+  override fun onGetItem(
+    session: MediaLibrarySession,
+    browser: MediaSession.ControllerInfo,
+    mediaId: String
+  ): ListenableFuture<LibraryResult<MediaItem>> {
+    Log.d("PlayerNotificationServ", "AALibrary: onGetItem called for mediaId: $mediaId from package: ${browser.packageName}")
+    return super.onGetItem(session, browser, mediaId)
   }
 
   /**

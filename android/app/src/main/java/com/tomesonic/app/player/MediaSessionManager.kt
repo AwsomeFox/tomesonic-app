@@ -16,6 +16,7 @@ import android.provider.MediaStore
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.datasource.DataSourceBitmapLoader
@@ -26,6 +27,7 @@ import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.FutureCallback
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -92,12 +94,34 @@ class MediaSessionManager(
             bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
         }
         val listeningExecutor = MoreExecutors.listeningDecorator(bitmapLoaderExecutor!!)
-        val sessionBitmapLoader: BitmapLoader = CacheBitmapLoader(
-            DataSourceBitmapLoader(
-                listeningExecutor,
-                androidx.media3.datasource.DefaultDataSource.Factory(context)
-            )
+        val dataSourceBitmapLoader = DataSourceBitmapLoader(
+            listeningExecutor,
+            androidx.media3.datasource.DefaultDataSource.Factory(context)
         )
+        val sessionBitmapLoader: BitmapLoader = object : BitmapLoader {
+            private val cache = CacheBitmapLoader(dataSourceBitmapLoader)
+
+            override fun supportsMimeType(mimeType: String): Boolean = cache.supportsMimeType(mimeType)
+
+            override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
+                Log.d(TAG, "BitmapLoader: Decoding bitmap from bytes (${data.size} bytes)")
+                return cache.decodeBitmap(data)
+            }
+
+            override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
+                Log.d(TAG, "BitmapLoader: Loading bitmap from URI: $uri")
+                val future = cache.loadBitmap(uri)
+                Futures.addCallback(future, object : FutureCallback<Bitmap> {
+                    override fun onSuccess(result: Bitmap?) {
+                        Log.d(TAG, "BitmapLoader: Successfully loaded bitmap from URI: $uri (size: ${result?.width}x${result?.height})")
+                    }
+                    override fun onFailure(t: Throwable) {
+                        Log.e(TAG, "BitmapLoader: Failed to load bitmap from URI: $uri", t)
+                    }
+                }, listeningExecutor)
+                return future
+            }
+        }
 
         val sessionBuilder = MediaLibrarySession.Builder(context, player, callback)
         sessionBuilder.setBitmapLoader(sessionBitmapLoader)
@@ -221,33 +245,32 @@ class MediaSessionManager(
     /**
      * Update MediaSession metadata with chapter-aware information
      * This makes Android Auto treat each chapter as a separate track with proper duration
-     *
-     * NOTE: With the new MediaSource architecture, MediaItems already have correct metadata
-     * from creation, so this method primarily serves as a fallback or for notification updates
      */
-    fun updateChapterMetadata(chapterTitle: String, chapterDuration: Long, bookTitle: String, author: String?, bitmap: Bitmap?) {
-        Log.d(TAG, "Updating chapter metadata: chapter='$chapterTitle', duration=${chapterDuration}ms")
+    fun updateChapterMetadata(chapterTitle: String, chapterDuration: Long, bookTitle: String, author: String?, artworkUri: Uri?, artworkData: ByteArray? = null) {
+        Log.d(TAG, "Updating chapter metadata: chapter='$chapterTitle', duration=${chapterDuration}ms, artworkUri=$artworkUri, artworkData=${artworkData?.size ?: 0} bytes")
 
-        // With the new MediaSource architecture, the MediaItems should already have the correct
-        // metadata including chapter duration, so we don't need to replace the MediaItem.
-        // Android Auto will use the MediaItem's original metadata.
-
-        // However, we can still log this for debugging purposes
         mediaSession?.let { session ->
-            val currentMediaItem = session.player.currentMediaItem
-            if (currentMediaItem != null) {
-                val currentMetadata = currentMediaItem.mediaMetadata
-                Log.d(TAG, "Current MediaItem metadata: title='${currentMetadata.title}', duration=${currentMetadata.durationMs}ms")
+            // Use Media3 1.8.0+ recommended way to update metadata without replacing MediaItem
+            val metadataBuilder = session.player.currentMediaItem?.mediaMetadata?.buildUpon()
+                ?: MediaMetadata.Builder()
 
-                // Verify that the MediaItem already has the correct duration
-                if (currentMetadata.durationMs != null && currentMetadata.durationMs!! > 0) {
-                    Log.d(TAG, "MediaItem already has correct duration metadata, no update needed")
-                } else {
-                    Log.w(TAG, "MediaItem missing duration metadata, this may cause Android Auto timeline issues")
-                }
-            } else {
-                Log.w(TAG, "No current MediaItem to check metadata")
-            }
+            metadataBuilder
+                .setTitle(chapterTitle)
+                .setDisplayTitle(chapterTitle)
+                .setArtist("$bookTitle • $author")
+                .setAlbumArtist("$bookTitle • $author")
+                .setSubtitle("$bookTitle • $author")
+                .setAlbumTitle(author)
+                .setArtworkUri(artworkUri)
+                .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                .setDurationMs(chapterDuration)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setIsPlayable(true)
+
+            // Update the session metadata directly
+            val metadata = metadataBuilder.build()
+            session.player.playlistMetadata = metadata
+            Log.d(TAG, "MediaSession metadata updated directly via playlistMetadata")
         }
     }
 
