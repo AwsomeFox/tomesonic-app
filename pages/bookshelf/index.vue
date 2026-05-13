@@ -16,47 +16,41 @@
     <div class="home-page-content" :class="{ 'is-pull-dragging': isPullGestureActive && pullGestureAxis === 'vertical' }" :style="pullContentStyle">
       <!-- Shelf-shaped Material 3 skeletons to match the loaded home layout -->
       <div v-if="showingSkeleton" class="w-full py-3">
-      <div v-for="shelfIndex in skeletonShelfCount" :key="`shelf-skel-${shelfIndex}`" class="px-4 pb-5">
-        <div
-          class="h-5 mb-3 rounded-md bg-surface-variant shimmer-block"
-          :class="shelfIndex % 2 === 0 ? 'shimmer-ltr' : 'shimmer-rtl'"
-          :style="{
-            '--shimmer-delay': shelfIndex * 120 + 'ms',
-            width: 120 + (shelfIndex % 3) * 36 + 'px'
-          }"
-        ></div>
-
-        <div class="flex items-end overflow-x-hidden overflow-y-visible gap-2" :style="{ height: skeletonShelfHeight + 'px', paddingBottom: skeletonEntityPaddingBottom + 'px' }">
+        <div v-for="shelfIndex in skeletonShelfCount" :key="`shelf-skel-${shelfIndex}`" class="px-4 pb-5">
           <div
-            v-for="cardIndex in skeletonCardsPerShelf"
-            :key="`card-skel-${shelfIndex}-${cardIndex}`"
-            :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', cardIndex % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
+            class="h-5 mb-3 rounded-md bg-surface-variant shimmer-block"
+            :class="shelfIndex % 2 === 0 ? 'shimmer-ltr' : 'shimmer-rtl'"
             :style="{
-              '--shimmer-delay': shelfIndex * 120 + cardIndex * 90 + 'ms',
-              width: bookSkeletonWidth + 'px',
-              height: bookSkeletonHeight + 'px'
+              '--shimmer-delay': shelfIndex * 120 + 'ms',
+              width: 120 + (shelfIndex % 3) * 36 + 'px'
             }"
-          >
-            <div class="w-full h-full bg-surface-variant shimmer-block relative">
-              <div v-if="altViewEnabled" class="absolute left-0 right-0 bottom-0 px-3 py-2 space-y-2">
-                <div class="h-3.5 bg-surface shimmer-block rounded-md w-4/5"></div>
-                <div class="h-3 bg-surface shimmer-block rounded-md w-3/5"></div>
+          ></div>
+
+          <div class="flex items-end overflow-x-hidden overflow-y-visible gap-2" :style="{ height: skeletonShelfHeight + 'px', paddingBottom: skeletonEntityPaddingBottom + 'px' }">
+            <div
+              v-for="cardIndex in skeletonCardsPerShelf"
+              :key="`card-skel-${shelfIndex}-${cardIndex}`"
+              :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', cardIndex % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
+              :style="{
+                '--shimmer-delay': shelfIndex * 120 + cardIndex * 90 + 'ms',
+                width: bookSkeletonWidth + 'px',
+                height: bookSkeletonHeight + 'px'
+              }"
+            >
+              <div class="w-full h-full bg-surface-variant shimmer-block relative">
+                <div v-if="altViewEnabled" class="absolute left-0 right-0 bottom-0 px-3 py-2 space-y-2">
+                  <div class="h-3.5 bg-surface shimmer-block rounded-md w-4/5"></div>
+                  <div class="h-3 bg-surface shimmer-block rounded-md w-3/5"></div>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-      </div>
 
       <div v-if="!showingSkeleton" class="w-full" :class="{ 'py-3': altViewEnabled }" :style="contentPaddingStyle">
         <template v-for="shelf in shelves">
-        <bookshelf-shelf
-          :key="shelf.id"
-          :label="getShelfLabel(shelf)"
-          :entities="shelf.entities"
-          :type="shelf.type"
-          :animate-items="false"
-        />
+          <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :animate-items="false" />
         </template>
       </div>
     </div>
@@ -960,9 +954,7 @@ export default {
     },
     async fetchCategories(options = {}) {
       const forceRefresh = !!options.force
-      console.log(
-        `[categories] fetchCategories networkConnected=${this.networkConnected}, user=${!!this.user}, currentLibraryId=${this.currentLibraryId}, lastServerFetch=${this.lastServerFetch}, lastLocalFetch=${this.lastLocalFetch}, force=${forceRefresh}`
-      )
+      console.log(`[categories] fetchCategories networkConnected=${this.networkConnected}, user=${!!this.user}, currentLibraryId=${this.currentLibraryId}, lastServerFetch=${this.lastServerFetch}, lastLocalFetch=${this.lastLocalFetch}, force=${forceRefresh}`)
 
       if (this.isFetchingCategories) {
         console.log('[categories] fetchCategories already in progress, skipping')
