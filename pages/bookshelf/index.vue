@@ -1,7 +1,21 @@
 <template>
   <div class="w-full h-full min-h-full relative">
-    <!-- Shelf-shaped Material 3 skeletons to match the loaded home layout -->
-    <div v-if="showingSkeleton" class="w-full py-3">
+    <div
+      class="pull-refresh-indicator"
+      :class="{
+        visible: pullDistance > 0 || isPullRefreshing,
+        ready: pullDistance >= pullTriggerDistance,
+        refreshing: isPullRefreshing
+      }"
+      :style="pullIndicatorStyle"
+    >
+      <span class="material-symbols pull-refresh-icon">{{ isPullRefreshing ? 'autorenew' : 'south' }}</span>
+      <span class="pull-refresh-label">{{ pullRefreshLabel }}</span>
+    </div>
+
+    <div class="home-page-content" :class="{ 'is-pull-dragging': isPullGestureActive && pullGestureAxis === 'vertical' }" :style="pullContentStyle">
+      <!-- Shelf-shaped Material 3 skeletons to match the loaded home layout -->
+      <div v-if="showingSkeleton" class="w-full py-3">
       <div v-for="shelfIndex in skeletonShelfCount" :key="`shelf-skel-${shelfIndex}`" class="px-4 pb-5">
         <div
           class="h-5 mb-3 rounded-md bg-surface-variant shimmer-block"
@@ -32,12 +46,19 @@
           </div>
         </div>
       </div>
-    </div>
+      </div>
 
-    <div v-if="!showingSkeleton" class="w-full" :class="{ 'py-3': altViewEnabled, 'content-loading': isLoading, 'content-loaded': !isLoading && shelves.length }" :style="contentPaddingStyle">
-      <template v-for="(shelf, index) in shelves">
-        <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :style="{ zIndex: shelves.length - index }" :class="[{ 'shelf-updating': shelf._updating }, 'shelf-item', `shelf-delay-${Math.min(index, 6)}`]" />
-      </template>
+      <div v-if="!showingSkeleton" class="w-full" :class="{ 'py-3': altViewEnabled }" :style="contentPaddingStyle">
+        <template v-for="shelf in shelves">
+        <bookshelf-shelf
+          :key="shelf.id"
+          :label="getShelfLabel(shelf)"
+          :entities="shelf.entities"
+          :type="shelf.type"
+          :animate-items="false"
+        />
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -62,7 +83,16 @@ export default {
       seriesRefsByLibraryItemId: {},
       seriesCountByIdByLibrary: {},
       seriesCoverBooksByLibrarySeries: {},
-      seriesStartedBookCountByLibrarySeries: {}
+      seriesStartedBookCountByLibrarySeries: {},
+      pullDistance: 0,
+      isPullRefreshing: false,
+      isPullGestureActive: false,
+      pullGestureAxis: 'none',
+      pullStartY: 0,
+      pullStartX: 0,
+      pullTriggerDistance: 86,
+      pullMaxDistance: 132,
+      _bookshelfWrapperEl: null
     }
   },
   watch: {
@@ -204,12 +234,146 @@ export default {
     skeletonEntityPaddingBottom() {
       if (!this.altViewEnabled) return 0
       return 15
+    },
+    pullProgress() {
+      if (!this.pullTriggerDistance) return 0
+      return Math.min(1, this.pullDistance / this.pullTriggerDistance)
+    },
+    pullRefreshLabel() {
+      if (this.isPullRefreshing) return 'Refreshing...'
+      if (this.pullDistance >= this.pullTriggerDistance) return 'Release to refresh'
+      return 'Pull to refresh'
+    },
+    pullIndicatorStyle() {
+      // Keep indicator hidden above content until user starts pulling.
+      const translateY = Math.min(18, -52 + this.pullDistance)
+      return {
+        transform: `translate(-50%, ${translateY}px)`
+      }
+    },
+    pullContentStyle() {
+      if (this.pullDistance <= 0) return {}
+      return {
+        transform: `translate3d(0, ${this.pullDistance}px, 0)`
+      }
     }
   },
   methods: {
     getShelfLabel(shelf) {
       if (shelf.labelStringKey && this.$strings[shelf.labelStringKey]) return this.$strings[shelf.labelStringKey]
       return shelf.label
+    },
+    getBookshelfWrapper() {
+      return document.getElementById('bookshelf-wrapper')
+    },
+    bindPullToRefresh() {
+      const wrapper = this.getBookshelfWrapper()
+      if (!wrapper) return
+
+      if (this._bookshelfWrapperEl === wrapper) return
+      this.unbindPullToRefresh()
+
+      this._bookshelfWrapperEl = wrapper
+      wrapper.addEventListener('touchstart', this.onPullStart, { passive: true })
+      wrapper.addEventListener('touchmove', this.onPullMove, { passive: false })
+      wrapper.addEventListener('touchend', this.onPullEnd, { passive: true })
+      wrapper.addEventListener('touchcancel', this.onPullEnd, { passive: true })
+    },
+    unbindPullToRefresh() {
+      if (!this._bookshelfWrapperEl) return
+
+      this._bookshelfWrapperEl.removeEventListener('touchstart', this.onPullStart)
+      this._bookshelfWrapperEl.removeEventListener('touchmove', this.onPullMove)
+      this._bookshelfWrapperEl.removeEventListener('touchend', this.onPullEnd)
+      this._bookshelfWrapperEl.removeEventListener('touchcancel', this.onPullEnd)
+      this._bookshelfWrapperEl = null
+    },
+    onPullStart(event) {
+      if (this.isPullRefreshing || this.isFetchingCategories) return
+
+      const wrapper = this._bookshelfWrapperEl || this.getBookshelfWrapper()
+      if (!wrapper || wrapper.scrollTop > 0) return
+      if (!event.touches || !event.touches.length) return
+
+      const touch = event.touches[0]
+      this.isPullGestureActive = true
+      this.pullGestureAxis = 'none'
+      this.pullStartY = touch.clientY
+      this.pullStartX = touch.clientX
+    },
+    onPullMove(event) {
+      if (!this.isPullGestureActive || this.isPullRefreshing) return
+      if (!event.touches || !event.touches.length) return
+
+      const wrapper = this._bookshelfWrapperEl || this.getBookshelfWrapper()
+      if (!wrapper) {
+        this.cancelPullGesture(true)
+        return
+      }
+
+      const touch = event.touches[0]
+      const deltaY = touch.clientY - this.pullStartY
+      const deltaX = touch.clientX - this.pullStartX
+
+      if (this.pullGestureAxis === 'none' && (Math.abs(deltaY) > 6 || Math.abs(deltaX) > 6)) {
+        this.pullGestureAxis = Math.abs(deltaY) > Math.abs(deltaX) ? 'vertical' : 'horizontal'
+      }
+
+      if (this.pullGestureAxis === 'horizontal') {
+        this.cancelPullGesture(true)
+        return
+      }
+
+      if (wrapper.scrollTop > 0 || deltaY <= 0) {
+        this.pullDistance = 0
+        return
+      }
+
+      this.pullDistance = this.getPullDistanceWithResistance(deltaY)
+      event.preventDefault()
+    },
+    async onPullEnd() {
+      if (!this.isPullGestureActive) return
+
+      const shouldRefresh = this.pullGestureAxis === 'vertical' && this.pullDistance >= this.pullTriggerDistance
+      this.isPullGestureActive = false
+      this.pullGestureAxis = 'none'
+
+      if (shouldRefresh) {
+        await this.triggerPullRefresh()
+      } else {
+        this.pullDistance = 0
+      }
+    },
+    cancelPullGesture(resetDistance = false) {
+      this.isPullGestureActive = false
+      this.pullGestureAxis = 'none'
+      if (resetDistance) this.pullDistance = 0
+    },
+    getPullDistanceWithResistance(rawDistance) {
+      const easedDistance = rawDistance * 0.45
+      return Math.min(this.pullMaxDistance, easedDistance)
+    },
+    async triggerPullRefresh() {
+      if (this.isPullRefreshing) return
+
+      this.isPullRefreshing = true
+      this.pullDistance = 56
+
+      try {
+        if (this.$hapticsImpactLight) {
+          await this.$hapticsImpactLight()
+        }
+      } catch (error) {
+        // Ignore haptics failures and continue refresh.
+      }
+
+      try {
+        await this.fetchCategories({ force: true })
+      } finally {
+        this.isPullRefreshing = false
+        this.pullDistance = 0
+      }
     },
     isContinueSeriesShelf(shelf) {
       return shelf?.id === 'continue-series' || shelf?.labelStringKey === 'LabelContinueSeries'
@@ -794,8 +958,11 @@ export default {
 
       return categories
     },
-    async fetchCategories() {
-      console.log(`[categories] fetchCategories networkConnected=${this.networkConnected}, user=${!!this.user}, currentLibraryId=${this.currentLibraryId}, lastServerFetch=${this.lastServerFetch}, lastLocalFetch=${this.lastLocalFetch}`)
+    async fetchCategories(options = {}) {
+      const forceRefresh = !!options.force
+      console.log(
+        `[categories] fetchCategories networkConnected=${this.networkConnected}, user=${!!this.user}, currentLibraryId=${this.currentLibraryId}, lastServerFetch=${this.lastServerFetch}, lastLocalFetch=${this.lastLocalFetch}, force=${forceRefresh}`
+      )
 
       if (this.isFetchingCategories) {
         console.log('[categories] fetchCategories already in progress, skipping')
@@ -810,27 +977,27 @@ export default {
 
         // Check if we should skip this fetch (too soon after last fetch)
         if (isConnectedToServerWithInternet) {
-          if (this.lastServerFetch && Date.now() - this.lastServerFetch < 5000 && this.lastServerFetchLibraryId == this.currentLibraryId) {
+          if (!forceRefresh && this.lastServerFetch && Date.now() - this.lastServerFetch < 5000 && this.lastServerFetchLibraryId == this.currentLibraryId) {
             console.log(`[categories] fetchCategories server fetch was ${Date.now() - this.lastServerFetch}ms ago so not doing it.`)
             this.isFetchingCategories = false
             return
-          } else {
-            console.log(`[categories] fetchCategories fetching from server. Last was ${this.lastServerFetch ? Date.now() - this.lastServerFetch + 'ms' : 'Never'} ago. lastServerFetchLibraryId=${this.lastServerFetchLibraryId} and currentLibraryId=${this.currentLibraryId}`)
-            this.lastServerFetchLibraryId = this.currentLibraryId
-            this.lastServerFetch = Date.now()
-            this.lastLocalFetch = 0
           }
+
+          console.log(`[categories] fetchCategories fetching from server. Last was ${this.lastServerFetch ? Date.now() - this.lastServerFetch + 'ms' : 'Never'} ago. lastServerFetchLibraryId=${this.lastServerFetchLibraryId} and currentLibraryId=${this.currentLibraryId}`)
+          this.lastServerFetchLibraryId = this.currentLibraryId
+          this.lastServerFetch = Date.now()
+          this.lastLocalFetch = 0
         } else {
-          if (this.lastLocalFetch && Date.now() - this.lastLocalFetch < 5000) {
+          if (!forceRefresh && this.lastLocalFetch && Date.now() - this.lastLocalFetch < 5000) {
             console.log(`[categories] fetchCategories local fetch was ${Date.now() - this.lastLocalFetch}ms ago so not doing it.`)
             this.isFetchingCategories = false
             return
-          } else {
-            console.log(`[categories] fetchCategories fetching from local. Last was ${this.lastLocalFetch ? Date.now() - this.lastLocalFetch + 'ms' : 'Never'} ago`)
-            this.lastServerFetchLibraryId = null
-            this.lastServerFetch = 0
-            this.lastLocalFetch = Date.now()
           }
+
+          console.log(`[categories] fetchCategories fetching from local. Last was ${this.lastLocalFetch ? Date.now() - this.lastLocalFetch + 'ms' : 'Never'} ago`)
+          this.lastServerFetchLibraryId = null
+          this.lastServerFetch = 0
+          this.lastLocalFetch = Date.now()
         }
 
         // Only show skeleton if we have no content yet, otherwise keep existing content during load
@@ -855,6 +1022,25 @@ export default {
           const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('__timeout__'), serverTimeoutMs))
           const categoriesOrTimeout = await Promise.race([serverRequest, timeoutPromise])
 
+          const attachLocalItemsToServerCategories = (serverCats) => {
+            if (!Array.isArray(serverCats)) return []
+
+            return serverCats.map((cat) => {
+              if ((cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') && Array.isArray(cat.entities)) {
+                cat.entities = cat.entities.map((entity) => {
+                  const localLibraryItem = this.localLibraryItems.find((lli) => {
+                    return lli.libraryItemId == entity.id
+                  })
+                  if (localLibraryItem) {
+                    entity.localLibraryItem = localLibraryItem
+                  }
+                  return entity
+                })
+              }
+              return cat
+            })
+          }
+
           // Helper function to merge local items with server categories
           const mergeLocalWithServerCategories = async (serverPayload) => {
             const extractedCategories = this.extractServerCategories(serverPayload)
@@ -874,20 +1060,7 @@ export default {
               normalizedCategories = extractedCategories
             }
 
-            return normalizedCategories.map((cat) => {
-              if ((cat.type == 'book' || cat.type == 'podcast' || cat.type == 'episode') && Array.isArray(cat.entities)) {
-                cat.entities = cat.entities.map((entity) => {
-                  const localLibraryItem = this.localLibraryItems.find((lli) => {
-                    return lli.libraryItemId == entity.id
-                  })
-                  if (localLibraryItem) {
-                    entity.localLibraryItem = localLibraryItem
-                  }
-                  return entity
-                })
-              }
-              return cat
-            })
+            return attachLocalItemsToServerCategories(normalizedCategories)
           }
 
           // Helper function to combine server and local-only shelves
@@ -902,8 +1075,8 @@ export default {
           // Case 1: Server responded before timeout
           if (categoriesOrTimeout !== '__timeout__' && initialServerCategories.length) {
             console.log('[categories] Server responded before timeout, displaying combined results immediately')
-            const serverCats = await mergeLocalWithServerCategories(categoriesOrTimeout)
-            const combinedShelves = combineServerAndLocalShelves(serverCats)
+            const fastServerCats = attachLocalItemsToServerCategories(initialServerCategories)
+            const combinedShelves = combineServerAndLocalShelves(fastServerCats)
 
             // Update all state together to prevent flash of local content
             // Set flags first to ensure skeleton stays visible during shelf assignment
@@ -913,6 +1086,29 @@ export default {
             this.shelves = combinedShelves
             this.showingSkeleton = false
             console.log('[categories] Combined server + local shelves displayed', this.shelves.length, this.lastServerFetch)
+
+            // Continue heavier continue-series enrichment in background to avoid delaying first paint.
+            ;(async () => {
+              try {
+                const enrichedServerCats = await mergeLocalWithServerCategories(categoriesOrTimeout)
+                if (!Array.isArray(enrichedServerCats) || !enrichedServerCats.length) return
+
+                const enrichedCombinedShelves = combineServerAndLocalShelves(enrichedServerCats)
+                enrichedCombinedShelves.forEach((incomingShelf) => {
+                  const existingShelf = this.shelves.find((s) => s && s.id === incomingShelf.id)
+                  if (existingShelf) {
+                    existingShelf.label = incomingShelf.label
+                    existingShelf.type = incomingShelf.type
+                    existingShelf.entities = incomingShelf.entities
+                  } else {
+                    this.shelves.push(incomingShelf)
+                  }
+                })
+              } catch (error) {
+                console.error('[categories] Background continue-series enrichment failed', error)
+              }
+            })()
+
             return
           }
 
@@ -1027,9 +1223,13 @@ export default {
     },
     initListeners() {
       this.$eventBus.$on('library-changed', this.libraryChanged)
+      this.$nextTick(() => {
+        this.bindPullToRefresh()
+      })
     },
     removeListeners() {
       this.$eventBus.$off('library-changed', this.libraryChanged)
+      this.unbindPullToRefresh()
     }
   },
   async mounted() {
@@ -1054,53 +1254,104 @@ export default {
     this.fetchCategories()
   },
   beforeDestroy() {
+    this.cancelPullGesture(true)
     this.removeListeners()
   }
 }
 </script>
 
 <style scoped>
+.home-page-content {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+  will-change: transform;
+}
+
+.home-page-content.is-pull-dragging {
+  transition: none;
+}
+
+.pull-refresh-indicator {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--md-sys-color-outline-variant), 0.4);
+  background: rgba(var(--md-sys-color-surface-container-high), 0.92);
+  color: rgb(var(--md-sys-color-on-surface-variant));
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.pull-refresh-indicator.visible {
+  opacity: 1;
+}
+
+.pull-refresh-indicator.ready {
+  color: rgb(var(--md-sys-color-primary));
+}
+
+.pull-refresh-indicator.refreshing .pull-refresh-icon {
+  animation: pullRefreshSpin 900ms linear infinite;
+}
+
+.pull-refresh-icon {
+  font-size: 18px;
+}
+
+.pull-refresh-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+@keyframes pullRefreshSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Material 3 Home Page Loading Animations */
 .content-loading {
   opacity: 0.3;
-  transition: opacity 400ms cubic-bezier(0.2, 0, 0, 1);
+  transition: opacity 240ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .content-loaded {
   opacity: 1;
-  animation: contentFadeIn 500ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+  animation: contentFadeIn 220ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
 @keyframes contentFadeIn {
   0% {
     opacity: 0;
-    transform: translateY(16px);
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
 /* Staggered shelf animations */
 .shelf-item {
   opacity: 0;
-  transform: translateY(20px);
-  animation: shelfSlideIn 600ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+  animation: shelfSlideIn 240ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
 @keyframes shelfSlideIn {
   0% {
     opacity: 0;
-    transform: translateY(20px);
-  }
-  70% {
-    opacity: 0.8;
-    transform: translateY(-2px);
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -1109,49 +1360,44 @@ export default {
   animation-delay: 0ms;
 }
 .shelf-delay-1 {
-  animation-delay: 150ms;
+  animation-delay: 60ms;
 }
 .shelf-delay-2 {
-  animation-delay: 300ms;
+  animation-delay: 120ms;
 }
 .shelf-delay-3 {
-  animation-delay: 450ms;
+  animation-delay: 180ms;
 }
 .shelf-delay-4 {
-  animation-delay: 600ms;
+  animation-delay: 240ms;
 }
 .shelf-delay-5 {
-  animation-delay: 750ms;
+  animation-delay: 300ms;
 }
 .shelf-delay-6 {
-  animation-delay: 900ms;
+  animation-delay: 360ms;
 }
 
 /* Animate updates to existing shelves to reduce jarring flash when server merges */
 .shelf-updating {
-  animation: shelfUpdate 600ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  animation: shelfUpdate 220ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
 @keyframes shelfUpdate {
   0% {
-    opacity: 0.6;
-    transform: translateY(6px) scale(0.995);
-  }
-  50% {
-    opacity: 0.95;
-    transform: translateY(-4px) scale(1.002);
+    opacity: 0.78;
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
 /* Shimmer styles for skeleton cards */
 .skeleton-card {
   position: relative;
-  --shimmer-duration: 1200ms;
+  --shimmer-duration: 2200ms;
   flex-shrink: 0;
+  contain: paint;
 }
 
 .shimmer-block {
@@ -1167,9 +1413,10 @@ export default {
   height: 100%;
   width: 150%;
   /* Use Material 3 on-surface token for shimmer highlight so it follows dynamic colors */
-  background: linear-gradient(90deg, transparent, rgba(var(--md-sys-color-on-surface), 0.06), transparent);
+  background: linear-gradient(90deg, transparent, rgba(var(--md-sys-color-on-surface), 0.04), transparent);
   transform: translateX(0);
-  animation: shimmer var(--shimmer-duration) linear infinite;
+  will-change: transform;
+  animation: shimmer var(--shimmer-duration) linear 1;
   animation-delay: var(--shimmer-delay, 0ms);
 }
 
@@ -1194,6 +1441,10 @@ export default {
   .content-loaded,
   .shelf-item {
     animation: simpleFadeIn 300ms ease-out forwards;
+  }
+
+  .shimmer-block::after {
+    animation: none;
   }
 
   @keyframes simpleFadeIn {

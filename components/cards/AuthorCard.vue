@@ -150,9 +150,9 @@ export default {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 8%, rgba(var(--md-sys-color-surface-container), 0.74) 58%, rgba(var(--md-sys-color-surface-container-high), 0.94) 100%);
-  backdrop-filter: blur(10px) brightness(0.84) saturate(0.86);
-  -webkit-backdrop-filter: blur(10px) brightness(0.84) saturate(0.86);
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.9) 50%, rgba(var(--md-sys-color-surface-container-high), 0.99) 100%);
+  backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+  -webkit-backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
 }
 
 .author-meta > * {
@@ -179,7 +179,7 @@ export default {
   padding-right: 16px;
   margin-left: -13px;
   margin-right: -13px;
-  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.96)) drop-shadow(0 0 5px rgba(0, 0, 0, 0.84)) drop-shadow(0 0 9px rgba(0, 0, 0, 0.72));
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.9));
 }
 
 .author-books {
@@ -197,7 +197,7 @@ export default {
 .author-books .material-symbols {
   flex: 0 0 auto;
   color: inherit;
-  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.92)) drop-shadow(0 0 4px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 7px rgba(0, 0, 0, 0.68));
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.85));
 }
 
 .author-books-text {
@@ -212,7 +212,7 @@ export default {
   padding-right: 16px;
   margin-left: -13px;
   margin-right: -13px;
-  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.92)) drop-shadow(0 0 4px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 7px rgba(0, 0, 0, 0.68));
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.85));
 }
 
 .author-loading-overlay {
@@ -223,6 +223,6 @@ export default {
   align-items: center;
   justify-content: center;
   background: rgba(var(--md-sys-color-surface-container), 0.7);
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(2px);
 }
 </style>

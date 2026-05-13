@@ -299,7 +299,7 @@
            position:absolute at the bottom of the sheet.
            miniLayerStyle fades it out as the sheet expands and also carries
            the horizontal swipe-to-dismiss translateX. -->
-      <div id="playerContent" class="playerContainer w-full bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20" :style="miniLayerStyle">
+      <div id="playerContent" class="playerContainer w-full bg-player-overlay backdrop-blur-sm shadow-elevation-3 border-t border-outline-variant border-opacity-20" :style="miniLayerStyle">
         <!-- Mini bar layout: Cover placeholder → Text → Controls -->
         <div class="flex items-center h-full px-2">
           <!-- Cover placeholder: invisible div that matches the mini cover dimensions
@@ -531,7 +531,10 @@ export default {
         zIndex: p > 0 ? 2147483647 : 50,
         overflow: 'hidden',
         pointerEvents: this.playbackSession ? 'auto' : 'none',
-        willChange: 'height, bottom'
+        transform: 'translateZ(0)',
+        backfaceVisibility: 'hidden',
+        WebkitBackfaceVisibility: 'hidden',
+        willChange: 'height, bottom, border-top-left-radius, border-top-right-radius'
       }
     },
 
@@ -552,11 +555,11 @@ export default {
       const cssRadius = scale > 0 ? visualRadius / scale : visualRadius
       return {
         position: 'fixed',
-        top: top + 'px',
-        left: left + 'px',
+        top: '0',
+        left: '0',
         width: this.fullCoverWidth + 'px',
         height: this.fullCoverHeight + 'px',
-        transform: `scale(${scale})`,
+        transform: `translate3d(${left}px, ${top}px, 0) scale(${scale})`,
         transformOrigin: 'top left',
         borderRadius: cssRadius + 'px',
         overflow: 'hidden',
@@ -564,7 +567,9 @@ export default {
         zIndex: p > 0 ? 2147483647 : 51,
         // Tapping the cover while mini expands; while full, the full layer handles clicks
         pointerEvents: p < 0.3 ? 'auto' : 'none',
-        willChange: 'transform, top, left'
+        backfaceVisibility: 'hidden',
+        WebkitBackfaceVisibility: 'hidden',
+        willChange: 'transform, border-radius'
       }
     },
 
@@ -586,7 +591,10 @@ export default {
         opacity,
         pointerEvents: opacity > 0.05 ? 'auto' : 'none',
         transform: `translateX(${this.swipeOffsetX}px) translateY(${translateY}px) scale(${scale})`,
-        transformOrigin: 'center bottom'
+        transformOrigin: 'center bottom',
+        backfaceVisibility: 'hidden',
+        WebkitBackfaceVisibility: 'hidden',
+        willChange: 'transform, opacity'
       }
     },
 
@@ -598,7 +606,8 @@ export default {
         position: 'absolute',
         inset: '0',
         opacity,
-        pointerEvents: p > 0.6 ? 'auto' : 'none'
+        pointerEvents: p > 0.6 ? 'auto' : 'none',
+        willChange: 'opacity'
       }
     },
     // ─── End of animation computeds ───────────────────────────────────────────
@@ -1055,7 +1064,7 @@ export default {
         return
       }
 
-      const duration = target === 1 ? 400 : 250
+      const duration = target === 1 ? 320 : 220
       // M3 emphasized-decelerate for expand, emphasized-accelerate for collapse
       const ease =
         target === 1
@@ -1063,6 +1072,11 @@ export default {
           : (t) => t * t // ease-in quadratic ≈ emphasized-accelerate
 
       const startValue = this.expandProgress
+      if (Math.abs(target - startValue) < 0.001) {
+        this.expandProgress = target
+        this._onAnimationComplete(target)
+        return
+      }
       const startTime = performance.now()
 
       if (this._animRaf) {
@@ -1072,7 +1086,10 @@ export default {
 
       const step = (now) => {
         const t = Math.min((now - startTime) / duration, 1)
-        this.expandProgress = startValue + (target - startValue) * ease(t)
+        const nextValue = startValue + (target - startValue) * ease(t)
+        if (Math.abs(nextValue - this.expandProgress) > 0.001 || t === 1) {
+          this.expandProgress = nextValue
+        }
         if (t < 1) {
           this._animRaf = requestAnimationFrame(step)
         } else {

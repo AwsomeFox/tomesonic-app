@@ -96,7 +96,7 @@
         <svg class="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 36 36">
           <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(var(--md-sys-color-outline-variant), 0.3)" stroke-width="2" stroke-dasharray="100, 100" />
           <!-- Progress circle -->
-          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgb(var(--md-sys-color-primary))" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${userProgressPercent * 100}, 100`" class="transition-all duration-300 ease-out" />
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgb(var(--md-sys-color-primary))" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${userProgressPercent * 100}, 100`" />
         </svg>
       </div>
     </div>
@@ -685,7 +685,7 @@ export default {
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  filter: blur(20px);
+  filter: blur(8px);
   transform: scale(1.1);
   top: -10%;
   left: -10%;
@@ -716,8 +716,8 @@ export default {
 
 /* Ensure overlays are always visible */
 .material-3-card .bg-opacity-95 {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 /* Icon rings for better visibility */
@@ -756,9 +756,9 @@ export default {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 8%, rgba(var(--md-sys-color-surface-container), 0.74) 58%, rgba(var(--md-sys-color-surface-container-high), 0.94) 100%);
-  backdrop-filter: blur(10px) brightness(0.84) saturate(0.86);
-  -webkit-backdrop-filter: blur(10px) brightness(0.84) saturate(0.86);
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.9) 50%, rgba(var(--md-sys-color-surface-container-high), 0.99) 100%);
+  backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+  -webkit-backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
 }
 
 .book-meta-content {
@@ -798,7 +798,7 @@ export default {
   padding-right: 16px;
   margin-left: -13px;
   margin-right: -13px;
-  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.96)) drop-shadow(0 0 5px rgba(0, 0, 0, 0.84)) drop-shadow(0 0 9px rgba(0, 0, 0, 0.72));
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 
 .book-meta-line {
@@ -821,6 +821,6 @@ export default {
   padding-right: 16px;
   margin-left: -13px;
   margin-right: -13px;
-  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.92)) drop-shadow(0 0 4px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 7px rgba(0, 0, 0, 0.68));
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.82);
 }
 </style>

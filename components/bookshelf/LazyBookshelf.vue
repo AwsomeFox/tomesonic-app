@@ -261,10 +261,39 @@ export default {
       const sfQueryString = this.currentSFQueryString ? this.currentSFQueryString + '&' : ''
       const fullQueryString = `?${sfQueryString}limit=${fetchLimit}&page=${fetchPage}&minified=1&include=rssfeed,numEpisodesIncomplete`
 
-      const payload = await this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/${entityPath}${fullQueryString}`).catch((error) => {
+      let payload = await this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/${entityPath}${fullQueryString}`).catch((error) => {
         console.error('failed to fetch books', error)
         return null
       })
+
+      if (isSeriesGrid && payload && Array.isArray(payload.results)) {
+        const aggregatedResults = [...payload.results]
+        let resolvedTotal = this.resolveTotalEntities(payload, 0, aggregatedResults.length)
+        let nextPage = 1
+        const maxSeriesGridPages = 100
+
+        while (aggregatedResults.length < resolvedTotal && nextPage < maxSeriesGridPages) {
+          const nextQueryString = `?${sfQueryString}limit=${fetchLimit}&page=${nextPage}&minified=1&include=rssfeed,numEpisodesIncomplete`
+          const nextPayload = await this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/${entityPath}${nextQueryString}`).catch((error) => {
+            console.error('failed to fetch additional series page', error)
+            return null
+          })
+
+          if (!nextPayload || !Array.isArray(nextPayload.results) || !nextPayload.results.length) {
+            break
+          }
+
+          aggregatedResults.push(...nextPayload.results)
+          resolvedTotal = this.resolveTotalEntities(nextPayload, nextPage * fetchLimit, resolvedTotal)
+          nextPage++
+        }
+
+        payload = {
+          ...payload,
+          results: aggregatedResults,
+          total: aggregatedResults.length
+        }
+      }
 
       this.isFetchingEntities = false
       if (this.pendingReset) {

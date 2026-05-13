@@ -4122,16 +4122,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       val seriesMap = seriesByLibraryAndId[seed.libraryId] ?: emptyMap()
       val seriesMeta = seriesMap[resolvedSeriesId]
 
-      val cachedSeriesBooks = service.mediaManager.getCachedSeriesBooks(seed.libraryId, resolvedSeriesId)
-      val seriesBooks = if (cachedSeriesBooks.isNotEmpty()) {
-        cachedSeriesBooks
-      } else {
-        loadFromServerSync<List<LibraryItem>>(
-          operation = { callback ->
-            service.mediaManager.loadLibrarySeriesItemsWithAudio(seed.libraryId, resolvedSeriesId, callback)
-          }
-        ) ?: emptyList()
-      }
+      val seriesBooks = service.mediaManager.getCachedSeriesBooks(seed.libraryId, resolvedSeriesId)
 
       val resolvedName = when {
         !seriesMeta?.name.isNullOrBlank() -> seriesMeta?.name

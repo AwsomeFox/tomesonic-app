@@ -119,8 +119,8 @@ class DynamicColorService {
 
     // Use dark-scheme dynamic colors for text over media cards in both modes.
     // This keeps overlay text consistently light while still honoring Material You.
-    const overlayPrimaryHex = overlayColors?.onSurface || colors.onSurface || colors.inverseOnSurface
-    const overlaySecondaryHex = overlayColors?.onSurfaceVariant || colors.onSurfaceVariant || overlayPrimaryHex
+    const overlayPrimaryHex = overlayColors?.onSurface || colors.inverseOnSurface || colors.onSurface
+    const overlaySecondaryHex = overlayColors?.onSurfaceVariant || colors.inverseOnSurface || colors.onSurfaceVariant || overlayPrimaryHex
 
     if (overlayPrimaryHex) {
       root.style.setProperty('--md-sys-color-on-media', this.hexToRgbString(overlayPrimaryHex))

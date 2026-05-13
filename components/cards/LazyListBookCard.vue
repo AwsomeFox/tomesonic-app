@@ -71,17 +71,17 @@
         <div v-if="isLibraryItem && !isPodcast && !collapsedSeries" class="absolute bottom-0 left-0 h-1.5 shadow-elevation-2 max-w-full z-10" :class="[itemIsFinished ? 'bg-tertiary' : 'bg-primary', squareAspectRatio ? 'rounded-bl-lg rounded-br-lg' : 'rounded-bl-xl rounded-br-xl']" :style="{ width: coverWidth * userProgressPercent + 'px' }"></div>
       </div>
       <div class="flex-grow pl-4" :class="showPlayButton ? (localLibraryItem || isLocal ? 'pr-28' : 'pr-20') : 'pr-4'">
-        <p class="whitespace-normal line-clamp-2 text-on-surface text-body-medium font-medium list-meta-title" :style="{ fontSize: 0.86 * sizeMultiplier + 'rem' }">
+        <p class="whitespace-normal line-clamp-2 text-on-surface text-body-medium font-medium" :style="{ fontSize: 0.8 * sizeMultiplier + 'rem' }">
           <span v-if="seriesSequence">#{{ seriesSequence }}&nbsp;</span>{{ displayTitle }}
         </p>
-        <p class="truncate text-on-surface-variant text-body-small list-meta-line" :style="{ fontSize: 0.74 * sizeMultiplier + 'rem' }">{{ displayAuthor }}</p>
-        <p v-if="displaySortLine" class="truncate text-on-surface-variant text-body-small list-meta-line" :style="{ fontSize: 0.74 * sizeMultiplier + 'rem' }">{{ displaySortLine }}</p>
-        <p v-if="duration" class="truncate text-on-surface-variant text-body-small list-meta-line" :style="{ fontSize: 0.74 * sizeMultiplier + 'rem' }">{{ $elapsedPretty(duration) }}</p>
+        <p class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displayAuthor }}</p>
+        <p v-if="displaySortLine" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displaySortLine }}</p>
+        <p v-if="duration" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ $elapsedPretty(duration) }}</p>
 
-        <p v-if="numEpisodesIncomplete" class="truncate text-on-surface-variant text-body-small list-meta-line" :style="{ fontSize: 0.74 * sizeMultiplier + 'rem' }">
+        <p v-if="numEpisodesIncomplete" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
           {{ $getString('LabelNumEpisodesIncomplete', [numEpisodes, numEpisodesIncomplete]) }}
         </p>
-        <p v-else-if="numEpisodes" class="truncate text-on-surface-variant text-body-small list-meta-line" :style="{ fontSize: 0.74 * sizeMultiplier + 'rem' }">
+        <p v-else-if="numEpisodes" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
           {{ $getString('LabelNumEpisodes', [numEpisodes]) }}
         </p>
       </div>
@@ -682,7 +682,6 @@ export default {
   transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1);
   position: relative;
   margin-bottom: 8px; /* Add spacing between list items */
-  isolation: isolate;
 }
 
 .material-3-list-card::before {
@@ -693,9 +692,7 @@ export default {
   left: 0;
   width: 100%;
   height: 100%;
-  background: linear-gradient(120deg, rgba(var(--md-sys-color-surface-container), 0.72), rgba(var(--md-sys-color-surface-container-high), 0.64));
-  backdrop-filter: blur(8px) brightness(0.98) saturate(0.92);
-  -webkit-backdrop-filter: blur(8px) brightness(0.98) saturate(0.92);
+  background-color: transparent;
   transition: background-color 200ms cubic-bezier(0.2, 0, 0, 1);
   pointer-events: none;
   z-index: 1;
@@ -721,25 +718,6 @@ export default {
 .material-3-list-card > * {
   position: relative;
   z-index: 2;
-}
-
-.list-meta-title {
-  color: rgb(var(--md-sys-color-on-media)) !important;
-  padding-left: 14px;
-  padding-right: 14px;
-  margin-left: -11px;
-  margin-right: -11px;
-  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.96)) drop-shadow(0 0 5px rgba(0, 0, 0, 0.84)) drop-shadow(0 0 9px rgba(0, 0, 0, 0.72));
-}
-
-.list-meta-line {
-  color: rgb(var(--md-sys-color-on-media-variant)) !important;
-  padding-left: 14px;
-  padding-right: 14px;
-  margin-left: -11px;
-  margin-right: -11px;
-  font-weight: 500;
-  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.92)) drop-shadow(0 0 4px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 7px rgba(0, 0, 0, 0.68));
 }
 
 /* Material 3 Play Button */
