@@ -279,6 +279,58 @@ class MediaSessionManager(
         }
     }
 
+    /**
+     * Re-embed [artworkData] (and [artworkUri]) into every MediaItem in the current
+     * timeline whose artworkUri matches. Used after the async cover prefetch
+     * finishes so the Wear OS bridge — which reads from the active MediaItem's
+     * MediaMetadata — actually receives the new cover bytes for the current
+     * chapter and for any chapter the player advances to next.
+     *
+     * Must be called on the application main thread because it mutates the player.
+     */
+    fun refreshArtworkOnTimeline(artworkUri: Uri, artworkData: ByteArray) {
+        val session = mediaSession ?: return
+        val player = session.player
+        val itemCount = player.mediaItemCount
+        if (itemCount == 0) {
+            Log.d(TAG, "refreshArtworkOnTimeline: timeline is empty, nothing to update")
+            return
+        }
+
+        var replacedCount = 0
+        for (index in 0 until itemCount) {
+            val item = try {
+                player.getMediaItemAt(index)
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshArtworkOnTimeline: failed to read MediaItem at $index", e)
+                continue
+            }
+
+            val existingArtworkUri = item.mediaMetadata.artworkUri
+            if (existingArtworkUri != artworkUri) {
+                continue
+            }
+
+            val newMetadata = item.mediaMetadata.buildUpon()
+                .setArtworkUri(artworkUri)
+                .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                .build()
+
+            val newItem = item.buildUpon()
+                .setMediaMetadata(newMetadata)
+                .build()
+
+            try {
+                player.replaceMediaItem(index, newItem)
+                replacedCount++
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshArtworkOnTimeline: replaceMediaItem failed at $index", e)
+            }
+        }
+
+        Log.d(TAG, "refreshArtworkOnTimeline: refreshed $replacedCount/$itemCount MediaItems with ${artworkData.size} artwork bytes for uri=$artworkUri")
+    }
+
     fun getSessionToken(): androidx.media3.session.SessionToken? =
         SessionToken(context, ComponentName(context, service::class.java))
 

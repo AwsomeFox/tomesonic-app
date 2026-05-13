@@ -439,12 +439,20 @@ class PlayerNotificationService : MediaLibraryService() {
       if (session == null || currentCoverUri != uri) {
         Log.d(tag, "onArtworkLoaded: ignoring stale artwork for uri=$uri (current=$currentCoverUri)")
       } else {
-        try {
-          val currentChapter = chapterNavigationHelper.getCurrentChapter()
-          if (currentChapter != null) {
-            val chapterIndex = chapterNavigationHelper.getCurrentChapterIndex()
-            val chapterDuration = currentChapter.endMs - currentChapter.startMs
-            Handler(Looper.getMainLooper()).post {
+        Handler(Looper.getMainLooper()).post {
+          try {
+            // 1) Re-embed the new artworkData on every chapter MediaItem in the
+            //    timeline that points at this cover URI. This is what the Wear
+            //    OS bridge actually reads (currentMediaItem.mediaMetadata) and
+            //    also ensures the next chapter transition keeps the artwork.
+            mediaSessionManager.refreshArtworkOnTimeline(uri, bytes)
+
+            // 2) Also refresh the session-level playlistMetadata so
+            //    notification/Android Auto consumers see the update immediately.
+            val currentChapter = chapterNavigationHelper.getCurrentChapter()
+            if (currentChapter != null) {
+              val chapterIndex = chapterNavigationHelper.getCurrentChapterIndex()
+              val chapterDuration = currentChapter.endMs - currentChapter.startMs
               mediaSessionManager.updateChapterMetadata(
                 chapterTitle = currentChapter.title ?: "Chapter ${chapterIndex + 1}",
                 chapterDuration = chapterDuration,
@@ -453,11 +461,11 @@ class PlayerNotificationService : MediaLibraryService() {
                 artworkUri = uri,
                 artworkData = bytes
               )
-              Log.d(tag, "onArtworkLoaded: refreshed chapter metadata with ${bytes.size} artwork bytes for uri=$uri")
             }
+            Log.d(tag, "onArtworkLoaded: refreshed metadata with ${bytes.size} artwork bytes for uri=$uri")
+          } catch (e: Exception) {
+            Log.w(tag, "onArtworkLoaded: failed to refresh metadata for uri=$uri", e)
           }
-        } catch (e: Exception) {
-          Log.w(tag, "onArtworkLoaded: failed to refresh metadata for uri=$uri", e)
         }
       }
     }
