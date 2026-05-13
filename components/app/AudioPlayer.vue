@@ -1,349 +1,359 @@
 <template>
-  <div
-    v-show="playbackSession"
-    id="streamContainer"
-    :class="{
-      fullscreen: showFullscreen,
-      'ios-player': $platform === 'ios',
-      'web-player': $platform === 'web',
-      'fixed pointer-events-none': true
-    }"
-    :style="{
-      zIndex: showFullscreen ? 2147483647 : 50,
-      top: showFullscreen ? '0' : 'auto',
-      bottom: showFullscreen ? '0' : playerBottomOffset,
-      left: '0',
-      right: '0',
-      height: showFullscreen ? '100vh' : 'auto',
-      width: showFullscreen ? '100vw' : 'auto',
-      visibility: 'visible',
-      backgroundColor: 'transparent',
-      position: 'fixed',
-      transition: showFullscreen ? 'none' : 'bottom 0.3s ease-in-out'
-    }"
-  >
-    <!-- Full screen player with flexible layout for all screen sizes -->
-    <div v-if="showFullscreen" class="fullscreen-container fixed inset-0 pointer-events-auto bg-surface-dynamic" :class="{ 'landscape-layout': isLandscape }" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})`, zIndex: 9999 }">
-      <!-- Background coverage -->
-      <div class="absolute inset-0 pointer-events-none bg-surface-dynamic" :style="{ top: fullscreenTopPadding, height: `calc(100vh - ${fullscreenTopPadding})` }" />
-
-      <div class="top-4 left-4 absolute">
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="collapseFullscreen">
-          <span class="material-symbols text-2xl text-on-surface">keyboard_arrow_down</span>
-        </button>
-      </div>
-      <div v-show="showCastBtn" class="top-4 right-36 absolute">
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="castClick">
-          <span class="material-symbols text-xl text-on-surface">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
-        </button>
-      </div>
-      <div class="top-4 right-20 absolute">
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" :disabled="!chapters.length" @click="clickChaptersBtn">
-          <span class="material-symbols text-xl text-on-surface" :class="chapters.length ? '' : 'opacity-30'">format_list_bulleted</span>
-        </button>
-      </div>
-      <div class="top-4 right-4 absolute">
-        <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="showMoreMenuDialog = true">
-          <span class="material-symbols text-xl text-on-surface">more_vert</span>
-        </button>
-      </div>
-      <p v-if="!isLandscape" class="top-16 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-on-surface-variant opacity-75" style="font-size: 10px">{{ isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
-
-      <!-- Portrait Layout (existing) -->
-      <template v-if="!isLandscape">
-        <!-- Fullscreen Cover Image with responsive sizing -->
-        <div class="cover-wrapper-portrait flex justify-center items-start pointer-events-auto" @click="collapseFullscreen">
-          <div class="cover-container relative">
-            <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
-
-            <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute inset-0 flex items-center justify-center z-10" @click.stop="showSyncsFailedDialog">
-              <span class="material-symbols text-error text-3xl">error</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Fullscreen Controls with responsive positioning -->
-        <div id="playerControls" class="controls-container-portrait pointer-events-auto">
-          <!-- Main playback controls row -->
-          <div class="flex items-center max-w-full mb-4" :class="playerSettings.lockUi ? 'justify-center' : 'justify-between'">
-            <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpChapterStart">
-              <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">first_page</span>
-            </button>
-            <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpBackwards">
-              <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
-            </button>
-            <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-200 hover:shadow-elevation-4 active:scale-95 mx-4 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
-              <span v-if="!isLoading" class="material-symbols text-2xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
-              <widgets-spinner-icon v-else class="h-6 w-6" />
-            </button>
-            <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpForward">
-              <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
-            </button>
-            <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="!nextChapter || isLoading" @click.stop="jumpNextChapter">
-              <span class="material-symbols text-xl text-on-surface" :class="nextChapter && !isLoading ? '' : 'opacity-30'">last_page</span>
-            </button>
-          </div>
-
-          <!-- Secondary controls row - Sleep Timer, Speed, and Bookmarks -->
-          <div v-show="showFullscreen && !playerSettings.lockUi" class="flex items-center justify-center space-x-8">
-            <!-- Sleep Timer Button (under and between back and play buttons) -->
-            <button v-if="!sleepTimerRunning" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
-              <span class="material-symbols text-xl text-on-surface">bedtime</span>
-            </button>
-            <button v-else class="px-3 py-2 rounded-full bg-tertiary-container text-on-tertiary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
-              <span class="text-sm font-mono font-medium">{{ sleepTimeRemainingPretty }}</span>
-            </button>
-
-            <!-- Speed Button (under and between play and forward buttons) -->
-            <button class="px-4 py-2 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('selectPlaybackSpeed')">
-              <span class="font-mono text-sm font-medium">{{ currentPlaybackRate }}x</span>
-            </button>
-
-            <!-- Bookmarks Button -->
-            <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('showBookmarks')">
-              <span class="material-symbols text-xl text-on-surface" :class="{ fill: bookmarks.length }">bookmark</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Progress Bars Container - manages both tracks -->
-        <div v-if="showFullscreen" id="progressBarsContainer" class="absolute left-0 right-0 mx-auto w-full px-6 bottom-56" style="max-width: 414px">
-          <!-- Total Progress Track (shown when both tracks enabled) -->
-          <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-6">
-            <div class="flex mb-1">
-              <p class="font-mono text-on-surface-variant text-xs">{{ currentTimePretty }}</p>
-              <div class="flex-grow" />
-              <p class="font-mono text-on-surface-variant text-xs">{{ totalTimeRemainingPretty }}</p>
-            </div>
-            <div class="w-full">
-              <div class="h-1 w-full bg-surface-variant/50 relative rounded-full">
-                <div ref="totalReadyTrack" class="h-full bg-outline/60 absolute top-0 left-0 pointer-events-none rounded-full" />
-                <div ref="totalBufferedTrack" class="h-full bg-on-surface-variant/60 absolute top-0 left-0 pointer-events-none rounded-full" />
-                <div ref="totalPlayedTrack" class="h-full bg-primary/80 absolute top-0 left-0 pointer-events-none rounded-full" />
-              </div>
-            </div>
-          </div>
-
-          <!-- Main Progress Track -->
-          <div>
-            <div class="flex pointer-events-none mb-2">
-              <p class="font-mono text-on-surface text-sm" ref="currentTimestampFull">0:00</p>
-              <div class="flex-grow" />
-              <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
-            </div>
-            <div ref="trackFull" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
-              <div ref="readyTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
-              <div ref="bufferedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
-              <div ref="playedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
-              <div
-                ref="trackCursorFull"
-                class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
-                :style="{ top: '-8px' }"
-                :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }"
-                @touchstart.stop="touchstartCursor"
-              >
-                <div class="rounded-full w-3 h-3 pointer-events-none bg-on-primary transition-all duration-200 ease-expressive" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Fullscreen Title and Author - positioned below progress bars -->
-        <div v-if="showFullscreen" class="title-author-texts absolute z-30 left-0 right-0 bottom-48 px-6 text-center overflow-hidden" @click="collapseFullscreen">
-          <div ref="titlewrapper" class="overflow-hidden relative">
-            <p class="title-text whitespace-nowrap text-on-surface text-lg font-medium">{{ title }}</p>
-          </div>
-          <p class="author-text text-on-surface-variant text-sm truncate">{{ authorName }}</p>
-        </div>
-      </template>
-
-      <!-- Landscape Layout -->
-      <template v-else>
-        <!-- Top Action Bar for Landscape -->
-        <div class="landscape-top-bar absolute top-0 left-0 right-0 z-40 flex items-center justify-between p-3" style="height: 60px">
-          <!-- Left: Close Button -->
-          <button class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="collapseFullscreen">
-            <span class="material-symbols text-xl text-on-surface">keyboard_arrow_down</span>
-          </button>
-
-          <!-- Right: Action Buttons -->
-          <div class="flex items-center space-x-2">
-            <button v-show="showCastBtn" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="castClick">
-              <span class="material-symbols text-lg text-on-surface">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
-            </button>
-            <button class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="!chapters.length" @click="clickChaptersBtn">
-              <span class="material-symbols text-lg text-on-surface" :class="chapters.length ? '' : 'opacity-30'">format_list_bulleted</span>
-            </button>
-            <button class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="showMoreMenuDialog = true">
-              <span class="material-symbols text-lg text-on-surface">more_vert</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Landscape Content Container with flexible grid -->
-        <div class="landscape-content-container flex" :style="{ top: '60px', height: `calc(100vh - 60px - ${fullscreenTopPadding})`, padding: '20px' }">
-          <!-- Left Side: Cover Image -->
-          <div class="landscape-cover-section flex items-center justify-center" style="flex: 0 0 45%; min-width: 0">
-            <div class="cover-wrapper-landscape relative pointer-events-auto" @click="collapseFullscreen">
-              <div class="cover-container-landscape">
-                <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="landscapeBookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
-
-                <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute inset-0 flex items-center justify-center z-10" @click.stop="showSyncsFailedDialog">
-                  <span class="material-symbols text-error text-3xl">error</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Right Side: Controls and Content -->
-          <div class="landscape-controls-section flex flex-col justify-center overflow-hidden" style="flex: 1; min-width: 0; padding-left: 20px">
-            <!-- Title and Author -->
-            <div class="title-author-texts-landscape mb-4 text-left">
-              <div ref="titlewrapper" class="overflow-hidden relative">
-                <p class="title-text whitespace-nowrap text-on-surface text-xl font-medium truncate">{{ title }}</p>
-              </div>
-              <p class="author-text text-on-surface-variant text-base truncate mt-1">{{ authorName }}</p>
-            </div>
-
-            <!-- Progress Bars Container -->
-            <div class="landscape-progress-container mb-4">
-              <!-- Total Progress Track (shown when both tracks enabled) -->
-              <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-3">
-                <div class="flex mb-1">
-                  <p class="font-mono text-on-surface-variant text-xs">{{ currentTimePretty }}</p>
-                  <div class="flex-grow" />
-                  <p class="font-mono text-on-surface-variant text-xs">{{ totalTimeRemainingPretty }}</p>
-                </div>
-                <div class="w-full">
-                  <div class="h-1 w-full bg-surface-variant/50 relative rounded-full">
-                    <div ref="totalReadyTrack" class="h-full bg-outline/60 absolute top-0 left-0 pointer-events-none rounded-full" />
-                    <div ref="totalBufferedTrack" class="h-full bg-on-surface-variant/60 absolute top-0 left-0 pointer-events-none rounded-full" />
-                    <div ref="totalPlayedTrack" class="h-full bg-primary/80 absolute top-0 left-0 pointer-events-none rounded-full" />
-                  </div>
-                </div>
-              </div>
-
-              <!-- Main Progress Track -->
-              <div>
-                <div class="flex pointer-events-none mb-1">
-                  <p class="font-mono text-on-surface text-sm" ref="currentTimestampFull">0:00</p>
-                  <div class="flex-grow" />
-                  <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
-                </div>
-                <div ref="trackFull" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
-                  <div ref="readyTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
-                  <div ref="bufferedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
-                  <div ref="playedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
-                  <div
-                    ref="trackCursorFull"
-                    class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
-                    :style="{ top: '-8px' }"
-                    :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }"
-                    @touchstart.stop="touchstartCursor"
-                  >
-                    <div class="rounded-full w-3 h-3 pointer-events-none bg-on-primary transition-all duration-200 ease-expressive" />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Main playback controls -->
-            <div class="landscape-main-controls flex items-center justify-center mb-3">
-              <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-2" :disabled="isLoading" @click.stop="jumpChapterStart">
-                <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">first_page</span>
-              </button>
-              <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-2" :disabled="isLoading" @click.stop="jumpBackwards">
-                <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
-              </button>
-              <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-200 hover:shadow-elevation-4 active:scale-95 mx-3 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
-                <span v-if="!isLoading" class="material-symbols text-2xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
-                <widgets-spinner-icon v-else class="h-6 w-6" />
-              </button>
-              <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-2" :disabled="isLoading" @click.stop="jumpForward">
-                <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
-              </button>
-              <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-2" :disabled="!nextChapter || isLoading" @click.stop="jumpNextChapter">
-                <span class="material-symbols text-lg text-on-surface" :class="nextChapter && !isLoading ? '' : 'opacity-30'">last_page</span>
-              </button>
-            </div>
-
-            <!-- Secondary controls row - Sleep Timer, Speed, and Bookmarks -->
-            <div v-show="!playerSettings.lockUi" class="landscape-secondary-controls flex items-center justify-center space-x-3 mt-2">
-              <!-- Sleep Timer Button -->
-              <button v-if="!sleepTimerRunning" class="w-9 h-9 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
-                <span class="material-symbols text-base text-on-surface">bedtime</span>
-              </button>
-              <button v-else class="px-2 py-1 rounded-full bg-tertiary-container text-on-tertiary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
-                <span class="text-xs font-mono font-medium">{{ sleepTimeRemainingPretty }}</span>
-              </button>
-
-              <!-- Speed Button -->
-              <button class="px-3 py-1 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('selectPlaybackSpeed')">
-                <span class="font-mono text-xs font-medium">{{ currentPlaybackRate }}x</span>
-              </button>
-
-              <!-- Bookmarks Button -->
-              <button class="w-9 h-9 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('showBookmarks')">
-                <span class="material-symbols text-base text-on-surface" :class="{ fill: bookmarks.length }">bookmark</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </template>
-    </div>
-
+  <!-- Root wrapper required because we have two sibling root elements (shared cover + sheet) -->
+  <div>
+    <!-- ─── Player sheet ─────────────────────────────────────────────────────────
+         Unified container for the mini bar and full-screen player.
+         playerSheetStyle interpolates height, bottom offset, and border-radius. -->
     <div
-      id="playerContent"
-      class="playerContainer w-full pointer-events-auto bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20"
-      :class="{ 'transition-all duration-500 ease-expressive': !isSwipeActive }"
-      :style="{ backgroundColor: showFullscreen ? '' : '', transform: showFullscreen ? 'translateY(-100vh)' : `translateY(${swipeOffset}px) translateX(${swipeOffsetX}px)`, zIndex: showFullscreen ? '9999' : '50' }"
+      v-show="playbackSession"
+      id="playerSheet"
+      class="bg-surface-dynamic"
+      :class="{
+        fullscreen: showFullscreen,
+        'ios-player': $platform === 'ios',
+        'web-player': $platform === 'web'
+      }"
+      :style="playerSheetStyle"
       @touchstart="handleTouchStart"
       @touchmove="handleTouchMove"
       @touchend="handleTouchEnd"
     >
-      <!-- Collapsed player layout: Cover → Text → Controls -->
-      <div v-if="!showFullscreen" class="flex items-center h-full px-2">
-        <!-- Cover Image -->
-        <div class="cover-wrapper-mini flex-shrink-0 mr-2" @click="expandFullscreen">
-          <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
+      <!-- ─── Full-screen layer ──────────────────────────────────────────────────
+           Always in the DOM; fullLayerStyle controls opacity and pointer-events.
+           position:absolute fills the player sheet. -->
+      <div class="fullscreen-container absolute inset-0 pointer-events-auto bg-surface-dynamic" :class="{ 'landscape-layout': isLandscape }" :style="fullLayerStyle">
+        <!-- Background coverage -->
+        <div class="absolute inset-0 pointer-events-none bg-surface-dynamic" />
+
+        <!-- Drag handle pill — tap to collapse -->
+        <div class="absolute top-0 left-0 right-0 flex justify-center pt-2 pb-1 z-50" style="pointer-events: auto" @click="animateTo(0)">
+          <div class="w-9 h-1 rounded-full bg-on-surface-variant opacity-30" />
         </div>
 
-        <!-- Text Content -->
-        <div class="flex-1 min-w-0 mr-2" @click="expandFullscreen">
-          <div ref="titlewrapper" class="overflow-hidden relative">
-            <p class="title-text whitespace-nowrap truncate text-on-surface text-sm font-medium">{{ title }}</p>
+        <div class="top-4 left-4 absolute">
+          <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="animateTo(0)">
+            <span class="material-symbols text-2xl text-on-surface">keyboard_arrow_down</span>
+          </button>
+        </div>
+        <div v-show="showCastBtn" class="top-4 right-36 absolute">
+          <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="castClick">
+            <span class="material-symbols text-xl text-on-surface">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
+          </button>
+        </div>
+        <div class="top-4 right-20 absolute">
+          <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" :disabled="!chapters.length" @click="clickChaptersBtn">
+            <span class="material-symbols text-xl text-on-surface" :class="chapters.length ? '' : 'opacity-30'">format_list_bulleted</span>
+          </button>
+        </div>
+        <div class="top-4 right-4 absolute">
+          <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95" @click="showMoreMenuDialog = true">
+            <span class="material-symbols text-xl text-on-surface">more_vert</span>
+          </button>
+        </div>
+        <p v-if="!isLandscape" class="top-16 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-on-surface-variant opacity-75" style="font-size: 10px">{{ isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
+
+        <!-- Portrait Layout (existing) -->
+        <template v-if="!isLandscape">
+          <!-- Fullscreen Cover — portrait.
+             The actual image is the shared cover element (position:fixed above the sheet).
+             This spacer keeps the flex layout so controls are pushed to their expected positions. -->
+          <div class="cover-wrapper-portrait flex justify-center items-start pointer-events-auto" @click="animateTo(0)">
+            <div class="cover-container">
+              <!-- Invisible placeholder matching full-cover dimensions -->
+              <div :style="{ width: fullCoverWidth + 'px', height: fullCoverHeight + 'px' }" />
+            </div>
           </div>
-          <p class="author-text text-on-surface-variant text-xs truncate">{{ authorName }}</p>
+
+          <!-- Fullscreen Controls with responsive positioning -->
+          <div id="playerControls" class="controls-container-portrait pointer-events-auto">
+            <!-- Main playback controls row -->
+            <div class="flex items-center max-w-full mb-4" :class="playerSettings.lockUi ? 'justify-center' : 'justify-between'">
+              <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpChapterStart">
+                <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">first_page</span>
+              </button>
+              <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpBackwards">
+                <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
+              </button>
+              <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-200 hover:shadow-elevation-4 active:scale-95 mx-4 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+                <span v-if="!isLoading" class="material-symbols text-2xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+                <widgets-spinner-icon v-else class="h-6 w-6" />
+              </button>
+              <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpForward">
+                <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
+              </button>
+              <button v-show="showFullscreen && !playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="!nextChapter || isLoading" @click.stop="jumpNextChapter">
+                <span class="material-symbols text-xl text-on-surface" :class="nextChapter && !isLoading ? '' : 'opacity-30'">last_page</span>
+              </button>
+            </div>
+
+            <!-- Secondary controls row - Sleep Timer, Speed, and Bookmarks -->
+            <div v-show="showFullscreen && !playerSettings.lockUi" class="flex items-center justify-center space-x-8">
+              <!-- Sleep Timer Button (under and between back and play buttons) -->
+              <button v-if="!sleepTimerRunning" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
+                <span class="material-symbols text-xl text-on-surface">bedtime</span>
+              </button>
+              <button v-else class="px-3 py-2 rounded-full bg-tertiary-container text-on-tertiary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
+                <span class="text-sm font-mono font-medium">{{ sleepTimeRemainingPretty }}</span>
+              </button>
+
+              <!-- Speed Button (under and between play and forward buttons) -->
+              <button class="px-4 py-2 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('selectPlaybackSpeed')">
+                <span class="font-mono text-sm font-medium">{{ currentPlaybackRate }}x</span>
+              </button>
+
+              <!-- Bookmarks Button -->
+              <button class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('showBookmarks')">
+                <span class="material-symbols text-xl text-on-surface" :class="{ fill: bookmarks.length }">bookmark</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Progress Bars Container - manages both tracks -->
+          <div v-if="showFullscreen" id="progressBarsContainer" class="absolute left-0 right-0 mx-auto w-full px-6 bottom-56" style="max-width: 414px">
+            <!-- Total Progress Track (shown when both tracks enabled) -->
+            <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-6">
+              <div class="flex mb-1">
+                <p class="font-mono text-on-surface-variant text-xs">{{ currentTimePretty }}</p>
+                <div class="flex-grow" />
+                <p class="font-mono text-on-surface-variant text-xs">{{ totalTimeRemainingPretty }}</p>
+              </div>
+              <div class="w-full">
+                <div class="h-1 w-full bg-surface-variant/50 relative rounded-full">
+                  <div ref="totalReadyTrack" class="h-full bg-outline/60 absolute top-0 left-0 pointer-events-none rounded-full" />
+                  <div ref="totalBufferedTrack" class="h-full bg-on-surface-variant/60 absolute top-0 left-0 pointer-events-none rounded-full" />
+                  <div ref="totalPlayedTrack" class="h-full bg-primary/80 absolute top-0 left-0 pointer-events-none rounded-full" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Main Progress Track -->
+            <div>
+              <div class="flex pointer-events-none mb-2">
+                <p class="font-mono text-on-surface text-sm" ref="currentTimestampFull">0:00</p>
+                <div class="flex-grow" />
+                <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
+              </div>
+              <div ref="trackFull" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
+                <div ref="readyTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
+                <div ref="bufferedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
+                <div ref="playedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
+                <div
+                  ref="trackCursorFull"
+                  class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
+                  :style="{ top: '-8px' }"
+                  :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }"
+                  @touchstart.stop="touchstartCursor"
+                >
+                  <div class="rounded-full w-3 h-3 pointer-events-none bg-on-primary transition-all duration-200 ease-expressive" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Fullscreen Title and Author - positioned below progress bars -->
+          <div v-if="showFullscreen" class="title-author-texts absolute z-30 left-0 right-0 bottom-48 px-6 text-center overflow-hidden" @click="clickTitleAndAuthor">
+            <div ref="titlewrapper" class="overflow-hidden relative">
+              <p class="title-text whitespace-nowrap text-on-surface text-lg font-medium">{{ title }}</p>
+            </div>
+            <p class="author-text text-on-surface-variant text-sm truncate">{{ authorName }}</p>
+          </div>
+        </template>
+
+        <!-- Landscape Layout -->
+        <template v-else>
+          <!-- Top Action Bar for Landscape -->
+          <div class="landscape-top-bar absolute top-0 left-0 right-0 z-40 flex items-center justify-between p-3" style="height: 60px">
+            <!-- Left: Close Button -->
+            <button class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="animateTo(0)">
+              <span class="material-symbols text-xl text-on-surface">keyboard_arrow_down</span>
+            </button>
+
+            <!-- Right: Action Buttons -->
+            <div class="flex items-center space-x-2">
+              <button v-show="showCastBtn" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="castClick">
+                <span class="material-symbols text-lg text-on-surface">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
+              </button>
+              <button class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="!chapters.length" @click="clickChaptersBtn">
+                <span class="material-symbols text-lg text-on-surface" :class="chapters.length ? '' : 'opacity-30'">format_list_bulleted</span>
+              </button>
+              <button class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="showMoreMenuDialog = true">
+                <span class="material-symbols text-lg text-on-surface">more_vert</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Landscape Content Container with flexible grid -->
+          <div class="landscape-content-container flex" :style="{ top: '60px', height: `calc(100vh - 60px - ${fullscreenTopPadding})`, padding: '20px' }">
+            <!-- Left Side: Cover — spacer only; actual image is the shared cover element -->
+            <div class="landscape-cover-section flex items-center justify-center" style="flex: 0 0 45%; min-width: 0">
+              <div class="cover-wrapper-landscape relative pointer-events-auto" @click="animateTo(0)">
+                <div class="cover-container-landscape">
+                  <!-- Invisible placeholder matching landscape cover dimensions -->
+                  <div :style="{ width: landscapeBookCoverWidth + 'px', height: landscapeBookCoverWidth * bookCoverAspectRatio + 'px' }" />
+
+                  <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute inset-0 flex items-center justify-center z-10" @click.stop="showSyncsFailedDialog">
+                    <span class="material-symbols text-error text-3xl">error</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Side: Controls and Content -->
+            <div class="landscape-controls-section flex flex-col justify-center overflow-hidden" style="flex: 1; min-width: 0; padding-left: 20px">
+              <!-- Title and Author -->
+              <div class="title-author-texts-landscape mb-4 text-left">
+                <div ref="titlewrapper" class="overflow-hidden relative">
+                  <p class="title-text whitespace-nowrap text-on-surface text-xl font-medium truncate">{{ title }}</p>
+                </div>
+                <p class="author-text text-on-surface-variant text-base truncate mt-1">{{ authorName }}</p>
+              </div>
+
+              <!-- Progress Bars Container -->
+              <div class="landscape-progress-container mb-4">
+                <!-- Total Progress Track (shown when both tracks enabled) -->
+                <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-3">
+                  <div class="flex mb-1">
+                    <p class="font-mono text-on-surface-variant text-xs">{{ currentTimePretty }}</p>
+                    <div class="flex-grow" />
+                    <p class="font-mono text-on-surface-variant text-xs">{{ totalTimeRemainingPretty }}</p>
+                  </div>
+                  <div class="w-full">
+                    <div class="h-1 w-full bg-surface-variant/50 relative rounded-full">
+                      <div ref="totalReadyTrack" class="h-full bg-outline/60 absolute top-0 left-0 pointer-events-none rounded-full" />
+                      <div ref="totalBufferedTrack" class="h-full bg-on-surface-variant/60 absolute top-0 left-0 pointer-events-none rounded-full" />
+                      <div ref="totalPlayedTrack" class="h-full bg-primary/80 absolute top-0 left-0 pointer-events-none rounded-full" />
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Main Progress Track -->
+                <div>
+                  <div class="flex pointer-events-none mb-1">
+                    <p class="font-mono text-on-surface text-sm" ref="currentTimestampFull">0:00</p>
+                    <div class="flex-grow" />
+                    <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
+                  </div>
+                  <div ref="trackFull" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
+                    <div ref="readyTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
+                    <div ref="bufferedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
+                    <div ref="playedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
+                    <div
+                      ref="trackCursorFull"
+                      class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
+                      :style="{ top: '-8px' }"
+                      :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }"
+                      @touchstart.stop="touchstartCursor"
+                    >
+                      <div class="rounded-full w-3 h-3 pointer-events-none bg-on-primary transition-all duration-200 ease-expressive" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Main playback controls -->
+              <div class="landscape-main-controls flex items-center justify-center mb-3">
+                <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-2" :disabled="isLoading" @click.stop="jumpChapterStart">
+                  <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">first_page</span>
+                </button>
+                <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-2" :disabled="isLoading" @click.stop="jumpBackwards">
+                  <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
+                </button>
+                <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-200 hover:shadow-elevation-4 active:scale-95 mx-3 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+                  <span v-if="!isLoading" class="material-symbols text-2xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+                  <widgets-spinner-icon v-else class="h-6 w-6" />
+                </button>
+                <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-2" :disabled="isLoading" @click.stop="jumpForward">
+                  <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
+                </button>
+                <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-2" :disabled="!nextChapter || isLoading" @click.stop="jumpNextChapter">
+                  <span class="material-symbols text-lg text-on-surface" :class="nextChapter && !isLoading ? '' : 'opacity-30'">last_page</span>
+                </button>
+              </div>
+
+              <!-- Secondary controls row - Sleep Timer, Speed, and Bookmarks -->
+              <div v-show="!playerSettings.lockUi" class="landscape-secondary-controls flex items-center justify-center space-x-3 mt-2">
+                <!-- Sleep Timer Button -->
+                <button v-if="!sleepTimerRunning" class="w-9 h-9 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
+                  <span class="material-symbols text-base text-on-surface">bedtime</span>
+                </button>
+                <button v-else class="px-2 py-1 rounded-full bg-tertiary-container text-on-tertiary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click.stop="$emit('showSleepTimer')">
+                  <span class="text-xs font-mono font-medium">{{ sleepTimeRemainingPretty }}</span>
+                </button>
+
+                <!-- Speed Button -->
+                <button class="px-3 py-1 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('selectPlaybackSpeed')">
+                  <span class="font-mono text-xs font-medium">{{ currentPlaybackRate }}x</span>
+                </button>
+
+                <!-- Bookmarks Button -->
+                <button class="w-9 h-9 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" @click="$emit('showBookmarks')">
+                  <span class="material-symbols text-base text-on-surface" :class="{ fill: bookmarks.length }">bookmark</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ─── Mini-player layer ─────────────────────────────────────────────────
+           position:absolute at the bottom of the sheet.
+           miniLayerStyle fades it out as the sheet expands and also carries
+           the horizontal swipe-to-dismiss translateX. -->
+      <div id="playerContent" class="playerContainer w-full bg-player-overlay backdrop-blur-md shadow-elevation-3 border-t border-outline-variant border-opacity-20" :style="miniLayerStyle">
+        <!-- Mini bar layout: Cover placeholder → Text → Controls -->
+        <div class="flex items-center h-full px-2">
+          <!-- Cover placeholder: invisible div that matches the mini cover dimensions
+               so the text and controls are correctly pushed to the right.
+               The actual cover image is the shared element above the sheet. -->
+          <div class="cover-wrapper-mini flex-shrink-0 mr-2" style="visibility: hidden" />
+
+          <!-- Text Content -->
+          <div class="flex-1 min-w-0 mr-2" @click="animateTo(1)">
+            <div ref="titlewrapper" class="overflow-hidden relative">
+              <p class="title-text whitespace-nowrap truncate text-on-surface text-sm font-medium">{{ title }}</p>
+            </div>
+            <p class="author-text text-on-surface-variant text-xs truncate">{{ authorName }}</p>
+          </div>
+
+          <!-- Controls -->
+          <div class="flex items-center flex-shrink-0">
+            <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-1" :disabled="isLoading" @click.stop="jumpBackwards">
+              <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
+            </button>
+            <button class="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95 mx-2 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+              <span v-if="!isLoading" class="material-symbols text-xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+              <widgets-spinner-icon v-else class="h-5 w-5" />
+            </button>
+            <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-1" :disabled="isLoading" @click.stop="jumpForward">
+              <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
+            </button>
+          </div>
         </div>
 
-        <!-- Controls -->
-        <div class="flex items-center flex-shrink-0">
-          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-1" :disabled="isLoading" @click.stop="jumpBackwards">
-            <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
-          </button>
-          <button class="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95 mx-2 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
-            <span v-if="!isLoading" class="material-symbols text-xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
-            <widgets-spinner-icon v-else class="h-5 w-5" />
-          </button>
-          <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-1" :disabled="isLoading" @click.stop="jumpForward">
-            <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
-          </button>
+        <!-- Mini Progress Bar -->
+        <div id="playerTrackMini" class="absolute bottom-2 left-0 w-full px-2">
+          <div ref="trackMini" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart.stop="startDragSeek">
+            <div ref="readyTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
+            <div ref="bufferedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
+            <div ref="playedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
+          </div>
         </div>
       </div>
 
-      <!-- Progress Bar -->
-      <div v-if="!showFullscreen" id="playerTrackMini" class="absolute bottom-2 left-0 w-full px-2">
-        <div ref="trackMini" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
-          <div ref="readyTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
-          <div ref="bufferedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
-          <div ref="playedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
-        </div>
-      </div>
+      <modals-chapters-modal v-model="showChapterModal" :current-chapter="currentChapter" :chapters="chapters" :playback-rate="currentPlaybackRate" @select="selectChapter" />
+      <modals-dialog v-model="showMoreMenuDialog" :items="menuItems" width="80vw" @action="clickMenuAction" />
+      <modals-cast-device-selection-modal ref="castDeviceModal" @cast-device-connected="onCastDeviceConnected" @cast-device-disconnected="onCastDeviceDisconnected" />
     </div>
 
-    <modals-chapters-modal v-model="showChapterModal" :current-chapter="currentChapter" :chapters="chapters" :playback-rate="currentPlaybackRate" @select="selectChapter" />
-    <modals-dialog v-model="showMoreMenuDialog" :items="menuItems" width="80vw" @action="clickMenuAction" />
-    <modals-cast-device-selection-modal ref="castDeviceModal" @cast-device-connected="onCastDeviceConnected" @cast-device-disconnected="onCastDeviceDisconnected" />
+    <!-- ─── Shared cover ────────────────────────────────────────────────────────
+         MUST be after playerSheet in DOM: browsers clamp z-index at INT32_MAX so
+         when both share the same effective z-index, later DOM order wins. -->
+    <div v-if="playbackSession && (libraryItem || localLibraryItemCoverSrc)" id="sharedCoverWrapper" :style="sharedCoverStyle" @click="onSharedCoverTap">
+      <covers-book-cover ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="fullCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
+      <div v-if="syncStatus === $constants.SyncStatus.FAILED" class="absolute inset-0 flex items-center justify-center z-10" @click.stop="showSyncsFailedDialog">
+        <span class="material-symbols text-error text-3xl">error</span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -369,7 +379,12 @@ export default {
       windowWidth: 0,
       playbackSession: null,
       showChapterModal: false,
-      showFullscreen: false,
+      // expandProgress: 0 = fully mini, 1 = fully full-screen
+      // This drives ALL animation; showFullscreen is a computed alias.
+      expandProgress: 0,
+      // dragMode: 'none' | 'expand' | 'collapse' — set during interactive drag
+      dragMode: 'none',
+      miniBarHeight: 80, // matches CSS .playerContainer { height: 80px }
       totalDuration: 0,
       currentPlaybackRate: 1,
       currentTime: 0,
@@ -428,8 +443,10 @@ export default {
   },
   watch: {
     showFullscreen(val) {
+      // showFullscreen is now computed (expandProgress >= 0.5).
+      // The Vuex commit is handled by _onAnimationComplete at the true boundaries.
+      // We still need to trigger updateScreenSize when the state changes.
       this.updateScreenSize()
-      this.$store.commit('setPlayerFullscreen', !!val)
     },
     bookCoverAspectRatio() {
       this.updateScreenSize()
@@ -439,6 +456,153 @@ export default {
     }
   },
   computed: {
+    // ─── YouTube Music–style player animation ─────────────────────────────────
+    // showFullscreen is now a COMPUTED (derived from expandProgress) rather than data.
+    // Every place that used `this.showFullscreen = true/false` now calls
+    // animateTo(1) / animateTo(0) or sets expandProgress directly.
+    showFullscreen() {
+      return this.expandProgress >= 0.5
+    },
+    miniBottomOffsetPx() {
+      return parseFloat(this.playerBottomOffset) || 0
+    },
+    // Width of the mini cover image (height is always 48px in mini mode)
+    miniCoverWidth() {
+      return 48 / (this.bookCoverAspectRatio || 1)
+    },
+    // Viewport top of the mini cover (vertically centred inside the mini bar)
+    miniCoverViewportTop() {
+      return this.windowHeight - this.miniBottomOffsetPx - this.miniBarHeight + (this.miniBarHeight - 48) / 2
+    },
+    // Viewport left of the mini cover (px-2 padding = 8px)
+    miniCoverViewportLeft() {
+      return 8
+    },
+    // Full-screen cover dimensions (portrait)
+    fullCoverWidth() {
+      return this.isLandscape ? this.landscapeBookCoverWidth : this.fullscreenBookCoverWidth
+    },
+    fullCoverHeight() {
+      return this.fullCoverWidth * (this.bookCoverAspectRatio || 1)
+    },
+    // Uniform scale that shrinks the full-size cover element to appear as the mini cover
+    miniCoverScale() {
+      return this.fullCoverHeight > 0 ? 48 / this.fullCoverHeight : 1
+    },
+    // Viewport top of the full cover when the player is expanded (portrait)
+    fullCoverViewportTop() {
+      const topPad = parseFloat(this.fullscreenTopPadding) || 0
+      if (this.isLandscape) {
+        // landscape: cover is vertically centred in the left column (top bar = 60px + padding 20px)
+        const topBarH = 80
+        const availH = this.windowHeight - topBarH
+        return topBarH + (availH - this.fullCoverHeight) / 2
+      }
+      // portrait: safe area + cover-wrapper-portrait padding-top (100px from CSS)
+      return topPad + 100
+    },
+    // Viewport left of the full cover when expanded
+    fullCoverViewportLeft() {
+      if (this.isLandscape) {
+        // left column is 45% of viewport, cover is centred within it (20px container padding)
+        const colW = this.windowWidth * 0.45 - 40
+        return 20 + (colW - this.fullCoverWidth) / 2
+      }
+      return (this.windowWidth - this.fullCoverWidth) / 2
+    },
+
+    // ── Animated style objects ──────────────────────────────────────────────
+    playerSheetStyle() {
+      const p = this.expandProgress
+      const mini = this.miniBarHeight
+      const topPad = parseFloat(this.fullscreenTopPadding) || 0
+      const height = mini + (this.windowHeight - topPad - mini) * p
+      const bottom = this.miniBottomOffsetPx * (1 - p)
+      const radius = Math.round(16 * (1 - p))
+      return {
+        position: 'fixed',
+        left: '0',
+        right: '0',
+        bottom: bottom + 'px',
+        height: height + 'px',
+        borderTopLeftRadius: radius + 'px',
+        borderTopRightRadius: radius + 'px',
+        // NavBar has zIndex 2147483646; we need 2147483647 (INT32_MAX) to sit above it when expanded
+        zIndex: p > 0 ? 2147483647 : 50,
+        overflow: 'hidden',
+        pointerEvents: this.playbackSession ? 'auto' : 'none',
+        willChange: 'height, bottom'
+      }
+    },
+
+    // The single shared cover element: position:fixed, morphs between mini and full positions
+    sharedCoverStyle() {
+      if (!this.playbackSession) return { display: 'none' }
+      const p = this.expandProgress
+      // Uniform scale: miniCoverScale at p=0, 1.0 at p=1
+      const scale = this.miniCoverScale + (1 - this.miniCoverScale) * p
+      // Viewport top/left of the cover's top-left corner
+      const top = this.miniCoverViewportTop + (this.fullCoverViewportTop - this.miniCoverViewportTop) * p
+      // Horizontal offset also carries the swipe-to-dismiss translation (mini state only)
+      const horizOffset = p < 0.05 ? this.swipeOffsetX : this.swipeOffsetX * (1 - p / 0.05)
+      const left = this.miniCoverViewportLeft + (this.fullCoverViewportLeft - this.miniCoverViewportLeft) * p + horizOffset
+      // The CSS border-radius is divided by scale so the VISUAL radius stays consistent
+      // (scale shrinks the element, which would shrink a raw radius too)
+      const visualRadius = 8 + (16 - 8) * p
+      const cssRadius = scale > 0 ? visualRadius / scale : visualRadius
+      return {
+        position: 'fixed',
+        top: top + 'px',
+        left: left + 'px',
+        width: this.fullCoverWidth + 'px',
+        height: this.fullCoverHeight + 'px',
+        transform: `scale(${scale})`,
+        transformOrigin: 'top left',
+        borderRadius: cssRadius + 'px',
+        overflow: 'hidden',
+        // Same INT32_MAX value as playerSheet but later in DOM → paints above it
+        zIndex: p > 0 ? 2147483647 : 51,
+        // Tapping the cover while mini expands; while full, the full layer handles clicks
+        pointerEvents: p < 0.3 ? 'auto' : 'none',
+        willChange: 'transform, top, left'
+      }
+    },
+
+    // Mini bar layer: stays visible and scales up as the sheet grows (like the album art)
+    miniLayerStyle() {
+      const p = this.expandProgress
+      // Stay fully visible until ~40%, then fade out by ~75%
+      const opacity = Math.max(0, 1 - p / 0.75)
+      // Scale up slightly as the sheet expands (origin: center-bottom so it grows upward)
+      const scale = 1 + p * 0.18
+      // Drift upward a little as it grows
+      const translateY = -p * 20
+      return {
+        position: 'absolute',
+        bottom: '0',
+        left: '0',
+        right: '0',
+        height: this.miniBarHeight + 'px',
+        opacity,
+        pointerEvents: opacity > 0.05 ? 'auto' : 'none',
+        transform: `translateX(${this.swipeOffsetX}px) translateY(${translateY}px) scale(${scale})`,
+        transformOrigin: 'center bottom'
+      }
+    },
+
+    // Full-screen layer: delayed until sheet is large enough (starts at p=0.3, full at p=0.85)
+    fullLayerStyle() {
+      const p = this.expandProgress
+      const opacity = Math.max(0, Math.min(1, (p - 0.3) / 0.55))
+      return {
+        position: 'absolute',
+        inset: '0',
+        opacity,
+        pointerEvents: p > 0.6 ? 'auto' : 'none'
+      }
+    },
+    // ─── End of animation computeds ───────────────────────────────────────────
+
     theme() {
       return document.documentElement.dataset.theme || 'dark'
     },
@@ -740,97 +904,99 @@ export default {
     }
   },
   methods: {
+    // ─── Touch / gesture handlers ─────────────────────────────────────────────
+    // These are attached to #playerSheet and handle both the mini→full expand
+    // gesture (swipe up) and the full→mini collapse gesture (swipe down on the
+    // full-screen view).  Horizontal swipe-to-dismiss is only active when the
+    // player is fully collapsed (expandProgress === 0).
     handleTouchStart(event) {
-      if (this.showFullscreen) return
+      // Cancel any in-flight animation so the user takes direct control
+      if (this._animRaf) {
+        cancelAnimationFrame(this._animRaf)
+        this._animRaf = null
+      }
 
+      const touch = event.touches[0]
+      this._dragStartY = touch.clientY
+      this._dragStartX = touch.clientX
+      this._dragStartProgress = this.expandProgress
+      this._dragStartTime = Date.now()
+      this.swipeStartY = touch.clientY
+      this.swipeStartX = touch.clientX
       this.isSwipeActive = true
-      this.swipeStartY = event.touches[0].clientY
-      this.swipeOffset = 0
-      // init horizontal swipe
-      this.swipeStartX = event.touches[0].clientX
+      this.gestureAxis = 'none'
       this.swipeOffsetX = 0
       this.isHorizontalSwipeActive = false
-      this.gestureAxis = 'none'
     },
     handleTouchMove(event) {
-      if (!this.isSwipeActive || this.showFullscreen) return
+      if (!this.isSwipeActive) return
 
       event.preventDefault()
-      const currentY = event.touches[0].clientY
-      const deltaY = this.swipeStartY - currentY // Negative for upward swipe
-      const currentX = event.touches[0].clientX
-      const deltaX = currentX - this.swipeStartX
+      const touch = event.touches[0]
+      const deltaY = this._dragStartY - touch.clientY // positive = swipe up
+      const deltaX = touch.clientX - this._dragStartX // positive = swipe right
 
-      // Decide gesture axis if not yet decided and movement exceeds threshold
+      // Determine dominant axis on first sufficient movement
       if (this.gestureAxis === 'none') {
-        if (Math.abs(deltaX) > this.gestureDetectionThreshold || Math.abs(deltaY) > this.gestureDetectionThreshold) {
-          // pick the dominant axis
+        const mag = Math.max(Math.abs(deltaX), Math.abs(deltaY))
+        if (mag > this.gestureDetectionThreshold) {
           this.gestureAxis = Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical'
         }
       }
 
-      // Only act on the locked axis
       if (this.gestureAxis === 'vertical') {
-        // vertical gesture: ignore horizontal movement and update vertical offset
-        if (deltaY > 0) {
-          // Only allow upward swipes
-          this.swipeOffset = -Math.min(deltaY, window.innerHeight)
-        } else {
-          this.swipeOffset = 0
-        }
-        // ensure horizontal offset stays centered
+        // Swipe up from mini expands; swipe down from full collapses.
+        const viewportH = window.innerHeight || this.windowHeight || 1
+        const progress = deltaY / viewportH
+        this.expandProgress = Math.max(0, Math.min(1, this._dragStartProgress + progress))
         this.swipeOffsetX = 0
-      } else if (this.gestureAxis === 'horizontal') {
-        // horizontal gesture: ignore vertical movement and update horizontal offset
-        this.swipeOffset = 0
+      } else if (this.gestureAxis === 'horizontal' && this._dragStartProgress < 0.05) {
+        // Horizontal swipe only when fully in mini state
         this.isHorizontalSwipeActive = true
         this.swipeOffsetX = Math.max(Math.min(deltaX, window.innerWidth), -window.innerWidth)
       } else {
-        // No axis decided yet: don't move UI
-        this.swipeOffset = 0
         this.swipeOffsetX = 0
       }
     },
     handleTouchEnd(event) {
-      if (!this.isSwipeActive || this.showFullscreen) return
+      if (!this.isSwipeActive) return
 
       this.isSwipeActive = false
       this.isHorizontalSwipeActive = false
-      const currentY = event.changedTouches[0].clientY
-      const deltaY = this.swipeStartY - currentY
 
-      // Act based on the decided axis
+      const touch = event.changedTouches[0]
+      const deltaY = this._dragStartY - touch.clientY // positive = swipe up
+      const elapsed = Math.max(Date.now() - this._dragStartTime, 1)
+      const velocityY = deltaY / elapsed // px/ms, positive = upward
+
       if (this.gestureAxis === 'horizontal') {
-        try {
-          const endX = event.changedTouches[0].clientX
-          const deltaX = endX - this.swipeStartX
-          if (Math.abs(deltaX) > this.horizontalSwipeThreshold) {
-            // Close playback and nudge UI
-            this.swipeOffsetX = deltaX > 0 ? window.innerWidth : -window.innerWidth
-            // Small delay so user sees the swipe animation before closing
-            setTimeout(() => {
-              this.closePlayback()
-            }, 120)
-            return
-          }
-        } catch (e) {}
-        // Not far enough: snap back
+        const deltaX = touch.clientX - this._dragStartX
+        if (Math.abs(deltaX) > this.horizontalSwipeThreshold) {
+          this.swipeOffsetX = deltaX > 0 ? window.innerWidth : -window.innerWidth
+          setTimeout(() => {
+            this.closePlayback()
+          }, 120)
+          this.gestureAxis = 'none'
+          return
+        }
         this.swipeOffsetX = 0
       } else if (this.gestureAxis === 'vertical') {
-        if (deltaY > this.swipeThreshold) {
-          // Swipe was far enough, expand to fullscreen
-          this.expandFullscreen()
+        // Snap decision: commit if past 30% of travel or fast enough flick
+        const shouldExpand = this.expandProgress > 0.3 || (velocityY > 0.5 && deltaY > 0)
+        const shouldCollapse = this.expandProgress < 0.7 || (velocityY < -0.5 && deltaY < 0)
+        if (this._dragStartProgress < 0.5) {
+          // Was in mini → snap to full or mini
+          this.animateTo(shouldExpand ? 1 : 0)
         } else {
-          // Snap back to mini player
-          this.swipeOffset = 0
+          // Was in full → snap to mini or full
+          this.animateTo(shouldCollapse ? 0 : 1)
         }
       } else {
-        // No decisive gesture: reset offsets
-        this.swipeOffset = 0
+        // No decisive gesture — snap to nearest boundary
         this.swipeOffsetX = 0
+        this.animateTo(this.expandProgress >= 0.5 ? 1 : 0)
       }
 
-      // reset axis
       this.gestureAxis = 'none'
     },
     showSyncsFailedDialog() {
@@ -852,7 +1018,7 @@ export default {
       const llid = this.serverLibraryItemId || this.libraryItem?.id || this.localLibraryItem?.id
       if (llid) {
         this.$router.push(`/item/${llid}`)
-        this.showFullscreen = false
+        this.expandProgress = 0
       }
     },
     async selectChapter(chapter) {
@@ -873,37 +1039,88 @@ export default {
         this.$eventBus.$emit('cast-local-item')
       }
     },
+
+    // ─── Animation engine ──────────────────────────────────────────────────────
+    /**
+     * animateTo(target) — smoothly drives expandProgress to 0 (mini) or 1 (full)
+     * using requestAnimationFrame and M3 emphasized easing.
+     * @param {number} target  0 = collapse to mini, 1 = expand to full
+     */
+    animateTo(target) {
+      // Respect prefers-reduced-motion
+      const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (prefersReduced) {
+        this.expandProgress = target
+        this._onAnimationComplete(target)
+        return
+      }
+
+      const duration = target === 1 ? 400 : 250
+      // M3 emphasized-decelerate for expand, emphasized-accelerate for collapse
+      const ease =
+        target === 1
+          ? (t) => 1 - Math.pow(1 - t, 3) // ease-out cubic ≈ emphasized-decelerate
+          : (t) => t * t // ease-in quadratic ≈ emphasized-accelerate
+
+      const startValue = this.expandProgress
+      const startTime = performance.now()
+
+      if (this._animRaf) {
+        cancelAnimationFrame(this._animRaf)
+        this._animRaf = null
+      }
+
+      const step = (now) => {
+        const t = Math.min((now - startTime) / duration, 1)
+        this.expandProgress = startValue + (target - startValue) * ease(t)
+        if (t < 1) {
+          this._animRaf = requestAnimationFrame(step)
+        } else {
+          this.expandProgress = target
+          this._animRaf = null
+          this._onAnimationComplete(target)
+        }
+      }
+      this._animRaf = requestAnimationFrame(step)
+    },
+
+    _onAnimationComplete(target) {
+      // Commit Vuex state only at the hard boundaries
+      this.$store.commit('setPlayerFullscreen', target === 1)
+      if (target === 0) {
+        this.forceCloseDropdownMenu()
+      }
+      // Recalculate track width after layout settles
+      this.trackWidth = 0
+      this.$nextTick(() => {
+        this.updateTrack()
+      })
+      if (this.titleMarquee) this.titleMarquee.reset()
+    },
+
+    /** Called when the user taps the shared cover image */
+    onSharedCoverTap() {
+      if (this.expandProgress < 0.5) {
+        this.animateTo(1)
+      }
+      // When fully expanded the full-layer handles taps; cover pointer-events are none
+    },
+
     clickContainer() {
-      this.expandToFullscreen()
+      this.animateTo(1)
     },
     expandFullscreen() {
-      this.expandToFullscreen()
+      this.animateTo(1)
     },
     expandToFullscreen() {
       this.swipeOffset = 0
       this.isSwipeActive = false
-      this.showFullscreen = true
-      this.trackWidth = 0 // Reset track width so it gets recalculated for full view
-      if (this.titleMarquee) this.titleMarquee.reset()
-
-      // Update track for total time bar if useChapterTrack is set
-      this.$nextTick(() => {
-        this.updateTrack()
-      })
+      this.animateTo(1)
     },
     collapseFullscreen() {
       this.swipeOffset = 0
       this.isSwipeActive = false
-      this.showFullscreen = false
-      this.trackWidth = 0 // Reset track width so it gets recalculated for mini view
-      if (this.titleMarquee) this.titleMarquee.reset()
-
-      this.forceCloseDropdownMenu()
-
-      // Update track immediately for mini view
-      this.$nextTick(() => {
-        this.updateTrack()
-      })
+      this.animateTo(0)
     },
     async jumpNextChapter() {
       console.log('[NUXT_SKIP_DEBUG] jumpNextChapter called', {
@@ -1510,7 +1727,7 @@ export default {
       this.$nextTick(() => {
         if (action === 'history') {
           this.$router.push(`/media/${this.mediaId}/history?title=${this.title}`)
-          this.showFullscreen = false
+          this.expandProgress = 0
         } else if (action === 'scale_elapsed_time') {
           this.playerSettings.scaleElapsedTimeBySpeed = !this.playerSettings.scaleElapsedTimeBySpeed
           this.updateTimestamp()
@@ -1573,7 +1790,7 @@ export default {
     },
     endPlayback() {
       this.$store.commit('setPlaybackSession', null)
-      this.showFullscreen = false
+      this.expandProgress = 0
       this.isEnded = false
       this.isLoading = false
       this.playbackSession = null
@@ -1755,7 +1972,7 @@ export default {
       // Find matching local episode if this is a podcast
       let localEpisodeId = null
       if (serverEpisodeId && localLibraryItem.mediaType === 'podcast') {
-        const localEpisode = localLibraryItem.media.episodes?.find(ep => ep.serverEpisodeId === serverEpisodeId)
+        const localEpisode = localLibraryItem.media.episodes?.find((ep) => ep.serverEpisodeId === serverEpisodeId)
         localEpisodeId = localEpisode?.id || null
       }
 
@@ -1767,13 +1984,7 @@ export default {
         currentTime
       })
 
-      this.executeLocalPlaybackRestore(
-        localLibraryItem.id,
-        localLibraryItem.libraryItemId,
-        localEpisodeId,
-        serverEpisodeId,
-        currentTime
-      )
+      this.executeLocalPlaybackRestore(localLibraryItem.id, localLibraryItem.libraryItemId, localEpisodeId, serverEpisodeId, currentTime)
     },
     executeLocalPlaybackRestore(libraryItemId, serverLibraryItemId, episodeId, serverEpisodeId, currentTime) {
       // Add a delay to ensure cast session is fully disconnected and force local playback
@@ -2024,6 +2235,13 @@ export default {
     this._safeAreaObserver.observe(document.documentElement, { attributes: true })
     window.addEventListener('resize', updateFullscreenTopPadding)
 
+    // Non-reactive animation state (not in Vue data to avoid triggering renders)
+    this._animRaf = null
+    this._dragStartY = 0
+    this._dragStartX = 0
+    this._dragStartProgress = 0
+    this._dragStartTime = 0
+
     this.$nextTick(this.init)
   },
   beforeDestroy() {
@@ -2051,6 +2269,10 @@ export default {
       AbsAudioPlayer.removeAllListeners()
     }
     clearInterval(this.playInterval)
+    if (this._animRaf) {
+      cancelAnimationFrame(this._animRaf)
+      this._animRaf = null
+    }
 
     // Clean up safe area observer
     if (this._safeAreaObserver) {
@@ -2099,22 +2321,22 @@ export default {
   height: 80px;
   background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
   backdrop-filter: blur(20px);
-  border-radius: 16px;
+  /* border-radius is driven by playerSheetStyle now */
   box-shadow: var(--md-sys-elevation-surface-container-high);
-  margin: 0; /* Remove all margins - positioning handled by parent container */
+  margin: 0;
 }
-.fullscreen .playerContainer {
-  height: 200px;
-}
+/* Fullscreen .playerContainer override is no longer needed — the sheet itself controls its height */
+
+/* #playerContent is now the mini bar layer (position:absolute bottom of sheet) */
 #playerContent {
-  box-shadow: var(--md-sys-elevation-surface-container-high);
-  border-radius: 16px;
   background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
   backdrop-filter: blur(20px);
-  margin: 0; /* Remove all margins - positioning handled by container */
+  margin: 0;
 }
-.fullscreen #playerContent {
-  box-shadow: none;
+
+/* #playerSheet is the new root — it already handles its own background via the full layer */
+#playerSheet {
+  background: transparent;
 }
 
 #playerTrack {
