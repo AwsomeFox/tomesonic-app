@@ -8,7 +8,20 @@
       <template v-for="(entity, index) in entities">
         <cards-lazy-book-card v-if="type === 'book' || type === 'podcast'" :key="entity.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
         <cards-lazy-book-card v-if="type === 'episode'" :key="entity.recentEpisode.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
-        <cards-lazy-series-card v-else-if="type === 'series'" :key="entity.id" :index="index" :series-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" is-categorized class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-lazy-series-card
+          v-else-if="type === 'series'"
+          :key="entity.id"
+          :index="index"
+          :series-mount="entity"
+          :width="bookWidth"
+          :height="entityHeight"
+          :book-cover-aspect-ratio="bookCoverAspectRatio"
+          :is-alt-view-enabled="altViewEnabled"
+          is-categorized
+          class="mx-1 relative"
+          :class="getItemAnimationClass(index)"
+          :style="getItemAnimationStyle(index)"
+        />
         <cards-author-card v-else-if="type === 'authors'" :key="entity.id" :width="bookWidth" :height="bookWidth" :author="entity" :size-multiplier="sizeMultiplier" class="mx-1" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
       </template>
     </div>
