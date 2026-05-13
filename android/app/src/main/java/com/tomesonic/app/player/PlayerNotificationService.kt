@@ -428,6 +428,40 @@ class PlayerNotificationService : MediaLibraryService() {
     chapterNavigationHelper = ChapterNavigationHelper(exoPlayer, audiobookProgressTracker)
     Log.d(tag, "Initialized new Media3 MediaSource architecture with direct ExoPlayer usage")
 
+    // When the async artwork prefetch finishes (e.g. shortly after a new book
+    // is prepared), push a metadata refresh so the Wear OS bridge picks up
+    // the new artworkData bytes for the currently playing chapter. Without
+    // this, the first chapter of a new book is broadcast with artworkData=null
+    // and Wear keeps showing the previous book's cached bitmap.
+    audiobookMediaSourceBuilder.onArtworkLoaded = { uri, bytes ->
+      val session = currentPlaybackSession
+      val currentCoverUri = session?.getCoverUri(this)
+      if (session == null || currentCoverUri != uri) {
+        Log.d(tag, "onArtworkLoaded: ignoring stale artwork for uri=$uri (current=$currentCoverUri)")
+      } else {
+        try {
+          val currentChapter = chapterNavigationHelper.getCurrentChapter()
+          if (currentChapter != null) {
+            val chapterIndex = chapterNavigationHelper.getCurrentChapterIndex()
+            val chapterDuration = currentChapter.endMs - currentChapter.startMs
+            Handler(Looper.getMainLooper()).post {
+              mediaSessionManager.updateChapterMetadata(
+                chapterTitle = currentChapter.title ?: "Chapter ${chapterIndex + 1}",
+                chapterDuration = chapterDuration,
+                bookTitle = session.displayTitle ?: "",
+                author = session.displayAuthor,
+                artworkUri = uri,
+                artworkData = bytes
+              )
+              Log.d(tag, "onArtworkLoaded: refreshed chapter metadata with ${bytes.size} artwork bytes for uri=$uri")
+            }
+          }
+        } catch (e: Exception) {
+          Log.w(tag, "onArtworkLoaded: failed to refresh metadata for uri=$uri", e)
+        }
+      }
+    }
+
     // Now initialize MediaSession with the direct ExoPlayer
     if (currentPlayer != null) {
         mediaSessionManager.initializeMediaSession(notificationId, channelId, sessionActivityPendingIntent, currentPlayer)

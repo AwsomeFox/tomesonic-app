@@ -67,6 +67,14 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     private val artworkCacheLock = Any()
 
     /**
+     * Called on the artwork loader thread once an async artwork prefetch
+     * completes successfully. Lets the service push a metadata refresh so
+     * downstream consumers (notification, Wear OS bridge) pick up the new
+     * artworkData bytes for the first chapter of a freshly-prepared session.
+     */
+    var onArtworkLoaded: ((uri: Uri, bytes: ByteArray) -> Unit)? = null
+
+    /**
      * Get the chapter segments from the last built MediaSource
      */
     fun getLastChapterSegments(): List<ChapterSegment> = lastChapterSegments
@@ -447,6 +455,15 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
                 return cachedArtworkData
             }
 
+            // URI changed (new book). Drop the previous book's bytes so we don't
+            // accidentally hand them out, and so the Wear OS bridge sees a clean
+            // transition once the new bytes are loaded.
+            if (cachedArtworkUri != null && cachedArtworkUri != uri) {
+                Log.d(TAG, "Artwork URI changed (${cachedArtworkUri} -> $uri); clearing previous cache")
+                cachedArtworkUri = null
+                cachedArtworkData = null
+            }
+
             if (artworkLoadInProgressUri == uri) {
                 Log.d(TAG, "Artwork load already in progress for uri=$uri")
                 return null
@@ -510,11 +527,17 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
                     val normalizedBitmap = normalizeArtworkBitmap(bitmap)
                     val output = ByteArrayOutputStream()
                     normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, 80, output)
+                    val bytes = output.toByteArray()
                     synchronized(artworkCacheLock) {
                         cachedArtworkUri = uri
-                        cachedArtworkData = output.toByteArray()
+                        cachedArtworkData = bytes
                     }
-                    Log.d(TAG, "Prefetched artwork bitmap for uri=$uri (${normalizedBitmap.width}x${normalizedBitmap.height}, ${cachedArtworkData?.size ?: 0} bytes)")
+                    Log.d(TAG, "Prefetched artwork bitmap for uri=$uri (${normalizedBitmap.width}x${normalizedBitmap.height}, ${bytes.size} bytes)")
+                    try {
+                        onArtworkLoaded?.invoke(uri, bytes)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "onArtworkLoaded listener threw for uri=$uri", e)
+                    }
                 } catch (e: Exception) {
                     Log.w(TAG, "Prefetch failed for artwork uri=$uri", e)
                 } finally {
