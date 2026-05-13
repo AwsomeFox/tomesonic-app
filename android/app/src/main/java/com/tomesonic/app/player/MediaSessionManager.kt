@@ -281,13 +281,14 @@ class MediaSessionManager(
             // Use Media3 1.8.0+ recommended way to update metadata without replacing MediaItem
             val metadataBuilder = session.player.currentMediaItem?.mediaMetadata?.buildUpon()
                 ?: MediaMetadata.Builder()
+            val subtitleText = if (author.isNullOrBlank()) bookTitle else "$bookTitle • $author"
 
             metadataBuilder
                 .setTitle(chapterTitle)
                 .setDisplayTitle(chapterTitle)
-                .setArtist("$bookTitle • $author")
-                .setAlbumArtist("$bookTitle • $author")
-                .setSubtitle("$bookTitle • $author")
+                .setArtist(subtitleText)
+                .setAlbumArtist(subtitleText)
+                .setSubtitle(subtitleText)
                 .setAlbumTitle(author)
                 .setArtworkUri(artworkUri)
                 .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)

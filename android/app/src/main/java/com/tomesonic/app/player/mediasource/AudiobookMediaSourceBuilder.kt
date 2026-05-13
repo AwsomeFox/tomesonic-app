@@ -429,13 +429,9 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         val chapter = playbackSession.chapters.getOrNull(segment.chapterIndex)
         val baseMetadata = playbackSession.getExoMediaMetadata(context, null, chapter, segment.chapterIndex)
 
-        // Intentionally do NOT embed artworkData here. Media3's notification provider
-        // prefers artworkData bytes when present, which means we'd be capping the
-        // notification's cover quality to whatever we re-encode here. By leaving
-        // only artworkUri, the session's BitmapLoader fetches the cover at its
-        // native resolution for the phone notification and Wear OS card.
-
-        // UPDATE: Adding artworkData (small) for better compatibility with Wear OS bridge
+        // Keep artworkUri so the phone notification can resolve higher-quality artwork
+        // through the session BitmapLoader, but also embed a small artworkData payload
+        // for Wear OS/bridge surfaces that rely on metadata bytes instead of URI fetches.
         val artworkData = getArtworkDataForUri(baseMetadata.artworkUri)
 
         val builder = MediaMetadata.Builder()

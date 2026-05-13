@@ -25,6 +25,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import java.util.concurrent.TimeUnit
 // MIGRATION-DEFERRED: CAST - Commented out for migration
 // import com.google.android.gms.cast.MediaInfo
 // import com.google.android.gms.cast.MediaQueueItem
@@ -691,22 +692,33 @@ class PlaybackSession(
   fun getArtworkData(ctx: Context, size: Int = 300): ByteArray? {
     try {
       val uri = getCoverUri(ctx)
-      val bitmap = if (Build.VERSION.SDK_INT >= 28) {
-        val source = ImageDecoder.createSource(ctx.contentResolver, uri)
-        ImageDecoder.decodeBitmap(source) { decoder, info, source ->
-          decoder.setTargetSize(size, size)
-          decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+      val bitmap = when (uri.scheme?.lowercase()) {
+        "http", "https" -> {
+          Glide.with(ctx)
+              .asBitmap()
+              .load(uri)
+              .submit(size, size)
+              .get(8, TimeUnit.SECONDS)
         }
-      } else {
-        ctx.contentResolver.openInputStream(uri)?.use { inputStream ->
-          val options = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-          }
-          BitmapFactory.decodeStream(inputStream, null, options)
-          options.inSampleSize = calculateInSampleSize(options, size, size)
-          options.inJustDecodeBounds = false
-          ctx.contentResolver.openInputStream(uri)?.use { inputStream2 ->
-            BitmapFactory.decodeStream(inputStream2, null, options)
+        else -> {
+          if (Build.VERSION.SDK_INT >= 28) {
+            val source = ImageDecoder.createSource(ctx.contentResolver, uri)
+            ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+              decoder.setTargetSize(size, size)
+              decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+            }
+          } else {
+            ctx.contentResolver.openInputStream(uri)?.use { inputStream ->
+              val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+              }
+              BitmapFactory.decodeStream(inputStream, null, options)
+              options.inSampleSize = calculateInSampleSize(options, size, size)
+              options.inJustDecodeBounds = false
+              ctx.contentResolver.openInputStream(uri)?.use { inputStream2 ->
+                BitmapFactory.decodeStream(inputStream2, null, options)
+              }
+            }
           }
         }
       }
