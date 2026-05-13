@@ -803,23 +803,33 @@ class AbsAudioPlayer : Plugin() {
           return@post
         }
         val playItemRequestPayload = playerNotificationService.getPlayItemRequestPayload(false)
-        playerNotificationService.mediaProgressSyncer.stop {
-          apiHandler.playLibraryItem(libraryItemId, episodeId, playItemRequestPayload) {
-            if (it == null) {
-              call.resolve(JSObject("{\"error\":\"Server play request failed\"}"))
-            } else {
-              if (startTimeOverride != null) {
-                Log.d(tag, "prepareLibraryItem: Using start time override $startTimeOverride")
-                it.currentTime = startTimeOverride
-              }
 
-              Handler(Looper.getMainLooper()).post {
-                Log.d(tag, "Preparing Player playback session ${jacksonMapper.writeValueAsString(it)}")
-                PlayerListener.lazyIsPlaying = false
-                playerNotificationService.preparePlayer(it, playWhenReady, playbackRate)
-              }
-              call.resolve(JSObject(jacksonMapper.writeValueAsString(it)))
+        // Run the previous session's progress sync (HTTP) and the new /play
+        // request in parallel. They target unrelated server resources (the
+        // sync writes the old item's progress, the play creates a new session
+        // for the new item) so there's no ordering requirement. Sequencing
+        // them was costing a full HTTP round-trip on every book switch.
+        Log.d(tag, "prepareLibraryItem: kicking off progress sync + /play in parallel")
+        val prepareStartMs = System.currentTimeMillis()
+        playerNotificationService.mediaProgressSyncer.stop {
+          Log.d(tag, "prepareLibraryItem: progress sync stop completed in ${System.currentTimeMillis() - prepareStartMs}ms")
+        }
+        apiHandler.playLibraryItem(libraryItemId, episodeId, playItemRequestPayload) {
+          Log.d(tag, "prepareLibraryItem: /play response in ${System.currentTimeMillis() - prepareStartMs}ms")
+          if (it == null) {
+            call.resolve(JSObject("{\"error\":\"Server play request failed\"}"))
+          } else {
+            if (startTimeOverride != null) {
+              Log.d(tag, "prepareLibraryItem: Using start time override $startTimeOverride")
+              it.currentTime = startTimeOverride
             }
+
+            Handler(Looper.getMainLooper()).post {
+              Log.d(tag, "Preparing Player playback session ${jacksonMapper.writeValueAsString(it)}")
+              PlayerListener.lazyIsPlaying = false
+              playerNotificationService.preparePlayer(it, playWhenReady, playbackRate)
+            }
+            call.resolve(JSObject(jacksonMapper.writeValueAsString(it)))
           }
         }
       }
