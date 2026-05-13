@@ -53,8 +53,8 @@ android {
     applicationId "com.tomesonic.app"
     minSdkVersion rootProject.ext.minSdkVersion
     targetSdkVersion rootProject.ext.targetSdkVersion
-    versionCode 1214
-    versionName "0.12.14-beta"
+    versionCode 1215
+    versionName "0.12.15-beta"
     testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     manifestPlaceholders = [
       "appAuthRedirectScheme": "com.tomesonic.app"
@@ -68,7 +68,12 @@ android {
   buildTypes {
     debug {
       signingConfig signingConfigs.debug
+      applicationIdSuffix ".debug"
       versionNameSuffix "-debug"
+      resValue "string", "app_name", "TomeSonic Debug"
+      manifestPlaceholders = [
+        "appAuthRedirectScheme": "com.tomesonic.app.debug"
+      ]
       minifyEnabled false
       proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
     }

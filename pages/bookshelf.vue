@@ -1,7 +1,7 @@
 <template>
   <div class="w-full h-full bg-surface-dynamic">
     <home-bookshelf-toolbar v-show="!hideToolbar" />
-    <div id="bookshelf-wrapper" class="main-content overflow-y-auto relative bg-surface-dynamic library-scroll-container" :class="hideToolbar ? 'no-toolbar' : ''">
+    <div id="bookshelf-wrapper" class="main-content overflow-y-auto overflow-x-hidden relative bg-surface-dynamic library-scroll-container" :class="hideToolbar ? 'no-toolbar' : ''">
       <nuxt-child />
     </div>
   </div>
@@ -42,6 +42,7 @@ export default {
   max-height: calc(100% - 48px);
   min-height: calc(100% - 48px);
   max-width: 100vw;
+  overscroll-behavior-x: none;
   background-color: rgb(var(--md-sys-color-surface));
 }
 .main-content.no-toolbar {

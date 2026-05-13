@@ -52,6 +52,10 @@
   --md-sys-color-inverse-on-surface: 245 239 244;
   --md-sys-color-inverse-primary: 208 188 255;
 
+  /* Text over media artwork (always light, replaced by dynamic dark palette when available) */
+  --md-sys-color-on-media: 231 225 229;
+  --md-sys-color-on-media-variant: 202 196 208;
+
   /* State layers */
   --md-sys-state-hover-opacity: 0.08;
   --md-sys-state-focus-opacity: 0.12;
@@ -147,6 +151,9 @@
     --md-sys-color-inverse-surface: 231 225 229;
     --md-sys-color-inverse-on-surface: 53 47 51;
     --md-sys-color-inverse-primary: 103 80 164;
+
+    --md-sys-color-on-media: 231 225 229;
+    --md-sys-color-on-media-variant: 202 196 208;
   }
 }
 
@@ -203,6 +210,9 @@
   --md-sys-color-inverse-surface: 231 225 229;
   --md-sys-color-inverse-on-surface: 53 47 51;
   --md-sys-color-inverse-primary: 103 80 164;
+
+  --md-sys-color-on-media: 231 225 229;
+  --md-sys-color-on-media-variant: 202 196 208;
 }
 
 /* Material 3 Component Styles */
@@ -236,7 +246,7 @@
 }
 
 .material-3-input {
-  @apply bg-surface-container-highest rounded-md px-4 py-3 text-body-large text-on-surface border border-outline-variant;
+  @apply rounded-md px-4 py-3 text-body-large border border-outline-variant;
 }
 
 .material-3-input:focus {
@@ -416,13 +426,13 @@
 
 /* Force all outlined text inputs to have good visibility */
 .material-3-input.bg-dialog-button {
-  background-color: rgba(var(--md-sys-color-surface-container-highest), 1) !important;
+  background-color: rgba(var(--md-sys-color-surface-container), 1) !important;
   color: rgb(var(--md-sys-color-on-surface)) !important;
 }
 
 /* Ensure all text inputs have proper contrast in dark mode */
 [data-theme="dark"] .material-3-input {
-  background-color: rgba(var(--md-sys-color-surface-container-highest), 1) !important;
+  background-color: rgba(var(--md-sys-color-surface-container), 1) !important;
   color: rgb(var(--md-sys-color-on-surface)) !important;
 }
 

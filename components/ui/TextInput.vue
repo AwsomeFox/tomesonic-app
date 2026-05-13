@@ -78,8 +78,8 @@ export default {
           classes.push('border-outline-variant')
         }
       } else if (this.variant === 'outlined') {
-        // Material 3 outlined inputs should have surface background
-        classes.push('bg-surface')
+        // Use surface-container because dynamic color service always updates this role.
+        classes.push('bg-surface-container')
         classes.push('rounded-md')
         classes.push('border-2')
         if (this.focused) {
@@ -96,6 +96,10 @@ export default {
         classes.push('text-on-surface opacity-38')
       } else {
         classes.push('text-on-surface')
+      }
+
+      if (this.readonly) {
+        classes.push('cursor-pointer')
       }
 
       // Padding based on icons
@@ -152,6 +156,13 @@ export default {
 
 .material-3-input:focus::placeholder {
   @apply text-on-surface-variant opacity-60;
+}
+
+.material-3-input[readonly] {
+  color: rgb(var(--md-sys-color-on-surface)) !important;
+  -webkit-text-fill-color: rgb(var(--md-sys-color-on-surface)) !important;
+  background-color: rgb(var(--md-sys-color-surface-container)) !important;
+  opacity: 1;
 }
 
 input[type='time']::-webkit-calendar-picker-indicator {

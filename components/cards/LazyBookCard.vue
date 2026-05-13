@@ -1,5 +1,5 @@
 <template>
-  <div ref="card" :id="`book-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
+  <div ref="card" :id="`book-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card book-card-shell p-0 rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
     <!-- Cover image container - fills entire card (first in DOM, lowest z-index) -->
     <div class="cover-container absolute inset-0 z-0">
       <!-- Blurred background for aspect ratio mismatch -->
@@ -39,17 +39,21 @@
       </div>
     </div>
 
-    <!-- Alternative bookshelf title/author/sort with improved visibility -->
-    <div v-if="isAltViewEnabled && (!imageReady || !hasCover || isMaterialSymbolPlaceholder)" class="absolute bottom-2 z-50 max-w-[80%]" :class="showPlayButton ? 'right-2' : 'left-2'">
-      <div class="bg-card-title-overlay backdrop-blur-md rounded-lg p-2 shadow-elevation-3 border border-outline border-opacity-25">
-        <div :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }" class="flex items-center">
-          <p class="truncate text-on-surface font-medium" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
-            {{ displayTitle }}
+    <!-- Alt-view metadata panel to match Author/Series Material 3 pattern -->
+    <div v-if="isAltViewEnabled" class="book-meta-panel absolute left-0 right-0 bottom-0 z-50">
+      <div class="book-meta-content" :style="showPlayButton ? { paddingLeft: 3.6 * sizeMultiplier + 'rem' } : null">
+        <div :style="{ fontSize: 0.76 * sizeMultiplier + 'rem' }" class="book-meta-title-row">
+          <p class="book-meta-title" :style="{ fontSize: 0.78 * sizeMultiplier + 'rem' }">
+            <span class="book-meta-title-text">{{ displayTitle }}</span>
           </p>
           <widgets-explicit-indicator v-if="isExplicit" class="ml-1" />
         </div>
-        <p class="truncate text-on-surface-variant" :style="{ fontSize: 0.6 * sizeMultiplier + 'rem' }">{{ displayLineTwo || '&nbsp;' }}</p>
-        <p v-if="displaySortLine" class="truncate text-on-surface-variant" :style="{ fontSize: 0.6 * sizeMultiplier + 'rem' }">{{ displaySortLine }}</p>
+        <p class="book-meta-line" :style="{ fontSize: 0.68 * sizeMultiplier + 'rem' }">
+          <span class="book-meta-line-text">{{ displayLineTwo || '&nbsp;' }}</span>
+        </p>
+        <p v-if="displaySortLine" class="book-meta-line" :style="{ fontSize: 0.68 * sizeMultiplier + 'rem' }">
+          <span class="book-meta-line-text">{{ displaySortLine }}</span>
+        </p>
       </div>
     </div>
 
@@ -90,23 +94,9 @@
       <div v-else class="relative rounded-full backdrop-blur-sm bg-surface-container bg-opacity-80 border-2 border-outline-variant border-opacity-40 shadow-elevation-3" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
         <!-- Background circle (subtle) -->
         <svg class="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-          <path
-            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-            fill="none"
-            stroke="rgba(var(--md-sys-color-outline-variant), 0.3)"
-            stroke-width="2"
-            stroke-dasharray="100, 100"
-          />
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(var(--md-sys-color-outline-variant), 0.3)" stroke-width="2" stroke-dasharray="100, 100" />
           <!-- Progress circle -->
-          <path
-            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-            fill="none"
-            stroke="rgb(var(--md-sys-color-primary))"
-            stroke-width="3"
-            stroke-linecap="round"
-            :stroke-dasharray="`${userProgressPercent * 100}, 100`"
-            class="transition-all duration-300 ease-out"
-          />
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgb(var(--md-sys-color-primary))" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${userProgressPercent * 100}, 100`" />
         </svg>
       </div>
     </div>
@@ -641,6 +631,10 @@ export default {
   transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 300ms cubic-bezier(0.2, 0, 0, 1);
 }
 
+.book-card-shell {
+  padding: 0 !important;
+}
+
 .material-3-card::before {
   content: '';
   position: absolute;
@@ -691,7 +685,7 @@ export default {
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  filter: blur(20px);
+  filter: blur(8px);
   transform: scale(1.1);
   top: -10%;
   left: -10%;
@@ -722,8 +716,8 @@ export default {
 
 /* Ensure overlays are always visible */
 .material-3-card .bg-opacity-95 {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 /* Icon rings for better visibility */
@@ -750,5 +744,83 @@ export default {
 /* Expressive easing definition */
 .ease-expressive {
   transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.book-meta-panel {
+  background: transparent;
+  isolation: isolate;
+}
+
+.book-meta-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.9) 50%, rgba(var(--md-sys-color-surface-container-high), 0.99) 100%);
+  backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+  -webkit-backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+}
+
+.book-meta-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.book-meta-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.book-meta-title {
+  color: rgb(var(--md-sys-color-on-media));
+  font-weight: 600;
+  line-height: 1.2;
+  padding-left: 3px;
+  padding-right: 3px;
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.book-meta-title-text {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 16px;
+  padding-right: 16px;
+  margin-left: -13px;
+  margin-right: -13px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+.book-meta-line {
+  color: rgb(var(--md-sys-color-on-media-variant));
+  font-weight: 500;
+  line-height: 1.2;
+  padding-left: 3px;
+  padding-right: 3px;
+  margin: 0;
+}
+
+.book-meta-line-text {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 16px;
+  padding-right: 16px;
+  margin-left: -13px;
+  margin-right: -13px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.82);
 }
 </style>

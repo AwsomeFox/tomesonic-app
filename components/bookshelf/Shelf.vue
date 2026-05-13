@@ -6,23 +6,10 @@
 
     <div class="flex items-end px-3 max-w-full overflow-x-auto shelf-scroll-container" :class="altViewEnabled ? '' : 'bookshelfRow'" :style="{ height: shelfHeight + 'px', paddingBottom: entityPaddingBottom + 'px' }">
       <template v-for="(entity, index) in entities">
-        <cards-lazy-book-card v-if="type === 'book' || type === 'podcast'" :key="entity.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative item-loading-animation" :class="`loading-delay-${Math.min(index, 12)}`" :style="{ animationDelay: index * 80 + 'ms' }" />
-        <cards-lazy-book-card v-if="type === 'episode'" :key="entity.recentEpisode.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative item-loading-animation" :class="`loading-delay-${Math.min(index, 12)}`" :style="{ animationDelay: index * 80 + 'ms' }" />
-        <cards-lazy-series-card
-          v-else-if="type === 'series'"
-          :key="entity.id"
-          :index="index"
-          :series-mount="entity"
-          :width="bookWidth"
-          :height="entityHeight"
-          :book-cover-aspect-ratio="bookCoverAspectRatio"
-          :is-alt-view-enabled="altViewEnabled"
-          is-categorized
-          class="mx-1 relative item-loading-animation"
-          :class="`loading-delay-${Math.min(index, 12)}`"
-          :style="{ animationDelay: index * 80 + 'ms' }"
-        />
-        <cards-author-card v-else-if="type === 'authors'" :key="entity.id" :width="bookWidth" :height="bookHeight" :author="entity" :size-multiplier="sizeMultiplier" class="mx-1 item-loading-animation" :class="`loading-delay-${Math.min(index, 12)}`" :style="{ animationDelay: index * 80 + 'ms' }" />
+        <cards-lazy-book-card v-if="type === 'book' || type === 'podcast'" :key="entity.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-lazy-book-card v-if="type === 'episode'" :key="entity.recentEpisode.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-lazy-series-card v-else-if="type === 'series'" :key="entity.id" :index="index" :series-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" is-categorized class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-author-card v-else-if="type === 'authors'" :key="entity.id" :width="bookWidth" :height="bookWidth" :author="entity" :size-multiplier="sizeMultiplier" class="mx-1" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
       </template>
     </div>
 
@@ -43,6 +30,10 @@ export default {
     entities: {
       type: Array,
       default: () => []
+    },
+    animateItems: {
+      type: Boolean,
+      default: true
     }
   },
   data() {
@@ -71,6 +62,7 @@ export default {
       return this.bookWidth * 1.6
     },
     entityHeight() {
+      if (this.type === 'authors') return this.bookWidth
       return this.bookHeight
     },
     sizeMultiplier() {
@@ -87,7 +79,16 @@ export default {
       return this.$store.getters['getAltViewEnabled']
     }
   },
-  methods: {},
+  methods: {
+    getItemAnimationClass(index) {
+      if (!this.animateItems) return []
+      return ['item-loading-animation', `loading-delay-${Math.min(index, 8)}`]
+    },
+    getItemAnimationStyle(index) {
+      if (!this.animateItems) return {}
+      return { animationDelay: Math.min(index, 8) * 35 + 'ms' }
+    }
+  },
   mounted() {},
   beforeDestroy() {}
 }
@@ -116,22 +117,15 @@ export default {
 /* Material 3 Loading Animations */
 .item-loading-animation {
   opacity: 0;
-  transform: translateY(24px) scale(0.8);
-  animation: materialLoadIn 600ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+  animation: materialLoadIn 220ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
 @keyframes materialLoadIn {
   0% {
     opacity: 0;
-    transform: translateY(24px) scale(0.8);
-  }
-  60% {
-    opacity: 0.8;
-    transform: translateY(-4px) scale(1.02);
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
 }
 
@@ -140,55 +134,41 @@ export default {
   animation-delay: 0ms;
 }
 .loading-delay-1 {
-  animation-delay: 80ms;
+  animation-delay: 35ms;
 }
 .loading-delay-2 {
-  animation-delay: 160ms;
+  animation-delay: 70ms;
 }
 .loading-delay-3 {
-  animation-delay: 240ms;
+  animation-delay: 105ms;
 }
 .loading-delay-4 {
-  animation-delay: 320ms;
+  animation-delay: 140ms;
 }
 .loading-delay-5 {
-  animation-delay: 400ms;
+  animation-delay: 175ms;
 }
 .loading-delay-6 {
-  animation-delay: 480ms;
+  animation-delay: 210ms;
 }
 .loading-delay-7 {
-  animation-delay: 560ms;
+  animation-delay: 245ms;
 }
 .loading-delay-8 {
-  animation-delay: 640ms;
-}
-.loading-delay-9 {
-  animation-delay: 720ms;
-}
-.loading-delay-10 {
-  animation-delay: 800ms;
-}
-.loading-delay-11 {
-  animation-delay: 880ms;
-}
-.loading-delay-12 {
-  animation-delay: 960ms;
+  animation-delay: 280ms;
 }
 
 /* Shelf label animation */
 .shelf-loading {
-  animation: shelfLabelIn 500ms cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+  animation: shelfLabelIn 240ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
 @keyframes shelfLabelIn {
   0% {
     opacity: 0;
-    transform: translateX(-16px);
   }
   100% {
     opacity: 1;
-    transform: translateX(0);
   }
 }
 

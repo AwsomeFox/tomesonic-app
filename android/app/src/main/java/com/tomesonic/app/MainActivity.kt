@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import androidx.core.app.ActivityCompat
@@ -73,6 +74,8 @@ class MainActivity : BridgeActivity() {
     super.onCreate(savedInstanceState)
     Log.d(tag, "onCreate")
 
+    requestHighRefreshModeIfAvailable()
+
     // Initialize Cast SDK
     initializeCast()
 
@@ -80,6 +83,7 @@ class MainActivity : BridgeActivity() {
   // See: https://developer.android.com/develop/ui/views/layout/edge-to-edge
   WindowCompat.setDecorFitsSystemWindows(window, false)
     val webView: WebView = findViewById(R.id.webview)
+    webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
     // Keep injecting CSS safe-area insets but DO NOT add margins so the webview
     // content draws behind the system bars (transparent nav/status bar)
     webView.setOnApplyWindowInsetsListener { v, insets ->
@@ -177,6 +181,35 @@ class MainActivity : BridgeActivity() {
     Handler(Looper.getMainLooper()).postDelayed({
       updateSafeAreaInsets()
     }, 200)
+  }
+
+  private fun requestHighRefreshModeIfAvailable() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+
+    try {
+      @Suppress("DEPRECATION")
+      val targetDisplay = windowManager.defaultDisplay
+      val currentMode = targetDisplay.mode
+
+      val preferredMode = targetDisplay.supportedModes
+        .filter { mode ->
+          mode.physicalWidth == currentMode.physicalWidth &&
+            mode.physicalHeight == currentMode.physicalHeight
+        }
+        .maxByOrNull { mode -> mode.refreshRate } ?: currentMode
+
+      if (preferredMode.modeId == currentMode.modeId || preferredMode.refreshRate < 89f) {
+        Log.d(tag, "Display mode unchanged at ${currentMode.refreshRate}Hz")
+        return
+      }
+
+      val attrs = window.attributes
+      attrs.preferredDisplayModeId = preferredMode.modeId
+      window.attributes = attrs
+      Log.d(tag, "Requested high refresh mode ${preferredMode.refreshRate}Hz (modeId=${preferredMode.modeId})")
+    } catch (e: Exception) {
+      Log.w(tag, "Unable to request high refresh mode", e)
+    }
   }
 
   private fun updateSafeAreaInsets() {

@@ -94,7 +94,10 @@ class NetworkConnectivityManager(
                 MediaLibrarySessionCallback.AUTO_MEDIA_ROOT,
                 MediaLibrarySessionCallback.LIBRARIES_ROOT,
                 MediaLibrarySessionCallback.RECENTLY_ROOT,
-                MediaLibrarySessionCallback.CONTINUE_ROOT
+                MediaLibrarySessionCallback.DISCOVER_NEW_BOOKS_ROOT,
+                MediaLibrarySessionCallback.DISCOVER_BOOKS_ROOT,
+                MediaLibrarySessionCallback.CONTINUE_ROOT,
+                MediaLibrarySessionCallback.CONTINUE_SERIES_ROOT
             )
         }
 

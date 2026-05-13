@@ -12,10 +12,12 @@ class DynamicColorService {
 
     try {
       const storedColors = localStorage.getItem('dynamicColors')
+      const storedOverlayColors = localStorage.getItem('dynamicOverlayColors')
       if (storedColors) {
         const colors = JSON.parse(storedColors)
+        const overlayColors = storedOverlayColors ? JSON.parse(storedOverlayColors) : null
         console.log('DynamicColorService: Found stored colors, applying immediately...')
-        this.applyColorsToDOM(colors)
+        this.applyColorsToDOM(colors, overlayColors)
         this.currentColors = colors
         return true
       } else {
@@ -38,8 +40,18 @@ class DynamicColorService {
     }
   }
 
+  // Store dark overlay text colors used on media cards across both light/dark modes
+  storeOverlayColors(colors) {
+    try {
+      localStorage.setItem('dynamicOverlayColors', JSON.stringify(colors))
+      console.log('DynamicColorService: Overlay colors stored in localStorage')
+    } catch (error) {
+      console.error('DynamicColorService: Error storing overlay colors:', error)
+    }
+  }
+
   // Apply colors directly to DOM
-  applyColorsToDOM(colors) {
+  applyColorsToDOM(colors, overlayColors = null) {
     console.log('=== APPLYING COLORS TO DOM ===')
     console.log('DynamicColorService: Applying colors to DOM...')
     console.log('DynamicColorService: Colors object received:', colors)
@@ -51,20 +63,23 @@ class DynamicColorService {
       return
     }
 
+    const fallbackSurface = colors.surface || colors.background
+    const fallbackVariant = colors.surfaceVariant || fallbackSurface
+
     // Apply all Material You color variables
     const colorMapping = {
       '--md-sys-color-primary': colors.primary,
       '--md-sys-color-on-primary': colors.onPrimary,
-      '--md-sys-color-primary-container': colors.primaryContainer,
-      '--md-sys-color-on-primary-container': colors.onPrimaryContainer,
+      '--md-sys-color-primary-container': colors.primaryContainer || colors.primary,
+      '--md-sys-color-on-primary-container': colors.onPrimaryContainer || colors.onPrimary,
       '--md-sys-color-secondary': colors.secondary,
       '--md-sys-color-on-secondary': colors.onSecondary,
-      '--md-sys-color-secondary-container': colors.secondaryContainer,
-      '--md-sys-color-on-secondary-container': colors.onSecondaryContainer,
+      '--md-sys-color-secondary-container': colors.secondaryContainer || colors.secondary,
+      '--md-sys-color-on-secondary-container': colors.onSecondaryContainer || colors.onSecondary,
       '--md-sys-color-tertiary': colors.tertiary,
       '--md-sys-color-on-tertiary': colors.onTertiary,
-      '--md-sys-color-tertiary-container': colors.tertiaryContainer,
-      '--md-sys-color-on-tertiary-container': colors.onTertiaryContainer,
+      '--md-sys-color-tertiary-container': colors.tertiaryContainer || colors.tertiary,
+      '--md-sys-color-on-tertiary-container': colors.onTertiaryContainer || colors.onTertiary,
       '--md-sys-color-error': colors.error,
       '--md-sys-color-on-error': colors.onError,
       '--md-sys-color-error-container': colors.errorContainer,
@@ -73,17 +88,17 @@ class DynamicColorService {
       '--md-sys-color-on-background': colors.onBackground,
       '--md-sys-color-surface': colors.surface,
       '--md-sys-color-on-surface': colors.onSurface,
-      '--md-sys-color-surface-variant': colors.surfaceVariant,
+      '--md-sys-color-surface-variant': fallbackVariant,
       '--md-sys-color-on-surface-variant': colors.onSurfaceVariant,
       '--md-sys-color-outline': colors.outline,
       '--md-sys-color-outline-variant': colors.outlineVariant,
-      '--md-sys-color-surface-dim': colors.surfaceDim,
-      '--md-sys-color-surface-bright': colors.surfaceBright,
-      '--md-sys-color-surface-container-lowest': colors.surfaceContainerLowest,
-      '--md-sys-color-surface-container-low': colors.surfaceContainerLow,
-      '--md-sys-color-surface-container': colors.surfaceContainer,
-      '--md-sys-color-surface-container-high': colors.surfaceContainerHigh,
-      '--md-sys-color-surface-container-highest': colors.surfaceContainerHighest,
+      '--md-sys-color-surface-dim': colors.surfaceDim || fallbackSurface,
+      '--md-sys-color-surface-bright': colors.surfaceBright || fallbackSurface,
+      '--md-sys-color-surface-container-lowest': colors.surfaceContainerLowest || fallbackSurface,
+      '--md-sys-color-surface-container-low': colors.surfaceContainerLow || fallbackSurface,
+      '--md-sys-color-surface-container': colors.surfaceContainer || fallbackSurface,
+      '--md-sys-color-surface-container-high': colors.surfaceContainerHigh || colors.surfaceContainer || fallbackSurface,
+      '--md-sys-color-surface-container-highest': colors.surfaceContainerHighest || colors.surfaceContainerHigh || colors.surfaceContainer || fallbackSurface,
       '--md-sys-color-inverse-surface': colors.inverseSurface,
       '--md-sys-color-inverse-on-surface': colors.inverseOnSurface,
       '--md-sys-color-inverse-primary': colors.inversePrimary
@@ -101,6 +116,18 @@ class DynamicColorService {
         console.warn(`DynamicColorService: Missing color for ${property}`)
       }
     })
+
+    // Use dark-scheme dynamic colors for text over media cards in both modes.
+    // This keeps overlay text consistently light while still honoring Material You.
+    const overlayPrimaryHex = overlayColors?.onSurface || colors.inverseOnSurface || colors.onSurface
+    const overlaySecondaryHex = overlayColors?.onSurfaceVariant || colors.inverseOnSurface || colors.onSurfaceVariant || overlayPrimaryHex
+
+    if (overlayPrimaryHex) {
+      root.style.setProperty('--md-sys-color-on-media', this.hexToRgbString(overlayPrimaryHex))
+    }
+    if (overlaySecondaryHex) {
+      root.style.setProperty('--md-sys-color-on-media-variant', this.hexToRgbString(overlaySecondaryHex))
+    }
 
     // Mark that Material You colors are active
     root.setAttribute('data-monet-active', 'true')
@@ -202,9 +229,21 @@ class DynamicColorService {
         console.log('  - onSurface:', result.colors.onSurface)
         console.log('DynamicColorService: Total colors received:', Object.keys(result.colors).length)
 
+        let overlayColors = null
+        try {
+          const darkResult = await window.Capacitor.Plugins.DynamicColor.getSystemColors({ isDark: true })
+          if (darkResult && darkResult.colors) {
+            overlayColors = darkResult.colors
+            this.storeOverlayColors(darkResult.colors)
+            console.log('DynamicColorService: Loaded dark dynamic palette for media overlays')
+          }
+        } catch (darkError) {
+          console.warn('DynamicColorService: Could not load dark overlay palette, falling back to active palette', darkError)
+        }
+
         this.currentColors = result.colors
         this.storeColors(result.colors) // Store for next app load
-        this.applyColorsToDOM(result.colors) // Apply the full set of colors
+        this.applyColorsToDOM(result.colors, overlayColors) // Apply full colors + overlay text variables
         this.isInitialized = true
         console.log('DynamicColorService: Colors applied to DOM successfully')
       } else {
@@ -444,6 +483,7 @@ class DynamicColorService {
   clearStoredColors() {
     try {
       localStorage.removeItem('dynamicColors')
+      localStorage.removeItem('dynamicOverlayColors')
       console.log('DynamicColorService: Stored colors cleared')
     } catch (error) {
       console.error('DynamicColorService: Error clearing stored colors:', error)
@@ -480,6 +520,7 @@ class DynamicColorService {
       // Clear stored colors
       try {
         localStorage.removeItem('dynamicColors')
+        localStorage.removeItem('dynamicOverlayColors')
       } catch (error) {
         console.error('DynamicColorService: Error clearing stored colors:', error)
       }

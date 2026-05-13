@@ -3035,6 +3035,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     const val RECENTLY_ROOT = "__RECENTLY__"
     const val DOWNLOADS_ROOT = "__DOWNLOADS__"
     const val CONTINUE_ROOT = "__CONTINUE__"
+    const val CONTINUE_SERIES_ROOT = "__CONTINUE_SERIES__"
+    const val DISCOVER_NEW_BOOKS_ROOT = "__DISCOVER_NEW_BOOKS__"
+    const val DISCOVER_BOOKS_ROOT = "__DISCOVER_BOOKS__"
     const val LOCAL_ROOT = "__LOCAL__"
 
     // Android Auto package names for MediaBrowser validation
@@ -3148,7 +3151,7 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     // Load user media progress immediately so continue metadata can refresh as soon as possible.
     service.mediaManager.loadServerUserMediaProgress {
       Log.d("PlayerNotificationServ", "AALibrary: Preloaded user media progress")
-      service.notifyAndroidAutoBrowseChanged(CONTINUE_ROOT)
+      service.notifyAndroidAutoBrowseChanged(CONTINUE_ROOT, CONTINUE_SERIES_ROOT)
     }
 
     // Continue listening does not depend on library discovery, so load it in parallel.
@@ -3156,7 +3159,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       Log.d("PlayerNotificationServ", "AALibrary: Preloaded ${itemsInProgress.size} items in progress")
       service.notifyAndroidAutoBrowseChanged(
         AUTO_MEDIA_ROOT,
-        CONTINUE_ROOT
+        CONTINUE_ROOT,
+        CONTINUE_SERIES_ROOT
       )
     }
 
@@ -3177,6 +3181,9 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         service.notifyAndroidAutoBrowseChanged(
           AUTO_MEDIA_ROOT,
           RECENTLY_ROOT,
+          DISCOVER_NEW_BOOKS_ROOT,
+          DISCOVER_BOOKS_ROOT,
+          CONTINUE_SERIES_ROOT,
           LIBRARIES_ROOT
         )
       }
@@ -3217,17 +3224,33 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
               .build()
           )
 
-          // Recent root
+          // Continue series root
+          rootItems.add(
+            MediaItem.Builder()
+              .setMediaId(CONTINUE_SERIES_ROOT)
+              .setMediaMetadata(
+                MediaMetadata.Builder()
+                  .setTitle("Continue Series")
+                  .setIsBrowsable(true)
+                  .setIsPlayable(false)
+                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_series))
+                  .build()
+              )
+              .build()
+          )
+
+          // Discover root
           rootItems.add(
             MediaItem.Builder()
               .setMediaId(RECENTLY_ROOT)
               .setMediaMetadata(
                 MediaMetadata.Builder()
-                  .setTitle("Recently Added")
+                  .setTitle("Discover")
                   .setIsBrowsable(true)
                   .setIsPlayable(false)
                   .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.md_clock_outline))
+                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_discovery))
                   .build()
               )
               .build()
@@ -3274,13 +3297,25 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
         }
 
         RECENTLY_ROOT -> {
-          // Load recent items asynchronously
-          loadRecentItemsAsync(future, params)
+          // Discover root contains New Books + Discover sub-sections.
+          loadDiscoverSectionsAsync(future, params)
         }
 
         CONTINUE_ROOT -> {
           // Load continue items in a worker thread to avoid blocking browse callback threads.
           loadContinueItemsAsync(future, params)
+        }
+
+        CONTINUE_SERIES_ROOT -> {
+          loadContinueSeriesItemsAsync(future, params)
+        }
+
+        DISCOVER_NEW_BOOKS_ROOT -> {
+          loadDiscoverNewBooksAsync(future, params)
+        }
+
+        DISCOVER_BOOKS_ROOT -> {
+          loadDiscoverBooksAsync(future, params)
         }
 
         LOCAL_ROOT -> {
@@ -3719,6 +3754,418 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }
   }
 
+  private fun loadDiscoverSectionsAsync(
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    val discoverSections = listOf(
+      MediaItem.Builder()
+        .setMediaId(DISCOVER_NEW_BOOKS_ROOT)
+        .setMediaMetadata(
+          MediaMetadata.Builder()
+            .setTitle("New Books")
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.md_clock_outline))
+            .build()
+        )
+        .build(),
+      MediaItem.Builder()
+        .setMediaId(DISCOVER_BOOKS_ROOT)
+        .setMediaMetadata(
+          MediaMetadata.Builder()
+            .setTitle("Discover")
+            .setIsBrowsable(true)
+            .setIsPlayable(false)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_discovery))
+            .build()
+        )
+        .build()
+    )
+
+    future.set(LibraryResult.ofItemList(ImmutableList.copyOf(discoverSections), params))
+  }
+
+  private fun loadDiscoverNewBooksAsync(
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    androidAutoBrowseExecutor.execute {
+      val allRecentShelves = service.mediaManager.getAllCachedLibraryRecentShelves()
+      val dedupedBooks = LinkedHashMap<String, Pair<LibraryItem, String>>()
+
+      allRecentShelves.forEach { (libraryId, shelves) ->
+        val libraryName = service.mediaManager.getLibrary(libraryId)?.name ?: "Library"
+        shelves.forEach { shelf ->
+          if (shelf is LibraryShelfBookEntity && shelf.id == "recently-added") {
+            shelf.entities
+              ?.filter { it.checkHasTracks() }
+              ?.sortedByDescending { it.addedAt }
+              ?.forEach { book ->
+                if (!dedupedBooks.containsKey(book.id)) {
+                  dedupedBooks[book.id] = Pair(book, libraryName)
+                }
+              }
+          }
+        }
+      }
+
+      val resultItems = if (dedupedBooks.isEmpty()) {
+        listOf(
+          MediaItem.Builder()
+            .setMediaId("__NO_NEW_BOOKS__")
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle("No new books")
+                .setSubtitle("New additions will appear here")
+                .setIsBrowsable(false)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .build()
+            )
+            .build()
+        )
+      } else {
+        dedupedBooks.values.map { (book, libraryName) ->
+          val subtitle = "${formatAuthorWithDownloadIcon(book.id, book.authorName)} • $libraryName"
+          MediaItem.Builder()
+            .setMediaId(book.id)
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle(book.title ?: "Unknown Title")
+                .setArtist(subtitle)
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                .setArtworkUri(book.getCoverUri())
+                .build()
+            )
+            .build()
+        }
+      }
+
+      Handler(Looper.getMainLooper()).post {
+        if (!future.isDone) {
+          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(resultItems), params))
+        }
+      }
+    }
+  }
+
+  private fun loadDiscoverBooksAsync(
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    androidAutoBrowseExecutor.execute {
+      val dedupedBooks = LinkedHashMap<String, Pair<LibraryItem, String>>()
+
+      service.mediaManager.serverLibraries
+        .filter { it.mediaType == "book" }
+        .forEach { library ->
+          service.mediaManager.getCachedDiscoveryItems(library.id)
+            .filter { it.checkHasTracks() }
+            .sortedByDescending { it.addedAt }
+            .forEach { book ->
+              if (!dedupedBooks.containsKey(book.id)) {
+                dedupedBooks[book.id] = Pair(book, library.name)
+              }
+            }
+        }
+
+      val resultItems = if (dedupedBooks.isEmpty()) {
+        listOf(
+          MediaItem.Builder()
+            .setMediaId("__NO_DISCOVER__")
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle("No discover items")
+                .setSubtitle("Try again after library sync")
+                .setIsBrowsable(false)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .build()
+            )
+            .build()
+        )
+      } else {
+        dedupedBooks.values.map { (book, libraryName) ->
+          val subtitle = "${formatAuthorWithDownloadIcon(book.id, book.authorName)} • $libraryName"
+          MediaItem.Builder()
+            .setMediaId(book.id)
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle(book.title ?: "Unknown Title")
+                .setArtist(subtitle)
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                .setArtworkUri(book.getCoverUri())
+                .build()
+            )
+            .build()
+        }
+      }
+
+      Handler(Looper.getMainLooper()).post {
+        if (!future.isDone) {
+          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(resultItems), params))
+        }
+      }
+    }
+  }
+
+  private data class ContinueSeriesCandidate(
+    val libraryId: String,
+    val seriesId: String,
+    val name: String,
+    val bookCount: Int,
+    val lastUpdate: Long,
+    val artworkUri: Uri?
+  )
+
+  private data class ContinueSeriesSeed(
+    val libraryId: String,
+    val seriesId: String?,
+    val name: String,
+    val bookCountHint: Int,
+    val lastUpdate: Long
+  )
+
+  private val continueSeriesSuffixRegex = Regex("\\s+#\\d+(?:\\.\\d+)?$")
+
+  private fun loadContinueSeriesItemsAsync(
+    future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
+    params: LibraryParams?
+  ) {
+    androidAutoBrowseExecutor.execute {
+      val continueSeriesCandidates = buildContinueSeriesCandidates()
+
+      val resultItems = if (continueSeriesCandidates.isEmpty()) {
+        listOf(
+          MediaItem.Builder()
+            .setMediaId("__NO_CONTINUE_SERIES__")
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle("No series in progress")
+                .setSubtitle("Start a series to see it here")
+                .setIsBrowsable(false)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .build()
+            )
+            .build()
+        )
+      } else {
+        continueSeriesCandidates.map { candidate ->
+          val subtitle = if (candidate.bookCount > 0) {
+            "${candidate.bookCount} books"
+          } else {
+            "Open series"
+          }
+
+          MediaItem.Builder()
+            .setMediaId("__LIBRARY__${candidate.libraryId}__SERIES__${candidate.seriesId}")
+            .setMediaMetadata(
+              MediaMetadata.Builder()
+                .setTitle(candidate.name)
+                .setSubtitle(subtitle)
+                .setIsBrowsable(true)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .setArtworkUri(candidate.artworkUri ?: getUriToDrawable(service.applicationContext, R.drawable.ic_series))
+                .build()
+            )
+            .build()
+        }
+      }
+
+      Handler(Looper.getMainLooper()).post {
+        if (!future.isDone) {
+          future.set(LibraryResult.ofItemList(ImmutableList.copyOf(resultItems), params))
+        }
+      }
+    }
+  }
+
+  private fun buildContinueSeriesCandidates(): List<ContinueSeriesCandidate> {
+    val seeds = LinkedHashMap<String, ContinueSeriesSeed>()
+
+    fun addSeed(seed: ContinueSeriesSeed) {
+      val lookupKey = if (!seed.seriesId.isNullOrBlank()) {
+        "${seed.libraryId}::id::${seed.seriesId}"
+      } else {
+        "${seed.libraryId}::name::${normalizeSeriesName(seed.name)}"
+      }
+
+      val existing = seeds[lookupKey]
+      if (existing == null || seed.lastUpdate > existing.lastUpdate) {
+        seeds[lookupKey] = if (existing == null) {
+          seed
+        } else {
+          ContinueSeriesSeed(
+            libraryId = seed.libraryId,
+            seriesId = seed.seriesId ?: existing.seriesId,
+            name = if (seed.name.isBlank()) existing.name else seed.name,
+            bookCountHint = if (seed.bookCountHint > 0) seed.bookCountHint else existing.bookCountHint,
+            lastUpdate = maxOf(seed.lastUpdate, existing.lastUpdate)
+          )
+        }
+      }
+    }
+
+    service.mediaManager.getAllCachedContinueSeriesItems().forEach { (libraryId, seriesItems) ->
+      seriesItems.forEach { seriesItem ->
+        if (libraryId.isBlank()) return@forEach
+        addSeed(
+          ContinueSeriesSeed(
+            libraryId = libraryId,
+            seriesId = seriesItem.id,
+            name = if (seriesItem.name.isBlank()) "Unknown Series" else seriesItem.name,
+            bookCountHint = seriesItem.audiobookCount,
+            lastUpdate = 0L
+          )
+        )
+      }
+    }
+
+    val itemsInProgress = service.mediaManager.loadItemsInProgressSync()
+
+    itemsInProgress.forEach { itemInProgress ->
+      val wrapper = itemInProgress.libraryItemWrapper
+      if (wrapper !is LibraryItem || wrapper.mediaType == "podcast") return@forEach
+
+      val libraryId = wrapper.libraryId
+      if (libraryId.isBlank()) return@forEach
+
+      val collapsedSeriesRef = wrapper.collapsedSeries?.let {
+        listOf(SeriesType(it.id, it.name, it.sequence))
+      } ?: emptyList()
+
+      val metadataSeriesRefs = ((wrapper.media as? Book)?.metadata as? BookMetadata)?.series ?: emptyList()
+      val seriesRefs = if (collapsedSeriesRef.isNotEmpty()) collapsedSeriesRef else metadataSeriesRefs
+
+      if (seriesRefs.isEmpty()) {
+        val seriesName = ((wrapper.media as? Book)?.metadata as? BookMetadata)?.seriesName
+        if (!seriesName.isNullOrBlank()) {
+          addSeed(
+            ContinueSeriesSeed(
+              libraryId = libraryId,
+              seriesId = null,
+              name = seriesName,
+              bookCountHint = 0,
+              lastUpdate = itemInProgress.progressLastUpdate
+            )
+          )
+        }
+      }
+
+      seriesRefs.forEach { seriesRef ->
+        addSeed(
+          ContinueSeriesSeed(
+            libraryId = libraryId,
+            seriesId = seriesRef.id,
+            name = if (seriesRef.name.isBlank()) "Unknown Series" else seriesRef.name,
+            bookCountHint = 0,
+            lastUpdate = itemInProgress.progressLastUpdate
+          )
+        )
+      }
+    }
+
+    if (seeds.isEmpty()) return emptyList()
+
+    val libraryIds = seeds.values.map { it.libraryId }.distinct()
+    val seriesByLibraryAndId = mutableMapOf<String, Map<String, LibrarySeriesItem>>()
+    val seriesNameLookupByLibrary = mutableMapOf<String, Map<String, String>>()
+
+    libraryIds.forEach { libraryId ->
+      val series = loadFromServerSync<List<LibrarySeriesItem>>(
+        operation = { callback ->
+          service.mediaManager.loadLibrarySeriesWithAudio(libraryId, callback)
+        }
+      ) ?: emptyList()
+
+      seriesByLibraryAndId[libraryId] = series.associateBy { it.id }
+
+      val nameLookup = LinkedHashMap<String, String>()
+      series.forEach { seriesItem ->
+        normalizedSeriesNameCandidates(seriesItem.name).forEach { normalizedName ->
+          if (!nameLookup.containsKey(normalizedName)) {
+            nameLookup[normalizedName] = seriesItem.id
+          }
+        }
+      }
+      seriesNameLookupByLibrary[libraryId] = nameLookup
+    }
+
+    val resolved = LinkedHashMap<String, ContinueSeriesCandidate>()
+    seeds.values.forEach { seed ->
+      if (seed.libraryId.isBlank()) return@forEach
+
+      val resolvedSeriesId = if (!seed.seriesId.isNullOrBlank()) {
+        seed.seriesId
+      } else {
+        val nameLookup = seriesNameLookupByLibrary[seed.libraryId] ?: emptyMap()
+        var matchedSeriesId: String? = null
+        normalizedSeriesNameCandidates(seed.name).forEach { normalizedName ->
+          if (matchedSeriesId == null) {
+            matchedSeriesId = nameLookup[normalizedName]
+          }
+        }
+        matchedSeriesId
+      }
+
+      if (resolvedSeriesId.isNullOrBlank()) return@forEach
+
+      val seriesMap = seriesByLibraryAndId[seed.libraryId] ?: emptyMap()
+      val seriesMeta = seriesMap[resolvedSeriesId]
+
+      val seriesBooks = service.mediaManager.getCachedSeriesBooks(seed.libraryId, resolvedSeriesId)
+
+      val resolvedName = when {
+        !seriesMeta?.name.isNullOrBlank() -> seriesMeta?.name
+        seed.name.isNotBlank() -> seed.name
+        else -> "Unknown Series"
+      } ?: "Unknown Series"
+
+      val resolvedBookCount = when {
+        (seriesMeta?.audiobookCount ?: 0) > 0 -> seriesMeta?.audiobookCount ?: 0
+        seriesBooks.isNotEmpty() -> seriesBooks.size
+        else -> seed.bookCountHint
+      }
+
+      val artworkUri = seriesBooks.firstOrNull()?.getCoverUri()
+      val key = "${seed.libraryId}::${resolvedSeriesId}"
+      val existing = resolved[key]
+      if (existing == null || seed.lastUpdate > existing.lastUpdate) {
+        resolved[key] = ContinueSeriesCandidate(
+          libraryId = seed.libraryId,
+          seriesId = resolvedSeriesId,
+          name = resolvedName,
+          bookCount = resolvedBookCount,
+          lastUpdate = seed.lastUpdate,
+          artworkUri = artworkUri
+        )
+      }
+    }
+
+    return resolved.values
+      .filter { it.bookCount != 1 }
+      .sortedWith(compareByDescending<ContinueSeriesCandidate> { it.lastUpdate }.thenBy { it.name.lowercase(Locale.getDefault()) })
+  }
+
+  private fun normalizeSeriesName(name: String): String {
+    return continueSeriesSuffixRegex.replace(name, "").replace("\\s+".toRegex(), " ").trim().lowercase(Locale.getDefault())
+  }
+
+  private fun normalizedSeriesNameCandidates(name: String): List<String> {
+    val normalizedOriginal = name.replace("\\s+".toRegex(), " ").trim().lowercase(Locale.getDefault())
+    val normalizedWithoutSuffix = normalizeSeriesName(name)
+    return listOf(normalizedOriginal, normalizedWithoutSuffix).filter { it.isNotBlank() }.distinct()
+  }
+
   private fun handleLibraryBrowsingAsync(
     parentId: String,
     future: SettableFuture<LibraryResult<ImmutableList<MediaItem>>>,
@@ -3874,12 +4321,14 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
       return mutableListOf()
     }
 
+    val filteredSeries = series.filter { it.audiobookCount != 1 }
+
     // If we have a letter filter (5th part), filter series by starting letter
     if (mediaIdParts.size >= 5) {
       val letterFilter = mediaIdParts[4]
       Log.d("PlayerNotificationServ", "AALibrary: Filtering series by letter: $letterFilter")
-      val filteredSeries = series.filter { it.name.startsWith(letterFilter, ignoreCase = true) }
-      return filteredSeries.map { series ->
+      val letterFilteredSeries = filteredSeries.filter { it.name.startsWith(letterFilter, ignoreCase = true) }
+      return letterFilteredSeries.map { series ->
         MediaItem.Builder()
           .setMediaId("__LIBRARY__${libraryId}__SERIES__${series.id}")
           .setMediaMetadata(
@@ -3897,10 +4346,10 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
     // Check if we need alphabetical grouping
     val browseLimit = 50
-    if (series.size > browseLimit && series.size > 1) {
+    if (filteredSeries.size > browseLimit && filteredSeries.size > 1) {
       // Group by first letter
-      val seriesLetters = series.groupingBy { it.name.first().uppercaseChar() }.eachCount()
-      Log.d("PlayerNotificationServ", "AALibrary: Grouping ${series.size} series alphabetically")
+      val seriesLetters = filteredSeries.groupingBy { it.name.first().uppercaseChar() }.eachCount()
+      Log.d("PlayerNotificationServ", "AALibrary: Grouping ${filteredSeries.size} series alphabetically")
       return seriesLetters.map { (letter, count) ->
         MediaItem.Builder()
           .setMediaId("__LIBRARY__${libraryId}__SERIES_LIST__${letter}")
@@ -3918,8 +4367,8 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     }
 
     // Return series directly
-    Log.d("PlayerNotificationServ", "AALibrary: Returning ${series.size} series directly")
-    return series.map { seriesItem ->
+    Log.d("PlayerNotificationServ", "AALibrary: Returning ${filteredSeries.size} series directly")
+    return filteredSeries.map { seriesItem ->
       MediaItem.Builder()
         .setMediaId("__LIBRARY__${libraryId}__SERIES__${seriesItem.id}")
         .setMediaMetadata(
@@ -3958,12 +4407,20 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
 
     return seriesBooks.map { book ->
       val progress = service.mediaManager.serverUserMediaProgress.find { it.libraryItemId == book.id }
+      val seriesSequence = book.seriesSequence.trim()
+      val sequencePrefix = if (seriesSequence.isNotBlank()) "$seriesSequence. " else ""
+      val authorSubtitle = formatAuthorWithDownloadIcon(book.id, book.authorName)
+      val rowSubtitle = if (seriesSequence.isNotBlank()) {
+        "Book #$seriesSequence${if (authorSubtitle.isNotBlank()) " • $authorSubtitle" else ""}"
+      } else {
+        authorSubtitle
+      }
       MediaItem.Builder()
         .setMediaId(book.id)
         .setMediaMetadata(
           MediaMetadata.Builder()
-            .setTitle(book.title ?: "Unknown Title")
-            .setArtist(book.authorName)
+            .setTitle("$sequencePrefix${book.title ?: "Unknown Title"}")
+            .setArtist(rowSubtitle)
             .setIsPlayable(true)
             .setIsBrowsable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)

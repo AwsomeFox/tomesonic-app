@@ -1,34 +1,31 @@
 <template>
-  <div>
-    <div :style="{ width: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer overflow-hidden relative" @click="clickCard">
-      <!-- Author image container - fills entire card -->
-      <div class="cover-container absolute inset-0 overflow-hidden z-0">
-        <!-- Loading placeholder with author icon -->
-        <div v-show="author && !imageReady" class="absolute inset-0 flex items-center justify-center bg-surface-container z-10">
-          <span class="material-symbols text-on-surface-variant" :style="{ fontSize: sizeMultiplier * 2.5 + 'rem' }">person</span>
+  <div class="author-card-root">
+    <div class="author-card state-layer" :style="{ width: width + 'px', height: width + 'px' }" @click="clickCard">
+      <div class="author-image-container" :class="{ 'image-only': nameBelow }">
+        <div v-show="author && !imageReady" class="author-placeholder">
+          <span class="material-symbols text-on-surface-variant" :style="{ fontSize: sizeMultiplier * 2.25 + 'rem' }">person</span>
         </div>
 
-        <!-- Author image -->
-        <covers-author-image v-if="author" :author="author" class="w-full h-full transition-opacity duration-300" :style="{ opacity: imageReady ? 1 : 0 }" @imageLoaded="imageLoaded" />
+        <covers-author-image v-if="author" :author="author" rounded="none" class="w-full h-full transition-opacity duration-200" :style="{ opacity: imageReady ? 1 : 0 }" @imageLoaded="imageLoaded" />
       </div>
 
-      <!-- Author name & num books overlay with enhanced visibility -->
-      <div v-if="!searching && !nameBelow" class="absolute bottom-2 left-2 z-50 max-w-[80%]">
-        <div class="bg-surface-container bg-opacity-95 backdrop-blur-md rounded-lg p-2 shadow-elevation-2 border border-outline-variant border-opacity-20">
-          <p class="text-on-surface font-bold truncate drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.7 + 'rem' }">{{ name }}</p>
-          <p class="text-on-surface-variant font-medium truncate drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.6 + 'rem' }">{{ numBooks }} {{ $strings.LabelBooks }}</p>
-        </div>
+      <div v-if="!searching && !nameBelow" class="author-meta">
+        <p class="author-name" :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }">
+          <span class="author-name-text">{{ name }}</span>
+        </p>
+        <p class="author-books" :style="{ fontSize: sizeMultiplier * 0.7 + 'rem' }">
+          <span class="material-symbols text-label-small mr-1">menu_book</span>
+          <span class="author-books-text">{{ numBooks }} {{ $strings.LabelBooks }}</span>
+        </p>
       </div>
 
-      <!-- Loading spinner with enhanced visibility -->
-      <div v-show="searching" class="absolute top-0 left-0 z-40 w-full h-full bg-surface-dim bg-opacity-80 backdrop-blur-sm flex items-center justify-center">
+      <div v-show="searching" class="author-loading-overlay">
         <widgets-loading-spinner size="" />
       </div>
     </div>
 
-    <!-- Name below card with improved styling -->
     <div v-show="nameBelow" class="w-full py-2 px-2">
-      <p class="text-center font-bold truncate text-on-surface" :style="{ fontSize: sizeMultiplier * 0.75 + 'rem' }">{{ name }}</p>
+      <p class="text-center font-semibold truncate text-on-surface" :style="{ fontSize: sizeMultiplier * 0.75 + 'rem' }">{{ name }}</p>
     </div>
   </div>
 </template>
@@ -77,83 +74,155 @@ export default {
       this.$router.push(`/bookshelf/library?filter=authors.${this.$encode(this.authorId)}`)
     }
   },
+  watch: {
+    authorId() {
+      this.imageReady = false
+    }
+  },
   mounted() {}
 }
 </script>
 
 <style scoped>
-/* Material 3 Expressive Author Card Styles */
-.material-3-card {
-  transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 300ms cubic-bezier(0.2, 0, 0, 1);
+.author-card-root {
+  width: fit-content;
 }
 
-.material-3-card::before {
-  content: '';
-  position: absolute;
-  border-radius: inherit;
-  top: 0;
-  left: 0;
+.author-card {
+  position: relative;
+  display: block;
+  border-radius: 16px;
+  overflow: hidden;
+  cursor: pointer;
+  background-color: rgb(var(--md-sys-color-surface-container));
+  border: 1px solid rgba(var(--md-sys-color-outline-variant), 0.35);
+  box-shadow: var(--md-sys-elevation-level1);
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1), box-shadow 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.author-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--md-sys-elevation-level2);
+}
+
+.author-card:active {
+  transform: translateY(0);
+}
+
+.author-image-container {
+  position: relative;
   width: 100%;
   height: 100%;
-  background-color: transparent;
-  transition: background-color 200ms cubic-bezier(0.2, 0, 0, 1);
-  pointer-events: none;
+  overflow: hidden;
+  background: rgb(var(--md-sys-color-surface-container));
+}
+
+.author-image-container.image-only {
+  border-radius: 16px;
+}
+
+.author-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(var(--md-sys-color-surface-container));
+}
+
+.author-meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+  background: transparent;
+  isolation: isolate;
+}
+
+.author-meta::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.9) 50%, rgba(var(--md-sys-color-surface-container-high), 0.99) 100%);
+  backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+  -webkit-backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+}
+
+.author-meta > * {
+  position: relative;
   z-index: 1;
 }
 
-.material-3-card:hover {
-  transform: translateY(-2px);
+.author-name {
+  font-weight: 600;
+  color: rgb(var(--md-sys-color-on-media));
+  line-height: 1.2;
+  margin: 0;
+  padding-left: 3px;
+  padding-right: 3px;
 }
 
-.material-3-card:hover::before {
-  background-color: rgba(var(--md-sys-color-on-surface), 0.08);
+.author-name-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 16px;
+  padding-right: 16px;
+  margin-left: -13px;
+  margin-right: -13px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.9));
 }
 
-.material-3-card:active {
-  transform: translateY(0px);
+.author-books {
+  display: flex;
+  align-items: center;
+  color: rgb(var(--md-sys-color-on-media-variant));
+  font-weight: 500;
+  line-height: 1.2;
+  margin: 0;
+  min-width: 0;
+  padding-left: 3px;
+  padding-right: 3px;
 }
 
-.material-3-card:active::before {
-  background-color: rgba(var(--md-sys-color-on-surface), 0.12);
+.author-books .material-symbols {
+  flex: 0 0 auto;
+  color: inherit;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.85));
 }
 
-/* Ensure content stays above state layer, but exclude cover container and absolutely positioned elements */
-.material-3-card > *:not(.cover-container):not(.absolute) {
-  position: relative;
-  z-index: 2;
+.author-books-text {
+  display: block;
+  max-width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 16px;
+  padding-right: 16px;
+  margin-left: -13px;
+  margin-right: -13px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.85));
 }
 
-/* Force cover images to fit container */
-.material-3-card .covers-author-image,
-.material-3-card .covers-author-image > div,
-.material-3-card .covers-author-image img,
-.material-3-card img {
-  object-fit: cover;
-  object-position: center center;
-}
-</style>
-
-/* Force square aspect ratio for author images */
-.material-3-card .covers-author-image,
-.material-3-card img {
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  object-position: center center;
-}
-
-/* Enhanced text visibility */
-.drop-shadow-sm {
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
-}
-
-/* Ensure overlays are always visible */
-.bg-opacity-95 {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-/* Expressive easing definition */
-.ease-expressive {
-  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+.author-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--md-sys-color-surface-container), 0.7);
+  backdrop-filter: blur(2px);
 }
 </style>
