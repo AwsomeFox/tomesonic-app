@@ -210,14 +210,20 @@ class MediaProgressSyncer(
     val currentTime =
             if (shouldSync == true) playerNotificationService.getCurrentTimeSeconds() else 0.0
     if (currentTime > 0) { // Current time should always be > 0 on stop
+      // Kick off the progress sync HTTP request, but don't make the caller
+      // wait for the network round-trip — the next action (typically
+      // preparing a new playback session for a different item) does not
+      // depend on the previous session's progress being acknowledged by the
+      // server. The sync still runs to completion in the background and
+      // fires stopEvent + reset when it returns.
       sync(true, currentTime) { syncResult ->
         currentPlaybackSession?.let { playbackSession ->
           MediaEventManager.stopEvent(playbackSession, syncResult)
         }
 
         reset()
-        cb()
       }
+      cb()
     } else {
       currentPlaybackSession?.let { playbackSession ->
         MediaEventManager.stopEvent(playbackSession, null)

@@ -208,7 +208,9 @@ export default {
         })
     },
     async playLibraryItem(payload) {
-      await AbsLogger.info({ tag: 'AudioPlayerContainer', message: `playLibraryItem: Received play request for library item ${payload.libraryItemId} ${payload.episodeId ? `episode ${payload.episodeId}` : ''}` })
+      // Fire-and-forget the log so we don't pay a Capacitor bridge round-trip
+      // before kicking off the (network-bound) prepareLibraryItem.
+      AbsLogger.info({ tag: 'AudioPlayerContainer', message: `playLibraryItem: Received play request for library item ${payload.libraryItemId} ${payload.episodeId ? `episode ${payload.episodeId}` : ''}` })
       const libraryItemId = payload.libraryItemId
       const episodeId = payload.episodeId
       const startTime = payload.startTime

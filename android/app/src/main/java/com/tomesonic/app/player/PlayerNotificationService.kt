@@ -657,7 +657,10 @@ class PlayerNotificationService : MediaLibraryService() {
         val canUseCast = castPlayerManager.canUseCastPlayer(playbackSession)
         Log.d(tag, "Cast check - canUseCast=$canUseCast, isLocal=${playbackSession.isLocal}")
 
-        if (canUseCast && getMediaPlayer() == CastPlayerManager.PLAYER_EXO) {
+        // Only spin up the 5-second polling job if there is actually a cast
+        // session that might be establishing right now. Otherwise this fires
+        // on every single book switch when the user is not casting.
+        if (canUseCast && getMediaPlayer() == CastPlayerManager.PLAYER_EXO && castPlayerManager.isConnected()) {
           Log.d(tag, "Checking cast session with polling for delayed readiness...")
           castPlayerManager.checkCastSessionWithPolling(callback = { isCastReady ->
             Log.d(tag, "Cast polling result - isCastReady=$isCastReady")
