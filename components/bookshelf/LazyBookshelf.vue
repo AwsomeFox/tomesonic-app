@@ -34,24 +34,13 @@
     <!-- Direct grid rendering for series page to avoid virtual-mount timing gaps -->
     <div v-if="useDirectSeriesGrid && initialized" class="w-full px-4 py-3">
       <div class="series-grid-view" :style="seriesGridStyle">
-        <cards-lazy-series-card
-          v-for="(entity, index) in seriesEntities"
-          :key="entity.id || index"
-          :index="index"
-          :series-mount="entity"
-          :width="entityWidth"
-          :height="entityHeight"
-          :book-cover-aspect-ratio="bookCoverAspectRatio"
-          :is-alt-view-enabled="altViewEnabled"
-          class="relative"
-        />
+        <cards-lazy-series-card v-for="(entity, index) in seriesEntities" :key="entity.id || index" :index="index" :series-mount="entity" :width="entityWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="relative" />
       </div>
     </div>
 
     <!-- Actual shelves -->
     <template v-else v-for="shelf in totalShelves">
-      <div :key="shelf" class="w-full px-4 bg-surface-dynamic shelf-list-view" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle">
-      </div>
+      <div :key="shelf" class="w-full px-4 bg-surface-dynamic shelf-list-view" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle"></div>
     </template>
 
     <div v-show="!entities.length && initialized" class="w-full py-16 text-center">
@@ -821,5 +810,4 @@ export default {
 .shelf-list-view {
   position: relative;
 }
-
 </style>

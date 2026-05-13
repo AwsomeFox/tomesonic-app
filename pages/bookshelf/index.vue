@@ -8,7 +8,7 @@
           :class="shelfIndex % 2 === 0 ? 'shimmer-ltr' : 'shimmer-rtl'"
           :style="{
             '--shimmer-delay': shelfIndex * 120 + 'ms',
-            width: (120 + (shelfIndex % 3) * 36) + 'px'
+            width: 120 + (shelfIndex % 3) * 36 + 'px'
           }"
         ></div>
 
@@ -18,7 +18,7 @@
             :key="`card-skel-${shelfIndex}-${cardIndex}`"
             :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', cardIndex % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
             :style="{
-              '--shimmer-delay': (shelfIndex * 120 + cardIndex * 90) + 'ms',
+              '--shimmer-delay': shelfIndex * 120 + cardIndex * 90 + 'ms',
               width: bookSkeletonWidth + 'px',
               height: bookSkeletonHeight + 'px'
             }"
