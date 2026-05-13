@@ -3,10 +3,10 @@
     <!-- Tab switcher -->
     <div class="flex items-center justify-center px-4 pt-4 pb-2">
       <div class="bg-surface-container rounded-full p-1 flex items-center shadow-elevation-1">
-        <button class="px-4 py-2 rounded-full text-label-medium font-medium transition-all duration-200 ease-expressive min-w-24" :class="currentView === 'collections' ? 'bg-primary text-on-primary shadow-elevation-2' : 'text-on-surface-variant hover:bg-on-surface/8'" @click="currentView = 'collections'">
+        <button class="px-4 py-2 rounded-full text-label-medium font-medium transition-all duration-200 ease-expressive min-w-24" :class="currentView === 'collections' ? 'bg-primary text-on-primary shadow-elevation-2' : 'text-on-surface-variant hover:bg-on-surface/8'" @click="selectView('collections')">
           {{ $strings.ButtonCollections }}
         </button>
-        <button class="px-4 py-2 rounded-full text-label-medium font-medium transition-all duration-200 ease-expressive min-w-24" :class="currentView === 'playlists' ? 'bg-primary text-on-primary shadow-elevation-2' : 'text-on-surface-variant hover:bg-on-surface/8'" @click="currentView = 'playlists'">
+        <button class="px-4 py-2 rounded-full text-label-medium font-medium transition-all duration-200 ease-expressive min-w-24" :class="currentView === 'playlists' ? 'bg-primary text-on-primary shadow-elevation-2' : 'text-on-surface-variant hover:bg-on-surface/8'" @click="selectView('playlists')">
           {{ $strings.ButtonPlaylists }}
         </button>
       </div>
@@ -53,16 +53,19 @@ export default {
     this.$eventBus.$off('bookshelf-total-entities', this.onEntityCountUpdated)
   },
   methods: {
+    selectView(view) {
+      this.currentView = view
+    },
     onEntityCountUpdated(totalEntities) {
-      // Only auto-switch if we're currently viewing collections and they just loaded
-      if (this.currentView === 'collections') {
-        this.collectionsLoaded = true
-        this.hasCollections = totalEntities > 0
+      // Only run the auto-switch logic once on initial collections load.
+      if (this.currentView !== 'collections') return
 
-        // If no collections and user has playlists, auto-switch to playlists
-        if (!this.hasCollections && this.userHasPlaylists) {
-          this.currentView = 'playlists'
-        }
+      const isInitialCollectionsLoad = !this.collectionsLoaded
+      this.collectionsLoaded = true
+      this.hasCollections = totalEntities > 0
+
+      if (isInitialCollectionsLoad && !this.hasCollections && this.userHasPlaylists) {
+        this.currentView = 'playlists'
       }
     }
   },

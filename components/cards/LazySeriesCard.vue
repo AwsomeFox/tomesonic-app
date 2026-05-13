@@ -1,22 +1,24 @@
 <template>
-  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
+  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card series-card-shell p-0 rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
     <!-- Cover image container - fills entire card (first in DOM, lowest z-index) -->
-    <div class="cover-container absolute inset-0 z-0">
+    <div class="cover-container series-image-container z-0" :class="{ 'image-only': !isAltViewEnabled }">
       <!-- Loading placeholder -->
-      <div v-show="seriesMount && !imageReady" class="absolute inset-0 flex items-center justify-center bg-surface-container z-10">
+      <div v-show="hasSeriesData && !imageReady" class="absolute inset-0 flex items-center justify-center bg-surface-container z-10">
         <p :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }" class="text-on-surface-variant text-center">{{ seriesName }}</p>
       </div>
 
-      <!-- Group cover for series -->
-      <covers-group-cover v-if="seriesMount && bookItems.length" :id="seriesMount.id" :name="seriesName" :book-items="bookItems" :width="width" :height="height" :book-cover-aspect-ratio="bookCoverAspectRatio" class="w-full h-full" @ready="imageReady = true" />
+      <!-- Full-bleed series collage -->
+      <div v-if="hasSeriesData && coverBookItems.length" class="series-collage" :class="`count-${Math.min(coverBookItems.length, 4)}`">
+        <img v-for="(book, idx) in coverBookItems.slice(0, 4)" :key="book.id || idx" :src="coverSrcFor(book)" class="series-collage-item" />
+      </div>
 
       <!-- Material Symbol placeholder for empty series -->
-      <div v-else-if="seriesMount" class="w-full h-full absolute inset-0 flex items-center justify-center bg-surface-container z-5">
+      <div v-else-if="hasSeriesData" class="w-full h-full absolute inset-0 flex items-center justify-center bg-surface-container z-5">
         <span class="material-symbols text-6xl text-on-surface-variant">library_books</span>
       </div>
 
       <!-- Placeholder Cover Title -->
-      <div v-if="!bookItems.length" class="absolute inset-0 flex flex-col items-center justify-center bg-primary p-4 z-10">
+      <div v-if="!coverBookItems.length" class="absolute inset-0 flex flex-col items-center justify-center bg-primary p-4 z-10">
         <div class="text-center">
           <p class="text-on-primary font-medium mb-2" :style="{ fontSize: titleFontSize + 'rem' }">{{ seriesName }}</p>
           <p class="text-on-primary opacity-75" :style="{ fontSize: authorFontSize + 'rem' }">{{ booksInSeries }} {{ $strings.LabelBooks }}</p>
@@ -24,21 +26,19 @@
       </div>
     </div>
 
-    <!-- Alternative bookshelf title/author/sort with improved visibility -->
-    <div v-if="isAltViewEnabled" class="absolute bottom-2 left-2 z-50 max-w-[80%]">
-      <div class="bg-card-title-overlay backdrop-blur-md rounded-lg p-2 shadow-elevation-3 border border-outline border-opacity-25">
-        <div :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }" class="flex items-center">
-          <p class="truncate text-on-surface font-medium" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
-            {{ seriesName }}
-          </p>
-        </div>
-        <p class="truncate text-on-surface-variant" :style="{ fontSize: 0.6 * sizeMultiplier + 'rem' }">{{ booksInSeries }} {{ $strings.LabelBooks }}</p>
-      </div>
+    <div v-if="isAltViewEnabled" class="series-meta absolute left-0 right-0 bottom-0 z-20">
+      <p class="series-name" :style="{ fontSize: sizeMultiplier * 0.86 + 'rem' }">
+        <span class="series-name-text">{{ seriesName }}</span>
+      </p>
+      <p class="series-books" :style="{ fontSize: sizeMultiplier * 0.74 + 'rem' }">
+        <span class="material-symbols text-label-small mr-1">menu_book</span>
+        <span class="series-books-text">{{ booksInSeries }} {{ $strings.LabelBooks }}</span>
+      </p>
     </div>
 
-    <!-- Books count badge with enhanced visibility -->
-    <div v-if="booksInSeries > 1" class="absolute rounded-lg bg-secondary-container shadow-elevation-3 z-30 border border-outline-variant border-opacity-30" :style="{ top: '8px', right: '8px', padding: `${0.15 * sizeMultiplier}rem ${0.3 * sizeMultiplier}rem` }">
-      <p class="text-on-secondary-container font-bold" :style="{ fontSize: sizeMultiplier * 0.7 + 'rem' }">{{ booksInSeries }}</p>
+    <!-- Unread-and-not-in-progress books left badge -->
+    <div v-if="booksLeftToStart >= 0" class="absolute rounded-lg bg-secondary-container shadow-elevation-3 z-30 border border-outline-variant border-opacity-30" :style="{ top: '8px', right: '8px', padding: `${0.15 * sizeMultiplier}rem ${0.3 * sizeMultiplier}rem` }">
+      <p class="text-on-secondary-container font-bold" :style="{ fontSize: sizeMultiplier * 0.7 + 'rem' }">{{ booksLeftToStart }}</p>
     </div>
 
     <!-- Series progress indicator if any books have progress -->
@@ -76,22 +76,107 @@ export default {
   },
   data() {
     return {
-      imageReady: false
+      imageReady: false,
+      seriesEntity: null,
+      fetchedCoverBooks: []
+    }
+  },
+  watch: {
+    seriesMount: {
+      immediate: true,
+      handler(newVal) {
+        this.seriesEntity = newVal || null
+        this.fetchedCoverBooks = []
+        this.maybeFetchCoverBooks()
+      }
+    },
+    coverBookItems: {
+      immediate: true,
+      handler(newItems) {
+        if (Array.isArray(newItems) && newItems.length) {
+          this.$nextTick(() => {
+            this.imageReady = true
+          })
+        }
+      }
     }
   },
   computed: {
+    seriesData() {
+      return this.seriesEntity || this.seriesMount || {}
+    },
+    hasSeriesData() {
+      return !!(this.seriesData?.id || this.seriesData?.name)
+    },
     sizeMultiplier() {
       const baseSize = this.bookCoverAspectRatio === 1 ? 192 : 120
       return this.width / baseSize
     },
     seriesName() {
-      return this.seriesMount?.name || ''
+      return this.seriesData?.name || ''
     },
-    bookItems() {
-      return this.seriesMount?.books || []
+    coverBookItems() {
+      if (Array.isArray(this.seriesData?.coverBooks) && this.seriesData.coverBooks.length) {
+        return this.seriesData.coverBooks.slice(0, 4)
+      }
+      if (Array.isArray(this.seriesData?.books) && this.seriesData.books.length) {
+        return this.seriesData.books.slice(0, 4)
+      }
+      return this.fetchedCoverBooks
+    },
+    progressBookItems() {
+      return this.seriesMount?.books || this.coverBookItems
     },
     booksInSeries() {
-      return this.bookItems.length
+      const series = this.seriesData || {}
+      const totalCandidates = [series.numBooks, series.audiobookCount, series.booksCount, series.totalBooks, series.numItems, series?.stats?.numBooks]
+      for (const candidate of totalCandidates) {
+        const parsed = Number(candidate)
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          return parsed
+        }
+      }
+      return this.progressBookItems.length
+    },
+    startedBooksCount() {
+      if (this.seriesData) {
+        const startedCandidates = [this.seriesData.numStartedBooks, this.seriesData.startedBooksCount, this.seriesData.numBooksStarted, this.seriesData?.stats?.numStartedBooks]
+        for (const candidate of startedCandidates) {
+          const parsed = Number(candidate)
+          if (Number.isFinite(parsed) && parsed >= 0) {
+            return parsed
+          }
+        }
+      }
+
+      if (!Array.isArray(this.progressBookItems) || !this.progressBookItems.length) return 0
+
+      const startedIds = new Set()
+      this.progressBookItems.forEach((book) => {
+        const bookId = book?.id || book?.libraryItemId
+        if (!bookId) return
+
+        const progress = book?.userMediaProgress || null
+        if (progress && (progress.isFinished || (progress.progress || 0) > 0)) {
+          startedIds.add(bookId)
+        }
+      })
+
+      // Continue-series home shelves can omit progress details even when these are known in-progress items.
+      // Do not apply this fallback on full series pages, or every badge trends to zero remaining.
+      if (!startedIds.size && this.isCategorized) {
+        this.progressBookItems.forEach((book) => {
+          const bookId = book?.id || book?.libraryItemId
+          if (bookId) startedIds.add(bookId)
+        })
+      }
+
+      return startedIds.size
+    },
+    booksLeftToStart() {
+      const totalBooks = Number(this.booksInSeries || 0)
+      const startedBooks = Number(this.startedBooksCount || 0)
+      return Math.max(0, totalBooks - startedBooks)
     },
     titleFontSize() {
       if (this.seriesName.length > 30) return 0.6 * this.sizeMultiplier
@@ -102,12 +187,12 @@ export default {
       return 0.6 * this.sizeMultiplier
     },
     seriesProgressPercent() {
-      if (!this.bookItems.length) return 0
+      if (!this.progressBookItems.length) return 0
 
       let totalProgress = 0
       let booksWithProgress = 0
 
-      this.bookItems.forEach((book) => {
+      this.progressBookItems.forEach((book) => {
         if (book.userMediaProgress) {
           totalProgress += book.userMediaProgress.progress || 0
           booksWithProgress++
@@ -118,21 +203,60 @@ export default {
       return totalProgress / booksWithProgress
     },
     seriesIsFinished() {
-      if (!this.bookItems.length) return false
-      return this.bookItems.every((book) => book.userMediaProgress && book.userMediaProgress.isFinished)
+      if (!this.progressBookItems.length) return false
+      return this.progressBookItems.every((book) => book.userMediaProgress && book.userMediaProgress.isFinished)
     }
   },
   methods: {
+    setSelectionMode() {},
+    setEntity(seriesEntity) {
+      this.seriesEntity = seriesEntity || null
+      this.fetchedCoverBooks = []
+      this.maybeFetchCoverBooks()
+      this.imageReady = Array.isArray(this.coverBookItems) && this.coverBookItems.length > 0
+    },
+    async maybeFetchCoverBooks() {
+      if (Array.isArray(this.coverBookItems) && this.coverBookItems.length) return
+      const seriesId = this.seriesData?.id
+      const libraryId = this.seriesData?.libraryId
+      if (!seriesId || !libraryId) return
+
+      const searchParams = new URLSearchParams()
+      searchParams.set('filter', `series.${this.$encode(seriesId)}`)
+      searchParams.set('limit', '4')
+      searchParams.set('page', '0')
+      searchParams.set('minified', '1')
+
+      const payload = await this.$nativeHttp.get(`/api/libraries/${libraryId}/items?${searchParams.toString()}`).catch((error) => {
+        console.error('Failed to fetch series cover books', error)
+        return null
+      })
+
+      if (payload?.results?.length) {
+        this.fetchedCoverBooks = payload.results.slice(0, 4)
+      }
+    },
+    coverSrcFor(book) {
+      return this.$store.getters['globals/getLibraryItemCoverSrc'](book, '')
+    },
     clickCard() {
-      if (this.seriesMount?.id) {
-        const routePath = `/bookshelf/series/${this.seriesMount.id}`
+      if (this.seriesData?.id) {
+        const routePath = `/bookshelf/series/${this.seriesData.id}`
         this.$router.push(routePath)
+      }
+    },
+    destroy() {
+      this.$destroy()
+      if (this.$el && this.$el.parentNode) {
+        this.$el.parentNode.removeChild(this.$el)
+      } else if (this.$el && this.$el.remove) {
+        this.$el.remove()
       }
     }
   },
   mounted() {
     // Set image as ready after a short delay if no group cover
-    if (!this.bookItems.length) {
+    if (!this.coverBookItems.length) {
       setTimeout(() => {
         this.imageReady = true
       }, 100)
@@ -145,6 +269,151 @@ export default {
 .material-3-card {
   overflow: hidden;
   position: relative;
+  border: 1px solid rgba(var(--md-sys-color-outline-variant), 0.35);
+  box-shadow: var(--md-sys-elevation-level1);
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1), box-shadow 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.series-card-shell {
+  display: block;
+  padding: 0 !important;
+}
+
+.series-image-container {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  background: rgb(var(--md-sys-color-surface-container));
+}
+
+.series-image-container.image-only {
+  border-radius: 16px;
+}
+
+.series-image-container:not(.image-only) {
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+}
+
+.series-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+  background: transparent;
+  isolation: isolate;
+}
+
+.series-meta::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 8%, rgba(var(--md-sys-color-surface-container), 0.74) 58%, rgba(var(--md-sys-color-surface-container-high), 0.94) 100%);
+  backdrop-filter: blur(10px) brightness(0.84) saturate(0.86);
+  -webkit-backdrop-filter: blur(10px) brightness(0.84) saturate(0.86);
+}
+
+.series-meta > * {
+  position: relative;
+  z-index: 1;
+}
+
+.series-name {
+  font-weight: 600;
+  color: rgb(var(--md-sys-color-on-media));
+  line-height: 1.2;
+  margin: 0;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+
+.series-name-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 16px;
+  padding-right: 16px;
+  margin-left: -13px;
+  margin-right: -13px;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.96)) drop-shadow(0 0 5px rgba(0, 0, 0, 0.84)) drop-shadow(0 0 9px rgba(0, 0, 0, 0.72));
+}
+
+.series-books {
+  display: flex;
+  align-items: center;
+  color: rgb(var(--md-sys-color-on-media-variant));
+  font-weight: 500;
+  line-height: 1.2;
+  margin: 0;
+  min-width: 0;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+
+.series-books .material-symbols {
+  flex: 0 0 auto;
+  color: inherit;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.92)) drop-shadow(0 0 4px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 7px rgba(0, 0, 0, 0.68));
+}
+
+.series-books-text {
+  display: block;
+  max-width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 16px;
+  padding-right: 16px;
+  margin-left: -13px;
+  margin-right: -13px;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.92)) drop-shadow(0 0 4px rgba(0, 0, 0, 0.8)) drop-shadow(0 0 7px rgba(0, 0, 0, 0.68));
+}
+
+.series-collage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+}
+
+.series-collage.count-1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.series-collage.count-2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+.series-collage.count-3,
+.series-collage.count-4 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.series-collage.count-3 .series-collage-item:nth-child(3) {
+  grid-column: 1 / span 2;
+}
+
+.series-collage-item {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.material-3-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--md-sys-elevation-level2);
+}
+
+.material-3-card:active {
+  transform: translateY(0);
 }
 
 .state-layer::before {
@@ -166,9 +435,5 @@ export default {
 
 .state-layer:active::before {
   background-color: rgba(var(--md-sys-color-on-surface), 0.12);
-}
-
-.bg-card-title-overlay {
-  background-color: rgba(var(--md-sys-color-surface), 0.85);
 }
 </style>

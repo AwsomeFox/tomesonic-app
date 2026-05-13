@@ -1,10 +1,10 @@
 <template>
-  <div class="flex h-full px-1 overflow-hidden">
-    <div class="w-10 h-10 flex items-center justify-center">
-      <span class="material-symbols text-2xl text-gray-200">record_voice_over</span>
+  <div class="search-card-shell">
+    <div class="search-card-icon">
+      <span class="material-symbols text-2xl text-on-surface-variant">record_voice_over</span>
     </div>
-    <div class="flex-grow px-2 narratorSearchCardContent h-full">
-      <p class="truncate text-sm">{{ narrator }}</p>
+    <div class="search-card-content narratorSearchCardContent h-full">
+      <p class="truncate text-base text-on-surface font-medium search-primary">{{ narrator }}</p>
     </div>
   </div>
 </template>
@@ -24,11 +24,69 @@ export default {
 </script>
 
 <style scoped>
-.narratorSearchCardContent {
-  width: calc(100% - 40px);
+.search-card-shell {
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgb(var(--md-sys-color-surface-container));
+  border: 1px solid rgba(var(--md-sys-color-outline-variant), 0.35);
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.search-card-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: linear-gradient(120deg, rgba(var(--md-sys-color-surface-container), 0.72), rgba(var(--md-sys-color-surface-container-high), 0.64));
+  backdrop-filter: blur(8px) brightness(0.98) saturate(0.92);
+  -webkit-backdrop-filter: blur(8px) brightness(0.98) saturate(0.92);
+}
+
+.search-card-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.search-card-icon {
+  width: 40px;
   height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(var(--md-sys-color-surface-variant), 0.6);
+  flex-shrink: 0;
+  box-shadow: 0 0 12px rgba(var(--md-sys-color-on-surface), 0.08);
+}
+
+.search-card-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.narratorSearchCardContent {
+  height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+
+.search-primary {
+  color: rgb(var(--md-sys-color-on-media)) !important;
+  display: block;
+  max-width: 100%;
+  padding-left: 14px;
+  padding-right: 14px;
+  margin-left: -11px;
+  margin-right: -11px;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.96)) drop-shadow(0 0 5px rgba(0, 0, 0, 0.84)) drop-shadow(0 0 9px rgba(0, 0, 0, 0.72));
 }
 </style>

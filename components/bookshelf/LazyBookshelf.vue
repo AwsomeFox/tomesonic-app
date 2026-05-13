@@ -1,7 +1,18 @@
 <template>
   <div id="bookshelf" class="w-full max-w-full h-full bg-surface-dynamic library-scroll-container">
-    <!-- Loading skeleton for initial load -->
-    <div v-if="!initialized" class="w-full px-4 space-y-2 py-4">
+    <!-- Loading skeleton for initial load (series grid) -->
+    <div v-if="!initialized && useDirectSeriesGrid" class="w-full px-4 py-3">
+      <div class="series-grid-view" :style="seriesGridStyle">
+        <div v-for="n in seriesSkeletonCount" :key="`series-skel-${n}`" class="series-grid-skeleton loading-skeleton" :style="{ width: entityWidth + 'px', height: entityHeight + 'px', animationDelay: n * 70 + 'ms' }">
+          <div class="w-full h-full bg-surface-container rounded-2xl overflow-hidden border border-outline-variant border-opacity-30 shadow-elevation-1">
+            <div class="w-full h-full bg-surface-variant shimmer-block"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading skeleton for initial load (list view) -->
+    <div v-else-if="!initialized" class="w-full px-4 space-y-2 py-4">
       <div v-for="n in 8" :key="n" class="w-full h-20 bg-surface-container rounded-2xl shadow-elevation-1 animate-pulse loading-skeleton" :style="{ animationDelay: n * 100 + 'ms' }">
         <div class="h-full flex items-center p-2">
           <!-- Cover placeholder -->
@@ -20,8 +31,25 @@
       </div>
     </div>
 
+    <!-- Direct grid rendering for series page to avoid virtual-mount timing gaps -->
+    <div v-if="useDirectSeriesGrid && initialized" class="w-full px-4 py-3">
+      <div class="series-grid-view" :style="seriesGridStyle">
+        <cards-lazy-series-card
+          v-for="(entity, index) in seriesEntities"
+          :key="entity.id || index"
+          :index="index"
+          :series-mount="entity"
+          :width="entityWidth"
+          :height="entityHeight"
+          :book-cover-aspect-ratio="bookCoverAspectRatio"
+          :is-alt-view-enabled="altViewEnabled"
+          class="relative"
+        />
+      </div>
+    </div>
+
     <!-- Actual shelves -->
-    <template v-for="shelf in totalShelves">
+    <template v-else v-for="shelf in totalShelves">
       <div :key="shelf" class="w-full px-4 bg-surface-dynamic shelf-list-view" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle">
       </div>
     </template>
@@ -87,8 +115,11 @@ export default {
       return this.$store.state.globals.bookshelfListView
     },
     showBookshelfListView() {
-      // Always use list view for all entities - cards only on home page
-      return true
+      // Keep list view for most pages, but use card grid for series browser.
+      return this.entityName !== 'series'
+    },
+    useDirectSeriesGrid() {
+      return this.entityName === 'series' && !this.showBookshelfListView
     },
     sortingIgnorePrefix() {
       return this.$store.getters['getServerSetting']('sortingIgnorePrefix')
@@ -132,12 +163,14 @@ export default {
       return this.bookWidth * 1.6
     },
     entityWidth() {
-      // Always use list view width since we removed card view
-      return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
+      if (this.showBookshelfListView) {
+        return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
+      }
+      return this.bookWidth
     },
     entityHeight() {
-      // Always use list view height since we removed card view
-      return 88
+      if (this.showBookshelfListView) return 88
+      return this.bookHeight
     },
     currentLibraryId() {
       return this.$store.state.libraries.currentLibraryId
@@ -156,10 +189,8 @@ export default {
     totalEntityCardWidth() {
       if (this.showBookshelfListView) return this.entityWidth
 
-      // Since everything uses list view now, always return standard width
-
-      // Use Material 3 spacing - 16px between cards for absolute positioned items
-      return this.entityWidth + 16
+      // Use a compact card gap to match the home shelf spacing.
+      return this.entityWidth + 8
     },
     altViewEnabled() {
       return this.$store.getters['getAltViewEnabled']
@@ -169,18 +200,67 @@ export default {
       return this.entityWidth / baseSize
     },
     shelfContainerStyle() {
-      // Always use list view layout since we removed card view
-      return { height: this.shelfHeight + 'px' }
+      if (this.showBookshelfListView) {
+        return { height: this.shelfHeight + 'px' }
+      }
+      return {
+        height: this.shelfHeight + 'px',
+        marginLeft: this.bookshelfMarginLeft + 'px'
+      }
+    },
+    seriesEntities() {
+      if (!Array.isArray(this.entities)) return []
+      return this.entities.filter((entity) => !!entity)
+    },
+    seriesGridStyle() {
+      const columns = Math.max(1, this.entitiesPerShelf || 1)
+      return {
+        display: 'grid',
+        gridTemplateColumns: `repeat(${columns}, ${this.entityWidth}px)`,
+        gap: '8px',
+        justifyContent: 'center'
+      }
+    },
+    seriesSkeletonCount() {
+      const columns = Math.max(1, this.entitiesPerShelf || 1)
+      return Math.max(columns * 4, 8)
     }
   },
   methods: {
+    getPayloadTotal(payload) {
+      if (!payload) return null
+      const totalCandidates = [payload.total, payload.totalResults, payload.totalCount, payload.numResults, payload?.meta?.total]
+      for (const candidate of totalCandidates) {
+        const parsed = Number(candidate)
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          return Math.floor(parsed)
+        }
+      }
+      return null
+    },
+    resolveTotalEntities(payload, startIndex, previousTotal = 0) {
+      const explicitTotal = this.getPayloadTotal(payload)
+      if (explicitTotal !== null) return explicitTotal
+
+      const resultsLength = Array.isArray(payload?.results) ? payload.results.length : 0
+      return Math.max(previousTotal, startIndex + resultsLength)
+    },
+    getTargetColumnsForWidth(availableWidth) {
+      if (!availableWidth || availableWidth <= 0) return 1
+      const gutter = 8
+      const targetColumns = Math.floor((availableWidth + gutter) / (this.bookWidth + gutter))
+      return Math.max(1, Math.min(4, targetColumns))
+    },
     clearFilter() {
       this.$store.dispatch('user/updateUserSettings', {
         mobileFilterBy: 'all'
       })
     },
     async fetchEntities(page) {
-      const startIndex = page * this.booksPerFetch
+      const isSeriesGrid = this.useDirectSeriesGrid
+      const fetchPage = isSeriesGrid ? 0 : page
+      const fetchLimit = isSeriesGrid ? 1000 : this.booksPerFetch
+      const startIndex = isSeriesGrid ? 0 : page * this.booksPerFetch
 
       this.isFetchingEntities = true
 
@@ -190,7 +270,7 @@ export default {
 
       const entityPath = this.entityName === 'books' || this.entityName === 'series-books' ? `items` : this.entityName
       const sfQueryString = this.currentSFQueryString ? this.currentSFQueryString + '&' : ''
-      const fullQueryString = `?${sfQueryString}limit=${this.booksPerFetch}&page=${page}&minified=1&include=rssfeed,numEpisodesIncomplete`
+      const fullQueryString = `?${sfQueryString}limit=${fetchLimit}&page=${fetchPage}&minified=1&include=rssfeed,numEpisodesIncomplete`
 
       const payload = await this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/${entityPath}${fullQueryString}`).catch((error) => {
         console.error('failed to fetch books', error)
@@ -206,15 +286,16 @@ export default {
       if (payload && payload.results) {
         console.log('Received payload', payload)
         if (!this.initialized) {
+          const resolvedTotal = this.resolveTotalEntities(payload, startIndex, 0)
           this.initialized = true
-          this.totalEntities = payload.total
+          this.totalEntities = resolvedTotal
           this.totalShelves = Math.ceil(this.totalEntities / this.entitiesPerShelf)
           this.entities = new Array(this.totalEntities)
           this.$eventBus.$emit('bookshelf-total-entities', this.totalEntities)
         } else {
           // Handle filter changes - recalculate total entities and shelves
           const previousTotal = this.totalEntities
-          this.totalEntities = payload.total
+          this.totalEntities = this.resolveTotalEntities(payload, startIndex, previousTotal)
           this.totalShelves = Math.ceil(this.totalEntities / this.entitiesPerShelf)
 
           if (previousTotal !== this.totalEntities) {
@@ -322,6 +403,7 @@ export default {
       }
     },
     handleScroll(scrollTop) {
+      if (this.useDirectSeriesGrid) return
       this.currScrollTop = scrollTop
       var firstShelfIndex = Math.floor(scrollTop / this.shelfHeight)
       var lastShelfIndex = Math.ceil((scrollTop + this.bookshelfHeight) / this.shelfHeight)
@@ -345,7 +427,7 @@ export default {
       // Remove entities out of view
       this.entityIndexesMounted = this.entityIndexesMounted.filter((_index) => {
         if (_index < firstBookIndex || _index >= lastBookIndex) {
-          var el = document.getElementById(`book-card-${_index}`)
+          var el = document.getElementById(`book-card-${_index}`) || document.getElementById(`series-card-${_index}`)
           if (el) el.remove()
           return false
         }
@@ -393,7 +475,11 @@ export default {
       if (this.user) {
         await this.loadPage(0)
         var lastBookIndex = Math.min(this.totalEntities, this.shelvesPerPage * this.entitiesPerShelf)
-        this.mountEntites(0, lastBookIndex)
+        if (!this.useDirectSeriesGrid) {
+          this.$nextTick(() => {
+            this.mountEntites(0, lastBookIndex)
+          })
+        }
       } else {
         // Local only
       }
@@ -435,7 +521,7 @@ export default {
         this.entitiesPerShelf = this.getTargetColumnsForWidth(availableWidth)
 
         // Center the grid if there's extra space
-        const usedWidth = this.entitiesPerShelf * this.totalEntityCardWidth - 16 // Remove last gap
+        const usedWidth = this.entitiesPerShelf * this.totalEntityCardWidth - 8 // Remove last gap
         this.bookshelfMarginLeft = Math.max(0, (availableWidth - usedWidth) / 2)
       }
 
@@ -465,7 +551,11 @@ export default {
       this.initSizeData()
       await this.loadPage(0)
       var lastBookIndex = Math.min(this.totalEntities, this.shelvesPerPage * this.entitiesPerShelf)
-      this.mountEntites(0, lastBookIndex)
+      if (!this.useDirectSeriesGrid) {
+        this.$nextTick(() => {
+          this.mountEntites(0, lastBookIndex)
+        })
+      }
 
       // Set last scroll position for this bookshelf page
       if (this.$store.state.lastBookshelfScrollData[this.page] && window['bookshelf-wrapper']) {
@@ -679,6 +769,36 @@ export default {
   opacity: 0;
   transform: translateY(20px) scale(0.95);
   animation: skeletonSlideIn 600ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.series-grid-skeleton {
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.shimmer-block {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer-block::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -150%;
+  height: 100%;
+  width: 150%;
+  background: linear-gradient(90deg, transparent, rgba(var(--md-sys-color-on-surface), 0.06), transparent);
+  animation: shimmer 1200ms linear infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 @keyframes skeletonSlideIn {

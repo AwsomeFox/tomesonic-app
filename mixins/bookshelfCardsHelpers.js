@@ -1,5 +1,6 @@
 import Vue from 'vue'
 import LazyListBookCard from '@/components/cards/LazyListBookCard'
+import LazySeriesCard from '@/components/cards/LazySeriesCard'
 
 export default {
   data() {
@@ -11,13 +12,19 @@ export default {
   },
   methods: {
     getComponentClass() {
-      // Always use LazyListBookCard for all entities since we force list view everywhere
+      if (this.entityName === 'series' && !this.showBookshelfListView) {
+        return Vue.extend(LazySeriesCard)
+      }
       return Vue.extend(LazyListBookCard)
     },
-    async mountEntityCard(index) {
+    async mountEntityCard(index, retries = 0) {
       var shelf = Math.floor(index / this.entitiesPerShelf)
       var shelfEl = document.getElementById(`shelf-${shelf}`)
       if (!shelfEl) {
+        if (retries < 15) {
+          setTimeout(() => this.mountEntityCard(index, retries + 1), 16)
+          return
+        }
         console.error('mount entity card invalid shelf', shelf, 'book index', index)
         return
       }
@@ -25,15 +32,23 @@ export default {
       if (this.entityComponentRefs[index]) {
         var bookComponent = this.entityComponentRefs[index]
         shelfEl.appendChild(bookComponent.$el)
-        bookComponent.setSelectionMode(false)
+        if (bookComponent.setSelectionMode) bookComponent.setSelectionMode(false)
         bookComponent.isHovering = false
         return
       }
-      // Since everything now uses list view, center the wider items within the shelf container
-      var availableWidth = this.bookshelfWidth - 32 // Container has px-4 padding (32px total)
-      var overflow = Math.max(0, this.entityWidth - availableWidth)
-      var shelfOffsetX = -overflow / 2 // Center by offsetting half the overflow to the left
-      var shelfOffsetY = 4
+      var shelfOffsetX = 0
+      var shelfOffsetY = 0
+
+      if (this.showBookshelfListView) {
+        // Center wide list rows within the shelf container.
+        var availableWidth = this.bookshelfWidth - 32 // Container has px-4 padding (32px total)
+        var overflow = Math.max(0, this.entityWidth - availableWidth)
+        shelfOffsetX = -overflow / 2
+        shelfOffsetY = 4
+      } else {
+        const indexInShelf = index % this.entitiesPerShelf
+        shelfOffsetX = indexInShelf * this.totalEntityCardWidth
+      }
 
       var ComponentClass = this.getComponentClass()
       var props = {
@@ -42,6 +57,9 @@ export default {
         height: this.entityHeight,
         bookCoverAspectRatio: this.bookCoverAspectRatio,
         isAltViewEnabled: this.altViewEnabled
+      }
+      if (this.entityName === 'series' && !this.showBookshelfListView) {
+        props.seriesMount = this.entities[index] || null
       }
       if (this.entityName === 'series-books') props.showSequence = true
       if (this.entityName === 'books') {
@@ -73,12 +91,12 @@ export default {
 
       if (this.entities[index]) {
         var entity = this.entities[index]
-        instance.setEntity(entity)
+        if (instance.setEntity) instance.setEntity(entity)
 
         if (this.isBookEntity && !entity.isLocal) {
           var localLibraryItem = this.localLibraryItems.find((lli) => lli.libraryItemId == entity.id)
           if (localLibraryItem) {
-            instance.setLocalLibraryItem(localLibraryItem)
+            if (instance.setLocalLibraryItem) instance.setLocalLibraryItem(localLibraryItem)
           }
         }
       }

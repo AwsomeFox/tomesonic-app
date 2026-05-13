@@ -34,6 +34,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   private var cachedLibrarySeriesItem : MutableMap<String, MutableMap<String, List<LibraryItem>>> = hashMapOf()
   private var cachedLibraryCollections : MutableMap<String, MutableMap<String, LibraryCollection>> = hashMapOf()
   private var cachedLibraryRecentShelves : MutableMap<String, MutableList<LibraryShelfType>> = hashMapOf()
+  private var cachedLibraryContinueSeries : MutableMap<String, MutableList<LibrarySeriesItem>> = hashMapOf()
   private var cachedLibraryDiscovery : MutableMap<String, MutableList<LibraryItem>> = hashMapOf()
   private var cachedLibraryPodcasts : MutableMap<String, MutableMap<String, LibraryItem>> = hashMapOf()
   private var isLibraryPodcastsCached : MutableMap<String, Boolean> = hashMapOf()
@@ -169,6 +170,100 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     }
   }
 
+  private fun extractSeriesRefsFromBookEntity(book: LibraryItem): List<SeriesType> {
+    val refs = mutableListOf<SeriesType>()
+
+    book.collapsedSeries?.let { collapsedSeries ->
+      refs.add(SeriesType(collapsedSeries.id, collapsedSeries.name, collapsedSeries.sequence))
+    }
+
+    val metadataSeries = ((book.media as? Book)?.metadata as? BookMetadata)?.series ?: emptyList()
+    metadataSeries.forEach { seriesRef ->
+      if (seriesRef.id.isNotBlank() && refs.find { it.id == seriesRef.id } == null) {
+        refs.add(seriesRef)
+      }
+    }
+
+    return refs
+  }
+
+  private fun addContinueSeriesFromBookShelf(libraryId: String, shelf: LibraryShelfBookEntity) {
+    if (!cachedLibraryContinueSeries.containsKey(libraryId)) {
+      cachedLibraryContinueSeries[libraryId] = mutableListOf()
+    }
+
+    val continueSeriesMap = cachedLibraryContinueSeries[libraryId]!!.associateBy { it.id }.toMutableMap()
+    shelf.entities?.forEach { book ->
+      if (!book.checkHasTracks()) return@forEach
+
+      val seriesRefs = extractSeriesRefsFromBookEntity(book)
+      seriesRefs.forEach { seriesRef ->
+        if (seriesRef.id.isBlank()) return@forEach
+
+        val existing = continueSeriesMap[seriesRef.id]
+        val resolvedName = if (seriesRef.name.isNotBlank()) {
+          seriesRef.name
+        } else {
+          ((book.media as? Book)?.metadata as? BookMetadata)?.seriesName ?: "Unknown Series"
+        }
+
+        if (existing == null) {
+          continueSeriesMap[seriesRef.id] = LibrarySeriesItem(
+            seriesRef.id,
+            libraryId,
+            resolvedName,
+            null,
+            book.addedAt,
+            book.updatedAt,
+            mutableListOf(book),
+            null
+          )
+        } else {
+          if ((existing.name.isBlank() || existing.name == "Unknown Series") && resolvedName.isNotBlank()) {
+            existing.name = resolvedName
+          }
+          if (existing.books == null) {
+            existing.books = mutableListOf()
+          }
+          if (existing.books?.find { it.id == book.id } == null) {
+            existing.books!!.add(book)
+          }
+          if (book.updatedAt > existing.updatedAt) {
+            existing.updatedAt = book.updatedAt
+          }
+        }
+      }
+    }
+
+    cachedLibraryContinueSeries[libraryId] = continueSeriesMap.values.toMutableList()
+  }
+
+  private fun addContinueSeriesFromSeriesShelf(libraryId: String, shelf: LibraryShelfSeriesEntity) {
+    if (!cachedLibraryContinueSeries.containsKey(libraryId)) {
+      cachedLibraryContinueSeries[libraryId] = mutableListOf()
+    }
+
+    val continueSeriesMap = cachedLibraryContinueSeries[libraryId]!!.associateBy { it.id }.toMutableMap()
+    shelf.entities?.forEach { seriesItem ->
+      val existing = continueSeriesMap[seriesItem.id]
+      if (existing == null) {
+        continueSeriesMap[seriesItem.id] = seriesItem
+      } else {
+        if ((existing.name.isBlank() || existing.name == "Unknown Series") && seriesItem.name.isNotBlank()) {
+          existing.name = seriesItem.name
+        }
+        if ((existing.books == null || existing.books!!.isEmpty()) && !seriesItem.books.isNullOrEmpty()) {
+          existing.books = seriesItem.books
+        }
+        if (seriesItem.updatedAt > existing.updatedAt) {
+          existing.updatedAt = seriesItem.updatedAt
+        }
+      }
+    }
+
+    cachedLibraryContinueSeries[libraryId] = continueSeriesMap.values.toMutableList()
+  }
+
   fun getSavedPlaybackRate():Float {
     if (userSettingsPlaybackRate != null) {
       return userSettingsPlaybackRate ?: 1f
@@ -240,6 +335,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       cachedLibrarySeriesItem = hashMapOf()
       cachedLibraryCollections = hashMapOf()
       cachedLibraryRecentShelves = hashMapOf()
+      cachedLibraryContinueSeries = hashMapOf()
       cachedLibraryDiscovery = hashMapOf()
       cachedLibraryPodcasts = hashMapOf()
       isLibraryPodcastsCached = hashMapOf()
@@ -308,6 +404,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     apiHandler.getLibraryPersonalized(libraryId) { shelves ->
       Log.d(tag, "populatePersonalizedDataForLibrary $libraryId")
       if (shelves === null) return@getLibraryPersonalized
+      cachedLibraryContinueSeries[libraryId]?.clear()
       shelves.map { shelf ->
         Log.d(tag, "$shelf")
         if (shelf.type == "book") {
@@ -330,10 +427,15 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
             }
           }
           else if (shelf.id == "continue-reading") return@map
-          else if (shelf.id == "continue-series") return@map
+          else if (shelf.id == "continue-series") {
+            addContinueSeriesFromBookShelf(libraryId, shelf as LibraryShelfBookEntity)
+            return@map
+          }
           shelf as LibraryShelfBookEntity
         } else if (shelf.type == "series") {
-          if (shelf.id == "recent-series") {
+          if (shelf.id == "continue-series") {
+            addContinueSeriesFromSeriesShelf(libraryId, shelf as LibraryShelfSeriesEntity)
+          } else if (shelf.id == "recent-series") {
             if (!cachedLibraryRecentShelves.containsKey(libraryId)) {
               cachedLibraryRecentShelves[libraryId] = mutableListOf()
             }
@@ -811,6 +913,20 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   }
 
   /**
+   * Returns all cached continue-series entities by library id.
+   */
+  fun getAllCachedContinueSeriesItems(): Map<String, MutableList<LibrarySeriesItem>> {
+    return cachedLibraryContinueSeries
+  }
+
+  /**
+   * Returns continue-series entities for [libraryId] or empty list.
+   */
+  fun getCachedContinueSeriesItems(libraryId: String): List<LibrarySeriesItem> {
+    return cachedLibraryContinueSeries[libraryId] ?: emptyList()
+  }
+
+  /**
    * Returns true if any recent shelves are loaded
    */
   fun hasRecentShelvesLoaded(): Boolean {
@@ -829,6 +945,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
       getCachedAuthors(libraryId).isNotEmpty() ||
       getCachedSeries(libraryId).isNotEmpty() ||
       getCachedCollections(libraryId).isNotEmpty() ||
+      cachedLibraryContinueSeries.containsKey(libraryId) ||
       cachedLibraryDiscovery.containsKey(libraryId)
     }
   }
@@ -1112,7 +1229,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         future.set(sortedItems)
 
         // Notify Android Auto listeners that data is now available
-        notifyAndroidAutoDataReady("/", "__CONTINUE__")
+        notifyAndroidAutoDataReady("/", "__CONTINUE__", "__CONTINUE_SERIES__")
       }
 
       return try {
@@ -1158,7 +1275,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
 
       // If the count changed or data is different, notify Android Auto
       if (filteredItemsInProgress.size != previousCount) {
-        notifyAndroidAutoDataReady("/", "__CONTINUE__")
+        notifyAndroidAutoDataReady("/", "__CONTINUE__", "__CONTINUE_SERIES__")
       }
     }
 
@@ -2042,6 +2159,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
     return cachedLibraryAuthors.isNotEmpty() ||
            cachedLibrarySeries.isNotEmpty() ||
            cachedLibraryCollections.isNotEmpty() ||
+           cachedLibraryContinueSeries.isNotEmpty() ||
            cachedLibraryDiscovery.isNotEmpty()
   }
 

@@ -22,7 +22,7 @@
           :class="`loading-delay-${Math.min(index, 12)}`"
           :style="{ animationDelay: index * 80 + 'ms' }"
         />
-        <cards-author-card v-else-if="type === 'authors'" :key="entity.id" :width="bookWidth" :height="bookHeight" :author="entity" :size-multiplier="sizeMultiplier" class="mx-1 item-loading-animation" :class="`loading-delay-${Math.min(index, 12)}`" :style="{ animationDelay: index * 80 + 'ms' }" />
+        <cards-author-card v-else-if="type === 'authors'" :key="entity.id" :width="bookWidth" :height="bookWidth" :author="entity" :size-multiplier="sizeMultiplier" class="mx-1 item-loading-animation" :class="`loading-delay-${Math.min(index, 12)}`" :style="{ animationDelay: index * 80 + 'ms' }" />
       </template>
     </div>
 
@@ -71,6 +71,7 @@ export default {
       return this.bookWidth * 1.6
     },
     entityHeight() {
+      if (this.type === 'authors') return this.bookWidth
       return this.bookHeight
     },
     sizeMultiplier() {
