@@ -43,15 +43,15 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
     companion object {
         private const val TAG = "AudiobookMediaSourceBuilder"
         // Size/quality used for the artworkData bytes embedded in MediaMetadata.
-        // These bytes are what the Wear OS notification bridge and the phone
-        // notification's DefaultMediaNotificationProvider actually render
-        // (DefaultMediaNotificationProvider prefers artworkData over
-        // artworkUri+BitmapLoader when both are present). Keep large enough
-        // that a typical phone notification large icon (~256dp ≈ 768px on a
-        // 3x screen) and the Wear circular card both look crisp, while still
-        // fitting in the ~1MB IPC bundle the Wear bridge uses.
-        private const val ARTWORK_SIZE_PX = 1024
-        private const val ARTWORK_JPEG_QUALITY = 90
+        // These bytes are what the Wear OS notification bridge actually renders,
+        // and they have to cross IPC inside a Bundle that has a hard ~1 MB limit
+        // shared with the rest of the MediaMetadata. Empirically, anything much
+        // bigger than 400px / JPEG-80 (~30-60 KB) caused the Wear bridge to
+        // silently drop the artwork. The phone notification's high-quality
+        // cover comes from MediaMetadata.artworkUri + the session BitmapLoader,
+        // not from these embedded bytes.
+        private const val ARTWORK_SIZE_PX = 400
+        private const val ARTWORK_JPEG_QUALITY = 80
     }
 
     private val dataSourceFactory by lazy {

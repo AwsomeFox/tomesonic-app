@@ -111,7 +111,6 @@ class MediaSessionManager(
             override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
                 Futures.submit(
                     Callable {
-                        Log.d(TAG, "BitmapLoader: loading native-resolution artwork for uri=$uri")
                         val bitmap = com.bumptech.glide.Glide.with(context)
                             .asBitmap()
                             .load(uri)
@@ -120,13 +119,39 @@ class MediaSessionManager(
                             // downsample only if the target view requires it.
                             .submit()
                             .get(15, TimeUnit.SECONDS)
-                        Log.d(TAG, "BitmapLoader: loaded bitmap ${bitmap.width}x${bitmap.height} for uri=$uri")
                         bitmap
                     },
                     loaderExecutor
                 )
         }
-        val sessionBitmapLoader: BitmapLoader = CacheBitmapLoader(glideBackedLoader)
+        // Wrap the Glide-backed loader in CacheBitmapLoader for an in-memory
+        // bitmap cache, then wrap THAT in an outer BitmapLoader that overrides
+        // loadBitmapFromMetadata to prefer artworkUri over artworkData.
+        //
+        // Why: DefaultMediaNotificationProvider (phone notification + system
+        // media controls) calls bitmapLoader.loadBitmapFromMetadata(metadata),
+        // whose default implementation prefers the small embedded artworkData
+        // bytes (we ship 400px/JPEG-80 for Wear OS IPC) over the high-quality
+        // artworkUri. By inverting that preference here, the phone notification
+        // and lock screen render the native-resolution cover via Glide (with
+        // Glide's HTTP disk cache providing the offline fallback), while the
+        // Wear OS notification bridge — which does NOT call BitmapLoader and
+        // instead reads MediaMetadata.artworkData bytes directly over IPC —
+        // continues to render the embedded 400px artwork.
+        val cachedLoader = CacheBitmapLoader(glideBackedLoader)
+        val sessionBitmapLoader: BitmapLoader = object : BitmapLoader {
+            override fun supportsMimeType(mimeType: String) = cachedLoader.supportsMimeType(mimeType)
+            override fun decodeBitmap(data: ByteArray) = cachedLoader.decodeBitmap(data)
+            override fun loadBitmap(uri: Uri) = cachedLoader.loadBitmap(uri)
+            override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
+                // Prefer artworkUri (Glide → native resolution, offline-cached)
+                // over the small embedded artworkData bytes that are only there
+                // for the Wear OS notification bridge.
+                metadata.artworkUri?.let { return loadBitmap(it) }
+                metadata.artworkData?.let { return decodeBitmap(it) }
+                return null
+            }
+        }
 
         val sessionBuilder = MediaLibrarySession.Builder(context, player, callback)
         sessionBuilder.setBitmapLoader(sessionBitmapLoader)
@@ -252,8 +277,6 @@ class MediaSessionManager(
      * This makes Android Auto treat each chapter as a separate track with proper duration
      */
     fun updateChapterMetadata(chapterTitle: String, chapterDuration: Long, bookTitle: String, author: String?, artworkUri: Uri?, artworkData: ByteArray? = null) {
-        Log.d(TAG, "Updating chapter metadata: chapter='$chapterTitle', duration=${chapterDuration}ms, artworkUri=$artworkUri, artworkData=${artworkData?.size ?: 0} bytes")
-
         mediaSession?.let { session ->
             // Use Media3 1.8.0+ recommended way to update metadata without replacing MediaItem
             val metadataBuilder = session.player.currentMediaItem?.mediaMetadata?.buildUpon()
@@ -328,7 +351,9 @@ class MediaSessionManager(
             }
         }
 
-        Log.d(TAG, "refreshArtworkOnTimeline: refreshed $replacedCount/$itemCount MediaItems with ${artworkData.size} artwork bytes for uri=$artworkUri")
+        if (replacedCount == 0) {
+            Log.w(TAG, "refreshArtworkOnTimeline: no matching MediaItems found for uri=$artworkUri")
+        }
     }
 
     fun getSessionToken(): androidx.media3.session.SessionToken? =

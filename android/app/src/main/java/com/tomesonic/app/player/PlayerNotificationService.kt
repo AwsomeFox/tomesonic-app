@@ -436,9 +436,7 @@ class PlayerNotificationService : MediaLibraryService() {
     audiobookMediaSourceBuilder.onArtworkLoaded = { uri, bytes ->
       val session = currentPlaybackSession
       val currentCoverUri = session?.getCoverUri(this)
-      if (session == null || currentCoverUri != uri) {
-        Log.d(tag, "onArtworkLoaded: ignoring stale artwork for uri=$uri (current=$currentCoverUri)")
-      } else {
+      if (session != null && currentCoverUri == uri) {
         Handler(Looper.getMainLooper()).post {
           try {
             // 1) Re-embed the new artworkData on every chapter MediaItem in the
@@ -462,7 +460,6 @@ class PlayerNotificationService : MediaLibraryService() {
                 artworkData = bytes
               )
             }
-            Log.d(tag, "onArtworkLoaded: refreshed metadata with ${bytes.size} artwork bytes for uri=$uri")
           } catch (e: Exception) {
             Log.w(tag, "onArtworkLoaded: failed to refresh metadata for uri=$uri", e)
           }
