@@ -757,16 +757,6 @@ class AbsAudioPlayer : Plugin() {
           Log.d(tag, "prepareLibraryItem: Active cast session detected - will switch to cast player during preparation")
         }
       }
-
-      // Also schedule a delayed check in case the cast session is establishing
-      Handler(Looper.getMainLooper()).postDelayed({
-        playerNotificationService.castPlayerManager.isConnectedSafe { isCastConnected ->
-          Log.d(tag, "prepareLibraryItem: [DELAYED CHECK] Cast session connected: $isCastConnected")
-          if (isCastConnected) {
-            Log.d(tag, "prepareLibraryItem: [DELAYED] Cast session now available - may need to restart playback")
-          }
-        }
-      }, 2000) // Check again after 2 seconds
     }
 
     AbsLogger.info("AbsAudioPlayer", "prepareLibraryItem: lid=$libraryItemId, startTimeOverride=$startTimeOverride, playbackRate=$playbackRate")

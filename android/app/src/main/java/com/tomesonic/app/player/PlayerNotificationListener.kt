@@ -17,15 +17,6 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
     notificationId: Int,
     notification: Notification,
     onGoing: Boolean) {
-
-    // TODO: Add WearableExtender for better Wear OS support
-    // val wearableExtender = NotificationCompat.WearableExtender()
-    //   .setHintShowBackgroundOnly(true)
-    //   .setBackground(notification.getLargeIcon())
-
-    // For now, use the original notification
-    val enhancedNotification = notification
-
     if (onGoing && !isForegroundService) {
       // Start foreground service when media notification is posted
       Log.d(tag, "Notification Posted $notificationId - Start Foreground | $notification")
@@ -33,9 +24,9 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
 
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          playerNotificationService.startForeground(notificationId, enhancedNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+          playerNotificationService.startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
-          playerNotificationService.startForeground(notificationId, enhancedNotification)
+          playerNotificationService.startForeground(notificationId, notification)
         }
         isForegroundService = true
         Log.d(tag, "Successfully started foreground service with media notification")
@@ -44,10 +35,8 @@ class PlayerNotificationListener(var playerNotificationService:PlayerNotificatio
         // Don't set isForegroundService = true if we failed
       }
     } else if (onGoing && isForegroundService) {
-      // Service is already in foreground, just update the notification
+      // Service is already in foreground; PlayerNotificationManager updates the notification automatically
       Log.d(tag, "Notification posted $notificationId - Service already foreground, notification will be updated automatically")
-      // The PlayerNotificationManager will automatically update the notification
-      // We don't need to call startForeground again
     } else {
       Log.d(tag, "Notification posted $notificationId, not ongoing - onGoing=$onGoing | isForegroundService=$isForegroundService")
     }

@@ -206,20 +206,34 @@ class MediaProgressSyncer(
     listeningTimerTask = null
     listeningTimerRunning = false
     Log.d(tag, "stop: Stopping listening for $currentDisplayTitle")
+        val stoppedSession = currentPlaybackSession
+        val stoppedSessionId = stoppedSession?.id
 
     val currentTime =
             if (shouldSync == true) playerNotificationService.getCurrentTimeSeconds() else 0.0
     if (currentTime > 0) { // Current time should always be > 0 on stop
+      // Kick off the progress sync HTTP request, but don't make the caller
+      // wait for the network round-trip — the next action (typically
+      // preparing a new playback session for a different item) does not
+      // depend on the previous session's progress being acknowledged by the
+      // server. The sync still runs to completion in the background and
+      // fires stopEvent + reset when it returns.
       sync(true, currentTime) { syncResult ->
-        currentPlaybackSession?.let { playbackSession ->
+        stoppedSession?.let { playbackSession ->
           MediaEventManager.stopEvent(playbackSession, syncResult)
         }
 
-        reset()
-        cb()
+        // If a new session has been started while this sync was in-flight,
+        // don't reset shared state for the new session.
+        if (currentPlaybackSession?.id == stoppedSessionId) {
+          reset()
+        } else {
+          Log.d(tag, "stop: Skip reset for stale session $stoppedSessionId")
+        }
       }
+      cb()
     } else {
-      currentPlaybackSession?.let { playbackSession ->
+      stoppedSession?.let { playbackSession ->
         MediaEventManager.stopEvent(playbackSession, null)
       }
 

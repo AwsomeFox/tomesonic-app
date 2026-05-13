@@ -1,7 +1,11 @@
 package com.tomesonic.app.player.mediasource
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -19,10 +23,15 @@ import androidx.media3.extractor.mp4.Mp4Extractor
 import androidx.media3.extractor.wav.WavExtractor
 import androidx.media3.extractor.flac.FlacExtractor
 import androidx.media3.extractor.ogg.OggExtractor
+import com.bumptech.glide.Glide
 import com.tomesonic.app.data.AudioTrack
 import com.tomesonic.app.data.BookChapter
 import com.tomesonic.app.data.PlaybackSession
 import com.tomesonic.app.utils.MimeTypeUtil
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Builds MediaItem playlists for audiobooks with chapter-based playback.
@@ -33,6 +42,16 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
     companion object {
         private const val TAG = "AudiobookMediaSourceBuilder"
+        // Size/quality used for the artworkData bytes embedded in MediaMetadata.
+        // These bytes are what the Wear OS notification bridge actually renders,
+        // and they have to cross IPC inside a Bundle that has a hard ~1 MB limit
+        // shared with the rest of the MediaMetadata. Empirically, anything much
+        // bigger than 400px / JPEG-80 (~30-60 KB) caused the Wear bridge to
+        // silently drop the artwork. The phone notification's high-quality
+        // cover comes from MediaMetadata.artworkUri + the session BitmapLoader,
+        // not from these embedded bytes.
+        private const val ARTWORK_SIZE_PX = 400
+        private const val ARTWORK_JPEG_QUALITY = 80
     }
 
     private val dataSourceFactory by lazy {
@@ -50,11 +69,35 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
 
     // Store the last created chapter segments for external access
     private var lastChapterSegments: List<ChapterSegment> = emptyList()
+    private var cachedArtworkUri: Uri? = null
+    private var cachedArtworkData: ByteArray? = null
+    private var artworkLoadInProgressUri: Uri? = null
+    private var artworkLoadExecutor: ExecutorService? = null
+    private val artworkCacheLock = Any()
+
+    /**
+     * Called on the artwork loader thread once an async artwork prefetch
+     * completes successfully. Lets the service push a metadata refresh so
+     * downstream consumers (notification, Wear OS bridge) pick up the new
+     * artworkData bytes for the first chapter of a freshly-prepared session.
+     */
+    var onArtworkLoaded: ((uri: Uri, bytes: ByteArray) -> Unit)? = null
 
     /**
      * Get the chapter segments from the last built MediaSource
      */
     fun getLastChapterSegments(): List<ChapterSegment> = lastChapterSegments
+
+    fun release() {
+        artworkLoadExecutor?.shutdownNow()
+        artworkLoadExecutor = null
+
+        synchronized(artworkCacheLock) {
+            cachedArtworkUri = null
+            cachedArtworkData = null
+            artworkLoadInProgressUri = null
+        }
+    }
 
     /**
      * Builds a list of MediaItems for an audiobook with chapter-based playback
@@ -386,8 +429,12 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         val chapter = playbackSession.chapters.getOrNull(segment.chapterIndex)
         val baseMetadata = playbackSession.getExoMediaMetadata(context, null, chapter, segment.chapterIndex)
 
-        // Create a new metadata builder using the library metadata fields
-        return MediaMetadata.Builder()
+        // Keep artworkUri so the phone notification can resolve higher-quality artwork
+        // through the session BitmapLoader, but also embed a small artworkData payload
+        // for Wear OS/bridge surfaces that rely on metadata bytes instead of URI fetches.
+        val artworkData = getArtworkDataForUri(baseMetadata.artworkUri)
+
+        val builder = MediaMetadata.Builder()
             .setTitle(baseMetadata.title)
             .setSubtitle(baseMetadata.subtitle)
             .setArtist(baseMetadata.artist)
@@ -395,11 +442,151 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             .setAlbumTitle(baseMetadata.albumTitle)
             .setDescription(baseMetadata.description)
             .setArtworkUri(baseMetadata.artworkUri) // This includes the library cover image
+            .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
             .setMediaType(baseMetadata.mediaType)
             .setTrackNumber(segment.chapterIndex + 1)
             .setDurationMs(segment.durationMs) // Set chapter duration for Android Auto timeline
             .setIsPlayable(true)
-            .build()
+
+        return builder.build()
+    }
+
+    internal fun getArtworkDataForUri(uri: Uri?): ByteArray? {
+        if (uri == null) return null
+
+        synchronized(artworkCacheLock) {
+            if (cachedArtworkUri == uri && cachedArtworkData != null) {
+                Log.d(TAG, "Reusing cached artwork bytes for uri=$uri (${cachedArtworkData?.size ?: 0} bytes)")
+                return cachedArtworkData
+            }
+
+            // URI changed (new book). Drop the previous book's bytes so we don't
+            // accidentally hand them out, and so the Wear OS bridge sees a clean
+            // transition once the new bytes are loaded.
+            if (cachedArtworkUri != null && cachedArtworkUri != uri) {
+                Log.d(TAG, "Artwork URI changed (${cachedArtworkUri} -> $uri); clearing previous cache")
+                cachedArtworkUri = null
+                cachedArtworkData = null
+            }
+
+            if (artworkLoadInProgressUri == uri) {
+                Log.d(TAG, "Artwork load already in progress for uri=$uri")
+                return null
+            }
+        }
+
+        Log.d(TAG, "Loading artwork bytes for uri=$uri")
+        val bytes = loadArtworkBytes(uri)
+        if (bytes != null) {
+            synchronized(artworkCacheLock) {
+                cachedArtworkUri = uri
+                cachedArtworkData = bytes
+            }
+            Log.d(TAG, "Cached artwork bytes for uri=$uri (${bytes.size} bytes)")
+        } else {
+            if (artworkLoadInProgressUri == uri) {
+                Log.d(TAG, "Artwork prefetch started for uri=$uri; metadata will rely on artworkUri until cache is ready")
+            } else {
+                Log.d(TAG, "Artwork bytes still unavailable for uri=$uri; metadata will rely on artworkUri")
+            }
+        }
+
+        return bytes
+    }
+
+    private fun loadArtworkBytes(uri: Uri): ByteArray? {
+        return try {
+            synchronized(artworkCacheLock) {
+                artworkLoadInProgressUri = uri
+            }
+            ensureArtworkExecutor().submit {
+                try {
+                    val bitmap = when (uri.scheme?.lowercase()) {
+                        "http", "https" -> Glide.with(context)
+                            .asBitmap()
+                            .load(uri)
+                            .override(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+                            .submit()
+                            .get(10, TimeUnit.SECONDS)
+
+                        else -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                val source = ImageDecoder.createSource(context.contentResolver, uri)
+                                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                                    decoder.setTargetSize(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+                                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+                                }
+                            } else {
+                                context.contentResolver.openInputStream(uri)?.use {
+                                    BitmapFactory.decodeStream(it)
+                                }
+                            }
+                        }
+                    }
+
+                    if (bitmap == null) {
+                        Log.w(TAG, "Artwork bitmap decode returned null for uri=$uri")
+                        return@submit
+                    }
+
+                    val normalizedBitmap = normalizeArtworkBitmap(bitmap)
+                    val output = ByteArrayOutputStream()
+                    normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, ARTWORK_JPEG_QUALITY, output)
+                    val bytes = output.toByteArray()
+                    synchronized(artworkCacheLock) {
+                        cachedArtworkUri = uri
+                        cachedArtworkData = bytes
+                    }
+                    Log.d(TAG, "Prefetched artwork bitmap for uri=$uri (${normalizedBitmap.width}x${normalizedBitmap.height}, ${bytes.size} bytes)")
+                    try {
+                        onArtworkLoaded?.invoke(uri, bytes)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "onArtworkLoaded listener threw for uri=$uri", e)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Prefetch failed for artwork uri=$uri", e)
+                } finally {
+                    synchronized(artworkCacheLock) {
+                        if (artworkLoadInProgressUri == uri) {
+                            artworkLoadInProgressUri = null
+                        }
+                    }
+                }
+            }
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load artwork bytes for metadata uri=$uri", e)
+            null
+        }
+    }
+
+    private fun ensureArtworkExecutor(): ExecutorService {
+        if (artworkLoadExecutor == null || artworkLoadExecutor?.isShutdown == true) {
+            artworkLoadExecutor = Executors.newSingleThreadExecutor()
+        }
+
+        return artworkLoadExecutor!!
+    }
+
+    private fun normalizeArtworkBitmap(bitmap: Bitmap): Bitmap {
+        if (bitmap.width == ARTWORK_SIZE_PX && bitmap.height == ARTWORK_SIZE_PX) {
+            return bitmap
+        }
+
+        val scaledBitmap = Bitmap.createBitmap(ARTWORK_SIZE_PX, ARTWORK_SIZE_PX, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(scaledBitmap)
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            isFilterBitmap = true
+            isDither = false
+        }
+        val srcRect = android.graphics.Rect(0, 0, bitmap.width, bitmap.height)
+        val dstRect = android.graphics.Rect(0, 0, ARTWORK_SIZE_PX, ARTWORK_SIZE_PX)
+        canvas.drawBitmap(bitmap, srcRect, dstRect, paint)
+        if (bitmap != scaledBitmap) {
+            bitmap.recycle()
+        }
+        return scaledBitmap
     }
 
     /**
@@ -515,7 +702,7 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             val positionInChapter = currentTimeMs - chapter.startMs
             Log.d(TAG, "Starting at position ${positionInChapter}ms within chapter $mediaItemIndex")
             return positionInChapter.coerceAtLeast(0)
-        } 
+        }
         // Track-based approach
         else if (playbackSession.audioTracks.isNotEmpty() && mediaItemIndex < playbackSession.audioTracks.size) {
             val track = playbackSession.audioTracks[mediaItemIndex]

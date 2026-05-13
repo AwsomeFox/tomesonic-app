@@ -25,6 +25,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import java.util.concurrent.TimeUnit
 // MIGRATION-DEFERRED: CAST - Commented out for migration
 // import com.google.android.gms.cast.MediaInfo
 // import com.google.android.gms.cast.MediaQueueItem
@@ -334,7 +335,8 @@ class PlaybackSession(
             ANDROID_AUTO_PKG_NAME,
             ANDROID_AUTO_SIMULATOR_PKG_NAME,
             ANDROID_AUTOMOTIVE_PKG_NAME,
-            "com.android.systemui" // Required for media notifications
+            "com.android.systemui", // Required for media notifications
+            "com.google.android.wearable.app" // Required for Wear OS album art
           )
 
           val packageManager = ctx.packageManager
@@ -368,12 +370,15 @@ class PlaybackSession(
       return Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon)
     }
 
+    // Request the raw (original-resolution) cover so the notification and Wear
+    // OS card render at full quality, matching what the Vue player screen
+    // requests via `?raw=1`.
     // As of v2.17.0 token is not needed with cover image requests
     if (checkIsServerVersionGte("2.17.0")) {
-      val serverUri = Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
+      val serverUri = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?raw=1")
       return serverUri
     }
-    val serverUriWithToken = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=${DeviceManager.token}")
+    val serverUriWithToken = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?raw=1&token=${DeviceManager.token}")
     return serverUriWithToken
   }
 
@@ -671,13 +676,62 @@ class PlaybackSession(
                     .setAlbumTitle(displayAuthor)
                     .setDescription(displayAuthor)
                     .setArtworkUri(coverUri) // Media3 BitmapLoader will handle automatic loading
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC) // Use MUSIC for better compatibility with external players
+                    .setIsPlayable(true)
 
     // Note: Media3 1.8.0+ automatically handles artwork transmission to Bluetooth devices
     // via AVRCP when MediaSession is properly configured. The BitmapLoader will load
     // artwork from the URI and transmit it. Success depends on car's AVRCP version (1.6+ required).
 
     return metadataBuilder.build()
+  }
+
+  /**
+   * Helper to get artwork as bytes for embedding in metadata
+   */
+  fun getArtworkData(ctx: Context, size: Int = 300): ByteArray? {
+    try {
+      val uri = getCoverUri(ctx)
+      val bitmap = when (uri.scheme?.lowercase()) {
+        "http", "https" -> {
+          Glide.with(ctx)
+              .asBitmap()
+              .load(uri)
+              .submit(size, size)
+              .get(8, TimeUnit.SECONDS)
+        }
+        else -> {
+          if (Build.VERSION.SDK_INT >= 28) {
+            val source = ImageDecoder.createSource(ctx.contentResolver, uri)
+            ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+              decoder.setTargetSize(size, size)
+              decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+            }
+          } else {
+            ctx.contentResolver.openInputStream(uri)?.use { inputStream ->
+              val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+              }
+              BitmapFactory.decodeStream(inputStream, null, options)
+              options.inSampleSize = calculateInSampleSize(options, size, size)
+              options.inJustDecodeBounds = false
+              ctx.contentResolver.openInputStream(uri)?.use { inputStream2 ->
+                BitmapFactory.decodeStream(inputStream2, null, options)
+              }
+            }
+          }
+        }
+      }
+
+      return bitmap?.let {
+        val stream = java.io.ByteArrayOutputStream()
+        it.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+        stream.toByteArray()
+      }
+    } catch (e: Exception) {
+      Log.w("PlaybackSession", "Failed to get artwork data: ${e.message}")
+      return null
+    }
   }
 
   // MIGRATION-DEFERRED: CAST - Commented out Cast-related methods

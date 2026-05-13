@@ -5,7 +5,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -13,20 +15,25 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
-// MIGRATION: Remove MediaSessionCompat - now using Media3 MediaSession
-// import android.support.v4.media.session.MediaSessionCompat
 import android.util.Log
-import androidx.core.app.NotificationCompat
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.BitmapLoader
+import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
-import androidx.media3.ui.PlayerNotificationManager
 import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import com.tomesonic.app.R
 import com.tomesonic.app.data.PlaybackSession
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 // MIGRATION-BACKUP: ExoPlayer2 Implementation (commented out for reference)
 /*
@@ -52,7 +59,7 @@ class MediaSessionManager(
     var mediaSession: MediaLibrarySession? = null
         private set
 
-    private var playerNotificationManager: PlayerNotificationManager? = null
+    private var bitmapLoaderExecutor: ExecutorService? = null
 
     fun initializeMediaSession(
         notificationId: Int,
@@ -60,8 +67,94 @@ class MediaSessionManager(
         sessionActivityPendingIntent: PendingIntent?,
         player: Player
     ) {
-        // Create Media3 MediaLibrarySession
+        // Create Media3 MediaLibrarySession with a Glide-backed BitmapLoader.
+        // This is the critical path for Wear OS artwork: the watch (or any
+        // MediaController, including the system media controls) asks the session's
+        // BitmapLoader to resolve MediaMetadata.artworkUri. Without a BitmapLoader
+        // the controller has no way to fetch high-resolution artwork from a remote
+        // server URI.
+        //
+        // We deliberately do NOT instantiate a PlayerNotificationManager here.
+        // MediaLibraryService already publishes a proper MediaStyle foreground
+        // notification through DefaultMediaNotificationProvider; that notification
+        // links to this session, which is what the Wear OS notification bridge
+        // (and Android system media controls) require to display artwork.
+        // Running a second PlayerNotificationManager alongside causes the bridge
+        // to pick up a notification without a session token attached, which is
+        // why Wear OS was showing no artwork before.
+        // BitmapLoader strategy:
+        //  - Use Glide to load covers because it has built-in HTTP disk cache
+        //    and bitmap memory cache, matching how the Vue UI re-uses covers.
+        //  - Decode at the image's native resolution (no override) so the phone
+        //    notification, lock screen, and Wear OS card render at full quality
+        //    when the server returns the raw cover (`?raw=1`, set in
+        //    PlaybackSession.getCoverUri).
+        //  - Wrap in Media3's CacheBitmapLoader for an additional in-memory
+        //    Bitmap cache keyed by URI, so repeated chapter MediaItem builds
+        //    reuse the same decoded bitmap.
+        if (bitmapLoaderExecutor == null || bitmapLoaderExecutor?.isShutdown == true) {
+            bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
+        }
+        val loaderExecutor = bitmapLoaderExecutor!!
+        val glideBackedLoader = object : BitmapLoader {
+            override fun supportsMimeType(mimeType: String) = mimeType.startsWith("image/")
+
+            override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
+                Futures.submit(
+                    Callable {
+                        BitmapFactory.decodeByteArray(data, 0, data.size)
+                            ?: throw IllegalStateException("decodeBitmap failed for artworkData")
+                    },
+                    loaderExecutor
+                )
+
+            override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
+                Futures.submit(
+                    Callable {
+                        val bitmap = com.bumptech.glide.Glide.with(context)
+                            .asBitmap()
+                            .load(uri)
+                            // No .override(...) — decode at the cover's native
+                            // resolution; Glide still applies a sensible
+                            // downsample only if the target view requires it.
+                            .submit()
+                            .get(15, TimeUnit.SECONDS)
+                        bitmap
+                    },
+                    loaderExecutor
+                )
+        }
+        // Wrap the Glide-backed loader in CacheBitmapLoader for an in-memory
+        // bitmap cache, then wrap THAT in an outer BitmapLoader that overrides
+        // loadBitmapFromMetadata to prefer artworkUri over artworkData.
+        //
+        // Why: DefaultMediaNotificationProvider (phone notification + system
+        // media controls) calls bitmapLoader.loadBitmapFromMetadata(metadata),
+        // whose default implementation prefers the small embedded artworkData
+        // bytes (we ship 400px/JPEG-80 for Wear OS IPC) over the high-quality
+        // artworkUri. By inverting that preference here, the phone notification
+        // and lock screen render the native-resolution cover via Glide (with
+        // Glide's HTTP disk cache providing the offline fallback), while the
+        // Wear OS notification bridge — which does NOT call BitmapLoader and
+        // instead reads MediaMetadata.artworkData bytes directly over IPC —
+        // continues to render the embedded 400px artwork.
+        val cachedLoader = CacheBitmapLoader(glideBackedLoader)
+        val sessionBitmapLoader: BitmapLoader = object : BitmapLoader {
+            override fun supportsMimeType(mimeType: String) = cachedLoader.supportsMimeType(mimeType)
+            override fun decodeBitmap(data: ByteArray) = cachedLoader.decodeBitmap(data)
+            override fun loadBitmap(uri: Uri) = cachedLoader.loadBitmap(uri)
+            override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
+                // Prefer artworkUri (Glide → native resolution, offline-cached)
+                // over the small embedded artworkData bytes that are only there
+                // for the Wear OS notification bridge.
+                metadata.artworkUri?.let { return loadBitmap(it) }
+                metadata.artworkData?.let { return decodeBitmap(it) }
+                return null
+            }
+        }
+
         val sessionBuilder = MediaLibrarySession.Builder(context, player, callback)
+        sessionBuilder.setBitmapLoader(sessionBitmapLoader)
         sessionActivityPendingIntent?.let { sessionBuilder.setSessionActivity(it) }
 
         // Enable custom commands and actions for Android Auto
@@ -75,10 +168,7 @@ class MediaSessionManager(
 
         mediaSession = sessionBuilder.build()
 
-        // Set up PlayerNotificationManager for Media3
-        setupPlayerNotificationManager(notificationId, channelId, player)
-
-        Log.d(TAG, "Media3 MediaLibrarySession and PlayerNotificationManager initialized successfully")
+        Log.d(TAG, "Media3 MediaLibrarySession initialized (notifications handled by MediaLibraryService)")
     }
 
     /**
@@ -108,40 +198,6 @@ class MediaSessionManager(
         )
 
         return buttons.build()
-    }
-
-    private fun setupPlayerNotificationManager(notificationId: Int, channelId: String, player: Player) {
-        val mediaDescriptionAdapter = AbMediaDescriptionAdapter(context)
-        val notificationListener = PlayerNotificationListener(service)
-
-        playerNotificationManager = PlayerNotificationManager.Builder(context, notificationId, channelId)
-            .setMediaDescriptionAdapter(mediaDescriptionAdapter)
-            .setNotificationListener(notificationListener)
-            .build()
-
-        playerNotificationManager?.setPlayer(player)
-        playerNotificationManager?.setUseRewindAction(false)
-        playerNotificationManager?.setUseFastForwardAction(false)
-        playerNotificationManager?.setUseNextAction(false)
-        playerNotificationManager?.setUsePreviousAction(false)
-
-        // Enhanced logging for cast player debugging
-        val playerType = when {
-            player.javaClass.simpleName.contains("Cast") -> "CastPlayer"
-            player.javaClass.simpleName.contains("ExoPlayer") -> "ExoPlayer"
-            else -> player.javaClass.simpleName
-        }
-
-        Log.d(TAG, "PlayerNotificationManager set up for $playerType")
-        Log.d(TAG, "Player state: playbackState=${player.playbackState}, isPlaying=${player.isPlaying}")
-        Log.d(TAG, "Player mediaItemCount=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}")
-
-        // Force notification update for cast players
-        if (playerType == "CastPlayer" && player.currentMediaItem != null) {
-            Log.d(TAG, "Forcing notification update for CastPlayer with mediaItem")
-            // The PlayerNotificationManager should automatically create a notification
-            // when a player has a current media item and is in a valid state
-        }
     }
 
     private fun buildCustomMediaActions(): ImmutableList<androidx.media3.session.CommandButton> {
@@ -219,33 +275,85 @@ class MediaSessionManager(
     /**
      * Update MediaSession metadata with chapter-aware information
      * This makes Android Auto treat each chapter as a separate track with proper duration
-     *
-     * NOTE: With the new MediaSource architecture, MediaItems already have correct metadata
-     * from creation, so this method primarily serves as a fallback or for notification updates
      */
-    fun updateChapterMetadata(chapterTitle: String, chapterDuration: Long, bookTitle: String, author: String?, bitmap: Bitmap?) {
-        Log.d(TAG, "Updating chapter metadata: chapter='$chapterTitle', duration=${chapterDuration}ms")
-
-        // With the new MediaSource architecture, the MediaItems should already have the correct
-        // metadata including chapter duration, so we don't need to replace the MediaItem.
-        // Android Auto will use the MediaItem's original metadata.
-
-        // However, we can still log this for debugging purposes
+    fun updateChapterMetadata(chapterTitle: String, chapterDuration: Long, bookTitle: String, author: String?, artworkUri: Uri?, artworkData: ByteArray? = null) {
         mediaSession?.let { session ->
-            val currentMediaItem = session.player.currentMediaItem
-            if (currentMediaItem != null) {
-                val currentMetadata = currentMediaItem.mediaMetadata
-                Log.d(TAG, "Current MediaItem metadata: title='${currentMetadata.title}', duration=${currentMetadata.durationMs}ms")
+            // Use Media3 1.8.0+ recommended way to update metadata without replacing MediaItem
+            val metadataBuilder = session.player.currentMediaItem?.mediaMetadata?.buildUpon()
+                ?: MediaMetadata.Builder()
+            val subtitleText = if (author.isNullOrBlank()) bookTitle else "$bookTitle • $author"
 
-                // Verify that the MediaItem already has the correct duration
-                if (currentMetadata.durationMs != null && currentMetadata.durationMs!! > 0) {
-                    Log.d(TAG, "MediaItem already has correct duration metadata, no update needed")
-                } else {
-                    Log.w(TAG, "MediaItem missing duration metadata, this may cause Android Auto timeline issues")
-                }
-            } else {
-                Log.w(TAG, "No current MediaItem to check metadata")
+            metadataBuilder
+                .setTitle(chapterTitle)
+                .setDisplayTitle(chapterTitle)
+                .setArtist(subtitleText)
+                .setAlbumArtist(subtitleText)
+                .setSubtitle(subtitleText)
+                .setAlbumTitle(author)
+                .setArtworkUri(artworkUri)
+                .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                .setDurationMs(chapterDuration)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .setIsPlayable(true)
+
+            // Update the session metadata directly
+            val metadata = metadataBuilder.build()
+            session.player.playlistMetadata = metadata
+            Log.d(TAG, "MediaSession metadata updated directly via playlistMetadata")
+        }
+    }
+
+    /**
+     * Re-embed [artworkData] (and [artworkUri]) into every MediaItem in the current
+     * timeline whose artworkUri matches. Used after the async cover prefetch
+     * finishes so the Wear OS bridge — which reads from the active MediaItem's
+     * MediaMetadata — actually receives the new cover bytes for the current
+     * chapter and for any chapter the player advances to next.
+     *
+     * Must be called on the application main thread because it mutates the player.
+     */
+    fun refreshArtworkOnTimeline(artworkUri: Uri, artworkData: ByteArray) {
+        val session = mediaSession ?: return
+        val player = session.player
+        val itemCount = player.mediaItemCount
+        if (itemCount == 0) {
+            Log.d(TAG, "refreshArtworkOnTimeline: timeline is empty, nothing to update")
+            return
+        }
+
+        var replacedCount = 0
+        for (index in 0 until itemCount) {
+            val item = try {
+                player.getMediaItemAt(index)
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshArtworkOnTimeline: failed to read MediaItem at $index", e)
+                continue
             }
+
+            val existingArtworkUri = item.mediaMetadata.artworkUri
+            if (existingArtworkUri != artworkUri) {
+                continue
+            }
+
+            val newMetadata = item.mediaMetadata.buildUpon()
+                .setArtworkUri(artworkUri)
+                .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                .build()
+
+            val newItem = item.buildUpon()
+                .setMediaMetadata(newMetadata)
+                .build()
+
+            try {
+                player.replaceMediaItem(index, newItem)
+                replacedCount++
+            } catch (e: Exception) {
+                Log.w(TAG, "refreshArtworkOnTimeline: replaceMediaItem failed at $index", e)
+            }
+        }
+
+        if (replacedCount == 0) {
+            Log.w(TAG, "refreshArtworkOnTimeline: no matching MediaItems found for uri=$artworkUri")
         }
     }
 
@@ -262,17 +370,15 @@ class MediaSessionManager(
     fun updatePlayer(newPlayer: Player) {
         Log.d(TAG, "updatePlayer: Switching to new player type: ${newPlayer.javaClass.simpleName}")
 
-        // Update notification manager with new player
-        playerNotificationManager?.setPlayer(newPlayer)
-
-        // The MediaSession itself doesn't need to be recreated in Media3
-        // The playerNotificationManager handles the player switch seamlessly
+        // MediaLibraryService's built-in DefaultMediaNotificationProvider follows the
+        // session's player automatically, so we don't need to wire the new player into
+        // a separate notification manager here.
         Log.d(TAG, "updatePlayer: Player updated successfully")
     }
 
     fun release() {
-        playerNotificationManager?.setPlayer(null)
-        playerNotificationManager = null
+        bitmapLoaderExecutor?.shutdownNow()
+        bitmapLoaderExecutor = null
 
         mediaSession?.let { session: MediaLibrarySession ->
             session.release()
