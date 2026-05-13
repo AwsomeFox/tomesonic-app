@@ -369,12 +369,15 @@ class PlaybackSession(
       return Uri.parse("android.resource://${BuildConfig.APPLICATION_ID}/" + R.drawable.icon)
     }
 
+    // Request the raw (original-resolution) cover so the notification and Wear
+    // OS card render at full quality, matching what the Vue player screen
+    // requests via `?raw=1`.
     // As of v2.17.0 token is not needed with cover image requests
     if (checkIsServerVersionGte("2.17.0")) {
-      val serverUri = Uri.parse("$serverAddress/api/items/$libraryItemId/cover")
+      val serverUri = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?raw=1")
       return serverUri
     }
-    val serverUriWithToken = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?token=${DeviceManager.token}")
+    val serverUriWithToken = Uri.parse("$serverAddress/api/items/$libraryItemId/cover?raw=1&token=${DeviceManager.token}")
     return serverUriWithToken
   }
 

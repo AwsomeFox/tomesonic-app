@@ -19,7 +19,6 @@ import android.util.Log
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.BitmapLoader
-import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
@@ -27,10 +26,8 @@ import androidx.media3.session.MediaLibraryService.MediaLibrarySession.Callback
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.google.common.collect.ImmutableList
-import com.google.common.util.concurrent.FutureCallback
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import com.google.common.util.concurrent.MoreExecutors
 import com.tomesonic.app.R
 import com.tomesonic.app.data.PlaybackSession
 import java.util.concurrent.Callable
@@ -85,43 +82,51 @@ class MediaSessionManager(
         // Running a second PlayerNotificationManager alongside causes the bridge
         // to pick up a notification without a session token attached, which is
         // why Wear OS was showing no artwork before.
-        // Use Media3's recommended CacheBitmapLoader(DataSourceBitmapLoader) so
-        // covers are fetched at native resolution (no forced downscale) and cached.
-        // This gives the system notification, lock screen, and Wear OS card the
-        // highest-quality artwork the server provides; Media3 itself handles any
-        // size limiting needed for IPC to controllers.
+        // BitmapLoader strategy:
+        //  - Use Glide to load covers because it has built-in HTTP disk cache
+        //    and bitmap memory cache, matching how the Vue UI re-uses covers.
+        //  - Decode at the image's native resolution (no override) so the phone
+        //    notification, lock screen, and Wear OS card render at full quality
+        //    when the server returns the raw cover (`?raw=1`, set in
+        //    PlaybackSession.getCoverUri).
+        //  - Wrap in Media3's CacheBitmapLoader for an additional in-memory
+        //    Bitmap cache keyed by URI, so repeated chapter MediaItem builds
+        //    reuse the same decoded bitmap.
         if (bitmapLoaderExecutor == null || bitmapLoaderExecutor?.isShutdown == true) {
             bitmapLoaderExecutor = Executors.newSingleThreadExecutor()
         }
-        val listeningExecutor = MoreExecutors.listeningDecorator(bitmapLoaderExecutor!!)
-        val dataSourceBitmapLoader = DataSourceBitmapLoader(
-            listeningExecutor,
-            androidx.media3.datasource.DefaultDataSource.Factory(context)
-        )
-        val sessionBitmapLoader: BitmapLoader = object : BitmapLoader {
-            private val cache = CacheBitmapLoader(dataSourceBitmapLoader)
+        val loaderExecutor = bitmapLoaderExecutor!!
+        val glideBackedLoader = object : BitmapLoader {
+            override fun supportsMimeType(mimeType: String) = mimeType.startsWith("image/")
 
-            override fun supportsMimeType(mimeType: String): Boolean = cache.supportsMimeType(mimeType)
+            override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
+                Futures.submit(
+                    Callable {
+                        BitmapFactory.decodeByteArray(data, 0, data.size)
+                            ?: throw IllegalStateException("decodeBitmap failed for artworkData")
+                    },
+                    loaderExecutor
+                )
 
-            override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
-                Log.d(TAG, "BitmapLoader: Decoding bitmap from bytes (${data.size} bytes)")
-                return cache.decodeBitmap(data)
-            }
-
-            override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
-                Log.d(TAG, "BitmapLoader: Loading bitmap from URI: $uri")
-                val future = cache.loadBitmap(uri)
-                Futures.addCallback(future, object : FutureCallback<Bitmap> {
-                    override fun onSuccess(result: Bitmap?) {
-                        Log.d(TAG, "BitmapLoader: Successfully loaded bitmap from URI: $uri (size: ${result?.width}x${result?.height})")
-                    }
-                    override fun onFailure(t: Throwable) {
-                        Log.e(TAG, "BitmapLoader: Failed to load bitmap from URI: $uri", t)
-                    }
-                }, listeningExecutor)
-                return future
-            }
+            override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
+                Futures.submit(
+                    Callable {
+                        Log.d(TAG, "BitmapLoader: loading native-resolution artwork for uri=$uri")
+                        val bitmap = com.bumptech.glide.Glide.with(context)
+                            .asBitmap()
+                            .load(uri)
+                            // No .override(...) — decode at the cover's native
+                            // resolution; Glide still applies a sensible
+                            // downsample only if the target view requires it.
+                            .submit()
+                            .get(15, TimeUnit.SECONDS)
+                        Log.d(TAG, "BitmapLoader: loaded bitmap ${bitmap.width}x${bitmap.height} for uri=$uri")
+                        bitmap
+                    },
+                    loaderExecutor
+                )
         }
+        val sessionBitmapLoader: BitmapLoader = CacheBitmapLoader(glideBackedLoader)
 
         val sessionBuilder = MediaLibrarySession.Builder(context, player, callback)
         sessionBuilder.setBitmapLoader(sessionBitmapLoader)
