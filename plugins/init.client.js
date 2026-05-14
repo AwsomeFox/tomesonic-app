@@ -283,6 +283,123 @@ function isValidVersion(currentVersion, minVersion) {
   return true
 }
 
+const BOOKSHELF_TOP_LEVEL_ROUTES = new Set(['bookshelf', 'bookshelf-library', 'bookshelf-series', 'bookshelf-collections-playlists', 'bookshelf-authors', 'bookshelf-latest', 'bookshelf-add-podcast'])
+
+const APP_TOP_LEVEL_ROUTES = new Set(['index', 'account', 'stats', 'settings', 'logs', 'connect', 'downloads', 'downloading', 'search', ...BOOKSHELF_TOP_LEVEL_ROUTES])
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function getRouteDepth(route) {
+  const path = route?.path || ''
+  if (!path) return 0
+  return path.split('?')[0].split('#')[0].split('/').filter(Boolean).length
+}
+
+function isTopLevelRoute(route) {
+  if (!route) return false
+
+  const routeName = route?.name || ''
+  if (APP_TOP_LEVEL_ROUTES.has(routeName)) return true
+
+  const path = route?.path || ''
+  if (!path) return false
+  if (path === '/' || path === '/bookshelf' || path === '/bookshelf/library' || path === '/bookshelf/series' || path === '/bookshelf/collections-playlists' || path === '/bookshelf/authors' || path === '/bookshelf/latest') {
+    return true
+  }
+
+  return getRouteDepth(route) <= 1
+}
+
+function classifyRouteTransition(to, from, navigationEvent) {
+  if (prefersReducedMotion()) {
+    return {
+      name: 'm3-reduced',
+      mode: 'reduced',
+      direction: 'forward'
+    }
+  }
+
+  if (isTopLevelRoute(to) && isTopLevelRoute(from)) {
+    return {
+      name: 'm3-top-level',
+      mode: 'top-level',
+      direction: 'forward'
+    }
+  }
+
+  const toDepth = getRouteDepth(to)
+  const fromDepth = getRouteDepth(from)
+
+  let direction = 'forward'
+  if (navigationEvent === 'pop') {
+    direction = 'back'
+  } else if (navigationEvent === 'replace' && toDepth < fromDepth) {
+    // Query cleanup / shallow replacement into parent route can feel better with back motion.
+    direction = 'back'
+  }
+
+  return {
+    name: direction === 'back' ? 'm3-back' : 'm3-forward',
+    mode: 'hierarchical',
+    direction
+  }
+}
+
+function installRouteTransitionIntentTracking(router, store) {
+  if (!router || !store || router.__m3TransitionIntentTrackingInstalled) return
+
+  const markNavigationEvent = (eventType) => {
+    store.commit('setRouteNavigationEvent', eventType)
+  }
+
+  const originalPush = router.push.bind(router)
+  router.push = function pushWithTransitionIntent(...args) {
+    markNavigationEvent('push')
+    return originalPush(...args)
+  }
+
+  const originalReplace = router.replace.bind(router)
+  router.replace = function replaceWithTransitionIntent(...args) {
+    markNavigationEvent('replace')
+    return originalReplace(...args)
+  }
+
+  if (typeof router.go === 'function') {
+    const originalGo = router.go.bind(router)
+    router.go = function goWithTransitionIntent(...args) {
+      markNavigationEvent('pop')
+      return originalGo(...args)
+    }
+  }
+
+  if (typeof router.back === 'function') {
+    const originalBack = router.back.bind(router)
+    router.back = function backWithTransitionIntent(...args) {
+      markNavigationEvent('pop')
+      return originalBack(...args)
+    }
+  }
+
+  if (typeof router.forward === 'function') {
+    const originalForward = router.forward.bind(router)
+    router.forward = function forwardWithTransitionIntent(...args) {
+      markNavigationEvent('pop')
+      return originalForward(...args)
+    }
+  }
+
+  if (typeof window !== 'undefined' && !window.__m3TransitionPopstateListenerBound) {
+    window.addEventListener('popstate', () => {
+      markNavigationEvent('pop')
+    })
+    window.__m3TransitionPopstateListenerBound = true
+  }
+
+  router.__m3TransitionIntentTrackingInstalled = true
+}
+
 export default ({ store, app }, inject) => {
   const eventBus = new Vue()
   inject('eventBus', eventBus)
@@ -291,6 +408,23 @@ export default ({ store, app }, inject) => {
 
   // Expose helper so other parts of the app can toggle native status bar theme
   Vue.prototype.$updateStatusBarTheme = updateNativeStatusBarStyle
+
+  if (app.router) {
+    installRouteTransitionIntentTracking(app.router, store)
+
+    app.router.beforeEach((to, from, next) => {
+      const navigationEvent = store.state.routeNavigationEvent || 'push'
+      const transitionDescriptor = classifyRouteTransition(to, from, navigationEvent)
+      store.commit('setRouteTransition', transitionDescriptor)
+      next()
+    })
+
+    app.router.afterEach(() => {
+      if (store.state.routeNavigationEvent !== 'push') {
+        store.commit('setRouteNavigationEvent', 'push')
+      }
+    })
+  }
 
   // Calculate and store mini player bottom positions once at startup
   const calculateMiniPlayerPositions = () => {

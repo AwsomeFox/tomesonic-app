@@ -25,6 +25,16 @@ export default {
         src: '/libs/sortable.js'
       }
     ],
+    style: [
+      {
+        // Paint the Material 3 surface background immediately, before the CSS bundle
+        // parses, so the WebView never flashes white between the native splash screen
+        // and the Vue app rendering.
+        hid: 'm3-bootstrap-bg',
+        cssText: `html,body,#__nuxt,#__layout{background-color:rgb(255,248,250);color:rgb(32,26,29);} @media (prefers-color-scheme: dark){html,body,#__nuxt,#__layout{background-color:rgb(20,18,24);color:rgb(230,225,229);}}`,
+        type: 'text/css'
+      }
+    ],
     link: [{ rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' }]
   },
 

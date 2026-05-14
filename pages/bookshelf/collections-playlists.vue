@@ -13,11 +13,12 @@
     </div>
 
     <!-- Content area -->
-    <div class="flex-grow" :style="contentPaddingStyle">
-      <keep-alive>
-        <bookshelf-lazy-bookshelf v-if="currentView === 'collections'" key="collections" page="collections" />
-        <bookshelf-lazy-bookshelf v-else key="playlists" page="playlists" />
-      </keep-alive>
+    <div class="flex-grow collections-content-stage" :style="contentPaddingStyle">
+      <transition :name="collectionsSwitchTransitionName" mode="out-in">
+        <keep-alive>
+          <bookshelf-lazy-bookshelf :key="currentView" :page="currentView" />
+        </keep-alive>
+      </transition>
     </div>
   </div>
 </template>
@@ -36,6 +37,12 @@ export default {
   computed: {
     userHasPlaylists() {
       return this.$store.state.libraries.numUserPlaylists
+    },
+    collectionsSwitchTransitionName() {
+      if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        return 'm3-reduced'
+      }
+      return 'm3-top-level'
     },
     contentPaddingStyle() {
       return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
@@ -102,3 +109,10 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.collections-content-stage {
+  position: relative;
+  min-height: 100%;
+}
+</style>

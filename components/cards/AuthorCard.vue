@@ -105,8 +105,9 @@ export default {
 
       if (this.navigationMode === 'author-detail') {
         if (!this.authorId) return
+        const encodedAuthorId = encodeURIComponent(String(this.authorId))
         this.$router.push({
-          path: `/bookshelf/author/${this.authorId}`,
+          path: `/bookshelf/author/${encodedAuthorId}`,
           query: this.name ? { name: this.name } : {}
         })
         return
@@ -114,8 +115,9 @@ export default {
 
       if (this.navigationMode === 'narrator-detail') {
         if (!this.name) return
+        const encodedNarratorName = encodeURIComponent(this.$encode(this.name))
         this.$router.push({
-          path: `/bookshelf/narrator/${this.$encode(this.name)}`,
+          path: `/bookshelf/narrator/${encodedNarratorName}`,
           query: { name: this.name }
         })
         return

@@ -11,6 +11,8 @@
 </template>
 
 <script>
+import { getAudioPeopleStatsForLibrary } from '@/plugins/audioFiltering'
+
 export default {
   name: 'BookshelfAuthorsPage',
   data() {
@@ -22,9 +24,17 @@ export default {
       listenersInitialized: false
     }
   },
+  watch: {
+    hideNonAudiobooks() {
+      this.init()
+    }
+  },
   computed: {
     currentLibraryId() {
       return this.$store.state.libraries.currentLibraryId
+    },
+    hideNonAudiobooks() {
+      return this.$store.getters['getHideNonAudiobooksGlobal']
     },
     cardHeight() {
       return this.cardWidth * 1.25
@@ -34,30 +44,74 @@ export default {
     }
   },
   methods: {
+    getAuthorAudioCount(authorEntity, peopleStats) {
+      const authorId = authorEntity?.id
+      if (authorId && Object.prototype.hasOwnProperty.call(peopleStats.authorAudioCountsById || {}, authorId)) {
+        return Number(peopleStats.authorAudioCountsById[authorId] || 0)
+      }
+
+      const normalizedName = `${authorEntity?.name || ''}`.trim().toLowerCase().replace(/\s+/g, ' ')
+      if (normalizedName && Object.prototype.hasOwnProperty.call(peopleStats.authorAudioCountsByName || {}, normalizedName)) {
+        return Number(peopleStats.authorAudioCountsByName[normalizedName] || 0)
+      }
+
+      return 0
+    },
     async init() {
       this.cardWidth = (window.innerWidth - 64) / 2
       if (!this.currentLibraryId) {
         return
       }
       this.loadedLibraryId = this.currentLibraryId
-      this.authors = await this.$nativeHttp
+      let authors = await this.$nativeHttp
         .get(`/api/libraries/${this.currentLibraryId}/authors`)
         .then((response) => response.authors)
         .catch((error) => {
           console.error('Failed to load authors', error)
           return []
         })
+
+      if (this.hideNonAudiobooks) {
+        const peopleStats = await getAudioPeopleStatsForLibrary({
+          libraryId: this.currentLibraryId,
+          nativeHttp: this.$nativeHttp,
+          encode: this.$encode,
+          includeEbookOnly: true
+        })
+
+        authors = (Array.isArray(authors) ? authors : [])
+          .map((authorEntity) => {
+            const numBooks = this.getAuthorAudioCount(authorEntity, peopleStats)
+            return {
+              ...authorEntity,
+              numBooks
+            }
+          })
+          .filter((authorEntity) => Number(authorEntity?.numBooks || 0) > 0)
+      }
+
+      this.authors = Array.isArray(authors) ? authors : []
       console.log('Loaded authors', this.authors)
       this.$eventBus.$emit('bookshelf-total-entities', this.authors.length)
       this.loading = false
     },
     authorAdded(author) {
+      if (this.hideNonAudiobooks) {
+        this.init()
+        return
+      }
+
       if (!this.authors.some((au) => au.id === author.id)) {
         this.authors.push(author)
         this.$eventBus.$emit('bookshelf-total-entities', this.authors.length)
       }
     },
     authorUpdated(author) {
+      if (this.hideNonAudiobooks) {
+        this.init()
+        return
+      }
+
       this.authors = this.authors.map((au) => {
         if (au.id === author.id) {
           return author

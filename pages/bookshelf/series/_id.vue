@@ -11,18 +11,28 @@ import cellularPermissionHelpers from '@/mixins/cellularPermissionHelpers'
 
 export default {
   name: 'BookshelfSeriesDetailPage',
-  async asyncData({ params, app, store, redirect }) {
-    var series = await app.$nativeHttp.get(`/api/series/${params.id}`).catch((error) => {
+  async asyncData({ params, app, store }) {
+    const encodedSeriesId = params?.id || ''
+    let routeSeriesId = encodedSeriesId
+    if (encodedSeriesId) {
+      try {
+        routeSeriesId = decodeURIComponent(encodedSeriesId)
+      } catch (error) {
+        routeSeriesId = encodedSeriesId
+      }
+    }
+
+    var series = await app.$nativeHttp.get(`/api/series/${routeSeriesId}`).catch((error) => {
       console.error('Failed', error)
       return false
     })
-    if (!series) {
-      return redirect('/oops?message=Series not found')
+    if (series) {
+      store.commit('globals/setSeries', series)
     }
-    store.commit('globals/setSeries', series)
+
     return {
-      series,
-      seriesId: params.id
+      series: series || null,
+      seriesId: routeSeriesId
     }
   },
   data() {
@@ -56,8 +66,16 @@ export default {
   },
   methods: {
     async syncSeriesFromRoute(force = false) {
-      const routeSeriesId = this.$route?.params?.id
-      if (!routeSeriesId) return
+      const encodedRouteSeriesId = this.$route?.params?.id
+      if (!encodedRouteSeriesId) return
+
+      let routeSeriesId = encodedRouteSeriesId
+      try {
+        routeSeriesId = decodeURIComponent(encodedRouteSeriesId)
+      } catch (error) {
+        routeSeriesId = encodedRouteSeriesId
+      }
+
       if (!force && this.seriesId === routeSeriesId && this.series?.id === routeSeriesId) return
 
       const series = await this.$nativeHttp.get(`/api/series/${routeSeriesId}`).catch((error) => {
@@ -66,7 +84,8 @@ export default {
       })
 
       if (!series) {
-        this.$router.replace('/oops?message=Series not found')
+        this.seriesId = routeSeriesId
+        this.series = null
         return
       }
 

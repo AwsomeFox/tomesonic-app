@@ -58,6 +58,26 @@
 </template>
 
 <script>
+import { clearAudioPeopleStatsCache, getAudioPeopleStatsForLibrary, isBookEntityAudioCapable } from '@/plugins/audioFiltering'
+
+const homeShelfCache = new Map()
+const HOME_SHELF_CACHE_MAX = 8
+
+function setHomeShelfCacheEntry(key, value) {
+  if (!key) return
+  if (homeShelfCache.has(key)) {
+    homeShelfCache.delete(key)
+  }
+  homeShelfCache.set(key, value)
+
+  if (homeShelfCache.size > HOME_SHELF_CACHE_MAX) {
+    const oldestKey = homeShelfCache.keys().next().value
+    if (oldestKey) {
+      homeShelfCache.delete(oldestKey)
+    }
+  }
+}
+
 export default {
   name: 'BookshelfHomePage',
   props: {},
@@ -79,10 +99,9 @@ export default {
       seriesCountByIdByLibrary: {},
       seriesCoverBooksByLibrarySeries: {},
       seriesStartedBookCountByLibrarySeries: {},
+      seriesTotalBookCountByLibrarySeries: {},
       authorLookupByLibrary: {},
       authorCountByIdByLibrary: {},
-      authorStatsByLibraryAuthor: {},
-      narratorStatsByLibrary: {},
       pullDistance: 0,
       isPullRefreshing: false,
       isPullGestureActive: false,
@@ -94,7 +113,8 @@ export default {
       _bookshelfWrapperEl: null,
       listenersInitialized: false,
       isPageActive: true,
-      loadedLibraryId: null
+      loadedLibraryId: null,
+      restoredFromCacheAt: 0
     }
   },
   watch: {
@@ -149,6 +169,7 @@ export default {
       // When library ID changes (but not on initial load)
       if (newVal && oldVal && newVal !== oldVal) {
         console.log('[categories] Library ID switched from', oldVal, 'to', newVal, '- resetting and refetching')
+        clearAudioPeopleStatsCache(oldVal)
         // Reset state for new library (actual switch)
         this.showingSkeleton = true
         this.isLoading = true
@@ -165,6 +186,13 @@ export default {
           this.fetchCategories()
         }
       }
+    },
+    hideNonAudiobooks(newVal, oldVal) {
+      if (!this.isPageActive) return
+      if (newVal === oldVal) return
+
+      clearAudioPeopleStatsCache(this.currentLibraryId)
+      this.fetchCategories({ force: true })
     }
   },
   computed: {
@@ -191,6 +219,9 @@ export default {
     },
     altViewEnabled() {
       return this.$store.getters['getAltViewEnabled']
+    },
+    hideNonAudiobooks() {
+      return this.$store.getters['getHideNonAudiobooksGlobal']
     },
     localMediaProgress() {
       return this.$store.state.globals.localMediaProgress
@@ -267,6 +298,46 @@ export default {
     getShelfLabel(shelf) {
       if (shelf.labelStringKey && this.$strings[shelf.labelStringKey]) return this.$strings[shelf.labelStringKey]
       return shelf.label
+    },
+    buildHomeShelfCacheKey() {
+      return [this.currentLibraryId || 'none', this.hideNonAudiobooks ? 'audio' : 'all'].join('::')
+    },
+    hasSuspiciousContinueSeriesCounts(shelves = this.shelves) {
+      if (!Array.isArray(shelves) || !shelves.length) return false
+
+      const continueSeriesShelf = shelves.find((shelf) => this.isContinueSeriesShelf(shelf) && shelf?.type === 'series' && Array.isArray(shelf.entities))
+      if (!continueSeriesShelf) return false
+
+      return continueSeriesShelf.entities.some((seriesEntity) => {
+        const total = Number(seriesEntity?.numBooks || 0)
+        // Continue-series should represent multi-book series; 0/1 here indicates stale
+        // or incomplete normalization data and should trigger a fresh server refresh.
+        return !Number.isFinite(total) || total <= 1
+      })
+    },
+    restoreHomeShelfCache() {
+      const cacheKey = this.buildHomeShelfCacheKey()
+      const cachedEntry = homeShelfCache.get(cacheKey)
+      if (!cachedEntry) return false
+
+      this.shelves = Array.isArray(cachedEntry.shelves) ? cachedEntry.shelves.map((shelf) => ({ ...shelf })) : []
+      this.showingSkeleton = !this.shelves.length
+      this.isLoading = false
+      this.firstLoad = !this.shelves.length
+      this.lastServerFetch = Number(cachedEntry.lastServerFetch || 0)
+      this.lastServerFetchLibraryId = this.currentLibraryId || null
+      this.loadedLibraryId = this.currentLibraryId || this.loadedLibraryId
+      this.restoredFromCacheAt = Date.now()
+      return this.shelves.length > 0
+    },
+    saveHomeShelfCache() {
+      if (!this.currentLibraryId || !Array.isArray(this.shelves) || !this.shelves.length) return
+      const cacheKey = this.buildHomeShelfCacheKey()
+      setHomeShelfCacheEntry(cacheKey, {
+        shelves: this.shelves.map((shelf) => ({ ...shelf })),
+        lastServerFetch: this.lastServerFetch,
+        savedAt: Date.now()
+      })
     },
     getBookshelfWrapper() {
       return document.getElementById('bookshelf-wrapper')
@@ -548,7 +619,7 @@ export default {
           return {
             id: null,
             name: candidate,
-            libraryId: source?.libraryId || null
+            libraryId: source?.libraryId || this.currentLibraryId || null
           }
         }
 
@@ -560,7 +631,7 @@ export default {
         return {
           id,
           name,
-          libraryId: candidate.libraryId || nestedSeries?.libraryId || source?.libraryId || null
+          libraryId: candidate.libraryId || nestedSeries?.libraryId || source?.libraryId || this.currentLibraryId || null
         }
       }
 
@@ -569,7 +640,7 @@ export default {
           id: collapsedSeries.id,
           seriesId: collapsedSeries.seriesId,
           name: collapsedSeries.name || collapsedSeries.title,
-          libraryId: collapsedSeries.libraryId || source?.libraryId || null
+          libraryId: collapsedSeries.libraryId || source?.libraryId || this.currentLibraryId || null
         })
         if (collapsedSeriesRef) refs.push(collapsedSeriesRef)
       }
@@ -585,7 +656,7 @@ export default {
         refs.push({
           id: null,
           name: metadataSeriesName,
-          libraryId: source?.libraryId || null
+          libraryId: source?.libraryId || this.currentLibraryId || null
         })
       }
 
@@ -646,6 +717,51 @@ export default {
         }
       }
 
+      // Some servers omit total-count fields from minified series payloads. When that
+      // happens, run a second non-minified pass to backfill authoritative numBooks.
+      if (Object.keys(nameToId).length > 0 && Object.keys(countById).length === 0) {
+        let fullPage = 0
+        let keepFullPaging = true
+
+        while (keepFullPaging && fullPage < 20) {
+          const fullPayload = await this.$nativeHttp.get(`/api/libraries/${libraryId}/series?limit=${limit}&page=${fullPage}`, { connectTimeout: 12000 }).catch(() => null)
+          if (!fullPayload) break
+
+          const fullResults = Array.isArray(fullPayload?.results) ? fullPayload.results : Array.isArray(fullPayload) ? fullPayload : []
+
+          fullResults.forEach((seriesEntity) => {
+            if (!seriesEntity?.id || !seriesEntity?.name) return
+
+            const totalCandidates = [seriesEntity.numBooks, seriesEntity.audiobookCount, seriesEntity.totalBooks, seriesEntity.numItems, Array.isArray(seriesEntity.books) ? seriesEntity.books.length : 0]
+            for (const candidate of totalCandidates) {
+              const parsed = Number(candidate)
+              if (Number.isFinite(parsed) && parsed > 0) {
+                countById[seriesEntity.id] = parsed
+                break
+              }
+            }
+
+            // Ensure name lookup is fully hydrated from the richer payload as well.
+            this.getNormalizedSeriesNameCandidates(seriesEntity.name).forEach((nameKey) => {
+              nameToId[nameKey] = seriesEntity.id
+            })
+            if (seriesEntity.nameIgnorePrefix) {
+              this.getNormalizedSeriesNameCandidates(seriesEntity.nameIgnorePrefix).forEach((nameKey) => {
+                nameToId[nameKey] = seriesEntity.id
+              })
+            }
+          })
+
+          if (!Array.isArray(fullPayload?.results)) {
+            keepFullPaging = false
+          } else {
+            const total = Number(fullPayload?.total || fullResults.length)
+            fullPage += 1
+            keepFullPaging = fullPage * limit < total
+          }
+        }
+      }
+
       this.$set(this.seriesIdLookupByLibrary, libraryId, nameToId)
       this.$set(this.seriesCountByIdByLibrary, libraryId, countById)
       return nameToId
@@ -684,88 +800,75 @@ export default {
       this.$set(this.authorCountByIdByLibrary, libraryId, countById)
       return lookupByName
     },
-    async getNarratorStatsForLibrary(libraryId, narratorName) {
-      if (!libraryId || !narratorName) return { numBooks: 0, coverBooks: [] }
-
-      const normalizedName = this.getNormalizedPersonNameCandidates(narratorName)[0]
-      if (!normalizedName) return { numBooks: 0, coverBooks: [] }
-
-      const cacheKey = `${libraryId}::${normalizedName}`
-      if (this.narratorStatsByLibrary[cacheKey]) {
-        return this.narratorStatsByLibrary[cacheKey]
-      }
-
-      const searchParams = new URLSearchParams()
-      searchParams.set('filter', `narrators.${this.$encode(narratorName)}`)
-      searchParams.set('collapseseries', '0')
-      searchParams.set('limit', '4')
-      searchParams.set('page', '0')
-      searchParams.set('minified', '1')
-
-      const payload = await this.$nativeHttp.get(`/api/libraries/${libraryId}/items?${searchParams.toString()}`, { connectTimeout: 10000 }).catch((error) => {
-        console.error('[categories] Failed to load narrator stats', error)
-        return null
-      })
-
-      const results = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload) ? payload : []
-      const totalCandidates = [payload?.total, payload?.numResults, payload?.totalResults, payload?.count]
-
-      let numBooks = 0
-      for (let i = 0; i < totalCandidates.length; i += 1) {
-        const parsed = Number(totalCandidates[i])
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          numBooks = parsed
-          break
+    async getPeopleStatsForCurrentLibrary(options = {}) {
+      if (!this.currentLibraryId) {
+        return {
+          authorTotalsById: {},
+          authorTotalsByName: {},
+          authorAudioCountsById: {},
+          authorAudioCountsByName: {},
+          narratorTotalsByName: {},
+          narratorAudioCountsByName: {}
         }
       }
 
-      const narratorStats = {
-        numBooks: Number(numBooks || results.length || 0),
-        coverBooks: results.slice(0, 4)
-      }
-
-      this.$set(this.narratorStatsByLibrary, cacheKey, narratorStats)
-      return narratorStats
+      return getAudioPeopleStatsForLibrary({
+        libraryId: this.currentLibraryId,
+        nativeHttp: this.$nativeHttp,
+        encode: this.$encode,
+        includeEbookOnly: !!this.hideNonAudiobooks,
+        forceRefresh: !!options.forceRefresh
+      })
     },
-    async getAuthorStatsForLibrary(libraryId, authorId) {
-      if (!libraryId || !authorId) return { numBooks: 0, coverBooks: [] }
+    getAuthorBooksCountFromPeopleStats(authorEntity, peopleStats, fallbackCount = 0) {
+      if (!authorEntity || !peopleStats) return Number(fallbackCount || 0)
 
-      const cacheKey = `${libraryId}::${authorId}`
-      if (this.authorStatsByLibraryAuthor[cacheKey]) {
-        return this.authorStatsByLibraryAuthor[cacheKey]
+      const authorId = authorEntity.id
+      const hasIdTotal = authorId ? Object.prototype.hasOwnProperty.call(peopleStats.authorTotalsById || {}, authorId) : false
+      const hasIdAudio = authorId ? Object.prototype.hasOwnProperty.call(peopleStats.authorAudioCountsById || {}, authorId) : false
+
+      const idCountFromTotals = hasIdTotal ? Number(peopleStats.authorTotalsById?.[authorId] || 0) : null
+      const idCountFromAudio = hasIdAudio ? Number(peopleStats.authorAudioCountsById?.[authorId] || 0) : null
+
+      const normalizedName = this.getNormalizedPersonNameCandidates(authorEntity.name)[0]
+      const hasNameTotal = normalizedName ? Object.prototype.hasOwnProperty.call(peopleStats.authorTotalsByName || {}, normalizedName) : false
+      const hasNameAudio = normalizedName ? Object.prototype.hasOwnProperty.call(peopleStats.authorAudioCountsByName || {}, normalizedName) : false
+
+      const nameCountFromTotals = hasNameTotal ? Number(peopleStats.authorTotalsByName?.[normalizedName] || 0) : null
+      const nameCountFromAudio = hasNameAudio ? Number(peopleStats.authorAudioCountsByName?.[normalizedName] || 0) : null
+
+      if (this.hideNonAudiobooks) {
+        if (idCountFromAudio !== null) return Math.max(0, Number(idCountFromAudio || 0))
+        if (nameCountFromAudio !== null) return Math.max(0, Number(nameCountFromAudio || 0))
       }
 
-      const searchParams = new URLSearchParams()
-      searchParams.set('filter', `authors.${this.$encode(authorId)}`)
-      searchParams.set('collapseseries', '0')
-      searchParams.set('limit', '4')
-      searchParams.set('page', '0')
-      searchParams.set('minified', '1')
+      if (idCountFromTotals !== null) return Math.max(0, Number(idCountFromTotals || 0))
+      if (nameCountFromTotals !== null) return Math.max(0, Number(nameCountFromTotals || 0))
 
-      const payload = await this.$nativeHttp.get(`/api/libraries/${libraryId}/items?${searchParams.toString()}`, { connectTimeout: 10000 }).catch((error) => {
-        console.error('[categories] Failed to load author stats', error)
-        return null
-      })
+      return Number(fallbackCount || 0)
+    },
+    getNarratorBooksCountFromPeopleStats(narratorEntity, peopleStats, fallbackCount = 0) {
+      if (!narratorEntity || !peopleStats) return Number(fallbackCount || 0)
 
-      const results = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload) ? payload : []
-      const totalCandidates = [payload?.total, payload?.numResults, payload?.totalResults, payload?.count]
+      const normalizedName = this.getNormalizedPersonNameCandidates(narratorEntity.name)[0]
+      if (!normalizedName) return Number(fallbackCount || 0)
 
-      let numBooks = 0
-      for (let i = 0; i < totalCandidates.length; i += 1) {
-        const parsed = Number(totalCandidates[i])
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          numBooks = parsed
-          break
+      if (this.hideNonAudiobooks) {
+        if (Object.prototype.hasOwnProperty.call(peopleStats.narratorAudioCountsByName || {}, normalizedName)) {
+          const audioCount = Number(peopleStats.narratorAudioCountsByName?.[normalizedName] || 0)
+          return Math.max(0, audioCount)
         }
       }
 
-      const authorStats = {
-        numBooks: Number(numBooks || results.length || 0),
-        coverBooks: results.slice(0, 4)
+      if (Object.prototype.hasOwnProperty.call(peopleStats.narratorTotalsByName || {}, normalizedName)) {
+        const totalCount = Number(peopleStats.narratorTotalsByName?.[normalizedName] || 0)
+        return Math.max(0, totalCount)
       }
 
-      this.$set(this.authorStatsByLibraryAuthor, cacheKey, authorStats)
-      return authorStats
+      return Number(fallbackCount || 0)
+    },
+    isAudioCapableBookEntity(entity) {
+      return isBookEntityAudioCapable(entity)
     },
     getSeriesCountForId(seriesId, libraryId = null) {
       if (!seriesId) return 0
@@ -802,15 +905,47 @@ export default {
         return count
       }, 0)
 
+      const totalCandidates = [payload?.total, payload?.totalResults, payload?.numResults, payload?.count, results.length]
+      let totalBooks = 0
+      for (const candidate of totalCandidates) {
+        const parsed = Number(candidate)
+        if (Number.isFinite(parsed) && parsed > 0) {
+          totalBooks = parsed
+          break
+        }
+      }
+
       const coverBooks = results.slice(0, 4)
       this.$set(this.seriesCoverBooksByLibrarySeries, cacheKey, coverBooks)
       this.$set(this.seriesStartedBookCountByLibrarySeries, cacheKey, startedBooks)
+      this.$set(this.seriesTotalBookCountByLibrarySeries, cacheKey, totalBooks)
       return coverBooks
     },
     getSeriesStartedBookCountForSeries(libraryId, seriesId) {
       if (!libraryId || !seriesId) return 0
       const cacheKey = `${libraryId}::${seriesId}`
       return Number(this.seriesStartedBookCountByLibrarySeries[cacheKey] || 0)
+    },
+    getSeriesTotalBookCountForSeries(libraryId, seriesId) {
+      if (!libraryId || !seriesId) return 0
+      const cacheKey = `${libraryId}::${seriesId}`
+      return Number(this.seriesTotalBookCountByLibrarySeries[cacheKey] || 0)
+    },
+    async getSeriesTotalBookCountBySeriesId(seriesId) {
+      if (!seriesId) return 0
+      const encodedSeriesId = encodeURIComponent(seriesId)
+      const seriesPayload = await this.$nativeHttp.get(`/api/series/${encodedSeriesId}`, { connectTimeout: 10000 }).catch(() => null)
+      if (!seriesPayload) return 0
+
+      const totalCandidates = [seriesPayload?.numBooks, seriesPayload?.audiobookCount, seriesPayload?.totalBooks, seriesPayload?.numItems, Array.isArray(seriesPayload?.books) ? seriesPayload.books.length : 0]
+      for (const candidate of totalCandidates) {
+        const parsed = Number(candidate)
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed
+        }
+      }
+
+      return 0
     },
     async enrichSeriesCoverBooks(normalizedSeries) {
       if (!Array.isArray(normalizedSeries) || !normalizedSeries.length) return
@@ -830,6 +965,61 @@ export default {
             seriesEntity.coverBooks = Array.isArray(seriesEntity?.books) ? seriesEntity.books.slice(0, 4) : []
           }
           seriesEntity.numStartedBooks = this.getSeriesStartedBookCountForSeries(seriesEntity.libraryId, seriesEntity.id)
+          // Prefer the authoritative total from the per-series items fetch over whatever
+          // the personalized/categories payload reported (often missing or 1 for continue-series).
+          let resolvedTotal = this.getSeriesTotalBookCountForSeries(seriesEntity.libraryId, seriesEntity.id)
+
+          // Some continue-series entries carry a non-canonical id that can return 0/1
+          // from the items filter endpoint. If we have a better canonical id by name
+          // in the library lookup, prefer that count.
+          if (resolvedTotal <= 1 && seriesEntity?.name) {
+            const lookupByName = this.seriesIdLookupByLibrary[seriesEntity.libraryId] || {}
+            const nameCandidates = this.getNormalizedSeriesNameCandidates(seriesEntity.name)
+            for (let i = 0; i < nameCandidates.length; i += 1) {
+              const mappedSeriesId = lookupByName[nameCandidates[i]]
+              if (!mappedSeriesId) continue
+              const mappedCount = Number(this.getSeriesCountForId(mappedSeriesId, seriesEntity.libraryId) || 0)
+              if (mappedCount > resolvedTotal) {
+                resolvedTotal = mappedCount
+              }
+            }
+          }
+
+          // Final fallback: query the canonical series endpoint directly for true totals
+          // when all shelf/minified-derived sources still report 0/1.
+          if (resolvedTotal <= 1) {
+            const lookupByName = this.seriesIdLookupByLibrary[seriesEntity.libraryId] || {}
+            const mappedIdCandidates = seriesEntity?.name
+              ? this.getNormalizedSeriesNameCandidates(seriesEntity.name)
+                  .map((nameKey) => lookupByName[nameKey])
+                  .filter(Boolean)
+              : []
+
+            const endpointIdsToTry = Array.from(new Set([seriesEntity.id, ...mappedIdCandidates].filter(Boolean)))
+            for (let i = 0; i < endpointIdsToTry.length; i += 1) {
+              const endpointSeriesId = endpointIdsToTry[i]
+              const endpointTotal = await this.getSeriesTotalBookCountBySeriesId(endpointSeriesId)
+              if (endpointTotal > resolvedTotal) {
+                resolvedTotal = endpointTotal
+                if (endpointSeriesId !== seriesEntity.id) {
+                  seriesEntity.id = endpointSeriesId
+                }
+              }
+            }
+          }
+
+          if (resolvedTotal > 0) {
+            seriesEntity.numBooks = resolvedTotal
+            if (seriesEntity.libraryId && seriesEntity.id) {
+              const cacheKey = `${seriesEntity.libraryId}::${seriesEntity.id}`
+              this.$set(this.seriesTotalBookCountByLibrarySeries, cacheKey, resolvedTotal)
+
+              if (!this.seriesCountByIdByLibrary[seriesEntity.libraryId]) {
+                this.$set(this.seriesCountByIdByLibrary, seriesEntity.libraryId, {})
+              }
+              this.$set(this.seriesCountByIdByLibrary[seriesEntity.libraryId], seriesEntity.id, resolvedTotal)
+            }
+          }
         })
       )
     },
@@ -957,32 +1147,51 @@ export default {
 
       const resolveSeriesRef = (seriesRef) => {
         if (!seriesRef) return null
-        if (seriesRef.id) return seriesRef
+        const resolvedLibraryId = seriesRef.libraryId || this.currentLibraryId || null
+        const originalId = seriesRef.id || null
         const nameCandidates = this.getNormalizedSeriesNameCandidates(seriesRef.name)
-        if (!nameCandidates.length) return seriesRef
+        let mappedId = null
 
-        let resolvedId = null
-        nameCandidates.some((nameKey) => {
-          const found = knownSeriesIdsByName.get(nameKey)
-          if (found) {
-            resolvedId = found
-            return true
+        if (nameCandidates.length) {
+          nameCandidates.some((nameKey) => {
+            const found = knownSeriesIdsByName.get(nameKey)
+            if (found) {
+              mappedId = found
+              return true
+            }
+            return false
+          })
+        }
+
+        let resolvedId = originalId || mappedId
+
+        // Some continue-series payloads provide a non-canonical id that carries a 0/1 count.
+        // When we can map a canonical id from the normalized series name, prefer it.
+        if (originalId && mappedId && originalId !== mappedId) {
+          resolvedId = mappedId
+        }
+
+        if (!resolvedId) {
+          return {
+            ...seriesRef,
+            libraryId: resolvedLibraryId
           }
-          return false
-        })
+        }
 
-        if (!resolvedId) return seriesRef
         return {
           ...seriesRef,
-          id: resolvedId
+          id: resolvedId,
+          libraryId: resolvedLibraryId
         }
       }
 
       const upsertSeries = (seriesRef, sourceBook = null, score = 0) => {
         if (!seriesRef?.id) return
 
-        const resolvedLibraryId = seriesRef.libraryId || sourceBook?.libraryId || null
-        const resolvedCount = Number(seriesRef.numBooks || seriesRef.audiobookCount || 0) || this.getSeriesCountForId(seriesRef.id, resolvedLibraryId) || 0
+        const resolvedLibraryId = seriesRef.libraryId || sourceBook?.libraryId || this.currentLibraryId || null
+        const hintedCount = Number(seriesRef.numBooks || seriesRef.audiobookCount || seriesRef.totalBooks || seriesRef.booksCount || 0)
+        const lookupCount = Number(this.getSeriesCountForId(seriesRef.id, resolvedLibraryId) || 0)
+        const resolvedCount = Math.max(Number.isFinite(hintedCount) ? hintedCount : 0, Number.isFinite(lookupCount) ? lookupCount : 0)
 
         const existing = seriesMap.get(seriesRef.id)
         if (!existing) {
@@ -999,8 +1208,8 @@ export default {
         }
 
         if ((!existing.name || existing.name === 'Unknown Series') && seriesRef.name) existing.name = seriesRef.name
-        if (!existing.libraryId && (seriesRef.libraryId || sourceBook?.libraryId)) {
-          existing.libraryId = seriesRef.libraryId || sourceBook?.libraryId
+        if (!existing.libraryId && (seriesRef.libraryId || sourceBook?.libraryId || this.currentLibraryId)) {
+          existing.libraryId = seriesRef.libraryId || sourceBook?.libraryId || this.currentLibraryId
         }
 
         if (resolvedCount > (existing.numBooks || 0)) {
@@ -1027,26 +1236,24 @@ export default {
               return Math.max(maxScore, bookScore)
             }, 0)
 
-            upsertSeries(
-              {
-                id: seriesEntity.id,
-                name: seriesEntity.name || 'Unknown Series',
-                libraryId: seriesEntity.libraryId || null
-              },
-              null,
-              seriesScore
-            )
+            const resolvedSeriesRef = resolveSeriesRef({
+              id: seriesEntity.id,
+              name: seriesEntity.name || 'Unknown Series',
+              libraryId: seriesEntity.libraryId || this.currentLibraryId || null,
+              numBooks: seriesEntity.numBooks || seriesEntity.audiobookCount || seriesEntity.totalBooks || 0
+            })
+
+            upsertSeries(resolvedSeriesRef, null, seriesScore)
 
             seriesBooks.forEach((seriesBook) => {
-              upsertSeries(
-                {
-                  id: seriesEntity.id,
-                  name: seriesEntity.name || 'Unknown Series',
-                  libraryId: seriesEntity.libraryId || seriesBook?.libraryId || null
-                },
-                seriesBook,
-                seriesBook?.userMediaProgress?.lastUpdate || 0
-              )
+              const resolvedBookSeriesRef = resolveSeriesRef({
+                id: seriesEntity.id,
+                name: seriesEntity.name || 'Unknown Series',
+                libraryId: seriesEntity.libraryId || seriesBook?.libraryId || this.currentLibraryId || null,
+                numBooks: seriesEntity.numBooks || seriesEntity.audiobookCount || seriesEntity.totalBooks || 0
+              })
+
+              upsertSeries(resolvedBookSeriesRef, seriesBook, seriesBook?.userMediaProgress?.lastUpdate || 0)
             })
           })
         } else {
@@ -1068,6 +1275,11 @@ export default {
         shelf.entities.forEach((bookEntity) => {
           const progress = this.getBookProgress(bookEntity)
           const sourceBook = this.unwrapBookEntity(bookEntity) || bookEntity
+
+          if (this.hideNonAudiobooks && !this.isAudioCapableBookEntity(sourceBook)) {
+            return
+          }
+
           const score = progress?.lastUpdate || sourceBook?.updatedAt || sourceBook?.addedAt || 0
           const seriesRefs = this.getSeriesRefsFromBookEntity(sourceBook)
           if (!seriesRefs.length) return
@@ -1088,26 +1300,81 @@ export default {
           return {
             id: seriesEntity.id,
             name: seriesEntity.name || 'Unknown Series',
-            libraryId: seriesEntity.libraryId,
-            numBooks: seriesEntity.numBooks || seriesEntity.audiobookCount || seriesEntity.books?.length || 0,
+            libraryId: seriesEntity.libraryId || this.currentLibraryId || null,
+            // Tentative; will be overwritten with the authoritative total by enrichSeriesCoverBooks below.
+            numBooks: seriesEntity.numBooks || seriesEntity.audiobookCount || 0,
             numStartedBooks: Number(seriesEntity.numStartedBooks || 0),
             coverBooks: Array.isArray(seriesEntity.coverBooks) ? seriesEntity.coverBooks : [],
             books: seriesEntity.books
           }
         })
-        .filter((seriesEntity) => {
-          const totalBooks = Number(seriesEntity.numBooks || 0)
-          // Keep unknown counts (0) and multi-book series; explicitly hide single-book series.
-          return totalBooks === 0 || totalBooks > 1
-        })
 
       if (!normalizedSeries.length) return serverCategories
 
+      // Resolve real per-series totals/started counts from the items endpoint, then filter
+      // single-book series so we don't accidentally hide multi-book series whose initial
+      // numBooks was wrong (e.g. 0 or 1 from minified/personalized payloads).
       await this.enrichSeriesCoverBooks(normalizedSeries)
+
+      const dedupedSeriesById = new Map()
+      normalizedSeries.forEach((seriesEntity) => {
+        if (!seriesEntity?.id) return
+
+        const existing = dedupedSeriesById.get(seriesEntity.id)
+        if (!existing) {
+          dedupedSeriesById.set(seriesEntity.id, seriesEntity)
+          return
+        }
+
+        const existingCount = Number(existing.numBooks || 0)
+        const nextCount = Number(seriesEntity.numBooks || 0)
+        if (nextCount > existingCount) {
+          existing.numBooks = nextCount
+        }
+
+        const existingStarted = Number(existing.numStartedBooks || 0)
+        const nextStarted = Number(seriesEntity.numStartedBooks || 0)
+        if (nextStarted > existingStarted) {
+          existing.numStartedBooks = nextStarted
+        }
+
+        if ((!existing.name || existing.name === 'Unknown Series') && seriesEntity.name) {
+          existing.name = seriesEntity.name
+        }
+        if (!existing.libraryId && seriesEntity.libraryId) {
+          existing.libraryId = seriesEntity.libraryId
+        }
+
+        if ((!Array.isArray(existing.coverBooks) || !existing.coverBooks.length) && Array.isArray(seriesEntity.coverBooks) && seriesEntity.coverBooks.length) {
+          existing.coverBooks = seriesEntity.coverBooks
+        }
+
+        if (Array.isArray(seriesEntity.books) && seriesEntity.books.length) {
+          const existingBookIds = new Set((existing.books || []).map((book) => book?.id || book?.libraryItemId || book?.media?.id).filter(Boolean))
+          const mergedBooks = [...(existing.books || [])]
+          seriesEntity.books.forEach((book) => {
+            const bookId = book?.id || book?.libraryItemId || book?.media?.id
+            if (bookId && !existingBookIds.has(bookId)) {
+              existingBookIds.add(bookId)
+              mergedBooks.push(book)
+            }
+          })
+          existing.books = mergedBooks
+        }
+      })
+
+      const normalizedDedupedSeries = Array.from(dedupedSeriesById.values())
+
+      const filteredSeries = normalizedDedupedSeries.filter((seriesEntity) => {
+        const totalBooks = Number(seriesEntity.numBooks || 0)
+        return totalBooks === 0 || totalBooks > 1
+      })
+
+      if (!filteredSeries.length) return serverCategories
 
       if (continueSeriesShelf) {
         continueSeriesShelf.type = 'series'
-        continueSeriesShelf.entities = normalizedSeries
+        continueSeriesShelf.entities = filteredSeries
         if (!continueSeriesShelf.label) continueSeriesShelf.label = this.$strings.LabelContinueSeries
         if (!continueSeriesShelf.labelStringKey) continueSeriesShelf.labelStringKey = 'LabelContinueSeries'
         return serverCategories
@@ -1118,7 +1385,7 @@ export default {
         label: this.$strings.LabelContinueSeries,
         labelStringKey: 'LabelContinueSeries',
         type: 'series',
-        entities: normalizedSeries
+        entities: filteredSeries
       }
 
       const continueReadingIndex = serverCategories.findIndex((shelf) => this.isContinueReadingShelf(shelf))
@@ -1292,6 +1559,8 @@ export default {
         })
       })
 
+      const peopleStats = includeRemoteStats ? await this.getPeopleStatsForCurrentLibrary() : null
+
       const normalizedAuthors = Array.from(authorMap.values())
         .sort((a, b) => {
           if (b._score !== a._score) return b._score - a._score
@@ -1299,32 +1568,22 @@ export default {
         })
         .map((authorEntity) => {
           const observedBooks = authorEntity._bookIds?.size || 0
+          const fallbackCount = Number(authorEntity.numBooks || observedBooks || 0)
           return {
             id: authorEntity.id,
             name: authorEntity.name || 'Unknown Author',
             libraryId: this.currentLibraryId || null,
-            numBooks: Number(authorEntity.numBooks || observedBooks || 0),
+            numBooks: includeRemoteStats ? this.getAuthorBooksCountFromPeopleStats(authorEntity, peopleStats, fallbackCount) : fallbackCount,
             coverBooks: Array.isArray(authorEntity._books) ? authorEntity._books.slice(0, 4) : []
           }
         })
 
-      const enrichedAuthors = includeRemoteStats
-        ? await Promise.all(
-            normalizedAuthors.map(async (authorEntity) => {
-              const resolvedLibraryId = authorEntity.libraryId || this.currentLibraryId || null
-              if (!resolvedLibraryId || !authorEntity.id) return authorEntity
-
-              const authorStats = await this.getAuthorStatsForLibrary(resolvedLibraryId, authorEntity.id)
-              return {
-                ...authorEntity,
-                numBooks: Number(authorStats.numBooks || authorEntity.numBooks || 0),
-                coverBooks: Array.isArray(authorStats.coverBooks) ? authorStats.coverBooks.slice(0, 4) : authorEntity.coverBooks
-              }
-            })
-          )
-        : normalizedAuthors
-
-      const filteredAuthors = includeRemoteStats ? enrichedAuthors.filter((authorEntity) => Number(authorEntity?.numBooks || 0) !== 1) : enrichedAuthors
+      const filteredAuthors = normalizedAuthors.filter((authorEntity) => {
+        const totalBooks = Number(authorEntity?.numBooks || 0)
+        if (this.hideNonAudiobooks && totalBooks <= 0) return false
+        if (includeRemoteStats && totalBooks === 1) return false
+        return true
+      })
 
       const normalizedNarrators = Array.from(narratorMap.values())
         .sort((a, b) => {
@@ -1333,32 +1592,22 @@ export default {
         })
         .map((narratorEntity) => {
           const observedBooks = narratorEntity._bookIds?.size || 0
+          const fallbackCount = Number(observedBooks || narratorEntity.numBooks || 0)
           return {
             id: narratorEntity.id,
             name: narratorEntity.name,
             libraryId: narratorEntity.libraryId || this.currentLibraryId || null,
-            numBooks: Number(observedBooks || narratorEntity.numBooks || 0),
+            numBooks: includeRemoteStats ? this.getNarratorBooksCountFromPeopleStats(narratorEntity, peopleStats, fallbackCount) : fallbackCount,
             coverBooks: Array.isArray(narratorEntity._books) ? narratorEntity._books.slice(0, 4) : []
           }
         })
 
-      const enrichedNarrators = includeRemoteStats
-        ? await Promise.all(
-            normalizedNarrators.map(async (narratorEntity) => {
-              const resolvedLibraryId = narratorEntity.libraryId || this.currentLibraryId || null
-              if (!resolvedLibraryId) return narratorEntity
-
-              const narratorStats = await this.getNarratorStatsForLibrary(resolvedLibraryId, narratorEntity.name)
-              return {
-                ...narratorEntity,
-                numBooks: Number(narratorStats.numBooks || narratorEntity.numBooks || 0),
-                coverBooks: Array.isArray(narratorStats.coverBooks) ? narratorStats.coverBooks.slice(0, 4) : narratorEntity.coverBooks
-              }
-            })
-          )
-        : normalizedNarrators
-
-      const filteredNarrators = includeRemoteStats ? enrichedNarrators.filter((narratorEntity) => Number(narratorEntity?.numBooks || 0) !== 1) : enrichedNarrators
+      const filteredNarrators = normalizedNarrators.filter((narratorEntity) => {
+        const totalBooks = Number(narratorEntity?.numBooks || 0)
+        if (this.hideNonAudiobooks && totalBooks <= 0) return false
+        if (includeRemoteStats && totalBooks === 1) return false
+        return true
+      })
 
       // Remove existing continue-people shelves first, then re-insert in deterministic order.
       const peopleShelfIndexes = []
@@ -1400,6 +1649,85 @@ export default {
 
       return serverCategories
     },
+    async applyAudiobookOnlyFilterToCategories(serverCategories) {
+      if (!Array.isArray(serverCategories) || !serverCategories.length) return serverCategories || []
+      if (!this.hideNonAudiobooks) return serverCategories
+
+      const peopleStats = await this.getPeopleStatsForCurrentLibrary()
+
+      return serverCategories
+        .map((shelf) => {
+          if (!Array.isArray(shelf?.entities)) return shelf
+
+          if (shelf.type === 'book') {
+            const entities = shelf.entities.filter((entity) => this.isAudioCapableBookEntity(entity))
+            return {
+              ...shelf,
+              entities
+            }
+          }
+
+          if (shelf.type === 'series') {
+            const entities = shelf.entities
+              .map((seriesEntity) => {
+                const filteredBooks = Array.isArray(seriesEntity?.books) ? seriesEntity.books.filter((book) => this.isAudioCapableBookEntity(book)) : []
+                const filteredCoverBooks = Array.isArray(seriesEntity?.coverBooks) ? seriesEntity.coverBooks.filter((book) => this.isAudioCapableBookEntity(book)).slice(0, 4) : filteredBooks.slice(0, 4)
+
+                // Do not collapse total series count to filteredBooks.length here.
+                // Continue-series entities often carry only sampled/in-progress books in
+                // `books`, so length can be 1 even when the true series total is much larger.
+                const countCandidates = [seriesEntity?.audiobookCount, seriesEntity?.numBooks, seriesEntity?.totalBooks, filteredBooks.length, filteredCoverBooks.length]
+                let resolvedTotal = 0
+                for (const candidate of countCandidates) {
+                  const parsed = Number(candidate)
+                  if (Number.isFinite(parsed) && parsed > resolvedTotal) {
+                    resolvedTotal = parsed
+                  }
+                }
+
+                return {
+                  ...seriesEntity,
+                  books: filteredBooks,
+                  coverBooks: filteredCoverBooks,
+                  numBooks: resolvedTotal
+                }
+              })
+              .filter((seriesEntity) => Array.isArray(seriesEntity.books) && seriesEntity.books.length > 0)
+
+            return {
+              ...shelf,
+              entities
+            }
+          }
+
+          if (shelf.type === 'authors') {
+            const isNarratorShelf = this.isContinueNarratorsShelf(shelf) || shelf.entities.some((entity) => `${entity?.id || ''}`.startsWith('narrator:'))
+            const entities = shelf.entities
+              .map((entity) => {
+                if (isNarratorShelf) {
+                  return {
+                    ...entity,
+                    numBooks: this.getNarratorBooksCountFromPeopleStats(entity, peopleStats, Number(entity?.numBooks || 0))
+                  }
+                }
+
+                return {
+                  ...entity,
+                  numBooks: this.getAuthorBooksCountFromPeopleStats(entity, peopleStats, Number(entity?.numBooks || 0))
+                }
+              })
+              .filter((entity) => Number(entity?.numBooks || 0) > 0)
+
+            return {
+              ...shelf,
+              entities
+            }
+          }
+
+          return shelf
+        })
+        .filter((shelf) => !Array.isArray(shelf?.entities) || shelf.entities.length > 0)
+    },
     applyShelvesInOrder(incomingShelves) {
       if (!Array.isArray(incomingShelves)) return
 
@@ -1435,6 +1763,10 @@ export default {
       const podcastEpisodesContinueListening = []
       localMedia.forEach((item) => {
         if (item.mediaType == 'book') {
+          if (this.hideNonAudiobooks && !this.isAudioCapableBookEntity(item)) {
+            return
+          }
+
           item.progress = this.$store.getters['globals/getLocalMediaProgressById'](item.id)
           if (item.progress && !item.progress.isFinished && item.progress.progress > 0) booksContinueListening.push(item)
           books.push(item)
@@ -1517,6 +1849,9 @@ export default {
     },
     async fetchCategories(options = {}) {
       const forceRefresh = !!options.force
+      if (forceRefresh && this.currentLibraryId) {
+        clearAudioPeopleStatsCache(this.currentLibraryId)
+      }
       if (!this.isPageActive) {
         console.log('[categories] fetchCategories skipped because page is inactive')
         return
@@ -1588,15 +1923,10 @@ export default {
         console.log('[categories] Local categories computed', localCategories.length, 'isConnectedToServerWithInternet=', isConnectedToServerWithInternet)
 
         if (isConnectedToServerWithInternet) {
-          // Wait up to 5 seconds for server books to load
-          const serverTimeoutMs = 5000
-          const serverRequest = this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/personalized?minified=1&include=rssfeed,numEpisodesIncomplete,series`, { connectTimeout: 10000 }).catch((error) => {
+          const serverPayload = await this.$nativeHttp.get(`/api/libraries/${this.currentLibraryId}/personalized?minified=1&include=rssfeed,numEpisodesIncomplete,series`, { connectTimeout: 15000 }).catch((error) => {
             console.error('[categories] Failed to fetch categories', error)
             return null
           })
-
-          const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve('__timeout__'), serverTimeoutMs))
-          const categoriesOrTimeout = await Promise.race([serverRequest, timeoutPromise])
 
           const attachLocalItemsToServerCategories = (serverCats) => {
             if (!Array.isArray(serverCats)) return []
@@ -1618,38 +1948,52 @@ export default {
           }
 
           // Helper function to merge local items with server categories
-          const mergeLocalWithServerCategories = async (serverPayload, options = {}) => {
-            const skipSeriesNormalization = !!options.skipSeriesNormalization
-            const includeRemotePeopleStats = options.includeRemotePeopleStats !== false
-            const extractedCategories = this.extractServerCategories(serverPayload)
+          const mergeLocalWithServerCategories = async (incomingServerPayload) => {
+            const extractedCategories = this.extractServerCategories(incomingServerPayload)
             if (!extractedCategories.length) return []
 
-            if (!skipSeriesNormalization) {
-              await this.enrichContinueShelvesWithExpandedSeries(extractedCategories)
-            }
+            await this.enrichContinueShelvesWithExpandedSeries(extractedCategories)
 
-            const shouldLoadContinueLookups = extractedCategories.some((shelf) => this.isContinueReadingShelf(shelf) && shelf?.type === 'book' && Array.isArray(shelf?.entities) && shelf.entities.length)
-            const seriesLookup = !skipSeriesNormalization && shouldLoadContinueLookups ? await this.getSeriesLookupForLibrary(this.currentLibraryId) : null
+            const shouldLoadContinueLookups = extractedCategories.some((shelf) => {
+              const hasEntities = Array.isArray(shelf?.entities) && shelf.entities.length
+              if (!hasEntities) return false
+
+              if (this.isContinueReadingShelf(shelf) && shelf?.type === 'book') {
+                return true
+              }
+
+              if (this.isContinueSeriesShelf(shelf) && (shelf?.type === 'book' || shelf?.type === 'series')) {
+                return true
+              }
+
+              return false
+            })
+            const seriesLookup = shouldLoadContinueLookups ? await this.getSeriesLookupForLibrary(this.currentLibraryId) : null
             const authorLookup = shouldLoadContinueLookups ? await this.getAuthorLookupForLibrary(this.currentLibraryId) : null
 
             let normalizedCategories = extractedCategories
-            if (!skipSeriesNormalization) {
-              try {
-                const maybeNormalized = await this.normalizeContinueSeriesCategories(extractedCategories, seriesLookup)
-                normalizedCategories = Array.isArray(maybeNormalized) ? maybeNormalized : extractedCategories
-              } catch (error) {
-                console.error('[categories] Failed to normalize continue-series categories, falling back to raw server categories', error)
-                normalizedCategories = extractedCategories
-              }
+            try {
+              const maybeNormalized = await this.normalizeContinueSeriesCategories(extractedCategories, seriesLookup)
+              normalizedCategories = Array.isArray(maybeNormalized) ? maybeNormalized : extractedCategories
+            } catch (error) {
+              console.error('[categories] Failed to normalize continue-series categories, falling back to raw server categories', error)
+              normalizedCategories = extractedCategories
             }
 
             try {
               const maybePeopleNormalized = await this.normalizeContinuePeopleCategories(normalizedCategories, authorLookup, {
-                includeRemoteStats: includeRemotePeopleStats
+                includeRemoteStats: true
               })
               normalizedCategories = Array.isArray(maybePeopleNormalized) ? maybePeopleNormalized : normalizedCategories
             } catch (error) {
               console.error('[categories] Failed to normalize continue-author/narrator categories, continuing without people shelves', error)
+            }
+
+            try {
+              const maybeAudioFiltered = await this.applyAudiobookOnlyFilterToCategories(normalizedCategories)
+              normalizedCategories = Array.isArray(maybeAudioFiltered) ? maybeAudioFiltered : normalizedCategories
+            } catch (error) {
+              console.error('[categories] Failed to apply audiobook-only filtering on home categories', error)
             }
 
             return attachLocalItemsToServerCategories(normalizedCategories)
@@ -1662,111 +2006,45 @@ export default {
             return [...serverCats, ...localOnlyShelves]
           }
 
-          const initialServerCategories = this.extractServerCategories(categoriesOrTimeout)
-
-          // Case 1: Server responded before timeout
-          if (categoriesOrTimeout !== '__timeout__' && initialServerCategories.length) {
-            const isInitialRenderPass = this.firstLoad || !this.shelves.length
-            let combinedShelves = []
-
-            if (isInitialRenderPass) {
-              // Initial render uses lightweight normalization to avoid first-load stalls.
-              // Heavy series/remote-stats enrichment continues in background.
-              console.log('[categories] Server responded before timeout during initial render, using lightweight continue-people normalization')
-              const enrichedServerCats = await mergeLocalWithServerCategories(categoriesOrTimeout, {
-                skipSeriesNormalization: true,
-                includeRemotePeopleStats: false
-              })
-              const initialServerCats = Array.isArray(enrichedServerCats) && enrichedServerCats.length ? enrichedServerCats : attachLocalItemsToServerCategories(initialServerCategories)
-              combinedShelves = combineServerAndLocalShelves(initialServerCats)
-            } else {
-              console.log('[categories] Server responded before timeout, displaying combined results immediately')
-              const fastServerCats = attachLocalItemsToServerCategories(initialServerCategories)
-              combinedShelves = combineServerAndLocalShelves(fastServerCats)
-            }
-
-            // Update all state together to prevent flash of local content
-            // Set flags first to ensure skeleton stays visible during shelf assignment
-            this.isLoading = false
-            this.firstLoad = false
-            // Now update shelves and hide skeleton in same tick
+          const serverCategories = await mergeLocalWithServerCategories(serverPayload)
+          if (Array.isArray(serverCategories) && serverCategories.length) {
+            const combinedShelves = combineServerAndLocalShelves(serverCategories)
             this.shelves = combinedShelves
             this.showingSkeleton = false
-            console.log('[categories] Combined server + local shelves displayed', this.shelves.length, this.lastServerFetch)
-
-            // Refresh people counts/filtering quickly without waiting for full series enrichment.
-            ;(async () => {
-              try {
-                const peopleEnrichedServerCats = await mergeLocalWithServerCategories(categoriesOrTimeout, {
-                  skipSeriesNormalization: true,
-                  includeRemotePeopleStats: true
-                })
-                if (!Array.isArray(peopleEnrichedServerCats) || !peopleEnrichedServerCats.length) return
-
-                const peopleEnrichedCombinedShelves = combineServerAndLocalShelves(peopleEnrichedServerCats)
-                this.applyShelvesInOrder(peopleEnrichedCombinedShelves)
-              } catch (error) {
-                console.error('[categories] Background continue-people enrichment failed', error)
-              }
-            })()
-
-            // Continue heavier continue-series enrichment in background to avoid delaying first paint.
-            ;(async () => {
-              try {
-                const enrichedServerCats = await mergeLocalWithServerCategories(categoriesOrTimeout)
-                if (!Array.isArray(enrichedServerCats) || !enrichedServerCats.length) return
-
-                const enrichedCombinedShelves = combineServerAndLocalShelves(enrichedServerCats)
-                this.applyShelvesInOrder(enrichedCombinedShelves)
-              } catch (error) {
-                console.error('[categories] Background continue-series enrichment failed', error)
-              }
-            })()
-
+            this.isLoading = false
+            this.firstLoad = false
+            this.saveHomeShelfCache()
+            console.log('[categories] Server shelves displayed after full enrichment', this.shelves.length, this.lastServerFetch)
             return
           }
 
-          // Case 2: Timeout occurred, show local books only
-          console.log('[categories] Server request timed out (5s), displaying local shelves')
+          console.warn('[categories] Server returned empty/invalid data, falling back to local shelves')
           this.shelves = localCategories
           this.showingSkeleton = false
           this.isLoading = false
           this.firstLoad = false
-
-          // Continue waiting for server response in background (if timeout occurred)
-          if (categoriesOrTimeout === '__timeout__') {
-            console.log('[categories] Waiting for server response in background...')
-            try {
-              const categories = await serverRequest
-              const delayedServerCategories = this.extractServerCategories(categories)
-
-              // Case 3: Server eventually responded after timeout
-              if (delayedServerCategories.length) {
-                console.log('[categories] Server responded after timeout, silently merging results')
-                const serverCats = await mergeLocalWithServerCategories(categories)
-                const mergedShelves = combineServerAndLocalShelves(serverCats)
-
-                // Preserve server-dictated shelf order while updating existing shelf objects.
-                this.applyShelvesInOrder(mergedShelves)
-
-                console.log('[categories] Server shelves silently merged after timeout', this.shelves.length)
-              }
-            } catch (err) {
-              console.log('[categories] Server request failed after timeout, keeping local shelves only')
-            }
-          } else {
-            // Server responded but with empty/invalid data
-            console.warn('[categories] Server returned empty/invalid data, using local shelves only')
-          }
+          this.saveHomeShelfCache()
         } else {
           // When offline or user/library not ready, show local categories
           console.log('[categories] Offline or not connected - showing local shelves only')
+
+          // Cold-start guard: on first load, if we haven't completed the initial
+          // connection wait yet, hold the skeleton instead of flashing local-only
+          // shelves that will be replaced by the server fetch a moment later.
+          if (this.firstLoad && !this.initialConnectionWaitComplete) {
+            console.log('[categories] First load before initialConnectionWaitComplete - holding skeleton')
+            this.showingSkeleton = !this.shelves.length
+            this.isLoading = true
+            this.lastLocalFetch = 0
+            return
+          }
 
           // Show local books immediately (no need for delay)
           this.shelves = localCategories
           this.showingSkeleton = false
           this.isLoading = false
           this.firstLoad = false
+          this.saveHomeShelfCache()
           console.log('[categories] Local shelves set (offline/not connected)', this.shelves.length, this.lastLocalFetch)
         }
       } finally {
@@ -1776,6 +2054,7 @@ export default {
     libraryChanged() {
       if (this.currentLibraryId) {
         console.log(`[categories] libraryChanged so fetching categories`)
+        clearAudioPeopleStatsCache()
         // Reset loading state when library changes
         this.showingSkeleton = true
         this.isLoading = true
@@ -1848,6 +2127,18 @@ export default {
     this.initListeners()
     await this.$store.dispatch('globals/loadLocalMediaProgress')
 
+    const restoredFromCache = this.restoreHomeShelfCache()
+    const cacheLooksStaleForContinueSeries = restoredFromCache && this.hasSuspiciousContinueSeriesCounts(this.shelves)
+    if (restoredFromCache && !cacheLooksStaleForContinueSeries && this.lastServerFetch && Date.now() - this.lastServerFetch < 30000) {
+      console.log('[categories] Restored home shelves from cache and skipping immediate refetch')
+      this.initialConnectionWaitComplete = true
+      return
+    }
+
+    if (cacheLooksStaleForContinueSeries) {
+      console.log('[categories] Restored cache has stale continue-series totals; forcing immediate refetch')
+    }
+
     // Wait briefly for connection/user/library to be established on first load
     // This prevents showing local books then immediately switching to server books
     if (this.firstLoad) {
@@ -1879,10 +2170,12 @@ export default {
   },
   deactivated() {
     this.isPageActive = false
+    this.saveHomeShelfCache()
     this.cancelPullGesture(true)
     this.removeListeners()
   },
   beforeDestroy() {
+    this.saveHomeShelfCache()
     this.cancelPullGesture(true)
     this.removeListeners()
   }

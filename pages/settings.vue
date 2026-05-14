@@ -40,6 +40,12 @@
       <p class="pl-4">{{ $strings.LabelUseDynamicColors || 'Use Dynamic Colors (Material You)' }}</p>
       <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('dynamicColors')">info</span>
     </div>
+    <div class="flex items-center py-3">
+      <div class="w-12 flex justify-center mr-2" @click="toggleHideNonAudiobooksGlobal">
+        <ui-toggle-switch :value="hideNonAudiobooksGlobal" class="pointer-events-none" />
+      </div>
+      <p class="pl-4">{{ $strings.LabelHideNonAudiobooksGlobal || 'Hide non-audiobooks globally' }}</p>
+    </div>
 
     <!-- Playback settings -->
     <p class="uppercase text-label-small font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderPlaybackSettings }}</p>
@@ -417,6 +423,9 @@ export default {
     themeOption() {
       return this.themeOptionItems.find((i) => i.value === this.theme)?.text || ''
     },
+    hideNonAudiobooksGlobal() {
+      return !!this.$store.getters['user/getUserSetting']('hideNonAudiobooksGlobal')
+    },
     sleepTimerLengthOption() {
       if (!this.settings.sleepTimerLength) return this.$strings.LabelEndOfChapter
       const minutes = Number(this.settings.sleepTimerLength) / 1000 / 60
@@ -662,6 +671,13 @@ export default {
           this.$toast.info('Using static Material 3 theme', { timeout: 2000 })
         }
       }
+    },
+    async toggleHideNonAudiobooksGlobal() {
+      const nextValue = !this.hideNonAudiobooksGlobal
+      await this.$hapticsImpact()
+      await this.$store.dispatch('user/updateUserSettings', {
+        hideNonAudiobooksGlobal: nextValue
+      })
     },
     getCurrentOrientation() {
       const orientation = window.screen?.orientation || {}

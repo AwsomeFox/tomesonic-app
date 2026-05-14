@@ -539,7 +539,7 @@ export default {
         const router = this.$router || this.$nuxt.$router
         if (router) {
           if (this.recentEpisode) router.push(`/item/${this.libraryItemId}/${this.recentEpisode.id}`)
-          else if (this.collapsedSeries) router.push(`/bookshelf/series/${this.collapsedSeries.id}`)
+          else if (this.collapsedSeries) router.push(`/bookshelf/series/${encodeURIComponent(String(this.collapsedSeries.id))}`)
           else if (this.localLibraryItem) {
             // Pass local library item id to server page to allow falling back to offline page
             router.push(`/item/${this.libraryItemId}?localLibraryItemId=${this.localLibraryItemId}`)

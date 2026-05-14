@@ -35,7 +35,16 @@ export default {
   },
   methods: {
     syncNarratorFromRoute() {
-      const routeKey = this.$route?.params?.id || ''
+      const encodedRouteKey = this.$route?.params?.id || ''
+      let routeKey = encodedRouteKey
+      if (encodedRouteKey) {
+        try {
+          routeKey = decodeURIComponent(encodedRouteKey)
+        } catch (error) {
+          routeKey = encodedRouteKey
+        }
+      }
+
       let resolvedName = typeof this.$route?.query?.name === 'string' ? this.$route.query.name : ''
 
       if (!resolvedName && routeKey) {

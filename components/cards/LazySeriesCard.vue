@@ -241,7 +241,8 @@ export default {
     },
     clickCard() {
       if (this.seriesData?.id) {
-        const routePath = `/bookshelf/series/${this.seriesData.id}`
+        const encodedSeriesId = encodeURIComponent(String(this.seriesData.id))
+        const routePath = `/bookshelf/series/${encodedSeriesId}`
         this.$router.push(routePath)
       }
     },
