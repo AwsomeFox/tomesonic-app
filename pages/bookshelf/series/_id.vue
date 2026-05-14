@@ -1,6 +1,6 @@
 <template>
   <div :style="contentPaddingStyle">
-    <bookshelf-lazy-bookshelf page="series-books" :series-id="seriesId" v-on:downloadSeriesClick="downloadSeriesClick" />
+    <bookshelf-lazy-bookshelf :key="seriesId" page="series-books" :series-id="seriesId" v-on:downloadSeriesClick="downloadSeriesClick" />
   </div>
 </template>
 
@@ -10,6 +10,7 @@ import { AbsDownloader } from '@/plugins/capacitor'
 import cellularPermissionHelpers from '@/mixins/cellularPermissionHelpers'
 
 export default {
+  name: 'BookshelfSeriesDetailPage',
   async asyncData({ params, app, store, redirect }) {
     var series = await app.$nativeHttp.get(`/api/series/${params.id}`).catch((error) => {
       console.error('Failed', error)
@@ -27,6 +28,7 @@ export default {
   data() {
     return {
       startingDownload: false,
+      listenersInitialized: false,
       mediaType: 'book',
       booksPerFetch: 20,
       books: 0,
@@ -36,6 +38,14 @@ export default {
     }
   },
   mixins: [cellularPermissionHelpers],
+  watch: {
+    '$route.params.id': {
+      async handler(newVal, oldVal) {
+        if (!newVal || newVal === oldVal) return
+        await this.syncSeriesFromRoute(true)
+      }
+    }
+  },
   computed: {
     isIos() {
       return this.$platform === 'ios'
@@ -45,6 +55,35 @@ export default {
     }
   },
   methods: {
+    async syncSeriesFromRoute(force = false) {
+      const routeSeriesId = this.$route?.params?.id
+      if (!routeSeriesId) return
+      if (!force && this.seriesId === routeSeriesId && this.series?.id === routeSeriesId) return
+
+      const series = await this.$nativeHttp.get(`/api/series/${routeSeriesId}`).catch((error) => {
+        console.error('Failed to sync route series', error)
+        return null
+      })
+
+      if (!series) {
+        this.$router.replace('/oops?message=Series not found')
+        return
+      }
+
+      this.seriesId = routeSeriesId
+      this.series = series
+      this.$store.commit('globals/setSeries', series)
+    },
+    initListeners() {
+      if (this.listenersInitialized) return
+      this.$eventBus.$on('download-series-click', this.downloadSeriesClick)
+      this.listenersInitialized = true
+    },
+    removeListeners() {
+      if (!this.listenersInitialized) return
+      this.$eventBus.$off('download-series-click', this.downloadSeriesClick)
+      this.listenersInitialized = false
+    },
     async downloadSeriesClick() {
       console.log('Download Series clicked')
       if (this.startingDownload) return
@@ -180,10 +219,18 @@ export default {
     }
   },
   mounted() {
-    this.$eventBus.$on('download-series-click', this.downloadSeriesClick)
+    this.initListeners()
+    this.syncSeriesFromRoute()
+  },
+  activated() {
+    this.initListeners()
+    this.syncSeriesFromRoute()
+  },
+  deactivated() {
+    this.removeListeners()
   },
   beforeDestroy() {
-    this.$eventBus.$off('download-series-click', this.downloadSeriesClick)
+    this.removeListeners()
   }
 }
 </script>

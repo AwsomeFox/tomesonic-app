@@ -49,9 +49,9 @@
       </div>
 
       <div v-if="!showingSkeleton" class="w-full" :class="{ 'py-3': altViewEnabled }" :style="contentPaddingStyle">
-        <template v-for="shelf in shelves">
-          <bookshelf-shelf :key="shelf.id" :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :animate-items="false" />
-        </template>
+        <div v-for="shelf in shelves" :key="shelf.id" class="home-shelf-row">
+          <bookshelf-shelf :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :shelf-id="shelf.id" :animate-items="false" />
+        </div>
       </div>
     </div>
   </div>
@@ -59,6 +59,7 @@
 
 <script>
 export default {
+  name: 'BookshelfHomePage',
   props: {},
   data() {
     return {
@@ -78,6 +79,10 @@ export default {
       seriesCountByIdByLibrary: {},
       seriesCoverBooksByLibrarySeries: {},
       seriesStartedBookCountByLibrarySeries: {},
+      authorLookupByLibrary: {},
+      authorCountByIdByLibrary: {},
+      authorStatsByLibraryAuthor: {},
+      narratorStatsByLibrary: {},
       pullDistance: 0,
       isPullRefreshing: false,
       isPullGestureActive: false,
@@ -86,11 +91,15 @@ export default {
       pullStartX: 0,
       pullTriggerDistance: 86,
       pullMaxDistance: 132,
-      _bookshelfWrapperEl: null
+      _bookshelfWrapperEl: null,
+      listenersInitialized: false,
+      isPageActive: true,
+      loadedLibraryId: null
     }
   },
   watch: {
     networkConnected(newVal) {
+      if (!this.isPageActive) return
       // Update shelves when network connect status changes
       console.log(`[categories] Network changed to ${newVal} - fetch categories. ${this.lastServerFetch}/${this.lastLocalFetch}`)
 
@@ -122,6 +131,7 @@ export default {
       }
     },
     user(newVal, oldVal) {
+      if (!this.isPageActive) return
       // When user becomes available (login/connection), refetch if we previously showed local-only
       if (newVal && !oldVal && this.networkConnected && this.currentLibraryId && this.initialConnectionWaitComplete) {
         console.log('[categories] User became available after initial wait, checking if refetch needed')
@@ -135,6 +145,7 @@ export default {
       }
     },
     currentLibraryId(newVal, oldVal) {
+      if (!this.isPageActive) return
       // When library ID changes (but not on initial load)
       if (newVal && oldVal && newVal !== oldVal) {
         console.log('[categories] Library ID switched from', oldVal, 'to', newVal, '- resetting and refetching')
@@ -269,7 +280,8 @@ export default {
 
       this._bookshelfWrapperEl = wrapper
       wrapper.addEventListener('touchstart', this.onPullStart, { passive: true })
-      wrapper.addEventListener('touchmove', this.onPullMove, { passive: false })
+      // Keep this passive so normal vertical scroll is never blocked by pull-to-refresh logic.
+      wrapper.addEventListener('touchmove', this.onPullMove, { passive: true })
       wrapper.addEventListener('touchend', this.onPullEnd, { passive: true })
       wrapper.addEventListener('touchcancel', this.onPullEnd, { passive: true })
     },
@@ -318,13 +330,16 @@ export default {
         return
       }
 
+      // If user starts regular vertical scrolling, immediately release pull handling.
       if (wrapper.scrollTop > 0 || deltaY <= 0) {
-        this.pullDistance = 0
+        this.cancelPullGesture(true)
         return
       }
 
-      this.pullDistance = this.getPullDistanceWithResistance(deltaY)
-      event.preventDefault()
+      const nextPullDistance = this.getPullDistanceWithResistance(deltaY)
+      if (Math.abs(nextPullDistance - this.pullDistance) >= 1) {
+        this.pullDistance = nextPullDistance
+      }
     },
     async onPullEnd() {
       if (!this.isPullGestureActive) return
@@ -375,13 +390,150 @@ export default {
     isContinueReadingShelf(shelf) {
       return shelf?.id === 'continue-reading' || shelf?.id === 'continue-listening' || shelf?.labelStringKey === 'LabelContinueReading' || shelf?.labelStringKey === 'LabelContinueListening'
     },
+    isContinueAuthorsShelf(shelf) {
+      return shelf?.id === 'continue-authors'
+    },
+    isContinueNarratorsShelf(shelf) {
+      return shelf?.id === 'continue-narrators'
+    },
     unwrapBookEntity(bookEntity) {
       if (!bookEntity) return null
       return bookEntity.libraryItem || bookEntity.item || bookEntity.libraryItemWrapper || bookEntity
     },
+    getNormalizedPersonNameCandidates(name) {
+      if (!name || typeof name !== 'string') return []
+      const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ')
+
+      if (!normalized) return []
+      return [normalized]
+    },
     getBookProgress(bookEntity) {
       const source = this.unwrapBookEntity(bookEntity) || bookEntity
       return bookEntity?.userMediaProgress || source?.userMediaProgress || bookEntity?.mediaProgress || source?.mediaProgress || bookEntity?.progress || source?.progress || null
+    },
+    getAuthorRefsFromBookEntity(bookEntity) {
+      const source = this.unwrapBookEntity(bookEntity) || bookEntity
+      const refs = []
+      const metadata = source?.media?.metadata || source?.metadata || source?.mediaMetadata || null
+
+      const parseAuthorRef = (candidate) => {
+        if (!candidate) return null
+
+        if (typeof candidate === 'string') {
+          return {
+            id: null,
+            name: candidate,
+            libraryId: source?.libraryId || null
+          }
+        }
+
+        const nestedAuthor = candidate.author || null
+        const id = candidate.id || candidate.authorId || nestedAuthor?.id || null
+        const name = candidate.name || nestedAuthor?.name || candidate.authorName || null
+        if (!name && !id) return null
+
+        return {
+          id,
+          name: name || 'Unknown Author',
+          libraryId: candidate.libraryId || nestedAuthor?.libraryId || source?.libraryId || null,
+          numBooks: Number(candidate.numBooks || nestedAuthor?.numBooks || 0)
+        }
+      }
+
+      const rawAuthors = metadata?.authors || source?.authors || source?.media?.authors
+      const authors = Array.isArray(rawAuthors) ? rawAuthors : rawAuthors ? [rawAuthors] : []
+      authors.forEach((authorRef) => {
+        const parsed = parseAuthorRef(authorRef)
+        if (parsed) refs.push(parsed)
+      })
+
+      const fallbackAuthorName = metadata?.authorName || metadata?.author || source?.authorName || source?.author || source?.media?.authorName || source?.media?.author || null
+      if (!refs.length && fallbackAuthorName) {
+        const parsedFallback = parseAuthorRef(fallbackAuthorName)
+        if (parsedFallback) refs.push(parsedFallback)
+      }
+
+      const deduped = []
+      const keys = new Set()
+      refs.forEach((ref) => {
+        const key = ref.id || (ref.name ? `name:${ref.name.toLowerCase()}` : null)
+        if (key && !keys.has(key)) {
+          keys.add(key)
+          deduped.push(ref)
+        }
+      })
+
+      return deduped
+    },
+    getNarratorRefsFromBookEntity(bookEntity) {
+      const source = this.unwrapBookEntity(bookEntity) || bookEntity
+      const refs = []
+      const metadata = source?.media?.metadata || source?.metadata || source?.mediaMetadata || null
+
+      const toNarratorNameList = (rawValue) => {
+        if (!rawValue) return []
+
+        if (Array.isArray(rawValue)) {
+          return rawValue.flatMap((value) => toNarratorNameList(value)).filter((value, index, arr) => arr.indexOf(value) === index)
+        }
+
+        if (typeof rawValue === 'string') {
+          return rawValue
+            .split(/[,;]\s*/)
+            .map((value) => value.trim())
+            .filter(Boolean)
+        }
+
+        return []
+      }
+
+      const parseNarratorRef = (candidate) => {
+        if (!candidate) return null
+
+        if (typeof candidate === 'string') {
+          return {
+            name: candidate,
+            libraryId: source?.libraryId || null
+          }
+        }
+
+        const name = candidate.name || candidate.narratorName || candidate.narrator || candidate.displayName || null
+        if (!name) return null
+
+        return {
+          name,
+          libraryId: candidate.libraryId || source?.libraryId || null
+        }
+      }
+
+      const rawNarrators = metadata?.narrators || source?.narrators || source?.media?.narrators
+      const narrators = Array.isArray(rawNarrators) ? rawNarrators : rawNarrators ? [rawNarrators] : []
+      narrators.forEach((narratorRef) => {
+        const parsed = parseNarratorRef(narratorRef)
+        if (parsed) refs.push(parsed)
+      })
+
+      // Some book payloads expose narrators as a single string (e.g. narratorName)
+      // rather than an array. Expand those into narrator refs as a fallback.
+      const fallbackNarratorNames = [metadata?.narratorName, metadata?.narrator, source?.narratorName, source?.narrator, source?.media?.narratorName, source?.media?.narrator]
+      fallbackNarratorNames.forEach((fallbackValue) => {
+        toNarratorNameList(fallbackValue).forEach((narratorName) => {
+          const parsed = parseNarratorRef(narratorName)
+          if (parsed) refs.push(parsed)
+        })
+      })
+
+      const deduped = []
+      const keys = new Set()
+      refs.forEach((ref) => {
+        const normalizedName = this.getNormalizedPersonNameCandidates(ref.name)[0]
+        if (!normalizedName) return
+        if (keys.has(normalizedName)) return
+        keys.add(normalizedName)
+        deduped.push(ref)
+      })
+
+      return deduped
     },
     getSeriesRefsFromBookEntity(bookEntity) {
       const source = this.unwrapBookEntity(bookEntity) || bookEntity
@@ -497,6 +649,123 @@ export default {
       this.$set(this.seriesIdLookupByLibrary, libraryId, nameToId)
       this.$set(this.seriesCountByIdByLibrary, libraryId, countById)
       return nameToId
+    },
+    async getAuthorLookupForLibrary(libraryId) {
+      if (!libraryId) return {}
+      if (this.authorLookupByLibrary[libraryId]) return this.authorLookupByLibrary[libraryId]
+
+      const lookupByName = {}
+      const countById = {}
+
+      const payload = await this.$nativeHttp.get(`/api/libraries/${libraryId}/authors`, { connectTimeout: 10000 }).catch((error) => {
+        console.error('[categories] Failed to load author lookup', error)
+        return null
+      })
+
+      const authors = Array.isArray(payload?.authors) ? payload.authors : Array.isArray(payload) ? payload : []
+      authors.forEach((authorEntity) => {
+        if (!authorEntity?.id || !authorEntity?.name) return
+        const normalizedCandidates = this.getNormalizedPersonNameCandidates(authorEntity.name)
+        normalizedCandidates.forEach((nameKey) => {
+          lookupByName[nameKey] = {
+            id: authorEntity.id,
+            name: authorEntity.name,
+            numBooks: Number(authorEntity.numBooks || authorEntity.totalBooks || 0)
+          }
+        })
+
+        const resolvedCount = Number(authorEntity.numBooks || authorEntity.totalBooks || 0)
+        if (resolvedCount > 0) {
+          countById[authorEntity.id] = resolvedCount
+        }
+      })
+
+      this.$set(this.authorLookupByLibrary, libraryId, lookupByName)
+      this.$set(this.authorCountByIdByLibrary, libraryId, countById)
+      return lookupByName
+    },
+    async getNarratorStatsForLibrary(libraryId, narratorName) {
+      if (!libraryId || !narratorName) return { numBooks: 0, coverBooks: [] }
+
+      const normalizedName = this.getNormalizedPersonNameCandidates(narratorName)[0]
+      if (!normalizedName) return { numBooks: 0, coverBooks: [] }
+
+      const cacheKey = `${libraryId}::${normalizedName}`
+      if (this.narratorStatsByLibrary[cacheKey]) {
+        return this.narratorStatsByLibrary[cacheKey]
+      }
+
+      const searchParams = new URLSearchParams()
+      searchParams.set('filter', `narrators.${this.$encode(narratorName)}`)
+      searchParams.set('collapseseries', '0')
+      searchParams.set('limit', '4')
+      searchParams.set('page', '0')
+      searchParams.set('minified', '1')
+
+      const payload = await this.$nativeHttp.get(`/api/libraries/${libraryId}/items?${searchParams.toString()}`, { connectTimeout: 10000 }).catch((error) => {
+        console.error('[categories] Failed to load narrator stats', error)
+        return null
+      })
+
+      const results = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload) ? payload : []
+      const totalCandidates = [payload?.total, payload?.numResults, payload?.totalResults, payload?.count]
+
+      let numBooks = 0
+      for (let i = 0; i < totalCandidates.length; i += 1) {
+        const parsed = Number(totalCandidates[i])
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          numBooks = parsed
+          break
+        }
+      }
+
+      const narratorStats = {
+        numBooks: Number(numBooks || results.length || 0),
+        coverBooks: results.slice(0, 4)
+      }
+
+      this.$set(this.narratorStatsByLibrary, cacheKey, narratorStats)
+      return narratorStats
+    },
+    async getAuthorStatsForLibrary(libraryId, authorId) {
+      if (!libraryId || !authorId) return { numBooks: 0, coverBooks: [] }
+
+      const cacheKey = `${libraryId}::${authorId}`
+      if (this.authorStatsByLibraryAuthor[cacheKey]) {
+        return this.authorStatsByLibraryAuthor[cacheKey]
+      }
+
+      const searchParams = new URLSearchParams()
+      searchParams.set('filter', `authors.${this.$encode(authorId)}`)
+      searchParams.set('collapseseries', '0')
+      searchParams.set('limit', '4')
+      searchParams.set('page', '0')
+      searchParams.set('minified', '1')
+
+      const payload = await this.$nativeHttp.get(`/api/libraries/${libraryId}/items?${searchParams.toString()}`, { connectTimeout: 10000 }).catch((error) => {
+        console.error('[categories] Failed to load author stats', error)
+        return null
+      })
+
+      const results = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload) ? payload : []
+      const totalCandidates = [payload?.total, payload?.numResults, payload?.totalResults, payload?.count]
+
+      let numBooks = 0
+      for (let i = 0; i < totalCandidates.length; i += 1) {
+        const parsed = Number(totalCandidates[i])
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          numBooks = parsed
+          break
+        }
+      }
+
+      const authorStats = {
+        numBooks: Number(numBooks || results.length || 0),
+        coverBooks: results.slice(0, 4)
+      }
+
+      this.$set(this.authorStatsByLibraryAuthor, cacheKey, authorStats)
+      return authorStats
     },
     getSeriesCountForId(seriesId, libraryId = null) {
       if (!seriesId) return 0
@@ -861,6 +1130,300 @@ export default {
 
       return serverCategories
     },
+    async normalizeContinuePeopleCategories(serverCategories, authorLookup = null, options = {}) {
+      if (!Array.isArray(serverCategories) || !serverCategories.length) return serverCategories || []
+
+      const includeRemoteStats = options.includeRemoteStats !== false
+
+      const continueReadingShelves = serverCategories.filter((shelf) => this.isContinueReadingShelf(shelf) && shelf?.type === 'book' && Array.isArray(shelf?.entities) && shelf.entities.length)
+      if (!continueReadingShelves.length) return serverCategories
+
+      const authorMap = new Map()
+      const narratorMap = new Map()
+
+      const resolveAuthorRef = (authorRef) => {
+        if (!authorRef) return null
+
+        const resolvedLibraryId = authorRef.libraryId || this.currentLibraryId || null
+        if (authorRef.id) {
+          return {
+            ...authorRef,
+            libraryId: resolvedLibraryId,
+            numBooks: Number(authorRef.numBooks || this.authorCountByIdByLibrary[resolvedLibraryId]?.[authorRef.id] || 0)
+          }
+        }
+
+        const nameCandidates = this.getNormalizedPersonNameCandidates(authorRef.name)
+        if (!nameCandidates.length) return null
+
+        let resolved = null
+        nameCandidates.some((nameKey) => {
+          const lookupHit = authorLookup?.[nameKey]
+          if (lookupHit?.id) {
+            resolved = {
+              id: lookupHit.id,
+              name: lookupHit.name || authorRef.name,
+              libraryId: resolvedLibraryId,
+              numBooks: Number(lookupHit.numBooks || 0)
+            }
+            return true
+          }
+          return false
+        })
+
+        return resolved
+      }
+
+      const upsertAuthor = (authorRef, sourceBook, score = 0) => {
+        if (!authorRef?.id || !authorRef?.name) return
+
+        const bookId = sourceBook?.id || sourceBook?.libraryItemId || null
+        const existing = authorMap.get(authorRef.id)
+        if (!existing) {
+          const entry = {
+            id: authorRef.id,
+            name: authorRef.name,
+            libraryId: authorRef.libraryId || sourceBook?.libraryId || this.currentLibraryId || null,
+            numBooks: Number(authorRef.numBooks || 0),
+            _score: score || 0,
+            _bookIds: new Set(),
+            _books: []
+          }
+          if (bookId) {
+            entry._bookIds.add(bookId)
+            if (sourceBook && entry._books.length < 4) {
+              entry._books.push(sourceBook)
+            }
+          }
+          authorMap.set(authorRef.id, entry)
+          return
+        }
+
+        if ((!existing.name || existing.name === 'Unknown Author') && authorRef.name) {
+          existing.name = authorRef.name
+        }
+        if (!existing.libraryId && (authorRef.libraryId || sourceBook?.libraryId || this.currentLibraryId)) {
+          existing.libraryId = authorRef.libraryId || sourceBook?.libraryId || this.currentLibraryId || null
+        }
+        if (Number(authorRef.numBooks || 0) > Number(existing.numBooks || 0)) {
+          existing.numBooks = Number(authorRef.numBooks || 0)
+        }
+        if (score > existing._score) {
+          existing._score = score
+        }
+        if (bookId) {
+          existing._bookIds.add(bookId)
+          if (sourceBook && existing._books.length < 4) {
+            const alreadyAdded = existing._books.some((book) => {
+              const existingBookId = book?.id || book?.libraryItemId || null
+              return existingBookId && existingBookId === bookId
+            })
+            if (!alreadyAdded) {
+              existing._books.push(sourceBook)
+            }
+          }
+        }
+      }
+
+      const upsertNarrator = (narratorRef, sourceBook, score = 0) => {
+        if (!narratorRef?.name) return
+
+        const normalizedName = this.getNormalizedPersonNameCandidates(narratorRef.name)[0]
+        if (!normalizedName) return
+
+        const bookId = sourceBook?.id || sourceBook?.libraryItemId || null
+        const existing = narratorMap.get(normalizedName)
+        if (!existing) {
+          const entry = {
+            id: `narrator:${this.$encode(narratorRef.name)}`,
+            name: narratorRef.name,
+            libraryId: narratorRef.libraryId || sourceBook?.libraryId || this.currentLibraryId || null,
+            numBooks: 0,
+            _score: score || 0,
+            _bookIds: new Set(),
+            _books: []
+          }
+          if (bookId) {
+            entry._bookIds.add(bookId)
+            if (sourceBook && entry._books.length < 4) {
+              entry._books.push(sourceBook)
+            }
+          }
+          narratorMap.set(normalizedName, entry)
+          return
+        }
+
+        if (score > existing._score) {
+          existing._score = score
+        }
+        if (!existing.libraryId && (narratorRef.libraryId || sourceBook?.libraryId || this.currentLibraryId)) {
+          existing.libraryId = narratorRef.libraryId || sourceBook?.libraryId || this.currentLibraryId || null
+        }
+        if (bookId) {
+          existing._bookIds.add(bookId)
+          if (sourceBook && existing._books.length < 4) {
+            const alreadyAdded = existing._books.some((book) => {
+              const existingBookId = book?.id || book?.libraryItemId || null
+              return existingBookId && existingBookId === bookId
+            })
+            if (!alreadyAdded) {
+              existing._books.push(sourceBook)
+            }
+          }
+        }
+      }
+
+      continueReadingShelves.forEach((shelf) => {
+        shelf.entities.forEach((bookEntity) => {
+          const progress = this.getBookProgress(bookEntity)
+          const sourceBook = this.unwrapBookEntity(bookEntity) || bookEntity
+          const score = progress?.lastUpdate || sourceBook?.updatedAt || sourceBook?.addedAt || 0
+
+          const authorRefs = this.getAuthorRefsFromBookEntity(sourceBook)
+          authorRefs.forEach((authorRef) => {
+            const resolvedAuthorRef = resolveAuthorRef(authorRef)
+            upsertAuthor(resolvedAuthorRef, sourceBook, score)
+          })
+
+          const narratorRefs = this.getNarratorRefsFromBookEntity(sourceBook)
+          narratorRefs.forEach((narratorRef) => {
+            upsertNarrator(narratorRef, sourceBook, score)
+          })
+        })
+      })
+
+      const normalizedAuthors = Array.from(authorMap.values())
+        .sort((a, b) => {
+          if (b._score !== a._score) return b._score - a._score
+          return (a.name || '').localeCompare(b.name || '')
+        })
+        .map((authorEntity) => {
+          const observedBooks = authorEntity._bookIds?.size || 0
+          return {
+            id: authorEntity.id,
+            name: authorEntity.name || 'Unknown Author',
+            libraryId: this.currentLibraryId || null,
+            numBooks: Number(authorEntity.numBooks || observedBooks || 0),
+            coverBooks: Array.isArray(authorEntity._books) ? authorEntity._books.slice(0, 4) : []
+          }
+        })
+
+      const enrichedAuthors = includeRemoteStats
+        ? await Promise.all(
+            normalizedAuthors.map(async (authorEntity) => {
+              const resolvedLibraryId = authorEntity.libraryId || this.currentLibraryId || null
+              if (!resolvedLibraryId || !authorEntity.id) return authorEntity
+
+              const authorStats = await this.getAuthorStatsForLibrary(resolvedLibraryId, authorEntity.id)
+              return {
+                ...authorEntity,
+                numBooks: Number(authorStats.numBooks || authorEntity.numBooks || 0),
+                coverBooks: Array.isArray(authorStats.coverBooks) ? authorStats.coverBooks.slice(0, 4) : authorEntity.coverBooks
+              }
+            })
+          )
+        : normalizedAuthors
+
+      const filteredAuthors = includeRemoteStats ? enrichedAuthors.filter((authorEntity) => Number(authorEntity?.numBooks || 0) !== 1) : enrichedAuthors
+
+      const normalizedNarrators = Array.from(narratorMap.values())
+        .sort((a, b) => {
+          if (b._score !== a._score) return b._score - a._score
+          return (a.name || '').localeCompare(b.name || '')
+        })
+        .map((narratorEntity) => {
+          const observedBooks = narratorEntity._bookIds?.size || 0
+          return {
+            id: narratorEntity.id,
+            name: narratorEntity.name,
+            libraryId: narratorEntity.libraryId || this.currentLibraryId || null,
+            numBooks: Number(observedBooks || narratorEntity.numBooks || 0),
+            coverBooks: Array.isArray(narratorEntity._books) ? narratorEntity._books.slice(0, 4) : []
+          }
+        })
+
+      const enrichedNarrators = includeRemoteStats
+        ? await Promise.all(
+            normalizedNarrators.map(async (narratorEntity) => {
+              const resolvedLibraryId = narratorEntity.libraryId || this.currentLibraryId || null
+              if (!resolvedLibraryId) return narratorEntity
+
+              const narratorStats = await this.getNarratorStatsForLibrary(resolvedLibraryId, narratorEntity.name)
+              return {
+                ...narratorEntity,
+                numBooks: Number(narratorStats.numBooks || narratorEntity.numBooks || 0),
+                coverBooks: Array.isArray(narratorStats.coverBooks) ? narratorStats.coverBooks.slice(0, 4) : narratorEntity.coverBooks
+              }
+            })
+          )
+        : normalizedNarrators
+
+      const filteredNarrators = includeRemoteStats ? enrichedNarrators.filter((narratorEntity) => Number(narratorEntity?.numBooks || 0) !== 1) : enrichedNarrators
+
+      // Remove existing continue-people shelves first, then re-insert in deterministic order.
+      const peopleShelfIndexes = []
+      serverCategories.forEach((shelf, index) => {
+        if (this.isContinueAuthorsShelf(shelf) || this.isContinueNarratorsShelf(shelf)) {
+          peopleShelfIndexes.push(index)
+        }
+      })
+      peopleShelfIndexes
+        .sort((a, b) => b - a)
+        .forEach((index) => {
+          serverCategories.splice(index, 1)
+        })
+
+      const continueSeriesIndex = serverCategories.findIndex((shelf) => this.isContinueSeriesShelf(shelf))
+      const continueReadingIndex = serverCategories.findIndex((shelf) => this.isContinueReadingShelf(shelf))
+      const baseInsertIndex = continueSeriesIndex >= 0 ? continueSeriesIndex : continueReadingIndex
+
+      let insertIndex = baseInsertIndex >= 0 ? baseInsertIndex + 1 : 0
+
+      if (filteredAuthors.length) {
+        serverCategories.splice(insertIndex, 0, {
+          id: 'continue-authors',
+          label: `Continue ${this.$strings.LabelAuthors || 'Authors'}`,
+          type: 'authors',
+          entities: filteredAuthors
+        })
+        insertIndex += 1
+      }
+
+      if (filteredNarrators.length) {
+        serverCategories.splice(insertIndex, 0, {
+          id: 'continue-narrators',
+          label: `Continue ${this.$strings.LabelNarrators || 'Narrators'}`,
+          type: 'authors',
+          entities: filteredNarrators
+        })
+      }
+
+      return serverCategories
+    },
+    applyShelvesInOrder(incomingShelves) {
+      if (!Array.isArray(incomingShelves)) return
+
+      const existingById = {}
+      this.shelves.forEach((shelf) => {
+        if (shelf?.id) {
+          existingById[shelf.id] = shelf
+        }
+      })
+
+      const orderedShelves = incomingShelves.map((incomingShelf) => {
+        const existingShelf = incomingShelf?.id ? existingById[incomingShelf.id] : null
+        if (!existingShelf) return incomingShelf
+
+        existingShelf.label = incomingShelf.label
+        existingShelf.labelStringKey = incomingShelf.labelStringKey
+        existingShelf.type = incomingShelf.type
+        existingShelf.entities = incomingShelf.entities
+        existingShelf.localOnly = incomingShelf.localOnly
+        return existingShelf
+      })
+
+      this.shelves = orderedShelves
+    },
     getLocalMediaItemCategories() {
       const localMedia = this.localLibraryItems
       if (!localMedia?.length) return []
@@ -954,6 +1517,13 @@ export default {
     },
     async fetchCategories(options = {}) {
       const forceRefresh = !!options.force
+      if (!this.isPageActive) {
+        console.log('[categories] fetchCategories skipped because page is inactive')
+        return
+      }
+      if (this.currentLibraryId) {
+        this.loadedLibraryId = this.currentLibraryId
+      }
       console.log(`[categories] fetchCategories networkConnected=${this.networkConnected}, user=${!!this.user}, currentLibraryId=${this.currentLibraryId}, lastServerFetch=${this.lastServerFetch}, lastLocalFetch=${this.lastLocalFetch}, force=${forceRefresh}`)
 
       if (this.isFetchingCategories) {
@@ -964,8 +1534,22 @@ export default {
 
       try {
         // Check connection status once at the start and use it consistently throughout
+        const hasInternetConnection = !!this.networkConnected
         const isConnectedToServerWithInternet = this.user && this.currentLibraryId && this.networkConnected
-        console.log(`[categories] isConnectedToServerWithInternet=${isConnectedToServerWithInternet}`)
+        console.log(`[categories] hasInternetConnection=${hasInternetConnection} isConnectedToServerWithInternet=${isConnectedToServerWithInternet}`)
+
+        // Do not render local-only shelves when internet is available.
+        // Wait for server context (user + library) and keep/return to skeleton instead.
+        if (hasInternetConnection && !isConnectedToServerWithInternet) {
+          const showingLocalOnlyShelves = this.shelves.length > 0 && this.lastServerFetch === 0
+          if (showingLocalOnlyShelves) {
+            this.shelves = []
+          }
+          this.showingSkeleton = true
+          this.isLoading = true
+          console.log('[categories] Internet is available but server context is not ready yet. Waiting before rendering shelves.')
+          return
+        }
 
         // Check if we should skip this fetch (too soon after last fetch)
         if (isConnectedToServerWithInternet) {
@@ -1034,22 +1618,38 @@ export default {
           }
 
           // Helper function to merge local items with server categories
-          const mergeLocalWithServerCategories = async (serverPayload) => {
+          const mergeLocalWithServerCategories = async (serverPayload, options = {}) => {
+            const skipSeriesNormalization = !!options.skipSeriesNormalization
+            const includeRemotePeopleStats = options.includeRemotePeopleStats !== false
             const extractedCategories = this.extractServerCategories(serverPayload)
             if (!extractedCategories.length) return []
 
-            await this.enrichContinueShelvesWithExpandedSeries(extractedCategories)
+            if (!skipSeriesNormalization) {
+              await this.enrichContinueShelvesWithExpandedSeries(extractedCategories)
+            }
 
-            const shouldLoadSeriesLookup = extractedCategories.some((shelf) => this.isContinueReadingShelf(shelf) && shelf?.type === 'book' && Array.isArray(shelf?.entities) && shelf.entities.length)
-            const seriesLookup = shouldLoadSeriesLookup ? await this.getSeriesLookupForLibrary(this.currentLibraryId) : null
+            const shouldLoadContinueLookups = extractedCategories.some((shelf) => this.isContinueReadingShelf(shelf) && shelf?.type === 'book' && Array.isArray(shelf?.entities) && shelf.entities.length)
+            const seriesLookup = !skipSeriesNormalization && shouldLoadContinueLookups ? await this.getSeriesLookupForLibrary(this.currentLibraryId) : null
+            const authorLookup = shouldLoadContinueLookups ? await this.getAuthorLookupForLibrary(this.currentLibraryId) : null
 
             let normalizedCategories = extractedCategories
+            if (!skipSeriesNormalization) {
+              try {
+                const maybeNormalized = await this.normalizeContinueSeriesCategories(extractedCategories, seriesLookup)
+                normalizedCategories = Array.isArray(maybeNormalized) ? maybeNormalized : extractedCategories
+              } catch (error) {
+                console.error('[categories] Failed to normalize continue-series categories, falling back to raw server categories', error)
+                normalizedCategories = extractedCategories
+              }
+            }
+
             try {
-              const maybeNormalized = await this.normalizeContinueSeriesCategories(extractedCategories, seriesLookup)
-              normalizedCategories = Array.isArray(maybeNormalized) ? maybeNormalized : extractedCategories
+              const maybePeopleNormalized = await this.normalizeContinuePeopleCategories(normalizedCategories, authorLookup, {
+                includeRemoteStats: includeRemotePeopleStats
+              })
+              normalizedCategories = Array.isArray(maybePeopleNormalized) ? maybePeopleNormalized : normalizedCategories
             } catch (error) {
-              console.error('[categories] Failed to normalize continue-series categories, falling back to raw server categories', error)
-              normalizedCategories = extractedCategories
+              console.error('[categories] Failed to normalize continue-author/narrator categories, continuing without people shelves', error)
             }
 
             return attachLocalItemsToServerCategories(normalizedCategories)
@@ -1066,9 +1666,24 @@ export default {
 
           // Case 1: Server responded before timeout
           if (categoriesOrTimeout !== '__timeout__' && initialServerCategories.length) {
-            console.log('[categories] Server responded before timeout, displaying combined results immediately')
-            const fastServerCats = attachLocalItemsToServerCategories(initialServerCategories)
-            const combinedShelves = combineServerAndLocalShelves(fastServerCats)
+            const isInitialRenderPass = this.firstLoad || !this.shelves.length
+            let combinedShelves = []
+
+            if (isInitialRenderPass) {
+              // Initial render uses lightweight normalization to avoid first-load stalls.
+              // Heavy series/remote-stats enrichment continues in background.
+              console.log('[categories] Server responded before timeout during initial render, using lightweight continue-people normalization')
+              const enrichedServerCats = await mergeLocalWithServerCategories(categoriesOrTimeout, {
+                skipSeriesNormalization: true,
+                includeRemotePeopleStats: false
+              })
+              const initialServerCats = Array.isArray(enrichedServerCats) && enrichedServerCats.length ? enrichedServerCats : attachLocalItemsToServerCategories(initialServerCategories)
+              combinedShelves = combineServerAndLocalShelves(initialServerCats)
+            } else {
+              console.log('[categories] Server responded before timeout, displaying combined results immediately')
+              const fastServerCats = attachLocalItemsToServerCategories(initialServerCategories)
+              combinedShelves = combineServerAndLocalShelves(fastServerCats)
+            }
 
             // Update all state together to prevent flash of local content
             // Set flags first to ensure skeleton stays visible during shelf assignment
@@ -1079,6 +1694,22 @@ export default {
             this.showingSkeleton = false
             console.log('[categories] Combined server + local shelves displayed', this.shelves.length, this.lastServerFetch)
 
+            // Refresh people counts/filtering quickly without waiting for full series enrichment.
+            ;(async () => {
+              try {
+                const peopleEnrichedServerCats = await mergeLocalWithServerCategories(categoriesOrTimeout, {
+                  skipSeriesNormalization: true,
+                  includeRemotePeopleStats: true
+                })
+                if (!Array.isArray(peopleEnrichedServerCats) || !peopleEnrichedServerCats.length) return
+
+                const peopleEnrichedCombinedShelves = combineServerAndLocalShelves(peopleEnrichedServerCats)
+                this.applyShelvesInOrder(peopleEnrichedCombinedShelves)
+              } catch (error) {
+                console.error('[categories] Background continue-people enrichment failed', error)
+              }
+            })()
+
             // Continue heavier continue-series enrichment in background to avoid delaying first paint.
             ;(async () => {
               try {
@@ -1086,16 +1717,7 @@ export default {
                 if (!Array.isArray(enrichedServerCats) || !enrichedServerCats.length) return
 
                 const enrichedCombinedShelves = combineServerAndLocalShelves(enrichedServerCats)
-                enrichedCombinedShelves.forEach((incomingShelf) => {
-                  const existingShelf = this.shelves.find((s) => s && s.id === incomingShelf.id)
-                  if (existingShelf) {
-                    existingShelf.label = incomingShelf.label
-                    existingShelf.type = incomingShelf.type
-                    existingShelf.entities = incomingShelf.entities
-                  } else {
-                    this.shelves.push(incomingShelf)
-                  }
-                })
+                this.applyShelvesInOrder(enrichedCombinedShelves)
               } catch (error) {
                 console.error('[categories] Background continue-series enrichment failed', error)
               }
@@ -1122,21 +1744,10 @@ export default {
               if (delayedServerCategories.length) {
                 console.log('[categories] Server responded after timeout, silently merging results')
                 const serverCats = await mergeLocalWithServerCategories(categories)
+                const mergedShelves = combineServerAndLocalShelves(serverCats)
 
-                // Smoothly merge server results without causing visible reload
-                // Only update shelves that exist in server response
-                serverCats.forEach((scat) => {
-                  const existingShelf = this.shelves.find((s) => s && s.id === scat.id)
-                  if (existingShelf) {
-                    // Update existing shelf in-place to avoid DOM re-render flash
-                    existingShelf.label = scat.label
-                    existingShelf.type = scat.type
-                    existingShelf.entities = scat.entities
-                  } else {
-                    // Add new server-only shelf
-                    this.shelves.push(scat)
-                  }
-                })
+                // Preserve server-dictated shelf order while updating existing shelf objects.
+                this.applyShelvesInOrder(mergedShelves)
 
                 console.log('[categories] Server shelves silently merged after timeout', this.shelves.length)
               }
@@ -1214,17 +1825,22 @@ export default {
       })
     },
     initListeners() {
+      if (this.listenersInitialized) return
       this.$eventBus.$on('library-changed', this.libraryChanged)
       this.$nextTick(() => {
         this.bindPullToRefresh()
       })
+      this.listenersInitialized = true
     },
     removeListeners() {
+      if (!this.listenersInitialized) return
       this.$eventBus.$off('library-changed', this.libraryChanged)
       this.unbindPullToRefresh()
+      this.listenersInitialized = false
     }
   },
   async mounted() {
+    this.isPageActive = true
     if (this.$route.query.error) {
       this.$toast.error(this.$route.query.error)
     }
@@ -1245,6 +1861,27 @@ export default {
     console.log(`[categories] mounted so fetching categories`)
     this.fetchCategories()
   },
+  activated() {
+    this.isPageActive = true
+    this.initListeners()
+    if (!this.shelves.length) {
+      this.fetchCategories()
+      return
+    }
+
+    if (this.currentLibraryId && this.loadedLibraryId && this.currentLibraryId !== this.loadedLibraryId) {
+      this.showingSkeleton = true
+      this.isLoading = true
+      this.firstLoad = true
+      this.shelves = []
+      this.fetchCategories()
+    }
+  },
+  deactivated() {
+    this.isPageActive = false
+    this.cancelPullGesture(true)
+    this.removeListeners()
+  },
   beforeDestroy() {
     this.cancelPullGesture(true)
     this.removeListeners()
@@ -1256,6 +1893,11 @@ export default {
 .home-page-content {
   transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
   will-change: transform;
+}
+
+.home-shelf-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 260px;
 }
 
 .home-page-content.is-pull-dragging {

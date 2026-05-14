@@ -25,6 +25,17 @@ class ServerSocket extends EventEmitter {
   }
 
   connect(serverAddress, token) {
+    if (this.socket) {
+      console.log('[SOCKET] Resetting existing socket before creating a new connection')
+      this.removeListeners()
+      this.socket.disconnect()
+      this.socket = null
+    }
+
+    this.connected = false
+    this.isAuthenticated = false
+    this.$store.commit('setSocketConnected', false)
+
     this.serverAddress = serverAddress
 
     const serverUrl = new URL(serverAddress)
@@ -44,8 +55,14 @@ class ServerSocket extends EventEmitter {
   }
 
   logout() {
-    if (this.socket) this.socket.disconnect()
+    if (this.socket) {
+      this.socket.disconnect()
+    }
     this.removeListeners()
+    this.socket = null
+    this.connected = false
+    this.isAuthenticated = false
+    this.$store.commit('setSocketConnected', false)
   }
 
   setSocketListeners() {
@@ -99,6 +116,7 @@ class ServerSocket extends EventEmitter {
   onDisconnect(reason) {
     console.log('[SOCKET] Socket Disconnected: ' + reason)
     this.connected = false
+    this.isAuthenticated = false
     this.$store.commit('setSocketConnected', false)
     this.emit('connection-update', false)
   }

@@ -6,6 +6,7 @@
 
 <script>
 export default {
+  name: 'BookshelfLibraryPage',
   async asyncData({ store, params, query }) {
     // Set filter by
     if (query.filter) {

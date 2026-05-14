@@ -12,12 +12,14 @@
 
 <script>
 export default {
+  name: 'BookshelfAuthorsPage',
   data() {
     return {
       loading: true,
       authors: [],
       loadedLibraryId: null,
-      cardWidth: 200
+      cardWidth: 200,
+      listenersInitialized: false
     }
   },
   computed: {
@@ -75,20 +77,36 @@ export default {
           this.$router.replace('/bookshelf')
         }
       }
+    },
+    initListeners() {
+      if (this.listenersInitialized) return
+      this.$socket.$on('author_added', this.authorAdded)
+      this.$socket.$on('author_updated', this.authorUpdated)
+      this.$socket.$on('author_removed', this.authorRemoved)
+      this.$eventBus.$on('library-changed', this.libraryChanged)
+      this.listenersInitialized = true
+    },
+    removeListeners() {
+      if (!this.listenersInitialized) return
+      this.$socket.$off('author_added', this.authorAdded)
+      this.$socket.$off('author_updated', this.authorUpdated)
+      this.$socket.$off('author_removed', this.authorRemoved)
+      this.$eventBus.$off('library-changed', this.libraryChanged)
+      this.listenersInitialized = false
     }
   },
   mounted() {
     this.init()
-    this.$socket.$on('author_added', this.authorAdded)
-    this.$socket.$on('author_updated', this.authorUpdated)
-    this.$socket.$on('author_removed', this.authorRemoved)
-    this.$eventBus.$on('library-changed', this.libraryChanged)
+    this.initListeners()
+  },
+  activated() {
+    this.initListeners()
+  },
+  deactivated() {
+    this.removeListeners()
   },
   beforeDestroy() {
-    this.$socket.$off('author_added', this.authorAdded)
-    this.$socket.$off('author_updated', this.authorUpdated)
-    this.$socket.$off('author_removed', this.authorRemoved)
-    this.$eventBus.$off('library-changed', this.libraryChanged)
+    this.removeListeners()
   }
 }
 </script>

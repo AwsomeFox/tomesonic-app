@@ -14,18 +14,23 @@
 
     <!-- Content area -->
     <div class="flex-grow" :style="contentPaddingStyle">
-      <bookshelf-lazy-bookshelf :key="currentView" :page="currentView" />
+      <keep-alive>
+        <bookshelf-lazy-bookshelf v-if="currentView === 'collections'" key="collections" page="collections" />
+        <bookshelf-lazy-bookshelf v-else key="playlists" page="playlists" />
+      </keep-alive>
     </div>
   </div>
 </template>
 
 <script>
 export default {
+  name: 'BookshelfCollectionsPlaylistsPage',
   data() {
     return {
       currentView: 'collections',
       collectionsLoaded: false,
-      hasCollections: false
+      hasCollections: false,
+      listenersInitialized: false
     }
   },
   computed: {
@@ -37,8 +42,7 @@ export default {
     }
   },
   mounted() {
-    // Listen for entity count updates from LazyBookshelf
-    this.$eventBus.$on('bookshelf-total-entities', this.onEntityCountUpdated)
+    this.initListeners()
 
     // Check if we should default to playlists view based on route query or user preference
     if (this.$route.query.view === 'playlists' && this.userHasPlaylists) {
@@ -49,10 +53,26 @@ export default {
     }
     // Otherwise default to collections
   },
+  activated() {
+    this.initListeners()
+  },
+  deactivated() {
+    this.removeListeners()
+  },
   beforeDestroy() {
-    this.$eventBus.$off('bookshelf-total-entities', this.onEntityCountUpdated)
+    this.removeListeners()
   },
   methods: {
+    initListeners() {
+      if (this.listenersInitialized) return
+      this.$eventBus.$on('bookshelf-total-entities', this.onEntityCountUpdated)
+      this.listenersInitialized = true
+    },
+    removeListeners() {
+      if (!this.listenersInitialized) return
+      this.$eventBus.$off('bookshelf-total-entities', this.onEntityCountUpdated)
+      this.listenersInitialized = false
+    },
     selectView(view) {
       this.currentView = view
     },

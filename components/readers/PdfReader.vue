@@ -27,6 +27,7 @@
 
 <script>
 import pdf from '@teckel/vue-pdf'
+import { classifyAuthFailure } from '@/plugins/authFailure'
 
 export default {
   components: {
@@ -170,12 +171,14 @@ export default {
       try {
         console.log('[PdfReader] Handling refresh failure - logging out user')
 
+        const serverConnectionConfigId = this.$store.getters['user/getServerConnectionConfigId']
+
         // Clear store
         await this.$store.dispatch('user/logout')
 
-        if (this.$store.getters['user/getServerConnectionConfigId']) {
+        if (serverConnectionConfigId) {
           // Clear refresh token for server connection config
-          await this.$db.clearRefreshToken(this.$store.getters['user/getServerConnectionConfigId'])
+          await this.$db.clearRefreshToken(serverConnectionConfigId)
         }
 
         if (window.location.pathname !== '/connect') {
@@ -190,12 +193,22 @@ export default {
       this.isRefreshing = true
       // Cannot use axios with this pdf reader so we need to handle the refresh separately
       // Should work on migrating to a different pdf reader in the future
-      const newAccessToken = await this.$store.dispatch('user/refreshToken').catch((error) => {
+      let refreshFailure = null
+      const newAccessToken = await this.$store.dispatch('user/refreshToken', { throwOnFailure: true }).catch((error) => {
+        refreshFailure = error
         console.error('Failed to refresh token', error)
         return null
       })
       if (!newAccessToken) {
+        const failure = classifyAuthFailure(refreshFailure)
+        if (failure.isRetryable) {
+          this.$toast.error('Temporary connection issue while refreshing session. Please try again.')
+          this.isRefreshing = false
+          return
+        }
+
         this.handleRefreshFailure()
+        this.isRefreshing = false
         return
       }
 

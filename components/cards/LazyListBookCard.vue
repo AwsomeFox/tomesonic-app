@@ -10,7 +10,7 @@
       height: height + 'px',
       animationDelay: animationDelay + 'ms'
     }"
-    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'transition-all', 'duration-300', 'ease-expressive', 'loading-item', animationFromTop ? 'from-top' : 'from-bottom']"
+    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'transition-all', 'duration-300', 'ease-expressive', shouldPlayEntryAnimation ? 'loading-item' : '', shouldPlayEntryAnimation ? entryDirectionClass : '']"
   >
     <div class="h-full flex items-center relative">
       <!-- Loading cover placeholder -->
@@ -48,7 +48,7 @@
       height: height + 'px',
       animationDelay: animationDelay + 'ms'
     }"
-    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'cursor-pointer', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'hover:shadow-elevation-2', 'transition-all', 'duration-300', 'ease-expressive', 'loaded-item', animationFromTop ? 'from-top' : 'from-bottom']"
+    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'cursor-pointer', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'hover:shadow-elevation-2', 'transition-all', 'duration-300', 'ease-expressive', shouldPlayEntryAnimation ? 'loaded-item' : '', shouldPlayEntryAnimation ? entryDirectionClass : '']"
     @click="clickCard"
   >
     <div class="h-full flex items-center relative">
@@ -149,7 +149,9 @@ export default {
       animationDelay: 0,
       // true when the item should animate as if entering from the top (user scrolled up)
       animationFromTop: false,
-      _io: null
+      _io: null,
+      hasPlayedEntryAnimation: false,
+      _entryAnimationTimer: null
     }
   },
   watch: {
@@ -436,9 +438,23 @@ export default {
     },
     isMaterialSymbolPlaceholder() {
       return this.bookCoverSrc === 'material-symbol:book'
+    },
+    entryDirectionClass() {
+      return this.animationFromTop ? 'from-top' : 'from-bottom'
+    },
+    shouldPlayEntryAnimation() {
+      return !this.hasPlayedEntryAnimation
     }
   },
   methods: {
+    markEntryAnimationAsCompleted() {
+      if (this.hasPlayedEntryAnimation || this._entryAnimationTimer) return
+
+      this._entryAnimationTimer = setTimeout(() => {
+        this.hasPlayedEntryAnimation = true
+        this._entryAnimationTimer = null
+      }, 380)
+    },
     setSelectionMode(val) {
       this.isSelectionMode = val
       if (!val) this.selected = false
@@ -448,6 +464,7 @@ export default {
       // If entity is set after initial loading, stop loading state
       if (this.isLoading && libraryItem) {
         this.isLoading = false
+        this.markEntryAnimationAsCompleted()
       }
     },
     setLocalLibraryItem(localLibraryItem) {
@@ -608,6 +625,7 @@ export default {
 
           setTimeout(() => {
             this.isLoading = false
+            this.markEntryAnimationAsCompleted()
 
             if (this.bookMount) {
               this.setEntity(this.bookMount)
@@ -637,6 +655,7 @@ export default {
       this.animationDelay = (this.index % 6) * 28
       setTimeout(() => {
         this.isLoading = false
+        this.markEntryAnimationAsCompleted()
 
         if (this.bookMount) {
           this.setEntity(this.bookMount)
@@ -654,6 +673,10 @@ export default {
       if (this._io) {
         this._io.disconnect()
         this._io = null
+      }
+      if (this._entryAnimationTimer) {
+        clearTimeout(this._entryAnimationTimer)
+        this._entryAnimationTimer = null
       }
     } catch (e) {
       // ignore

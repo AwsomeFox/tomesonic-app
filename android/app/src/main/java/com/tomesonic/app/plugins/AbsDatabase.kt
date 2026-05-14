@@ -78,7 +78,7 @@ class AbsDatabase : Plugin() {
       call.reject("Folder data is required")
       return
     }
-    
+
     try {
       val localFolder = jacksonMapper.readValue(folderJson, LocalFolder::class.java)
       GlobalScope.launch(Dispatchers.IO) {
@@ -212,6 +212,20 @@ class AbsDatabase : Plugin() {
       }
 
       DeviceManager.serverConnectionConfig = serverConnectionConfig
+
+      Handler(Looper.getMainLooper()).post {
+        try {
+          if (mainActivity.isPlayerNotificationServiceInitialized()) {
+            Log.d(tag, "setCurrentServerConnectionConfig: Triggering Android Auto browse reload")
+            mainActivity.foregroundService.onServerConnectionConfigChanged()
+          } else {
+            Log.d(tag, "setCurrentServerConnectionConfig: PlayerNotificationService not initialized yet, skipping immediate browse reload")
+          }
+        } catch (e: Exception) {
+          Log.e(tag, "setCurrentServerConnectionConfig: Failed to trigger Android Auto browse reload", e)
+        }
+      }
+
       call.resolve(JSObject(jacksonMapper.writeValueAsString(DeviceManager.serverConnectionConfig)))
     }
   }

@@ -1,4 +1,5 @@
 import { CapacitorHttp } from '@capacitor/core'
+import { classifyAuthFailure } from '@/plugins/authFailure'
 
 export default function ({ store, $db, $socket }, inject) {
   const nativeHttp = {
@@ -43,7 +44,10 @@ export default function ({ store, $db, $socket }, inject) {
         }
         if (res.status >= 400) {
           console.error(`[nativeHttp] ${res.status} status for url "${url}"`)
-          throw new Error(res.data)
+          const requestError = new Error(typeof res.data === 'string' ? res.data : JSON.stringify(res.data || {}))
+          requestError.statusCode = res.status
+          requestError.responseData = res.data
+          throw requestError
         }
         return res.data
       })
@@ -116,9 +120,16 @@ export default function ({ store, $db, $socket }, inject) {
 
         return retryResponse.data
       } catch (error) {
-        console.error('[nativeHttp] Token refresh failed:', error)
+        const failure = classifyAuthFailure(error)
+        console.error(`[nativeHttp] Token refresh failed (${failure.reason})`, error)
 
-        // If refresh fails, redirect to login
+        // Keep current session for retryable failures (timeouts/network/server unavailable).
+        if (failure.isRetryable) {
+          console.warn('[nativeHttp] Token refresh failed transiently, preserving session state')
+          throw error
+        }
+
+        // Permanent auth failures must clear session and force re-authentication.
         await this.handleRefreshFailure(serverConnectionConfig?.id)
         throw error
       }
@@ -133,7 +144,9 @@ export default function ({ store, $db, $socket }, inject) {
     async refreshAccessToken(refreshToken, serverAddress) {
       try {
         if (!serverAddress) {
-          throw new Error('No server address available')
+          const noAddressError = new Error('No server address available')
+          noAddressError.statusCode = 400
+          throw noAddressError
         }
 
         console.log('[nativeHttp] Refreshing access token...')
@@ -149,13 +162,18 @@ export default function ({ store, $db, $socket }, inject) {
 
         if (response.status !== 200) {
           console.error('[nativeHttp] Token refresh request failed:', response.status)
-          return null
+          const refreshStatusError = new Error(`Token refresh request failed with status ${response.status}`)
+          refreshStatusError.statusCode = response.status
+          refreshStatusError.responseData = response.data
+          throw refreshStatusError
         }
 
         const userResponseData = response.data
         if (!userResponseData.user?.accessToken) {
           console.error('[nativeHttp] No access token in refresh response')
-          return null
+          const noTokenError = new Error('No access token in refresh response')
+          noTokenError.statusCode = 401
+          throw noTokenError
         }
 
         console.log('[nativeHttp] Successfully refreshed access token')
@@ -166,7 +184,20 @@ export default function ({ store, $db, $socket }, inject) {
         }
       } catch (error) {
         console.error('[nativeHttp] Failed to refresh access token:', error)
-        return null
+        if (error?.statusCode) {
+          throw error
+        }
+
+        const wrappedError = new Error(error?.message || 'Failed to refresh access token')
+        wrappedError.errorCode = error?.code || null
+
+        if (typeof error?.status === 'number') {
+          wrappedError.statusCode = error.status
+        } else if (typeof error?.code === 'number') {
+          wrappedError.statusCode = error.code
+        }
+
+        throw wrappedError
       }
     },
 
