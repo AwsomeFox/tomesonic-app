@@ -989,7 +989,11 @@ export default {
           // when all shelf/minified-derived sources still report 0/1.
           if (resolvedTotal <= 1) {
             const lookupByName = this.seriesIdLookupByLibrary[seriesEntity.libraryId] || {}
-            const mappedIdCandidates = seriesEntity?.name ? this.getNormalizedSeriesNameCandidates(seriesEntity.name).map((nameKey) => lookupByName[nameKey]).filter(Boolean) : []
+            const mappedIdCandidates = seriesEntity?.name
+              ? this.getNormalizedSeriesNameCandidates(seriesEntity.name)
+                  .map((nameKey) => lookupByName[nameKey])
+                  .filter(Boolean)
+              : []
 
             const endpointIdsToTry = Array.from(new Set([seriesEntity.id, ...mappedIdCandidates].filter(Boolean)))
             for (let i = 0; i < endpointIdsToTry.length; i += 1) {
@@ -1239,11 +1243,7 @@ export default {
               numBooks: seriesEntity.numBooks || seriesEntity.audiobookCount || seriesEntity.totalBooks || 0
             })
 
-            upsertSeries(
-              resolvedSeriesRef,
-              null,
-              seriesScore
-            )
+            upsertSeries(resolvedSeriesRef, null, seriesScore)
 
             seriesBooks.forEach((seriesBook) => {
               const resolvedBookSeriesRef = resolveSeriesRef({
@@ -1253,11 +1253,7 @@ export default {
                 numBooks: seriesEntity.numBooks || seriesEntity.audiobookCount || seriesEntity.totalBooks || 0
               })
 
-              upsertSeries(
-                resolvedBookSeriesRef,
-                seriesBook,
-                seriesBook?.userMediaProgress?.lastUpdate || 0
-              )
+              upsertSeries(resolvedBookSeriesRef, seriesBook, seriesBook?.userMediaProgress?.lastUpdate || 0)
             })
           })
         } else {
