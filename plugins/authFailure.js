@@ -1,34 +1,8 @@
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504])
 
-const RETRYABLE_MESSAGE_PATTERNS = [
-  /timeout/i,
-  /timed out/i,
-  /network request failed/i,
-  /failed to fetch/i,
-  /network is unreachable/i,
-  /connection reset/i,
-  /connection refused/i,
-  /temporarily unavailable/i,
-  /unable to resolve host/i,
-  /could not connect/i,
-  /offline/i,
-  /dns/i
-]
+const RETRYABLE_MESSAGE_PATTERNS = [/timeout/i, /timed out/i, /network request failed/i, /failed to fetch/i, /network is unreachable/i, /connection reset/i, /connection refused/i, /temporarily unavailable/i, /unable to resolve host/i, /could not connect/i, /offline/i, /dns/i]
 
-const PERMANENT_AUTH_MESSAGE_PATTERNS = [
-  /invalid token/i,
-  /token invalid/i,
-  /expired token/i,
-  /token expired/i,
-  /invalid refresh/i,
-  /refresh token.*(missing|invalid|expired|revoked)/i,
-  /invalid_grant/i,
-  /unauthorized/i,
-  /forbidden/i,
-  /authentication failed/i,
-  /no refresh token/i,
-  /oldauthtoken/i
-]
+const PERMANENT_AUTH_MESSAGE_PATTERNS = [/invalid token/i, /token invalid/i, /expired token/i, /token expired/i, /invalid refresh/i, /refresh token.*(missing|invalid|expired|revoked)/i, /invalid_grant/i, /unauthorized/i, /forbidden/i, /authentication failed/i, /no refresh token/i, /oldauthtoken/i]
 
 function toNumber(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -40,13 +14,7 @@ function toNumber(value) {
 }
 
 export function extractStatusCode(error) {
-  return (
-    toNumber(error?.statusCode) ||
-    toNumber(error?.status) ||
-    toNumber(error?.code) ||
-    toNumber(error?.response?.status) ||
-    null
-  )
+  return toNumber(error?.statusCode) || toNumber(error?.status) || toNumber(error?.code) || toNumber(error?.response?.status) || null
 }
 
 export function extractErrorCode(error) {

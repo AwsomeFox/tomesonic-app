@@ -329,7 +329,7 @@ export const actions = {
         // This shouldn't happen in normal circumstances
         console.error('[user] Refresh token missing during periodic verification')
         await AbsLogger.error({ tag: 'user', message: `Periodic verification detected missing refresh token for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
-        
+
         // We could potentially trigger a re-login flow here, but for now just log it
         // The next API call that requires refresh will trigger the re-login flow
       }
@@ -345,7 +345,6 @@ export const actions = {
     }
   }
 }
-
 
 export const mutations = {
   logout(state) {

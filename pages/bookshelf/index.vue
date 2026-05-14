@@ -402,10 +402,7 @@ export default {
     },
     getNormalizedPersonNameCandidates(name) {
       if (!name || typeof name !== 'string') return []
-      const normalized = name
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
+      const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ')
 
       if (!normalized) return []
       return [normalized]
@@ -477,9 +474,7 @@ export default {
         if (!rawValue) return []
 
         if (Array.isArray(rawValue)) {
-          return rawValue
-            .flatMap((value) => toNarratorNameList(value))
-            .filter((value, index, arr) => arr.indexOf(value) === index)
+          return rawValue.flatMap((value) => toNarratorNameList(value)).filter((value, index, arr) => arr.indexOf(value) === index)
         }
 
         if (typeof rawValue === 'string') {
@@ -520,14 +515,7 @@ export default {
 
       // Some book payloads expose narrators as a single string (e.g. narratorName)
       // rather than an array. Expand those into narrator refs as a fallback.
-      const fallbackNarratorNames = [
-        metadata?.narratorName,
-        metadata?.narrator,
-        source?.narratorName,
-        source?.narrator,
-        source?.media?.narratorName,
-        source?.media?.narrator
-      ]
+      const fallbackNarratorNames = [metadata?.narratorName, metadata?.narrator, source?.narratorName, source?.narrator, source?.media?.narratorName, source?.media?.narrator]
       fallbackNarratorNames.forEach((fallbackValue) => {
         toNarratorNameList(fallbackValue).forEach((narratorName) => {
           const parsed = parseNarratorRef(narratorName)
@@ -1336,9 +1324,7 @@ export default {
           )
         : normalizedAuthors
 
-      const filteredAuthors = includeRemoteStats
-        ? enrichedAuthors.filter((authorEntity) => Number(authorEntity?.numBooks || 0) !== 1)
-        : enrichedAuthors
+      const filteredAuthors = includeRemoteStats ? enrichedAuthors.filter((authorEntity) => Number(authorEntity?.numBooks || 0) !== 1) : enrichedAuthors
 
       const normalizedNarrators = Array.from(narratorMap.values())
         .sort((a, b) => {
@@ -1372,9 +1358,7 @@ export default {
           )
         : normalizedNarrators
 
-      const filteredNarrators = includeRemoteStats
-        ? enrichedNarrators.filter((narratorEntity) => Number(narratorEntity?.numBooks || 0) !== 1)
-        : enrichedNarrators
+      const filteredNarrators = includeRemoteStats ? enrichedNarrators.filter((narratorEntity) => Number(narratorEntity?.numBooks || 0) !== 1) : enrichedNarrators
 
       // Remove existing continue-people shelves first, then re-insert in deterministic order.
       const peopleShelfIndexes = []

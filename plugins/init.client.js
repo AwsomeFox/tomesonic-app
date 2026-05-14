@@ -339,9 +339,11 @@ export default ({ store, app }, inject) => {
 
     // Notify components that positions are ready
     if (typeof window !== 'undefined' && window.dispatchEvent) {
-      window.dispatchEvent(new CustomEvent('miniPlayerPositionsReady', {
-        detail: window.MINI_PLAYER_POSITIONS
-      }))
+      window.dispatchEvent(
+        new CustomEvent('miniPlayerPositionsReady', {
+          detail: window.MINI_PLAYER_POSITIONS
+        })
+      )
     }
   }
 

@@ -78,7 +78,7 @@ class AbsDatabase : Plugin() {
       call.reject("Folder data is required")
       return
     }
-    
+
     try {
       val localFolder = jacksonMapper.readValue(folderJson, LocalFolder::class.java)
       GlobalScope.launch(Dispatchers.IO) {
