@@ -76,6 +76,10 @@ export default {
         return this.$strings.ButtonPlaylists
       } else if (this.page === 'series') {
         return this.$strings.LabelSeries
+      } else if (this.page === 'author') {
+        return this.$strings.LabelAuthors
+      } else if (this.page === 'narrator') {
+        return this.$strings.LabelNarrators
       } else if (this.page === 'collections') {
         return this.$strings.ButtonCollections
       } else if (this.page === 'collections-playlists') {
@@ -88,6 +92,17 @@ export default {
     selectedSeriesName() {
       if (this.page === 'series' && this.$route.params.id && this.$store.state.globals.series) {
         return this.$store.state.globals.series.name
+      }
+      if (this.page === 'author' && this.$route.params.id && this.$route.query?.name) {
+        return this.$route.query.name
+      }
+      if (this.page === 'narrator' && this.$route.params.id) {
+        if (this.$route.query?.name) return this.$route.query.name
+        try {
+          return this.$decode(this.$route.params.id)
+        } catch (error) {
+          return null
+        }
       }
       return null
     },

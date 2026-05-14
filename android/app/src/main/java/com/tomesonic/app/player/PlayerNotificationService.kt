@@ -2673,6 +2673,48 @@ class PlayerNotificationService : MediaLibraryService() {
       session.notifyChildrenChanged(MediaLibrarySessionCallback.AUTO_MEDIA_ROOT, 0, null)
     }
   }
+
+  fun onServerConnectionConfigChanged() {
+    AbsLogger.info(tag, "Server connection config changed: refreshing Android Auto browse data")
+
+    if (!::mediaManager.isInitialized) {
+      Log.w(tag, "onServerConnectionConfigChanged: mediaManager not initialized yet")
+      return
+    }
+
+    Handler(Looper.getMainLooper()).post {
+      try {
+        mediaManager.checkResetServerItems()
+
+        // Trigger a quick root/library refresh immediately so Android Auto can request children again.
+        notifyAndroidAutoBrowseChanged(
+          MediaLibrarySessionCallback.AUTO_MEDIA_ROOT,
+          MediaLibrarySessionCallback.LIBRARIES_ROOT
+        )
+
+        // Then deterministically re-establish connection and preload browse data.
+        mediaManager.ensureServerConnectionForAndroidAuto {
+          mediaManager.preloadAndroidAutoBrowsingData {
+            if (::networkConnectivityManager.isInitialized) {
+              networkConnectivityManager.setFirstLoadDone(true)
+            }
+
+            notifyAndroidAutoBrowseChanged(
+              MediaLibrarySessionCallback.AUTO_MEDIA_ROOT,
+              MediaLibrarySessionCallback.LIBRARIES_ROOT,
+              MediaLibrarySessionCallback.RECENTLY_ROOT,
+              MediaLibrarySessionCallback.DISCOVER_NEW_BOOKS_ROOT,
+              MediaLibrarySessionCallback.DISCOVER_BOOKS_ROOT,
+              MediaLibrarySessionCallback.CONTINUE_ROOT,
+              MediaLibrarySessionCallback.CONTINUE_SERIES_ROOT
+            )
+          }
+        }
+      } catch (e: Exception) {
+        Log.e(tag, "onServerConnectionConfigChanged: Failed to refresh Android Auto browse data", e)
+      }
+    }
+  }
 }
 
 /**
@@ -3235,22 +3277,6 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
                   .setIsPlayable(false)
                   .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
                   .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_series))
-                  .build()
-              )
-              .build()
-          )
-
-          // Discover root
-          rootItems.add(
-            MediaItem.Builder()
-              .setMediaId(RECENTLY_ROOT)
-              .setMediaMetadata(
-                MediaMetadata.Builder()
-                  .setTitle("Discover")
-                  .setIsBrowsable(true)
-                  .setIsPlayable(false)
-                  .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                  .setArtworkUri(getUriToDrawable(service.applicationContext, R.drawable.ic_discovery))
                   .build()
               )
               .build()

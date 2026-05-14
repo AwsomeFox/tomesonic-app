@@ -6,6 +6,7 @@
 
 <script>
 export default {
+  name: 'BookshelfSeriesPage',
   computed: {
     contentPaddingStyle() {
       return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}

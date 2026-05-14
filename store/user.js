@@ -175,19 +175,33 @@ export const actions = {
     commit('libraries/setCurrentLibrary', null, { root: true })
     await AbsLogger.info({ tag: 'user', message: `Logged out from server ${state.serverConnectionConfig?.name || 'Not connected'}` })
   },
-  async refreshToken({ getters, commit, state }) {
+  async refreshToken({ getters, commit, state }, options = {}) {
+    const throwOnFailure = !!options?.throwOnFailure
+    const fail = (message, statusCode = null, errorCode = null) => {
+      if (!throwOnFailure) return null
+
+      const refreshError = new Error(message)
+      if (typeof statusCode === 'number') {
+        refreshError.statusCode = statusCode
+      }
+      if (errorCode !== null && errorCode !== undefined) {
+        refreshError.errorCode = errorCode
+      }
+      throw refreshError
+    }
+
     const serverConnectionConfigId = getters.getServerConnectionConfigId
     const refreshToken = await this.$db.getRefreshToken(serverConnectionConfigId)
     if (!refreshToken) {
       console.error('[user] No refresh token found for server config:', serverConnectionConfigId)
       await AbsLogger.error({ tag: 'user', message: `No refresh token found for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
-      return null
+      return fail('No refresh token found for server connection config', 401)
     }
 
     const serverAddress = getters.getServerAddress
     if (!serverAddress) {
       console.error('[user] No server address available for token refresh')
-      return null
+      return fail('No server address available for token refresh', 400)
     }
 
     try {
@@ -203,14 +217,14 @@ export const actions = {
       if (response.status !== 200) {
         console.error('[user] Token refresh request failed:', response.status)
         await AbsLogger.error({ tag: 'user', message: `Token refresh failed with status ${response.status} for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
-        return null
+        return fail(`Token refresh failed with status ${response.status}`, response.status)
       }
 
       const userResponseData = response.data
       if (!userResponseData.user?.accessToken) {
         console.error('[user] No access token in refresh response')
         await AbsLogger.error({ tag: 'user', message: `No access token in refresh response for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
-        return null
+        return fail('No access token in refresh response', 401)
       }
 
       // Update the config with new tokens
@@ -231,7 +245,7 @@ export const actions = {
       if (!savedConfig) {
         console.error('[user] Failed to save updated server connection config')
         await AbsLogger.error({ tag: 'user', message: `Failed to save updated tokens for server ${state.serverConnectionConfig?.name || 'Unknown'}` })
-        return null
+        return fail('Failed to save updated server connection config', 500)
       }
 
       // Verify the refresh token was actually saved
@@ -258,6 +272,23 @@ export const actions = {
     } catch (error) {
       console.error('[user] Token refresh error:', error)
       await AbsLogger.error({ tag: 'user', message: `Token refresh error for server ${state.serverConnectionConfig?.name || 'Unknown'}: ${error.message || error}` })
+
+      if (throwOnFailure) {
+        if (error?.statusCode) {
+          throw error
+        }
+        const refreshError = new Error(error?.message || 'Token refresh error')
+        if (typeof error?.status === 'number') {
+          refreshError.statusCode = error.status
+        } else if (typeof error?.code === 'number') {
+          refreshError.statusCode = error.code
+        }
+        if (error?.code !== undefined && error?.code !== null) {
+          refreshError.errorCode = error.code
+        }
+        throw refreshError
+      }
+
       return null
     }
   },

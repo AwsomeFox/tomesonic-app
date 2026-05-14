@@ -295,31 +295,29 @@ export default ({ store, app }, inject) => {
   // Calculate and store mini player bottom positions once at startup
   const calculateMiniPlayerPositions = () => {
     // Calculate the two positions the mini player should use
-    let withTabBarPosition = '88px' // Default fallback
+    let withTabBarPosition = '102px' // Default fallback
     let withoutTabBarPosition = '8px' // Default fallback
 
     try {
       // Get safe area bottom inset
       const safeInset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '')) || 0
-      const clampedSafeInset = Math.min(safeInset, 16) // Clamp like BookshelfNavBar does
+      const bottomPadding = Math.max(12, Math.min(safeInset + 10, 34))
 
       // Base navigation height (content area)
       const baseNavHeight = 56
 
-      // Total tab bar height when visible (base + safe area) - back to original calculation
-      const totalTabBarHeight = baseNavHeight + clampedSafeInset
+      // Total rendered tab bar height when visible (base + bottom safe-area padding)
+      const totalTabBarHeight = baseNavHeight + bottomPadding
 
       // Position 1: When tab bar is visible - above the tab bar with small gap
-      // Account for the tab bar's 1px top border by reducing the gap
       withTabBarPosition = `${totalTabBarHeight + 10}px`
 
       // Position 2: When tab bar is NOT visible - maintain same visual position from bottom
-      // This is the same distance from bottom as when tab bar is visible
-      withoutTabBarPosition = `${clampedSafeInset + 4}px`
+      withoutTabBarPosition = `${Math.max(8, Math.min(safeInset + 4, 24))}px`
 
       console.log('[Init] Mini player positions calculated:', {
         safeInset,
-        clampedSafeInset,
+        bottomPadding,
         baseNavHeight,
         totalTabBarHeight,
         withTabBar: withTabBarPosition,
@@ -562,6 +560,8 @@ export default ({ store, app }, inject) => {
 
   // Listen for app state changes to recalculate mini player positions when needed
   App.addListener('appStateChange', ({ isActive }) => {
+    eventBus.$emit('app-state-change', { isActive })
+
     if (isActive && window.recalculateMiniPlayerPositions) {
       // Recalculate positions when app becomes active (e.g., after background)
       setTimeout(() => {

@@ -1,9 +1,7 @@
 <template>
-  <div id="bookshelf-navbar" class="fixed bottom-0 left-0 right-0 w-full bg-surface-container shadow-elevation-3 z-80 border-t border-outline-variant border-opacity-20" :style="{ paddingBottom: 'clamp(0px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 16px)', boxSizing: 'border-box', overflow: 'visible', zIndex: 2147483646 }">
-    <!-- The inner navbar height includes the safe-area padding so the fixed bar
-      visually grows on devices with a bottom inset without requiring the
-      content area to subtract the inset separately. -->
-    <div id="bookshelf-navbar-inner" class="w-full flex items-center justify-around px-2" :style="{ minHeight: `var(--bottom-nav-height)` }">
+  <div id="bookshelf-navbar" class="fixed bottom-0 left-0 right-0 w-full bg-surface-container shadow-elevation-3 z-80 border-t border-outline-variant border-opacity-20" :style="{ paddingBottom: 'clamp(12px, calc(var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) + 10px), 34px)', boxSizing: 'border-box', overflow: 'visible', zIndex: 2147483646 }">
+    <!-- Keep visual nav content at M3 baseline height; safe-area padding is on the outer container. -->
+    <div id="bookshelf-navbar-inner" class="w-full flex items-center justify-around px-2" :style="{ minHeight: '56px' }">
       <!-- allows padding to increase height without clipping -->
       <nuxt-link v-for="item in items" :key="item.to" :to="item.to" class="flex flex-col items-center justify-center py-1.5 px-3 min-w-16 transition-all duration-200 ease-standard" :style="{ minHeight: '3.25rem' }" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
         <!-- Icon with Material 3 active state pill -->
@@ -13,7 +11,7 @@
         </div>
 
         <!-- Label -->
-        <p class="text-label-small font-medium leading-none mt-1 transition-colors duration-200" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
+        <p class="text-label-small font-medium leading-none mt-2 transition-colors duration-200" :class="routeName === item.routeName ? 'text-on-surface' : 'text-on-surface-variant'">
           {{ item.text }}
         </p>
       </nuxt-link>
@@ -147,19 +145,22 @@ export default {
       try {
         // Base height for the navigation bar (56px is Material 3 standard)
         const baseHeight = 56
-        // Add safe area inset
+        // Read safe area and mirror the same clamp used by the template padding.
         const safeInsetStr = getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-bottom')?.replace('px', '') || '0'
         const safeInset = parseFloat(safeInsetStr) || 0
-        const totalHeight = Math.min(baseHeight + safeInset, 80) // Cap at 80px
+        const bottomPadding = Math.max(12, Math.min(safeInset + 10, 34))
+        const totalHeight = Math.round(baseHeight + bottomPadding)
 
-        // Always set the base height (the safe area padding is handled separately in the template)
-        document.documentElement.style.setProperty('--bottom-nav-height', `${baseHeight}px`)
-        console.log('[BookshelfNavBar] Set --bottom-nav-height to:', baseHeight, 'px with safe inset:', safeInset, 'px')
+        // Expose full rendered nav height so layout and mini-player offsets stay aligned.
+        document.documentElement.style.setProperty('--bottom-nav-height', `${totalHeight}px`)
+        console.log('[BookshelfNavBar] Set --bottom-nav-height to:', totalHeight, 'px (base:', baseHeight, 'padding:', bottomPadding, 'safe inset:', safeInset, 'px)')
       } catch (e) {
         console.warn('[BookshelfNavBar] Error setting bottom nav height:', e)
-        document.documentElement.style.setProperty('--bottom-nav-height', '56px')
+        document.documentElement.style.setProperty('--bottom-nav-height', '68px')
       }
     }
+
+    this._updateBottomNavHeight = updateBottomNavHeight
 
     // Listen for safe area changes
     this.safeAreaObserver = new MutationObserver((mutations) => {
@@ -186,13 +187,15 @@ export default {
     }
     periodicCheck()
 
-    window.addEventListener('resize', updateBottomNavHeight)
+    window.addEventListener('resize', this._updateBottomNavHeight)
   },
   beforeDestroy() {
     if (this.safeAreaObserver) {
       this.safeAreaObserver.disconnect()
     }
-    window.removeEventListener('resize', () => {})
+    if (this._updateBottomNavHeight) {
+      window.removeEventListener('resize', this._updateBottomNavHeight)
+    }
   }
 }
 </script>

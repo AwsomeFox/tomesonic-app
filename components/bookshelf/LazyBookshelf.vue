@@ -57,7 +57,9 @@ import bookshelfCardsHelpers from '@/mixins/bookshelfCardsHelpers'
 export default {
   props: {
     page: String,
-    seriesId: String
+    seriesId: String,
+    authorId: String,
+    narratorName: String
   },
   mixins: [bookshelfCardsHelpers],
   data() {
@@ -81,11 +83,18 @@ export default {
       pagesLoaded: {},
       isFirstInit: false,
       pendingReset: false,
-      localLibraryItems: []
+      localLibraryItems: [],
+      listenersInitialized: false
     }
   },
   watch: {
     seriesId() {
+      this.resetEntities()
+    },
+    authorId() {
+      this.resetEntities()
+    },
+    narratorName() {
       this.resetEntities()
     }
   },
@@ -94,7 +103,7 @@ export default {
       return this.$store.state.user.user
     },
     isBookEntity() {
-      return this.entityName === 'books' || this.entityName === 'series-books'
+      return this.entityName === 'books' || this.entityName === 'series-books' || this.entityName === 'author-books' || this.entityName === 'narrator-books'
     },
     shelfDividerHeightIndex() {
       if (this.isBookEntity) return 4
@@ -117,7 +126,7 @@ export default {
       return this.page
     },
     hasFilter() {
-      if (this.page === 'series' || this.page === 'collections' || this.page === 'playlists') return false
+      if (this.page === 'series' || this.page === 'collections' || this.page === 'playlists' || this.page === 'author-books' || this.page === 'narrator-books') return false
       return this.filterBy !== 'all'
     },
     orderBy() {
@@ -257,7 +266,7 @@ export default {
         this.currentSFQueryString = this.buildSearchParams()
       }
 
-      const entityPath = this.entityName === 'books' || this.entityName === 'series-books' ? `items` : this.entityName
+      const entityPath = this.entityName === 'books' || this.entityName === 'series-books' || this.entityName === 'author-books' || this.entityName === 'narrator-books' ? `items` : this.entityName
       const sfQueryString = this.currentSFQueryString ? this.currentSFQueryString + '&' : ''
       const fullQueryString = `?${sfQueryString}limit=${fetchLimit}&page=${fetchPage}&minified=1&include=rssfeed,numEpisodesIncomplete`
 
@@ -514,6 +523,21 @@ export default {
         this.cardsHelpers.mountEntityCard(i)
       })
     },
+    saveScrollPosition() {
+      if (window['bookshelf-wrapper']) {
+        this.$store.commit('setLastBookshelfScrollData', { scrollTop: window['bookshelf-wrapper'].scrollTop || 0, path: this.routeFullPath, name: this.page })
+      }
+    },
+    restoreScrollPosition() {
+      if (!window['bookshelf-wrapper']) return
+      const savedScrollData = this.$store.state.lastBookshelfScrollData[this.page]
+      if (!savedScrollData) return
+
+      const { path, scrollTop } = savedScrollData
+      if (path === this.routeFullPath) {
+        window['bookshelf-wrapper'].scrollTop = scrollTop
+      }
+    },
     initSizeData() {
       var bookshelf = document.getElementById('bookshelf')
       var bookshelfWrapper = document.getElementById('bookshelf-wrapper')
@@ -574,15 +598,7 @@ export default {
           this.mountEntites(0, lastBookIndex)
         })
       }
-
-      // Set last scroll position for this bookshelf page
-      if (this.$store.state.lastBookshelfScrollData[this.page] && window['bookshelf-wrapper']) {
-        const { path, scrollTop } = this.$store.state.lastBookshelfScrollData[this.page]
-        if (path === this.routeFullPath) {
-          // Exact path match with query so use scroll position
-          window['bookshelf-wrapper'].scrollTop = scrollTop
-        }
-      }
+      this.restoreScrollPosition()
     },
     scroll(e) {
       if (!e || !e.target) return
@@ -607,6 +623,12 @@ export default {
         if (this.collapseBookSeries) {
           searchParams.set('collapseseries', 1)
         }
+      } else if (this.page === 'author-books') {
+        const authorFilterValue = this.authorId || '__missing_author__'
+        searchParams.set('filter', `authors.${this.$encode(authorFilterValue)}`)
+      } else if (this.page === 'narrator-books') {
+        const narratorFilterValue = this.narratorName || '__missing_narrator__'
+        searchParams.set('filter', `narrators.${this.$encode(narratorFilterValue)}`)
       } else {
         if (this.filterBy && this.filterBy !== 'all') {
           searchParams.set('filter', this.filterBy)
@@ -647,7 +669,7 @@ export default {
       }
     },
     libraryChanged() {
-      if (this.currentLibraryMediaType !== 'book' && (this.page === 'series' || this.page === 'collections' || this.page === 'series-books')) {
+      if (this.currentLibraryMediaType !== 'book' && (this.page === 'series' || this.page === 'collections' || this.page === 'series-books' || this.page === 'author-books' || this.page === 'narrator-books')) {
         this.$router.replace('/bookshelf')
         return
       }
@@ -665,7 +687,7 @@ export default {
     },
     libraryItemUpdated(libraryItem) {
       console.log('Item updated', libraryItem)
-      if (this.entityName === 'books' || this.entityName === 'series-books') {
+      if (this.entityName === 'books' || this.entityName === 'series-books' || this.entityName === 'author-books' || this.entityName === 'narrator-books') {
         var indexOf = this.entities.findIndex((ent) => ent && ent.id === libraryItem.id)
         if (indexOf >= 0) {
           this.entities[indexOf] = libraryItem
@@ -683,7 +705,7 @@ export default {
       }
     },
     libraryItemRemoved(libraryItem) {
-      if (this.entityName === 'books' || this.entityName === 'series-books') {
+      if (this.entityName === 'books' || this.entityName === 'series-books' || this.entityName === 'author-books' || this.entityName === 'narrator-books') {
         var indexOf = this.entities.findIndex((ent) => ent && ent.id === libraryItem.id)
         if (indexOf >= 0) {
           this.entities = this.entities.filter((ent) => ent.id !== libraryItem.id)
@@ -710,6 +732,7 @@ export default {
       }, 50)
     },
     initListeners() {
+      if (this.listenersInitialized) return
       const bookshelf = document.getElementById('bookshelf-wrapper')
       if (bookshelf) {
         bookshelf.addEventListener('scroll', this.scroll)
@@ -730,8 +753,10 @@ export default {
       } else {
         document.addEventListener('orientationchange', this.screenOrientationChange)
       }
+      this.listenersInitialized = true
     },
     removeListeners() {
+      if (!this.listenersInitialized) return
       const bookshelf = document.getElementById('bookshelf-wrapper')
       if (bookshelf) {
         bookshelf.removeEventListener('scroll', this.scroll)
@@ -752,6 +777,7 @@ export default {
       } else {
         document.removeEventListener('orientationchange', this.screenOrientationChange)
       }
+      this.listenersInitialized = false
     }
   },
   updated() {
@@ -763,13 +789,18 @@ export default {
     this.init()
     this.initListeners()
   },
+  activated() {
+    this.routeFullPath = window.location.pathname + (window.location.search || '')
+    this.restoreScrollPosition()
+    this.initListeners()
+  },
+  deactivated() {
+    this.saveScrollPosition()
+    this.removeListeners()
+  },
   beforeDestroy() {
     this.removeListeners()
-
-    // Set bookshelf scroll position for specific bookshelf page and query
-    if (window['bookshelf-wrapper']) {
-      this.$store.commit('setLastBookshelfScrollData', { scrollTop: window['bookshelf-wrapper'].scrollTop || 0, path: this.routeFullPath, name: this.page })
-    }
+    this.saveScrollPosition()
   }
 }
 </script>

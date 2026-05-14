@@ -895,7 +895,16 @@ export default {
       }
 
       // Fallback if positions haven't been calculated yet
-      const fallback = this.isInBookshelfContext ? '88px' : '8px'
+      let fallback = '8px'
+      if (this.isInBookshelfContext) {
+        try {
+          const navHeightRaw = getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-height') || ''
+          const navHeight = parseFloat(navHeightRaw.replace('px', '')) || 92
+          fallback = `${Math.round(navHeight + 10)}px`
+        } catch (e) {
+          fallback = '102px'
+        }
+      }
       console.log('[AudioPlayer] Using fallback position:', fallback, 'positions ready:', this.miniPlayerPositionsReady, 'global positions:', !!window.MINI_PLAYER_POSITIONS)
       return fallback
     },
@@ -2337,7 +2346,7 @@ export default {
 .playerContainer {
   height: 80px;
   background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(14px);
   /* border-radius is driven by playerSheetStyle now */
   box-shadow: var(--md-sys-elevation-surface-container-high);
   margin: 0;
@@ -2347,7 +2356,7 @@ export default {
 /* #playerContent is now the mini bar layer (position:absolute bottom of sheet) */
 #playerContent {
   background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(14px);
   margin: 0;
 }
 
@@ -2357,8 +2366,7 @@ export default {
 }
 
 #playerTrack {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: margin;
+  transition: margin 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   bottom: 43px;
 }
 #progressBarsContainer {
@@ -2373,8 +2381,7 @@ export default {
   left: 16px;
   height: var(--cover-image-height-collapsed);
   width: var(--cover-image-width-collapsed);
-  transition: all 0.25s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: left, bottom, width, height;
+  transition: left 0.25s cubic-bezier(0.39, 0.575, 0.565, 1), bottom 0.25s cubic-bezier(0.39, 0.575, 0.565, 1), width 0.25s cubic-bezier(0.39, 0.575, 0.565, 1), height 0.25s cubic-bezier(0.39, 0.575, 0.565, 1), border-radius 0.2s cubic-bezier(0.39, 0.575, 0.565, 1);
   transform-origin: left bottom;
   border-radius: 8px;
   overflow: hidden;
@@ -2382,8 +2389,7 @@ export default {
 }
 
 .title-author-texts {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: left, bottom, width, height;
+  transition: left 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), bottom 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), width 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), height 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   transform-origin: left bottom;
 
   width: var(--title-author-width-collapsed);
@@ -2392,16 +2398,14 @@ export default {
   text-align: left;
 }
 .title-author-texts .title-text {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: font-size;
+  transition: font-size 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   font-size: 0.85rem;
   line-height: 1.5;
   color: var(--md-sys-color-on-surface);
   font-weight: 500;
 }
 .title-author-texts .author-text {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: font-size;
+  transition: font-size 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   font-size: 0.75rem;
   line-height: 1.2;
   color: var(--md-sys-color-on-surface-variant);
@@ -2423,23 +2427,20 @@ export default {
 }
 
 #playerControls {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: width, bottom;
+  transition: width 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), bottom 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), padding-left 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), padding-right 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
   width: 128px;
   padding-right: 16px;
   bottom: 78px;
 }
 #playerControls .jump-icon {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: font-size;
+  transition: font-size 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), color 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
 
   margin: 0px 0px;
   font-size: 1.6rem;
   color: var(--md-sys-color-on-surface-variant);
 }
 #playerControls .play-btn {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: padding, margin, height, width, min-width, min-height;
+  transition: padding 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), margin 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), height 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), width 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), min-width 0.15s cubic-bezier(0.39, 0.575, 0.565, 1), min-height 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
 
   height: 48px;
   width: 48px;
@@ -2450,8 +2451,7 @@ export default {
   box-shadow: var(--md-sys-elevation-fab-primary);
 }
 #playerControls .play-btn .material-symbols {
-  transition: all 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
-  transition-property: font-size;
+  transition: font-size 0.15s cubic-bezier(0.39, 0.575, 0.565, 1);
 
   font-size: 1.75rem;
   color: var(--md-sys-color-on-primary);
@@ -2563,7 +2563,7 @@ export default {
   border-radius: 20px;
   overflow: hidden;
   box-shadow: var(--md-sys-elevation-surface-container-high);
-  transition: all 0.3s cubic-bezier(0.39, 0.575, 0.565, 1);
+  transition: transform 0.3s cubic-bezier(0.39, 0.575, 0.565, 1), box-shadow 0.3s cubic-bezier(0.39, 0.575, 0.565, 1);
   max-height: 75vh;
   max-width: 100%;
   width: fit-content;

@@ -1,4 +1,5 @@
 import { AbsDatabase } from './capacitor/AbsDatabase'
+import { classifyAuthFailure } from '@/plugins/authFailure'
 
 class DbService {
   constructor() {}
@@ -143,6 +144,13 @@ export default ({ app, store }, inject) => {
   // Listen for token refresh failure events from native app
   AbsDatabase.addListener('onTokenRefreshFailure', async (data) => {
     console.log('[db] onTokenRefreshFailure', data)
+    const failure = classifyAuthFailure(data)
+
+    if (data?.canRetry || failure.isRetryable) {
+      console.warn('[db] Token refresh failure is retryable. Keeping current session and server selection.')
+      return
+    }
+
     // Clear store and redirect to login page
     await store.dispatch('user/logout')
     if (window.location.pathname !== '/connect') {

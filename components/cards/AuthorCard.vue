@@ -2,11 +2,15 @@
   <div class="author-card-root">
     <div class="author-card state-layer" :style="{ width: width + 'px', height: width + 'px' }" @click="clickCard">
       <div class="author-image-container" :class="{ 'image-only': nameBelow }">
-        <div v-show="author && !imageReady" class="author-placeholder">
+        <div v-show="author && !imageReady && !hasCoverCollage" class="author-placeholder">
           <span class="material-symbols text-on-surface-variant" :style="{ fontSize: sizeMultiplier * 2.25 + 'rem' }">person</span>
         </div>
 
-        <covers-author-image v-if="author" :author="author" rounded="none" class="w-full h-full transition-opacity duration-200" :style="{ opacity: imageReady ? 1 : 0 }" @imageLoaded="imageLoaded" />
+        <div v-if="hasCoverCollage" class="author-collage" :class="`count-${Math.min(coverBookItems.length, 4)}`">
+          <img v-for="(book, idx) in coverBookItems.slice(0, 4)" :key="book.id || idx" :src="coverSrcFor(book)" class="author-collage-item" />
+        </div>
+
+        <covers-author-image v-if="author && showImage && authorId && !hasCoverCollage" :author="author" rounded="none" class="w-full h-full transition-opacity duration-200" :style="{ opacity: imageReady ? 1 : 0 }" @imageLoaded="imageLoaded" />
       </div>
 
       <div v-if="!searching && !nameBelow" class="author-meta">
@@ -43,7 +47,15 @@ export default {
       type: Number,
       default: 1
     },
-    nameBelow: Boolean
+    nameBelow: Boolean,
+    navigationMode: {
+      type: String,
+      default: 'library-filter-author'
+    },
+    showImage: {
+      type: Boolean,
+      default: true
+    }
   },
   data() {
     return {
@@ -61,22 +73,71 @@ export default {
     name() {
       return this._author.name || ''
     },
+    coverBookItems() {
+      if (Array.isArray(this._author.coverBooks) && this._author.coverBooks.length) {
+        return this._author.coverBooks.slice(0, 4)
+      }
+      if (Array.isArray(this._author.books) && this._author.books.length) {
+        return this._author.books.slice(0, 4)
+      }
+      return []
+    },
+    hasCoverCollage() {
+      return this.coverBookItems.length > 0
+    },
     numBooks() {
-      return this._author.numBooks || 0
+      const parsed = Number(this._author.numBooks)
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed
+      }
+      return this.coverBookItems.length || 0
     }
   },
   methods: {
     imageLoaded() {
       this.imageReady = true
     },
+    coverSrcFor(book) {
+      return this.$store.getters['globals/getLibraryItemCoverSrc'](book, '')
+    },
     clickCard() {
       if (!this.author) return
+
+      if (this.navigationMode === 'author-detail') {
+        if (!this.authorId) return
+        this.$router.push({
+          path: `/bookshelf/author/${this.authorId}`,
+          query: this.name ? { name: this.name } : {}
+        })
+        return
+      }
+
+      if (this.navigationMode === 'narrator-detail') {
+        if (!this.name) return
+        this.$router.push({
+          path: `/bookshelf/narrator/${this.$encode(this.name)}`,
+          query: { name: this.name }
+        })
+        return
+      }
+
+      if (!this.authorId) return
       this.$router.push(`/bookshelf/library?filter=authors.${this.$encode(this.authorId)}`)
     }
   },
   watch: {
     authorId() {
-      this.imageReady = false
+      this.imageReady = this.hasCoverCollage
+    },
+    hasCoverCollage: {
+      immediate: true,
+      handler(newVal) {
+        if (newVal) {
+          this.imageReady = true
+        } else {
+          this.imageReady = false
+        }
+      }
     }
   },
   mounted() {}
@@ -129,6 +190,39 @@ export default {
   align-items: center;
   justify-content: center;
   background: rgb(var(--md-sys-color-surface-container));
+}
+
+.author-collage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+}
+
+.author-collage.count-1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.author-collage.count-2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+.author-collage.count-3,
+.author-collage.count-4 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.author-collage.count-3 .author-collage-item:nth-child(3) {
+  grid-column: 1 / span 2;
+}
+
+.author-collage-item {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
 }
 
 .author-meta {

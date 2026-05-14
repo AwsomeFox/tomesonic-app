@@ -10,6 +10,7 @@
 
 <script>
 export default {
+  name: 'BookshelfLatestPage',
   data() {
     return {
       processing: false,
@@ -17,7 +18,8 @@ export default {
       totalEpisodes: 0,
       currentPage: 0,
       localLibraryItems: [],
-      loadedLibraryId: null
+      loadedLibraryId: null,
+      listenersInitialized: false
     }
   },
   watch: {},
@@ -98,17 +100,33 @@ export default {
       } else {
         this.localLibraryItems.push(item)
       }
+    },
+    initListeners() {
+      if (this.listenersInitialized) return
+      this.$eventBus.$on('library-changed', this.libraryChanged)
+      this.$eventBus.$on('new-local-library-item', this.newLocalLibraryItem)
+      this.listenersInitialized = true
+    },
+    removeListeners() {
+      if (!this.listenersInitialized) return
+      this.$eventBus.$off('library-changed', this.libraryChanged)
+      this.$eventBus.$off('new-local-library-item', this.newLocalLibraryItem)
+      this.listenersInitialized = false
     }
   },
   mounted() {
     this.loadRecentEpisodes()
     this.loadLocalPodcastLibraryItems()
-    this.$eventBus.$on('library-changed', this.libraryChanged)
-    this.$eventBus.$on('new-local-library-item', this.newLocalLibraryItem)
+    this.initListeners()
+  },
+  activated() {
+    this.initListeners()
+  },
+  deactivated() {
+    this.removeListeners()
   },
   beforeDestroy() {
-    this.$eventBus.$off('library-changed', this.libraryChanged)
-    this.$eventBus.$off('new-local-library-item', this.newLocalLibraryItem)
+    this.removeListeners()
   }
 }
 </script>

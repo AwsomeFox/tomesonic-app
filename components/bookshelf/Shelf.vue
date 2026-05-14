@@ -1,19 +1,19 @@
 <template>
   <div class="w-full relative">
-    <div v-if="altViewEnabled" class="px-5 pb-2 pt-3 shelf-loading">
+    <div v-if="altViewEnabled" class="px-5 pb-2 pt-3">
       <p class="font-semibold" :style="{ fontSize: sizeMultiplier + 'rem' }">{{ label }}</p>
     </div>
 
     <div class="flex items-end px-3 max-w-full overflow-x-auto shelf-scroll-container" :class="altViewEnabled ? '' : 'bookshelfRow'" :style="{ height: shelfHeight + 'px', paddingBottom: entityPaddingBottom + 'px' }">
       <template v-for="(entity, index) in entities">
-        <cards-lazy-book-card v-if="type === 'book' || type === 'podcast'" :key="entity.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
-        <cards-lazy-book-card v-if="type === 'episode'" :key="entity.recentEpisode.id" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
-        <cards-lazy-series-card v-else-if="type === 'series'" :key="entity.id" :index="index" :series-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" is-categorized class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
-        <cards-author-card v-else-if="type === 'authors'" :key="entity.id" :width="bookWidth" :height="bookWidth" :author="entity" :size-multiplier="sizeMultiplier" class="mx-1" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-lazy-book-card v-if="type === 'book' || type === 'podcast'" :key="`book-${entity.id}-${index}`" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-lazy-book-card v-if="type === 'episode'" :key="`episode-${entity.recentEpisode.id}-${index}`" :index="index" :book-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-lazy-series-card v-else-if="type === 'series'" :key="`series-${entity.id}-${index}`" :index="index" :series-mount="entity" :width="bookWidth" :height="entityHeight" :book-cover-aspect-ratio="bookCoverAspectRatio" :is-alt-view-enabled="altViewEnabled" is-categorized class="mx-1 relative" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
+        <cards-author-card v-else-if="type === 'authors'" :key="`author-${entity.id}-${index}`" :width="bookWidth" :height="bookWidth" :author="entity" :size-multiplier="sizeMultiplier" :navigation-mode="authorCardNavigationMode" :show-image="showAuthorImage" class="mx-1" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
       </template>
     </div>
 
-    <div v-if="!altViewEnabled" class="absolute text-center categoryPlacardtransform z-30 bottom-0.5 left-4 md:left-8 w-36 rounded-md shelf-loading" style="height: 18px">
+    <div v-if="!altViewEnabled" class="absolute text-center categoryPlacardtransform z-30 bottom-0.5 left-4 md:left-8 w-36 rounded-md" style="height: 18px">
       <div class="w-full h-full flex items-center justify-center rounded-sm border shinyBlack">
         <p class="transform text-xs">{{ label }}</p>
       </div>
@@ -27,6 +27,10 @@ export default {
   props: {
     label: String,
     type: String,
+    shelfId: {
+      type: String,
+      default: ''
+    },
     entities: {
       type: Array,
       default: () => []
@@ -77,6 +81,17 @@ export default {
     },
     altViewEnabled() {
       return this.$store.getters['getAltViewEnabled']
+    },
+    isNarratorContinueShelf() {
+      return this.shelfId === 'continue-narrators'
+    },
+    authorCardNavigationMode() {
+      if (this.shelfId === 'continue-authors') return 'author-detail'
+      if (this.shelfId === 'continue-narrators') return 'narrator-detail'
+      return 'library-filter-author'
+    },
+    showAuthorImage() {
+      return !this.isNarratorContinueShelf
     }
   },
   methods: {

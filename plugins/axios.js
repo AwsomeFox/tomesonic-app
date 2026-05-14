@@ -1,3 +1,5 @@
+import { classifyAuthFailure } from '@/plugins/authFailure'
+
 export default function ({ $axios, store, $db }) {
   // Track if we're currently refreshing to prevent multiple refresh attempts
   let isRefreshing = false
@@ -78,7 +80,10 @@ export default function ({ $axios, store, $db }) {
     if (code === 401 && !originalRequest._retry) {
       // Skip refresh for auth endpoints to prevent infinite loops
       if (originalRequest.url.endsWith('/auth/refresh') || originalRequest.url.endsWith('/login')) {
-        await handleRefreshFailure(store.getters['user/getServerConnectionConfigId'])
+        const refreshEndpointFailure = classifyAuthFailure(error)
+        if (!refreshEndpointFailure.isRetryable) {
+          await handleRefreshFailure(store.getters['user/getServerConnectionConfigId'])
+        }
         return Promise.reject(error)
       }
 
@@ -105,10 +110,11 @@ export default function ({ $axios, store, $db }) {
       try {
         // Attempt to refresh the token
         // Updates store if successful, otherwise clears store and throw error
-        const newAccessToken = await store.dispatch('user/refreshToken')
+        const newAccessToken = await store.dispatch('user/refreshToken', { throwOnFailure: true })
         if (!newAccessToken) {
-          console.error('No new access token received')
-          return Promise.reject(error)
+          const noAccessTokenError = new Error('No new access token received')
+          noAccessTokenError.statusCode = 401
+          throw noAccessTokenError
         }
 
         // Update the original request with new token
@@ -128,7 +134,10 @@ export default function ({ $axios, store, $db }) {
         // Process queued requests with error
         processQueue(refreshError, null)
 
-        await handleRefreshFailure(store.getters['user/getServerConnectionConfigId'])
+        const refreshFailure = classifyAuthFailure(refreshError)
+        if (!refreshFailure.isRetryable) {
+          await handleRefreshFailure(store.getters['user/getServerConnectionConfigId'])
+        }
 
         return Promise.reject(refreshError)
       } finally {
