@@ -29,8 +29,16 @@ export default {
   },
   methods: {
     syncAuthorFromRoute() {
-      const routeAuthorId = this.$route?.params?.id
-      if (!routeAuthorId) return
+      const encodedRouteAuthorId = this.$route?.params?.id
+      if (!encodedRouteAuthorId) return
+
+      let routeAuthorId = encodedRouteAuthorId
+      try {
+        routeAuthorId = decodeURIComponent(encodedRouteAuthorId)
+      } catch (error) {
+        routeAuthorId = encodedRouteAuthorId
+      }
+
       this.authorId = routeAuthorId
     }
   },

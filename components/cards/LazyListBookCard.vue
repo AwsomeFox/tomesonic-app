@@ -480,9 +480,9 @@ export default {
         var router = this.$router || this.$nuxt.$router
         if (router) {
           if (this.collapsedSeries) {
-            router.push(`/bookshelf/series/${this.collapsedSeries.id}`)
+            router.push(`/bookshelf/series/${encodeURIComponent(String(this.collapsedSeries.id))}`)
           } else if (this.isSeriesEntity) {
-            router.push(`/bookshelf/series/${this.libraryItemId}`)
+            router.push(`/bookshelf/series/${encodeURIComponent(String(this.libraryItemId))}`)
           } else if (this.isCollectionEntity) {
             router.push(`/collection/${this.libraryItemId}`)
           } else if (this.isPlaylistEntity) {

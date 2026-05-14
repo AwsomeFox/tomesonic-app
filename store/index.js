@@ -27,7 +27,12 @@ export const state = () => ({
   isNetworkListenerInit: false,
   serverSettings: null,
   lastBookshelfScrollData: {},
-  lastItemScrollData: {}
+  lastItemScrollData: {},
+  routeTransitionName: 'm3-forward',
+  routeTransitionMode: 'hierarchical',
+  routeTransitionDirection: 'forward',
+  routeTransitionNonce: 0,
+  routeNavigationEvent: 'push'
 })
 
 export const getters = {
@@ -74,6 +79,21 @@ export const getters = {
   getAltViewEnabled: (state) => {
     if (!state.deviceData?.deviceSettings) return true
     return state.deviceData.deviceSettings.enableAltView
+  },
+  getHideNonAudiobooksGlobal: (state, getters, rootState, rootGetters) => {
+    return !!rootGetters['user/getUserSetting']('hideNonAudiobooksGlobal')
+  },
+  getRouteTransitionName: (state) => {
+    return state.routeTransitionName || 'm3-forward'
+  },
+  getRouteTransitionMode: (state) => {
+    return state.routeTransitionMode || 'hierarchical'
+  },
+  getRouteTransitionDirection: (state) => {
+    return state.routeTransitionDirection || 'forward'
+  },
+  getRouteTransitionNonce: (state) => {
+    return Number(state.routeTransitionNonce || 0)
   },
   getOrientationLockSetting: (state) => {
     return state.deviceData?.deviceSettings?.lockOrientation
@@ -281,6 +301,24 @@ export const mutations = {
   },
   setShowSideDrawer(state, val) {
     state.showSideDrawer = val
+  },
+  setRouteNavigationEvent(state, eventType) {
+    const normalizedType = typeof eventType === 'string' ? eventType.toLowerCase() : 'push'
+    if (normalizedType !== 'pop' && normalizedType !== 'replace' && normalizedType !== 'push') {
+      state.routeNavigationEvent = 'push'
+      return
+    }
+    state.routeNavigationEvent = normalizedType
+  },
+  setRouteTransition(state, payload = {}) {
+    const nextName = typeof payload.name === 'string' ? payload.name : state.routeTransitionName
+    const nextMode = typeof payload.mode === 'string' ? payload.mode : state.routeTransitionMode
+    const nextDirection = payload.direction === 'back' ? 'back' : 'forward'
+
+    state.routeTransitionName = nextName || 'm3-forward'
+    state.routeTransitionMode = nextMode || 'hierarchical'
+    state.routeTransitionDirection = nextDirection
+    state.routeTransitionNonce = Number(state.routeTransitionNonce || 0) + 1
   },
   setServerSettings(state, val) {
     state.serverSettings = val

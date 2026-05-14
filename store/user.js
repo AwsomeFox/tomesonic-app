@@ -20,7 +20,8 @@ export const state = () => ({
     playbackRate: 1,
     collapseSeries: false,
     collapseBookSeries: false,
-    enableDynamicColors: true
+    enableDynamicColors: true,
+    hideNonAudiobooksGlobal: false
   }
 })
 

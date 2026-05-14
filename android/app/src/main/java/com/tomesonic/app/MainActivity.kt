@@ -84,6 +84,14 @@ class MainActivity : BridgeActivity() {
   WindowCompat.setDecorFitsSystemWindows(window, false)
     val webView: WebView = findViewById(R.id.webview)
     webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
+    // Paint the WebView with the Material 3 surface color immediately so the
+    // user does not see a default-white WebView flash between the native
+    // splash screen and the Nuxt app's first paint.
+    val isNightMode = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+    val bootBackground = if (isNightMode) android.graphics.Color.rgb(20, 18, 24) else android.graphics.Color.rgb(255, 248, 250)
+    webView.setBackgroundColor(bootBackground)
+    window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bootBackground))
     // Keep injecting CSS safe-area insets but DO NOT add margins so the webview
     // content draws behind the system bars (transparent nav/status bar)
     webView.setOnApplyWindowInsetsListener { v, insets ->

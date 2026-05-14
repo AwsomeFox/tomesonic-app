@@ -100,7 +100,7 @@
           <div v-if="series?.length" class="text-fg-muted uppercase text-sm">{{ $strings.LabelSeries }}</div>
           <div v-if="series?.length" class="text-sm">
             <template v-for="(series, index) in seriesList">
-              <nuxt-link :key="series.id" :to="`/bookshelf/series/${series.id}`" class="underline whitespace-nowrap">{{ series.text }}</nuxt-link
+              <nuxt-link :key="series.id" :to="`/bookshelf/series/${encodeURIComponent(String(series.id))}`" class="underline whitespace-nowrap">{{ series.text }}</nuxt-link
               ><span :key="`${series.id}-comma`" v-if="index < seriesList.length - 1">, </span>
             </template>
           </div>
@@ -163,13 +163,7 @@
 
     <modals-fullscreen-cover v-model="showFullscreenCover" :library-item="libraryItem" />
 
-    <modals-confirm-dialog
-      v-model="showConfirmDialog"
-      :title="confirmDialogTitle"
-      :message="confirmDialogMessage"
-      @confirm="handleConfirm"
-      @cancel="handleCancel"
-    />
+    <modals-confirm-dialog v-model="showConfirmDialog" :title="confirmDialogTitle" :message="confirmDialogMessage" @confirm="handleConfirm" @cancel="handleCancel" />
 
     <div v-show="processing" class="fixed top-0 left-0 w-screen h-screen flex items-center justify-center bg-black/50 z-50">
       <ui-loading-indicator />

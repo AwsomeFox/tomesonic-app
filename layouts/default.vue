@@ -2,19 +2,8 @@
   <div class="w-full layout-wrapper" :class="{ 'full-height': isPlayerOpen && !isInBookshelfContext }">
     <app-appbar />
     <div id="content" class="relative" :class="[isPlayerOpen ? 'playerOpen' : '', isInBookshelfContext ? 'has-bottom-nav' : '', isPlayerOpen && !isInBookshelfContext ? 'content-scrollable' : 'overflow-hidden']" :style="contentStyle">
-      <transition
-        name="page-transition"
-        mode="out-in"
-        @enter="onPageEnter"
-        @leave="onPageLeave"
-        enter-active-class="transition-all duration-500 ease-emphasized-decelerate"
-        leave-active-class="transition-all duration-300 ease-emphasized-accelerate"
-        enter-from-class="opacity-0 transform scale-90 translate-y-8"
-        enter-to-class="opacity-100 transform scale-100 translate-y-0"
-        leave-from-class="opacity-100 transform scale-100 translate-y-0"
-        leave-to-class="opacity-0 transform scale-95 translate-y-4"
-      >
-        <Nuxt :key="currentLang" />
+      <transition :name="routeTransitionName" :mode="routeTransitionVueMode" @enter="onPageEnter" @leave="onPageLeave">
+        <Nuxt :key="routeViewKey" />
       </transition>
     </div>
     <app-audio-player-container ref="streamContainer" />
@@ -99,6 +88,30 @@ export default {
     },
     networkConnected() {
       return this.$store.state.networkConnected
+    },
+    routeTransitionName() {
+      return this.$store.getters['getRouteTransitionName'] || 'm3-forward'
+    },
+    routeTransitionNonce() {
+      return this.$store.getters['getRouteTransitionNonce'] || 0
+    },
+    routeTransitionMode() {
+      return this.$store.getters['getRouteTransitionMode'] || 'hierarchical'
+    },
+    routeTransitionVueMode() {
+      // Cross-fade top-level destinations for smoother tab-like switches.
+      if (this.routeTransitionMode === 'top-level' || this.routeTransitionMode === 'reduced') {
+        return undefined
+      }
+      return 'out-in'
+    },
+    routeViewKey() {
+      if (this.isInBookshelfContext) {
+        return `bookshelf-shell-${this.currentLang || 'default'}`
+      }
+
+      const routeFullPath = this.$route?.fullPath || this.$route?.path || 'root'
+      return `${this.currentLang || 'default'}::${routeFullPath}::${this.routeTransitionNonce}`
     },
     user() {
       return this.$store.state.user.user

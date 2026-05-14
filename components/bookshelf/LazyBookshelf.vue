@@ -53,6 +53,25 @@
 
 <script>
 import bookshelfCardsHelpers from '@/mixins/bookshelfCardsHelpers'
+import { isBookEntityAudioCapable } from '@/plugins/audioFiltering'
+
+const lazyBookshelfViewCache = new Map()
+const LAZY_BOOKSHELF_CACHE_MAX = 40
+
+function setLazyBookshelfCacheEntry(key, value) {
+  if (!key) return
+  if (lazyBookshelfViewCache.has(key)) {
+    lazyBookshelfViewCache.delete(key)
+  }
+  lazyBookshelfViewCache.set(key, value)
+
+  if (lazyBookshelfViewCache.size > LAZY_BOOKSHELF_CACHE_MAX) {
+    const oldestKey = lazyBookshelfViewCache.keys().next().value
+    if (oldestKey) {
+      lazyBookshelfViewCache.delete(oldestKey)
+    }
+  }
+}
 
 export default {
   props: {
@@ -84,8 +103,14 @@ export default {
       isFirstInit: false,
       pendingReset: false,
       localLibraryItems: [],
-      listenersInitialized: false
+      listenersInitialized: false,
+      lastHideNonAudiobooks: false,
+      cacheKey: null
     }
+  },
+  created() {
+    this.cacheKey = this.buildViewCacheKey()
+    this.tryRestoreFromCache()
   },
   watch: {
     seriesId() {
@@ -143,6 +168,9 @@ export default {
     },
     collapseBookSeries() {
       return this.$store.getters['user/getUserSetting']('collapseBookSeries')
+    },
+    hideNonAudiobooks() {
+      return this.$store.getters['getHideNonAudiobooksGlobal']
     },
     isCoverSquareAspectRatio() {
       return this.bookCoverAspectRatio === 1
@@ -249,13 +277,50 @@ export default {
       const targetColumns = Math.floor((availableWidth + gutter) / (this.bookWidth + gutter))
       return Math.max(1, Math.min(4, targetColumns))
     },
+    buildViewCacheKey() {
+      const searchParams = this.buildSearchParams()
+      return [this.currentLibraryId || 'none', this.entityName || 'none', this.seriesId || '', this.authorId || '', this.narratorName || '', searchParams || '', this.showBookshelfListView ? 'list' : 'grid', this.hideNonAudiobooks ? 'audio' : 'all'].join('::')
+    },
+    tryRestoreFromCache() {
+      const key = this.cacheKey || this.buildViewCacheKey()
+      const cachedState = lazyBookshelfViewCache.get(key)
+      if (!cachedState) return false
+
+      this.currentSFQueryString = cachedState.currentSFQueryString || this.buildSearchParams()
+      this.entities = Array.isArray(cachedState.entities) ? cachedState.entities.slice() : []
+      this.totalEntities = Number(cachedState.totalEntities || this.entities.length || 0)
+      this.totalShelves = Number(cachedState.totalShelves || 0)
+      this.pagesLoaded = cachedState.pagesLoaded ? { ...cachedState.pagesLoaded } : {}
+      this.initialized = true
+      this.$eventBus.$emit('bookshelf-total-entities', this.totalEntities)
+      return true
+    },
+    saveViewCache() {
+      if (!this.cacheKey || !this.initialized) return
+
+      setLazyBookshelfCacheEntry(this.cacheKey, {
+        currentSFQueryString: this.currentSFQueryString,
+        entities: Array.isArray(this.entities) ? this.entities.slice() : [],
+        totalEntities: Number(this.totalEntities || 0),
+        totalShelves: Number(this.totalShelves || 0),
+        pagesLoaded: { ...this.pagesLoaded },
+        timestamp: Date.now()
+      })
+    },
+    clearViewCache() {
+      if (!this.cacheKey) return
+      lazyBookshelfViewCache.delete(this.cacheKey)
+    },
     clearFilter() {
       this.$store.dispatch('user/updateUserSettings', {
         mobileFilterBy: 'all'
       })
     },
+    shouldUseAudioOnlyDataset() {
+      return this.hideNonAudiobooks && this.isBookEntity
+    },
     async fetchEntities(page) {
-      const isSeriesGrid = this.useDirectSeriesGrid
+      const isSeriesGrid = this.useDirectSeriesGrid || this.shouldUseAudioOnlyDataset()
       const fetchPage = isSeriesGrid ? 0 : page
       const fetchLimit = isSeriesGrid ? 1000 : this.booksPerFetch
       const startIndex = isSeriesGrid ? 0 : page * this.booksPerFetch
@@ -304,6 +369,15 @@ export default {
         }
       }
 
+      if (this.shouldUseAudioOnlyDataset() && payload && Array.isArray(payload.results)) {
+        const filteredAudioResults = payload.results.filter((entity) => isBookEntityAudioCapable(entity))
+        payload = {
+          ...payload,
+          results: filteredAudioResults,
+          total: filteredAudioResults.length
+        }
+      }
+
       this.isFetchingEntities = false
       if (this.pendingReset) {
         this.pendingReset = false
@@ -319,6 +393,13 @@ export default {
           this.totalShelves = Math.ceil(this.totalEntities / this.entitiesPerShelf)
           this.entities = new Array(this.totalEntities)
           this.$eventBus.$emit('bookshelf-total-entities', this.totalEntities)
+
+          if (this.shouldUseAudioOnlyDataset()) {
+            const virtualPageCount = Math.max(1, Math.ceil(this.totalEntities / this.booksPerFetch))
+            for (let pageIndex = 0; pageIndex < virtualPageCount; pageIndex++) {
+              this.pagesLoaded[pageIndex] = true
+            }
+          }
         } else {
           // Handle filter changes - recalculate total entities and shelves
           const previousTotal = this.totalEntities
@@ -412,6 +493,8 @@ export default {
             }
           }
         }
+
+        this.saveViewCache()
       }
     },
     async loadPage(page) {
@@ -419,6 +502,12 @@ export default {
         console.error('[LazyBookshelf] loadPage current library id not set')
         return
       }
+
+      if (this.shouldUseAudioOnlyDataset() && this.initialized && page > 0) {
+        this.pagesLoaded[page] = true
+        return
+      }
+
       this.pagesLoaded[page] = true
       await this.fetchEntities(page)
     },
@@ -488,6 +577,22 @@ export default {
         this.pendingReset = true
         return
       }
+      this.clearViewCache()
+      this.cacheKey = this.buildViewCacheKey()
+
+      if (this.tryRestoreFromCache()) {
+        this.isFirstInit = true
+        this.initSizeData()
+        if (!this.useDirectSeriesGrid) {
+          this.$nextTick(() => {
+            const initialLastBookIndex = Math.min(this.totalEntities, this.shelvesPerPage * this.entitiesPerShelf)
+            this.mountEntites(0, initialLastBookIndex)
+          })
+        }
+        this.restoreScrollPosition()
+        return
+      }
+
       this.destroyEntityComponents()
       this.entityIndexesMounted = []
       this.entityComponentRefs = {}
@@ -579,6 +684,23 @@ export default {
     },
     async init() {
       if (this.isFirstInit) return
+      this.cacheKey = this.buildViewCacheKey()
+
+      if (this.tryRestoreFromCache()) {
+        this.localLibraryItems = await this.$db.getLocalLibraryItems(this.currentLibraryMediaType)
+        this.lastHideNonAudiobooks = !!this.hideNonAudiobooks
+        this.isFirstInit = true
+        this.initSizeData()
+        if (!this.useDirectSeriesGrid) {
+          this.$nextTick(() => {
+            const initialLastBookIndex = Math.min(this.totalEntities, this.shelvesPerPage * this.entitiesPerShelf)
+            this.mountEntites(0, initialLastBookIndex)
+          })
+        }
+        this.restoreScrollPosition()
+        return
+      }
+
       if (!this.user) {
         // Offline support not available
         await this.resetEntities()
@@ -588,6 +710,7 @@ export default {
 
       this.localLibraryItems = await this.$db.getLocalLibraryItems(this.currentLibraryMediaType)
       console.log('Local library items loaded for lazy bookshelf', this.localLibraryItems.length)
+      this.lastHideNonAudiobooks = !!this.hideNonAudiobooks
 
       this.isFirstInit = true
       this.initSizeData()
@@ -599,6 +722,7 @@ export default {
         })
       }
       this.restoreScrollPosition()
+      this.saveViewCache()
     },
     scroll(e) {
       if (!e || !e.target) return
@@ -663,6 +787,13 @@ export default {
       return false
     },
     settingsUpdated() {
+      const nextHideNonAudiobooks = !!this.hideNonAudiobooks
+      if (nextHideNonAudiobooks !== this.lastHideNonAudiobooks) {
+        this.lastHideNonAudiobooks = nextHideNonAudiobooks
+        this.resetEntities()
+        return
+      }
+
       const wasUpdated = this.checkUpdateSearchParams()
       if (wasUpdated) {
         this.resetEntities()
@@ -796,9 +927,11 @@ export default {
   },
   deactivated() {
     this.saveScrollPosition()
+    this.saveViewCache()
     this.removeListeners()
   },
   beforeDestroy() {
+    this.saveViewCache()
     this.removeListeners()
     this.saveScrollPosition()
   }

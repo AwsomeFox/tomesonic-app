@@ -45,7 +45,7 @@
       <p v-if="seriesResults.length" class="font-semibold text-sm mb-1 mt-2">{{ $strings.LabelSeries }}</p>
       <template v-for="seriesResult in seriesResults">
         <div :key="seriesResult.series.id" class="w-full h-16 py-1">
-          <nuxt-link :to="`/bookshelf/series/${seriesResult.series.id}`">
+          <nuxt-link :to="`/bookshelf/series/${encodeURIComponent(String(seriesResult.series.id))}`">
             <cards-series-search-card :series="seriesResult.series" :book-items="seriesResult.books" />
           </nuxt-link>
         </div>
@@ -82,6 +82,8 @@
 </template>
 
 <script>
+import { getAudioPeopleStatsForLibrary, isBookEntityAudioCapable } from '@/plugins/audioFiltering'
+
 export default {
   data() {
     return {
@@ -102,6 +104,9 @@ export default {
     currentLibraryId() {
       return this.$store.state.libraries.currentLibraryId
     },
+    hideNonAudiobooks() {
+      return this.$store.getters['getHideNonAudiobooksGlobal']
+    },
     bookCoverAspectRatio() {
       return this.$store.getters['libraries/getBookCoverAspectRatio']
     },
@@ -119,7 +124,37 @@ export default {
       return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
     }
   },
+  watch: {
+    hideNonAudiobooks() {
+      if (this.lastSearch) {
+        this.runSearch(this.lastSearch)
+      }
+    }
+  },
   methods: {
+    normalizePersonName(name) {
+      if (!name || typeof name !== 'string') return ''
+      return name.trim().toLowerCase().replace(/\s+/g, ' ')
+    },
+    getAuthorAudioCountFromStats(authorEntity, peopleStats) {
+      const authorId = authorEntity?.id
+      if (authorId && Object.prototype.hasOwnProperty.call(peopleStats.authorAudioCountsById || {}, authorId)) {
+        return Number(peopleStats.authorAudioCountsById[authorId] || 0)
+      }
+
+      const normalizedName = this.normalizePersonName(authorEntity?.name)
+      if (normalizedName && Object.prototype.hasOwnProperty.call(peopleStats.authorAudioCountsByName || {}, normalizedName)) {
+        return Number(peopleStats.authorAudioCountsByName[normalizedName] || 0)
+      }
+
+      return 0
+    },
+    getNarratorAudioCountFromStats(narratorEntity, peopleStats) {
+      const normalizedName = this.normalizePersonName(narratorEntity?.name)
+      if (!normalizedName) return 0
+      if (!Object.prototype.hasOwnProperty.call(peopleStats.narratorAudioCountsByName || {}, normalizedName)) return 0
+      return Number(peopleStats.narratorAudioCountsByName[normalizedName] || 0)
+    },
     async runSearch(value) {
       if (this.isFetching && this.lastSearch === value) return
 
@@ -142,18 +177,72 @@ export default {
       })
       if (value !== this.lastSearch) {
         console.log(`runSearch: New search was made for ${this.lastSearch} - results are from ${value}`)
+        this.isFetching = false
         return
       }
       console.log('RESULTS', results)
 
+      let nextBookResults = results?.book || []
+      const nextPodcastResults = results?.podcast || []
+      let nextSeriesResults = results?.series || []
+      let nextAuthorResults = results?.authors || []
+      let nextNarratorResults = results?.narrators || []
+      const nextTagResults = results?.tags || []
+
+      if (this.hideNonAudiobooks) {
+        const peopleStats = await getAudioPeopleStatsForLibrary({
+          libraryId: this.currentLibraryId,
+          nativeHttp: this.$nativeHttp,
+          encode: this.$encode,
+          includeEbookOnly: true
+        })
+
+        if (value !== this.lastSearch) {
+          console.log(`runSearch: New search was made for ${this.lastSearch} while filtering results for ${value}`)
+          this.isFetching = false
+          return
+        }
+
+        nextBookResults = nextBookResults.filter((bookResult) => isBookEntityAudioCapable(bookResult?.libraryItem || bookResult))
+        nextSeriesResults = nextSeriesResults
+          .map((seriesResult) => {
+            const filteredBooks = Array.isArray(seriesResult?.books) ? seriesResult.books.filter((book) => isBookEntityAudioCapable(book)) : []
+            return {
+              ...seriesResult,
+              books: filteredBooks
+            }
+          })
+          .filter((seriesResult) => Array.isArray(seriesResult.books) && seriesResult.books.length > 0)
+
+        nextAuthorResults = nextAuthorResults
+          .map((authorEntity) => {
+            const numBooks = this.getAuthorAudioCountFromStats(authorEntity, peopleStats)
+            return {
+              ...authorEntity,
+              numBooks
+            }
+          })
+          .filter((authorEntity) => Number(authorEntity?.numBooks || 0) > 0)
+
+        nextNarratorResults = nextNarratorResults
+          .map((narratorEntity) => {
+            const numBooks = this.getNarratorAudioCountFromStats(narratorEntity, peopleStats)
+            return {
+              ...narratorEntity,
+              numBooks
+            }
+          })
+          .filter((narratorEntity) => Number(narratorEntity?.numBooks || 0) > 0)
+      }
+
       this.isFetching = false
 
-      this.bookResults = results?.book || []
-      this.podcastResults = results?.podcast || []
-      this.seriesResults = results?.series || []
-      this.authorResults = results?.authors || []
-      this.narratorResults = results?.narrators || []
-      this.tagResults = results?.tags || []
+      this.bookResults = nextBookResults
+      this.podcastResults = nextPodcastResults
+      this.seriesResults = nextSeriesResults
+      this.authorResults = nextAuthorResults
+      this.narratorResults = nextNarratorResults
+      this.tagResults = nextTagResults
     },
     updateSearch(val) {
       clearTimeout(this.searchTimeout)
