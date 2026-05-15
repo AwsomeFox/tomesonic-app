@@ -207,11 +207,18 @@ class MediaSessionManager(
     private fun buildCustomMediaActionsWithSpeed(currentSpeed: Float): ImmutableList<androidx.media3.session.CommandButton> {
         val customActions = ImmutableList.builder<androidx.media3.session.CommandButton>()
 
-        // Jump backward button (time skip) - closest to play on left side
+        // Jump backward button (time skip) - closest to play on left side.
+        // Assigning SLOT_BACK ensures system surfaces (Wear OS notification,
+        // Android Auto compact player) place this directly next to the
+        // play/pause button instead of using the default seek-to-previous-
+        // track button. The CommandButton overload that takes a slot will
+        // include SLOT_OVERFLOW as a fallback so it still appears on
+        // surfaces that don't honor the back/forward slots.
         customActions.add(
             androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_SKIP_BACK)
                 .setDisplayName("Jump Back")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_BACKWARD, Bundle.EMPTY))
+                .setSlots(androidx.media3.session.CommandButton.SLOT_BACK, androidx.media3.session.CommandButton.SLOT_OVERFLOW)
                 .build()
         )
 
@@ -220,6 +227,7 @@ class MediaSessionManager(
             androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_SKIP_FORWARD)
                 .setDisplayName("Jump Forward")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_JUMP_FORWARD, Bundle.EMPTY))
+                .setSlots(androidx.media3.session.CommandButton.SLOT_FORWARD, androidx.media3.session.CommandButton.SLOT_OVERFLOW)
                 .build()
         )
 
@@ -229,6 +237,7 @@ class MediaSessionManager(
                 .setIconResId(getSpeedIcon(currentSpeed))
                 .setDisplayName("Speed")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_CHANGE_PLAYBACK_SPEED, Bundle.EMPTY))
+                .setSlots(androidx.media3.session.CommandButton.SLOT_OVERFLOW)
                 .build()
         )
 
@@ -237,6 +246,7 @@ class MediaSessionManager(
             androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_PREVIOUS)
                 .setDisplayName("Previous Chapter")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER, Bundle.EMPTY))
+                .setSlots(androidx.media3.session.CommandButton.SLOT_OVERFLOW)
                 .build()
         )
 
@@ -245,6 +255,7 @@ class MediaSessionManager(
             androidx.media3.session.CommandButton.Builder(androidx.media3.session.CommandButton.ICON_NEXT)
                 .setDisplayName("Next Chapter")
                 .setSessionCommand(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER, Bundle.EMPTY))
+                .setSlots(androidx.media3.session.CommandButton.SLOT_OVERFLOW)
                 .build()
         )
 
@@ -304,13 +315,22 @@ class MediaSessionManager(
     }
 
     /**
-     * Re-embed [artworkData] (and [artworkUri]) into every MediaItem in the current
-     * timeline whose artworkUri matches. Used after the async cover prefetch
-     * finishes so the Wear OS bridge — which reads from the active MediaItem's
-     * MediaMetadata — actually receives the new cover bytes for the current
-     * chapter and for any chapter the player advances to next.
+     * Re-embed [artworkData] (and [artworkUri]) into the CURRENTLY PLAYING
+     * MediaItem only. Used after the async cover prefetch finishes so the Wear
+     * OS bridge — which reads from the active MediaItem's MediaMetadata —
+     * receives the new cover bytes for the current chapter.
      *
-     * Must be called on the application main thread because it mutates the player.
+     * We deliberately do NOT update every chapter MediaItem in the timeline:
+     * each chapter is a queue entry that Media3 bridges to Wear via
+     * MediaSessionCompat.setQueue() in a single Binder transaction (~1 MB
+     * limit). Embedding tens of KB of JPEG bytes on every chapter blows past
+     * that limit on books with many chapters and causes Wear's "Up Next" list
+     * to come through empty. Only the current item's bytes are needed for the
+     * now-playing card; the rest of the queue stays light so it transmits
+     * cleanly.
+     *
+     * Must be called on the application main thread because it mutates the
+     * player.
      */
     fun refreshArtworkOnTimeline(artworkUri: Uri, artworkData: ByteArray) {
         val session = mediaSession ?: return
@@ -321,39 +341,39 @@ class MediaSessionManager(
             return
         }
 
-        var replacedCount = 0
-        for (index in 0 until itemCount) {
-            val item = try {
-                player.getMediaItemAt(index)
-            } catch (e: Exception) {
-                Log.w(TAG, "refreshArtworkOnTimeline: failed to read MediaItem at $index", e)
-                continue
-            }
-
-            val existingArtworkUri = item.mediaMetadata.artworkUri
-            if (existingArtworkUri != artworkUri) {
-                continue
-            }
-
-            val newMetadata = item.mediaMetadata.buildUpon()
-                .setArtworkUri(artworkUri)
-                .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
-                .build()
-
-            val newItem = item.buildUpon()
-                .setMediaMetadata(newMetadata)
-                .build()
-
-            try {
-                player.replaceMediaItem(index, newItem)
-                replacedCount++
-            } catch (e: Exception) {
-                Log.w(TAG, "refreshArtworkOnTimeline: replaceMediaItem failed at $index", e)
-            }
+        val index = player.currentMediaItemIndex
+        if (index < 0 || index >= itemCount) {
+            Log.w(TAG, "refreshArtworkOnTimeline: currentMediaItemIndex out of range: $index / $itemCount")
+            return
         }
 
-        if (replacedCount == 0) {
-            Log.w(TAG, "refreshArtworkOnTimeline: no matching MediaItems found for uri=$artworkUri")
+        val item = try {
+            player.getMediaItemAt(index)
+        } catch (e: Exception) {
+            Log.w(TAG, "refreshArtworkOnTimeline: failed to read current MediaItem at $index", e)
+            return
+        }
+
+        val existingArtworkUri = item.mediaMetadata.artworkUri
+        if (existingArtworkUri != artworkUri) {
+            Log.d(TAG, "refreshArtworkOnTimeline: current item artworkUri ($existingArtworkUri) does not match $artworkUri; skipping")
+            return
+        }
+
+        val newMetadata = item.mediaMetadata.buildUpon()
+            .setArtworkUri(artworkUri)
+            .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+            .build()
+
+        val newItem = item.buildUpon()
+            .setMediaMetadata(newMetadata)
+            .build()
+
+        try {
+            player.replaceMediaItem(index, newItem)
+            Log.d(TAG, "refreshArtworkOnTimeline: embedded ${artworkData.size} bytes on current MediaItem at index $index")
+        } catch (e: Exception) {
+            Log.w(TAG, "refreshArtworkOnTimeline: replaceMediaItem failed at $index", e)
         }
     }
 

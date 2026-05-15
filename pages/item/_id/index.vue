@@ -1,20 +1,11 @@
 <template>
-  <div v-if="!libraryItem" class="w-full h-full relative flex items-center justify-center bg-surface-dynamic">
-    <ui-loading-indicator />
-  </div>
+  <div v-if="!libraryItem" class="w-full h-full relative bg-surface-dynamic"></div>
   <div v-else id="item-page" class="w-full h-full overflow-y-auto overflow-x-hidden relative bg-surface-dynamic" :style="contentPaddingStyle">
     <!-- cover -->
-    <div class="w-full flex justify-center relative">
-      <div style="width: 0; transform: translateX(-50vw); overflow: visible">
-        <div style="width: 150vw; overflow: hidden">
-          <div id="coverBg" style="filter: blur(5vw)">
-            <covers-book-cover :library-item="libraryItem" :width="coverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" @imageLoaded="coverImageLoaded" />
-          </div>
-        </div>
-      </div>
-      <div class="relative" @click="showFullscreenCover = true">
+    <div class="w-full flex justify-center relative pt-4">
+      <div class="relative expressive-detail-cover" @click="showFullscreenCover = true">
         <covers-book-cover :library-item="libraryItem" :width="coverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" no-bg raw @imageLoaded="coverImageLoaded" />
-        <div v-if="!isPodcast" class="absolute bottom-0 left-0 h-1 z-10 box-shadow-progressbar" :class="userIsFinished ? 'bg-success' : 'bg-yellow-400'" :style="{ width: coverWidth * progressPercent + 'px' }"></div>
+        <div v-if="!isPodcast && progressPercent > 0" class="absolute bottom-0 left-0 h-1.5 z-10 rounded-r-full" :class="userIsFinished ? 'bg-tertiary' : 'bg-primary'" :style="{ width: coverWidth * progressPercent + 'px' }"></div>
       </div>
     </div>
 
@@ -37,13 +28,13 @@
         </div>
 
         <div v-if="hasLocal" class="mx-1">
-          <div v-if="currentServerConnectionConfigId && !isLocalMatchingServerAddress" class="w-full rounded-md bg-warning/10 border border-warning p-4">
+          <div v-if="currentServerConnectionConfigId && !isLocalMatchingServerAddress" class="w-full rounded-2xl bg-error-container text-on-error-container p-4 border border-outline-variant">
             <p class="text-sm">{{ $getString('MessageMediaLinkedToADifferentServer', [localLibraryItem.serverAddress]) }}</p>
           </div>
-          <div v-else-if="currentServerConnectionConfigId && !isLocalMatchingUser" class="w-full rounded-md bg-warning/10 border border-warning p-4">
+          <div v-else-if="currentServerConnectionConfigId && !isLocalMatchingUser" class="w-full rounded-2xl bg-error-container text-on-error-container p-4 border border-outline-variant">
             <p class="text-sm">{{ $strings.MessageMediaLinkedToADifferentUser }}</p>
           </div>
-          <div v-else-if="currentServerConnectionConfigId && !isLocalMatchingConnectionConfig" class="w-full rounded-md bg-warning/10 border border-warning p-4">
+          <div v-else-if="currentServerConnectionConfigId && !isLocalMatchingConnectionConfig" class="w-full rounded-2xl bg-error-container text-on-error-container p-4 border border-outline-variant">
             <p class="text-sm">Media is linked to a different server connection config. Downloaded User Id: {{ localLibraryItem.serverUserId }}. Downloaded Server Address: {{ localLibraryItem.serverAddress }}. Currently connected User Id: {{ user.id }}. Currently connected server address: {{ currentServerAddress }}.</p>
           </div>
         </div>
@@ -51,17 +42,31 @@
         <!-- action buttons -->
         <div class="col-span-full">
           <div v-if="showPlay || showRead" class="flex mt-4 -mx-1">
-            <ui-btn v-if="showPlay" color="primary" class="flex items-center justify-center flex-grow mx-1" :loading="playerIsStartingForThisMedia" :padding-x="4" @click="playClick">
-              <span class="material-symbols text-2xl fill text-on-primary">{{ playerIsPlaying ? 'pause' : 'play_arrow' }}</span>
-              <span class="px-1 text-sm text-on-primary">{{ playerIsPlaying ? $strings.ButtonPause : isPodcast ? $strings.ButtonNextEpisode : hasLocal ? $strings.ButtonPlay : $strings.ButtonStream }}</span>
+            <ui-btn v-if="showPlay" color="primary" class="flex items-center justify-center flex-grow mx-1 play-cta" :class="{ 'play-cta--just-downloaded': justFinishedDownload }" :loading="playerIsStartingForThisMedia" :padding-x="4" @click="playClick">
+              <transition name="play-icon-swap" mode="out-in">
+                <span :key="playerIsPlaying ? 'pause' : hasLocal ? 'play' : 'stream'" class="material-symbols text-2xl fill text-on-primary">{{ playerIsPlaying ? 'pause' : 'play_arrow' }}</span>
+              </transition>
+              <transition name="play-label-swap" mode="out-in">
+                <span :key="playerIsPlaying ? 'pause' : isPodcast ? 'next' : hasLocal ? 'play' : 'stream'" class="px-1 text-sm text-on-primary">{{ playerIsPlaying ? $strings.ButtonPause : isPodcast ? $strings.ButtonNextEpisode : hasLocal ? $strings.ButtonPlay : $strings.ButtonStream }}</span>
+              </transition>
             </ui-btn>
             <ui-btn v-if="showRead" variant="tonal" color="secondary" class="flex items-center justify-center mx-1" :class="showPlay ? '' : 'flex-grow'" :padding-x="2" @click="readBook">
               <span class="material-symbols text-2xl text-on-surface">auto_stories</span>
               <span v-if="!showPlay" class="px-2 text-base">{{ $strings.ButtonRead }} {{ ebookFormat }}</span>
             </ui-btn>
-            <ui-btn v-if="showDownload" variant="tonal" color="secondary" class="flex items-center justify-center mx-1" :padding-x="2" @click="downloadClick">
-              <span class="material-symbols text-2xl text-on-surface" :class="downloadItem || startingDownload ? 'animate-pulse' : ''">{{ downloadItem || startingDownload ? 'downloading' : 'download' }}</span>
-            </ui-btn>
+            <transition name="download-btn-swap">
+              <div v-if="showDownload || downloadItem || startingDownload" key="download-slot" class="download-btn-slot mx-1">
+                <button class="download-btn-m3" :class="downloadBtnStateClass" :aria-label="downloadAriaLabel" :disabled="!!downloadItem || startingDownload" @click="downloadClick">
+                  <svg v-if="downloadItem || startingDownload" class="download-progress-ring" viewBox="0 0 40 40">
+                    <circle class="download-progress-track" cx="20" cy="20" r="17.5" />
+                    <circle class="download-progress-arc" cx="20" cy="20" r="17.5" :stroke-dasharray="downloadProgressCircumference" :stroke-dashoffset="downloadProgressOffset" :class="{ 'download-progress-arc--indeterminate': isDownloadIndeterminate }" />
+                  </svg>
+                  <transition name="download-icon-swap" mode="out-in">
+                    <span :key="downloadIconKey" class="material-symbols download-btn-icon" :class="{ 'download-btn-icon--bounce': downloadIconKey === 'check' }">{{ downloadIconName }}</span>
+                  </transition>
+                </button>
+              </div>
+            </transition>
             <ui-btn variant="tonal" color="secondary" class="flex items-center justify-center mx-1" :padding-x="2" @click="moreButtonPress">
               <span class="material-symbols text-2xl text-on-surface">more_vert</span>
             </ui-btn>
@@ -78,14 +83,16 @@
           </div>
         </div>
 
-        <div v-if="downloadItem" class="py-3">
-          <p v-if="downloadItem.itemProgress == 1" class="text-center text-lg">{{ $strings.MessageDownloadCompleteProcessing }}</p>
-          <p v-else class="text-center text-lg">{{ $strings.MessageDownloading }} ({{ Math.round(downloadItem.itemProgress * 100) }}%)</p>
-        </div>
+        <transition name="download-status-fade">
+          <div v-if="downloadItem" class="py-3">
+            <p v-if="downloadItem.itemProgress == 1" class="text-center text-lg">{{ $strings.MessageDownloadCompleteProcessing }}</p>
+            <p v-else class="text-center text-lg">{{ $strings.MessageDownloading }} ({{ Math.round(downloadItem.itemProgress * 100) }}%)</p>
+          </div>
+        </transition>
 
         <!-- metadata -->
         <div id="metadata" class="grid gap-2 my-2" style>
-          <div v-if="podcastAuthor || bookAuthors?.length" class="text-fg-muted uppercase text-sm">{{ $strings.LabelAuthor }}</div>
+          <div v-if="podcastAuthor || bookAuthors?.length" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelAuthor }}</div>
           <div v-if="podcastAuthor" class="text-sm">{{ podcastAuthor }}</div>
           <div v-else-if="bookAuthors?.length" class="text-sm">
             <template v-for="(author, index) in bookAuthors">
@@ -94,10 +101,10 @@
             </template>
           </div>
 
-          <div v-if="podcastType" class="text-fg-muted uppercase text-sm">{{ $strings.LabelType }}</div>
+          <div v-if="podcastType" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelType }}</div>
           <div v-if="podcastType" class="text-sm capitalize">{{ podcastType }}</div>
 
-          <div v-if="series?.length" class="text-fg-muted uppercase text-sm">{{ $strings.LabelSeries }}</div>
+          <div v-if="series?.length" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelSeries }}</div>
           <div v-if="series?.length" class="text-sm">
             <template v-for="(series, index) in seriesList">
               <nuxt-link :key="series.id" :to="`/bookshelf/series/${encodeURIComponent(String(series.id))}`" class="underline whitespace-nowrap">{{ series.text }}</nuxt-link
@@ -105,10 +112,10 @@
             </template>
           </div>
 
-          <div v-if="numTracks" class="text-fg-muted uppercase text-sm">{{ $strings.LabelDuration }}</div>
+          <div v-if="numTracks" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelDuration }}</div>
           <div v-if="numTracks" class="text-sm">{{ $elapsedPretty(duration) }}</div>
 
-          <div v-if="narrators?.length" class="text-fg-muted uppercase text-sm">{{ $strings.LabelNarrators }}</div>
+          <div v-if="narrators?.length" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelNarrators }}</div>
           <div v-if="narrators?.length" class="text-sm">
             <template v-for="(narrator, index) in narrators">
               <nuxt-link :key="narrator" :to="`/bookshelf/library?filter=narrators.${$encode(narrator)}`" class="underline whitespace-nowrap">{{ narrator }}</nuxt-link
@@ -116,7 +123,7 @@
             </template>
           </div>
 
-          <div v-if="genres.length" class="text-fg-muted uppercase text-sm">{{ $strings.LabelGenres }}</div>
+          <div v-if="genres.length" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelGenres }}</div>
           <div v-if="genres.length" class="text-sm">
             <template v-for="(genre, index) in genres">
               <nuxt-link :key="genre" :to="`/bookshelf/library?filter=genres.${$encode(genre)}`" class="underline whitespace-nowrap">{{ genre }}</nuxt-link
@@ -124,7 +131,7 @@
             </template>
           </div>
 
-          <div v-if="tags.length" class="text-fg-muted uppercase text-sm">{{ $strings.LabelTags }}</div>
+          <div v-if="tags.length" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelTags }}</div>
           <div v-if="tags.length" class="text-sm">
             <template v-for="(tag, index) in tags">
               <nuxt-link :key="tag" :to="`/bookshelf/library?filter=tags.${$encode(tag)}`" class="underline whitespace-nowrap">{{ tag }}</nuxt-link
@@ -132,7 +139,7 @@
             </template>
           </div>
 
-          <div v-if="publishedYear" class="text-fg-muted uppercase text-sm">{{ $strings.LabelPublishYear }}</div>
+          <div v-if="publishedYear" class="text-on-surface-variant uppercase text-xs font-medium tracking-wider">{{ $strings.LabelPublishYear }}</div>
           <div v-if="publishedYear" class="text-sm">{{ publishedYear }}</div>
         </div>
 
@@ -165,8 +172,10 @@
 
     <modals-confirm-dialog v-model="showConfirmDialog" :title="confirmDialogTitle" :message="confirmDialogMessage" @confirm="handleConfirm" @cancel="handleCancel" />
 
-    <div v-show="processing" class="fixed top-0 left-0 w-screen h-screen flex items-center justify-center bg-black/50 z-50">
-      <ui-loading-indicator />
+    <div v-show="processing" class="fixed top-0 left-0 w-screen h-screen flex items-center justify-center z-50" style="background-color: rgba(var(--md-sys-color-scrim), 0.5)">
+      <div class="px-6 py-5 rounded-3xl bg-surface-container-high shadow-elevation-3 border border-outline-variant">
+        <ui-loading-indicator />
+      </div>
     </div>
   </div>
 </template>
@@ -223,6 +232,8 @@ export default {
       showFullDescription: false,
       episodeStartingPlayback: null,
       startingDownload: false,
+      justFinishedDownload: false,
+      _downloadCompletePulseTimer: null,
       showConfirmDialog: false,
       confirmDialogTitle: '',
       confirmDialogMessage: '',
@@ -475,6 +486,54 @@ export default {
     downloadItem() {
       return this.$store.getters['globals/getDownloadItem'](this.libraryItemId)
     },
+    downloadProgressPercent() {
+      if (!this.downloadItem) return 0
+      const p = Number(this.downloadItem.itemProgress) || 0
+      return Math.max(0, Math.min(1, p))
+    },
+    isDownloadIndeterminate() {
+      // Show indeterminate spin while we're optimistically starting or before progress reports
+      return this.startingDownload || (this.downloadItem && this.downloadProgressPercent === 0)
+    },
+    downloadProgressCircumference() {
+      // r = 17.5 → C = 2πr ≈ 109.9
+      return 109.9
+    },
+    downloadProgressOffset() {
+      const c = this.downloadProgressCircumference
+      if (this.isDownloadIndeterminate) return c * 0.75
+      return c * (1 - this.downloadProgressPercent)
+    },
+    downloadIconKey() {
+      if (this.justFinishedDownload) return 'check'
+      if (this.startingDownload && !this.downloadItem) return 'hourglass'
+      if (this.downloadItem) return 'downloading'
+      return 'download'
+    },
+    downloadIconName() {
+      switch (this.downloadIconKey) {
+        case 'check':
+          return 'check'
+        case 'hourglass':
+          return 'hourglass_empty'
+        case 'downloading':
+          return 'downloading'
+        default:
+          return 'download'
+      }
+    },
+    downloadBtnStateClass() {
+      if (this.justFinishedDownload) return 'download-btn-m3--complete'
+      if (this.downloadItem || this.startingDownload) return 'download-btn-m3--active'
+      return 'download-btn-m3--idle'
+    },
+    downloadAriaLabel() {
+      if (this.justFinishedDownload) return this.$strings.MessageDownloadComplete || 'Download complete'
+      if (this.downloadItem || this.startingDownload) {
+        return `${this.$strings.MessageDownloading || 'Downloading'} ${Math.round(this.downloadProgressPercent * 100)}%`
+      }
+      return this.$strings.ButtonDownload || 'Download'
+    },
     episodes() {
       return this.media.episodes || []
     },
@@ -494,6 +553,20 @@ export default {
     },
     contentPaddingStyle() {
       return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
+    }
+  },
+  watch: {
+    downloadItem(newVal, oldVal) {
+      // When the active download disappears, briefly show a "complete" celebration
+      // on the download button so the user sees the M3 expressive transition before
+      // showDownload flips false and the button collapses (or hasLocal flips true).
+      if (oldVal && !newVal) {
+        this.justFinishedDownload = true
+        clearTimeout(this._downloadCompletePulseTimer)
+        this._downloadCompletePulseTimer = setTimeout(() => {
+          this.justFinishedDownload = false
+        }, 1200)
+      }
     }
   },
   methods: {
@@ -817,6 +890,7 @@ export default {
     this.$socket.$off('item_updated', this.itemUpdated)
     this.$socket.$off('rss_feed_open', this.rssFeedOpen)
     this.$socket.$off('rss_feed_closed', this.rssFeedClosed)
+    clearTimeout(this._downloadCompletePulseTimer)
 
     // Set scroll position
     if (window['item-page']) {
@@ -840,9 +914,19 @@ export default {
   width: calc(100% - 64px);
   max-width: calc(100% - 64px);
 }
-#coverBg > div {
-  width: 150vw !important;
-  max-width: 150vw !important;
+
+.expressive-detail-cover {
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: var(--md-sys-elevation-surface-container-high, 0 8px 24px -8px rgba(0, 0, 0, 0.35));
+  transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+.expressive-detail-cover:active {
+  transform: scale(0.98);
+}
+.expressive-detail-cover :deep(.book-cover-image),
+.expressive-detail-cover :deep(img) {
+  border-radius: 20px;
 }
 
 @media only screen and (max-width: 500px) {
@@ -853,6 +937,196 @@ export default {
 @media only screen and (min-width: 500px) {
   #metadata {
     grid-template-columns: auto 1fr auto 1fr;
+  }
+}
+
+/* M3 Expressive download button + progress ring */
+.download-btn-slot {
+  display: inline-flex;
+}
+.download-btn-m3 {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(var(--md-sys-color-secondary-container));
+  color: rgb(var(--md-sys-color-on-secondary-container));
+  border: 1px solid rgba(var(--md-sys-color-outline-variant), 0.45);
+  box-shadow: var(--md-sys-elevation-level1);
+  cursor: pointer;
+  overflow: visible;
+  transition: background-color 220ms cubic-bezier(0.2, 0, 0, 1), color 220ms cubic-bezier(0.2, 0, 0, 1), border-radius 320ms cubic-bezier(0.2, 0, 0, 1), transform 220ms cubic-bezier(0.2, 0, 0, 1), box-shadow 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.download-btn-m3:disabled {
+  cursor: default;
+}
+.download-btn-m3--idle:active {
+  transform: scale(0.94);
+}
+.download-btn-m3--active {
+  background: rgb(var(--md-sys-color-primary-container));
+  color: rgb(var(--md-sys-color-on-primary-container));
+  border-radius: 24px;
+  animation: dlBtnPulse 1800ms cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+.download-btn-m3--complete {
+  background: rgb(var(--md-sys-color-primary));
+  color: rgb(var(--md-sys-color-on-primary));
+  border-radius: 24px;
+  animation: dlBtnPop 520ms cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+  box-shadow: var(--md-sys-elevation-level2);
+}
+.download-btn-icon {
+  font-size: 22px;
+  line-height: 1;
+  position: relative;
+  z-index: 1;
+}
+.download-btn-icon--bounce {
+  animation: dlIconPop 460ms cubic-bezier(0.2, 0.9, 0.3, 1.4) both;
+}
+.download-progress-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+.download-progress-track {
+  fill: none;
+  stroke: rgba(var(--md-sys-color-on-primary-container), 0.18);
+  stroke-width: 3;
+}
+.download-progress-arc {
+  fill: none;
+  stroke: rgb(var(--md-sys-color-on-primary-container));
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 280ms cubic-bezier(0.2, 0, 0, 1);
+}
+.download-progress-arc--indeterminate {
+  animation: dlIndeterminate 1400ms linear infinite;
+  transition: none;
+}
+
+/* Play CTA: small expressive cue when download just completed and the label
+   transitions from "Stream" → "Play". */
+.play-cta {
+  transition: box-shadow 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+.play-cta--just-downloaded {
+  animation: playCtaCelebrate 700ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+/* Vue transitions */
+.play-icon-swap-enter-active,
+.play-icon-swap-leave-active,
+.play-label-swap-enter-active,
+.play-label-swap-leave-active,
+.download-icon-swap-enter-active,
+.download-icon-swap-leave-active {
+  transition: opacity 180ms cubic-bezier(0.2, 0, 0, 1), transform 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.play-icon-swap-enter,
+.download-icon-swap-enter {
+  opacity: 0;
+  transform: scale(0.7) rotate(-12deg);
+}
+.play-icon-swap-leave-to,
+.download-icon-swap-leave-to {
+  opacity: 0;
+  transform: scale(0.7) rotate(12deg);
+}
+.play-label-swap-enter {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.play-label-swap-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.download-btn-swap-enter-active,
+.download-btn-swap-leave-active {
+  transition: opacity 260ms cubic-bezier(0.2, 0, 0, 1), transform 320ms cubic-bezier(0.2, 0.9, 0.3, 1.2), max-width 320ms cubic-bezier(0.2, 0, 0, 1), margin 320ms cubic-bezier(0.2, 0, 0, 1);
+  overflow: hidden;
+}
+.download-btn-swap-enter,
+.download-btn-swap-leave-to {
+  opacity: 0;
+  transform: scale(0.6);
+  max-width: 0;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+.download-btn-swap-enter-to,
+.download-btn-swap-leave {
+  opacity: 1;
+  transform: scale(1);
+  max-width: 64px;
+}
+
+.download-status-fade-enter-active,
+.download-status-fade-leave-active {
+  transition: opacity 220ms cubic-bezier(0.2, 0, 0, 1), transform 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+.download-status-fade-enter,
+.download-status-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@keyframes dlBtnPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--md-sys-color-primary), 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(var(--md-sys-color-primary), 0);
+  }
+}
+@keyframes dlBtnPop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes dlIconPop {
+  0% {
+    transform: scale(0) rotate(-90deg);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.25) rotate(0);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0);
+  }
+}
+@keyframes dlIndeterminate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes playCtaCelebrate {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--md-sys-color-primary), 0.35);
+  }
+  60% {
+    box-shadow: 0 0 0 14px rgba(var(--md-sys-color-primary), 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--md-sys-color-primary), 0);
   }
 }
 </style>

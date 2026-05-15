@@ -1,7 +1,6 @@
 <template>
   <div class="w-full h-full bg-surface-dynamic">
-    <home-bookshelf-toolbar v-show="!hideToolbar" />
-    <div id="bookshelf-wrapper" class="main-content overflow-y-auto overflow-x-hidden relative bg-surface-dynamic library-scroll-container" :class="hideToolbar ? 'no-toolbar' : ''">
+    <div id="bookshelf-wrapper" class="main-content overflow-y-auto overflow-x-hidden relative bg-surface-dynamic library-scroll-container no-toolbar">
       <div class="bookshelf-child-stage" :class="tabStageClass">
         <keep-alive :max="32">
           <nuxt-child :key="bookshelfChildViewKey" :nuxt-child-key="getBookshelfChildKey" />

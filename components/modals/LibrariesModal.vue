@@ -1,19 +1,22 @@
 <template>
   <modals-modal v-model="show" :width="300" :processing="processing" height="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop >
-      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4" style="max-height: 75%" >
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface-container-high rounded-3xl border border-outline-variant border-opacity-40 shadow-elevation-4" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
-        <div class="px-6 py-4 border-b border-outline-variant">
-          <h2 class="text-headline-small text-on-surface font-medium">{{ $strings.HeaderLibraries }}</h2>
+        <div class="px-6 pt-5 pb-3">
+          <div class="w-full flex items-center">
+            <span class="material-symbols text-on-surface mr-3" style="font-size: 24px">library_books</span>
+            <h2 class="text-headline-small text-on-surface font-medium flex-grow">{{ $strings.HeaderLibraries }}</h2>
+          </div>
         </div>
 
-        <ul class="h-full w-full" role="listbox" aria-labelledby="listbox-label">
+        <ul class="h-full w-full px-2 pb-3 flex flex-col gap-1" role="listbox" aria-labelledby="listbox-label">
           <template v-for="library in libraries">
-            <li :key="library.id" class="text-on-surface select-none relative py-3 cursor-pointer state-layer" :class="currentLibraryId === library.id ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(library)">
-              <div v-show="currentLibraryId === library.id" class="absolute top-0 left-0 w-0.5 bg-primary h-full" />
-              <div class="flex items-center px-3">
+            <li :key="library.id" class="text-on-surface select-none relative py-3 px-3 rounded-2xl cursor-pointer state-layer" :class="currentLibraryId === library.id ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(library)">
+              <div class="flex items-center">
                 <ui-library-icon :icon="library.icon" />
                 <span class="font-normal block truncate text-lg ml-4">{{ library.name }}</span>
+                <span v-if="currentLibraryId === library.id" class="material-symbols ml-auto text-on-primary-container" style="font-size: 22px">check</span>
               </div>
             </li>
           </template>

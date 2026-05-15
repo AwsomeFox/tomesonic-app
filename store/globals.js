@@ -5,6 +5,11 @@ export const state = () => ({
   series: null,
   localMediaProgress: [],
   lastSearch: null,
+  seriesOrderBy: 'name',
+  seriesOrderDesc: false,
+  authorsOrderBy: 'name',
+  authorsOrderDesc: false,
+  collectionsPlaylistsView: 'collections',
   jumpForwardItems: [
     {
       icon: 'forward_5',
@@ -199,6 +204,21 @@ export const mutations = {
   },
   setLastSearch(state, val) {
     state.lastSearch = val
+  },
+  setSeriesOrderBy(state, val) {
+    state.seriesOrderBy = val || 'name'
+  },
+  setSeriesOrderDesc(state, val) {
+    state.seriesOrderDesc = !!val
+  },
+  setAuthorsOrderBy(state, val) {
+    state.authorsOrderBy = val || 'name'
+  },
+  setAuthorsOrderDesc(state, val) {
+    state.authorsOrderDesc = !!val
+  },
+  setCollectionsPlaylistsView(state, val) {
+    state.collectionsPlaylistsView = val === 'playlists' ? 'playlists' : 'collections'
   },
   setSelectedPlaylistItems(state, items) {
     state.selectedPlaylistItems = items

@@ -2187,13 +2187,29 @@ export default {
     },
     refreshUI() {
       this.updateScreenSize()
-      const el = this.getTrackElement()
-      if (el) {
-        this.trackWidth = el.clientWidth
-        this.updateTrack()
-        this.updateReadyTrack()
-        this.updateTimestamp()
+      // The portrait and landscape templates share refs (trackFull, playedTrackFull, ...).
+      // Vue tears down the old branch and mounts the new one when isLandscape flips, so
+      // we need to wait for the template swap to complete before measuring widths and
+      // re-applying the progress / timestamp values — otherwise the new track elements
+      // come up with width 0 and the bars look reset until the next `timeupdate`.
+      const apply = () => {
+        const el = this.getTrackElement()
+        if (el && el.clientWidth) {
+          this.trackWidth = el.clientWidth
+          this.updateTrack()
+          this.updateReadyTrack()
+          this.updateTimestamp()
+        }
       }
+      this.$nextTick(() => {
+        apply()
+        // Second pass on the next animation frame for cases where layout width
+        // hasn't fully settled (orientation transitions can take an extra frame).
+        requestAnimationFrame(() => {
+          this.trackWidth = 0
+          apply()
+        })
+      })
     },
     updateScreenSize() {
       setTimeout(() => {

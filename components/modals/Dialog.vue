@@ -1,18 +1,18 @@
 <template>
   <modals-modal v-model="show" :width="width" height="100%">
     <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
-      <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 p-2 backdrop-blur-md" style="max-height: 75%">
+      <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface-container-high rounded-3xl border border-outline-variant border-opacity-40 shadow-elevation-4 p-2" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
-        <div v-if="title" class="px-4 py-4 border-b border-outline-variant">
+        <div v-if="title" class="px-4 pt-4 pb-2">
           <h2 class="text-headline-small text-on-surface font-medium">{{ title }}</h2>
         </div>
 
-        <ul class="h-full w-full" role="listbox" aria-labelledby="listbox-label">
+        <ul class="h-full w-full px-1 pb-1 flex flex-col gap-1" role="listbox" aria-labelledby="listbox-label">
           <template v-for="item in itemsToShow">
             <slot :name="item.value" :item="item" :selected="item.value === selected">
-              <li :key="item.value" :ref="`item-${item.value}`" class="text-on-surface select-none relative cursor-pointer state-layer" :class="selected === item.value ? 'bg-primary-container text-on-primary-container' : ''" :style="{ paddingTop: itemPaddingY, paddingBottom: itemPaddingY }" role="option" @click="clickedOption(item.value)">
+              <li :key="item.value" :ref="`item-${item.value}`" class="text-on-surface select-none relative cursor-pointer state-layer rounded-2xl" :class="selected === item.value ? 'bg-primary-container text-on-primary-container' : ''" :style="{ paddingTop: itemPaddingY, paddingBottom: itemPaddingY }" role="option" @click="clickedOption(item.value)">
                 <div class="relative flex items-center px-3">
-                  <span v-if="item.icon" class="material-symbols text-xl mr-2 text-on-surface-variant">{{ item.icon }}</span>
+                  <span v-if="item.icon" class="material-symbols mr-3" :class="selected === item.value ? 'text-on-primary-container' : 'text-on-surface-variant'" style="font-size: 22px">{{ item.icon }}</span>
                   <p class="font-normal block truncate text-base">{{ item.text }}</p>
                 </div>
               </li>

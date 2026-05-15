@@ -1,14 +1,10 @@
 <template>
-  <div class="w-40">
-    <div class="bg-bg border border-border py-2 px-5 rounded-lg flex items-center flex-col box-shadow-md">
-      <div class="loader-dots block relative w-20 h-5 mt-2">
-        <div class="absolute top-0 mt-1 w-3 h-3 rounded-full bg-green-500"></div>
-        <div class="absolute top-0 mt-1 w-3 h-3 rounded-full bg-green-500"></div>
-        <div class="absolute top-0 mt-1 w-3 h-3 rounded-full bg-green-500"></div>
-        <div class="absolute top-0 mt-1 w-3 h-3 rounded-full bg-green-500"></div>
-      </div>
-      <div class="text-fg text-xs font-light mt-2 text-center">{{ text }}</div>
-    </div>
+  <div class="m3-loading-indicator inline-flex flex-col items-center justify-center" :style="containerStyle">
+    <svg class="m3-progress" :width="size" :height="size" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+      <circle class="m3-progress__track" cx="24" cy="24" r="20" fill="none" />
+      <circle class="m3-progress__indicator" cx="24" cy="24" r="20" fill="none" />
+    </svg>
+    <div v-if="text" class="m3-loading-indicator__label mt-3 text-sm text-on-surface-variant text-center font-medium">{{ text }}</div>
   </div>
 </template>
 
@@ -17,54 +13,61 @@ export default {
   props: {
     text: {
       type: String,
-      default: 'Please Wait...'
+      default: ''
+    },
+    size: {
+      type: [Number, String],
+      default: 48
+    }
+  },
+  computed: {
+    containerStyle() {
+      return {}
     }
   }
 }
 </script>
 
-<style>
-.loader-dots div {
-  animation-timing-function: cubic-bezier(0, 1, 1, 0);
+<style scoped>
+.m3-loading-indicator {
+  color: rgb(var(--md-sys-color-primary));
 }
-.loader-dots div:nth-child(1) {
-  left: 8px;
-  animation: loader-dots1 0.6s infinite;
+.m3-progress {
+  animation: m3-progress-rotate 1.4s linear infinite;
+  transform-origin: center;
 }
-.loader-dots div:nth-child(2) {
-  left: 8px;
-  animation: loader-dots2 0.6s infinite;
+.m3-progress__track {
+  stroke: rgb(var(--md-sys-color-surface-variant));
+  stroke-width: 4;
+  opacity: 0.4;
 }
-.loader-dots div:nth-child(3) {
-  left: 32px;
-  animation: loader-dots2 0.6s infinite;
+.m3-progress__indicator {
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 125;
+  stroke-dashoffset: 125;
+  transform-origin: center;
+  animation: m3-progress-dash 1.4s ease-in-out infinite;
 }
-.loader-dots div:nth-child(4) {
-  left: 56px;
-  animation: loader-dots3 0.6s infinite;
+
+@keyframes m3-progress-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
-@keyframes loader-dots1 {
+@keyframes m3-progress-dash {
   0% {
-    transform: scale(0);
+    stroke-dasharray: 1, 125;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 90, 125;
+    stroke-dashoffset: -30;
   }
   100% {
-    transform: scale(1);
-  }
-}
-@keyframes loader-dots3 {
-  0% {
-    transform: scale(1);
-  }
-  100% {
-    transform: scale(0);
-  }
-}
-@keyframes loader-dots2 {
-  0% {
-    transform: translate(0, 0);
-  }
-  100% {
-    transform: translate(24px, 0);
+    stroke-dasharray: 90, 125;
+    stroke-dashoffset: -120;
   }
 }
 </style>

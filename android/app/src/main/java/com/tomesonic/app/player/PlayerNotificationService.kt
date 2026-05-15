@@ -467,6 +467,24 @@ class PlayerNotificationService : MediaLibraryService() {
       }
     }
 
+    // When the player advances to a new chapter MediaItem, the queue items
+    // were intentionally built without artworkData bytes (to keep the legacy
+    // queue Binder payload small for the Wear OS bridge — see
+    // AudiobookMediaSourceBuilder.createChapterMetadata). Re-embed the cached
+    // artwork bytes on the new current item so Wear's now-playing card keeps
+    // showing the book cover after a chapter transition.
+    exoPlayer.addListener(object : Player.Listener {
+      override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        val uri = mediaItem?.mediaMetadata?.artworkUri ?: return
+        val bytes = audiobookMediaSourceBuilder.getArtworkDataForUri(uri) ?: return
+        try {
+          mediaSessionManager.refreshArtworkOnTimeline(uri, bytes)
+        } catch (e: Exception) {
+          Log.w(tag, "onMediaItemTransition: failed to refresh artwork for uri=$uri", e)
+        }
+      }
+    })
+
     // Now initialize MediaSession with the direct ExoPlayer
     if (currentPlayer != null) {
         mediaSessionManager.initializeMediaSession(notificationId, channelId, sessionActivityPendingIntent, currentPlayer)
@@ -5126,9 +5144,14 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   }
 
   /**
-   * Intercept player commands from bluetooth/external controls and Android Auto hardware buttons.
-   * Redirect skip next/previous commands to jump forward/backward (30s seek) instead of
-   * skipping to next/previous items in queue.
+   * Intercept player commands from bluetooth/external controls and Android
+   * Auto hardware buttons. Redirect skip next/previous commands to jump
+   * forward/backward (30s seek) instead of skipping MediaItems in the queue.
+   *
+   * Applied to all controllers (matches the global stripping in onConnect).
+   * Wear OS Up Next is not populated by the Timeline anyway for our chapter
+   * playlist (see androidx/media#3128), so there's no benefit to letting
+   * `*_MEDIA_ITEM` commands flow to the player for any specific controller.
    */
   override fun onPlayerCommandRequest(
     session: MediaSession,
@@ -5137,17 +5160,13 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
   ): Int {
     return when (playerCommand) {
       Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, Player.COMMAND_SEEK_TO_NEXT -> {
-        // Intercept next track command from bluetooth/Android Auto and redirect to jump forward
         Log.d("PlayerNotificationServ", "Hardware control: Intercepting skip to next, redirecting to jump forward")
         service.jumpForward()
-        // Return error to prevent the default skip-to-next behavior from executing
         SessionResult.RESULT_ERROR_NOT_SUPPORTED
       }
       Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, Player.COMMAND_SEEK_TO_PREVIOUS -> {
-        // Intercept previous track command from bluetooth/Android Auto and redirect to jump backward
         Log.d("PlayerNotificationServ", "Hardware control: Intercepting skip to previous, redirecting to jump backward")
         service.jumpBackward()
-        // Return error to prevent the default skip-to-previous behavior from executing
         SessionResult.RESULT_ERROR_NOT_SUPPORTED
       }
       else -> {
@@ -5404,8 +5423,23 @@ class MediaLibrarySessionCallback(private val service: PlayerNotificationService
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_PREVIOUS_CHAPTER, Bundle.EMPTY))
     availableSessionCommands.add(SessionCommand(PlayerNotificationService.CUSTOM_ACTION_SKIP_TO_NEXT_CHAPTER, Bundle.EMPTY))
 
-    // CRITICAL: Disable default Android Auto skip buttons to prevent duplicates
-    // This is equivalent to the original setUseNextAction(false) and setUsePreviousAction(false)
+    // Disable default skip-track buttons to prevent duplicates next to our
+    // custom jump-back / jump-forward SLOT_BACK / SLOT_FORWARD buttons on
+    // every controller surface (system notification, Wear OS, Android Auto,
+    // Bluetooth, app UI).
+    //
+    // Note on Wear OS "Up Next" (androidx/media#3128): leaving these commands
+    // enabled would make Wear render skip-next / skip-previous icons next to
+    // play. We tried that to see if it would also populate Up Next from the
+    // ExoPlayer Timeline, but the chapter playlist we build uses N MediaItems
+    // that share a single backing audio URI with different ClippingConfig
+    // ranges, which the Wear OS companion app's queue filtering doesn't
+    // accept (same root cause as the ResolvingDataSource case in #3128 —
+    // upstream fix is "planned on the watch side in coming releases").
+    // Since Wear Up Next can't be populated regardless, prefer the cleaner
+    // UI and strip the commands globally.
+    availablePlayerCommands.remove(Player.COMMAND_SEEK_TO_NEXT)
+    availablePlayerCommands.remove(Player.COMMAND_SEEK_TO_PREVIOUS)
     availablePlayerCommands.remove(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
     availablePlayerCommands.remove(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
 
