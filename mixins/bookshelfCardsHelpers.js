@@ -41,7 +41,7 @@ export default {
 
       if (this.showBookshelfListView) {
         // Center wide list rows within the shelf container.
-        var availableWidth = this.bookshelfWidth - 32 // Container has px-4 padding (32px total)
+        var availableWidth = this.bookshelfWidth - 16 // Container has px-2 padding (16px total)
         var overflow = Math.max(0, this.entityWidth - availableWidth)
         shelfOffsetX = -overflow / 2
         shelfOffsetY = 4

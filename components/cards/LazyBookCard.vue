@@ -1,5 +1,5 @@
 <template>
-  <div ref="card" :id="`book-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card book-card-shell p-0 rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
+  <div ref="card" :id="`book-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card book-card-shell expressive-card p-0 rounded-3xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
     <!-- Cover image container - fills entire card (first in DOM, lowest z-index) -->
     <div class="cover-container absolute inset-0 z-0">
       <!-- Blurred background for aspect ratio mismatch -->
@@ -17,6 +17,8 @@
         v-show="libraryItem && !isMaterialSymbolPlaceholder"
         ref="cover"
         :src="bookCoverSrc"
+        loading="lazy"
+        decoding="async"
         class="w-full h-full transition-opacity duration-300 object-cover z-5"
         @load="imageLoaded"
         :style="{
@@ -84,27 +86,18 @@
       </div>
     </div>
 
-    <!-- Material 3 Circular Progress indicator in top left corner -->
+    <!-- M3 Expressive Progress chip in top-left (matches library list row pill) -->
     <div v-if="!collapsedSeries && (!isPodcast || recentEpisode) && userProgressPercent > 0" class="absolute top-2 left-2 z-40">
-      <!-- Completed book check mark -->
-      <div v-if="itemIsFinished" class="bg-primary-container shadow-elevation-4 rounded-full border-2 border-outline-variant border-opacity-40 flex items-center justify-center backdrop-blur-sm" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
-        <span class="material-symbols text-on-primary-container drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }">check</span>
-      </div>
-      <!-- Progress circle for incomplete books -->
-      <div v-else class="relative rounded-full backdrop-blur-sm bg-surface-container bg-opacity-80 border-2 border-outline-variant border-opacity-40 shadow-elevation-3" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
-        <!-- Background circle (subtle) -->
-        <svg class="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(var(--md-sys-color-outline-variant), 0.3)" stroke-width="2" stroke-dasharray="100, 100" />
-          <!-- Progress circle -->
-          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgb(var(--md-sys-color-primary))" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${userProgressPercent * 100}, 100`" />
-        </svg>
+      <div class="expressive-progress-chip inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-tertiary-container text-on-tertiary-container" :style="{ fontSize: 0.62 * sizeMultiplier + 'rem' }">
+        <span class="material-symbols" :style="{ fontSize: 0.85 * sizeMultiplier + 'rem' }">{{ itemIsFinished ? 'check_circle' : 'schedule' }}</span>
+        <span class="font-semibold leading-none">{{ progressChipLabel }}</span>
       </div>
     </div>
 
-    <!-- Downloaded indicator with enhanced visibility -->
+    <!-- Downloaded indicator (expressive) -->
     <div v-if="showHasLocalDownload" class="absolute right-2 top-2 z-30">
-      <div class="bg-primary-container shadow-elevation-4 rounded-full border-2 border-outline-variant border-opacity-40 flex items-center justify-center backdrop-blur-sm" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
-        <span class="material-symbols text-on-primary-container drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }">download_done</span>
+      <div class="expressive-download-badge flex items-center justify-center" :style="{ width: 1.75 * sizeMultiplier + 'rem', height: 1.75 * sizeMultiplier + 'rem' }">
+        <span class="material-symbols text-on-secondary" :style="{ fontSize: sizeMultiplier * 0.9 + 'rem' }">cloud_done</span>
       </div>
     </div>
 
@@ -356,6 +349,21 @@ export default {
     },
     itemIsFinished() {
       return !!this.userProgress?.isFinished
+    },
+    userTimeRemaining() {
+      const duration = Number(this.media?.duration || 0)
+      if (!duration) return 0
+      const progress = Number(this.userProgress?.progress || 0)
+      const remaining = duration * (1 - progress)
+      return remaining > 0 ? remaining : 0
+    },
+    progressChipLabel() {
+      if (this.itemIsFinished) return this.$strings?.LabelFinished || 'Finished'
+      const remaining = this.userTimeRemaining
+      if (!remaining) return ''
+      const pretty = this.$elapsedPretty ? this.$elapsedPretty(remaining) : ''
+      if (this.$getString && this.$strings?.LabelTimeRemaining) return this.$getString('LabelTimeRemaining', [pretty])
+      return pretty
     },
     showError() {
       return this.isMissing || this.isInvalid
@@ -665,6 +673,60 @@ export default {
   background-color: rgba(var(--md-sys-color-on-surface), var(--md-sys-state-pressed-opacity, 0.12));
 }
 
+/* Material 3 Expressive press response */
+.expressive-card {
+  transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.expressive-card:active {
+  transform: scale(0.97);
+}
+
+/* M3 Expressive badges & progress ring on book cards */
+@keyframes expressivePopIn {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.expressive-badge {
+  animation: expressivePopIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  border: 2px solid rgba(var(--md-sys-color-surface), 0.65);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18), 0 0 0 2px rgba(var(--md-sys-color-primary), 0.18);
+}
+.expressive-badge--download {
+  background: linear-gradient(135deg, rgb(var(--md-sys-color-primary)) 0%, rgb(var(--md-sys-color-tertiary)) 100%);
+}
+.expressive-badge--finished {
+  background: linear-gradient(135deg, rgb(var(--md-sys-color-tertiary-container)) 0%, rgb(var(--md-sys-color-primary-container)) 100%);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18), 0 0 0 2px rgba(var(--md-sys-color-tertiary), 0.25);
+}
+/* Downloaded indicator — squircle shape + secondary tint to distinguish from
+   the circular finished checkmark. */
+.expressive-download-badge {
+  background: linear-gradient(135deg, rgb(var(--md-sys-color-secondary)) 0%, rgb(var(--md-sys-color-primary)) 100%);
+  border-radius: 10px;
+  border: 2px solid rgba(var(--md-sys-color-surface), 0.65);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.22), 0 0 0 2px rgba(var(--md-sys-color-secondary), 0.22);
+  animation: expressivePopIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.expressive-progress-ring {
+  background: rgba(var(--md-sys-color-surface-container), 0.82);
+  border: 2px solid rgba(var(--md-sys-color-surface), 0.6);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.22);
+}
+.expressive-progress-ring__fill {
+  filter: drop-shadow(0 0 3px rgba(var(--md-sys-color-primary), 0.7));
+  transition: stroke-dasharray 480ms cubic-bezier(0.2, 0, 0, 1);
+}
+
 /* Ensure content stays above state layer, but exclude cover container and absolutely positioned elements */
 .material-3-card > *:not(.cover-container):not(.absolute) {
   position: relative;
@@ -709,15 +771,15 @@ export default {
   }
 }
 
-/* Enhanced text visibility */
+/* Enhanced text visibility — text-shadow is far cheaper than filter:drop-shadow
+   during shelf scroll (no extra paint layer per card). */
 .drop-shadow-sm {
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
-/* Ensure overlays are always visible */
+/* Ensure overlays are always visible — solid translucent surface, no blur */
 .material-3-card .bg-opacity-95 {
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background-color: rgba(var(--md-sys-color-surface-container-high), 0.95);
 }
 
 /* Icon rings for better visibility */
@@ -756,9 +818,9 @@ export default {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.9) 50%, rgba(var(--md-sys-color-surface-container-high), 0.99) 100%);
-  backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
-  -webkit-backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.78) 55%, rgba(var(--md-sys-color-surface-container-high), 0.9) 100%);
+  backdrop-filter: blur(10px) saturate(1.05);
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
 }
 
 .book-meta-content {
@@ -778,7 +840,8 @@ export default {
 
 .book-meta-title {
   color: rgb(var(--md-sys-color-on-media));
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   line-height: 1.2;
   padding-left: 3px;
   padding-right: 3px;

@@ -10,7 +10,7 @@
       height: height + 'px',
       animationDelay: animationDelay + 'ms'
     }"
-    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'transition-all', 'duration-300', 'ease-expressive', shouldPlayEntryAnimation ? 'loading-item' : '', shouldPlayEntryAnimation ? entryDirectionClass : '']"
+    :class="['material-3-list-card', 'embedded-list-row', 'z-10', 'py-1', 'px-2', 'mx-0', 'transition-colors', 'duration-200', 'ease-expressive', shouldPlayEntryAnimation ? 'loading-item' : '', shouldPlayEntryAnimation ? entryDirectionClass : '']"
   >
     <div class="h-full flex items-center relative">
       <!-- Loading cover placeholder -->
@@ -48,7 +48,7 @@
       height: height + 'px',
       animationDelay: animationDelay + 'ms'
     }"
-    :class="['material-3-list-card', 'rounded-2xl', 'z-10', 'cursor-pointer', 'py-1', 'px-2', 'mx-0', 'bg-surface-container', 'shadow-elevation-1', 'hover:shadow-elevation-2', 'transition-all', 'duration-300', 'ease-expressive', shouldPlayEntryAnimation ? 'loaded-item' : '', shouldPlayEntryAnimation ? entryDirectionClass : '']"
+    :class="['material-3-list-card', 'embedded-list-row', 'z-10', 'cursor-pointer', 'py-1', 'px-2', 'mx-0', 'transition-colors', 'duration-200', 'ease-expressive', shouldPlayEntryAnimation ? 'loaded-item' : '', shouldPlayEntryAnimation ? entryDirectionClass : '']"
     @click="clickCard"
   >
     <div class="h-full flex items-center relative">
@@ -70,13 +70,19 @@
         <!-- Enhanced progress indicator (only for playable items) -->
         <div v-if="isLibraryItem && !isPodcast && !collapsedSeries" class="absolute bottom-0 left-0 h-1.5 shadow-elevation-2 max-w-full z-10" :class="[itemIsFinished ? 'bg-tertiary' : 'bg-primary', squareAspectRatio ? 'rounded-bl-lg rounded-br-lg' : 'rounded-bl-xl rounded-br-xl']" :style="{ width: coverWidth * userProgressPercent + 'px' }"></div>
       </div>
-      <div class="flex-grow pl-4" :class="showPlayButton ? (localLibraryItem || isLocal ? 'pr-28' : 'pr-20') : 'pr-4'">
-        <p class="whitespace-normal line-clamp-2 text-on-surface text-body-medium font-medium" :style="{ fontSize: 0.8 * sizeMultiplier + 'rem' }">
+      <div class="flex-grow min-w-0 pl-4" :class="showPlayButton ? (localLibraryItem || isLocal ? 'pr-28' : 'pr-20') : 'pr-4'">
+        <p class="truncate text-on-surface text-body-medium font-medium" :style="{ fontSize: 0.8 * sizeMultiplier + 'rem' }">
           <span v-if="seriesSequence">#{{ seriesSequence }}&nbsp;</span>{{ displayTitle }}
         </p>
         <p class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displayAuthor }}</p>
         <p v-if="displaySortLine" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ displaySortLine }}</p>
         <p v-if="duration" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">{{ $elapsedPretty(duration) }}</p>
+
+        <!-- Embedded "Your Progress" chip — mirrors pages/item/_id/index.vue progress pill -->
+        <div v-if="showProgressChip" class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full bg-tertiary-container text-on-tertiary-container" :style="{ fontSize: 0.65 * sizeMultiplier + 'rem' }">
+          <span class="material-symbols" :style="{ fontSize: 0.85 * sizeMultiplier + 'rem' }">{{ itemIsFinished ? 'check_circle' : 'schedule' }}</span>
+          <span class="font-semibold">{{ progressChipLabel }}</span>
+        </div>
 
         <p v-if="numEpisodesIncomplete" class="truncate text-on-surface-variant text-body-small" :style="{ fontSize: 0.7 * sizeMultiplier + 'rem' }">
           {{ $getString('LabelNumEpisodesIncomplete', [numEpisodes, numEpisodesIncomplete]) }}
@@ -88,8 +94,8 @@
 
       <!-- Icon stack area - positioned to the left, stacking downward from top -->
       <div v-if="localLibraryItem || isLocal" class="absolute top-2 right-20 z-20">
-        <div class="bg-success-container shadow-elevation-2 rounded-full p-1.5 border border-outline-variant border-opacity-30 w-6 h-6 flex items-center justify-center">
-          <span class="material-symbols text-xs text-on-success-container">download_done</span>
+        <div class="expressive-download-badge--mini w-6 h-6 flex items-center justify-center">
+          <span class="material-symbols text-xs text-on-secondary">cloud_done</span>
         </div>
       </div>
 
@@ -389,6 +395,27 @@ export default {
     },
     itemIsFinished() {
       return !!this.userProgress?.isFinished
+    },
+    userTimeRemaining() {
+      if (!this.duration) return 0
+      const progress = Number(this.userProgress?.progress || 0)
+      const remaining = this.duration * (1 - progress)
+      return remaining > 0 ? remaining : 0
+    },
+    showProgressChip() {
+      if (this.isPodcast || this.collapsedSeries) return false
+      if (!this.isLibraryItem) return false
+      if (this.itemIsFinished) return true
+      return this.userProgressPercent > 0
+    },
+    progressChipLabel() {
+      if (this.itemIsFinished) return this.$strings?.LabelFinished || 'Finished'
+      const remaining = this.userTimeRemaining
+      if (!remaining) return ''
+      const pretty = this.$elapsedPretty ? this.$elapsedPretty(remaining) : ''
+      const template = this.$strings?.LabelTimeRemaining
+      if (template && this.$getString) return this.$getString('LabelTimeRemaining', [pretty])
+      return pretty
     },
     showError() {
       return this.isMissing || this.isInvalid
@@ -690,6 +717,30 @@ export default {
   --list-card-cover-width: 80px;
 }
 
+/* Expressive mini download badge \u2014 squircle + secondary tint, distinct from
+   the circular finished checkmark. */
+@keyframes expressivePopIn {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.expressive-download-badge--mini {
+  background: linear-gradient(135deg, rgb(var(--md-sys-color-secondary)) 0%, rgb(var(--md-sys-color-primary)) 100%);
+  border-radius: 8px;
+  border: 1.5px solid rgba(var(--md-sys-color-surface), 0.65);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.22), 0 0 0 1.5px rgba(var(--md-sys-color-secondary), 0.22);
+  animation: expressivePopIn 280ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
 .list-card-cover {
   height: 80px;
   max-height: 80px;
@@ -704,7 +755,19 @@ export default {
 .material-3-list-card {
   transition: box-shadow 300ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1);
   position: relative;
-  margin-bottom: 8px; /* Add spacing between list items */
+  margin-bottom: 0; /* embedded rows separated by divider, not gap */
+}
+
+/* Embedded (M3 Expressive) list row \u2014 no floating card chrome, just a bottom\n   divider and an inline progress chip. Mirrors the page-embedded look of the\n   "Your Progress" pill on the book detail page. */
+.embedded-list-row {
+  background-color: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  border-bottom: 1px solid rgba(var(--md-sys-color-outline-variant), 0.4);
+}
+
+.embedded-list-row:last-child {
+  border-bottom: none;
 }
 
 .material-3-list-card::before {

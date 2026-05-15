@@ -406,6 +406,35 @@ export default ({ store, app }, inject) => {
 
   inject('isValidVersion', isValidVersion)
 
+  // Reveal the app once Vue has committed its first paint, so the user never
+  // sees a white/black WebView frame between the native splash and the Vue UI.
+  // The `m3-boot-hidden` class is set on <html> via nuxt.config head and hides
+  // #__layout until we remove it here after a double-RAF. A safety fallback
+  // timer guarantees the veil never sticks if something throws during init.
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    let bootRevealed = false
+    const revealApp = () => {
+      if (bootRevealed) return
+      bootRevealed = true
+      try {
+        document.documentElement.classList.remove('m3-boot-hidden')
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    const scheduleReveal = () => {
+      const raf = window.requestAnimationFrame || ((cb) => setTimeout(cb, 16))
+      raf(() => raf(() => revealApp()))
+    }
+    // Reveal once the Nuxt root has finished initializing; fall back after 1.5s.
+    if (typeof window.onNuxtReady === 'function') {
+      window.onNuxtReady(scheduleReveal)
+    } else {
+      scheduleReveal()
+    }
+    setTimeout(revealApp, 1500)
+  }
+
   // Expose helper so other parts of the app can toggle native status bar theme
   Vue.prototype.$updateStatusBarTheme = updateNativeStatusBarStyle
 

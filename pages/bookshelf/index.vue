@@ -2191,6 +2191,11 @@ export default {
 .home-shelf-row {
   content-visibility: auto;
   contain-intrinsic-size: 260px;
+  /* Promote each shelf to its own compositor layer so cross-row paints
+     don't bleed during vertical scrolling on the home page. */
+  contain: content;
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 .home-page-content.is-pull-dragging {

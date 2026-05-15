@@ -1,7 +1,9 @@
 <template>
-  <div class="w-full relative">
-    <div v-if="altViewEnabled" class="px-5 pb-2 pt-3">
-      <p class="font-semibold" :style="{ fontSize: sizeMultiplier + 'rem' }">{{ label }}</p>
+  <div class="w-full relative shelf-section">
+    <!-- Material 3 Expressive shelf header: prominent title with an accent pip -->
+    <div class="shelf-header px-4 pt-3 pb-2 flex items-center gap-2">
+      <span class="shelf-accent-pip" />
+      <p class="shelf-title text-on-surface" :style="{ fontSize: 1.0 * sizeMultiplier + 'rem' }">{{ label }}</p>
     </div>
 
     <div class="flex items-end px-3 max-w-full overflow-x-auto shelf-scroll-container" :class="altViewEnabled ? '' : 'bookshelfRow'" :style="{ height: shelfHeight + 'px', paddingBottom: entityPaddingBottom + 'px' }">
@@ -12,13 +14,6 @@
         <cards-author-card v-else-if="type === 'authors'" :key="`author-${entity.id}-${index}`" :width="bookWidth" :height="bookWidth" :author="entity" :size-multiplier="sizeMultiplier" :navigation-mode="authorCardNavigationMode" :show-image="showAuthorImage" class="mx-1" :class="getItemAnimationClass(index)" :style="getItemAnimationStyle(index)" />
       </template>
     </div>
-
-    <div v-if="!altViewEnabled" class="absolute text-center categoryPlacardtransform z-30 bottom-0.5 left-4 md:left-8 w-36 rounded-md" style="height: 18px">
-      <div class="w-full h-full flex items-center justify-center rounded-sm border shinyBlack">
-        <p class="transform text-xs">{{ label }}</p>
-      </div>
-    </div>
-    <div v-if="!altViewEnabled" class="w-full h-1 z-40 bookshelfDivider"></div>
   </div>
 </template>
 
@@ -54,7 +49,7 @@ export default {
         var extraTitleSpace = this.type === 'authors' ? 5 : 25
         return this.entityHeight + extraTitleSpace * this.sizeMultiplier
       }
-      return this.entityHeight + 24 // Original spacing for bookshelf view
+      return this.entityHeight + 8 // header now sits above the row, only a small breathing gap
     },
     bookWidth() {
       // Use base sizes that match card sizeMultiplier calculations
@@ -110,11 +105,38 @@ export default {
 </script>
 
 <style scoped>
+/* Material 3 Expressive shelf header */
+.shelf-section {
+  padding-bottom: 4px;
+}
+.shelf-header {
+  user-select: none;
+}
+.shelf-title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  margin: 0;
+}
+.shelf-accent-pip {
+  display: inline-block;
+  width: 6px;
+  height: 18px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgb(var(--md-sys-color-primary)) 0%, rgb(var(--md-sys-color-tertiary)) 100%);
+  box-shadow: 0 0 0 2px rgba(var(--md-sys-color-primary), 0.12);
+  flex-shrink: 0;
+}
+
 /* Material 3 Expressive Scroll Container */
 .shelf-scroll-container {
-  scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
+  /* Promote to its own compositor layer and isolate paint so the row scrolls
+     independently of neighbours on the home page. */
+  contain: content;
+  transform: translateZ(0);
+  will-change: scroll-position;
 }
 
 /* Enhanced scroll effect for iOS/Android */
