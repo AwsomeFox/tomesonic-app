@@ -12,9 +12,9 @@
     </div>
 
     <!-- Loading skeleton for initial load (list view) -->
-    <div v-else-if="!initialized" class="w-full px-4 space-y-2 py-4">
-      <div v-for="n in 8" :key="n" class="w-full h-20 bg-surface-container rounded-2xl shadow-elevation-1 animate-pulse loading-skeleton" :style="{ animationDelay: n * 100 + 'ms' }">
-        <div class="h-full flex items-center p-2">
+    <div v-else-if="!initialized" class="w-full px-2 py-2">
+      <div v-for="n in 8" :key="n" class="w-full h-20 loading-skeleton border-b border-outline-variant border-opacity-40" :style="{ animationDelay: n * 100 + 'ms' }">
+        <div class="h-full flex items-center px-2">
           <!-- Cover placeholder -->
           <div class="w-16 h-16 bg-surface-variant rounded-xl animate-pulse"></div>
 
@@ -40,7 +40,7 @@
 
     <!-- Actual shelves -->
     <template v-else v-for="shelf in totalShelves">
-      <div :key="shelf" class="w-full px-4 bg-surface-dynamic shelf-list-view" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle"></div>
+      <div :key="shelf" class="w-full px-2 bg-surface-dynamic shelf-list-view" :id="`shelf-${shelf - 1}`" :style="shelfContainerStyle"></div>
     </template>
 
     <div v-show="!entities.length && initialized" class="w-full py-16 text-center">
@@ -190,7 +190,7 @@ export default {
     },
     entityWidth() {
       if (this.showBookshelfListView) {
-        return this.bookshelfWidth - 32 // Account for px-4 padding (16px each side)
+        return this.bookshelfWidth - 16 // Account for px-2 padding (8px each side)
       }
       return this.bookWidth
     },

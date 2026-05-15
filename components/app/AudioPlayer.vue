@@ -74,9 +74,16 @@
               <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpBackwards">
                 <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
               </button>
-              <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-200 hover:shadow-elevation-4 active:scale-95 mx-4 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
-                <span v-if="!isLoading" class="material-symbols text-2xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
-                <widgets-spinner-icon v-else class="h-6 w-6" />
+              <button
+                class="expressive-play-btn w-[72px] h-[72px] bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-300 ease-expressive hover:shadow-elevation-4 active:scale-95 mx-4 relative overflow-hidden"
+                :class="[isPlaying ? 'is-playing' : 'is-paused', { 'animate-spin': seekLoading }]"
+                :disabled="isLoading"
+                @mousedown.prevent
+                @mouseup.prevent
+                @click.stop="playPauseClick"
+              >
+                <span v-if="!isLoading" class="material-symbols text-3xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+                <widgets-spinner-icon v-else class="h-7 w-7" />
               </button>
               <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95" :disabled="isLoading" @click.stop="jumpForward">
                 <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
@@ -109,7 +116,7 @@
           </div>
 
           <!-- Progress Bars Container - manages both tracks -->
-          <div v-if="showFullscreen" id="progressBarsContainer" class="absolute left-0 right-0 mx-auto w-full px-6 bottom-56" style="max-width: 414px">
+          <div v-if="showFullscreen" id="progressBarsContainer" class="absolute left-0 right-0 mx-auto w-full px-6" style="max-width: 414px; bottom: 280px">
             <!-- Total Progress Track (shown when both tracks enabled) -->
             <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack" class="mb-6">
               <div class="flex mb-1">
@@ -133,14 +140,14 @@
                 <div class="flex-grow" />
                 <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
               </div>
-              <div ref="trackFull" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
+              <div ref="trackFull" class="expressive-track h-3 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
                 <div ref="readyTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
                 <div ref="bufferedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
-                <div ref="playedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
+                <div ref="playedTrackFull" class="expressive-played h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
                 <div
                   ref="trackCursorFull"
-                  class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
-                  :style="{ top: '-8px' }"
+                  class="h-7 w-7 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-3 bg-primary ring-4 ring-primary ring-opacity-25 transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
+                  :style="{ top: '-10px' }"
                   :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }"
                   @touchstart.stop="touchstartCursor"
                 >
@@ -233,14 +240,14 @@
                     <div class="flex-grow" />
                     <p class="font-mono text-on-surface text-sm">{{ timeRemainingPretty }}</p>
                   </div>
-                  <div ref="trackFull" class="h-2 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
+                  <div ref="trackFull" class="expressive-track h-3 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart="startDragSeek">
                     <div ref="readyTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
                     <div ref="bufferedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
-                    <div ref="playedTrackFull" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
+                    <div ref="playedTrackFull" class="expressive-played h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
                     <div
                       ref="trackCursorFull"
-                      class="h-6 w-6 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-2 bg-primary transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
-                      :style="{ top: '-8px' }"
+                      class="h-7 w-7 rounded-full absolute pointer-events-auto flex items-center justify-center shadow-elevation-3 bg-primary ring-4 ring-primary ring-opacity-25 transition-all duration-200 ease-expressive hover:scale-110 hover:shadow-elevation-3 active:scale-95 active:shadow-elevation-1"
+                      :style="{ top: '-10px' }"
                       :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }"
                       @touchstart.stop="touchstartCursor"
                     >
@@ -258,9 +265,16 @@
                 <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-2" :disabled="isLoading" @click.stop="jumpBackwards">
                   <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
                 </button>
-                <button class="w-16 h-16 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-200 hover:shadow-elevation-4 active:scale-95 mx-3 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
-                  <span v-if="!isLoading" class="material-symbols text-2xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
-                  <widgets-spinner-icon v-else class="h-6 w-6" />
+                <button
+                  class="expressive-play-btn w-[72px] h-[72px] bg-primary text-on-primary flex items-center justify-center shadow-elevation-3 transition-all duration-300 ease-expressive hover:shadow-elevation-4 active:scale-95 mx-3 relative overflow-hidden"
+                  :class="[isPlaying ? 'is-playing' : 'is-paused', { 'animate-spin': seekLoading }]"
+                  :disabled="isLoading"
+                  @mousedown.prevent
+                  @mouseup.prevent
+                  @click.stop="playPauseClick"
+                >
+                  <span v-if="!isLoading" class="material-symbols text-3xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+                  <widgets-spinner-icon v-else class="h-7 w-7" />
                 </button>
                 <button v-show="!playerSettings.lockUi" class="w-12 h-12 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 ml-2" :disabled="isLoading" @click.stop="jumpForward">
                   <span class="material-symbols text-xl text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpForwardIcon }}</span>
@@ -301,7 +315,7 @@
            the horizontal swipe-to-dismiss translateX. -->
       <div id="playerContent" class="playerContainer w-full bg-player-overlay backdrop-blur-sm shadow-elevation-3 border-t border-outline-variant border-opacity-20" :style="miniLayerStyle">
         <!-- Mini bar layout: Cover placeholder → Text → Controls -->
-        <div class="flex items-center h-full px-2">
+        <div class="flex items-center h-full px-2 pb-4">
           <!-- Cover placeholder: invisible div that matches the mini cover dimensions
                so the text and controls are correctly pushed to the right.
                The actual cover image is the shared element above the sheet. -->
@@ -320,7 +334,14 @@
             <button v-show="!playerSettings.lockUi" class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-elevation-1 transition-all duration-200 hover:shadow-elevation-2 active:scale-95 mr-1" :disabled="isLoading" @click.stop="jumpBackwards">
               <span class="material-symbols text-lg text-on-surface" :class="isLoading ? 'opacity-30' : ''">{{ jumpBackwardsIcon }}</span>
             </button>
-            <button class="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-elevation-2 transition-all duration-200 hover:shadow-elevation-3 active:scale-95 mx-2 relative overflow-hidden" :class="{ 'animate-spin': seekLoading }" :disabled="isLoading" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
+            <button
+              class="expressive-play-btn expressive-play-btn--mini w-12 h-12 bg-primary text-on-primary flex items-center justify-center shadow-elevation-2 transition-all duration-300 ease-expressive hover:shadow-elevation-3 active:scale-95 mx-2 relative overflow-hidden"
+              :class="[isPlaying ? 'is-playing' : 'is-paused', { 'animate-spin': seekLoading }]"
+              :disabled="isLoading"
+              @mousedown.prevent
+              @mouseup.prevent
+              @click.stop="playPauseClick"
+            >
               <span v-if="!isLoading" class="material-symbols text-xl text-on-primary">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
               <widgets-spinner-icon v-else class="h-5 w-5" />
             </button>
@@ -332,10 +353,17 @@
 
         <!-- Mini Progress Bar -->
         <div id="playerTrackMini" class="absolute bottom-2 left-0 w-full px-2">
-          <div ref="trackMini" class="h-1 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none" :class="{ 'animate-pulse': isLoading }" @click.stop="seekToPosition" @mousedown="startDragSeek" @touchstart.stop="startDragSeek">
+          <div
+            ref="trackMini"
+            class="expressive-track expressive-track--mini h-1.5 w-full relative rounded-full bg-surface-variant shadow-inner cursor-pointer transition-all duration-200 ease-expressive hover:bg-surface-variant/80 hover:shadow-md active:bg-surface-variant/90 select-none"
+            :class="{ 'animate-pulse': isLoading }"
+            @click.stop="seekToPosition"
+            @mousedown="startDragSeek"
+            @touchstart.stop="startDragSeek"
+          >
             <div ref="readyTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-outline transition-all duration-500 ease-expressive" />
             <div ref="bufferedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-on-surface-variant transition-all duration-500 ease-expressive" />
-            <div ref="playedTrackMini" class="h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
+            <div ref="playedTrackMini" class="expressive-played h-full absolute top-0 left-0 rounded-full pointer-events-none bg-primary transition-all duration-300 ease-expressive hover:bg-primary/90" />
           </div>
         </div>
       </div>
@@ -447,6 +475,24 @@ export default {
       // The Vuex commit is handled by _onAnimationComplete at the true boundaries.
       // We still need to trigger updateScreenSize when the state changes.
       this.updateScreenSize()
+      if (val) {
+        // The full-screen track refs (`trackFull`, `playedTrackFull`, ...) only
+        // exist while showFullscreen is true. When opening the full player from
+        // the mini bar without playback running, no `timeupdate` event fires,
+        // so the bars would stay empty until play is pressed. Force a refresh
+        // once the DOM has rendered the full-screen track elements.
+        this.$nextTick(() => {
+          this.trackWidth = 0
+          this.updateTrack()
+          this.updateTimestamp()
+          // Second tick in case layout width settles on the next frame.
+          requestAnimationFrame(() => {
+            this.trackWidth = 0
+            this.updateTrack()
+            this.updateTimestamp()
+          })
+        })
+      }
     },
     bookCoverAspectRatio() {
       this.updateScreenSize()
@@ -470,9 +516,13 @@ export default {
     miniCoverWidth() {
       return 48 / (this.bookCoverAspectRatio || 1)
     },
-    // Viewport top of the mini cover (vertically centred inside the mini bar)
+    // Viewport top of the mini cover (vertically centred within the mini bar's
+    // content row, which has 16px bottom padding to lift contents above the
+    // progress track at the bottom of the bar).
     miniCoverViewportTop() {
-      return this.windowHeight - this.miniBottomOffsetPx - this.miniBarHeight + (this.miniBarHeight - 48) / 2
+      const contentBottomPad = 16
+      const contentHeight = this.miniBarHeight - contentBottomPad
+      return this.windowHeight - this.miniBottomOffsetPx - this.miniBarHeight + (contentHeight - 48) / 2
     },
     // Viewport left of the mini cover (px-2 padding = 8px)
     miniCoverViewportLeft() {
@@ -2321,6 +2371,52 @@ export default {
   --title-author-width-collapsed: 40%;
 }
 
+/* Material 3 Expressive primary play/pause button \u2014 shape morph between
+   rounded-3xl (paused) and full circle (playing) plus a soft glow ring. */
+.expressive-play-btn {
+  position: relative;
+  border-radius: 28px;
+  transition: border-radius 380ms cubic-bezier(0.34, 1.56, 0.64, 1), transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+.expressive-play-btn.is-playing {
+  border-radius: 9999px;
+}
+.expressive-play-btn.is-paused {
+  border-radius: 28px;
+}
+.expressive-play-btn--mini.is-paused {
+  border-radius: 16px;
+}
+.expressive-play-btn::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(closest-side, rgba(var(--md-sys-color-primary), 0.35), rgba(var(--md-sys-color-primary), 0) 75%);
+  opacity: 0;
+  transition: opacity 320ms cubic-bezier(0.2, 0, 0, 1);
+  z-index: -1;
+}
+.expressive-play-btn.is-playing::after {
+  opacity: 1;
+}
+.expressive-play-btn:active {
+  transform: scale(0.94);
+}
+
+/* M3 Expressive progress track \u2014 soft halo on the played portion + gentle
+   pulse while playing. */
+.expressive-track {
+  overflow: visible;
+}
+.expressive-track .expressive-played {
+  box-shadow: 0 0 8px 0 rgba(var(--md-sys-color-primary), 0.55), 0 0 18px 0 rgba(var(--md-sys-color-primary), 0.25);
+}
+.expressive-track--mini .expressive-played {
+  box-shadow: 0 0 6px 0 rgba(var(--md-sys-color-primary), 0.45);
+}
+
 /* Mini player components */
 .cover-wrapper-mini {
   width: 48px;
@@ -2345,8 +2441,8 @@ export default {
 
 .playerContainer {
   height: 80px;
-  background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
-  backdrop-filter: blur(14px);
+  /* Solid M3 expressive surface for crisp text legibility over any cover */
+  background: rgb(var(--md-sys-color-surface-container-high));
   /* border-radius is driven by playerSheetStyle now */
   box-shadow: var(--md-sys-elevation-surface-container-high);
   margin: 0;
@@ -2355,8 +2451,7 @@ export default {
 
 /* #playerContent is now the mini bar layer (position:absolute bottom of sheet) */
 #playerContent {
-  background: rgba(var(--md-sys-color-surface-container-rgb), 0.85);
-  backdrop-filter: blur(14px);
+  background: rgb(var(--md-sys-color-surface-container-high));
   margin: 0;
 }
 
@@ -2412,7 +2507,7 @@ export default {
 }
 
 .fullscreen .title-author-texts {
-  bottom: 180px; /* Position below progress bars (260px) */
+  bottom: 190px; /* Position below progress bars (260px), with extra breathing room */
   width: 80%;
   left: 10%;
   text-align: center;

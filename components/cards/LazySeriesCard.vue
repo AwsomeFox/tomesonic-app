@@ -1,5 +1,5 @@
 <template>
-  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card series-card-shell p-0 rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
+  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card series-card-shell expressive-card p-0 rounded-3xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
     <!-- Cover image container - fills entire card (first in DOM, lowest z-index) -->
     <div class="cover-container series-image-container z-0" :class="{ 'image-only': !isAltViewEnabled }">
       <!-- Loading placeholder -->
@@ -9,7 +9,7 @@
 
       <!-- Full-bleed series collage -->
       <div v-if="hasSeriesData && coverBookItems.length" class="series-collage" :class="`count-${Math.min(coverBookItems.length, 4)}`">
-        <img v-for="(book, idx) in coverBookItems.slice(0, 4)" :key="book.id || idx" :src="coverSrcFor(book)" class="series-collage-item" />
+        <img v-for="(book, idx) in coverBookItems.slice(0, 4)" :key="book.id || idx" :src="coverSrcFor(book)" loading="lazy" decoding="async" class="series-collage-item" />
       </div>
 
       <!-- Material Symbol placeholder for empty series -->
@@ -37,23 +37,32 @@
     </div>
 
     <!-- Unread-and-not-in-progress books left badge -->
-    <div v-if="booksLeftToStart >= 0" class="absolute rounded-lg bg-secondary-container shadow-elevation-3 z-30 border border-outline-variant border-opacity-30" :style="{ top: '8px', right: '8px', padding: `${0.15 * sizeMultiplier}rem ${0.3 * sizeMultiplier}rem` }">
-      <p class="text-on-secondary-container font-bold" :style="{ fontSize: sizeMultiplier * 0.7 + 'rem' }">{{ booksLeftToStart }}</p>
+    <div v-if="booksLeftToStart >= 0" class="expressive-books-left absolute z-30 flex items-center gap-1" :style="{ top: '8px', right: '8px', padding: `${0.2 * sizeMultiplier}rem ${0.55 * sizeMultiplier}rem` }">
+      <span class="material-symbols text-on-tertiary-container" :style="{ fontSize: sizeMultiplier * 0.85 + 'rem' }">menu_book</span>
+      <p class="text-on-tertiary-container font-bold leading-none" :style="{ fontSize: sizeMultiplier * 0.75 + 'rem' }">{{ booksLeftToStart }}</p>
     </div>
 
     <!-- Series progress indicator if any books have progress -->
     <div v-if="seriesProgressPercent > 0" class="absolute top-2 left-2 z-40">
       <!-- Completed series check mark -->
-      <div v-if="seriesIsFinished" class="bg-primary-container shadow-elevation-4 rounded-full border-2 border-outline-variant border-opacity-40 flex items-center justify-center backdrop-blur-sm" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
-        <span class="material-symbols text-on-primary-container drop-shadow-sm" :style="{ fontSize: sizeMultiplier * 0.8 + 'rem' }">check</span>
+      <div v-if="seriesIsFinished" class="expressive-badge expressive-badge--finished rounded-full flex items-center justify-center" :style="{ width: 1.75 * sizeMultiplier + 'rem', height: 1.75 * sizeMultiplier + 'rem' }">
+        <span class="material-symbols text-on-tertiary-container" :style="{ fontSize: sizeMultiplier * 0.95 + 'rem' }">check</span>
       </div>
       <!-- Progress circle for incomplete series -->
-      <div v-else class="relative rounded-full backdrop-blur-sm bg-surface-container bg-opacity-80 border-2 border-outline-variant border-opacity-40 shadow-elevation-3" :style="{ width: 1.5 * sizeMultiplier + 'rem', height: 1.5 * sizeMultiplier + 'rem' }">
+      <div v-else class="expressive-progress-ring relative rounded-full" :style="{ width: 1.75 * sizeMultiplier + 'rem', height: 1.75 * sizeMultiplier + 'rem' }">
         <!-- Background circle (subtle) -->
         <svg class="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(var(--md-sys-color-outline-variant), 0.3)" stroke-width="2" stroke-dasharray="100, 100" />
+          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(var(--md-sys-color-outline-variant), 0.45)" stroke-width="3" stroke-dasharray="100, 100" />
           <!-- Progress circle -->
-          <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgb(var(--md-sys-color-primary))" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${seriesProgressPercent * 100}, 100`" />
+          <path class="expressive-progress-ring__fill" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="url(#expressiveProgressGradient)" stroke-width="4" stroke-linecap="round" :stroke-dasharray="`${seriesProgressPercent * 100}, 100`" />
+        </svg>
+        <svg width="0" height="0" class="absolute">
+          <defs>
+            <linearGradient id="expressiveProgressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="rgb(var(--md-sys-color-secondary))" />
+              <stop offset="100%" stop-color="rgb(var(--md-sys-color-primary))" />
+            </linearGradient>
+          </defs>
         </svg>
       </div>
     </div>
@@ -310,9 +319,9 @@ export default {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.9) 50%, rgba(var(--md-sys-color-surface-container-high), 0.99) 100%);
-  backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
-  -webkit-backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.78) 55%, rgba(var(--md-sys-color-surface-container-high), 0.9) 100%);
+  backdrop-filter: blur(10px) saturate(1.05);
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
 }
 
 .series-meta > * {
@@ -415,6 +424,54 @@ export default {
 
 .material-3-card:active {
   transform: translateY(0);
+}
+
+/* Material 3 Expressive press response */
+.expressive-card {
+  transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+.expressive-card:active {
+  transform: scale(0.97);
+}
+
+/* Expressive badges & books-left pill */
+@keyframes expressivePopIn {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.expressive-badge {
+  animation: expressivePopIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  border: 2px solid rgba(var(--md-sys-color-surface), 0.65);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18), 0 0 0 2px rgba(var(--md-sys-color-tertiary), 0.25);
+}
+.expressive-badge--finished {
+  background: linear-gradient(135deg, rgb(var(--md-sys-color-tertiary-container)) 0%, rgb(var(--md-sys-color-primary-container)) 100%);
+}
+.expressive-progress-ring {
+  background: rgba(var(--md-sys-color-surface-container), 0.82);
+  border: 2px solid rgba(var(--md-sys-color-surface), 0.6);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.22);
+}
+.expressive-progress-ring__fill {
+  filter: drop-shadow(0 0 3px rgba(var(--md-sys-color-primary), 0.7));
+  transition: stroke-dasharray 480ms cubic-bezier(0.2, 0, 0, 1);
+}
+.expressive-books-left {
+  background: linear-gradient(135deg, rgb(var(--md-sys-color-tertiary-container)) 0%, rgb(var(--md-sys-color-secondary-container)) 100%);
+  border-radius: 999px;
+  border: 2px solid rgba(var(--md-sys-color-surface), 0.65);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18), 0 0 0 2px rgba(var(--md-sys-color-tertiary), 0.2);
+  animation: expressivePopIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 
 .state-layer::before {
