@@ -1,29 +1,33 @@
 <template>
-  <div class="w-full h-full py-6 px-4 overflow-y-auto">
-    <p class="mb-2 text-base text-on-surface">{{ $strings.HeaderDownloads }} ({{ localLibraryItems.length }})</p>
+  <div class="w-full h-full py-4 px-4 overflow-y-auto downloads-scroll-container">
+    <p class="px-2 mb-2 text-title-medium text-on-surface-variant">{{ $strings.HeaderDownloads }} ({{ localLibraryItems.length }})</p>
 
-    <div class="w-full">
+    <div v-if="localLibraryItems.length" class="downloads-card">
       <template v-for="(mediaItem, num) in localLibraryItems">
-        <div :key="mediaItem.id" class="w-full">
-          <nuxt-link :to="`/localMedia/item/${mediaItem.id}`" class="flex items-center">
-            <div class="w-16 h-16 min-w-16 min-h-16 flex-none bg-primary relative">
-              <img v-if="mediaItem.coverPathSrc" :src="mediaItem.coverPathSrc" class="w-full h-full object-contain" />
+        <nuxt-link :key="mediaItem.id" :to="`/localMedia/item/${mediaItem.id}`" class="downloads-row state-layer">
+          <div class="downloads-cover flex-none relative">
+            <img v-if="mediaItem.coverPathSrc" :src="mediaItem.coverPathSrc" class="w-full h-full object-cover" />
+            <div v-else class="w-full h-full flex items-center justify-center bg-primary">
+              <span class="material-symbols text-on-primary">book</span>
             </div>
-            <div class="px-2 flex-grow">
-              <p class="text-sm">{{ mediaItem.media.metadata.title }}</p>
-              <p v-if="mediaItem.mediaType == 'book'" class="text-xs text-on-surface-variant">{{ mediaItem.media.tracks.length }} {{ $strings.LabelTracks }}</p>
-              <p v-else-if="mediaItem.mediaType == 'podcast'" class="text-xs text-on-surface-variant">{{ mediaItem.media.episodes.length }} {{ $strings.HeaderEpisodes }}</p>
-              <p v-if="mediaItem.size" class="text-xs text-on-surface-variant">{{ $bytesPretty(mediaItem.size) }}</p>
-            </div>
-            <div class="w-8 h-8 flex items-center justify-center">
-              <span class="material-symbols text-2xl text-on-surface-variant">chevron_right</span>
-            </div>
-          </nuxt-link>
-          <div v-if="num + 1 < localLibraryItems.length" class="flex border-t border-outline-variant my-3" />
-        </div>
+          </div>
+          <div class="flex-grow min-w-0 pl-3 pr-2">
+            <p class="truncate text-on-surface text-body-medium font-medium">{{ mediaItem.media.metadata.title }}</p>
+            <p v-if="mediaItem.mediaType == 'book'" class="truncate text-on-surface-variant text-body-small">
+              {{ mediaItem.media.tracks.length }} {{ $strings.LabelTracks }}<span v-if="mediaItem.size"> · {{ $bytesPretty(mediaItem.size) }}</span>
+            </p>
+            <p v-else-if="mediaItem.mediaType == 'podcast'" class="truncate text-on-surface-variant text-body-small">
+              {{ mediaItem.media.episodes.length }} {{ $strings.HeaderEpisodes }}<span v-if="mediaItem.size"> · {{ $bytesPretty(mediaItem.size) }}</span>
+            </p>
+            <p v-else-if="mediaItem.size" class="truncate text-on-surface-variant text-body-small">{{ $bytesPretty(mediaItem.size) }}</p>
+          </div>
+          <div class="w-8 h-8 flex items-center justify-center flex-none">
+            <span class="material-symbols text-on-surface-variant">chevron_right</span>
+          </div>
+        </nuxt-link>
       </template>
     </div>
-    <div v-if="localLibraryItems.length" class="mt-4 text-sm text-on-surface-variant">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(localLibraryItems.reduce((acc, item) => acc + item.size, 0)) }}</div>
+    <div v-if="localLibraryItems.length" class="mt-3 px-2 text-body-small text-on-surface-variant">{{ $strings.LabelTotalSize }}: {{ $bytesPretty(localLibraryItems.reduce((acc, item) => acc + item.size, 0)) }}</div>
   </div>
 </template>
 
@@ -79,4 +83,34 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.downloads-scroll-container {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+.downloads-card {
+  background-color: rgb(var(--md-sys-color-surface-container));
+  border-radius: 24px;
+  overflow: hidden;
+}
+.downloads-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  min-height: 72px;
+  text-decoration: none;
+}
+.downloads-row + .downloads-row {
+  border-top: 1px solid rgb(var(--md-sys-color-outline-variant) / 0.5);
+}
+.downloads-cover {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: rgb(var(--md-sys-color-surface-variant));
+}
+</style>
 

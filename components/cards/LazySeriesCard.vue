@@ -1,5 +1,5 @@
 <template>
-  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card series-card-shell expressive-card p-0 rounded-3xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative" @click="clickCard">
+  <div ref="card" :id="`series-card-${index}`" :style="{ minWidth: width + 'px', maxWidth: width + 'px', height: height + 'px' }" class="material-3-card series-card-shell expressive-card p-0 rounded-2xl z-10 bg-surface-container cursor-pointer shadow-elevation-1 hover:shadow-elevation-3 transition-all duration-300 ease-expressive state-layer relative overflow-hidden" @click="clickCard">
     <!-- Cover image container - fills entire card (first in DOM, lowest z-index) -->
     <div class="cover-container series-image-container z-0" :class="{ 'image-only': !isAltViewEnabled }">
       <!-- Loading placeholder -->
@@ -290,19 +290,21 @@ export default {
 }
 
 .series-image-container {
-  position: relative;
+  position: absolute;
+  inset: 0;
+  width: 100%;
   height: 100%;
   overflow: hidden;
   background: rgb(var(--md-sys-color-surface-container));
+  border-radius: inherit;
 }
 
 .series-image-container.image-only {
-  border-radius: 16px;
+  border-radius: inherit;
 }
 
 .series-image-container:not(.image-only) {
-  border-top-left-radius: 16px;
-  border-top-right-radius: 16px;
+  border-radius: inherit;
 }
 
 .series-meta {
@@ -319,9 +321,9 @@ export default {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.78) 55%, rgba(var(--md-sys-color-surface-container-high), 0.9) 100%);
-  backdrop-filter: blur(10px) saturate(1.05);
-  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  background: linear-gradient(180deg, rgba(var(--md-sys-color-surface-container), 0) 2%, rgba(var(--md-sys-color-surface-container), 0.9) 50%, rgba(var(--md-sys-color-surface-container-high), 0.99) 100%);
+  backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
+  -webkit-backdrop-filter: blur(10px) brightness(0.62) saturate(0.82);
 }
 
 .series-meta > * {

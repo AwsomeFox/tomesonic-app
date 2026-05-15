@@ -1,10 +1,13 @@
 <template>
   <modals-modal v-model="show" :width="200" height="100%">
     <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
-      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%">
+      <div class="w-full overflow-x-hidden overflow-y-auto bg-surface-container-high rounded-3xl border border-outline-variant border-opacity-40 shadow-elevation-4" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
-        <div class="px-6 py-4 border-b border-outline-variant">
-          <h2 class="text-headline-small text-on-surface font-medium">{{ $strings.HeaderSleepTimer }}</h2>
+        <div class="px-6 pt-5 pb-3">
+          <div class="w-full flex items-center">
+            <span class="material-symbols text-on-surface mr-3" style="font-size: 24px">bedtime</span>
+            <h2 class="text-headline-small text-on-surface font-medium flex-grow">{{ $strings.HeaderSleepTimer }}</h2>
+          </div>
         </div>
 
         <div v-if="manualTimerModal" class="p-4">
@@ -18,20 +21,20 @@
           </div>
           <ui-btn @click="clickedOption(manualTimeoutMin)" class="w-full">{{ $strings.ButtonSetTimer }}</ui-btn>
         </div>
-        <ul v-else-if="!sleepTimerRunning" class="h-full w-full" role="listbox" aria-labelledby="listbox-label">
+        <ul v-else-if="!sleepTimerRunning" class="w-full px-2 pb-2 flex flex-col gap-1" role="listbox" aria-labelledby="listbox-label">
           <template v-for="timeout in timeouts">
-            <li :key="timeout" class="text-on-surface select-none relative py-4 cursor-pointer state-layer" role="option" @click="clickedOption(timeout)">
+            <li :key="timeout" class="text-on-surface select-none relative py-3 rounded-2xl cursor-pointer state-layer" role="option" @click="clickedOption(timeout)">
               <div class="flex items-center justify-center">
                 <span class="font-normal block truncate text-lg">{{ timeout }} min</span>
               </div>
             </li>
           </template>
-          <li v-if="currentEndOfChapterTime" class="text-on-surface select-none relative py-4 cursor-pointer state-layer" role="option" @click="clickedChapterOption(timeout)">
+          <li v-if="currentEndOfChapterTime" class="text-on-surface select-none relative py-3 rounded-2xl cursor-pointer state-layer" role="option" @click="clickedChapterOption(timeout)">
             <div class="flex items-center justify-center">
               <span class="font-normal block truncate text-lg text-center">{{ $strings.LabelEndOfChapter }}</span>
             </div>
           </li>
-          <li class="text-on-surface select-none relative py-4 cursor-pointer state-layer" role="option" @click="manualTimerModal = true">
+          <li class="text-on-surface select-none relative py-3 rounded-2xl cursor-pointer state-layer" role="option" @click="manualTimerModal = true">
             <div class="flex items-center justify-center">
               <span class="font-normal block truncate text-lg text-center">{{ $strings.LabelCustomTime }}</span>
             </div>

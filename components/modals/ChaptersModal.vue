@@ -1,23 +1,25 @@
 <template>
   <modals-modal v-model="show" :width="400" height="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop >
-      <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface rounded-2xl border border-outline-variant shadow-elevation-4 backdrop-blur-md" style="max-height: 75%" >
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div ref="container" class="w-full overflow-x-hidden overflow-y-auto bg-surface-container-high rounded-3xl border border-outline-variant border-opacity-40 shadow-elevation-4" style="max-height: 75%">
         <!-- Material 3 Modal Header -->
-        <div v-if="currentChapter" class="px-6 py-4 border-b border-outline-variant">
-          <h2 class="text-headline-small text-on-surface font-medium">{{ chapters.length }} {{ $strings.LabelChapters }}</h2>
+        <div v-if="currentChapter" class="px-6 pt-5 pb-3">
+          <div class="w-full flex items-center">
+            <span class="material-symbols text-on-surface mr-3" style="font-size: 24px">format_list_numbered</span>
+            <h2 class="text-headline-small text-on-surface font-medium flex-grow">{{ chapters.length }} {{ $strings.LabelChapters }}</h2>
+          </div>
         </div>
 
-        <ul class="h-full w-full" role="listbox" aria-labelledby="listbox-label">
+        <ul class="h-full w-full px-2 pb-3 flex flex-col gap-1" role="listbox" aria-labelledby="listbox-label">
           <template v-for="chapter in chapters">
-            <li :key="chapter.id" :id="`chapter-row-${chapter.id}`" class="text-on-surface select-none relative py-4 cursor-pointer state-layer" :class="currentChapterId === chapter.id ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(chapter)">
-              <div class="relative flex items-center pl-3 pr-20">
+            <li :key="chapter.id" :id="`chapter-row-${chapter.id}`" class="text-on-surface select-none relative py-3 px-3 rounded-2xl cursor-pointer state-layer" :class="currentChapterId === chapter.id ? 'bg-primary-container text-on-primary-container' : ''" role="option" @click="clickedOption(chapter)">
+              <div class="relative flex items-center pr-16">
+                <span v-if="currentChapterId === chapter.id" class="material-symbols mr-2 text-on-primary-container" style="font-size: 20px">play_arrow</span>
                 <p class="font-normal block truncate text-sm">{{ chapter.title }}</p>
-                <div class="absolute top-0 right-3 -mt-0.5">
-                  <span class="font-mono text-on-surface-variant leading-3 text-sm" style="letter-spacing: -0.5px">{{ $secondsToTimestamp(chapter.start / _playbackRate) }}</span>
+                <div class="absolute right-0 top-1/2 -translate-y-1/2">
+                  <span class="font-mono leading-3 text-sm" :class="currentChapterId === chapter.id ? 'text-on-primary-container' : 'text-on-surface-variant'" style="letter-spacing: -0.5px">{{ $secondsToTimestamp(chapter.start / _playbackRate) }}</span>
                 </div>
               </div>
-
-              <div v-show="chapter.id === currentChapterId" class="w-0.5 h-full absolute top-0 left-0 bg-yellow-400" />
             </li>
           </template>
         </ul>

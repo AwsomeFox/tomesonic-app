@@ -2,7 +2,7 @@
   <div class="w-full h-full overflow-y-auto">
     <div id="bookshelf" class="w-full p-4 library-scroll-container" :style="contentPaddingStyle">
       <div class="flex flex-wrap justify-center">
-        <template v-for="author in authors">
+        <template v-for="author in sortedAuthors">
           <cards-author-card :key="author.id" :author="author" :width="cardWidth" :height="cardHeight" class="p-2" />
         </template>
       </div>
@@ -41,6 +41,50 @@ export default {
     },
     contentPaddingStyle() {
       return this.$store.getters['getIsPlayerOpen'] ? { paddingBottom: '120px' } : {}
+    },
+    authorsOrderBy() {
+      return this.$store.state.globals.authorsOrderBy || 'name'
+    },
+    authorsOrderDesc() {
+      return !!this.$store.state.globals.authorsOrderDesc
+    },
+    sortedAuthors() {
+      const list = Array.isArray(this.authors) ? [...this.authors] : []
+      const orderBy = this.authorsOrderBy
+      const desc = this.authorsOrderDesc
+      const getLastFirst = (name) => {
+        const str = `${name || ''}`.trim()
+        const parts = str.split(/\s+/)
+        if (parts.length < 2) return str.toLowerCase()
+        const last = parts.pop()
+        return `${last} ${parts.join(' ')}`.toLowerCase()
+      }
+      list.sort((a, b) => {
+        let av, bv
+        switch (orderBy) {
+          case 'numBooks':
+            av = Number(a.numBooks || 0)
+            bv = Number(b.numBooks || 0)
+            break
+          case 'addedAt':
+            av = Number(a.addedAt || 0)
+            bv = Number(b.addedAt || 0)
+            break
+          case 'lastFirst':
+            av = getLastFirst(a.name)
+            bv = getLastFirst(b.name)
+            break
+          case 'name':
+          default:
+            av = `${a.name || ''}`.toLowerCase()
+            bv = `${b.name || ''}`.toLowerCase()
+            break
+        }
+        if (av < bv) return desc ? 1 : -1
+        if (av > bv) return desc ? -1 : 1
+        return 0
+      })
+      return list
     }
   },
   methods: {

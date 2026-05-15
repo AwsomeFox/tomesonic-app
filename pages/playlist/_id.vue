@@ -10,9 +10,13 @@
             {{ playlistName }}
           </h1>
           <div class="flex-grow" />
-          <ui-btn v-if="showPlayButton" color="success" :padding-x="4" :loading="playerIsStartingForThisMedia" small class="flex items-center justify-center mx-1 w-24" @click="playClick">
-            <span class="material-symbols text-2xl fill text-on-surface">{{ playerIsPlaying ? 'pause' : 'play_arrow' }}</span>
-            <span class="px-1 text-sm">{{ playerIsPlaying ? $strings.ButtonPause : $strings.ButtonPlay }}</span>
+          <ui-btn v-if="showPlayButton" color="primary" :padding-x="4" :loading="playerIsStartingForThisMedia" class="flex items-center justify-center mx-1 play-cta" @click="playClick">
+            <transition name="play-icon-swap" mode="out-in">
+              <span :key="playerIsPlaying ? 'pause' : 'play'" class="material-symbols text-2xl fill text-on-primary">{{ playerIsPlaying ? 'pause' : 'play_arrow' }}</span>
+            </transition>
+            <transition name="play-label-swap" mode="out-in">
+              <span :key="playerIsPlaying ? 'pause' : 'play'" class="px-1 text-sm text-on-primary">{{ playerIsPlaying ? $strings.ButtonPause : $strings.ButtonPlay }}</span>
+            </transition>
           </ui-btn>
         </div>
 

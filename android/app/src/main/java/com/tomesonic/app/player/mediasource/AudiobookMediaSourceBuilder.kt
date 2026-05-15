@@ -429,10 +429,22 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
         val chapter = playbackSession.chapters.getOrNull(segment.chapterIndex)
         val baseMetadata = playbackSession.getExoMediaMetadata(context, null, chapter, segment.chapterIndex)
 
-        // Keep artworkUri so the phone notification can resolve higher-quality artwork
-        // through the session BitmapLoader, but also embed a small artworkData payload
-        // for Wear OS/bridge surfaces that rely on metadata bytes instead of URI fetches.
-        val artworkData = getArtworkDataForUri(baseMetadata.artworkUri)
+        // IMPORTANT: do NOT embed artworkData here. Each chapter becomes a queue
+        // entry that the Media3 legacy stub bridges to Wear OS via
+        // MediaSessionCompat.setQueue(). The whole queue is delivered in a
+        // single Binder transaction (~1 MB hard limit). Embedding ~30-60 KB of
+        // JPEG bytes per chapter on books with many chapters silently exceeds
+        // that limit, which causes Wear OS to show an empty "Up Next" list
+        // even though Android Auto (which uses a different transport) still
+        // sees the chapter list. Artwork bytes are embedded only on the
+        // currently-playing MediaItem via
+        // MediaSessionManager.refreshArtworkOnTimeline(), which Wear's
+        // now-playing card reads directly.
+        //
+        // We still touch getArtworkDataForUri() here so that the async
+        // prefetch is kicked off if the cache is cold; the onArtworkLoaded
+        // callback then re-embeds bytes on the current item.
+        getArtworkDataForUri(baseMetadata.artworkUri)
 
         val builder = MediaMetadata.Builder()
             .setTitle(baseMetadata.title)
@@ -442,7 +454,6 @@ class AudiobookMediaSourceBuilder(private val context: Context) {
             .setAlbumTitle(baseMetadata.albumTitle)
             .setDescription(baseMetadata.description)
             .setArtworkUri(baseMetadata.artworkUri) // This includes the library cover image
-            .setArtworkData(artworkData, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
             .setMediaType(baseMetadata.mediaType)
             .setTrackNumber(segment.chapterIndex + 1)
             .setDurationMs(segment.durationMs) // Set chapter duration for Android Auto timeline

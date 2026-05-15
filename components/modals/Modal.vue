@@ -3,7 +3,7 @@
     <div class="absolute top-0 left-0 w-full h-40 bg-gradient-to-b from-black to-transparent opacity-90 pointer-events-none" />
 
     <slot name="outer" />
-    <div ref="content" style="min-height: 200px; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)" class="relative text-on-surface max-h-screen" :style="{ height: modalHeight, width: modalWidth, maxWidth: maxWidth, transform: contentTransform }" @click.stop>
+    <div ref="content" style="min-height: 200px; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)" class="relative text-on-surface max-h-screen" :style="{ height: modalHeight, width: modalWidth, maxWidth: maxWidth, transform: contentTransform }" @click="onContentClick">
       <slot />
     </div>
   </div>
@@ -75,23 +75,23 @@ export default {
   methods: {
     clickBg(ev) {
       if (this.processing && this.persistent) return
-
-      const clickedElement = ev.target
-
-      // Only dismiss if we clicked the wrapper itself (true background)
-      if (clickedElement === this.$refs.wrapper) {
+      // Only treat clicks on the outer wrapper itself (the dim area
+      // around the modal content) as background dismiss. Clicks inside
+      // the content area are handled by onContentClick.
+      if (ev.target === this.$refs.wrapper) {
         this.show = false
-        return
       }
-
-      // Check if any parent element up to the modal content has data-modal-backdrop
-      let element = clickedElement
-      while (element && element !== this.$refs.content) {
-        if (element.hasAttribute && element.hasAttribute('data-modal-backdrop')) {
-          this.show = false
-          return
-        }
-        element = element.parentElement
+    },
+    onContentClick(ev) {
+      if (this.processing && this.persistent) return
+      // Modals often wrap their visible card in a `[data-modal-backdrop]`
+      // spacer that fills the slot. A click that lands *directly* on that
+      // spacer (not on the card or its children) is an outside-the-card
+      // click and should dismiss. Card clicks fire on the card element
+      // itself and never match the attribute on this exact element.
+      const target = ev.target
+      if (target && target.nodeType === 1 && target.hasAttribute && target.hasAttribute('data-modal-backdrop')) {
+        this.show = false
       }
     },
     setShow() {
@@ -156,7 +156,6 @@ export default {
     this.$eventBus.$on('close-modal', this.closeModalEvt)
     this.el = this.$refs.wrapper
     this.content = this.$refs.content
-
 
     // Remove modal from its initial position but keep it in memory
     if (this.el.parentNode) {

@@ -1,192 +1,282 @@
 <template>
-  <div class="w-full h-full px-6 py-8 overflow-y-auto" :style="contentPaddingStyle">
-    <!-- Display settings -->
-    <p class="uppercase text-label-small font-semibold text-fg-muted mb-2">{{ $strings.HeaderUserInterfaceSettings }}</p>
-    <div class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleEnableAltView">
-        <ui-toggle-switch v-model="enableBookshelfView" @input="saveSettings" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelUseBookshelfView }}</p>
-    </div>
-    <!-- screen.orientation.lock not supported on iOS webview -->
-    <div v-if="!isiOS" class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click.stop="toggleLockOrientation">
-        <ui-toggle-switch v-model="lockCurrentOrientation" class="pointer-events-none" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelLockOrientation }}</p>
-    </div>
-    <div class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelHapticFeedback }}</p>
-      <div @click.stop="showHapticFeedbackOptions">
-        <ui-text-input :value="hapticFeedbackOption" readonly append-icon="expand_more" variant="outlined" style="max-width: 200px" />
-      </div>
-    </div>
-    <div class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelLanguage }}</p>
-      <div @click.stop="showLanguageOptions">
-        <ui-text-input :value="languageOption" readonly append-icon="expand_more" variant="outlined" style="max-width: 200px" />
-      </div>
-    </div>
-    <div class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelTheme }}</p>
-      <div @click.stop="showThemeOptions">
-        <ui-text-input :value="themeOption" readonly append-icon="expand_more" variant="outlined" style="max-width: 200px" />
-      </div>
-    </div>
-    <div v-if="$platform === 'android'" class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleDynamicColors">
-        <ui-toggle-switch v-model="settings.enableDynamicColors" @input="saveSettings" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelUseDynamicColors || 'Use Dynamic Colors (Material You)' }}</p>
-      <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('dynamicColors')">info</span>
-    </div>
-    <div class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleHideNonAudiobooksGlobal">
-        <ui-toggle-switch :value="hideNonAudiobooksGlobal" class="pointer-events-none" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelHideNonAudiobooksGlobal || 'Hide non-audiobooks globally' }}</p>
-    </div>
+  <div class="w-full h-full overflow-y-auto bg-surface-dynamic" :style="contentPaddingStyle">
+    <div class="settings-page mx-auto w-full max-w-2xl px-4 py-6 space-y-6">
+      <!-- Display settings -->
+      <section>
+        <h2 class="settings-section-header">{{ $strings.HeaderUserInterfaceSettings }}</h2>
+        <div class="settings-card">
+          <!-- screen.orientation.lock not supported on iOS webview -->
+          <div v-if="!isiOS" class="settings-row" @click="toggleLockOrientation">
+            <span class="settings-row-icon material-symbols">screen_rotation</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelLockOrientation }}</p>
+            </div>
+            <ui-toggle-switch v-model="lockCurrentOrientation" class="pointer-events-none" />
+          </div>
+          <div class="settings-row" @click.stop="showHapticFeedbackOptions">
+            <span class="settings-row-icon material-symbols">vibration</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelHapticFeedback }}</p>
+              <p class="settings-row-value">{{ hapticFeedbackOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+          <div class="settings-row" @click.stop="showLanguageOptions">
+            <span class="settings-row-icon material-symbols">language</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelLanguage }}</p>
+              <p class="settings-row-value">{{ languageOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+          <div class="settings-row" @click.stop="showThemeOptions">
+            <span class="settings-row-icon material-symbols">palette</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelTheme }}</p>
+              <p class="settings-row-value">{{ themeOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+          <div v-if="$platform === 'android'" class="settings-row" @click="toggleDynamicColors">
+            <span class="settings-row-icon material-symbols">colors</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelUseDynamicColors || 'Use Dynamic Colors (Material You)' }}</p>
+              <p class="settings-row-supporting">{{ $strings.LabelUseDynamicColorsHelp || 'Tint the app with colors from your wallpaper' }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('dynamicColors')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.enableDynamicColors" class="pointer-events-none" />
+          </div>
+          <div class="settings-row" @click="toggleHideNonAudiobooksGlobal">
+            <span class="settings-row-icon material-symbols">headphones</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelHideNonAudiobooksGlobal || 'Hide non-audiobooks globally' }}</p>
+            </div>
+            <ui-toggle-switch :value="hideNonAudiobooksGlobal" class="pointer-events-none" />
+          </div>
+        </div>
+      </section>
 
-    <!-- Playback settings -->
-    <p class="uppercase text-label-small font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderPlaybackSettings }}</p>
-    <div class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleDisableAutoRewind">
-        <ui-toggle-switch v-model="settings.disableAutoRewind" @input="saveSettings" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelDisableAutoRewind }}</p>
-    </div>
-    <div class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleJumpBackwards">
-        <span class="material-symbols text-display-large text-on-surface">{{ currentJumpBackwardsTimeIcon }}</span>
-      </div>
-      <p class="pl-4">{{ $strings.LabelJumpBackwardsTime }}</p>
-    </div>
-    <div class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleJumpForward">
-        <span class="material-symbols text-display-large text-on-surface">{{ currentJumpForwardTimeIcon }}</span>
-      </div>
-      <p class="pl-4">{{ $strings.LabelJumpForwardsTime }}</p>
-    </div>
-    <div v-if="!isiOS" class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleEnableMp3IndexSeeking">
-        <ui-toggle-switch v-model="settings.enableMp3IndexSeeking" @input="saveSettings" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelEnableMp3IndexSeeking }}</p>
-      <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showConfirmMp3IndexSeeking">info</span>
-    </div>
-    <div class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleAllowSeekingOnMediaControls">
-        <ui-toggle-switch v-model="settings.allowSeekingOnMediaControls" @input="saveSettings" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelAllowSeekingOnMediaControls }}</p>
-    </div>
+      <!-- Playback settings -->
+      <section>
+        <h2 class="settings-section-header">{{ $strings.HeaderPlaybackSettings }}</h2>
+        <div class="settings-card">
+          <div class="settings-row" @click="toggleDisableAutoRewind">
+            <span class="settings-row-icon material-symbols">replay</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelDisableAutoRewind }}</p>
+            </div>
+            <ui-toggle-switch v-model="settings.disableAutoRewind" class="pointer-events-none" />
+          </div>
+          <div class="settings-row" @click.stop="showJumpBackwardsOptions">
+            <span class="material-symbols settings-row-icon">{{ currentJumpBackwardsTimeIcon }}</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelJumpBackwardsTime }}</p>
+              <p class="settings-row-value">{{ jumpBackwardsTimeOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+          <div class="settings-row" @click.stop="showJumpForwardOptions">
+            <span class="material-symbols settings-row-icon">{{ currentJumpForwardTimeIcon }}</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelJumpForwardsTime }}</p>
+              <p class="settings-row-value">{{ jumpForwardTimeOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+          <div v-if="!isiOS" class="settings-row" @click="toggleEnableMp3IndexSeeking">
+            <span class="settings-row-icon material-symbols">fast_forward</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelEnableMp3IndexSeeking }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showConfirmMp3IndexSeeking">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.enableMp3IndexSeeking" class="pointer-events-none" />
+          </div>
+          <div class="settings-row" @click="toggleAllowSeekingOnMediaControls">
+            <span class="settings-row-icon material-symbols">touch_app</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelAllowSeekingOnMediaControls }}</p>
+            </div>
+            <ui-toggle-switch v-model="settings.allowSeekingOnMediaControls" class="pointer-events-none" />
+          </div>
+        </div>
+      </section>
 
-    <!-- Sleep timer settings -->
-    <template v-if="!isiOS">
-      <p class="uppercase text-label-small font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderSleepTimerSettings }}</p>
-      <div class="flex items-center py-3">
-        <div class="w-12 flex justify-center mr-2" @click="toggleDisableShakeToResetSleepTimer">
-          <ui-toggle-switch v-model="settings.disableShakeToResetSleepTimer" @input="saveSettings" />
+      <!-- Sleep timer settings -->
+      <section v-if="!isiOS">
+        <h2 class="settings-section-header">{{ $strings.HeaderSleepTimerSettings }}</h2>
+        <div class="settings-card">
+          <div class="settings-row" @click="toggleDisableShakeToResetSleepTimer">
+            <span class="settings-row-icon material-symbols">vibration</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelDisableShakeToReset }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('disableShakeToResetSleepTimer')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.disableShakeToResetSleepTimer" class="pointer-events-none" />
+          </div>
+          <div v-if="!settings.disableShakeToResetSleepTimer" class="settings-row" @click.stop="showShakeSensitivityOptions">
+            <span class="settings-row-icon material-symbols">tune</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelShakeSensitivity }}</p>
+              <p class="settings-row-value">{{ shakeSensitivityOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+          <div class="settings-row" @click="toggleDisableSleepTimerFadeOut">
+            <span class="settings-row-icon material-symbols">volume_off</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelDisableAudioFadeOut }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('disableSleepTimerFadeOut')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.disableSleepTimerFadeOut" class="pointer-events-none" />
+          </div>
+          <div class="settings-row" @click="toggleDisableSleepTimerResetFeedback">
+            <span class="settings-row-icon material-symbols">vibration</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelDisableVibrateOnReset }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('disableSleepTimerResetFeedback')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.disableSleepTimerResetFeedback" class="pointer-events-none" />
+          </div>
+          <div class="settings-row" @click="toggleSleepTimerAlmostDoneChime">
+            <span class="settings-row-icon material-symbols">notifications_active</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelSleepTimerAlmostDoneChime }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('enableSleepTimerAlmostDoneChime')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.enableSleepTimerAlmostDoneChime" class="pointer-events-none" />
+          </div>
+          <div class="settings-row" @click="toggleAutoSleepTimer">
+            <span class="settings-row-icon material-symbols">schedule</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelAutoSleepTimer }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('autoSleepTimer')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.autoSleepTimer" class="pointer-events-none" />
+          </div>
+          <template v-if="settings.autoSleepTimer">
+            <div class="settings-row">
+              <span class="settings-row-icon material-symbols">bedtime</span>
+              <div class="settings-row-text">
+                <p class="settings-row-title">{{ $strings.LabelStartTime }}</p>
+              </div>
+              <ui-text-input type="time" v-model="settings.autoSleepTimerStartTime" variant="outlined" style="width: 130px" @input="autoSleepTimerTimeUpdated" />
+            </div>
+            <div class="settings-row">
+              <span class="settings-row-icon material-symbols">alarm</span>
+              <div class="settings-row-text">
+                <p class="settings-row-title">{{ $strings.LabelEndTime }}</p>
+              </div>
+              <ui-text-input type="time" v-model="settings.autoSleepTimerEndTime" variant="outlined" style="width: 130px" @input="autoSleepTimerTimeUpdated" />
+            </div>
+            <div class="settings-row" @click.stop="showSleepTimerOptions">
+              <span class="settings-row-icon material-symbols">timer</span>
+              <div class="settings-row-text">
+                <p class="settings-row-title">{{ $strings.LabelSleepTimer }}</p>
+                <p class="settings-row-value">{{ sleepTimerLengthOption }}</p>
+              </div>
+              <span class="material-symbols settings-row-trailing">expand_more</span>
+            </div>
+            <div class="settings-row" @click="toggleAutoSleepTimerAutoRewind">
+              <span class="settings-row-icon material-symbols">replay_30</span>
+              <div class="settings-row-text">
+                <p class="settings-row-title">{{ $strings.LabelAutoSleepTimerAutoRewind }}</p>
+              </div>
+              <button class="settings-row-info" @click.stop="showInfo('autoSleepTimerAutoRewind')">
+                <span class="material-symbols">info</span>
+              </button>
+              <ui-toggle-switch v-model="settings.autoSleepTimerAutoRewind" class="pointer-events-none" />
+            </div>
+            <div v-if="settings.autoSleepTimerAutoRewind" class="settings-row" @click.stop="showAutoSleepTimerRewindOptions">
+              <span class="settings-row-icon material-symbols">history</span>
+              <div class="settings-row-text">
+                <p class="settings-row-title">{{ $strings.LabelAutoRewindTime }}</p>
+                <p class="settings-row-value">{{ autoSleepTimerRewindLengthOption }}</p>
+              </div>
+              <span class="material-symbols settings-row-trailing">expand_more</span>
+            </div>
+          </template>
         </div>
-        <p class="pl-4">{{ $strings.LabelDisableShakeToReset }}</p>
-        <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('disableShakeToResetSleepTimer')">info</span>
-      </div>
-      <div v-if="!settings.disableShakeToResetSleepTimer" class="py-3 flex items-center">
-        <p class="pr-4 w-36">{{ $strings.LabelShakeSensitivity }}</p>
-        <div @click.stop="showShakeSensitivityOptions">
-          <ui-text-input :value="shakeSensitivityOption" readonly append-icon="expand_more" variant="outlined" style="width: 145px; max-width: 145px" />
-        </div>
-      </div>
-    </template>
-    <div class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleDisableSleepTimerFadeOut">
-        <ui-toggle-switch v-model="settings.disableSleepTimerFadeOut" @input="saveSettings" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelDisableAudioFadeOut }}</p>
-      <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('disableSleepTimerFadeOut')">info</span>
-    </div>
-    <template v-if="!isiOS">
-      <div class="flex items-center py-3">
-        <div class="w-12 flex justify-center mr-2" @click="toggleDisableSleepTimerResetFeedback">
-          <ui-toggle-switch v-model="settings.disableSleepTimerResetFeedback" @input="saveSettings" />
-        </div>
-        <p class="pl-4">{{ $strings.LabelDisableVibrateOnReset }}</p>
-        <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('disableSleepTimerResetFeedback')">info</span>
-      </div>
-      <div class="flex items-center py-3">
-        <div class="w-12 flex justify-center mr-2" @click="toggleSleepTimerAlmostDoneChime">
-          <ui-toggle-switch v-model="settings.enableSleepTimerAlmostDoneChime" @input="saveSettings" />
-        </div>
-        <p class="pl-4">{{ $strings.LabelSleepTimerAlmostDoneChime }}</p>
-        <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('enableSleepTimerAlmostDoneChime')">info</span>
-      </div>
-      <div class="flex items-center py-3">
-        <div class="w-12 flex justify-center mr-2" @click="toggleAutoSleepTimer">
-          <ui-toggle-switch v-model="settings.autoSleepTimer" @input="saveSettings" />
-        </div>
-        <p class="pl-4">{{ $strings.LabelAutoSleepTimer }}</p>
-        <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('autoSleepTimer')">info</span>
-      </div>
-    </template>
-    <!-- Auto Sleep timer settings -->
-    <div v-if="settings.autoSleepTimer" class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelStartTime }}</p>
-      <ui-text-input type="time" v-model="settings.autoSleepTimerStartTime" variant="outlined" style="width: 145px; max-width: 145px" @input="autoSleepTimerTimeUpdated" />
-    </div>
-    <div v-if="settings.autoSleepTimer" class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelEndTime }}</p>
-      <ui-text-input type="time" v-model="settings.autoSleepTimerEndTime" variant="outlined" style="width: 145px; max-width: 145px" @input="autoSleepTimerTimeUpdated" />
-    </div>
-    <div v-if="settings.autoSleepTimer" class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelSleepTimer }}</p>
-      <div @click.stop="showSleepTimerOptions">
-        <ui-text-input :value="sleepTimerLengthOption" readonly append-icon="expand_more" variant="outlined" style="width: 145px; max-width: 145px" />
-      </div>
-    </div>
-    <div v-if="settings.autoSleepTimer" class="flex items-center py-3">
-      <div class="w-12 flex justify-center mr-2" @click="toggleAutoSleepTimerAutoRewind">
-        <ui-toggle-switch v-model="settings.autoSleepTimerAutoRewind" @input="saveSettings" />
-      </div>
-      <p class="pl-4">{{ $strings.LabelAutoSleepTimerAutoRewind }}</p>
-      <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('autoSleepTimerAutoRewind')">info</span>
-    </div>
-    <div v-if="settings.autoSleepTimerAutoRewind" class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelAutoRewindTime }}</p>
-      <div @click.stop="showAutoSleepTimerRewindOptions">
-        <ui-text-input :value="autoSleepTimerRewindLengthOption" readonly append-icon="expand_more" variant="outlined" style="width: 145px; max-width: 145px" />
-      </div>
-    </div>
+      </section>
 
-    <!-- Data settings -->
-    <p class="uppercase text-label-small font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderDataSettings }}</p>
-    <div class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelDownloadUsingCellular }}</p>
-      <div @click.stop="showDownloadUsingCellularOptions">
-        <ui-text-input :value="downloadUsingCellularOption" readonly append-icon="expand_more" variant="outlined" style="max-width: 200px" />
-      </div>
-    </div>
-    <div class="py-3 flex items-center">
-      <p class="pr-4 w-36">{{ $strings.LabelStreamingUsingCellular }}</p>
-      <div @click.stop="showStreamingUsingCellularOptions">
-        <ui-text-input :value="streamingUsingCellularOption" readonly append-icon="expand_more" variant="outlined" style="max-width: 200px" />
-      </div>
-    </div>
-
-    <!-- Android Auto settings -->
-    <template v-if="!isiOS">
-      <p class="uppercase text-label-small font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderAndroidAutoSettings }}</p>
-      <div class="py-3 flex items-center">
-        <p class="pr-4 w-36">{{ $strings.LabelAndroidAutoBrowseLimitForGrouping }}</p>
-        <ui-text-input type="number" v-model="settings.androidAutoBrowseLimitForGrouping" variant="outlined" style="width: 145px; max-width: 145px" @input="androidAutoBrowseLimitForGroupingUpdated" />
-        <span class="material-symbols text-display-small ml-2 text-on-surface" @click.stop="showInfo('androidAutoBrowseLimitForGrouping')">info</span>
-      </div>
-      <div class="py-3 flex items-center">
-        <p class="pr-4 w-36">{{ $strings.LabelAndroidAutoBrowseSeriesSequenceOrder }}</p>
-        <div @click.stop="showAndroidAutoBrowseSeriesSequenceOrderOptions">
-          <ui-text-input :value="androidAutoBrowseSeriesSequenceOrderOption" readonly append-icon="expand_more" variant="outlined" style="max-width: 200px" />
+      <!-- iOS-only fade-out toggle (no auto sleep timer section above) -->
+      <section v-else>
+        <h2 class="settings-section-header">{{ $strings.HeaderSleepTimerSettings }}</h2>
+        <div class="settings-card">
+          <div class="settings-row" @click="toggleDisableSleepTimerFadeOut">
+            <span class="settings-row-icon material-symbols">volume_off</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelDisableAudioFadeOut }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('disableSleepTimerFadeOut')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-toggle-switch v-model="settings.disableSleepTimerFadeOut" class="pointer-events-none" />
+          </div>
         </div>
-      </div>
-    </template>
+      </section>
+
+      <!-- Data settings -->
+      <section>
+        <h2 class="settings-section-header">{{ $strings.HeaderDataSettings }}</h2>
+        <div class="settings-card">
+          <div class="settings-row" @click.stop="showDownloadUsingCellularOptions">
+            <span class="settings-row-icon material-symbols">download</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelDownloadUsingCellular }}</p>
+              <p class="settings-row-value">{{ downloadUsingCellularOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+          <div class="settings-row" @click.stop="showStreamingUsingCellularOptions">
+            <span class="settings-row-icon material-symbols">network_cell</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelStreamingUsingCellular }}</p>
+              <p class="settings-row-value">{{ streamingUsingCellularOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Android Auto settings -->
+      <section v-if="!isiOS">
+        <h2 class="settings-section-header">{{ $strings.HeaderAndroidAutoSettings }}</h2>
+        <div class="settings-card">
+          <div class="settings-row">
+            <span class="settings-row-icon material-symbols">format_list_numbered</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelAndroidAutoBrowseLimitForGrouping }}</p>
+            </div>
+            <button class="settings-row-info" @click.stop="showInfo('androidAutoBrowseLimitForGrouping')">
+              <span class="material-symbols">info</span>
+            </button>
+            <ui-text-input type="number" v-model="settings.androidAutoBrowseLimitForGrouping" variant="outlined" style="width: 110px" @input="androidAutoBrowseLimitForGroupingUpdated" />
+          </div>
+          <div class="settings-row" @click.stop="showAndroidAutoBrowseSeriesSequenceOrderOptions">
+            <span class="settings-row-icon material-symbols">sort</span>
+            <div class="settings-row-text">
+              <p class="settings-row-title">{{ $strings.LabelAndroidAutoBrowseSeriesSequenceOrder }}</p>
+              <p class="settings-row-value">{{ androidAutoBrowseSeriesSequenceOrderOption }}</p>
+            </div>
+            <span class="material-symbols settings-row-trailing">expand_more</span>
+          </div>
+        </div>
+      </section>
+    </div>
 
     <div v-show="loading" class="w-full h-full absolute top-0 left-0 flex items-center justify-center z-10">
       <ui-loading-indicator />
@@ -358,23 +448,16 @@ export default {
     }
   },
   computed: {
-    // This is flipped because alt view was the default until v0.9.61-beta
-    enableBookshelfView: {
-      get() {
-        return !this.settings.enableAltView
-      },
-      set(val) {
-        this.settings.enableAltView = !val
-      }
-    },
     isiOS() {
       return this.$platform === 'ios'
     },
     jumpForwardItems() {
-      return this.$store.state.globals.jumpForwardItems || []
+      const items = this.$store.state.globals.jumpForwardItems || []
+      return items.map((i) => ({ ...i, text: `${i.value}s` }))
     },
     jumpBackwardsItems() {
-      return this.$store.state.globals.jumpBackwardsItems || []
+      const items = this.$store.state.globals.jumpBackwardsItems || []
+      return items.map((i) => ({ ...i, text: `${i.value}s` }))
     },
     languageOptionItems() {
       return this.$languageCodeOptions || []
@@ -408,6 +491,14 @@ export default {
     currentJumpBackwardsTimeIndex() {
       var index = this.jumpBackwardsItems.findIndex((jfi) => jfi.value === this.settings.jumpBackwardsTime)
       return index >= 0 ? index : 1
+    },
+    jumpForwardTimeOption() {
+      const item = this.jumpForwardItems.find((i) => i.value === this.settings.jumpForwardTime)
+      return item?.text || `${this.settings.jumpForwardTime}s`
+    },
+    jumpBackwardsTimeOption() {
+      const item = this.jumpBackwardsItems.find((i) => i.value === this.settings.jumpBackwardsTime)
+      return item?.text || `${this.settings.jumpBackwardsTime}s`
     },
     shakeSensitivityOption() {
       const item = this.shakeSensitivityItems.find((i) => i.value === this.settings.shakeSensitivity)
@@ -455,6 +546,8 @@ export default {
       else if (this.moreMenuSetting === 'downloadUsingCellular') return this.downloadUsingCellularItems
       else if (this.moreMenuSetting === 'streamingUsingCellular') return this.streamingUsingCellularItems
       else if (this.moreMenuSetting === 'androidAutoBrowseSeriesSequenceOrder') return this.androidAutoBrowseSeriesSequenceOrderItems
+      else if (this.moreMenuSetting === 'jumpForward') return this.jumpForwardItems
+      else if (this.moreMenuSetting === 'jumpBackwards') return this.jumpBackwardsItems
       return []
     },
     contentPaddingStyle() {
@@ -526,6 +619,12 @@ export default {
         this.saveSettings()
       } else if (this.moreMenuSetting === 'androidAutoBrowseSeriesSequenceOrder') {
         this.settings.androidAutoBrowseSeriesSequenceOrder = action
+        this.saveSettings()
+      } else if (this.moreMenuSetting === 'jumpForward') {
+        this.settings.jumpForwardTime = action
+        this.saveSettings()
+      } else if (this.moreMenuSetting === 'jumpBackwards') {
+        this.settings.jumpBackwardsTime = action
         this.saveSettings()
       }
     },
@@ -646,10 +745,6 @@ export default {
       this.settings.disableAutoRewind = !this.settings.disableAutoRewind
       this.saveSettings()
     },
-    toggleEnableAltView() {
-      this.settings.enableAltView = !this.settings.enableAltView
-      this.saveSettings()
-    },
     toggleAllowSeekingOnMediaControls() {
       this.settings.allowSeekingOnMediaControls = !this.settings.allowSeekingOnMediaControls
       this.saveSettings()
@@ -706,6 +801,14 @@ export default {
       if (next > 2) return
       this.settings.jumpBackwardsTime = this.jumpBackwardsItems[next].value
       this.saveSettings()
+    },
+    showJumpForwardOptions() {
+      this.moreMenuSetting = 'jumpForward'
+      this.showMoreMenuDialog = true
+    },
+    showJumpBackwardsOptions() {
+      this.moreMenuSetting = 'jumpBackwards'
+      this.showMoreMenuDialog = true
     },
     async saveSettings() {
       await this.$hapticsImpact()
@@ -771,3 +874,114 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.settings-section-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(var(--md-sys-color-primary));
+  padding: 0 16px 8px 16px;
+}
+
+.settings-card {
+  background-color: rgb(var(--md-sys-color-surface-container));
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  min-height: 64px;
+  cursor: pointer;
+  position: relative;
+  transition: background-color 150ms ease;
+}
+
+.settings-row + .settings-row {
+  border-top: 1px solid rgb(var(--md-sys-color-outline-variant) / 0.5);
+}
+
+.settings-row:active {
+  background-color: rgb(var(--md-sys-color-on-surface) / 0.08);
+}
+
+.settings-row-icon {
+  font-size: 24px;
+  color: rgb(var(--md-sys-color-on-surface-variant));
+  flex-shrink: 0;
+  width: 32px;
+  text-align: center;
+}
+
+.settings-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-row-title {
+  font-size: 1rem;
+  line-height: 1.4;
+  color: rgb(var(--md-sys-color-on-surface));
+}
+
+.settings-row-value {
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: rgb(var(--md-sys-color-on-surface-variant));
+}
+
+.settings-row-supporting {
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: rgb(var(--md-sys-color-on-surface-variant));
+}
+
+.settings-row-trailing {
+  font-size: 22px;
+  color: rgb(var(--md-sys-color-on-surface-variant));
+  flex-shrink: 0;
+}
+
+.settings-row-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  color: rgb(var(--md-sys-color-on-surface-variant));
+  flex-shrink: 0;
+  transition: background-color 150ms ease;
+}
+
+.settings-row-info:active {
+  background-color: rgb(var(--md-sys-color-on-surface) / 0.12);
+}
+
+.settings-row-info .material-symbols {
+  font-size: 20px;
+}
+
+/* Keep the toggle switch flush-right and consistent across rows by
+   canceling the negative margins from its state-layer wrapper. */
+.settings-row > .state-layer {
+  margin: 0 !important;
+  padding: 8px !important;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-row > .state-layer > .material-3-switch {
+  width: 52px !important;
+  height: 32px !important;
+}
+</style>

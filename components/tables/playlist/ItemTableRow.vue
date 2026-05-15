@@ -10,12 +10,17 @@
             <p class="truncate block text-sm">{{ itemTitle }} <span v-if="localLibraryItem" class="material-symbols text-success text-base align-text-bottom">download_done</span></p>
             <p v-if="authorName" class="truncate block text-fg-muted text-xs">{{ authorName }}</p>
             <p class="text-xxs text-fg-muted">{{ itemDuration }}</p>
+            <!-- M3 expressive progress chip - matches list & home shelf cards -->
+            <div v-if="showProgressChip" class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full bg-tertiary-container text-on-tertiary-container" style="font-size: 0.65rem">
+              <span class="material-symbols" style="font-size: 0.85rem">{{ userIsFinished ? 'check_circle' : 'schedule' }}</span>
+              <span class="font-semibold leading-none">{{ progressChipLabel }}</span>
+            </div>
           </div>
         </div>
-        <div class="w-8 min-w-8 flex justify-center">
-          <button v-if="showPlayBtn" class="w-8 h-8 rounded-full border border-white/20 flex items-center justify-center" @click.stop.prevent="playClick">
-            <span v-if="!playerIsStartingForThisMedia" class="material-symbols text-2xl fill" :class="streamIsPlaying ? '' : 'text-success'">{{ streamIsPlaying ? 'pause' : 'play_arrow' }}</span>
-            <svg v-else class="animate-spin" style="width: 18px; height: 18px" viewBox="0 0 24 24">
+        <div class="w-10 min-w-10 flex justify-center">
+          <button v-if="showPlayBtn" type="button" class="material-3-play-button w-10 h-10 rounded-full flex items-center justify-center shadow-elevation-2 transition-all duration-200 ease-expressive" :class="playerIsStartingForThisMedia ? 'bg-surface-variant' : 'bg-primary'" @click.stop.prevent="playClick">
+            <span v-if="!playerIsStartingForThisMedia" class="material-symbols text-2xl fill text-on-primary">{{ streamIsPlaying ? 'pause' : 'play_arrow' }}</span>
+            <svg v-else class="animate-spin text-on-surface-variant" style="width: 18px; height: 18px" viewBox="0 0 24 24">
               <path fill="currentColor" d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z" />
             </svg>
           </button>
@@ -26,7 +31,8 @@
           </button>
         </div>
       </nuxt-link>
-      <div class="absolute bottom-0 left-0 h-0.5 shadow-sm z-10" :class="userIsFinished ? 'bg-success' : 'bg-yellow-400'" :style="{ width: progressPercent * 100 + '%' }"></div>
+      <!-- Bottom progress bar uses M3 primary/tertiary tokens to match LazyListBookCard -->
+      <div v-if="progressPercent > 0" class="absolute bottom-0 left-0 h-1 z-10 transition-all duration-300 ease-expressive" :class="userIsFinished ? 'bg-tertiary' : 'bg-primary'" :style="{ width: progressPercent * 100 + '%' }"></div>
     </div>
   </div>
 </template>
@@ -139,6 +145,24 @@ export default {
     },
     progressPercent() {
       return Math.max(Math.min(1, this.userItemProgress?.progress || 0), 0)
+    },
+    userTimeRemaining() {
+      const duration = this.episode ? this.episode.duration : this.media.duration
+      if (!duration) return 0
+      const remaining = duration * (1 - this.progressPercent)
+      return remaining > 0 ? remaining : 0
+    },
+    showProgressChip() {
+      if (this.userIsFinished) return true
+      return this.progressPercent > 0
+    },
+    progressChipLabel() {
+      if (this.userIsFinished) return this.$strings?.LabelFinished || 'Finished'
+      const remaining = this.userTimeRemaining
+      if (!remaining) return ''
+      const pretty = this.$elapsedPretty ? this.$elapsedPretty(remaining) : ''
+      if (this.$getString && this.$strings?.LabelTimeRemaining) return this.$getString('LabelTimeRemaining', [pretty])
+      return pretty
     }
   },
   methods: {

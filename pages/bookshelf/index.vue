@@ -15,44 +15,48 @@
 
     <div class="home-page-content" :class="{ 'is-pull-dragging': isPullGestureActive && pullGestureAxis === 'vertical' }" :style="pullContentStyle">
       <!-- Shelf-shaped Material 3 skeletons to match the loaded home layout -->
-      <div v-if="showingSkeleton" class="w-full py-3">
-        <div v-for="shelfIndex in skeletonShelfCount" :key="`shelf-skel-${shelfIndex}`" class="px-4 pb-5">
-          <div
-            class="h-5 mb-3 rounded-md bg-surface-variant shimmer-block"
-            :class="shelfIndex % 2 === 0 ? 'shimmer-ltr' : 'shimmer-rtl'"
-            :style="{
-              '--shimmer-delay': shelfIndex * 120 + 'ms',
-              width: 120 + (shelfIndex % 3) * 36 + 'px'
-            }"
-          ></div>
-
-          <div class="flex items-end overflow-x-hidden overflow-y-visible gap-2" :style="{ height: skeletonShelfHeight + 'px', paddingBottom: skeletonEntityPaddingBottom + 'px' }">
+      <transition name="home-skeleton-fade">
+        <div v-if="showingSkeleton" key="skeleton" class="w-full py-3 home-skeleton-stage">
+          <div v-for="shelfIndex in skeletonShelfCount" :key="`shelf-skel-${shelfIndex}`" class="px-4 pb-5">
             <div
-              v-for="cardIndex in skeletonCardsPerShelf"
-              :key="`card-skel-${shelfIndex}-${cardIndex}`"
-              :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', cardIndex % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
+              class="h-5 mb-3 rounded-md bg-surface-variant shimmer-block"
+              :class="shelfIndex % 2 === 0 ? 'shimmer-ltr' : 'shimmer-rtl'"
               :style="{
-                '--shimmer-delay': shelfIndex * 120 + cardIndex * 90 + 'ms',
-                width: bookSkeletonWidth + 'px',
-                height: bookSkeletonHeight + 'px'
+                '--shimmer-delay': shelfIndex * 120 + 'ms',
+                width: 120 + (shelfIndex % 3) * 36 + 'px'
               }"
-            >
-              <div class="w-full h-full bg-surface-variant shimmer-block relative">
-                <div v-if="altViewEnabled" class="absolute left-0 right-0 bottom-0 px-3 py-2 space-y-2">
-                  <div class="h-3.5 bg-surface shimmer-block rounded-md w-4/5"></div>
-                  <div class="h-3 bg-surface shimmer-block rounded-md w-3/5"></div>
+            ></div>
+
+            <div class="flex items-end overflow-x-hidden overflow-y-visible gap-2" :style="{ height: skeletonShelfHeight + 'px', paddingBottom: skeletonEntityPaddingBottom + 'px' }">
+              <div
+                v-for="cardIndex in skeletonCardsPerShelf"
+                :key="`card-skel-${shelfIndex}-${cardIndex}`"
+                :class="['bg-surface-container rounded-2xl shadow-elevation-1 overflow-hidden skeleton-card', cardIndex % 2 === 0 ? 'shimmer-rtl' : 'shimmer-ltr']"
+                :style="{
+                  '--shimmer-delay': shelfIndex * 120 + cardIndex * 90 + 'ms',
+                  width: bookSkeletonWidth + 'px',
+                  height: bookSkeletonHeight + 'px'
+                }"
+              >
+                <div class="w-full h-full bg-surface-variant shimmer-block relative">
+                  <div v-if="altViewEnabled" class="absolute left-0 right-0 bottom-0 px-3 py-2 space-y-2">
+                    <div class="h-3.5 bg-surface shimmer-block rounded-md w-4/5"></div>
+                    <div class="h-3 bg-surface shimmer-block rounded-md w-3/5"></div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </transition>
 
-      <div v-if="!showingSkeleton" class="w-full" :class="{ 'py-3': altViewEnabled }" :style="contentPaddingStyle">
-        <div v-for="shelf in shelves" :key="shelf.id" class="home-shelf-row">
-          <bookshelf-shelf :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :shelf-id="shelf.id" :animate-items="false" />
+      <transition name="home-content-reveal">
+        <div v-if="!showingSkeleton" key="content" class="w-full home-content-stage" :class="{ 'py-3': altViewEnabled }" :style="contentPaddingStyle">
+          <div v-for="(shelf, shelfIdx) in shelves" :key="shelf.id" class="home-shelf-row" :style="{ '--shelf-stagger': shelfIdx * 60 + 'ms' }">
+            <bookshelf-shelf :label="getShelfLabel(shelf)" :entities="shelf.entities" :type="shelf.type" :shelf-id="shelf.id" :animate-items="false" />
+          </div>
         </div>
-      </div>
+      </transition>
     </div>
   </div>
 </template>
@@ -168,6 +172,15 @@ export default {
       if (!this.isPageActive) return
       // When library ID changes (but not on initial load)
       if (newVal && oldVal && newVal !== oldVal) {
+        // Guard against transient library-id churn during app resume: if we
+        // already have shelves loaded for `newVal` (the actual library we
+        // last rendered), don't wipe the UI back to a skeleton. Without this
+        // guard the home page would briefly flash cached content, snap to
+        // the skeleton, then fade back to the same content on cold start.
+        if (this.loadedLibraryId && this.loadedLibraryId === newVal && this.shelves.length) {
+          console.log('[categories] Library ID watcher: ignoring transient change back to loadedLibraryId', newVal)
+          return
+        }
         console.log('[categories] Library ID switched from', oldVal, 'to', newVal, '- resetting and refetching')
         clearAudioPeopleStatsCache(oldVal)
         // Reset state for new library (actual switch)
@@ -2186,6 +2199,54 @@ export default {
 .home-page-content {
   transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
   will-change: transform;
+  position: relative;
+}
+
+/* Crossfade between skeleton and real content so a sudden state flip
+   (e.g. on app resume) never produces a hard pop / data flash. */
+.home-skeleton-stage,
+.home-content-stage {
+  width: 100%;
+}
+.home-skeleton-fade-enter-active,
+.home-skeleton-fade-leave-active,
+.home-content-reveal-enter-active,
+.home-content-reveal-leave-active {
+  transition: opacity 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+.home-skeleton-fade-enter,
+.home-skeleton-fade-leave-to,
+.home-content-reveal-leave-to {
+  opacity: 0;
+}
+/* Real content slides + fades in expressively. Shelves stagger in via the
+   nested .home-shelf-row animation below. */
+.home-content-reveal-enter-active {
+  transition: opacity 320ms cubic-bezier(0.2, 0, 0, 1);
+}
+.home-content-reveal-enter {
+  opacity: 0;
+}
+.home-content-reveal-enter-active .home-shelf-row {
+  animation: homeShelfReveal 520ms cubic-bezier(0.2, 0.9, 0.3, 1.05) both;
+  animation-delay: var(--shelf-stagger, 0ms);
+}
+
+@keyframes homeShelfReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+    filter: blur(2px);
+  }
+  60% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
 }
 
 .home-shelf-row {

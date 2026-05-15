@@ -8,7 +8,7 @@
       <ui-icon-btn outlined borderless icon="more_vert" @click="showDialog = true" />
     </div>
 
-    <div class="w-full h-[calc(100%-40px)] overflow-y-auto relative" ref="logContainer">
+    <div class="w-full h-[calc(100%-40px)] overflow-y-auto relative logs-scroll-container" ref="logContainer">
       <div v-if="!logs.length && !isLoading" class="flex items-center justify-center h-32 p-4">
         <p class="text-on-surface-variant">{{ $strings.MessageNoLogs }}</p>
       </div>
@@ -175,4 +175,12 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.logs-scroll-container {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+</style>
 

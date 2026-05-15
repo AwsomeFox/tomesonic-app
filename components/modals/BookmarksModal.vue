@@ -1,10 +1,13 @@
 <template>
   <modals-modal v-model="show" :width="400" height="100%">
     <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
-      <div class="w-full rounded-2xl bg-surface border border-outline-variant shadow-elevation-4 backdrop-blur-md overflow-y-auto overflow-x-hidden relative mt-16" style="max-height: 80vh">
+      <div class="w-full rounded-3xl bg-surface-container-high border border-outline-variant border-opacity-40 shadow-elevation-4 overflow-y-auto overflow-x-hidden relative mt-16" style="max-height: 80vh">
         <!-- Material 3 Modal Header -->
-        <div class="px-6 py-4 border-b border-outline-variant">
-          <h2 class="text-headline-small text-on-surface font-medium">{{ $strings.LabelYourBookmarks }}</h2>
+        <div class="px-6 pt-5 pb-3">
+          <div class="w-full flex items-center">
+            <span class="material-symbols text-on-surface mr-3" style="font-size: 24px">bookmark</span>
+            <h2 class="text-headline-small text-on-surface font-medium flex-grow">{{ $strings.LabelYourBookmarks }}</h2>
+          </div>
         </div>
 
         <div class="w-full h-full p-4" v-if="showBookmarkTitleInput">
@@ -30,10 +33,10 @@
             <p class="text-xl text-on-surface">{{ $strings.MessageNoBookmarks }}</p>
           </div>
         </div>
-        <div v-if="canCreateBookmark && !showBookmarkTitleInput" class="flex px-4 py-2 items-center text-center justify-between border-t border-outline-variant bg-primary-container cursor-pointer text-on-primary-container sticky bottom-0 left-0 w-full" @click.stop="createBookmark">
-          <span class="material-symbols text-on-surface">add</span>
-          <p class="text-base pl-2">{{ $strings.ButtonCreateBookmark }}</p>
-          <p class="text-sm font-mono">{{ this.$secondsToTimestamp(currentTime / _playbackRate) }}</p>
+        <div v-if="canCreateBookmark && !showBookmarkTitleInput" class="flex px-5 py-3 items-center justify-between bg-primary-container cursor-pointer text-on-primary-container sticky bottom-0 left-0 w-full state-layer" @click.stop="createBookmark">
+          <span class="material-symbols text-on-primary-container" style="font-size: 22px">add</span>
+          <p class="text-label-large flex-grow pl-2">{{ $strings.ButtonCreateBookmark }}</p>
+          <p class="text-body-small font-mono">{{ this.$secondsToTimestamp(currentTime / _playbackRate) }}</p>
         </div>
       </div>
     </div>

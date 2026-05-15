@@ -179,6 +179,14 @@ export default {
       return this.$store.getters['libraries/getBookCoverAspectRatio']
     },
     bookWidth() {
+      // Match Authors page card width when rendering the series grid so they
+      // visually line up across tabs.
+      if (this.entityName === 'series' && !this.isCoverSquareAspectRatio) {
+        const containerWidth = this.bookshelfWidth || (typeof window !== 'undefined' ? window.innerWidth : 360)
+        // Authors page uses cardWidth = (innerWidth - 64) / 2 (px-4 + p-2 per card)
+        const cardWidth = Math.floor((containerWidth - 64) / 2)
+        return Math.max(120, cardWidth)
+      }
       // Simplified since we only need this for home page card sizing now
       // List view doesn't use this for sizing
       const baseWidth = this.isCoverSquareAspectRatio ? 192 : 120
@@ -186,6 +194,7 @@ export default {
     },
     bookHeight() {
       if (this.isCoverSquareAspectRatio || this.entityName === 'playlists') return this.bookWidth
+      if (this.entityName === 'series') return this.bookWidth
       return this.bookWidth * 1.6
     },
     entityWidth() {
@@ -243,7 +252,7 @@ export default {
       return {
         display: 'grid',
         gridTemplateColumns: `repeat(${columns}, ${this.entityWidth}px)`,
-        gap: '8px',
+        gap: '16px',
         justifyContent: 'center'
       }
     },
@@ -511,14 +520,62 @@ export default {
       this.pagesLoaded[page] = true
       await this.fetchEntities(page)
     },
-    mountEntites(fromIndex, toIndex) {
+    mountEntites(fromIndex, toIndex, immediate = false) {
+      // Collect indexes that still need mounting so we can yield to the
+      // browser between mounts. Creating many Vue instances synchronously
+      // during a scroll event causes long frames and visible hitching, so we
+      // chunk the work into idle/animation slots instead.
+      const pending = []
       for (let i = fromIndex; i < toIndex; i++) {
         if (!this.entityIndexesMounted.includes(i)) {
-          this.cardsHelpers.mountEntityCard(i)
+          pending.push(i)
         }
       }
+      if (!pending.length) return
+
+      // When the caller requests an immediate pass (e.g. scrolling has come
+      // to rest and we MUST show every card in the resting visible window),
+      // mount everything synchronously. The browser is idle in this case so
+      // there's no scroll frame to protect.
+      if (immediate) {
+        while (pending.length) {
+          const idx = pending.shift()
+          if (!this.entityIndexesMounted.includes(idx)) {
+            this.cardsHelpers.mountEntityCard(idx)
+          }
+        }
+        return
+      }
+
+      // Always mount the very first card synchronously to avoid a one-frame
+      // gap at the top of the visible window on initial render.
+      const first = pending.shift()
+      this.cardsHelpers.mountEntityCard(first)
+      if (!pending.length) return
+
+      const scheduler = (cb) => {
+        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+          return window.requestIdleCallback(cb, { timeout: 80 })
+        }
+        return setTimeout(cb, 0)
+      }
+      const mountChunk = (deadline) => {
+        // If we don't have a deadline (setTimeout fallback), bound the chunk
+        // to a small number of mounts so we don't block the main thread.
+        const hasDeadline = deadline && typeof deadline.timeRemaining === 'function'
+        let safety = 6
+        while (pending.length && (hasDeadline ? deadline.timeRemaining() > 4 : safety-- > 0)) {
+          const idx = pending.shift()
+          // The index may have been mounted by a later scroll pass; skip it.
+          if (!this.entityIndexesMounted.includes(idx)) {
+            this.cardsHelpers.mountEntityCard(idx)
+          }
+        }
+        if (pending.length) scheduler(mountChunk)
+      }
+      scheduler(mountChunk)
     },
-    handleScroll(scrollTop) {
+    handleScroll(scrollTop, immediate = false) {
       if (this.useDirectSeriesGrid) return
       this.currScrollTop = scrollTop
       var firstShelfIndex = Math.floor(scrollTop / this.shelfHeight)
@@ -549,7 +606,7 @@ export default {
         }
         return true
       })
-      this.mountEntites(firstBookIndex, lastBookIndex)
+      this.mountEntites(firstBookIndex, lastBookIndex, immediate)
     },
     destroyEntityComponents() {
       for (const key in this.entityComponentRefs) {
@@ -727,17 +784,53 @@ export default {
     scroll(e) {
       if (!e || !e.target) return
       if (!this.user) return
-      var { scrollTop } = e.target
-      this.handleScroll(scrollTop)
+      // Keep a reference so the rAF / trailing handlers can always read the
+      // CURRENT scrollTop instead of the value at scheduling time. Reading
+      // the stale captured value during fast scrolls caused us to mount the
+      // wrong window and miss visible cards once the user stopped.
+      this._scrollEl = e.target
+
+      // Schedule a rAF-throttled pass that reads the latest scrollTop. This
+      // intentionally does NOT skip small deltas - the previous half-shelf
+      // skip guard could drop the trailing scroll event, leaving the final
+      // visible window unmounted.
+      if (!this._scrollRafPending) {
+        this._scrollRafPending = true
+        requestAnimationFrame(() => {
+          this._scrollRafPending = false
+          const el = this._scrollEl
+          if (!el) return
+          const latest = el.scrollTop
+          this._lastScrollHandled = latest
+          this.handleScroll(latest)
+        })
+      }
+
+      // Always re-arm a short trailing timer so that when the user stops
+      // scrolling we run one final handleScroll with the resting scrollTop.
+      // We pass immediate=true so every visible card mounts synchronously
+      // (no requestIdleCallback deferral) — otherwise fast scroll-and-stop
+      // can leave the resting window with only the first card mounted while
+      // the rest sit pending in the idle queue.
+      if (this._scrollTrailingTimer) clearTimeout(this._scrollTrailingTimer)
+      this._scrollTrailingTimer = setTimeout(() => {
+        this._scrollTrailingTimer = null
+        const el = this._scrollEl
+        if (!el) return
+        const latest = el.scrollTop
+        this._lastScrollHandled = latest
+        this.handleScroll(latest, true)
+      }, 90)
     },
     buildSearchParams() {
       if (this.page === 'search' || this.page === 'collections') {
         return ''
       } else if (this.page === 'series') {
-        // Sort by name ascending
+        const seriesOrderBy = this.$store.state.globals.seriesOrderBy || 'name'
+        const seriesOrderDesc = !!this.$store.state.globals.seriesOrderDesc
         let searchParams = new URLSearchParams()
-        searchParams.set('sort', 'name')
-        searchParams.set('desc', 0)
+        searchParams.set('sort', seriesOrderBy)
+        searchParams.set('desc', seriesOrderDesc ? 1 : 0)
         return searchParams.toString()
       }
 
@@ -811,6 +904,11 @@ export default {
         this.resetEntities()
       }
     },
+    seriesOrderChanged() {
+      if (this.page === 'series' || this.entityName === 'series') {
+        this.resetEntities()
+      }
+    },
     libraryItemAdded(libraryItem) {
       console.log('libraryItem added', libraryItem)
       // TODO: Check if item would be on this shelf
@@ -866,11 +964,12 @@ export default {
       if (this.listenersInitialized) return
       const bookshelf = document.getElementById('bookshelf-wrapper')
       if (bookshelf) {
-        bookshelf.addEventListener('scroll', this.scroll)
+        bookshelf.addEventListener('scroll', this.scroll, { passive: true })
       }
 
       this.$eventBus.$on('library-changed', this.libraryChanged)
       this.$eventBus.$on('user-settings', this.settingsUpdated)
+      this.$eventBus.$on('series-order-change', this.seriesOrderChanged)
 
       this.$socket.$on('item_updated', this.libraryItemUpdated)
       this.$socket.$on('item_added', this.libraryItemAdded)
@@ -895,6 +994,7 @@ export default {
 
       this.$eventBus.$off('library-changed', this.libraryChanged)
       this.$eventBus.$off('user-settings', this.settingsUpdated)
+      this.$eventBus.$off('series-order-change', this.seriesOrderChanged)
 
       this.$socket.$off('item_updated', this.libraryItemUpdated)
       this.$socket.$off('item_added', this.libraryItemAdded)
@@ -931,6 +1031,10 @@ export default {
     this.removeListeners()
   },
   beforeDestroy() {
+    if (this._scrollTrailingTimer) {
+      clearTimeout(this._scrollTrailingTimer)
+      this._scrollTrailingTimer = null
+    }
     this.saveViewCache()
     this.removeListeners()
     this.saveScrollPosition()
@@ -944,6 +1048,14 @@ export default {
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
+}
+
+/* Paint optimization: each shelf is an isolated layout/paint scope so the
+   browser can skip layout/paint work for shelves outside the viewport. This
+   significantly reduces scroll jank on long libraries. */
+.shelf-list-view {
+  contain: layout paint style;
+  content-visibility: auto;
 }
 
 /* Loading skeleton animations */

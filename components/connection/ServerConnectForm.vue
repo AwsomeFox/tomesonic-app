@@ -476,6 +476,34 @@ export default {
         this.setUserAndConnection(payload)
       } else {
         this.showAuth = true
+        // When token auth fails (e.g. refresh token missing/expired) we need
+        // to populate the available auth methods so the OpenID/SSO button
+        // can be rendered for servers that have it configured. Without this
+        // the user only sees the local username/password form even when the
+        // server has OIDC enabled.
+        this.fetchAuthMethods(config.address).catch((err) => {
+          console.warn('[ServerConnectForm] Failed to fetch auth methods after token auth failure', err)
+        })
+      }
+    },
+    /**
+     * Fetch the server's /status to discover which auth methods are enabled
+     * (local, openid, etc). Used when we land on the auth form via a path
+     * that did NOT call submit() (e.g. reconnecting with an existing config
+     * whose token / refresh token is no longer valid).
+     */
+    async fetchAuthMethods(address) {
+      if (!address) return
+      try {
+        const statusData = await this.tryServerUrl(address, false)
+        if (!statusData || !statusData.data) return
+        this.authMethods = statusData.data.authMethods || []
+        this.oauth.buttonText = statusData.data.authFormData?.authOpenIDButtonText || 'Login with OpenID'
+        if (statusData.data.serverVersion) {
+          this.serverConfig.version = statusData.data.serverVersion
+        }
+      } catch (err) {
+        console.warn('[ServerConnectForm] fetchAuthMethods failed', err)
       }
     },
     async removeServerConfigClick() {

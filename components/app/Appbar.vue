@@ -2,38 +2,46 @@
   <div class="w-full bg-surface-container shadow-elevation-2 relative z-20" :style="{ paddingTop: topPadding, boxSizing: 'border-box' }">
     <div id="appbar" class="w-full flex items-center px-4" style="min-height: 3.5rem">
       <!-- keep ~h-14 / 56px height via min-height -->
-      <!-- Menu Button - hidden when back button is shown -->
-      <ui-icon-btn v-if="!showBack" icon="menu" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="clickShowSideDrawer" />
-
-      <!-- Back Navigation -->
-      <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="back" />
-
-      <!-- Library Selector -->
-      <div v-if="user && currentLibrary">
-        <div class="px-3 py-2 bg-primary-container rounded-full flex items-center cursor-pointer state-layer transition-all duration-200 ease-standard hover:shadow-elevation-1" @click="clickShowLibraryModal">
-          <ui-library-icon :icon="currentLibraryIcon" :size="4" font-size="base" color="on-primary-container" />
-          <p class="text-body-medium text-on-primary-container ml-2 max-w-24 truncate">{{ currentLibraryName }}</p>
+      <!-- ─── Search mode ─── -->
+      <template v-if="searchActive">
+        <ui-icon-btn icon="arrow_back" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="closeSearch" />
+        <div class="flex-1 flex items-center h-11 px-4 rounded-full bg-surface-container-high border border-outline-variant transition-all duration-200 ease-standard">
+          <span class="material-symbols text-on-surface-variant mr-3" style="font-size: 1.25rem">search</span>
+          <input ref="searchInput" v-model="searchQuery" type="text" :placeholder="$strings.ButtonSearch" class="flex-1 bg-transparent outline-none text-on-surface text-body-large placeholder:text-on-surface-variant min-w-0" autocomplete="off" autocorrect="off" autocapitalize="none" @input="onSearchInput" @keydown.enter="$refs.searchInput && $refs.searchInput.blur()" />
+          <button v-if="searchQuery" class="ml-2 w-8 h-8 rounded-full flex items-center justify-center state-layer" @click="clearSearch">
+            <span class="material-symbols text-on-surface-variant" style="font-size: 1.125rem">close</span>
+          </button>
         </div>
-      </div>
+      </template>
 
-      <widgets-connection-indicator />
+      <!-- ─── Default mode ─── -->
+      <template v-else>
+        <!-- Menu Button - hidden when back button is shown -->
+        <ui-icon-btn v-if="!showBack" icon="menu" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="clickShowSideDrawer" />
 
-      <div class="flex-grow" />
+        <!-- Back Navigation -->
+        <ui-icon-btn v-if="showBack" icon="arrow_back" variant="standard" color="on-surface-variant" size="medium" class="mr-2" @click="back" />
 
-      <widgets-download-progress-indicator />
+        <!-- Library Selector -->
+        <div v-if="user && currentLibrary">
+          <div class="px-3 py-2 bg-primary-container rounded-full flex items-center cursor-pointer state-layer transition-all duration-200 ease-standard hover:shadow-elevation-1" @click="clickShowLibraryModal">
+            <ui-library-icon :icon="currentLibraryIcon" :size="4" font-size="base" color="on-primary-container" />
+            <p class="text-body-medium text-on-primary-container ml-2 max-w-24 truncate">{{ currentLibraryName }}</p>
+          </div>
+        </div>
 
-      <!-- Cast Button -->
-      <ui-icon-btn v-show="isCastAvailable && user" :icon="isCasting ? 'cast_connected' : 'cast'" variant="standard" color="on-surface-variant" size="medium" class="mx-1" @click="castClick" />
+        <widgets-connection-indicator />
 
-      <!-- Search Button -->
-      <nuxt-link v-if="user" to="/search" class="ml-1 mr-0 block w-12 h-12 rounded-full flex items-center justify-center state-layer transition-all duration-200 ease-standard">
-        <span class="material-symbols text-on-surface-variant fill" style="font-size: 1.5rem">search</span>
-      </nuxt-link>
+        <div class="flex-grow" />
 
-      <!-- Logo moved to right when user is logged in -->
-      <nuxt-link to="/" class="ml-0 w-15 h-15 flex items-center justify-center state-layer rounded-lg">
-        <ui-tomesonic-app-icon :size="32" color="on-surface-variant" />
-      </nuxt-link>
+        <widgets-download-progress-indicator />
+
+        <!-- Inline bookshelf actions (filter / sort / more / download-series) -->
+        <home-bookshelf-toolbar v-if="user && isBookshelfRoute" inline class="mr-1" />
+
+        <!-- Search Button (always last / farthest right) -->
+        <ui-icon-btn v-if="user" icon="search" variant="standard" color="on-surface-variant" size="medium" class="ml-1" @click="openSearch" />
+      </template>
     </div>
 
     <modals-cast-device-selection-modal ref="castDeviceModal" />
@@ -48,7 +56,10 @@ export default {
     return {
       onCastAvailableUpdateListener: null,
       topPadding: '0px',
-      _safeAreaObserver: null
+      _safeAreaObserver: null,
+      searchActive: false,
+      searchQuery: '',
+      _searchDebounce: null
     }
   },
   computed: {
@@ -95,6 +106,16 @@ export default {
     },
     isCasting() {
       return this.$store.state.isCasting
+    },
+    isBookshelfRoute() {
+      const name = this.$route.name || ''
+      // Show inline bookshelf actions only on routes where the standalone toolbar
+      // used to render (everything under /bookshelf except home, latest, podcast-add).
+      if (!name.startsWith('bookshelf')) return false
+      if (name === 'bookshelf') return false
+      if (name === 'bookshelf-latest') return false
+      if (name === 'bookshelf-add-podcast') return false
+      return true
     }
   },
   methods: {
@@ -116,6 +137,59 @@ export default {
     },
     onCastAvailableUpdate(data) {
       this.isCastAvailable = data && data.value
+    },
+    openSearch() {
+      this.searchActive = true
+      this.searchQuery = this.$store.state.globals.lastSearch || ''
+      if (this.$route.name !== 'search') {
+        this.$router.push('/search').catch(() => {})
+      }
+      this.$nextTick(() => {
+        if (this.$refs.searchInput) {
+          this.$refs.searchInput.focus()
+        }
+      })
+    },
+    closeSearch() {
+      this.searchActive = false
+      if (this.$route.name === 'search') {
+        // Prefer history back so we restore prior tab; fall back to bookshelf root.
+        if (window.history.length > 1) {
+          window.history.back()
+        } else {
+          this.$router.push('/bookshelf').catch(() => {})
+        }
+      }
+    },
+    clearSearch() {
+      this.searchQuery = ''
+      this.onSearchInput()
+      this.$nextTick(() => {
+        if (this.$refs.searchInput) this.$refs.searchInput.focus()
+      })
+    },
+    onSearchInput() {
+      clearTimeout(this._searchDebounce)
+      const value = this.searchQuery
+      this._searchDebounce = setTimeout(() => {
+        this.$eventBus.$emit('appbar-search', value)
+      }, 300)
+    }
+  },
+  watch: {
+    '$route.name'(newName) {
+      // Auto-open inline search when route becomes /search (e.g. via deep link / drawer).
+      if (newName === 'search' && !this.searchActive) {
+        this.searchActive = true
+        this.searchQuery = this.$store.state.globals.lastSearch || ''
+        this.$nextTick(() => {
+          if (this.$refs.searchInput) this.$refs.searchInput.focus()
+        })
+      }
+      // Auto-close inline search when navigating away from the search page.
+      if (this.searchActive && newName !== 'search') {
+        this.searchActive = false
+      }
     }
   },
   async mounted() {
@@ -123,6 +197,14 @@ export default {
       this.isCastAvailable = data && data.value
     })
     this.onCastAvailableUpdateListener = await AbsAudioPlayer.addListener('onCastAvailableUpdate', this.onCastAvailableUpdate)
+    // If the app boots directly into /search, auto-enter search mode.
+    if (this.$route.name === 'search') {
+      this.searchActive = true
+      this.searchQuery = this.$store.state.globals.lastSearch || ''
+      this.$nextTick(() => {
+        if (this.$refs.searchInput) this.$refs.searchInput.focus()
+      })
+    }
     // Compute top padding from CSS variable (injected by Android MainActivity) and cap it.
     const updateTopPadding = () => {
       try {

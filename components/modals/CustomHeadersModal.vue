@@ -1,10 +1,13 @@
 <template>
   <modals-modal v-model="show" :width="'90%'" :max-width="'420px'" height="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop >
-      <div ref="container" class="w-full rounded-lg bg-surface border border-outline-variant shadow-elevation-4 overflow-y-auto overflow-x-hidden backdrop-blur-md" style="max-height: 80vh" >
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div ref="container" class="w-full rounded-3xl bg-surface-container-high border border-outline-variant border-opacity-40 shadow-elevation-4 overflow-y-auto overflow-x-hidden" style="max-height: 80vh">
         <!-- Material 3 Modal Header -->
-        <div class="px-6 py-4 border-b border-outline-variant">
-          <h2 class="text-headline-small text-on-surface font-medium">Custom Headers</h2>
+        <div class="px-6 pt-5 pb-3">
+          <div class="w-full flex items-center">
+            <span class="material-symbols text-on-surface mr-3" style="font-size: 24px">tune</span>
+            <h2 class="text-headline-small text-on-surface font-medium flex-grow">Custom Headers</h2>
+          </div>
         </div>
 
         <div class="w-full h-full p-4" v-if="showAddHeader">

@@ -1,28 +1,15 @@
 <template>
   <div class="w-full h-full" :style="contentPaddingStyle">
-    <div class="px-4 py-6">
-      <!-- Material 3 Search Field -->
-      <div class="relative w-full">
-        <div class="relative w-full h-14 bg-transparent rounded-full flex items-center px-4 border-2 shadow-elevation-1" :class="searchBorderClass">
-          <!-- Search Icon -->
-          <button @click="setFocus" class="material-symbols text-on-surface-variant mr-3 cursor-pointer state-layer" style="font-size: 1.25rem; background: none; border: none; padding: 0">search</button>
-
-          <!-- Search Input -->
-          <input ref="input" v-model="search" @input="updateSearch($event.target.value)" @focus="onFocus" @blur="onBlur" type="text" :placeholder="$strings.ButtonSearch" class="flex-1 bg-transparent outline-none text-on-surface text-body-large placeholder:text-on-surface-variant" autocomplete="off" autocorrect="off" autocapitalize="none" />
-
-          <!-- Clear Button -->
-          <button v-if="search" @click="clearSearch" class="ml-2 w-6 h-6 rounded-full flex items-center justify-center state-layer hover:bg-on-surface hover:bg-opacity-8 focus:bg-on-surface focus:bg-opacity-12 transition-all duration-200 ease-standard">
-            <span class="material-symbols text-on-surface-variant" style="font-size: 1.125rem">close</span>
-          </button>
-        </div>
-      </div>
-    </div>
-    <div class="w-full overflow-x-hidden overflow-y-auto search-content px-4" @click.stop>
+    <div class="w-full overflow-x-hidden overflow-y-auto search-content px-4 pt-3" @click.stop>
       <div v-show="isFetching" class="w-full py-8 flex justify-center">
-        <p class="text-lg text-fg-muted">{{ $strings.MessageFetching }}</p>
+        <p class="text-lg text-on-surface-variant">{{ $strings.MessageFetching }}</p>
       </div>
       <div v-if="!isFetching && lastSearch && !totalResults" class="w-full py-8 flex justify-center">
-        <p class="text-lg text-fg-muted">{{ $strings.MessageNoItemsFound }}</p>
+        <p class="text-lg text-on-surface-variant">{{ $strings.MessageNoItemsFound }}</p>
+      </div>
+      <div v-if="!isFetching && !lastSearch" class="w-full py-12 flex flex-col items-center text-center">
+        <span class="material-symbols text-on-surface-variant" style="font-size: 3rem">search</span>
+        <p class="text-base text-on-surface-variant mt-3">{{ $strings.ButtonSearch }}</p>
       </div>
       <p v-if="bookResults.length" class="font-semibold text-sm mb-1">{{ $strings.LabelBooks }}</p>
       <template v-for="item in bookResults">
@@ -277,19 +264,25 @@ export default {
     }
   },
   mounted() {
+    this._onAppbarSearch = (val) => {
+      this.search = val
+      this.runSearch(val)
+    }
+    this.$eventBus.$on('appbar-search', this._onAppbarSearch)
     if (this.$store.state.globals.lastSearch) {
       this.search = this.$store.state.globals.lastSearch
       this.runSearch(this.search)
-    } else {
-      this.$nextTick(() => this.setFocus())
     }
+  },
+  beforeDestroy() {
+    if (this._onAppbarSearch) this.$eventBus.$off('appbar-search', this._onAppbarSearch)
   }
 }
 </script>
 
 <style>
 .search-content {
-  height: calc(100% - 108px);
-  max-height: calc(100% - 108px);
+  height: 100%;
+  max-height: 100%;
 }
 </style>

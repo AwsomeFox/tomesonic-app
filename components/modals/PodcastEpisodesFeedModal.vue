@@ -1,10 +1,13 @@
 <template>
   <modals-modal v-model="show" width="100%" height="100%" max-width="100%">
-    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop >
-      <div class="feed-content w-full overflow-x-hidden overflow-y-auto bg-surface rounded-lg border border-outline-variant shadow-elevation-4 backdrop-blur-md">
+    <div class="w-full h-full overflow-hidden absolute top-0 left-0 flex items-center justify-center" data-modal-backdrop>
+      <div class="feed-content w-full overflow-x-hidden overflow-y-auto bg-surface-container-high rounded-3xl border border-outline-variant border-opacity-40 shadow-elevation-4">
         <!-- Material 3 Modal Header -->
-        <div class="px-6 py-4 border-b border-outline-variant">
-          <h2 class="text-headline-small text-on-surface font-medium">Feed Episodes</h2>
+        <div class="px-6 pt-5 pb-3">
+          <div class="w-full flex items-center">
+            <span class="material-symbols text-on-surface mr-3" style="font-size: 24px">rss_feed</span>
+            <h2 class="text-headline-small text-on-surface font-medium flex-grow">Feed Episodes</h2>
+          </div>
         </div>
 
         <template v-for="(episode, index) in episodes">
