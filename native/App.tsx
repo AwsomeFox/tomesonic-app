@@ -1,0 +1,93 @@
+import "./global.css";
+import React, { useEffect } from "react";
+import { View, AppState } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
+import * as ScreenOrientation from "expo-screen-orientation";
+import AppNavigator from "./navigation/AppNavigator";
+import PlayerBottomSheet from "./components/PlayerBottomSheet";
+import CastController from "./components/CastController";
+import LibrarySelector from "./components/LibrarySelector";
+import ErrorBoundary from "./components/ErrorBoundary";
+import OfflineBanner from "./components/OfflineBanner";
+import RotationCurtain from "./components/RotationCurtain";
+import { useUserStore } from "./store/useUserStore";
+import { useThemeStore } from "./store/useThemeStore";
+import { useThemeColors } from "./theme/useThemeColors";
+import { DynamicThemeProvider } from "./theme/DynamicThemeContext";
+import { useDownloadStore } from "./store/useDownloadStore";
+import { usePlaybackStore } from "./store/usePlaybackStore";
+import { flushPendingSyncs } from "./utils/progressSync";
+import { useNetworkStatus } from "./hooks/useNetworkStatus";
+
+function AppShell() {
+  const colors = useThemeColors();
+  const user = useUserStore((state) => state.user);
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.surface }}>
+      <OfflineBanner />
+      <AppNavigator />
+      <PlayerBottomSheet />
+      {user ? <CastController /> : null}
+      {user ? <LibrarySelector /> : null}
+      {/* Last child = topmost: masks layout reflow during rotation. */}
+      <RotationCurtain />
+    </View>
+  );
+}
+
+export default function App() {
+  const initializeUser = useUserStore((state) => state.initialize);
+  const initializeTheme = useThemeStore((state) => state.initialize);
+  const lockOrientation = useUserStore((state) => state.settings.lockOrientation);
+  const { isConnected } = useNetworkStatus();
+
+  // Regaining connectivity: push any progress that queued while offline.
+  useEffect(() => {
+    if (isConnected) flushPendingSyncs().catch(() => {});
+  }, [isConnected]);
+
+  useEffect(() => {
+    initializeTheme();
+    const init = async () => {
+      await initializeUser();
+      useDownloadStore.getState().loadDownloadsFromDb();
+      const user = useUserStore.getState().user;
+      if (user) {
+        await usePlaybackStore.getState().loadLastSession();
+      }
+    };
+    init();
+  }, [initializeUser, initializeTheme]);
+
+  // When the app returns to the foreground, flush any playback-progress syncs
+  // that were queued while offline so the server catches up.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") flushPendingSyncs().catch(() => {});
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Lock/unlock screen orientation per the "Lock orientation" setting. Use an
+  // explicit ALL lock when unlocked so it overrides the manifest's portrait
+  // default (unlockAsync would fall back to that portrait default).
+  useEffect(() => {
+    ScreenOrientation.lockAsync(
+      lockOrientation
+        ? ScreenOrientation.OrientationLock.PORTRAIT_UP
+        : ScreenOrientation.OrientationLock.ALL
+    ).catch(() => {});
+  }, [lockOrientation]);
+
+  return (
+    <SafeAreaProvider>
+      <DynamicThemeProvider>
+        <ErrorBoundary>
+          <AppShell />
+        </ErrorBoundary>
+      </DynamicThemeProvider>
+      <StatusBar style="auto" />
+    </SafeAreaProvider>
+  );
+}
