@@ -1,5 +1,6 @@
 import React from "react";
-import { View, Text, Pressable, Image } from "react-native";
+import { View, Text, Pressable } from "react-native";
+import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -8,6 +9,7 @@ import { useDownloadStore } from "../store/useDownloadStore";
 import { withAlpha } from "../theme/palette";
 import Icon from "./Icon";
 import BookProgressBadge from "./BookProgressBadge";
+import { hasAudio, hasEbook } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -23,15 +25,6 @@ export interface BookCardProps {
   navigation: any;
   badgeCount?: number; // e.g. books in series
   onPress?: () => void;
-}
-
-function remainingPretty(seconds: number): string {
-  if (!seconds || seconds <= 0) return "";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h} hr ${m} min remaining`;
-  if (m > 0) return `${m} min remaining`;
-  return `${Math.floor(seconds)} sec remaining`;
 }
 
 export default function BookCard({ item, size = 165, navigation, badgeCount, onPress }: BookCardProps) {
@@ -56,21 +49,30 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
   const coverUrl =
     item?.coverUrl ||
     (item?.id && serverAddress && token
-      ? `${serverAddress}/api/items/${item.id}/cover?token=${token}`
+      ? `${serverAddress}/api/items/${item.id}/cover?width=400&format=webp&token=${token}`
       : null);
 
   // Shelf/list payloads often omit progress; fall back to the global map.
   const progress = item?.userMediaProgress || item?.progress || (item?.id ? mediaProgress[item.id] : null) || null;
-  const duration = Number(media?.duration || progress?.duration || 0);
-  const currentTime = Number(progress?.currentTime || 0);
-  const progressPercent = Math.max(
-    Math.min(1, progress?.progress ?? (duration > 0 ? currentTime / duration : 0)),
-    0
-  );
-  const isFinished = !!progress?.isFinished;
-  const remaining = duration > 0 ? duration * (1 - progressPercent) : 0;
-  const showProgressChip = progressPercent > 0 || isFinished;
-  const chipLabel = isFinished ? "Finished" : remainingPretty(remaining);
+  const itemHasAudio = hasAudio(item);
+  const itemHasEbook = hasEbook(item);
+
+  const duration = itemHasAudio ? Number(media?.duration || progress?.duration || 0) : 0;
+  const currentTime = itemHasAudio ? Number(progress?.currentTime || 0) : 0;
+  const progressPercent = itemHasAudio
+    ? Math.max(Math.min(1, progress?.progress ?? (duration > 0 ? currentTime / duration : 0)), 0)
+    : 0;
+  const isFinished = itemHasAudio ? !!progress?.isFinished : false;
+
+  let ebookProgressPercent = 0;
+  if (itemHasEbook) {
+    if (itemHasAudio) {
+      ebookProgressPercent = Number(progress?.ebookProgress || 0);
+    } else {
+      ebookProgressPercent = Number(progress?.ebookProgress || progress?.progress || 0);
+    }
+  }
+  const isEbookFinished = ebookProgressPercent >= 0.99;
 
   const isDownloaded = !!(item?.id && completedDownloads[item.id]);
   const activeDownload = item?.id ? activeDownloads[item.id] : null;
@@ -113,7 +115,9 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
           <Image
             source={{ uri: coverUrl }}
             style={{ width: "100%", height: "100%", position: "absolute" }}
-            resizeMode="cover"
+            contentFit="cover"
+            cachePolicy="disk"
+            transition={150}
           />
           {/* Book-spine sheen on the left edge — makes covers read as books. */}
           <LinearGradient
@@ -141,6 +145,7 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       {/* Unified Progress & Download badge (top-left) */}
       <BookProgressBadge
         itemId={item?.id}
+        item={item}
         downloaded={isDownloaded}
         style={{
           position: "absolute",
@@ -203,6 +208,13 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       {progressPercent > 0 && !isFinished ? (
         <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 3, backgroundColor: "rgba(255,255,255,0.2)", zIndex: 45 }}>
           <View style={{ height: 3, width: `${progressPercent * 100}%`, backgroundColor: colors.primary }} />
+        </View>
+      ) : null}
+
+      {/* Reading progress bar */}
+      {ebookProgressPercent > 0 && !isEbookFinished ? (
+        <View style={{ position: "absolute", bottom: progressPercent > 0 && !isFinished ? 3 : 0, left: 0, right: 0, height: 3, backgroundColor: progressPercent > 0 && !isFinished ? "transparent" : "rgba(255,255,255,0.2)", zIndex: 45 }}>
+          <View style={{ height: 3, width: `${ebookProgressPercent * 100}%`, backgroundColor: colors.tertiary }} />
         </View>
       ) : null}
 

@@ -6,9 +6,9 @@ import {
   Pressable,
   Alert,
   Linking,
-  Image,
   ActivityIndicator,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -66,7 +66,6 @@ export default function LocalMediaScreen({ navigation }: any) {
     setBusyId(item.id);
     try {
       const ok = await startPlayback(item.libraryItemId || item.id);
-      if (ok) navigation.navigate("Player");
     } finally {
       setBusyId(null);
     }

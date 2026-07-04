@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, FlatList, Image, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, FlatList, ActivityIndicator } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
 import { storageHelper } from "../utils/storage";
@@ -68,7 +69,7 @@ export default function ListeningHistoryScreen({ navigation }: any) {
 
   const coverUri = (libraryItemId: string) =>
     libraryItemId && serverAddress && token
-      ? `${serverAddress}/api/items/${libraryItemId}/cover?token=${token}`
+      ? `${serverAddress}/api/items/${libraryItemId}/cover?width=400&format=webp&token=${token}`
       : null;
 
   return (
@@ -164,7 +165,7 @@ export default function ListeningHistoryScreen({ navigation }: any) {
                   }}
                 >
                   {uri ? (
-                    <Image source={{ uri }} style={{ width: 56, height: 56 }} resizeMode="cover" />
+                    <Image source={{ uri }} style={{ width: 56, height: 56 }} contentFit="cover" />
                   ) : (
                     <Icon name="book" size={26} color={colors.onSurfaceVariant} />
                   )}

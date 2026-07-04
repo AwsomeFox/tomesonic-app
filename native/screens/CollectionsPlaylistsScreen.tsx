@@ -4,12 +4,13 @@ import {
   Text,
   Pressable,
   ScrollView,
-  Image,
   ActivityIndicator,
   RefreshControl,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated, { FadeInUp } from "react-native-reanimated";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
@@ -41,7 +42,7 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const fetchData = useCallback(async () => {
@@ -99,7 +100,7 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
     return (
       <AnimatedPressable
         key={item.id || index}
-        entering={FadeInUp.delay(index * 50).springify().damping(32).stiffness(150)}
+        entering={listRowEnter(index)}
         onPress={() =>
           navigation.navigate(isCollection ? "CollectionDetail" : "PlaylistDetail", {
             collectionId: item.id,
@@ -254,7 +255,7 @@ function CollageCover({
           <Icon name="book" size={26} color={colors.onPrimary} />
         </View>
       ) : valid.length === 1 ? (
-        <Image source={{ uri: valid[0] }} style={{ width: size, height: size }} resizeMode="cover" />
+        <Image source={{ uri: valid[0] }} style={{ width: size, height: size }} contentFit="cover" />
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", width: size, height: size }}>
           {valid.slice(0, 4).map((uri, idx) => (
@@ -262,7 +263,7 @@ function CollageCover({
               key={idx}
               source={{ uri }}
               style={{ width: size / 2, height: valid.length <= 2 ? size : size / 2 }}
-              resizeMode="cover"
+              contentFit="cover"
             />
           ))}
         </View>

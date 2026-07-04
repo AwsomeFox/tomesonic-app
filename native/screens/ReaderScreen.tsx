@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Pressable, Linking, ActivityIndicator, Modal, FlatList, ScrollView } from "react-native";
+import { View, Text, Pressable, Linking, ActivityIndicator, Modal, FlatList, Animated } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
+import { useKeepAwake } from "expo-keep-awake";
 import { storageHelper, storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
+import { useDownloadStore } from "../store/useDownloadStore";
 
 // Height of the collapsed mini player (mirrors PlayerBottomSheet MINIPLAYER_HEIGHT)
 // so reader content can reserve space and not sit underneath it.
@@ -85,6 +87,9 @@ function ebookHtml(
 
   async function init() {
     try {
+      while (window.innerWidth === 0 || window.innerHeight === 0) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
       var file = base64ToFile("${base64}", "book${ext}");
       var view = document.createElement('foliate-view');
       view.setAttribute('margin', '16px');
@@ -146,6 +151,8 @@ function ebookHtml(
       var startCfi = ${startCfi ? `"${startCfi}"` : "null"};
       if (startCfi) {
         try { await view.goTo(startCfi); } catch(e) {}
+      } else {
+        try { await view.goTo(0); } catch(e) {}
       }
 
       // Expose navigation functions for RN injection and gesture handling
@@ -212,6 +219,9 @@ function getExtForFormat(format: string): string {
 export default function ReaderScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
+  // Reading is a long touch-free activity — keep the screen awake while the
+  // reader is mounted (released automatically on unmount).
+  useKeepAwake();
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const { itemId, ebookFormat, title } = route.params || {};
   const [pdfError, setPdfError] = useState(false);
@@ -239,6 +249,34 @@ export default function ReaderScreen({ route, navigation }: any) {
   const progressKey = `ebookCfi_${itemId}`;
   const syncTimeoutRef = useRef<any>(null);
   const latestProgressRef = useRef<{ cfi: string; fraction: number } | null>(null);
+
+  // Pulsing animation for loading state
+  const pulseAnim = useRef(new Animated.Value(0.6)).current;
+  useEffect(() => {
+    let anim: Animated.CompositeAnimation | null = null;
+    if (ebookStatus === "loading" || ebookStatus === "idle") {
+      anim = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 0.6,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      anim.start();
+    } else {
+      pulseAnim.setValue(0.6);
+    }
+    return () => {
+      if (anim) anim.stop();
+    };
+  }, [ebookStatus, pulseAnim]);
 
   // Style Settings States
   const [fontSize, setFontSize] = useState(() => storage.getNumber("reader_font_size") || 100);
@@ -291,6 +329,12 @@ export default function ReaderScreen({ route, navigation }: any) {
     }
   }, [fontSize, fontFamily, lineHeight, ebookStatus, bg, fg, accent]);
 
+  useEffect(() => {
+    if (itemId) {
+      storage.set(`last_interaction_${itemId}`, "read");
+    }
+  }, [itemId]);
+
   // Sync pending ebook progress to server on unmount/screen change
   useEffect(() => {
     return () => {
@@ -320,21 +364,36 @@ export default function ReaderScreen({ route, navigation }: any) {
     let cancelled = false;
     (async () => {
       try {
-        const ext = getExtForFormat(format);
-        const localPath = `${FileSystem.cacheDirectory}reader_${itemId}${ext}`;
-        const dl = await FileSystem.downloadAsync(ebookUri, localPath, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const info = await FileSystem.getInfoAsync(dl.uri);
+        const localDownload = useDownloadStore.getState().completedDownloads[itemId];
+        const ebookPart = localDownload?.parts?.find(p => p.id === "ebook");
+        
+        let fileUri = "";
+        if (ebookPart?.localFilePath) {
+          fileUri = ebookPart.localFilePath;
+          console.log("[Reader] Loading ebook from offline download:", fileUri);
+        } else {
+          const ext = getExtForFormat(format);
+          const localPath = `${FileSystem.cacheDirectory}reader_${itemId}${ext}`;
+          const dl = await FileSystem.downloadAsync(ebookUri, localPath, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          fileUri = dl.uri;
+        }
+
+        const info = await FileSystem.getInfoAsync(fileUri);
         if ((info as any).size && (info as any).size > MAX_EBOOK_INLINE_BYTES) {
-          FileSystem.deleteAsync(dl.uri, { idempotent: true }).catch(() => {});
+          if (!ebookPart?.localFilePath) {
+            FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+          }
           if (!cancelled) setEbookStatus("toobig");
           return;
         }
-        const base64 = await FileSystem.readAsStringAsync(dl.uri, {
+        const base64 = await FileSystem.readAsStringAsync(fileUri, {
           encoding: FileSystem.EncodingType.Base64,
         });
-        FileSystem.deleteAsync(dl.uri, { idempotent: true }).catch(() => {});
+        if (!ebookPart?.localFilePath) {
+          FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+        }
         if (cancelled) return;
         const localCfi = storage.getString(progressKey) || "";
         const serverProgress = useUserStore.getState().mediaProgress[itemId];
@@ -549,9 +608,22 @@ export default function ReaderScreen({ route, navigation }: any) {
   } else if (isFoliateFormat) {
     if (ebookStatus === "loading" || ebookStatus === "idle") {
       body = (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={{ color: colors.onSurfaceVariant, marginTop: 12 }}>Preparing your book…</Text>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface }}>
+          <Animated.View style={{ opacity: pulseAnim, transform: [{ scale: pulseAnim }], marginBottom: 20 }}>
+            <View style={{
+              width: 72, height: 72, borderRadius: 36, backgroundColor: colors.secondaryContainer,
+              alignItems: "center", justifyContent: "center"
+            }}>
+              <Icon name="book" size={36} color={colors.primary} />
+            </View>
+          </Animated.View>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600", marginTop: 16 }}>
+            Preparing your book…
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 4 }}>
+            Setting up typography and layout
+          </Text>
         </View>
       );
     } else if (canRenderEbook) {

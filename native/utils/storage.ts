@@ -1,13 +1,42 @@
 import { createMMKV } from "react-native-mmkv";
+import * as SecureStore from "expo-secure-store";
+import * as Crypto from "expo-crypto";
 
 // Standard storage for settings, library cache, UI state
 export const storage = createMMKV({
   id: "tomesonic-settings",
 });
 
-// Secure storage for tokens, server configurations
+// The secure store (auth token + refresh token, server config) is encrypted at
+// rest with a random key held in the OS keystore via expo-secure-store, so the
+// tokens aren't readable in a plaintext MMKV file on a rooted device or backup.
+// The key is fetched/generated synchronously at module load — SecureStore's
+// getItem/setItem are sync (SDK 51+) and this store is only read after the
+// module initializes — so every existing synchronous caller stays unchanged.
+const MMKV_ENCRYPTION_KEY_NAME = "tomesonic-mmkv-encryption-key";
+
+function getOrCreateEncryptionKey(): string | undefined {
+  try {
+    let key = SecureStore.getItem(MMKV_ENCRYPTION_KEY_NAME);
+    if (!key) {
+      // 32 random bytes -> 64-char hex. getRandomBytes is synchronous.
+      const bytes = Crypto.getRandomBytes(32);
+      key = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+      SecureStore.setItem(MMKV_ENCRYPTION_KEY_NAME, key);
+    }
+    return key;
+  } catch (e) {
+    // Keystore unavailable (extremely rare on a real device). Fall back to an
+    // unencrypted store so the app still launches rather than bricking.
+    console.warn("[storage] Encryption key unavailable; secure store is unencrypted", e);
+    return undefined;
+  }
+}
+
+// Secure storage for tokens / server configuration — encrypted at rest.
 export const secureStorage = createMMKV({
   id: "tomesonic-secure",
+  encryptionKey: getOrCreateEncryptionKey(),
 });
 
 export const storageHelper = {

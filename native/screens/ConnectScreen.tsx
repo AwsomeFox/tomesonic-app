@@ -20,7 +20,7 @@ const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
 
 export default function ConnectScreen() {
   const colors = useThemeColors();
-  const { login, serverConnectionConfig, setServerConnectionConfig } = useUserStore();
+  const { login, serverConnectionConfig } = useUserStore();
   const [address, setAddress] = useState(serverConnectionConfig?.address || "");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

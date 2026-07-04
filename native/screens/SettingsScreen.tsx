@@ -9,6 +9,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeStore, ThemeMode } from '../store/useThemeStore';
 import { useUserStore } from '../store/useUserStore';
+import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useThemeColors } from '../theme/useThemeColors';
 import Icon, { IconName } from '../components/Icon';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
@@ -48,6 +49,7 @@ export default function SettingsScreen({ navigation }: any) {
   const user = useUserStore((state) => state.user);
   const settings = useUserStore((state) => state.settings);
   const updateUserSettings = useUserStore((state) => state.updateUserSettings);
+  const hasSession = usePlaybackStore((s) => s.currentSession !== null);
 
   // Which dropdown modal is open (null = none).
   const [openPicker, setOpenPicker] = React.useState<
@@ -81,7 +83,7 @@ export default function SettingsScreen({ navigation }: any) {
         </Text>
       </View>
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 48 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 48 }}>
         {/* ── ACCOUNT ── */}
         <SectionHeader label="Account" colors={colors} />
         <RowBase

@@ -3,6 +3,7 @@ import { View, ViewStyle, DimensionValue, useWindowDimensions } from "react-nati
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, {
   Easing,
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -37,6 +38,8 @@ export function Skeleton({
       -1,
       false
     );
+    // Stop the infinite shimmer when the skeleton unmounts (content loaded).
+    return () => cancelAnimation(progress);
   }, []);
 
   const sweepStyle = useAnimatedStyle(() => ({

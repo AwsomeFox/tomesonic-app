@@ -10,6 +10,7 @@ import { api } from '../utils/api';
 import { useThemeColors } from '../theme/useThemeColors';
 import Icon from '../components/Icon';
 import { useUserStore } from '../store/useUserStore';
+import { usePlaybackStore } from '../store/usePlaybackStore';
 
 // Gold accent for the data-viz line, matching the original app's `yellow-400`.
 // This is a chart accent, not a theme role, so it is intentionally fixed.
@@ -102,6 +103,7 @@ function buildLast7Days(days: Record<string, number>): DayPoint[] {
 export default function StatsScreen({ navigation }: any) {
   const colors = useThemeColors();
   const user = useUserStore((state) => state.user);
+  const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const [stats, setStats] = useState<ListeningStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -191,7 +193,7 @@ export default function StatsScreen({ navigation }: any) {
           </TouchableOpacity>
         </View>
       ) : (
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 40 }}>
           {/* Totals row */}
           <View
             style={{

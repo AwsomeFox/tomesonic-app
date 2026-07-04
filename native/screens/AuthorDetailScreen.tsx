@@ -3,13 +3,14 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   Pressable,
   ActivityIndicator,
 } from "react-native";
+import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated, { FadeInDown } from "react-native-reanimated";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { withAlpha } from "../theme/palette";
@@ -55,12 +56,12 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const getAuthorImageUrl = () => {
     if (!author?.imagePath || !serverAddress || !token) return null;
-    return `${serverAddress}/api/authors/${author.id}/image?token=${token}`;
+    return `${serverAddress}/api/authors/${author.id}/image?width=400&format=webp&token=${token}`;
   };
 
   useEffect(() => {
@@ -99,11 +100,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
 
     return (
       <AnimatedPressable
-        entering={FadeInDown.delay(Math.min(index * 50, 500))
-          .duration(350)
-          .springify()
-          .damping(32)
-          .stiffness(150)}
+        entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
         style={{
           flexDirection: "row",
@@ -131,7 +128,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
             <Image
               source={{ uri: coverUri }}
               style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
-              resizeMode="cover"
+              contentFit="cover"
             />
           ) : (
             <View
@@ -176,6 +173,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           ) : null}
           <BookProgressBadge
             itemId={item.id}
+            item={item}
             downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
             style={{ marginTop: 4 }}
           />
@@ -207,7 +205,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
             <Image
               source={{ uri: imageUri }}
               style={{ width: 120, height: 120 }}
-              resizeMode="cover"
+              contentFit="cover"
             />
           ) : (
             <Icon name="person" size={56} color={colors.onPrimary} />

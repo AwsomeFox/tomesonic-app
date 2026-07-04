@@ -6,6 +6,7 @@ import { downloadNotifications } from "./downloadNotifications";
 import { absoluteUrl, coverUrl as buildCoverUrl } from "./urls";
 import { api } from "./api";
 import { useUserStore } from "../store/useUserStore";
+import { hasEbook, getEbookFormat } from "./bookMatch";
 
 // In-memory reference to active download processes so they can be cancelled
 const activeDownloadsMap: Record<string, FileSystem.DownloadResumable> = {};
@@ -135,6 +136,18 @@ export const downloader = {
         filename: coverLocalPath,
         url: coverDownloadUrl,
         fileSize: 0, // dynamic
+      });
+    }
+
+    // Add Ebook download if available
+    if (hasEbook(libraryItem)) {
+      const ebookDownloadUrl = `${serverAddress}/api/items/${id}/ebook`;
+      const ebookFormat = getEbookFormat(libraryItem) || "epub";
+      partsToDownload.push({
+        id: "ebook",
+        filename: `book.${ebookFormat}`,
+        url: ebookDownloadUrl,
+        fileSize: media.ebookFile?.metadata?.size || media.ebookFile?.fileSize || 0,
       });
     }
 

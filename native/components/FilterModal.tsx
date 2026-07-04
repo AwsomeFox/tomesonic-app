@@ -10,7 +10,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { useLibraryStore } from "../store/useLibraryStore";
-import { api } from "../utils/api";
 import Icon, { IconName } from "./Icon";
 
 /**
@@ -226,7 +225,7 @@ export default function FilterModal({
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType="slide"
       onRequestClose={onClose}
     >
       <Pressable

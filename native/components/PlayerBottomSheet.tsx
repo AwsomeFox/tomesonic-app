@@ -3,7 +3,6 @@ import {
   View,
   Text,
   Pressable,
-  Image,
   ScrollView,
   LayoutChangeEvent,
   PanResponder,
@@ -11,6 +10,7 @@ import {
   BackHandler,
   StyleSheet,
 } from "react-native";
+import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, {
@@ -63,28 +63,32 @@ export default function PlayerBottomSheet() {
   const isLandscape = screenWidth > screenHeight;
 
 
-  const {
-    currentSession,
-    isPlaying,
-    playPause,
-    position,
-    duration,
-    playbackSpeed,
-    setPlaybackSpeed,
-    seekForward,
-    seekBackward,
-    seek,
-    chapters,
-    currentChapterIndex,
-    nextChapter,
-    previousChapter,
-    seekToChapter,
-    sleepTimer,
-    setSleepTimer,
-    cancelSleepTimer,
-    isPlayerExpanded,
-    setPlayerExpanded,
-  } = usePlaybackStore();
+  // Shallow-select only the slices this component actually renders. The old
+  // selector-less usePlaybackStore() re-rendered the whole player on EVERY store
+  // write — including ones it doesn't use (isCasting, castClient, chapterQueue,
+  // onTabScreen, isInitialized). With useShallow it re-renders only when one of
+  // these values changes. (position/duration still tick ~1s while playing, which
+  // the scrubber needs — isolating those into a child is a further optimization.)
+  const currentSession = usePlaybackStore((s) => s.currentSession);
+  const isPlaying = usePlaybackStore((s) => s.isPlaying);
+  const playPause = usePlaybackStore((s) => s.playPause);
+  const position = usePlaybackStore((s) => s.position);
+  const duration = usePlaybackStore((s) => s.duration);
+  const playbackSpeed = usePlaybackStore((s) => s.playbackSpeed);
+  const setPlaybackSpeed = usePlaybackStore((s) => s.setPlaybackSpeed);
+  const seekForward = usePlaybackStore((s) => s.seekForward);
+  const seekBackward = usePlaybackStore((s) => s.seekBackward);
+  const seek = usePlaybackStore((s) => s.seek);
+  const chapters = usePlaybackStore((s) => s.chapters);
+  const currentChapterIndex = usePlaybackStore((s) => s.currentChapterIndex);
+  const nextChapter = usePlaybackStore((s) => s.nextChapter);
+  const previousChapter = usePlaybackStore((s) => s.previousChapter);
+  const seekToChapter = usePlaybackStore((s) => s.seekToChapter);
+  const sleepTimer = usePlaybackStore((s) => s.sleepTimer);
+  const setSleepTimer = usePlaybackStore((s) => s.setSleepTimer);
+  const cancelSleepTimer = usePlaybackStore((s) => s.cancelSleepTimer);
+  const isPlayerExpanded = usePlaybackStore((s) => s.isPlayerExpanded);
+  const setPlayerExpanded = usePlaybackStore((s) => s.setPlayerExpanded);
 
   const isPlayerExpandedRef = useRef(isPlayerExpanded);
   useEffect(() => {
@@ -175,8 +179,6 @@ export default function PlayerBottomSheet() {
   const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + 28 + 16;
   const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + 36 + 20;
   const TRANSPORT_Y_EXP = TITLE_Y_EXP + 64 + 24;
-
-  const dragRange = screenHeight - MINIPLAYER_HEIGHT - bottomOffset;
 
   // PanResponder to drive sheet progress via vertical dragging
   const panResponder = useRef(
@@ -487,7 +489,6 @@ export default function PlayerBottomSheet() {
 
   if (!currentSession) return null;
 
-  const progress = duration > 0 ? Math.min(Math.max(position / duration, 0), 1) : 0;
   const mediaTitle = currentSession.displayTitle || "Unknown Audiobook";
   const authorName = currentSession.displayAuthor || "Unknown Author";
   const coverUrl = currentSession.coverUrl || "";
@@ -529,7 +530,6 @@ export default function PlayerBottomSheet() {
 
   const chapterElapsed = currentChapter ? chapterFrac * chapterSpan : position;
   const chapterRemaining = currentChapter ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
-  const chapterDuration = currentChapter ? chapterSpan : duration;
 
   // Both orientation subtrees stay mounted (display-toggled), and BOTH
   // scrubbers call onLayout — only the visible one may own the width ref, or
@@ -1000,7 +1000,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           {coverUrl ? (
-            <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+            <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" />
           ) : (
             <Icon name="book" size={32} color={withAlpha(colors.onSurface, 0.4)} />
           )}
@@ -1142,21 +1142,25 @@ export default function PlayerBottomSheet() {
           </Pressable>
         </Animated.View>
 
-        {/* 6. Pinned miniplayer progress wave at bottom of mini player slot */}
+        {/* 6. Pinned miniplayer progress wave at bottom of mini player slot.
+            Inset to the text zone: the cover (left, ends x=62) and the
+            replay/play/forward cluster (right, starts x=screenWidth-122) both
+            reach y≈59-62, so a full-bleed wave at y=58 visually collides with
+            them. left 74 aligns with the title block. */}
         <Animated.View
           pointerEvents="none"
           style={[
             {
               position: "absolute",
-              left: 0,
-              right: 0,
+              left: 74,
+              right: 130,
               top: MINIPLAYER_HEIGHT - 10,
             },
             animatedMiniProgressStyle,
           ]}
         >
           <WavyProgress
-            progress={progress}
+            progress={liveChapterFrac}
             playing={isPlaying}
             color={colors.primary}
             trackColor={withAlpha(colors.primary, 0.2)}
@@ -1182,7 +1186,7 @@ export default function PlayerBottomSheet() {
           >
             <Pressable onPress={() => setPlayerExpanded(true)} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
               <View style={{ width: 50, height: 50, borderRadius: 8, overflow: "hidden", backgroundColor: colors.surfaceContainerHigh, alignItems: "center", justifyContent: "center" }}>
-                {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
+                {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>{title}</Text>
@@ -1236,7 +1240,7 @@ export default function PlayerBottomSheet() {
             <View style={{ flex: 1, flexDirection: "row", alignItems: "center" }}>
               <View style={{ width: LS_COVER + 16, alignItems: "center", justifyContent: "center" }}>
                 <View style={{ width: LS_COVER, height: LS_COVER, borderRadius: 16, overflow: "hidden", backgroundColor: colors.surfaceContainerHigh, alignItems: "center", justifyContent: "center", elevation: 4 }}>
-                  {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> : <Icon name="book" size={48} color={withAlpha(colors.onSurface, 0.4)} />}
+                  {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={48} color={withAlpha(colors.onSurface, 0.4)} />}
                   {coverUrl ? (
                     <LinearGradient colors={["rgba(0,0,0,0.35)", "rgba(0,0,0,0.12)", "rgba(255,255,255,0.10)", "rgba(0,0,0,0)"]} locations={[0, 0.35, 0.6, 1]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 18 }} />
                   ) : null}

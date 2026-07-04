@@ -8,13 +8,9 @@ const EBOOK_FORMATS = ["epub", "mobi", "azw3", "azw", "pdf", "cbr", "cbz", "fb2"
 /** True when the item has playable audio (tracks / duration). */
 export function hasAudio(item: any): boolean {
   const m = item?.media || {};
-  return (
-    (m.numAudioFiles ?? 0) > 0 ||
-    (m.numTracks ?? 0) > 0 ||
-    (m.duration ?? 0) > 0 ||
-    (Array.isArray(m.tracks) && m.tracks.length > 0) ||
-    (Array.isArray(m.audioFiles) && m.audioFiles.length > 0)
-  );
+  const numAudio = m.numAudioFiles ?? (Array.isArray(m.audioFiles) ? m.audioFiles.length : 0);
+  const numTracks = m.numTracks ?? (Array.isArray(m.tracks) ? m.tracks.length : 0);
+  return numAudio > 0 || numTracks > 0;
 }
 
 /** True when the item has an ebook file (any recognized format). */

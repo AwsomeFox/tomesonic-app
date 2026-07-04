@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, Image, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
@@ -52,7 +53,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   useEffect(() => {
@@ -66,7 +67,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
       try {
         setLoading(true);
         setError(null);
-        const response = await api.get(`/api/collections/${collectionId}?include=rssfeed`);
+        const response = await api.get(`/api/collections/${collectionId}`);
         setCollection(response.data);
       } catch (err) {
         console.error("[CollectionDetail] Failed to fetch collection:", err);
@@ -96,7 +97,6 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     setStarting(true);
     try {
       const ok = await startPlayback(next.id);
-      if (ok) navigation.navigate("Player");
     } finally {
       setStarting(false);
     }
@@ -107,7 +107,6 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     setStarting(true);
     try {
       const ok = await startPlayback(bookId);
-      if (ok) navigation.navigate("Player");
     } finally {
       setStarting(false);
     }
@@ -139,7 +138,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           }}
         >
           {coverUrl ? (
-            <Image source={{ uri: coverUrl }} style={{ width: 56, height: 80 }} resizeMode="cover" />
+            <Image source={{ uri: coverUrl }} style={{ width: 56, height: 80 }} contentFit="cover" />
           ) : (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <Icon name="book" size={22} color={colors.onSurfaceVariant} />
@@ -164,6 +163,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           ) : null}
           <BookProgressBadge
             itemId={book.id}
+            item={book}
             downloaded={(book as any).isLocal || !!(book as any).localLibraryItem}
             style={{ marginTop: 4 }}
           />
@@ -318,7 +318,7 @@ function CollageCover({
             return (
               <View key={b.id || i} style={{ width: w, height: size }}>
                 {uri ? (
-                  <Image source={{ uri }} style={{ width: w, height: size }} resizeMode="cover" />
+                  <Image source={{ uri }} style={{ width: w, height: size }} contentFit="cover" />
                 ) : (
                   <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="book" size={24} color={colors.onPrimary} />

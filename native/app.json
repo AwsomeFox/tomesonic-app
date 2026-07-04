@@ -28,8 +28,6 @@
     },
     "plugins": [
       "expo-sharing",
-      "expo-sqlite",
-      "expo-font",
       "expo-web-browser",
       [
         "expo-notifications",
@@ -60,6 +58,8 @@
       "./plugins/withAndroidAuto",
       "./plugins/withResumeWidget",
       "./plugins/withRotationCrossfade",
+      "./plugins/withSecureBackupRules",
+      "./plugins/withMedia3NotificationIcon",
       [
         "expo-build-properties",
         {
@@ -67,7 +67,10 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-image",
+      "@sentry/react-native"
     ]
   }
 }

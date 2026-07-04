@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { View, Text, FlatList, Image, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated, { FadeIn } from "react-native-reanimated";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
@@ -41,15 +43,6 @@ interface LibraryItem {
   };
 }
 
-// Mirrors $elapsedPretty
-function elapsedPretty(seconds: number): string {
-  if (!seconds || seconds <= 0) return "";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h} hr ${m} min`;
-  return `${m} min`;
-}
-
 // Mirrors displaySortLine for orderBy === 'addedAt' -> $getString('LabelAddedDate', [$formatDate(addedAt)])
 function formatAdded(ms?: number): string {
   if (!ms) return "";
@@ -81,10 +74,14 @@ export default function LibraryScreen({ route, navigation }: any) {
   const fetchIdRef = useRef(0);
   const routeFilter = route.params?.filter;
 
-  // Filter / sort state (raw query values matching the original app).
-  const [filterBy, setFilterBy] = useState(routeFilter || "all");
-  const [orderBy, setOrderBy] = useState("addedAt");
-  const [descending, setDescending] = useState(true);
+  // Filter / sort state (raw query values matching the original app). Seeded
+  // from the persisted mobile* settings so the user's sort/filter choices
+  // survive app restarts (a route-supplied filter still takes precedence).
+  const savedSettings = useUserStore.getState().settings;
+  const updateUserSettings = useUserStore((s) => s.updateUserSettings);
+  const [filterBy, setFilterBy] = useState(routeFilter || savedSettings?.mobileFilterBy || "all");
+  const [orderBy, setOrderBy] = useState(savedSettings?.mobileOrderBy || "addedAt");
+  const [descending, setDescending] = useState(savedSettings?.mobileOrderDesc ?? true);
   const [filterOpen, setFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
 
@@ -99,7 +96,7 @@ export default function LibraryScreen({ route, navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const fetchItems = useCallback(
@@ -174,7 +171,6 @@ export default function LibraryScreen({ route, navigation }: any) {
     setStartingId(item.id);
     try {
       const ok = await startPlayback(item.id);
-      if (ok) navigation.navigate("Player");
     } finally {
       setStartingId(null);
     }
@@ -221,7 +217,7 @@ export default function LibraryScreen({ route, navigation }: any) {
     return (
       // material-3-list-card embedded-list-row z-10 cursor-pointer py-1 px-2 mx-0
       <AnimatedPressable
-        entering={FadeIn.delay(Math.min(index * 20, 200)).duration(250)}
+        entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
         android_ripple={{ color: colors.surfaceContainerHighest }}
         style={{ zIndex: 10, paddingVertical: 12, paddingHorizontal: 12 }}
@@ -243,7 +239,7 @@ export default function LibraryScreen({ route, navigation }: any) {
               <Image
                 source={{ uri: coverUri }}
                 style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
-                resizeMode="cover"
+                contentFit="cover"
               />
             ) : (
               // Material Symbol placeholder — bg-surface-container, book icon
@@ -267,6 +263,7 @@ export default function LibraryScreen({ route, navigation }: any) {
             {hasBadge ? (
               <BookProgressBadge
                 itemId={item.id}
+                item={item}
                 downloaded={isLocal}
                 style={{ marginTop: 4 }}
               />
@@ -340,7 +337,11 @@ export default function LibraryScreen({ route, navigation }: any) {
         visible={filterOpen}
         onClose={() => setFilterOpen(false)}
         filterBy={filterBy}
-        onChange={setFilterBy}
+        onChange={(f) => {
+          setFilterBy(f);
+          // Persist so the choice survives restarts (mirrors the original app).
+          updateUserSettings({ mobileFilterBy: f }).catch(() => {});
+        }}
       />
       <OrderModal
         visible={sortOpen}
@@ -350,6 +351,7 @@ export default function LibraryScreen({ route, navigation }: any) {
         onChange={(o, d) => {
           setOrderBy(o);
           setDescending(d);
+          updateUserSettings({ mobileOrderBy: o, mobileOrderDesc: d }).catch(() => {});
         }}
       />
 

@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { View, Text, FlatList, Image, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated, { FadeIn } from "react-native-reanimated";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { LinearGradient } from "expo-linear-gradient";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -80,7 +82,7 @@ export default function SeriesListScreen({ navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const fetchSeries = useCallback(
@@ -162,7 +164,7 @@ export default function SeriesListScreen({ navigation }: any) {
     if (count === 1) {
       const uri = getCoverUrl(coverBooks[0].id);
       return (
-        <Image source={{ uri: uri || undefined }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+        <Image source={{ uri: uri || undefined }} style={{ width: "100%", height: "100%" }} contentFit="cover" />
       );
     }
 
@@ -175,7 +177,7 @@ export default function SeriesListScreen({ navigation }: any) {
               key={b.id || idx}
               source={{ uri: getCoverUrl(b.id) || undefined }}
               style={{ width: "50%", height: "100%" }}
-              resizeMode="cover"
+              contentFit="cover"
             />
           ))}
         </View>
@@ -187,10 +189,10 @@ export default function SeriesListScreen({ navigation }: any) {
       return (
         <View style={{ width: "100%", height: "100%" }}>
           <View style={{ flexDirection: "row", height: "50%" }}>
-            <Image source={{ uri: getCoverUrl(coverBooks[0].id) || undefined }} style={{ width: "50%", height: "100%" }} resizeMode="cover" />
-            <Image source={{ uri: getCoverUrl(coverBooks[1].id) || undefined }} style={{ width: "50%", height: "100%" }} resizeMode="cover" />
+            <Image source={{ uri: getCoverUrl(coverBooks[0].id) || undefined }} style={{ width: "50%", height: "100%" }} contentFit="cover" />
+            <Image source={{ uri: getCoverUrl(coverBooks[1].id) || undefined }} style={{ width: "50%", height: "100%" }} contentFit="cover" />
           </View>
-          <Image source={{ uri: getCoverUrl(coverBooks[2].id) || undefined }} style={{ width: "100%", height: "50%" }} resizeMode="cover" />
+          <Image source={{ uri: getCoverUrl(coverBooks[2].id) || undefined }} style={{ width: "100%", height: "50%" }} contentFit="cover" />
         </View>
       );
     }
@@ -203,7 +205,7 @@ export default function SeriesListScreen({ navigation }: any) {
             key={b.id || idx}
             source={{ uri: getCoverUrl(b.id) || undefined }}
             style={{ width: "50%", height: "50%" }}
-            resizeMode="cover"
+            contentFit="cover"
           />
         ))}
       </View>
@@ -231,7 +233,7 @@ export default function SeriesListScreen({ navigation }: any) {
     return (
       // material-3-card series-card-shell rounded-2xl bg-surface-container shadow-elevation-1 overflow-hidden
       <AnimatedPressable
-        entering={FadeIn.delay(Math.min(index * 40, 400)).duration(300)}
+        entering={listRowEnter(index)}
         onPress={() =>
           navigation.navigate("SeriesDetail", {
             seriesId: item.id,

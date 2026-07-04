@@ -3,13 +3,13 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   Pressable,
-  ActivityIndicator,
   useWindowDimensions,
 } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated, { FadeIn } from "react-native-reanimated";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
@@ -78,12 +78,12 @@ export default function AuthorsScreen({ navigation }: any) {
 
   const getAuthorImageUrl = (author: Author) => {
     if (!author.imagePath || !serverAddress || !token) return null;
-    return `${serverAddress}/api/authors/${author.id}/image?token=${token}`;
+    return `${serverAddress}/api/authors/${author.id}/image?width=400&format=webp&token=${token}`;
   };
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const fetchAuthors = useCallback(async () => {
@@ -140,7 +140,7 @@ export default function AuthorsScreen({ navigation }: any) {
 
     return (
       <AnimatedPressable
-        entering={FadeIn.delay(Math.min(index * 30, 400)).duration(300)}
+        entering={listRowEnter(index)}
         onPress={() =>
           navigation.navigate("AuthorDetail", {
             authorId: item.id,
@@ -163,7 +163,7 @@ export default function AuthorsScreen({ navigation }: any) {
           <Image
             source={{ uri: imageUri }}
             style={{ width: "100%", height: "100%" }}
-            resizeMode="cover"
+            contentFit="cover"
           />
         ) : collage.length > 0 ? (
           <View
@@ -184,7 +184,7 @@ export default function AuthorsScreen({ navigation }: any) {
                     <Image
                       source={{ uri: cUri }}
                       style={{ width: "100%", height: "100%" }}
-                      resizeMode="cover"
+                      contentFit="cover"
                     />
                   ) : (
                     <View

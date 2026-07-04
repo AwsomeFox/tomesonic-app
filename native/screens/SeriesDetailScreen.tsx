@@ -3,13 +3,14 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   Pressable,
   ActivityIndicator,
 } from "react-native";
+import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated, { FadeInDown } from "react-native-reanimated";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -91,7 +92,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   useEffect(() => {
@@ -155,7 +156,6 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     setStartingId(item.id);
     try {
       const ok = await startPlayback(item.id);
-      if (ok) navigation.navigate("Player");
     } finally {
       setStartingId(null);
     }
@@ -172,19 +172,11 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     const title =
       sequence != null && sequence !== "" ? `#${sequence} ${rawTitle}` : rawTitle;
 
-    // Sky-blue (tertiary-container) "N hr remaining" chip for in-progress books.
-    const progress = item.userMediaProgress || null;
-    const inProgress =
-      !!progress && !progress.isFinished && (progress.progress || 0) > 0;
-    const remaining = inProgress
-      ? elapsedPretty(duration - (progress?.currentTime || 0))
-      : "";
-
     const startingThis = startingId === item.id;
 
     return (
       <AnimatedPressable
-        entering={FadeInDown.delay(Math.min(index * 40, 400)).duration(300)}
+        entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
         android_ripple={{ color: colors.surfaceContainerHighest }}
         style={{ paddingVertical: 10, paddingHorizontal: 16 }}
@@ -204,7 +196,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
               <Image
                 source={{ uri: coverUri }}
                 style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
-                resizeMode="cover"
+                contentFit="cover"
               />
             ) : (
               <View
@@ -242,6 +234,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
 
             <BookProgressBadge
               itemId={item.id}
+              item={item}
               downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
               style={{ marginTop: 6 }}
             />

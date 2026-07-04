@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, Image, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "../components/Icon";
@@ -46,7 +47,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
 
   const getCoverUrl = (libraryItemId: string) => {
     if (!libraryItemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${libraryItemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${libraryItemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const formatDate = (dateStr: string | number | undefined) => {
@@ -106,7 +107,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
             <Image
               source={{ uri: coverUrl }}
               style={{ width: 60, height: 60 }}
-              resizeMode="cover"
+              contentFit="cover"
             />
           ) : (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>

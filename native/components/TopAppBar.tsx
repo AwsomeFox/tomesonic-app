@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { View, Text, Pressable, Modal, TextInput } from "react-native";
+import React, { useState, useEffect } from "react";
+import { View, Text, Pressable, Modal, TextInput, BackHandler } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -48,6 +48,18 @@ export default function TopAppBar({
 
   const currentLibrary = libraries.find((l) => l.id === currentLibraryId);
   const libraryName = currentLibrary?.name || "Library";
+
+  // Android hardware back closes the search overlay instead of popping the
+  // screen (or exiting the app) — matches every native Android search UX.
+  useEffect(() => {
+    if (!isSearchActive) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      setSearchActive(false);
+      setSearchQuery("");
+      return true;
+    });
+    return () => sub.remove();
+  }, [isSearchActive, setSearchActive, setSearchQuery]);
 
   if (isSearchActive) {
     return (

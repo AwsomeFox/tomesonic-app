@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, Image, RefreshControl } from "react-native";
+import { View, Text, Pressable, ScrollView, RefreshControl } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import Animated, { FadeInRight } from "react-native-reanimated";
+import Animated, { FadeIn, LinearTransition } from "react-native-reanimated";
+import { shelfCardEnter } from "../theme/motion";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
 import { api } from "../utils/api";
+import { storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
 import BookCard from "../components/BookCard";
@@ -17,8 +20,7 @@ import { ShelfSkeleton } from "../components/Skeleton";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { flushPendingSyncs } from "../utils/progressSync";
-import { encodeFilterValue } from "../components/FilterModal";
-import { hasEbook, hasAudio } from "../utils/bookMatch";
+import { hasEbook } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -29,8 +31,26 @@ export default function BookshelfScreen({ navigation }: any) {
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
   const { personalizedShelves, loadPersonalizedShelves, currentLibraryId, loadLibraries } = useLibraryStore();
-  const [continueReadingItems, setContinueReadingItems] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Continue Reading is cached per library (stale-while-revalidate, like the
+  // shelves) so it renders on the first frame instead of popping in after the
+  // per-item fetches finish.
+  const readContinueReadingCache = (libId: string | null): any[] => {
+    if (!libId) return [];
+    try {
+      const raw = storage.getString(`continueReadingCache_${libId}`);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+  const [continueReadingItems, setContinueReadingItems] = useState<any[]>(() =>
+    readContinueReadingCache(useLibraryStore.getState().currentLibraryId)
+  );
+  // Starts true so the very first frame of a fresh install shows the skeleton
+  // (not an empty screen). Warm starts hydrate shelves synchronously from the
+  // MMKV cache, so the `shelves.length === 0` half of the gate skips it.
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const { isConnected } = useNetworkStatus();
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
@@ -41,29 +61,57 @@ export default function BookshelfScreen({ navigation }: any) {
 
     try {
       const mediaProgress = useUserStore.getState().mediaProgress || {};
-      const filterVal = `progress.${encodeFilterValue("in-progress")}`;
-      const res = await api.get(`/api/libraries/${currentLibraryId}/items?filter=${filterVal}&limit=40`);
-      const items = res.data?.results || [];
       
-      // Filter duplicates (just in case) and select in-progress ebooks
-      const seenIds = new Set<string>();
-      const ebooks = items.filter((item: any) => {
-        if (!item?.id) return false;
-        if (seenIds.has(item.id)) return false;
-        seenIds.add(item.id);
+      // Find all library item IDs with active ebook progress from the user's
+      // progress store. Use the progress object's libraryItemId — the map key
+      // can be a composite `${libraryItemId}-${episodeId}` for podcast episodes,
+      // which would poison the batch item request. Episodes can't be ebooks,
+      // so skip episode-progress rows entirely.
+      const inProgressIds = Array.from(
+        new Set(
+          Object.values(mediaProgress)
+            .filter((p: any) => {
+              if (!p || p.isFinished || p.episodeId) return false;
+              return p.ebookLocation || (p.ebookProgress !== undefined && p.ebookProgress > 0);
+            })
+            .map((p: any) => p.libraryItemId)
+            .filter(Boolean)
+        )
+      );
 
-        const progress = item?.userMediaProgress || mediaProgress[item.id];
-        
-        if (!hasEbook(item)) return false;
-        if (!progress || progress.isFinished) return false;
-        
-        // If it's a pure ebook or has active ebook progress
-        if (progress.ebookLocation || (progress.ebookProgress !== undefined && progress.ebookProgress > 0)) {
-          return true;
-        }
-        return !hasAudio(item);
+      if (inProgressIds.length === 0) {
+        setContinueReadingItems([]);
+        try { storage.set(`continueReadingCache_${currentLibraryId}`, "[]"); } catch {}
+        return;
+      }
+
+      // Fetch all items in ONE batch request instead of N sequential item
+      // fetches (this was the main reason Continue Reading appeared late).
+      let fetchedItems: any[] = [];
+      try {
+        const res = await api.post(`/api/items/batch/get`, { libraryItemIds: inProgressIds });
+        fetchedItems = res.data?.libraryItems || [];
+      } catch (err) {
+        // Older servers without batch/get: fall back to per-item fetches.
+        console.warn("[Bookshelf] batch item fetch failed, falling back", err);
+        const itemRequests = inProgressIds.map(async (id) => {
+          try {
+            const r = await api.get(`/api/items/${id}`);
+            return r.data;
+          } catch {
+            return null;
+          }
+        });
+        fetchedItems = (await Promise.all(itemRequests)).filter(Boolean);
+      }
+      
+      // Filter so they belong to the current library and contain an ebook
+      const filtered = fetchedItems.filter((item: any) => {
+        return item.libraryId === currentLibraryId && hasEbook(item);
       });
-      setContinueReadingItems(ebooks);
+
+      setContinueReadingItems(filtered);
+      try { storage.set(`continueReadingCache_${currentLibraryId}`, JSON.stringify(filtered)); } catch {}
     } catch (e) {
       console.warn("[Bookshelf] failed to load continue reading items", e);
     }
@@ -72,7 +120,8 @@ export default function BookshelfScreen({ navigation }: any) {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([loadPersonalizedShelves(true), loadMediaProgress(), loadContinueReading()]);
+      await Promise.all([loadPersonalizedShelves(true), loadMediaProgress()]);
+      await loadContinueReading();
     } finally {
       setRefreshing(false);
     }
@@ -91,104 +140,66 @@ export default function BookshelfScreen({ navigation }: any) {
     }
   }, [isConnected]);
 
+  // Library switch: swap Continue Reading to the new library's cache right
+  // away (matches how the store swaps the shelves cache).
+  const prevLibraryRef = React.useRef(currentLibraryId);
+  useEffect(() => {
+    if (prevLibraryRef.current !== currentLibraryId) {
+      prevLibraryRef.current = currentLibraryId;
+      setContinueReadingItems(readContinueReadingCache(currentLibraryId));
+    }
+  }, [currentLibraryId]);
+
   useEffect(() => {
     const initData = async () => {
       setLoading(true);
-      await loadLibraries();
-      await Promise.all([loadPersonalizedShelves(), loadMediaProgress(), loadContinueReading()]);
+      // currentLibraryId is seeded synchronously from MMKV, so on warm starts
+      // shelves/progress fetch immediately — loadLibraries runs in PARALLEL
+      // (it only re-picks the library if the saved one disappeared, which
+      // re-runs this effect via the currentLibraryId change).
+      if (currentLibraryId) {
+        // Everything fans out in parallel. Continue Reading only needs
+        // mediaProgress, so it chains off that alone (it used to also wait for
+        // the shelves fetch) and doesn't hold the skeleton gate. The series
+        // list for Continue Series has its own parallel effect.
+        const librariesPromise = loadLibraries().catch(() => {});
+        const progressPromise = loadMediaProgress();
+        progressPromise.then(() => loadContinueReading()).catch(() => {});
+        await Promise.all([loadPersonalizedShelves(), progressPromise]);
+        await librariesPromise;
+      } else {
+        // True first run: discover libraries first (sets currentLibraryId,
+        // which re-runs this effect and takes the fast path above).
+        await loadLibraries();
+      }
       setLoading(false);
     };
     initData();
   }, [currentLibraryId]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("focus", () => {
+      loadMediaProgress().then(() => {
+        loadContinueReading();
+      });
+    });
+    return unsubscribe;
+  }, [navigation, currentLibraryId]);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
 
   const getCoverUrl = (id: string) => {
     if (!id || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${id}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${id}/cover?width=400&format=webp&token=${token}`;
   };
 
   const getAuthorImageUrl = (author: any) => {
     if (!author?.imagePath || !author?.id || !serverAddress || !token) return null;
-    return `${serverAddress}/api/authors/${author.id}/image?token=${token}`;
+    return `${serverAddress}/api/authors/${author.id}/image?width=400&format=webp&token=${token}`;
   };
 
-  const fallbackShelves = [
-    {
-      id: "continue-listening",
-      label: "Continue Listening",
-      type: "book",
-      entities: [
-        {
-          id: "book_exp_1",
-          title: "Critical Mass",
-          author: "Craig Alanson",
-          progress: { currentTime: 18000, duration: 47940 }, // 8h 19m remaining
-          coverUrl: "https://images-na.ssl-images-amazon.com/images/I/91aOpeW784L.jpg",
-        },
-        {
-          id: "book_eye_2",
-          title: "The Eye of the Bedlam Bride",
-          author: "Matt Dinniman",
-          progress: { currentTime: 10000, duration: 85000 }, // 20h 50m remaining
-          coverUrl: "https://images-na.ssl-images-amazon.com/images/I/91tS2hLgGTL.jpg",
-        },
-      ],
-    },
-    {
-      id: "continue-series",
-      label: "Continue Series",
-      type: "series",
-      entities: [
-        {
-          id: "series_hp",
-          title: "Harry Potter (Full-...",
-          booksCount: 7,
-          progressCount: 6,
-          covers: [
-            "https://images-na.ssl-images-amazon.com/images/I/81YOuOGFCJL.jpg",
-            "https://images-na.ssl-images-amazon.com/images/I/81t2bCOY3JL.jpg",
-            "https://images-na.ssl-images-amazon.com/images/I/81VqLoU2JLL.jpg",
-            "https://images-na.ssl-images-amazon.com/images/I/81WjG4W6eaL.jpg",
-          ],
-        },
-        {
-          id: "series_murderbot",
-          title: "Murderbot Diaries",
-          booksCount: 4,
-          progressCount: 2,
-          covers: [
-            "https://images-na.ssl-images-amazon.com/images/I/71t41G2zFmL.jpg",
-            "https://images-na.ssl-images-amazon.com/images/I/816K856pS-L.jpg",
-            "https://images-na.ssl-images-amazon.com/images/I/71N14299bLL.jpg",
-            "https://images-na.ssl-images-amazon.com/images/I/81pL7pLhBGL.jpg",
-          ],
-        },
-      ],
-    },
-    {
-      id: "continue-authors",
-      label: "Continue Authors",
-      type: "authors",
-      entities: [
-        {
-          id: "author_hp_stone",
-          title: "Harry Potter and the Sorcerer's Stone",
-          author: "J.K. Rowling",
-          coverUrl: "https://images-na.ssl-images-amazon.com/images/I/81YOuOGFCJL.jpg",
-        },
-        {
-          id: "author_fourth_wing",
-          title: "Fourth Wing",
-          author: "Rebecca Yarros",
-          coverUrl: "https://images-na.ssl-images-amazon.com/images/I/91n7p-j+3eL.jpg",
-        },
-      ],
-    },
-  ];
-
-  const activeShelves = personalizedShelves.length > 0 ? personalizedShelves : fallbackShelves;
+  const activeShelves = personalizedShelves;
 
   // "Continue Series" rendered as series folders (open the series list), merged
   // from the server's continue-series shelf (next book per series) AND the
@@ -197,25 +208,59 @@ export default function BookshelfScreen({ navigation }: any) {
   // so we resolve their series id via the library's series list (one fetch).
   const [continueSeries, setContinueSeries] = useState<any[]>([]);
 
+  // The library's series list — needed to resolve series names → ids for the
+  // Continue Series shelf. Fetched at MOUNT (parallel with shelves/progress,
+  // it doesn't depend on them) and cached per library, so the build below is
+  // purely synchronous.
+  const [seriesList, setSeriesList] = useState<any[]>(() => {
+    const libId = useLibraryStore.getState().currentLibraryId;
+    if (!libId) return [];
+    try {
+      const raw = storage.getString(`seriesListCache_${libId}`);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
   useEffect(() => {
     let cancelled = false;
-    const build = async () => {
-      if (personalizedShelves.length === 0 || !currentLibraryId) {
-        setContinueSeries([]);
-        return;
+    if (!currentLibraryId) {
+      setSeriesList([]);
+      return;
+    }
+    // Swap to this library's cache immediately, then revalidate from network.
+    try {
+      const raw = storage.getString(`seriesListCache_${currentLibraryId}`);
+      const cached = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(cached)) setSeriesList(cached);
+    } catch {}
+    (async () => {
+      try {
+        const r = await api.get(`/api/libraries/${currentLibraryId}/series?limit=1000&minified=1`);
+        const fresh = r.data?.results || [];
+        try { storage.set(`seriesListCache_${currentLibraryId}`, JSON.stringify(fresh)); } catch {}
+        if (!cancelled) setSeriesList(fresh);
+      } catch {
+        // Offline / transient failure — cached list (if any) stands.
       }
+    })();
+    return () => { cancelled = true; };
+  }, [currentLibraryId]);
+
+  useEffect(() => {
+    // Pure transform: shelves + a series list → ordered continue-series rows.
+    const buildFrom = (seriesList: any[]) => {
       // series name (lowercased, without the "#seq" suffix) -> series id
       const nameToId = new Map<string, string>();
       const idToSeries = new Map<string, any>();
-      try {
-        const r = await api.get(`/api/libraries/${currentLibraryId}/series?limit=1000&minified=1`);
-        (r.data?.results || []).forEach((s: any) => {
-          if (s?.id) {
-            idToSeries.set(s.id, s);
-            if (s?.name) nameToId.set(String(s.name).toLowerCase(), s.id);
-          }
-        });
-      } catch {}
+      (seriesList || []).forEach((s: any) => {
+        if (s?.id) {
+          idToSeries.set(s.id, s);
+          if (s?.name) nameToId.set(String(s.name).toLowerCase(), s.id);
+        }
+      });
 
       const stripSeq = (n: string) => n.replace(/\s+#[\d.]+\s*$/, "").trim();
       const ordered: any[] = [];
@@ -245,6 +290,14 @@ export default function BookshelfScreen({ navigation }: any) {
         const id = nameToId.get(name.toLowerCase());
         if (id) push(id, name);
       });
+      // Scan read-in-progress series as well!
+      continueReadingItems.forEach((b: any) => {
+        const sn = b?.media?.metadata?.seriesName;
+        if (!sn) return;
+        const name = stripSeq(sn);
+        const id = nameToId.get(name.toLowerCase());
+        if (id) push(id, name);
+      });
       // Then between-books series (already carry the id).
       const cs = personalizedShelves.find((s: any) => s.id === "continue-series");
       (cs?.entities || []).forEach((b: any) => {
@@ -253,34 +306,59 @@ export default function BookshelfScreen({ navigation }: any) {
         if (so?.id) push(so.id, so.name);
       });
 
-      if (!cancelled) setContinueSeries(ordered);
+      return ordered;
     };
-    build();
-    return () => { cancelled = true; };
-  }, [personalizedShelves, currentLibraryId]);
 
-  const displayShelves = activeShelves.reduce((acc: any[], shelf: any) => {
-    if (shelf.id === "continue-series" && personalizedShelves.length > 0) {
-      acc.push({ ...shelf, type: "series", entities: continueSeries });
-    } else {
-      acc.push(shelf);
+    // Fully synchronous: the series list arrives via its own parallel fetch
+    // above, so this just re-derives whenever any input changes.
+    if (personalizedShelves.length === 0 || !currentLibraryId || seriesList.length === 0) {
+      setContinueSeries([]);
+      return;
     }
-    if (shelf.id === "continue-listening" && continueReadingItems.length > 0) {
-      acc.push({
+    setContinueSeries(buildFrom(seriesList));
+  }, [personalizedShelves, currentLibraryId, continueReadingItems, seriesList]);
+
+  // Shelf assembly. Structurally deduped by id so "Continue Reading" can never
+  // render twice (e.g. a stale cached shelf list racing the fresh one that now
+  // includes the server's own continue-reading shelf).
+  const displayShelves: any[] = [];
+  {
+    const seenShelfIds = new Set<string>();
+    for (const shelf of activeShelves) {
+      if (!shelf?.id || seenShelfIds.has(shelf.id)) continue;
+      seenShelfIds.add(shelf.id);
+      if (shelf.id === "continue-series") {
+        displayShelves.push({ ...shelf, type: "series", entities: continueSeries });
+      } else if (shelf.id === "continue-reading") {
+        // Prefer the locally-built list (ebook-progress aware); fall back to
+        // the server's entities so the shelf shows instantly while ours loads.
+        displayShelves.push({
+          ...shelf,
+          type: "book",
+          entities: continueReadingItems.length > 0 ? continueReadingItems : shelf.entities || [],
+        });
+      } else {
+        displayShelves.push(shelf);
+      }
+    }
+    // Synthetic Continue Reading ONLY when the server sent none at all
+    // (older servers) — inserted right after Continue Listening.
+    if (!seenShelfIds.has("continue-reading") && continueReadingItems.length > 0) {
+      const idx = displayShelves.findIndex((s) => s.id === "continue-listening");
+      displayShelves.splice(idx + 1, 0, {
         id: "continue-reading",
         label: "Continue Reading",
         type: "book",
         entities: continueReadingItems,
       });
     }
-    return acc;
-  }, []);
+  }
 
   const renderBookCard = (item: any, index: number) => {
     return (
       <Animated.View
         key={item.id || index}
-        entering={FadeInRight.delay(index * 50).springify().damping(32).stiffness(150)}
+        entering={shelfCardEnter(index)}
       >
         <BookCard item={item} size={165} navigation={navigation} />
       </Animated.View>
@@ -302,7 +380,7 @@ export default function BookshelfScreen({ navigation }: any) {
     return (
       <AnimatedPressable
         key={series.id || index}
-        entering={FadeInRight.delay(index * 50).springify().damping(32).stiffness(150)}
+        entering={shelfCardEnter(index)}
         onPress={() =>
           navigation.navigate("SeriesDetail", { seriesId: series.id, seriesName: series.name || series.title })
         }
@@ -322,7 +400,7 @@ export default function BookshelfScreen({ navigation }: any) {
           <Image
             source={{ uri: covers[0] }}
             style={{ width: "100%", height: "100%" }}
-            resizeMode="cover"
+            contentFit="cover"
           />
         ) : (
           <View style={{ flexDirection: "row", flexWrap: "wrap", width: "100%", height: "100%" }}>
@@ -331,7 +409,7 @@ export default function BookshelfScreen({ navigation }: any) {
                 key={idx}
                 source={{ uri: coverUri }}
                 style={{ width: cardSize / 2, height: cardSize / 2 }}
-                resizeMode="cover"
+                contentFit="cover"
               />
             ))}
             {covers.length === 0 && (
@@ -403,7 +481,7 @@ export default function BookshelfScreen({ navigation }: any) {
     return (
       <AnimatedPressable
         key={author.id || index}
-        entering={FadeInRight.delay(index * 50).springify().damping(32).stiffness(150)}
+        entering={shelfCardEnter(index)}
         onPress={() =>
           navigation.navigate("AuthorDetail", {
             authorId: author.id,
@@ -426,7 +504,7 @@ export default function BookshelfScreen({ navigation }: any) {
           <Image
             source={{ uri: imageUri }}
             style={{ width: "100%", height: "100%" }}
-            resizeMode="cover"
+            contentFit="cover"
           />
         ) : (
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceContainerHighest }}>
@@ -496,14 +574,13 @@ export default function BookshelfScreen({ navigation }: any) {
                   key={dl.id}
                   onPress={async () => {
                     const ok = await startPlayback(dl.libraryItemId || dl.id);
-                    if (ok) navigation.navigate("Player");
                   }}
                   android_ripple={{ color: colors.surfaceContainerHighest }}
                   style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10 }}
                 >
                   <View style={{ width: 64, height: 64, borderRadius: 10, overflow: "hidden", backgroundColor: colors.surfaceContainerHighest }}>
                     {localCover ? (
-                      <Image source={{ uri: localCover }} style={{ width: 64, height: 64 }} resizeMode="cover" />
+                      <Image source={{ uri: localCover }} style={{ width: 64, height: 64 }} contentFit="cover" />
                     ) : (
                       <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
                         <Icon name="book" size={26} color={colors.onSurfaceVariant} />
@@ -533,7 +610,10 @@ export default function BookshelfScreen({ navigation }: any) {
       ) : loading && personalizedShelves.length === 0 ? (
         <ShelfSkeleton />
       ) : (
-        <ScrollView
+        // Soft fade when the shelves replace the skeleton (or first mount) —
+        // avoids the hard cut between loading and content states.
+        <Animated.ScrollView
+          entering={FadeIn.duration(200)}
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingTop: 16, paddingBottom: hasSession ? 100 : 16 }}
           refreshControl={
@@ -549,10 +629,19 @@ export default function BookshelfScreen({ navigation }: any) {
             // Dispatch by shelf type. We transform "Continue Series" into a
             // series-type shelf (folders that open the series list).
             const isSeriesType = shelf.type === "series";
-            if (isSeriesType && (!shelf.entities || shelf.entities.length === 0)) return null;
+            // Never render a shelf header with nothing under it — async-built
+            // shelves (Continue Reading/Series) simply appear once populated.
+            if (!shelf.entities || shelf.entities.length === 0) return null;
 
             return (
-              <View key={shelf.id} style={{ width: "100%", position: "relative", paddingBottom: 4 }}>
+              // Fade the shelf in when it (later) appears, and animate the
+              // layout shift of the shelves below it instead of snapping.
+              <Animated.View
+                key={shelf.id}
+                entering={FadeIn.duration(220)}
+                layout={LinearTransition.duration(250)}
+                style={{ width: "100%", position: "relative", paddingBottom: 4 }}
+              >
                 {/* Shelf header: teal rounded accent bar + prominent title */}
                 <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
                   <View
@@ -581,10 +670,10 @@ export default function BookshelfScreen({ navigation }: any) {
                     }
                   })}
                 </ScrollView>
-              </View>
+              </Animated.View>
             );
           })}
-        </ScrollView>
+        </Animated.ScrollView>
       )}
     </SafeAreaView>
   );

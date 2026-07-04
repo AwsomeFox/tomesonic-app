@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, FlatList, Image } from "react-native";
+import { View, Text, Pressable, FlatList, Alert } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
@@ -9,7 +10,7 @@ import { formatBytes } from "../utils/format";
 
 export default function DownloadsScreen({ navigation }: any) {
   const colors = useThemeColors();
-  const { activeDownloads, completedDownloads, loadDownloadsFromDb, cancelDownload, retryDownload } = useDownloadStore();
+  const { activeDownloads, completedDownloads, loadDownloadsFromDb, cancelDownload, retryDownload, removeDownload } = useDownloadStore();
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const [activeTab, setActiveTab] = useState<"completed" | "active">("completed");
 
@@ -27,7 +28,6 @@ export default function DownloadsScreen({ navigation }: any) {
     // The playback store already prefers locally-downloaded files when
     // available, so just start a normal playback session for this item.
     await startPlayback(item.libraryItemId || item.id);
-    navigation.navigate("Player");
   };
 
   const Cover = ({ uri }: { uri?: string }) => (
@@ -43,7 +43,7 @@ export default function DownloadsScreen({ navigation }: any) {
       }}
     >
       {uri ? (
-        <Image source={{ uri }} style={{ width: 56, height: 56 }} resizeMode="cover" />
+        <Image source={{ uri }} style={{ width: 56, height: 56 }} contentFit="cover" />
       ) : (
         <Icon name="book" size={26} color={colors.onSurfaceVariant} />
       )}
@@ -178,7 +178,19 @@ export default function DownloadsScreen({ navigation }: any) {
                 <Icon name="play" size={24} color={colors.onPrimary} />
               </Pressable>
               <Pressable
-                onPress={() => cancelDownload(item.id)}
+                onPress={() =>
+                  // cancelDownload only touches ACTIVE downloads — a completed
+                  // one must go through removeDownload (deletes the files too).
+                  // Destructive, so confirm first.
+                  Alert.alert(
+                    "Delete download",
+                    `Remove "${item.title}" from this device? You can download it again later.`,
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => removeDownload(item.id) },
+                    ]
+                  )
+                }
                 style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                 hitSlop={6}
               >

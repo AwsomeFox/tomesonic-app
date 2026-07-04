@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, Image, ActivityIndicator, useWindowDimensions } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions } from "react-native";
+import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useThemeColors } from "../theme/useThemeColors";
-import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { downloader } from "../utils/downloader";
+import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
@@ -68,6 +69,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const isDownloaded = !!(item?.id && completedDownloads[item.id]);
   const isDownloading = !!(item?.id && activeDownloads[item.id]);
   const isFinished = !!item?.userMediaProgress?.isFinished;
+  const activeDownload = item?.id ? activeDownloads[item.id] : null;
+  const downloadPct = activeDownload ? Math.round(activeDownload.progress * 100) : 0;
 
   const handleToggleFinished = async () => {
     if (!item?.id) return;
@@ -98,7 +101,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const refetchItem = async () => {
     if (!itemId) return;
     try {
-      const response = await api.get(`/api/items/${itemId}?expanded=1&include=progress,rssfeed`);
+      const response = await api.get(`/api/items/${itemId}?expanded=1&include=progress`);
       setItem(response.data);
     } catch (err) {
       console.warn("[ItemDetail] refetch failed", err);
@@ -118,7 +121,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       try {
         setLoading(true);
         setError(null);
-        const response = await api.get(`/api/items/${itemId}?expanded=1&include=progress,rssfeed`);
+        const response = await api.get(`/api/items/${itemId}?expanded=1&include=progress`);
         setItem(response.data);
       } catch (err) {
         console.error("[ItemDetail] Failed to fetch item:", err);
@@ -133,7 +136,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const metadata = item?.media?.metadata || {};
   const progress = item?.userMediaProgress || null;
   const coverUrl =
-    itemId && serverAddress && token ? `${serverAddress}/api/items/${itemId}/cover?token=${token}` : null;
+    itemId && serverAddress && token ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}` : null;
 
   const description = stripHtml(metadata.description || "");
   const duration = item?.media?.duration || 0;
@@ -189,6 +192,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const audioCounterpartId =
     !selfHasAudio && counterpart && hasAudio(counterpart) ? counterpart.id : null;
   const canRead = !!ebookSource;
+  const [, setLastInteractionState] = useState(() => {
+    return storage.getString(`last_interaction_${itemId}`) || (canRead && !selfHasAudio ? "read" : "listen");
+  });
 
   const handleSeekToChapter = async (index: number) => {
     if (isCurrentlyPlaying) {
@@ -202,7 +208,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         setTimeout(async () => {
           await seekToChapter(index);
         }, 300);
-        navigation.navigate("Player");
       }
     }
   };
@@ -231,14 +236,26 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const startAudio = async (id: string) => {
     if (!item || starting) return;
     setStarting(true);
+    storage.set(`last_interaction_${itemId}`, "listen");
+    setLastInteractionState("listen");
     const ok = await startPlayback(id);
     setStarting(false);
-    if (ok) navigation.navigate("Player");
   };
   const handlePlay = () => startAudio(itemId);
 
+  const hasAudioMedia = selfHasAudio || !!audioCounterpartId;
+  const onPlayPress = () => {
+    if (selfHasAudio) {
+      handlePlay();
+    } else if (audioCounterpartId) {
+      startAudio(audioCounterpartId);
+    }
+  };
+
   const openReader = () => {
     if (!ebookSource) return;
+    storage.set(`last_interaction_${itemId}`, "read");
+    setLastInteractionState("read");
     navigation.navigate("Reader", {
       itemId: ebookSource.id,
       ebookFormat: ebookSource.format,
@@ -331,7 +348,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               }}
             >
               {coverUrl ? (
-                <Image source={{ uri: coverUrl }} style={{ width: coverWidth, height: coverWidth }} resizeMode="cover" />
+                <Image source={{ uri: coverUrl }} style={{ width: coverWidth, height: coverWidth }} contentFit="cover" />
               ) : (
                 <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
                   <Icon name="book" size={64} color={colors.onSurfaceVariant} />
@@ -370,9 +387,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               it becomes Read (in the play button's place). A matched sibling in
               the other format adds the secondary Play/Read button. */}
           <View style={{ flexDirection: "row", paddingHorizontal: 20, marginTop: 18, alignItems: "stretch" }}>
-            {selfHasAudio ? (
+            {hasAudioMedia ? (
               <Pressable
-                onPress={handlePlay}
+                onPress={onPlayPress}
                 disabled={starting}
                 style={{
                   flex: 1,
@@ -382,6 +399,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   alignItems: "center",
                   justifyContent: "center",
                   flexDirection: "row",
+                  // Keep the label off the pill's rounded edge ("Continue" is
+                  // wide when sharing the row with a Read button).
+                  paddingHorizontal: 16,
+                  marginRight: canRead ? 8 : 0,
                   opacity: starting ? 0.6 : 1,
                 }}
               >
@@ -390,32 +411,37 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 ) : (
                   <>
                     <Icon name="play" size={22} color={colors.onPrimary} />
-                    <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600", marginLeft: 8 }}>
+                    <Text numberOfLines={1} style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600", marginLeft: 8 }}>
                       {progress && !isFinished && progressPercent > 0 ? "Continue" : "Play"}
                     </Text>
                   </>
                 )}
               </Pressable>
-            ) : canRead ? (
-              // Ebook-only: Read takes the primary slot.
+            ) : null}
+
+            {canRead ? (
               <Pressable
                 onPress={openReader}
                 style={{
                   flex: 1,
-                  backgroundColor: colors.primary,
+                  backgroundColor: hasAudioMedia ? colors.secondaryContainer : colors.primary,
                   height: 52,
                   borderRadius: 26,
                   alignItems: "center",
                   justifyContent: "center",
                   flexDirection: "row",
+                  paddingHorizontal: 16,
+                  marginLeft: hasAudioMedia ? 8 : 0,
                 }}
               >
-                <Icon name="book" size={22} color={colors.onPrimary} />
-                <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600", marginLeft: 8 }}>
+                <Icon name="book" size={22} color={hasAudioMedia ? colors.onSecondaryContainer : colors.onPrimary} />
+                <Text style={{ color: hasAudioMedia ? colors.onSecondaryContainer : colors.onPrimary, fontSize: 16, fontWeight: "600", marginLeft: 8 }}>
                   Read
                 </Text>
               </Pressable>
-            ) : (
+            ) : null}
+
+            {!hasAudioMedia && !canRead ? (
               <View
                 style={{
                   flex: 1, height: 52, borderRadius: 26, backgroundColor: colors.surfaceContainer,
@@ -424,10 +450,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               >
                 <Text style={{ color: colors.onSurfaceVariant, fontSize: 14 }}>No playable media</Text>
               </View>
-            )}
+            ) : null}
 
-            {/* Download Button — only for items with their own audio. */}
-            {selfHasAudio ? (
+            {/* Download Button — for items with their own audio or ebook. */}
+            {selfHasAudio || selfHasEbook ? (
               <Pressable
                 onPress={handleDownloadPress}
                 style={{
@@ -443,7 +469,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 }}
               >
                 {isDownloading ? (
-                  <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
+                  <View style={{ alignItems: "center", justifyContent: "center" }}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={{ fontSize: 10, color: colors.onSurface, marginTop: 2, fontWeight: "800" }}>
+                      {downloadPct}%
+                    </Text>
+                  </View>
                 ) : (
                   <Icon
                     name={isDownloaded ? "trash" : "download"}
@@ -454,46 +485,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               </Pressable>
             ) : null}
 
-            {/* Secondary Read button (audiobook that also has an ebook, own or matched). */}
-            {selfHasAudio && canRead ? (
-              <Pressable
-                onPress={openReader}
-                style={{
-                  marginLeft: 10,
-                  width: 52,
-                  height: 52,
-                  borderRadius: 26,
-                  backgroundColor: colors.secondaryContainer,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Icon name="book" size={22} color={colors.onSecondaryContainer} />
-              </Pressable>
-            ) : null}
 
-            {/* Secondary Play button (ebook-only item with a matched audiobook). */}
-            {!selfHasAudio && audioCounterpartId ? (
-              <Pressable
-                onPress={() => startAudio(audioCounterpartId)}
-                disabled={starting}
-                style={{
-                  marginLeft: 10,
-                  width: 52,
-                  height: 52,
-                  borderRadius: 26,
-                  backgroundColor: colors.secondaryContainer,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                {starting ? (
-                  <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
-                ) : (
-                  <Icon name="play" size={22} color={colors.onSecondaryContainer} />
-                )}
-              </Pressable>
-            ) : null}
 
             {/* Chapters Button */}
             {hasChapters ? (

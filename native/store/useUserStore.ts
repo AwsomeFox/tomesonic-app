@@ -7,13 +7,12 @@ import { useLibraryStore } from "./useLibraryStore";
 type HapticLevel = "off" | "light" | "medium" | "heavy";
 
 interface UserSettings {
+  // Library sort/filter — persisted so the user's choices survive restarts.
+  // (Global playback rate lives in storageHelper.getPlaybackRate, and the
+  // dynamic-colors toggle lives in useThemeStore — not duplicated here.)
   mobileOrderBy: string;
   mobileOrderDesc: boolean;
   mobileFilterBy: string;
-  playbackRate: number;
-  collapseSeries: boolean;
-  collapseBookSeries: boolean;
-  enableDynamicColors: boolean;
   hideNonAudiobooksGlobal: boolean;
   // Device settings (wired into the Settings screen).
   lockOrientation: boolean;
@@ -61,10 +60,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   mobileOrderBy: "addedAt",
   mobileOrderDesc: true,
   mobileFilterBy: "all",
-  playbackRate: 1,
-  collapseSeries: false,
-  collapseBookSeries: false,
-  enableDynamicColors: true,
   hideNonAudiobooksGlobal: false,
   lockOrientation: true,
   hapticFeedback: "medium",
@@ -177,6 +172,25 @@ export const useUserStore = create<UserState>((set, get) => ({
     writeAutoCreds(null, null, null);
     storageHelper.removeLastLibraryId();
     storageHelper.removeLastPlaybackSession();
+
+    // Wipe cached shelves/series lists so the next account never sees the
+    // previous account's home content (stale-while-revalidate caches).
+    try {
+      const { storage } = require("../utils/storage");
+      storage
+        .getAllKeys()
+        .filter(
+          (k: string) =>
+            k.startsWith("shelvesCache_") ||
+            k.startsWith("seriesListCache_") ||
+            k.startsWith("continueReadingCache_")
+        )
+        .forEach((k: string) => storage.remove(k));
+    } catch {}
+    try {
+      const { useLibraryStore } = require("./useLibraryStore");
+      useLibraryStore.getState().reset();
+    } catch {}
 
     set({
       user: null,

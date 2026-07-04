@@ -77,7 +77,8 @@ export type IconName =
   | "vibration"
   | "palette"
   | "color-fill"
-  | "replay";
+  | "replay"
+  | "lock";
 
 type Family = "mi" | "mci";
 
@@ -154,6 +155,7 @@ const MAP: Record<IconName, [Family, string]> = {
   palette: ["mi", "palette"],
   "color-fill": ["mci", "format-color-fill"],
   replay: ["mi", "replay"],
+  lock: ["mi", "lock-outline"],
 };
 
 interface IconProps {

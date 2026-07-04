@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, Image, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
@@ -57,7 +58,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const items: any[] = playlist?.items || [];
@@ -75,7 +76,6 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
     setStarting(true);
     try {
       const ok = await startPlayback(libraryItemId, item.episodeId);
-      if (ok) navigation.navigate("Player");
     } finally {
       setStarting(false);
     }
@@ -121,7 +121,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           }}
         >
           {coverUrl ? (
-            <Image source={{ uri: coverUrl }} style={{ width: 56, height: 80 }} resizeMode="cover" />
+            <Image source={{ uri: coverUrl }} style={{ width: 56, height: 80 }} contentFit="cover" />
           ) : (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <Icon name={isEpisode ? "podcast" : "book"} size={22} color={colors.onSurfaceVariant} />
@@ -147,6 +147,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           {libraryItemId ? (
             <BookProgressBadge
               itemId={libraryItemId}
+              item={(item as any).libraryItem || item}
               downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
               style={{ marginTop: 4 }}
             />
@@ -285,7 +286,7 @@ function PlaylistCollage({ covers, size, colors }: { covers: string[]; size: num
           <Icon name="list" size={28} color={colors.onPrimary} />
         </View>
       ) : covers.length === 1 ? (
-        <Image source={{ uri: covers[0] }} style={{ width: size, height: size }} resizeMode="cover" />
+        <Image source={{ uri: covers[0] }} style={{ width: size, height: size }} contentFit="cover" />
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", width: size, height: size }}>
           {covers.slice(0, 4).map((uri, idx) => (
@@ -293,7 +294,7 @@ function PlaylistCollage({ covers, size, colors }: { covers: string[]; size: num
               key={idx}
               source={{ uri }}
               style={{ width: size / 2, height: covers.length <= 2 ? size : size / 2 }}
-              resizeMode="cover"
+              contentFit="cover"
             />
           ))}
         </View>

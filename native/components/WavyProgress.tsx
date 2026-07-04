@@ -52,6 +52,16 @@ export default function WavyProgress({
   const [width, setWidth] = useState(0);
   const phase = useSharedValue(0);
   const amp = useSharedValue(0);
+  const progressShared = useSharedValue(0);
+  const widthShared = useSharedValue(0);
+
+  useEffect(() => {
+    progressShared.value = progress || 0;
+  }, [progress]);
+
+  useEffect(() => {
+    widthShared.value = width || 0;
+  }, [width]);
 
   // Peak amplitude, clamped so the stroke never clips the SVG edges.
   const peakAmp = Math.max(
@@ -67,6 +77,12 @@ export default function WavyProgress({
     } else {
       cancelAnimation(phase);
     }
+    // Cancel on unmount too, so the infinite repeat can't outlive the component
+    // (e.g. the player closing mid-playback).
+    return () => {
+      cancelAnimation(phase);
+      cancelAnimation(amp);
+    };
   }, [playing]);
 
   useEffect(() => {
@@ -82,17 +98,21 @@ export default function WavyProgress({
 
   const waveProps = useAnimatedProps(() => {
     "worklet";
-    if (endX <= 0) return { d: `M 0 ${cy}` };
+    const w = widthShared.value;
+    const cl = Math.max(0, Math.min(1, progressShared.value));
+    const currentEndX = Math.max(0, (w - STOP_R * 2) * cl);
+
+    if (currentEndX <= 0) return { d: `M 0 ${cy}` };
     const a = amp.value;
     const ph = phase.value;
     let d = "";
     const step = 1.5;
-    for (let x = 0; x <= endX; x += step) {
+    for (let x = 0; x <= currentEndX; x += step) {
       const y = cy + a * Math.sin((x / wavelength + ph) * Math.PI * 2);
       d += (x === 0 ? "M " : "L ") + x.toFixed(2) + " " + y.toFixed(2);
     }
     return { d };
-  }, [endX, cy, wavelength]);
+  });
 
   return (
     <View style={{ height }} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>

@@ -1,12 +1,6 @@
 import { create } from "zustand";
-import TrackPlayer, { 
-  Capability, 
-  State, 
-  useTrackPlayerEvents, 
-  Event, 
-  AppKilledPlaybackBehavior 
-} from "react-native-track-player";
-import { storageHelper } from "../utils/storage";
+import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react-native-track-player";
+import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
 import { syncProgress, closeSession } from "../utils/progressSync";
@@ -32,6 +26,9 @@ let _finishedSessionId: string | null = null;
 // In-flight initializePlayer() — shared so concurrent callers can't each
 // start their own progress interval.
 let _initPromise: Promise<void> | null = null;
+// Handle for the 1s player→store sync loop, kept module-level so a double init
+// can't leak a second interval (which would double-count listened time).
+let progressInterval: ReturnType<typeof setInterval> | null = null;
 
 const SYNC_INTERVAL_MS = 15000;
 const LOCAL_SAVE_INTERVAL_MS = 5000;
@@ -56,8 +53,11 @@ function buildPlayerOptions() {
   return {
     android: {
       appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
-      notificationIcon: "notification_icon",
     },
+    // NOTE: no icon/notificationIcon here — RNTP 5 (Media3) ignores those JS
+    // options entirely. The media-notification small icon is set by overriding
+    // the media3_notification_small_icon drawable at the app level (see
+    // plugins/withMedia3NotificationIcon.js).
     forwardJumpInterval: s.jumpForwardTime ?? 10,
     backwardJumpInterval: s.jumpBackwardTime ?? 10,
     capabilities: [
@@ -217,25 +217,54 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       set({ isInitialized: true });
       console.log("[PlaybackStore] TrackPlayer initialized successfully.");
 
-      // Sync player state to Zustand reactively
-      setInterval(async () => {
-        if (!get().isInitialized) return;
+      // Sync player state to Zustand reactively. Guard against a second interval
+      // (e.g. a double init across a Fast Refresh) and skip the native
+      // round-trips entirely when no session is loaded so we don't poll the
+      // player while idle.
+      if (progressInterval) clearInterval(progressInterval);
+      progressInterval = setInterval(async () => {
+        if (!get().isInitialized || !get().currentSession) return;
         try {
-          const state = await TrackPlayer.getActiveTrack();
-          if (state) {
+          const chapters = get().chapters;
+          const chapterQueue = get().chapterQueue;
+          const casting = get().isCasting;
+
+          let absolutePosition: number;
+          let bookDuration: number;
+          let isPlayerPlaying: boolean;
+          let chapterIndex = -1;
+
+          if (casting) {
+            // While casting the RECEIVER is the source of truth —
+            // CastController mirrors its progress/play-state into the store.
+            // Reading the (paused) local player here would overwrite the cast
+            // position every tick and rubber-band the scrubber. We still run
+            // the persistence tail below so listening time accrues and the
+            // position keeps saving/syncing during a cast session.
+            absolutePosition = get().position;
+            bookDuration = get().duration;
+            isPlayerPlaying = get().isPlaying;
+            for (let i = 0; i < chapters.length; i++) {
+              if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
+                chapterIndex = i;
+                break;
+              }
+            }
+            if (chapterIndex !== get().currentChapterIndex) {
+              set({ currentChapterIndex: chapterIndex });
+            }
+          } else {
+            const state = await TrackPlayer.getActiveTrack();
+            if (!state) return;
             const progress = await TrackPlayer.getProgress();
             const playerState = await TrackPlayer.getPlaybackState();
-            const isPlayerPlaying = playerState.state === State.Playing;
-            
-            const chapters = get().chapters;
-            const chapterQueue = get().chapterQueue;
+            isPlayerPlaying = playerState.state === State.Playing;
 
             // Translate the player position to an ABSOLUTE book position. With a
             // chapter queue each item is clipped, so the raw position is
             // chapter-relative and the active index IS the chapter.
-            let absolutePosition = progress.position;
-            let bookDuration = progress.duration;
-            let chapterIndex = -1;
+            absolutePosition = progress.position;
+            bookDuration = progress.duration;
             if (chapterQueue && chapters.length) {
               const activeIndex = await TrackPlayer.getActiveTrackIndex();
               if (activeIndex != null && chapters[activeIndex]) {
@@ -264,7 +293,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             if (!chapterQueue) {
               applyNowPlayingChapter(get().currentSession, chapters, chapterIndex);
             }
+          }
 
+          {
             // Accumulate real elapsed listening time (only while actually
             // playing), capped per tick so backgrounding/suspension doesn't
             // inflate it into a huge jump once ticks resume.
@@ -362,9 +393,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
       }, 1000);
 
-    } catch (error) {
-      console.log("[PlaybackStore] Setup already done or failed:", error);
-      set({ isInitialized: true }); // Assume initialized if it threw already-initialized error
+    } catch (error: any) {
+      // RNTP throws an "already initialized" error if the native player survived
+      // a JS reload — that's benign, so mark initialized. Any OTHER failure is
+      // real: leave isInitialized false so the next play()/startPlayback retries
+      // setup instead of every transport call silently no-oping.
+      const alreadyInit = String(error?.code ?? error?.message ?? "")
+        .toLowerCase()
+        .includes("already");
+      if (alreadyInit) {
+        set({ isInitialized: true });
+      } else {
+        console.error("[PlaybackStore] TrackPlayer setup failed:", error);
+      }
     }
     })();
     try {
@@ -375,6 +416,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   },
 
   startPlayback: async (itemId, episodeId) => {
+    if (itemId) {
+      storage.set(`last_interaction_${itemId}`, "listen");
+    }
     // Android Auto double-dispatches its play command (onAddMediaItems fires
     // twice), so remote-play-id arrives twice ~10ms apart. Without this guard,
     // two /play sessions race two reset+add() calls and the queue ends up with
@@ -500,7 +544,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const artworkUrl =
         session.coverUrl ||
         (libraryItemId && serverAddress
-          ? `${serverAddress}/api/items/${libraryItemId}/cover?token=${token}`
+          ? `${serverAddress}/api/items/${libraryItemId}/cover?width=800&format=webp&token=${token}`
           : undefined);
 
       // Prefer the locally-downloaded file when available so downloaded books
@@ -685,6 +729,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   // `value` is always an ABSOLUTE book position (seconds).
   seek: async (value) => {
     const { isCasting, castClient, chapterQueue, chapters } = get();
+    // Defensive clamp: scrubber overshoot / stale bookmarks can hand us a
+    // position past the end (or negative) — clamp to the book bounds.
+    const dur = get().duration;
+    value = Math.max(0, dur > 0 ? Math.min(value, dur) : value);
     if (isCasting && castClient) {
       try { await castClient.seek({ position: value }); } catch (e) { console.warn("[Cast] seek", e); }
       set({ position: value });

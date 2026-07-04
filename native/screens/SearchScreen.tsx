@@ -5,9 +5,9 @@ import {
   TextInput,
   Pressable,
   ScrollView,
-  Image,
   ActivityIndicator,
 } from "react-native";
+import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -46,12 +46,12 @@ export default function SearchScreen({ navigation }: any) {
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?token=${token}`;
+    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
   const getAuthorImageUrl = (author: any) => {
     if (!author?.imagePath || !author?.id || !serverAddress || !token) return null;
-    return `${serverAddress}/api/authors/${author.id}/image?token=${token}`;
+    return `${serverAddress}/api/authors/${author.id}/image?width=400&format=webp&token=${token}`;
   };
 
   // Monotonic id so a slow earlier response can't overwrite a newer one
@@ -179,7 +179,7 @@ export default function SearchScreen({ navigation }: any) {
             <Image
               source={{ uri: coverUrl }}
               style={{ width: COVER_W, height: COVER_H }}
-              resizeMode="cover"
+              contentFit="cover"
             />
           ) : (
             <View
@@ -207,6 +207,7 @@ export default function SearchScreen({ navigation }: any) {
           ) : null}
           <BookProgressBadge
             itemId={libraryItem.id}
+            item={libraryItem}
             downloaded={result.isLocal || libraryItem.isLocal || !!libraryItem.localLibraryItem}
             style={{ marginTop: 4 }}
           />
@@ -257,7 +258,7 @@ export default function SearchScreen({ navigation }: any) {
                     <Image
                       source={{ uri: cUri }}
                       style={{ width: "100%", height: "100%" }}
-                      resizeMode="cover"
+                      contentFit="cover"
                     />
                   ) : null}
                 </View>
@@ -323,7 +324,7 @@ export default function SearchScreen({ navigation }: any) {
           <Image
             source={{ uri: imageUri }}
             style={{ width: 40, height: 40 }}
-            resizeMode="cover"
+            contentFit="cover"
           />
         ) : (
           <Icon name="person" size={22} color={colors.onPrimary} />

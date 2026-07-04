@@ -3,6 +3,7 @@ import { View, Text, Pressable } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { appLogger } from "../utils/logger";
+import { Sentry } from "../utils/sentry";
 
 interface ErrorFallbackProps {
   error: Error;
@@ -83,6 +84,8 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, E
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     appLogger.error(error.message + " " + info.componentStack, "ErrorBoundary");
+    // Report to crash reporting (no-op unless Sentry was initialized).
+    Sentry.captureException(error, { extra: { componentStack: info.componentStack } });
   }
 
   render() {

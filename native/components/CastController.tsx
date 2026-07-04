@@ -34,7 +34,11 @@ export default function CastController() {
       const pos = usePlaybackStore.getState().position;
       (async () => {
         try {
-          await TrackPlayer.seekTo(pos);
+          // Route through the store's seek — with a chapter-clipped local
+          // queue a raw TrackPlayer.seekTo(absolute) lands in the wrong spot
+          // (each queue item is chapter-relative). setCastState(null) already
+          // ran above, so seek() takes the local path with chapter mapping.
+          await usePlaybackStore.getState().seek(pos);
           await TrackPlayer.play();
           usePlaybackStore.setState({ isPlaying: true });
         } catch (e) {
@@ -95,7 +99,7 @@ export default function CastController() {
         const coverUrl =
           currentSession.coverUrl ||
           (itemId && serverAddress
-            ? `${serverAddress}/api/items/${itemId}/cover?token=${token}`
+            ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}`
             : undefined);
 
         // Build the queue + cumulative offsets so the whole book plays.

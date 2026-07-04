@@ -23,7 +23,7 @@ export default function LibrarySelector() {
   };
 
   return (
-    <Modal visible={open} transparent animationType="fade" onRequestClose={close}>
+    <Modal visible={open} transparent animationType="slide" onRequestClose={close}>
       {/* Scrim */}
       <Pressable
         onPress={close}
