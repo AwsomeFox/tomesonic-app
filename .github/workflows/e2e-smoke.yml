@@ -51,6 +51,8 @@ jobs:
 
       - name: seed media fixture (generated audiobook)
         run: |
+          # ubuntu-latest no longer preinstalls ffmpeg.
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
           # Author/Series/Book folder layout so ABS derives a series too
           # (the 40-library-series flow needs one). Two 90s sine-tone tracks.
           mkdir -p "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
