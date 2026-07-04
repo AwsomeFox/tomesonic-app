@@ -31,7 +31,13 @@ jobs:
         run: npm ci --prefix native
 
       - name: build Android app
-        run: ./native/android/gradlew assembleDebug -p native/android --no-daemon
+        # Run from native/android (not the repo root): the Sentry gradle
+        # snippet resolves its script path via `node --print require.resolve`,
+        # which needs native/node_modules reachable from the working directory.
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: rename apk
         working-directory: native/android/app/build/outputs/apk/debug/
