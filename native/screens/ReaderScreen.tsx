@@ -6,6 +6,8 @@ import { storageHelper, storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
+import { api } from "../utils/api";
+import { useUserStore } from "../store/useUserStore";
 
 // Height of the collapsed mini player (mirrors PlayerBottomSheet MINIPLAYER_HEIGHT)
 // so reader content can reserve space and not sit underneath it.
@@ -235,6 +237,8 @@ export default function ReaderScreen({ route, navigation }: any) {
   const [ebookStatus, setEbookStatus] = useState<"idle" | "loading" | "ready" | "error" | "toobig">("idle");
   const webRef = useRef<any>(null);
   const progressKey = `ebookCfi_${itemId}`;
+  const syncTimeoutRef = useRef<any>(null);
+  const latestProgressRef = useRef<{ cfi: string; fraction: number } | null>(null);
 
   // Style Settings States
   const [fontSize, setFontSize] = useState(() => storage.getNumber("reader_font_size") || 100);
@@ -287,6 +291,27 @@ export default function ReaderScreen({ route, navigation }: any) {
     }
   }, [fontSize, fontFamily, lineHeight, ebookStatus, bg, fg, accent]);
 
+  // Sync pending ebook progress to server on unmount/screen change
+  useEffect(() => {
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      if (latestProgressRef.current) {
+        const { cfi, fraction } = latestProgressRef.current;
+        console.log("[Reader] Unmounting, flushing ebook progress to server:", itemId, cfi, fraction);
+        api.patch(`/api/me/progress/${itemId}`, {
+          ebookLocation: cfi,
+          ebookProgress: fraction,
+          progress: fraction,
+          isFinished: fraction >= 0.99,
+        }).catch((e) => {
+          console.warn("[Reader] Failed to sync ebook progress on unmount:", e);
+        });
+      }
+    };
+  }, [itemId]);
+
   // Load ebook contents and generate the HTML wrapper
   useEffect(() => {
     if (!isFoliateFormat || !WebView || !ebookUri) return;
@@ -311,7 +336,11 @@ export default function ReaderScreen({ route, navigation }: any) {
         });
         FileSystem.deleteAsync(dl.uri, { idempotent: true }).catch(() => {});
         if (cancelled) return;
-        const savedCfi = storage.getString(progressKey) || "";
+        const localCfi = storage.getString(progressKey) || "";
+        const serverProgress = useUserStore.getState().mediaProgress[itemId];
+        const serverCfi = serverProgress?.ebookLocation || "";
+        const savedCfi = localCfi || serverCfi;
+
         const mime = getMimeForFormat(format);
         const htmlContent = ebookHtml(base64, bg, fg, accent, savedCfi, mime, fontSize, fontFamily, lineHeight);
         const htmlPath = `${FileSystem.cacheDirectory}reader_${itemId}.html`;
@@ -333,20 +362,59 @@ export default function ReaderScreen({ route, navigation }: any) {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.type === "location") {
-        if (data.cfi) storage.set(progressKey, data.cfi);
+        if (data.cfi) {
+          storage.set(progressKey, data.cfi);
+          latestProgressRef.current = { cfi: data.cfi, fraction: data.fraction || 0 };
+        }
         setPageProgress({
           page: data.page || 1,
           pages: data.pages || 1,
           fraction: data.fraction || 0,
           tocItem: data.tocItem || null,
         });
+
+        // Update local store progress state instantly
+        const updatedProgress = {
+          libraryItemId: itemId,
+          ebookLocation: data.cfi || "",
+          ebookProgress: data.fraction || 0,
+          progress: data.fraction || 0,
+          isFinished: (data.fraction || 0) >= 0.99,
+          updatedAt: Date.now(),
+        };
+        useUserStore.setState({
+          mediaProgress: {
+            ...useUserStore.getState().mediaProgress,
+            [itemId]: {
+              ...useUserStore.getState().mediaProgress[itemId],
+              ...updatedProgress,
+            },
+          },
+        });
+
+        // Debounce progress PATCH to server
+        if (syncTimeoutRef.current) {
+          clearTimeout(syncTimeoutRef.current);
+        }
+        syncTimeoutRef.current = setTimeout(async () => {
+          try {
+            await api.patch(`/api/me/progress/${itemId}`, {
+              ebookLocation: data.cfi || "",
+              ebookProgress: data.fraction || 0,
+              progress: data.fraction || 0,
+              isFinished: (data.fraction || 0) >= 0.99,
+            });
+          } catch (e) {
+            console.warn("[Reader] Failed to sync ebook progress:", e);
+          }
+        }, 2000);
       } else if (data.type === "toc") {
         setToc(data.toc || []);
       } else if (data.type === "error") {
         setEbookStatus("error");
       }
     } catch {}
-  }, [progressKey]);
+  }, [progressKey, itemId]);
 
   const openExternally = async () => {
     try {

@@ -18,6 +18,7 @@ import { useDownloadStore } from "../store/useDownloadStore";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { flushPendingSyncs } from "../utils/progressSync";
 import { encodeFilterValue } from "../components/FilterModal";
+import { hasEbook, hasAudio } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -36,32 +37,13 @@ export default function BookshelfScreen({ navigation }: any) {
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
 
   const loadContinueReading = async () => {
-    let { libraries } = useLibraryStore.getState();
-    if (!libraries || libraries.length === 0) {
-      await loadLibraries();
-      libraries = useLibraryStore.getState().libraries;
-    }
-    const bookLibraries = (libraries || []).filter((l: any) => l.mediaType === "book");
-    if (bookLibraries.length === 0) return;
+    if (!currentLibraryId) return;
 
     try {
+      const mediaProgress = useUserStore.getState().mediaProgress || {};
       const filterVal = `progress.${encodeFilterValue("in-progress")}`;
-      const mediaProgress = useUserStore.getState().mediaProgress;
-      
-      const allResults = await Promise.all(
-        bookLibraries.map(async (lib) => {
-          try {
-            const res = await api.get(`/api/libraries/${lib.id}/items?filter=${filterVal}&limit=40`);
-            return res.data?.results || [];
-          } catch (e) {
-            console.warn(`[Bookshelf] failed to load items for library ${lib.id}`, e);
-            return [];
-          }
-        })
-      );
-      
-      const items = allResults.flat();
-      console.log("[Bookshelf] total items fetched across book libraries:", items.length);
+      const res = await api.get(`/api/libraries/${currentLibraryId}/items?filter=${filterVal}&limit=40`);
+      const items = res.data?.results || [];
       
       // Filter duplicates (just in case) and select in-progress ebooks
       const seenIds = new Set<string>();
@@ -71,19 +53,19 @@ export default function BookshelfScreen({ navigation }: any) {
         seenIds.add(item.id);
 
         const progress = item?.userMediaProgress || mediaProgress[item.id];
+        
+        if (!hasEbook(item)) return false;
         if (!progress || progress.isFinished) return false;
+        
+        // If it's a pure ebook or has active ebook progress
         if (progress.ebookLocation || (progress.ebookProgress !== undefined && progress.ebookProgress > 0)) {
           return true;
         }
-        const numAudio = item?.media?.numAudioFiles ?? 0;
-        const numEbook = item?.media?.numEbookFiles ?? 0;
-        return numAudio === 0 && numEbook > 0;
+        return !hasAudio(item);
       });
-      
-      console.log("[Bookshelf] filtered ebooks count across all book libraries:", ebooks.length, "titles:", ebooks.map((b: any) => b?.media?.metadata?.title));
       setContinueReadingItems(ebooks);
     } catch (e) {
-      console.warn("[Bookshelf] failed to load continue reading items globally", e);
+      console.warn("[Bookshelf] failed to load continue reading items", e);
     }
   };
 
