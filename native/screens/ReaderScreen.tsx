@@ -545,8 +545,8 @@ export default function ReaderScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {/* Spacer to clear bottom miniplayer or safe navigation bar */}
-      <View style={{ height: bottomReserve, backgroundColor: colors.surface }} />
+      {/* Spacer to clear bottom miniplayer or safe navigation bar, plus 24px extra buffer */}
+      <View style={{ height: bottomReserve + 24, backgroundColor: colors.surface }} />
 
       {/* Table of Contents Slide-up Modal */}
       <Modal
