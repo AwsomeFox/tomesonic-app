@@ -94,4 +94,3 @@ sw.*
 
 # Kotlin build artifacts
 /android/.kotlin/
-package-lock.json
