@@ -23,26 +23,28 @@ try { Sharing = require("expo-sharing"); } catch (e) { Sharing = null; }
 // beyond this the bridge transfer gets heavy, so we offer "open externally".
 const MAX_EBOOK_INLINE_BYTES = 12 * 1024 * 1024;
 
-// CDN base for foliate-js — all ES module relative imports resolve from here.
-const FOLIATE_CDN = "https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/";
+// CDN base for foliate-js — all ES module imports use absolute URLs.
+const FOLIATE_CDN = "https://cdn.jsdelivr.net/npm/foliate-js@1.0.1";
 
 // Builds the foliate-js reader HTML. The book bytes are passed in as base64
 // so no CORS/auth request happens in the WebView. Themed to the app surface,
 // paginated, with swipe + tap-to-turn gestures and animated page transitions;
 // progress is reported back to RN via postMessage.
 function ebookHtml(base64: string, bg: string, fg: string, accent: string, startCfi: string, mimeHint: string): string {
+  // Compute the filename extension for foliate-js format detection
+  const ext = mimeHint === "application/epub+zip" ? ".epub" : mimeHint === "application/x-mobipocket-ebook" ? ".mobi" : ".azw3";
   return `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
   html,body{margin:0;padding:0;height:100%;background:${bg};overflow:hidden;}
-  foliate-view{height:100vh;width:100vw;}
+  foliate-view{height:100%;width:100%;}
   #msg{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;
     color:${fg};font-family:sans-serif;padding:24px;text-align:center;z-index:10;}
 </style>
 </head><body>
 <div id="msg">Loading…</div>
 <script type="module">
-  import './view.js';
+  import '${FOLIATE_CDN}/view.js';
 
   const bg = "${bg}";
   const fg = "${fg}";
@@ -61,8 +63,9 @@ function ebookHtml(base64: string, bg: string, fg: string, accent: string, start
 
   async function init() {
     try {
-      var file = base64ToFile("${base64}", "book${mimeHint === "application/epub+zip" ? ".epub" : mimeHint === "application/x-mobipocket-ebook" ? ".mobi" : ".azw3"}");
+      var file = base64ToFile("${base64}", "book${ext}");
       var view = document.createElement('foliate-view');
+      view.setAttribute('margin', '40px');
       document.body.append(view);
 
       // Apply reading styles — theme colors and typography
@@ -192,7 +195,7 @@ export default function ReaderScreen({ route, navigation }: any) {
   const isShareOnly = !isPdf && !isFoliateFormat;
 
   // --- Ebook state (EPUB / MOBI / AZW3) ---
-  const [ebookHtmlDoc, setEbookHtmlDoc] = useState<string | null>(null);
+  const [ebookFileUri, setEbookFileUri] = useState<string | null>(null);
   const [ebookStatus, setEbookStatus] = useState<"idle" | "loading" | "ready" | "error" | "toobig">("idle");
   const webRef = useRef<any>(null);
   const progressKey = `ebookCfi_${itemId}`;
@@ -205,7 +208,7 @@ export default function ReaderScreen({ route, navigation }: any) {
     if (!isFoliateFormat || !WebView || !ebookUri) return;
     // Reset synchronously so a previous book's rendered doc can't linger while
     // (or after, on failure) the new one loads.
-    setEbookHtmlDoc(null);
+    setEbookFileUri(null);
     setEbookStatus("loading");
     let cancelled = false;
     (async () => {
@@ -230,7 +233,17 @@ export default function ReaderScreen({ route, navigation }: any) {
         if (cancelled) return;
         const savedCfi = storage.getString(progressKey) || "";
         const mime = getMimeForFormat(format);
-        setEbookHtmlDoc(ebookHtml(base64, bg, fg, accent, savedCfi, mime));
+        const htmlContent = ebookHtml(base64, bg, fg, accent, savedCfi, mime);
+        // Write to a temp HTML file so the WebView loads from a real file URI.
+        // This is required because foliate-js uses ES module import() with
+        // relative paths — inline HTML (loadDataWithBaseURL) doesn't resolve
+        // ES module specifiers correctly on Android WebView.
+        const htmlPath = `${FileSystem.cacheDirectory}reader_${itemId}.html`;
+        await FileSystem.writeAsStringAsync(htmlPath, htmlContent, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        if (cancelled) return;
+        setEbookFileUri(htmlPath);
         setEbookStatus("ready");
       } catch (e) {
         console.warn("[Reader] ebook load failed", e);
@@ -269,7 +282,7 @@ export default function ReaderScreen({ route, navigation }: any) {
   };
 
   const canRenderPdf = Pdf !== null && isPdf && !pdfError && !!ebookUri;
-  const canRenderEbook = WebView !== null && isFoliateFormat && ebookStatus === "ready" && !!ebookHtmlDoc;
+  const canRenderEbook = WebView !== null && isFoliateFormat && ebookStatus === "ready" && !!ebookFileUri;
 
   const formatLabel = format ? format.toUpperCase() : "ebook";
 
@@ -358,10 +371,7 @@ export default function ReaderScreen({ route, navigation }: any) {
         <WebView
           ref={webRef}
           originWhitelist={["*"]}
-          source={{
-            html: ebookHtmlDoc as string,
-            baseUrl: FOLIATE_CDN,
-          }}
+          source={{ uri: ebookFileUri as string }}
           style={{ flex: 1, backgroundColor: colors.surface }}
           onMessage={onWebMessage}
           javaScriptEnabled
