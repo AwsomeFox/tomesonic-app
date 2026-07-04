@@ -32,6 +32,7 @@ import LatestEpisodesScreen from "../screens/LatestEpisodesScreen";
 import ListeningHistoryScreen from "../screens/ListeningHistoryScreen";
 import ReaderScreen from "../screens/ReaderScreen";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { useUiStore } from "../store/useUiStore";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -50,6 +51,19 @@ function TabNavigator() {
 
   return (
     <Tab.Navigator
+      // Tapping any bottom tab while the search overlay is open closes the
+      // search and shows that tab's real content — otherwise the (global)
+      // overlay follows you to the next tab and it looks like the tabs are
+      // dead while searching.
+      screenListeners={{
+        tabPress: () => {
+          const ui = useUiStore.getState();
+          if (ui.isSearchActive) {
+            ui.setSearchActive(false);
+            ui.setSearchQuery("");
+          }
+        },
+      }}
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarIcon: ({ focused }) => (

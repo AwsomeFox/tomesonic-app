@@ -391,7 +391,11 @@ export default function LibraryScreen({ route, navigation }: any) {
         }}
       />
 
-      {isSearchActive ? (
+      {/* The search overlay belongs to TAB instances only. This screen is ALSO
+          registered on the root stack ("Library" + showBack) as the target of
+          narrator/tag/genre taps — rendering the overlay there showed the
+          search results AGAIN instead of the filtered list you navigated to. */}
+      {isSearchActive && !route.params?.showBack ? (
         <SearchContent navigation={navigation} />
       ) : initialLoading ? (
         <ListSkeleton rows={9} />

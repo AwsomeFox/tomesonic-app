@@ -488,7 +488,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         <View>
           {renderSectionHeader("Authors")}
           {authorResults.map((result, index) => {
-            const author = result.author || {};
+            // ABS search returns authors as PLAIN author objects (verified in
+            // server source: authorFilters.search → toOldJSONExpanded) — there
+            // is no {author: ...} wrapper. Tolerate both shapes.
+            const author = result.author || result || {};
             return renderPersonResult(
               author.id || String(index),
               author.name || "Unknown Author",

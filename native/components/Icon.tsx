@@ -78,7 +78,9 @@ export type IconName =
   | "palette"
   | "color-fill"
   | "replay"
-  | "lock";
+  | "lock"
+  | "add"
+  | "playlist-add";
 
 type Family = "mi" | "mci";
 
@@ -156,6 +158,8 @@ const MAP: Record<IconName, [Family, string]> = {
   "color-fill": ["mci", "format-color-fill"],
   replay: ["mi", "replay"],
   lock: ["mi", "lock-outline"],
+  add: ["mi", "add"],
+  "playlist-add": ["mi", "playlist-add"],
 };
 
 interface IconProps {

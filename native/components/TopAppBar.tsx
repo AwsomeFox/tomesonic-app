@@ -51,17 +51,24 @@ export default function TopAppBar({
 
   // Android hardware back closes the search overlay instead of popping the
   // screen (or exiting the app) — matches every native Android search UX.
+  // ONLY on tab-level bars (`!showBack`): a PUSHED screen's TopAppBar must not
+  // register this, or backing out of a screen opened FROM a search result
+  // would silently close the underlying search instead of popping back to the
+  // results (the search overlay is global state, the pushed screen is not
+  // the searching surface).
   useEffect(() => {
-    if (!isSearchActive) return;
+    if (!isSearchActive || showBack) return;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
       setSearchActive(false);
       setSearchQuery("");
       return true;
     });
     return () => sub.remove();
-  }, [isSearchActive, setSearchActive, setSearchQuery]);
+  }, [isSearchActive, showBack, setSearchActive, setSearchQuery]);
 
-  if (isSearchActive) {
+  // Same gate for the header itself: pushed screens keep their real back/title
+  // header while a search is open underneath.
+  if (isSearchActive && !showBack) {
     return (
       <View
         style={{

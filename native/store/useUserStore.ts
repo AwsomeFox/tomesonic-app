@@ -13,6 +13,9 @@ interface UserSettings {
   mobileOrderBy: string;
   mobileOrderDesc: boolean;
   mobileFilterBy: string;
+  // Authors page sort (same OrderModal pattern as the library page).
+  mobileAuthorsOrderBy: string;
+  mobileAuthorsOrderDesc: boolean;
   hideNonAudiobooksGlobal: boolean;
   // Device settings (wired into the Settings screen).
   lockOrientation: boolean;
@@ -60,6 +63,8 @@ const DEFAULT_SETTINGS: UserSettings = {
   mobileOrderBy: "addedAt",
   mobileOrderDesc: true,
   mobileFilterBy: "all",
+  mobileAuthorsOrderBy: "name",
+  mobileAuthorsOrderDesc: false,
   hideNonAudiobooksGlobal: false,
   lockOrientation: true,
   hapticFeedback: "medium",

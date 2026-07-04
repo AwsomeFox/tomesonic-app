@@ -17,6 +17,7 @@ import { useUserStore } from "../store/useUserStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import TopAppBar from "../components/TopAppBar";
+import OrderModal, { SortItem } from "../components/OrderModal";
 import { GridSkeleton } from "../components/Skeleton";
 import Icon from "../components/Icon";
 import { useUiStore } from "../store/useUiStore";
@@ -46,11 +47,12 @@ interface Author {
 
 type SortKey = "name" | "lastFirst" | "numBooks" | "addedAt";
 
-const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: "name", label: "Name" },
-  { key: "lastFirst", label: "Last, First" },
-  { key: "numBooks", label: "# Books" },
-  { key: "addedAt", label: "Added" },
+// Same OrderModal bottom sheet as the library page, with author fields.
+const SORT_ITEMS: SortItem[] = [
+  { text: "Name (First Last)", value: "name" },
+  { text: "Name (Last, First)", value: "lastFirst" },
+  { text: "Number of Books", value: "numBooks" },
+  { text: "Added At", value: "addedAt" },
 ];
 
 function lastName(name: string): string {
@@ -70,7 +72,16 @@ export default function AuthorsScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("name");
+  // Sort field + direction, persisted like the library page's sort settings.
+  const savedSettings = useUserStore.getState().settings;
+  const updateUserSettings = useUserStore((s) => s.updateUserSettings);
+  const [sortKey, setSortKey] = useState<SortKey>(
+    (savedSettings?.mobileAuthorsOrderBy as SortKey) || "name"
+  );
+  const [descending, setDescending] = useState<boolean>(
+    savedSettings?.mobileAuthorsOrderDesc ?? false
+  );
+  const [sortOpen, setSortOpen] = useState(false);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -127,25 +138,26 @@ export default function AuthorsScreen({ navigation }: any) {
 
   const sortedAuthors = useMemo(() => {
     const list = [...authors];
+    const dir = descending ? -1 : 1;
     switch (sortKey) {
       case "numBooks":
-        list.sort((a, b) => (b.numBooks || 0) - (a.numBooks || 0));
+        list.sort((a, b) => dir * ((a.numBooks || 0) - (b.numBooks || 0)));
         break;
       case "addedAt":
-        list.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+        list.sort((a, b) => dir * ((a.addedAt || 0) - (b.addedAt || 0)));
         break;
       case "lastFirst":
-        list.sort((a, b) =>
-          lastName(a.name || "").localeCompare(lastName(b.name || ""))
+        list.sort(
+          (a, b) => dir * lastName(a.name || "").localeCompare(lastName(b.name || ""))
         );
         break;
       case "name":
       default:
-        list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+        list.sort((a, b) => dir * (a.name || "").localeCompare(b.name || ""));
         break;
     }
     return list;
-  }, [authors, sortKey]);
+  }, [authors, sortKey, descending]);
 
   const renderItem = ({ item, index }: { item: Author; index: number }) => {
     const imageUri = getAuthorImageUrl(item);
@@ -315,54 +327,22 @@ export default function AuthorsScreen({ navigation }: any) {
       style={{ flex: 1, backgroundColor: colors.surface }}
       edges={["top", "left", "right"]}
     >
-      {/* No showSort here: sorting lives in the chip row below, so a top-bar
-          sort icon would be a dead control. */}
-      <TopAppBar navigation={navigation} />
+      {/* Same top-bar sort affordance as the library page. */}
+      <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
 
-      {/* Sort selector */}
-      <View
-        style={{
-          flexDirection: "row",
-          paddingHorizontal: GRID_PADDING,
-          paddingTop: 4,
-          paddingBottom: 10,
+      <OrderModal
+        visible={sortOpen}
+        onClose={() => setSortOpen(false)}
+        orderBy={sortKey}
+        descending={descending}
+        items={SORT_ITEMS}
+        onChange={(o, d) => {
+          setSortKey(o as SortKey);
+          setDescending(d);
+          // Persist so the choice survives restarts (mirrors the library page).
+          updateUserSettings({ mobileAuthorsOrderBy: o, mobileAuthorsOrderDesc: d }).catch(() => {});
         }}
-      >
-        {SORT_OPTIONS.map((opt) => (
-          <Pressable
-            key={opt.key}
-            onPress={() => setSortKey(opt.key)}
-            android_ripple={{ color: colors.surfaceContainerHighest }}
-            accessibilityRole="button"
-            accessibilityState={{ selected: sortKey === opt.key }}
-            accessibilityLabel={`Sort by ${opt.label}`}
-            style={{
-              paddingVertical: 6,
-              paddingHorizontal: 12,
-              borderRadius: 16,
-              overflow: "hidden",
-              marginRight: 8,
-              backgroundColor:
-                sortKey === opt.key
-                  ? colors.secondaryContainer
-                  : colors.surfaceContainer,
-            }}
-          >
-            <Text
-              style={{
-                color:
-                  sortKey === opt.key
-                    ? colors.onSecondaryContainer
-                    : colors.onSurfaceVariant,
-                fontSize: 12,
-                fontWeight: "600",
-              }}
-            >
-              {opt.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      />
 
       {loadError && authors.length === 0 ? (
         <View

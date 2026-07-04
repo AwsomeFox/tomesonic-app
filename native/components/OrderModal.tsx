@@ -12,7 +12,7 @@ import Icon from "./Icon";
  * chosen `orderBy` + `descending` to `sort` + `desc` query params.
  */
 
-type SortItem = { text: string; value: string };
+export type SortItem = { text: string; value: string };
 
 const BOOK_ITEMS: SortItem[] = [
   { text: "Title", value: "media.metadata.title" },
@@ -53,6 +53,8 @@ interface OrderModalProps {
   descending: boolean;
   /** Use the series-specific sort options instead of book/podcast ones. */
   series?: boolean;
+  /** Custom sort options (e.g. the Authors page) — overrides the presets. */
+  items?: SortItem[];
   /** Fired with the chosen field and direction. */
   onChange: (orderBy: string, descending: boolean) => void;
 }
@@ -63,6 +65,7 @@ export default function OrderModal({
   orderBy,
   descending,
   series,
+  items: itemsOverride,
   onChange,
 }: OrderModalProps) {
   const colors = useThemeColors();
@@ -70,14 +73,15 @@ export default function OrderModal({
   const currentLibrary = libraries.find((l) => l.id === currentLibraryId);
   const isPodcast = currentLibrary?.mediaType === "podcast";
 
-  const items = series ? SERIES_ITEMS : isPodcast ? PODCAST_ITEMS : BOOK_ITEMS;
+  const items = itemsOverride ?? (series ? SERIES_ITEMS : isPodcast ? PODCAST_ITEMS : BOOK_ITEMS);
 
   const clickedOption = (value: string) => {
     if (value === orderBy) {
       onChange(value, !descending);
     } else {
-      // addedAt defaults to descending (most recent first), mirroring the Vue.
-      const desc = value === "addedAt" || value === "recent";
+      // addedAt defaults to descending (most recent first), mirroring the Vue;
+      // count-like fields also read better biggest-first.
+      const desc = value === "addedAt" || value === "recent" || value === "numBooks";
       onChange(value, desc);
     }
     onClose();

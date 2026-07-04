@@ -5,6 +5,9 @@ import {
   Pressable,
   ScrollView,
   RefreshControl,
+  Modal,
+  TextInput,
+  ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -40,6 +43,11 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
+  // Create-new dialog (for whichever tab is active).
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -78,6 +86,32 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
     setRefreshing(true);
     await fetchData();
     setRefreshing(false);
+  };
+
+  const handleCreate = async () => {
+    const name = newName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      if (activeTab === "collections") {
+        if (!currentLibraryId) throw new Error("No library selected");
+        await api.post("/api/collections", { libraryId: currentLibraryId, name, books: [] });
+      } else {
+        if (!currentLibraryId) throw new Error("No library selected");
+        await api.post("/api/playlists", { libraryId: currentLibraryId, name, items: [] });
+      }
+      setCreateOpen(false);
+      setNewName("");
+      await fetchData();
+    } catch (e: any) {
+      console.warn("[CollectionsPlaylists] create failed", e);
+      setCreateError(
+        e?.response?.data?.toString?.() || "Couldn't create it — check the server connection."
+      );
+    } finally {
+      setCreating(false);
+    }
   };
 
   // First up-to-4 book cover URLs for the collage. Collections use `books`;
@@ -152,10 +186,19 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
         <SearchContent navigation={navigation} />
       ) : (
         <>
-          {/* Segmented toggle: Collections | Playlists */}
-          <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 }}>
+          {/* Segmented toggle: Collections | Playlists (+ create button) */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingHorizontal: 16,
+              paddingTop: 10,
+              paddingBottom: 6,
+            }}
+          >
         <View
           style={{
+            flex: 1,
             flexDirection: "row",
             borderWidth: 1,
             borderColor: colors.outline,
@@ -202,6 +245,29 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
             );
           })}
         </View>
+
+        {/* Create new (for the active tab) */}
+        <Pressable
+          onPress={() => {
+            setNewName("");
+            setCreateError(null);
+            setCreateOpen(true);
+          }}
+          android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel={`Create new ${activeTab === "collections" ? "collection" : "playlist"}`}
+          style={{
+            marginLeft: 10,
+            width: 42,
+            height: 42,
+            borderRadius: 21,
+            backgroundColor: colors.primary,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Icon name="add" size={24} color={colors.onPrimary} />
+        </Pressable>
       </View>
 
       {/* Content */}
@@ -266,6 +332,103 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
       )}
         </>
       )}
+
+      {/* Create collection/playlist dialog */}
+      <Modal
+        visible={createOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCreateOpen(false)}
+      >
+        <Pressable
+          onPress={() => setCreateOpen(false)}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.45)",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 32,
+          }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              backgroundColor: colors.surfaceContainerHigh,
+              borderRadius: 24,
+              padding: 20,
+            }}
+          >
+            <Text style={{ color: colors.onSurface, fontSize: 19, fontWeight: "700" }}>
+              New {activeTab === "collections" ? "collection" : "playlist"}
+            </Text>
+            <TextInput
+              value={newName}
+              onChangeText={setNewName}
+              placeholder={activeTab === "collections" ? "Collection name" : "Playlist name"}
+              placeholderTextColor={colors.onSurfaceVariant}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleCreate}
+              style={{
+                marginTop: 16,
+                color: colors.onSurface,
+                fontSize: 16,
+                backgroundColor: colors.surfaceContainerHighest,
+                borderRadius: 14,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+              }}
+            />
+            {createError ? (
+              <Text style={{ color: colors.error, fontSize: 13, marginTop: 10 }}>{createError}</Text>
+            ) : null}
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 18 }}>
+              <Pressable
+                onPress={() => setCreateOpen(false)}
+                android_ripple={{ color: colors.surfaceContainerHighest }}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+                style={{ paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20, overflow: "hidden" }}
+              >
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, fontWeight: "600" }}>
+                  Cancel
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={handleCreate}
+                disabled={!newName.trim() || creating}
+                android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+                accessibilityRole="button"
+                accessibilityLabel="Create"
+                style={{
+                  marginLeft: 8,
+                  paddingHorizontal: 22,
+                  paddingVertical: 10,
+                  borderRadius: 20,
+                  overflow: "hidden",
+                  backgroundColor: newName.trim() ? colors.primary : colors.surfaceContainerHighest,
+                }}
+              >
+                {creating ? (
+                  <ActivityIndicator size="small" color={colors.onPrimary} />
+                ) : (
+                  <Text
+                    style={{
+                      color: newName.trim() ? colors.onPrimary : colors.onSurfaceVariant,
+                      fontSize: 15,
+                      fontWeight: "700",
+                    }}
+                  >
+                    Create
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }

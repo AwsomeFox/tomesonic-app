@@ -14,6 +14,7 @@ import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
+import AddToListModal from "../components/AddToListModal";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
 import { formatBytes } from "../utils/format";
 
@@ -58,6 +59,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [starting, setStarting] = useState(false);
   const [startingEpisodeId, setStartingEpisodeId] = useState<string | null>(null);
   const [chaptersVisible, setChaptersVisible] = useState(false);
+  const [addToVisible, setAddToVisible] = useState(false);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const currentSession = usePlaybackStore((state) => state.currentSession);
@@ -703,6 +705,24 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 style={{ opacity: isFinished ? 1 : 0.45 }}
               />
             </Pressable>
+
+            {/* Add to collection / playlist */}
+            <Pressable
+              onPress={() => setAddToVisible(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Add to collection or playlist"
+              style={{
+                marginLeft: 10,
+                width: 52,
+                height: 52,
+                borderRadius: 26,
+                backgroundColor: colors.secondaryContainer,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon name="playlist-add" size={22} color={colors.onSecondaryContainer} />
+            </Pressable>
           </View>
 
           {/* Your Progress card — one icon-labeled row per format so listening
@@ -1094,6 +1114,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         onSeekToChapter={handleSeekToChapter}
         hideBackdrop
       />
+      {item?.id && item?.libraryId ? (
+        <AddToListModal
+          visible={addToVisible}
+          onClose={() => setAddToVisible(false)}
+          libraryItemId={item.id}
+          libraryId={item.libraryId}
+          isPodcast={isPodcastItem}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
