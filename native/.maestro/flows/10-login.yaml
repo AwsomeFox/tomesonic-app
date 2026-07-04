@@ -11,7 +11,8 @@ tags:
 - tapOn:
     text: "http://55.55.55.55:13378" # address field (matched by placeholder)
 - inputText: ${SERVER_URL}
-- tapOn: "Continue"
+- hideKeyboard
+- tapOn: "Submit"
 # Credential step.
 - extendedWaitUntil:
     visible: "Username"
@@ -21,7 +22,7 @@ tags:
 - tapOn: "Password"
 - inputText: ${ABS_PASS}
 - hideKeyboard
-- tapOn: "Login"
+- tapOn: "Submit"
 # Landing on the bookshelf proves the whole handshake worked.
 - extendedWaitUntil:
     visible: "Home"
