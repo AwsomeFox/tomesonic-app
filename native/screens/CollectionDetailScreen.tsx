@@ -88,6 +88,25 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     fetchCollection();
   }, [collectionId, retryTick]);
 
+  // Coming back to this screen (e.g. after toggling this collection's
+  // membership from a book's "Add to…" sheet): silently revalidate — no
+  // loading flip, so no skeleton flash over the already-rendered list.
+  const firstFocusRef = React.useRef(true);
+  useEffect(() => {
+    const unsub = navigation.addListener("focus", () => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
+      if (!collectionId) return;
+      api
+        .get(`/api/collections/${collectionId}`)
+        .then((r) => setCollection(r.data))
+        .catch(() => {});
+    });
+    return unsub;
+  }, [navigation, collectionId]);
+
   // "Hide non-audiobooks": ebook-only rows are dropped when the setting is on.
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
   const bookItems: CollectionBook[] = (collection?.books || []).filter(

@@ -159,7 +159,9 @@ describe("AddToListModal — membership toggles", () => {
     await fireEvent.press(screen.getByLabelText("Later, 1 item"));
     await act(async () => {});
     expect(apiDelete).toHaveBeenCalledWith(`/api/playlists/p1/item/${ITEM}`);
-    expect(screen.getByLabelText("Later, 0 items").props.accessibilityState?.checked).toBe(false);
+    // ABS deletes a playlist that loses its last item — the row is dropped
+    // locally too instead of lingering as a dead entry.
+    expect(screen.queryByLabelText(/^Later,/)).toBeNull();
   });
 
   it("refetches when the server response has no id", async () => {

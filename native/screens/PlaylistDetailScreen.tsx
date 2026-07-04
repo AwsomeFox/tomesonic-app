@@ -66,6 +66,24 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
     fetchPlaylist();
   }, [playlistId, retryTick]);
 
+  // Silent revalidate on return (membership can change from a book's
+  // "Add to…" sheet) — no loading flip, so no skeleton flash.
+  const firstFocusRef = React.useRef(true);
+  useEffect(() => {
+    const unsub = navigation.addListener("focus", () => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
+      if (!playlistId) return;
+      api
+        .get(`/api/playlists/${playlistId}`)
+        .then((r) => setPlaylist(r.data))
+        .catch(() => {});
+    });
+    return unsub;
+  }, [navigation, playlistId]);
+
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
     return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;

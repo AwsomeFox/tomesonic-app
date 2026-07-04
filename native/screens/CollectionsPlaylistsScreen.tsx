@@ -63,8 +63,10 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
       if (activeTab === "collections" && currentLibraryId) {
         const res = await api.get(`/api/libraries/${currentLibraryId}/collections`);
         setCollections(res.data?.results || res.data?.collections || res.data || []);
-      } else if (activeTab === "playlists") {
-        const res = await api.get("/api/playlists");
+      } else if (activeTab === "playlists" && currentLibraryId) {
+        // Library-scoped (matches the collections tab and the Add-to sheet) —
+        // the global /api/playlists mixes in other libraries' playlists.
+        const res = await api.get(`/api/libraries/${currentLibraryId}/playlists`);
         setPlaylists(res.data?.results || res.data?.playlists || res.data || []);
       }
     } catch (err) {
@@ -81,6 +83,21 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
     };
     load();
   }, [fetchData]);
+
+  // Returning to the tab: silently revalidate (lists can change from a book's
+  // "Add to…" sheet or a create elsewhere). fetchData doesn't flip `loading`,
+  // so the visible list never flashes to a skeleton.
+  const firstFocusRef = React.useRef(true);
+  useEffect(() => {
+    const unsub = navigation.addListener("focus", () => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
+      fetchData();
+    });
+    return unsub;
+  }, [navigation, fetchData]);
 
   const onRefresh = async () => {
     setRefreshing(true);

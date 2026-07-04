@@ -84,7 +84,9 @@ const PLAYLISTS = [
 function mockGets({ collections = COLLECTIONS, playlists = PLAYLISTS }: any = {}) {
   (api.get as jest.Mock).mockImplementation((url: string) => {
     if (url.includes("/collections")) return Promise.resolve({ data: { results: collections } });
-    if (url === "/api/playlists") return Promise.resolve({ data: { results: playlists } });
+    // Playlists are fetched library-scoped (matches the Add-to sheet).
+    if (url === "/api/libraries/lib1/playlists")
+      return Promise.resolve({ data: { results: playlists } });
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });
 }
@@ -128,7 +130,7 @@ describe("CollectionsPlaylistsScreen", () => {
     expect(screen.getByLabelText("Collection: Favorites, 2 items")).toBeTruthy();
     expect(screen.getByLabelText("Collection: To Read, 1 item")).toBeTruthy();
     // Playlists are not fetched until that tab is selected.
-    expect(api.get).not.toHaveBeenCalledWith("/api/playlists");
+    expect(api.get).not.toHaveBeenCalledWith("/api/libraries/lib1/playlists");
   });
 
   it("collection row navigates to CollectionDetail", async () => {
@@ -149,7 +151,7 @@ describe("CollectionsPlaylistsScreen", () => {
     await fireEvent.press(screen.getByText("Playlists"));
 
     expect(await screen.findByText("Morning Mix")).toBeTruthy();
-    expect(api.get).toHaveBeenCalledWith("/api/playlists");
+    expect(api.get).toHaveBeenCalledWith("/api/libraries/lib1/playlists");
     expect(screen.queryByText("Favorites")).toBeNull();
 
     await fireEvent.press(screen.getByText("Morning Mix"));

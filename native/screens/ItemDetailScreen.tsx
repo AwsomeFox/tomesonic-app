@@ -706,23 +706,27 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               />
             </Pressable>
 
-            {/* Add to collection / playlist */}
-            <Pressable
-              onPress={() => setAddToVisible(true)}
-              accessibilityRole="button"
-              accessibilityLabel="Add to collection or playlist"
-              style={{
-                marginLeft: 10,
-                width: 52,
-                height: 52,
-                borderRadius: 26,
-                backgroundColor: colors.secondaryContainer,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Icon name="playlist-add" size={22} color={colors.onSecondaryContainer} />
-            </Pressable>
+            {/* Add to collection / playlist. Books only: ABS collections are
+                book-only and playlists hold EPISODES for podcasts — adding a
+                whole podcast item would just 400 on the server. */}
+            {!isPodcastItem ? (
+              <Pressable
+                onPress={() => setAddToVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Add to collection or playlist"
+                style={{
+                  marginLeft: 10,
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  backgroundColor: colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="playlist-add" size={22} color={colors.onSecondaryContainer} />
+              </Pressable>
+            ) : null}
           </View>
 
           {/* Your Progress card — one icon-labeled row per format so listening

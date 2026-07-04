@@ -109,6 +109,8 @@ export default function AddToListModal({
       }
     } catch (e) {
       console.warn("[AddToList] collection toggle failed", e);
+      // Resync — the server state may have diverged (e.g. deleted elsewhere).
+      fetchLists();
     } finally {
       setBusyId(null);
     }
@@ -123,12 +125,21 @@ export default function AddToListModal({
         : await api.post(`/api/playlists/${p.id}/item`, { libraryItemId });
       const updated = res.data;
       if (updated?.id) {
-        setPlaylists((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+        // ABS deletes a playlist that loses its last item — drop it locally
+        // too instead of leaving a dead row.
+        if ((updated.items || []).length === 0) {
+          setPlaylists((prev) => prev.filter((x) => x.id !== updated.id));
+        } else {
+          setPlaylists((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+        }
       } else {
         fetchLists();
       }
     } catch (e) {
       console.warn("[AddToList] playlist toggle failed", e);
+      // Resync — ABS deletes a playlist when its last item is removed, so the
+      // local copy can go stale mid-session.
+      fetchLists();
     } finally {
       setBusyId(null);
     }
