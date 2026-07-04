@@ -156,6 +156,8 @@ interface PlaybackState {
   isPlayerExpanded: boolean;
   setPlayerExpanded: (expanded: boolean) => void;
   loadLastSession: () => Promise<void>;
+  onTabScreen: boolean;
+  setOnTabScreen: (isTab: boolean) => void;
 }
 
 // Ticks the sleep-timer countdown once per second, independent of the player
@@ -177,6 +179,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   sleepTimer: null,
   isPlayerExpanded: false,
   setPlayerExpanded: (expanded: boolean) => set({ isPlayerExpanded: expanded }),
+  onTabScreen: true,
+  setOnTabScreen: (isTab: boolean) => set({ onTabScreen: isTab }),
 
   setCastState: (client) => {
     set({ castClient: client || null, isCasting: !!client });

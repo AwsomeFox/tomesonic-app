@@ -97,11 +97,13 @@ function ebookHtml(
           background: \${bg} !important;
           color: \${fg} !important;
           font-size: ${fontSize}% !important;
-          font-family: \${fontValue} !important;
-          line-height: ${lineHeight} !important;
           text-align: start;
           -webkit-hyphens: auto;
           hyphens: auto;
+        }
+        body, p, li, blockquote, dd, div, span, a {
+          font-family: \${fontValue} !important;
+          line-height: ${lineHeight} !important;
         }
         pre { white-space: pre-wrap !important; }
       \`;
@@ -269,11 +271,13 @@ export default function ReaderScreen({ route, navigation }: any) {
           background: ${bg} !important;
           color: ${fg} !important;
           font-size: ${fontSize}% !important;
-          font-family: ${fontValue} !important;
-          line-height: ${lineHeight} !important;
           text-align: start;
           -webkit-hyphens: auto;
           hyphens: auto;
+        }
+        body, p, li, blockquote, dd, div, span, a {
+          font-family: ${fontValue} !important;
+          line-height: ${lineHeight} !important;
         }
         pre { white-space: pre-wrap !important; }
       `;

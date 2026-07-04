@@ -114,27 +114,7 @@ export default function PlayerBottomSheet() {
     }
   }, [position, duration, currentSession?.id]);
 
-  const [onTabScreen, setOnTabScreen] = useState(true);
-
-  useEffect(() => {
-    const TAB_ROUTES = ["Home", "Library", "Series", "Collections", "Authors"];
-    const checkRoute = () => {
-      if (navigationRef.isReady()) {
-        const route: any = navigationRef.getCurrentRoute();
-        if (route) {
-          const isTab = TAB_ROUTES.includes(route.name) && !route.params?.showBack;
-          setOnTabScreen(isTab);
-        } else {
-          setOnTabScreen(true);
-        }
-      }
-    };
-    checkRoute();
-    const unsubscribe = navigationRef.addListener("state", () => {
-      checkRoute();
-    });
-    return unsubscribe;
-  }, []);
+  const onTabScreen = usePlaybackStore((s) => s.onTabScreen);
 
   const bottomOffset = onTabScreen ? 64 + insets.bottom : 0;
 

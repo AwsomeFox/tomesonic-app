@@ -32,6 +32,7 @@ import LogsScreen from "../screens/LogsScreen";
 import LatestEpisodesScreen from "../screens/LatestEpisodesScreen";
 import ListeningHistoryScreen from "../screens/ListeningHistoryScreen";
 import ReaderScreen from "../screens/ReaderScreen";
+import { usePlaybackStore } from "../store/usePlaybackStore";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -115,7 +116,20 @@ export default function AppNavigator() {
   };
 
   return (
-    <NavigationContainer ref={navigationRef} theme={navTheme}>
+    <NavigationContainer
+      ref={navigationRef}
+      theme={navTheme}
+      onStateChange={() => {
+        if (navigationRef.isReady()) {
+          const route: any = navigationRef.getCurrentRoute();
+          if (route) {
+            const TAB_ROUTES = ["Home", "Library", "Series", "Collections", "Authors"];
+            const isTab = TAB_ROUTES.includes(route.name) && !route.params?.showBack;
+            usePlaybackStore.getState().setOnTabScreen(isTab);
+          }
+        }
+      }}
+    >
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {user === null ? (
           // Connect/Login screen shown if session is unauthenticated
