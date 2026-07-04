@@ -1,0 +1,351 @@
+jest.mock("../../utils/downloader", () => ({
+  downloader: {
+    abortBookParts: jest.fn().mockResolvedValue(undefined),
+    resumeDownload: jest.fn().mockResolvedValue(undefined),
+    sweepOrphanFolders: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+jest.mock("../../utils/autoCreds", () => ({
+  writeAutoCreds: jest.fn().mockResolvedValue(undefined),
+  readAutoCreds: jest.fn().mockResolvedValue(null),
+  writeAutoDownloads: jest.fn().mockResolvedValue(undefined),
+  writeWidgetState: jest.fn().mockResolvedValue(undefined),
+}));
+
+import * as FileSystem from "expo-file-system/legacy";
+import { downloader } from "../../utils/downloader";
+import { db, dbStorage } from "../../utils/db";
+import { storage, storageHelper, secureStorage } from "../../utils/storage";
+import { useDownloadStore, DownloadItem } from "../../store/useDownloadStore";
+
+const initial = useDownloadStore.getState();
+const flush = () => new Promise((r) => setImmediate(r));
+
+function baseItem(over: Partial<DownloadItem> = {}): DownloadItem {
+  return {
+    id: "item1",
+    libraryItemId: "item1",
+    title: "The Hobbit",
+    author: "J.R.R. Tolkien",
+    coverUrl: "https://server/cover.jpg",
+    progress: 0,
+    status: "pending",
+    parts: [
+      { id: "track_0", filename: "a.m4b", url: "u0", bytesDownloaded: 0, fileSize: 1000, completed: false },
+      { id: "cover", filename: "cover.jpg", url: "u1", bytesDownloaded: 0, fileSize: 0, completed: false },
+    ],
+    localFolderPath: "file:///downloads/item1/",
+    ...over,
+  };
+}
+
+describe("useDownloadStore", () => {
+  beforeEach(() => {
+    dbStorage.getAllKeys().forEach((k) => dbStorage.remove(k));
+    storage.getAllKeys().forEach((k) => storage.remove(k));
+    secureStorage.getAllKeys().forEach((k) => secureStorage.remove(k));
+    useDownloadStore.setState(initial, true);
+    useDownloadStore.setState({ activeDownloads: {}, completedDownloads: {} });
+  });
+
+  describe("startDownload", () => {
+    it("creates a pending item with zeroed parts, clears stale errors, and persists", () => {
+      useDownloadStore.getState().startDownload(
+        {
+          id: "item1",
+          libraryItemId: "item1",
+          title: "The Hobbit",
+          author: "J.R.R. Tolkien",
+          coverUrl: "c",
+          error: "old failure",
+        } as any,
+        [
+          { id: "track_0", filename: "a.m4b", url: "u0", fileSize: 1000 },
+          { id: "cover", filename: "cover.jpg", url: "u1", fileSize: 0 },
+        ] as any
+      );
+
+      const item = useDownloadStore.getState().activeDownloads["item1"];
+      expect(item.status).toBe("pending");
+      expect(item.progress).toBe(0);
+      expect(item.error).toBeUndefined();
+      expect(item.parts).toHaveLength(2);
+      expect(item.parts[0]).toMatchObject({ bytesDownloaded: 0, completed: false });
+      // Persisted to the downloads DB.
+      expect(db.getAllDownloads()).toHaveLength(1);
+    });
+  });
+
+  describe("updateDownloadProgress", () => {
+    beforeEach(() => {
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem() } });
+    });
+
+    it("computes progress across parts and flips status to downloading", () => {
+      useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 500, 1000);
+      const item = useDownloadStore.getState().activeDownloads["item1"];
+      expect(item.status).toBe("downloading");
+      // 500 of 1000 expected (cover part has 0 expected and 0 written).
+      expect(item.progress).toBeCloseTo(0.5, 5);
+    });
+
+    it("keeps the previous fileSize estimate when the callback reports unknown size", () => {
+      useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 100, -1);
+      const part = useDownloadStore.getState().activeDownloads["item1"].parts[0];
+      expect(part.fileSize).toBe(1000); // -1 must not clobber the server estimate
+      expect(part.bytesDownloaded).toBe(100);
+    });
+
+    it("never counts expected bytes below what is already written (unknown-size parts)", () => {
+      // Cover part: fileSize 0, 300 bytes written → expected for it = 300.
+      useDownloadStore.getState().updateDownloadProgress("item1", "cover", 300, 0);
+      const item = useDownloadStore.getState().activeDownloads["item1"];
+      // 300 / (1000 + 300)
+      expect(item.progress).toBeCloseTo(300 / 1300, 5);
+    });
+
+    it("caps progress at 0.99 until completion wraps up", () => {
+      useDownloadStore.getState().updateDownloadProgress("item1", "track_0", 1000, 1000);
+      const item = useDownloadStore.getState().activeDownloads["item1"];
+      expect(item.progress).toBe(0.99);
+    });
+
+    it("ignores updates for unknown items", () => {
+      useDownloadStore.getState().updateDownloadProgress("nope", "track_0", 10, 100);
+      expect(useDownloadStore.getState().activeDownloads["nope"]).toBeUndefined();
+    });
+  });
+
+  describe("completeDownloadPart", () => {
+    beforeEach(() => {
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem() } });
+    });
+
+    it("marks the part complete and snaps bytesDownloaded to fileSize when known", () => {
+      useDownloadStore.getState().completeDownloadPart("item1", "track_0", "/downloads/item1/a.m4b");
+      const part = useDownloadStore.getState().activeDownloads["item1"].parts[0];
+      expect(part.completed).toBe(true);
+      expect(part.bytesDownloaded).toBe(1000);
+      expect(part.localFilePath).toBe("/downloads/item1/a.m4b");
+    });
+
+    it("keeps bytesDownloaded for unknown-size parts (fileSize 0)", () => {
+      useDownloadStore.getState().updateDownloadProgress("item1", "cover", 321, 0);
+      useDownloadStore.getState().completeDownloadPart("item1", "cover", "/downloads/item1/cover.jpg");
+      const part = useDownloadStore
+        .getState()
+        .activeDownloads["item1"].parts.find((p) => p.id === "cover")!;
+      expect(part.completed).toBe(true);
+      expect(part.bytesDownloaded).toBe(321); // not snapped back to 0
+    });
+  });
+
+  describe("completeDownload", () => {
+    it("moves the item from active to completed with progress 1 and clears errors", () => {
+      useDownloadStore.setState({
+        activeDownloads: { item1: baseItem({ status: "downloading", error: "flaky" }) },
+      });
+
+      useDownloadStore.getState().completeDownload("item1", "file:///downloads/item1/");
+
+      const s = useDownloadStore.getState();
+      expect(s.activeDownloads["item1"]).toBeUndefined();
+      const done = s.completedDownloads["item1"];
+      expect(done.status).toBe("completed");
+      expect(done.progress).toBe(1);
+      expect(done.error).toBeUndefined();
+      expect(done.localFolderPath).toBe("file:///downloads/item1/");
+      // Offline library mapping saved.
+      expect(db.getLocalLibraryItem("item1")).toMatchObject({
+        libraryItemId: "item1",
+        isDownloaded: true,
+      });
+    });
+  });
+
+  describe("failDownload", () => {
+    it("keeps the item active with a failure reason", () => {
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem({ status: "downloading" }) } });
+      useDownloadStore.getState().failDownload("item1", "Not enough storage space");
+      const item = useDownloadStore.getState().activeDownloads["item1"];
+      expect(item.status).toBe("failed");
+      expect(item.error).toBe("Not enough storage space");
+      // Parts survive so retry can resume.
+      expect(item.parts).toHaveLength(2);
+    });
+
+    it("defaults the error message when none is given", () => {
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem() } });
+      useDownloadStore.getState().failDownload("item1", "");
+      expect(useDownloadStore.getState().activeDownloads["item1"].error).toBe("Unknown error");
+    });
+  });
+
+  describe("cancelDownload", () => {
+    it("aborts in-flight parts, deletes the folder, and removes the record entirely", async () => {
+      const item = baseItem({ status: "downloading" });
+      db.saveDownloadItem(item);
+      useDownloadStore.setState({ activeDownloads: { item1: item } });
+
+      useDownloadStore.getState().cancelDownload("item1");
+      await flush();
+
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("item1");
+      // Folder deleted only after the abort settles.
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/item1/", {
+        idempotent: true,
+      });
+      // No ghost record anywhere: neither in memory nor in the DB.
+      expect(useDownloadStore.getState().activeDownloads["item1"]).toBeUndefined();
+      expect(db.getAllDownloads()).toHaveLength(0);
+    });
+  });
+
+  describe("removeDownload", () => {
+    it("deletes the folder and drops the item from both maps and the DB", async () => {
+      const item = baseItem({ status: "completed" });
+      db.saveDownloadItem(item);
+      db.saveLocalLibraryItem({ id: "item1", libraryItemId: "item1" });
+      useDownloadStore.setState({ completedDownloads: { item1: item } });
+
+      await useDownloadStore.getState().removeDownload("item1");
+
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/item1/", {
+        idempotent: true,
+      });
+      expect(useDownloadStore.getState().completedDownloads["item1"]).toBeUndefined();
+      expect(useDownloadStore.getState().activeDownloads["item1"]).toBeUndefined();
+      expect(db.getAllDownloads()).toHaveLength(0);
+      expect(db.getLocalLibraryItem("item1")).toBeNull();
+    });
+
+    it("derives the folder from a part's file path when localFolderPath is missing", async () => {
+      const item = baseItem({ status: "failed", localFolderPath: undefined });
+      item.parts[0].localFilePath = "file:///downloads/derived/a.m4b";
+      useDownloadStore.setState({ activeDownloads: { item1: item } });
+
+      await useDownloadStore.getState().removeDownload("item1");
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/derived/", {
+        idempotent: true,
+      });
+    });
+  });
+
+  describe("retryDownload", () => {
+    it("flips a failed item back to pending and drives the downloader resume", async () => {
+      storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+      const item = baseItem({ status: "failed", error: "Interrupted" });
+      useDownloadStore.setState({ activeDownloads: { item1: item } });
+
+      await useDownloadStore.getState().retryDownload("item1");
+
+      const pending = useDownloadStore.getState().activeDownloads["item1"];
+      expect(pending.status).toBe("pending");
+      expect(pending.error).toBeUndefined();
+      expect(downloader.resumeDownload).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "item1", status: "pending" }),
+        "https://abs.example.com",
+        "tok"
+      );
+    });
+
+    it("fails the download when server config is missing", async () => {
+      const item = baseItem({ status: "failed" });
+      useDownloadStore.setState({ activeDownloads: { item1: item } });
+
+      await useDownloadStore.getState().retryDownload("item1");
+
+      const failed = useDownloadStore.getState().activeDownloads["item1"];
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toMatch(/Missing server config/);
+      expect(downloader.resumeDownload).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op for items already pending or downloading", async () => {
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem({ status: "downloading" }) } });
+      await useDownloadStore.getState().retryDownload("item1");
+      expect(downloader.resumeDownload).not.toHaveBeenCalled();
+      expect(useDownloadStore.getState().activeDownloads["item1"].status).toBe("downloading");
+    });
+  });
+
+  describe("loadDownloadsFromDb", () => {
+    it("splits completed and active rows", () => {
+      db.saveDownloadItem(baseItem({ id: "done1", status: "completed" }));
+      db.saveDownloadItem(baseItem({ id: "fail1", status: "failed", error: "boom" }));
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads["done1"].status).toBe("completed");
+      expect(s.activeDownloads["fail1"].status).toBe("failed");
+      expect(s.activeDownloads["fail1"].error).toBe("boom");
+    });
+
+    it("marks interrupted downloads as failed with a resume message, keeping parts", () => {
+      const interrupted = baseItem({ id: "int1", status: "downloading" });
+      interrupted.parts[0].completed = true;
+      interrupted.parts[0].bytesDownloaded = 1000;
+      db.saveDownloadItem(interrupted);
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      const item = useDownloadStore.getState().activeDownloads["int1"];
+      expect(item.status).toBe("failed");
+      expect(item.error).toBe("Interrupted — tap retry to resume");
+      // Progress kept intact so retry resumes instead of restarting.
+      expect(item.parts[0].completed).toBe(true);
+      // The failed status is persisted back to the DB too.
+      expect(db.getAllDownloads()[0].status).toBe("failed");
+    });
+
+    it("keeps the live in-memory item when a download loop is driving it right now", () => {
+      const live = baseItem({ id: "live1", status: "downloading", progress: 0.7 });
+      useDownloadStore.setState({ activeDownloads: { live1: live } });
+      // The throttled DB copy is stale.
+      db.saveDownloadItem({ ...live, progress: 0.2 });
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      const item = useDownloadStore.getState().activeDownloads["live1"];
+      expect(item).toBe(live); // exact in-memory object wins
+      expect(item.status).toBe("downloading");
+      expect(item.progress).toBe(0.7);
+    });
+
+    it("cleans up legacy cancelled rows: deletes files and removes the record", () => {
+      db.saveDownloadItem(baseItem({ id: "ghost1", status: "cancelled" }));
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/item1/", {
+        idempotent: true,
+      });
+      expect(db.getAllDownloads()).toHaveLength(0);
+      const s = useDownloadStore.getState();
+      expect(s.activeDownloads["ghost1"]).toBeUndefined();
+      expect(s.completedDownloads["ghost1"]).toBeUndefined();
+    });
+
+    it("sweeps orphan folders after hydration", () => {
+      useDownloadStore.getState().loadDownloadsFromDb();
+      expect(downloader.sweepOrphanFolders).toHaveBeenCalled();
+    });
+  });
+
+  describe("setDownloadFolder", () => {
+    it("backfills localFolderPath on an active item", () => {
+      const item = baseItem({ localFolderPath: undefined });
+      useDownloadStore.setState({ activeDownloads: { item1: item } });
+      useDownloadStore.getState().setDownloadFolder("item1", "file:///downloads/new/");
+      expect(useDownloadStore.getState().activeDownloads["item1"].localFolderPath).toBe(
+        "file:///downloads/new/"
+      );
+    });
+
+    it("is a no-op for unknown items or unchanged paths", () => {
+      useDownloadStore.getState().setDownloadFolder("missing", "file:///x/");
+      expect(useDownloadStore.getState().activeDownloads["missing"]).toBeUndefined();
+    });
+  });
+});

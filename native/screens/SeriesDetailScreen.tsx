@@ -53,6 +53,7 @@ interface MediaProgress {
 
 interface SeriesBook {
   id: string;
+  mediaType?: string;
   media: {
     metadata: {
       title: string;
@@ -60,6 +61,15 @@ interface SeriesBook {
     };
     coverPath?: string;
     duration?: number;
+    // Format-detection fields consumed by hasAudio()/isEbookOnly()/
+    // getEbookFormat() — present on minified (num*) and expanded (arrays)
+    // payloads. Without these every row looked ebook-only.
+    numTracks?: number;
+    numAudioFiles?: number;
+    tracks?: any[];
+    audioFiles?: any[];
+    ebookFormat?: string | null;
+    ebookFile?: any;
   };
   sequence?: string | number;
   userMediaProgress?: MediaProgress | null;
@@ -117,6 +127,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
             : rawSeries;
           return {
             id: item.id,
+            mediaType: item.mediaType,
             media: {
               metadata: {
                 title: item.media?.metadata?.title || "Untitled",
@@ -124,6 +135,16 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
               },
               coverPath: item.media?.coverPath,
               duration: item.media?.duration || 0,
+              // Keep the audio/ebook detection fields — stripping them made
+              // isEbookOnly() true for EVERY row (audiobooks got "Read"
+              // buttons routed to the Reader, and hideNonAudiobooksGlobal
+              // emptied the whole series).
+              numTracks: item.media?.numTracks,
+              numAudioFiles: item.media?.numAudioFiles,
+              tracks: item.media?.tracks,
+              audioFiles: item.media?.audioFiles,
+              ebookFormat: item.media?.ebookFormat,
+              ebookFile: item.media?.ebookFile,
             },
             sequence: matchedSeriesObj?.sequence ?? "",
             userMediaProgress: item.userMediaProgress || null,

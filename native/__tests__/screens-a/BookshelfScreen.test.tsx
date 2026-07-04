@@ -1,0 +1,467 @@
+/**
+ * BookshelfScreen — offline downloaded list (ebook rows → Reader), online
+ * personalized shelves (dedupe, hide-non-audiobooks, empty state), synthetic
+ * Continue Reading shelf from the batch item fetch, series/author card taps,
+ * and the offline→online flush-and-refresh transition.
+ */
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
+
+jest.mock("react-native-safe-area-context", () => {
+  const React = require("react");
+  const { View } = require("react-native");
+  const insets = { top: 0, right: 0, bottom: 0, left: 0 };
+  const frame = { x: 0, y: 0, width: 320, height: 640 };
+  return {
+    SafeAreaProvider: ({ children }: any) => children,
+    SafeAreaView: ({ children, edges, ...props }: any) => React.createElement(View, props, children),
+    useSafeAreaInsets: () => insets,
+    useSafeAreaFrame: () => frame,
+    initialWindowMetrics: { frame, insets },
+  };
+});
+
+// The setup-level reanimated mock delegates to react-native-reanimated/mock,
+// which now requires react-native-worklets' native bindings and throws under
+// jest. Replace it file-locally with an inert, self-contained implementation.
+jest.mock("react-native-reanimated", () => {
+  const React = require("react");
+  const RN = require("react-native");
+  const chain: any = {};
+  ["duration", "delay", "springify", "damping", "stiffness", "easing", "reduceMotion", "withInitialValues", "build"].forEach(
+    (k) => {
+      chain[k] = () => chain;
+    }
+  );
+  const passthrough = (Component: any) => {
+    const C = React.forwardRef(({ entering, exiting, layout, ...props }: any, ref: any) =>
+      React.createElement(Component, { ...props, ref })
+    );
+    C.displayName = `Animated(${Component.displayName || Component.name || "Component"})`;
+    return C;
+  };
+  const Animated = {
+    View: passthrough(RN.View),
+    Text: passthrough(RN.Text),
+    Image: passthrough(RN.Image),
+    ScrollView: passthrough(RN.ScrollView),
+    FlatList: passthrough(RN.FlatList),
+    createAnimatedComponent: (C: any) => passthrough(C),
+  };
+  return {
+    __esModule: true,
+    default: Animated,
+    ...Animated,
+    FadeIn: chain,
+    FadeOut: chain,
+    FadeInDown: chain,
+    FadeInUp: chain,
+    FadeInRight: chain,
+    LinearTransition: chain,
+    Easing: {
+      bezier: () => ({ factory: () => (t: number) => t }),
+      out: (f: any) => f,
+      in: (f: any) => f,
+      inOut: (f: any) => f,
+      cubic: (t: number) => t,
+      linear: (t: number) => t,
+    },
+    useSharedValue: (v: any) => ({ value: v }),
+    useAnimatedStyle: () => ({}),
+    useDerivedValue: (fn: any) => ({ value: typeof fn === "function" ? fn() : fn }),
+    useAnimatedProps: () => ({}),
+    useAnimatedReaction: () => {},
+    useAnimatedScrollHandler: () => () => {},
+    useReducedMotion: () => false,
+    withTiming: (v: any) => v,
+    withSpring: (v: any) => v,
+    withDelay: (_d: any, v: any) => v,
+    withRepeat: (v: any) => v,
+    withSequence: (...vals: any[]) => vals[vals.length - 1],
+    cancelAnimation: () => {},
+    runOnJS: (fn: any) => fn,
+    runOnUI: (fn: any) => fn,
+    interpolate: () => 0,
+    interpolateColor: () => "#000000",
+    Extrapolation: { CLAMP: "clamp", EXTEND: "extend" },
+  };
+});
+
+jest.mock("../../utils/api", () => ({
+  api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+jest.mock("../../utils/progressSync", () => ({
+  queueFinishedPatch: jest.fn(),
+  queueProgressPatch: jest.fn(),
+  queueEbookProgressPatch: jest.fn(),
+  flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
+  clearAllPending: jest.fn(),
+  syncProgress: jest.fn().mockResolvedValue(undefined),
+  closeSession: jest.fn().mockResolvedValue(undefined),
+}));
+// Controllable connectivity per test.
+jest.mock("../../hooks/useNetworkStatus", () => {
+  const useNetworkStatus = jest.fn(() => ({ isConnected: true, isInternetReachable: true }));
+  return { useNetworkStatus, default: useNetworkStatus };
+});
+
+import BookshelfScreen from "../../screens/BookshelfScreen";
+import { api } from "../../utils/api";
+import { flushPendingSyncs } from "../../utils/progressSync";
+import { useNetworkStatus } from "../../hooks/useNetworkStatus";
+import { useUserStore } from "../../store/useUserStore";
+import { useLibraryStore } from "../../store/useLibraryStore";
+import { useDownloadStore } from "../../store/useDownloadStore";
+import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useUiStore } from "../../store/useUiStore";
+import { storage } from "../../utils/storage";
+
+const mockedGet = api.get as jest.Mock;
+const mockedPost = api.post as jest.Mock;
+const mockedNet = useNetworkStatus as jest.Mock;
+
+const initialUser = useUserStore.getState();
+const initialLibrary = useLibraryStore.getState();
+const initialDownloads = useDownloadStore.getState();
+const initialPlayback = usePlaybackStore.getState();
+const initialUi = useUiStore.getState();
+
+const makeNavigation = () => {
+  const navigation: any = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    addListener: jest.fn(() => jest.fn()),
+  };
+  navigation.getParent = jest.fn(() => navigation);
+  return navigation;
+};
+
+// --- Fixtures ---------------------------------------------------------------
+
+const audioBook = {
+  id: "b1",
+  mediaType: "book",
+  media: {
+    coverPath: "/covers/b1.jpg",
+    duration: 3600,
+    numTracks: 2,
+    metadata: { title: "Audio Book One", authorName: "Alice Author" },
+  },
+};
+const ebookOnlyBook = {
+  id: "e1",
+  mediaType: "book",
+  media: {
+    ebookFile: { ebookFormat: "epub" },
+    metadata: { title: "Ebook Only Book", authorName: "Eve Writer" },
+  },
+};
+const authorEntity = { id: "auth1", name: "Alice Author", numBooks: 3, imagePath: "/a.jpg" };
+const seriesEntity = { id: "ser1", name: "Cool Series", books: [audioBook], booksCount: 2 };
+
+const baseShelves = [
+  { id: "continue-listening", label: "Continue Listening", type: "book", entities: [audioBook] },
+  { id: "recently-added", label: "Recently Added", type: "book", entities: [audioBook, ebookOnlyBook] },
+  { id: "newest-authors", label: "Newest Authors", type: "authors", entities: [authorEntity] },
+  { id: "recent-series", label: "Recent Series", type: "series", entities: [seriesEntity] },
+];
+
+/** Seed the library/user stores with stubbed loaders so initData resolves fast. */
+function seedOnline(shelves: any[], mediaProgress: Record<string, any> = {}) {
+  useLibraryStore.setState({
+    currentLibraryId: "lib1",
+    personalizedShelves: shelves,
+    loadPersonalizedShelves: jest.fn().mockResolvedValue(undefined),
+    loadLibraries: jest.fn().mockResolvedValue(true),
+  } as any);
+  useUserStore.setState({
+    serverConnectionConfig: { address: "https://abs.test", token: "tok" },
+    mediaProgress,
+    loadMediaProgress: jest.fn().mockResolvedValue(undefined),
+  } as any);
+}
+
+beforeEach(() => {
+  useUserStore.setState(initialUser, true);
+  useLibraryStore.setState(initialLibrary, true);
+  useDownloadStore.setState(initialDownloads, true);
+  usePlaybackStore.setState(initialPlayback, true);
+  useUiStore.setState(initialUi, true);
+  storage.getAllKeys().forEach((k: string) => storage.remove(k));
+  mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true });
+  // Series-list revalidation fetch (parallel effect) — empty by default.
+  mockedGet.mockResolvedValue({ data: { results: [] } });
+  mockedPost.mockResolvedValue({ data: { libraryItems: [] } });
+});
+
+describe("BookshelfScreen offline", () => {
+  const seedDownloads = () =>
+    useDownloadStore.setState({
+      completedDownloads: {
+        b1: {
+          id: "b1",
+          libraryItemId: "b1",
+          title: "Audio Book One",
+          author: "Alice Author",
+          status: "completed",
+          progress: 1,
+          parts: [{ id: "cover", filename: "cover.jpg", localFilePath: "file:///dl/b1/cover.jpg" }],
+          meta: { duration: 3600, chapters: [], tracks: [{ index: 1, filename: "t.mp3", duration: 3600, startOffset: 0 }] },
+        },
+        e1: {
+          id: "e1",
+          libraryItemId: "e1",
+          title: "Ebook Only Book",
+          author: "Eve Writer",
+          status: "completed",
+          progress: 1,
+          parts: [{ id: "ebook", filename: "great.epub", localFilePath: "file:///dl/e1/great.epub" }],
+          meta: { duration: 0, chapters: [], tracks: [] },
+        },
+      },
+    } as any);
+
+  it("renders the downloaded list and opens ebook-only rows in the Reader", async () => {
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    seedOnline(baseShelves);
+    seedDownloads();
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Available Offline");
+    expect(screen.getByText("Audio Book One")).toBeTruthy();
+    expect(screen.getByText("Ebook Only Book")).toBeTruthy();
+
+    await fireEvent.press(screen.getByText("Ebook Only Book"));
+    expect(navigation.navigate).toHaveBeenCalledWith("Reader", {
+      itemId: "e1",
+      ebookFormat: "epub",
+      title: "Ebook Only Book",
+    });
+  });
+
+  it("starts playback for downloaded audio rows", async () => {
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    seedOnline(baseShelves);
+    seedDownloads();
+    const startPlayback = jest.fn().mockResolvedValue(true);
+    usePlaybackStore.setState({ startPlayback } as any);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Available Offline");
+    await fireEvent.press(screen.getByText("Audio Book One"));
+    expect(startPlayback).toHaveBeenCalledWith("b1");
+  });
+
+  it("shows the offline empty state when nothing is downloaded", async () => {
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+    await screen.findByText("No downloaded books");
+  });
+
+  it("coming back online flushes queued syncs and refreshes the shelves", async () => {
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    seedOnline(baseShelves);
+    const loadShelves = useLibraryStore.getState().loadPersonalizedShelves as jest.Mock;
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+    await screen.findByText("Available Offline");
+
+    mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true });
+    await screen.rerender(<BookshelfScreen navigation={navigation} />);
+
+    await waitFor(() => {
+      expect(flushPendingSyncs).toHaveBeenCalled();
+      expect(loadShelves).toHaveBeenCalledWith(true); // onRefresh force-reload
+    });
+  });
+});
+
+describe("BookshelfScreen online", () => {
+  it("renders shelves from personalizedShelves (books, authors, series)", async () => {
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.getByText("Recently Added")).toBeTruthy();
+    // Coverless cards render the title twice (placeholder + meta panel).
+    expect(screen.getAllByText("Ebook Only Book").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByLabelText("Author: Alice Author")).toBeTruthy();
+    expect(screen.getByLabelText("Series: Cool Series")).toBeTruthy();
+  });
+
+  it("book card tap navigates to ItemDetail", async () => {
+    seedOnline([baseShelves[0]]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+    const card = await screen.findByLabelText("Audio Book One by Alice Author");
+    await fireEvent.press(card);
+    expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "b1" });
+  });
+
+  it("series and author card taps navigate to their detail screens", async () => {
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await fireEvent.press(await screen.findByLabelText("Series: Cool Series"));
+    expect(navigation.navigate).toHaveBeenCalledWith("SeriesDetail", {
+      seriesId: "ser1",
+      seriesName: "Cool Series",
+    });
+
+    await fireEvent.press(screen.getByLabelText("Author: Alice Author"));
+    expect(navigation.navigate).toHaveBeenCalledWith("AuthorDetail", {
+      authorId: "auth1",
+      authorName: "Alice Author",
+    });
+  });
+
+  it("dedupes shelves by id — Continue Reading can never render twice", async () => {
+    seedOnline([
+      ...baseShelves,
+      { id: "continue-reading", label: "Continue Reading", type: "book", entities: [ebookOnlyBook] },
+      { id: "continue-reading", label: "Continue Reading", type: "book", entities: [ebookOnlyBook] },
+    ]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.getAllByText("Continue Reading")).toHaveLength(1);
+  });
+
+  it("hideNonAudiobooksGlobal drops ebook-only entities and the reading shelf", async () => {
+    seedOnline([
+      ...baseShelves,
+      { id: "continue-reading", label: "Continue Reading", type: "book", entities: [ebookOnlyBook] },
+    ]);
+    useUserStore.setState({
+      settings: { ...useUserStore.getState().settings, hideNonAudiobooksGlobal: true },
+    } as any);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.queryByText("Continue Reading")).toBeNull();
+    expect(screen.queryByText("Ebook Only Book")).toBeNull(); // filtered out of Recently Added
+    expect(screen.getByText("Recently Added")).toBeTruthy(); // shelf itself survives
+  });
+
+  it("builds a synthetic Continue Reading shelf from in-progress ebooks (batch fetch)", async () => {
+    seedOnline(baseShelves, {
+      e1: { libraryItemId: "e1", ebookProgress: 0.4 },
+      // Finished + episode progress rows must be excluded from the batch ids.
+      done1: { libraryItemId: "done1", ebookProgress: 0.5, isFinished: true },
+      "pod1-ep1": { libraryItemId: "pod1", episodeId: "ep1", progress: 0.3 },
+    });
+    mockedPost.mockResolvedValue({ data: { libraryItems: [ebookOnlyBook] } });
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Reading");
+    expect(screen.getAllByText("Ebook Only Book").length).toBeGreaterThanOrEqual(1);
+    expect(mockedPost).toHaveBeenCalledWith("/api/items/batch/get", { libraryItemIds: ["e1"] });
+  });
+
+  it("shows the empty state when every shelf is empty", async () => {
+    seedOnline([]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+    await screen.findByText("Nothing on the shelf yet");
+  });
+
+  it("transforms Continue Series into series folders resolved from the library series list", async () => {
+    const inProgressWithSeries = {
+      ...audioBook,
+      media: {
+        ...audioBook.media,
+        metadata: { ...audioBook.media.metadata, seriesName: "Cool Series #1" },
+      },
+    };
+    const nextInSeries = {
+      id: "b9",
+      mediaType: "book",
+      media: {
+        duration: 100,
+        numTracks: 1,
+        metadata: {
+          title: "Other Book",
+          authorName: "Bob",
+          series: { id: "ser2", name: "Other Series" },
+        },
+      },
+    };
+    seedOnline([
+      { id: "continue-listening", label: "Continue Listening", type: "book", entities: [inProgressWithSeries] },
+      { id: "continue-series", label: "Continue Series", type: "book", entities: [nextInSeries] },
+    ]);
+    mockedGet.mockImplementation((url: string) => {
+      if (url.includes("/series?")) {
+        return Promise.resolve({
+          data: {
+            results: [
+              { id: "ser1", name: "Cool Series", books: [{ id: "b1" }], booksCount: 2 },
+              { id: "ser2", name: "Other Series", books: [{ id: "b9" }], booksCount: 3 },
+            ],
+          },
+        });
+      }
+      return Promise.resolve({ data: { results: [] } });
+    });
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Series");
+    // In-progress series first (from continue-listening), then between-books.
+    const coolSeries = await screen.findByLabelText("Series: Cool Series");
+    expect(screen.getByLabelText("Series: Other Series")).toBeTruthy();
+
+    await fireEvent.press(coolSeries);
+    expect(navigation.navigate).toHaveBeenCalledWith("SeriesDetail", {
+      seriesId: "ser1",
+      seriesName: "Cool Series",
+    });
+  });
+
+  it("falls back to per-item fetches when the batch endpoint is unavailable (older servers)", async () => {
+    seedOnline(baseShelves, { e1: { libraryItemId: "e1", ebookProgress: 0.4 } });
+    mockedPost.mockRejectedValue({ response: { status: 404 } });
+    mockedGet.mockImplementation((url: string) => {
+      if (url === "/api/items/e1") return Promise.resolve({ data: ebookOnlyBook });
+      return Promise.resolve({ data: { results: [] } });
+    });
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Reading");
+    expect(mockedGet).toHaveBeenCalledWith("/api/items/e1");
+    expect(screen.getAllByText("Ebook Only Book").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("re-fetches progress when the tab regains focus (skipping the initial mount focus)", async () => {
+    seedOnline(baseShelves);
+    const loadMediaProgress = useUserStore.getState().loadMediaProgress as jest.Mock;
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+    await screen.findByText("Continue Listening");
+
+    const focusHandler = (navigation.addListener as jest.Mock).mock.calls.find(
+      (c) => c[0] === "focus"
+    )?.[1];
+    expect(focusHandler).toBeTruthy();
+    loadMediaProgress.mockClear();
+
+    await act(async () => {
+      focusHandler(); // first focus after mount is intentionally skipped
+    });
+    expect(loadMediaProgress).not.toHaveBeenCalled();
+
+    await act(async () => {
+      focusHandler();
+    });
+    expect(loadMediaProgress).toHaveBeenCalledTimes(1);
+  });
+});

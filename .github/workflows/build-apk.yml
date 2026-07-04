@@ -10,6 +10,26 @@ on:
       - 'ios/**'
       - 'readme.md'
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: install dependencies
+        run: npm ci --prefix native
+
+      - name: typecheck
+        run: npm run typecheck --prefix native
+
+      - name: jest
+        run: npm test --prefix native -- --ci --maxWorkers=2
+
   main:
     runs-on: ubuntu-latest
     steps:
