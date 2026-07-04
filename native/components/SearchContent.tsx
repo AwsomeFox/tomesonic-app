@@ -37,6 +37,13 @@ const COVER_H = 58;
 
 export default function SearchContent({ navigation }: { navigation: any }) {
   const colors = useThemeColors();
+  // SearchContent renders INSIDE tab screens, so `navigation` belongs to the
+  // TAB navigator — but every result destination lives on the ROOT stack.
+  // Same-name routes resolve in the tab navigator first: "Library" collides
+  // with the Library TAB, silently switching tabs UNDERNEATH the still-open
+  // search overlay (the page only "appears" after closing search). Route all
+  // result taps through the parent stack so they always PUSH on top.
+  const rootNav = navigation?.getParent?.() ?? navigation;
   const currentLibraryId = useLibraryStore((state) => state.currentLibraryId);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
   const { serverConnectionConfig } = useUserStore();
@@ -167,7 +174,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         entering={listRowEnter(index)}
         android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
-          navigation.navigate("ItemDetail", { itemId: libraryItem.id })
+          rootNav.navigate("ItemDetail", { itemId: libraryItem.id })
         }
         style={{
           flexDirection: "row",
@@ -239,7 +246,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         entering={listRowEnter(index)}
         android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
-          navigation.navigate("SeriesDetail", { seriesId: series.id })
+          rootNav.navigate("SeriesDetail", { seriesId: series.id })
         }
         style={{
           flexDirection: "row",
@@ -373,7 +380,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         onPress={() =>
           // Filter values are base64-$encode'd (ABS convention) — a plain
           // URI-encoded name fails the server's base64 decode and matches nothing.
-          navigation.navigate("Library", {
+          rootNav.navigate("Library", {
             filter: `tags.${encodeFilterValue(name)}`,
             title: name,
             showBack: true,
@@ -489,7 +496,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
                 ? `${author.numBooks} ${author.numBooks === 1 ? "Book" : "Books"}`
                 : null,
               () =>
-                navigation.navigate("AuthorDetail", {
+                rootNav.navigate("AuthorDetail", {
                   authorId: author.id,
                   authorName: author.name,
                 }),
@@ -511,7 +518,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
                 ? `${narrator.numBooks} ${narrator.numBooks === 1 ? "Book" : "Books"}`
                 : null,
               () =>
-                navigation.navigate("Library", {
+                rootNav.navigate("Library", {
                   filter: `narrators.${encodeFilterValue(narrator.name)}`,
                   title: narrator.name,
                   showBack: true,
