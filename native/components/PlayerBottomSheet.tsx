@@ -116,7 +116,7 @@ export default function PlayerBottomSheet() {
 
   const onTabScreen = usePlaybackStore((s) => s.onTabScreen);
 
-  const bottomOffset = onTabScreen ? 64 + insets.bottom : 0;
+  const bottomOffset = onTabScreen ? 64 + insets.bottom : insets.bottom;
 
   // Animate bottom offset transitions (sliding tab bar offset)
   const bottomOffsetVal = useSharedValue(bottomOffset);

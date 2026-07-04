@@ -217,7 +217,7 @@ export default function ReaderScreen({ route, navigation }: any) {
   // Bottom reserve spacing matches exactly what the floating mini-player consumes.
   // When no session exists, the mini-player slides completely down (height = 0),
   // so we fall back to standard bottom safe inset for spacing.
-  const bottomReserve = hasSession ? MINIPLAYER_HEIGHT : insets.bottom;
+  const bottomReserve = hasSession ? MINIPLAYER_HEIGHT + insets.bottom : insets.bottom;
 
   const serverConfig = storageHelper.getServerConfig();
   const serverAddress = serverConfig?.address?.replace(/\/$/, "") || "";
