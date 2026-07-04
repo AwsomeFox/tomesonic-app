@@ -17,6 +17,7 @@ import { ShelfSkeleton } from "../components/Skeleton";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { flushPendingSyncs } from "../utils/progressSync";
+import { encodeFilterValue } from "../components/FilterModal";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -37,10 +38,12 @@ export default function BookshelfScreen({ navigation }: any) {
   const loadContinueReading = async () => {
     if (!currentLibraryId) return;
     try {
-      const res = await api.get(`/api/libraries/${currentLibraryId}/items?filter=progress&limit=20`);
+      const filterVal = `progress.${encodeFilterValue("in-progress")}`;
+      const res = await api.get(`/api/libraries/${currentLibraryId}/items?filter=${filterVal}&limit=40`);
       const items = res.data?.results || [];
+      const mediaProgress = useUserStore.getState().mediaProgress;
       const ebooks = items.filter((item: any) => {
-        const progress = item?.userMediaProgress;
+        const progress = item?.userMediaProgress || mediaProgress[item.id];
         if (!progress || progress.isFinished) return false;
         if (progress.ebookLocation || (progress.ebookProgress !== undefined && progress.ebookProgress > 0)) {
           return true;
