@@ -10,8 +10,16 @@ name: E2E (Maestro)
 #      screen (10-login against http://10.0.2.2:13378), then runs every flow
 # Catches what jest can't: native boot crashes, real Media3 playback, real
 # navigation, and the actual ABS login/session handshake. ~30 min of runner.
+# workflow_dispatch works once this file lands on the default branch (post
+# merge). Until then the pull_request trigger — scoped to the E2E files
+# themselves — runs it from the PR branch, so it only costs runner time when
+# the flows or this workflow actually change.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'native/.maestro/**'
+      - '.github/workflows/e2e-smoke.yml'
 
 jobs:
   e2e:
