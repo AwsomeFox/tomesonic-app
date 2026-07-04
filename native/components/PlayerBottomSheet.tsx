@@ -136,7 +136,7 @@ export default function PlayerBottomSheet() {
     return unsubscribe;
   }, []);
 
-  const bottomOffset = onTabScreen ? 64 + insets.bottom : insets.bottom;
+  const bottomOffset = onTabScreen ? 64 + insets.bottom : 0;
 
   // Animate bottom offset transitions (sliding tab bar offset)
   const bottomOffsetVal = useSharedValue(bottomOffset);

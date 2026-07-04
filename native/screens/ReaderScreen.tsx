@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Pressable, Linking, ActivityIndicator, Platform } from "react-native";
+import { View, Text, Pressable, Linking, ActivityIndicator, Modal, FlatList, ScrollView } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { storageHelper, storage } from "../utils/storage";
@@ -30,7 +30,17 @@ const FOLIATE_CDN = "https://cdn.jsdelivr.net/npm/foliate-js@1.0.1";
 // so no CORS/auth request happens in the WebView. Themed to the app surface,
 // paginated, with swipe + tap-to-turn gestures and animated page transitions;
 // progress is reported back to RN via postMessage.
-function ebookHtml(base64: string, bg: string, fg: string, accent: string, startCfi: string, mimeHint: string): string {
+function ebookHtml(
+  base64: string,
+  bg: string,
+  fg: string,
+  accent: string,
+  startCfi: string,
+  mimeHint: string,
+  fontSize: number,
+  fontFamily: string,
+  lineHeight: number
+): string {
   // Compute the filename extension for foliate-js format detection
   const ext = mimeHint === "application/epub+zip" ? ".epub" : mimeHint === "application/x-mobipocket-ebook" ? ".mobi" : ".azw3";
   return `<!DOCTYPE html><html><head>
@@ -43,12 +53,12 @@ function ebookHtml(base64: string, bg: string, fg: string, accent: string, start
 </style>
 <style id="reader-margins">
   foliate-view::part(head) {
-    height: 20px !important;
-    min-height: 20px !important;
+    height: 16px !important;
+    min-height: 16px !important;
   }
   foliate-view::part(foot) {
-    height: 40px !important;
-    min-height: 40px !important;
+    height: 16px !important;
+    min-height: 16px !important;
   }
 </style>
 </head><body>
@@ -79,13 +89,16 @@ function ebookHtml(base64: string, bg: string, fg: string, accent: string, start
       document.body.append(view);
 
       // Apply reading styles — theme colors and typography
+      var fontValue = "${fontFamily}" === "serif" ? "Georgia, serif" : "system-ui, sans-serif";
       var readerCSS = \`
         @namespace epub "http://www.idpf.org/2007/ops";
         html { color-scheme: light dark; }
-        body { background: \${bg} !important; color: \${fg} !important; }
-        a:link, a:visited { color: \${accent}; }
-        p, li, blockquote, dd {
-          line-height: 1.5;
+        body {
+          background: \${bg} !important;
+          color: \${fg} !important;
+          font-size: ${fontSize}% !important;
+          font-family: \${fontValue} !important;
+          line-height: ${lineHeight} !important;
           text-align: start;
           -webkit-hyphens: auto;
           hyphens: auto;
@@ -106,6 +119,8 @@ function ebookHtml(base64: string, bg: string, fg: string, accent: string, start
             cfi: detail.cfi || '',
             fraction: detail.fraction || 0,
             section: detail.section || 0,
+            page: (view.renderer.page || 0) + 1,
+            pages: view.renderer.pages || 1,
             tocItem: detail.tocItem ? { label: detail.tocItem.label || '' } : null,
           });
         }
@@ -113,6 +128,12 @@ function ebookHtml(base64: string, bg: string, fg: string, accent: string, start
 
       await view.open(file);
       document.getElementById('msg').style.display = 'none';
+
+      // Send TOC back to React Native
+      post({
+        type: 'toc',
+        toc: view.book.toc || []
+      });
 
       // Apply styles after opening
       view.renderer.setStyles?.(readerCSS);
@@ -126,6 +147,8 @@ function ebookHtml(base64: string, bg: string, fg: string, accent: string, start
       // Expose navigation functions for RN injection and gesture handling
       window.goNext = () => { try { view.goRight(); } catch(e) {} };
       window.goPrev = () => { try { view.goLeft(); } catch(e) {} };
+      window.goToHref = (href) => { try { view.goTo(href); } catch(e) {} };
+      window.setReaderStyles = (css) => { try { view.renderer.setStyles(css); } catch(e) {} };
 
       // Touch gestures on the outer container — swipe and tap zones
       var sx = 0, sy = 0, st = 0;
@@ -189,9 +212,10 @@ export default function ReaderScreen({ route, navigation }: any) {
   const { itemId, ebookFormat, title } = route.params || {};
   const [pdfError, setPdfError] = useState(false);
 
-  // Reserve space at the bottom so the reader never sits under the mini player
-  // (which floats above the system nav bar), and always clear the nav bar.
-  const bottomReserve = insets.bottom + (hasSession ? MINIPLAYER_HEIGHT : 0);
+  // Bottom reserve spacing matches exactly what the floating mini-player consumes.
+  // When no session exists, the mini-player slides completely down (height = 0),
+  // so we fall back to standard bottom safe inset for spacing.
+  const bottomReserve = hasSession ? MINIPLAYER_HEIGHT : insets.bottom;
 
   const serverConfig = storageHelper.getServerConfig();
   const serverAddress = serverConfig?.address?.replace(/\/$/, "") || "";
@@ -204,20 +228,64 @@ export default function ReaderScreen({ route, navigation }: any) {
   const isFoliateFormat = ["epub", "mobi", "azw3", "azw", "kf8"].includes(format);
   const isShareOnly = !isPdf && !isFoliateFormat;
 
-  // --- Ebook state (EPUB / MOBI / AZW3) ---
+  // --- Ebook settings & state (EPUB / MOBI / AZW3) ---
   const [ebookFileUri, setEbookFileUri] = useState<string | null>(null);
   const [ebookStatus, setEbookStatus] = useState<"idle" | "loading" | "ready" | "error" | "toobig">("idle");
   const webRef = useRef<any>(null);
   const progressKey = `ebookCfi_${itemId}`;
 
+  // Style Settings States
+  const [fontSize, setFontSize] = useState(() => storage.getNumber("reader_font_size") || 100);
+  const [fontFamily, setFontFamily] = useState<"serif" | "sans-serif">(() => (storage.getString("reader_font_family") as any) || "serif");
+  const [lineHeight, setLineHeight] = useState(() => storage.getNumber("reader_line_height") || 1.5);
+
+  // TOC and Progress Info States
+  const [toc, setToc] = useState<any[]>([]);
+  const [showToc, setShowToc] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [pageProgress, setPageProgress] = useState<{
+    page: number;
+    pages: number;
+    fraction: number;
+    tocItem: { label: string } | null;
+  } | null>(null);
+
   const bg = colors.surface;
   const fg = colors.onSurface;
   const accent = colors.primary;
 
+  // Dynamically push styles to the reader WebView when text settings change
+  useEffect(() => {
+    storage.set("reader_font_size", fontSize);
+    storage.set("reader_font_family", fontFamily);
+    storage.set("reader_line_height", lineHeight);
+
+    if (ebookStatus === "ready" && webRef.current) {
+      const fontValue = fontFamily === "serif" ? "Georgia, serif" : "system-ui, sans-serif";
+      const css = `
+        @namespace epub "http://www.idpf.org/2007/ops";
+        html { color-scheme: light dark; }
+        body {
+          background: ${bg} !important;
+          color: ${fg} !important;
+          font-size: ${fontSize}% !important;
+          font-family: ${fontValue} !important;
+          line-height: ${lineHeight} !important;
+          text-align: start;
+          -webkit-hyphens: auto;
+          hyphens: auto;
+        }
+        pre { white-space: pre-wrap !important; }
+      `;
+      // Clean script to inject
+      const cleanCSS = css.replace(/`/g, "\\`").replace(/\n/g, "");
+      webRef.current.injectJavaScript(`window.setReaderStyles && window.setReaderStyles(\`${cleanCSS}\`);true;`);
+    }
+  }, [fontSize, fontFamily, lineHeight, ebookStatus, bg, fg, accent]);
+
+  // Load ebook contents and generate the HTML wrapper
   useEffect(() => {
     if (!isFoliateFormat || !WebView || !ebookUri) return;
-    // Reset synchronously so a previous book's rendered doc can't linger while
-    // (or after, on failure) the new one loads.
     setEbookFileUri(null);
     setEbookStatus("loading");
     let cancelled = false;
@@ -237,17 +305,11 @@ export default function ReaderScreen({ route, navigation }: any) {
         const base64 = await FileSystem.readAsStringAsync(dl.uri, {
           encoding: FileSystem.EncodingType.Base64,
         });
-        // The bytes are inlined into the WebView now — drop the cache file so
-        // the cache dir doesn't grow by one book per read.
         FileSystem.deleteAsync(dl.uri, { idempotent: true }).catch(() => {});
         if (cancelled) return;
         const savedCfi = storage.getString(progressKey) || "";
         const mime = getMimeForFormat(format);
-        const htmlContent = ebookHtml(base64, bg, fg, accent, savedCfi, mime);
-        // Write to a temp HTML file so the WebView loads from a real file URI.
-        // This is required because foliate-js uses ES module import() with
-        // relative paths — inline HTML (loadDataWithBaseURL) doesn't resolve
-        // ES module specifiers correctly on Android WebView.
+        const htmlContent = ebookHtml(base64, bg, fg, accent, savedCfi, mime, fontSize, fontFamily, lineHeight);
         const htmlPath = `${FileSystem.cacheDirectory}reader_${itemId}.html`;
         await FileSystem.writeAsStringAsync(htmlPath, htmlContent, {
           encoding: FileSystem.EncodingType.UTF8,
@@ -266,8 +328,16 @@ export default function ReaderScreen({ route, navigation }: any) {
   const onWebMessage = useCallback((event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
-      if (data.type === "location" && data.cfi) {
-        storage.set(progressKey, data.cfi);
+      if (data.type === "location") {
+        if (data.cfi) storage.set(progressKey, data.cfi);
+        setPageProgress({
+          page: data.page || 1,
+          pages: data.pages || 1,
+          fraction: data.fraction || 0,
+          tocItem: data.tocItem || null,
+        });
+      } else if (data.type === "toc") {
+        setToc(data.toc || []);
       } else if (data.type === "error") {
         setEbookStatus("error");
       }
@@ -276,7 +346,6 @@ export default function ReaderScreen({ route, navigation }: any) {
 
   const openExternally = async () => {
     try {
-      // Download then hand off to a system app that can read this format.
       if (Sharing && (await Sharing.isAvailableAsync())) {
         const localPath = `${FileSystem.cacheDirectory}book_${itemId}.${format || "bin"}`;
         const dl = await FileSystem.downloadAsync(ebookUri, localPath, {
@@ -289,6 +358,13 @@ export default function ReaderScreen({ route, navigation }: any) {
       console.warn("[Reader] share failed", e);
     }
     if (ebookUri) Linking.openURL(ebookUri).catch(() => {});
+  };
+
+  const selectTocItem = (href: string) => {
+    if (webRef.current) {
+      webRef.current.injectJavaScript(`window.goToHref && window.goToHref("${href}");true;`);
+      setShowToc(false);
+    }
   };
 
   const canRenderPdf = Pdf !== null && isPdf && !pdfError && !!ebookUri;
@@ -309,20 +385,20 @@ export default function ReaderScreen({ route, navigation }: any) {
         {title || "Reader"}
       </Text>
       {isFoliateFormat && canRenderEbook ? (
-        <View style={{ flexDirection: "row" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
           <Pressable
-            onPress={() => webRef.current?.injectJavaScript("window.goPrev&&window.goPrev();true;")}
-            style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}
+            onPress={() => setShowToc(true)}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
             hitSlop={8}
           >
-            <Icon name="chevron-left" size={26} color={colors.onSurface} />
+            <Icon name="list" size={24} color={colors.onSurface} />
           </Pressable>
           <Pressable
-            onPress={() => webRef.current?.injectJavaScript("window.goNext&&window.goNext();true;")}
-            style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}
+            onPress={() => setShowSettings(true)}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
             hitSlop={8}
           >
-            <Icon name="chevron-right" size={26} color={colors.onSurface} />
+            <Icon name="settings" size={24} color={colors.onSurface} />
           </Pressable>
         </View>
       ) : null}
@@ -358,6 +434,36 @@ export default function ReaderScreen({ route, navigation }: any) {
       ) : null}
     </View>
   );
+
+  // Recursive rendering helper for TOC hierarchical lists (subitems)
+  const renderTocItem = ({ item }: { item: any }) => {
+    return (
+      <View style={{ marginLeft: 8 }}>
+        <Pressable
+          onPress={() => selectTocItem(item.href)}
+          style={{
+            paddingVertical: 14,
+            paddingHorizontal: 16,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.outlineVariant,
+          }}
+        >
+          <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "500" }}>
+            {item.label || "Untitled Section"}
+          </Text>
+        </Pressable>
+        {item.subitems && item.subitems.length > 0 && (
+          <View style={{ paddingLeft: 12, borderLeftWidth: 1, borderLeftColor: colors.outlineVariant }}>
+            {item.subitems.map((sub: any, idx: number) => (
+              <View key={idx}>
+                {renderTocItem({ item: sub })}
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+    );
+  };
 
   let body: React.ReactNode;
   if (canRenderPdf) {
@@ -410,8 +516,195 @@ export default function ReaderScreen({ route, navigation }: any) {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       {Header}
       <View style={{ flex: 1 }}>{body}</View>
-      {/* Keep the page above the mini player + system nav bar, plus 24px extra buffer. */}
-      <View style={{ height: bottomReserve + 24, backgroundColor: colors.surface }} />
+
+      {/* Footer Progress Indicators */}
+      {isFoliateFormat && canRenderEbook && pageProgress && (
+        <View
+          style={{
+            alignItems: "center",
+            justifyContent: "center",
+            paddingVertical: 10,
+            paddingHorizontal: 24,
+            backgroundColor: colors.surface,
+            borderTopWidth: 1,
+            borderTopColor: colors.outlineVariant,
+          }}
+        >
+          {pageProgress.tocItem?.label ? (
+            <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
+              {pageProgress.tocItem.label}
+            </Text>
+          ) : null}
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
+            Page {pageProgress.page} of {pageProgress.pages} ({Math.round(pageProgress.fraction * 100)}%)
+          </Text>
+        </View>
+      )}
+
+      {/* Spacer to clear bottom miniplayer or safe navigation bar */}
+      <View style={{ height: bottomReserve, backgroundColor: colors.surface }} />
+
+      {/* Table of Contents Slide-up Modal */}
+      <Modal
+        visible={showToc}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowToc(false)}
+      >
+        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
+          <View
+            style={{
+              backgroundColor: colors.surfaceContainer,
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              maxHeight: "80%",
+              paddingBottom: insets.bottom + 16,
+            }}
+          >
+            {/* Modal Header */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: 16,
+                borderBottomWidth: 1,
+                borderBottomColor: colors.outlineVariant,
+              }}
+            >
+              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Table of Contents</Text>
+              <Pressable
+                onPress={() => setShowToc(false)}
+                style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }}
+              >
+                <Icon name="close" size={24} color={colors.onSurface} />
+              </Pressable>
+            </View>
+
+            {/* List */}
+            {toc.length > 0 ? (
+              <FlatList
+                data={toc}
+                renderItem={renderTocItem}
+                keyExtractor={(_, index) => String(index)}
+                contentContainerStyle={{ paddingVertical: 8 }}
+              />
+            ) : (
+              <View style={{ padding: 48, alignItems: "center" }}>
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 15 }}>No table of contents available.</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Text Settings Slide-up Modal */}
+      <Modal
+        visible={showSettings}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowSettings(false)}
+      >
+        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
+          <View
+            style={{
+              backgroundColor: colors.surfaceContainer,
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              padding: 20,
+              paddingBottom: insets.bottom + 20,
+            }}
+          >
+            {/* Modal Header */}
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Style Configurations</Text>
+              <Pressable
+                onPress={() => setShowSettings(false)}
+                style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }}
+              >
+                <Icon name="close" size={24} color={colors.onSurface} />
+              </Pressable>
+            </View>
+
+            {/* Text Size Control */}
+            <View style={{ marginBottom: 24 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Text Size</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Pressable
+                  onPress={() => setFontSize(prev => Math.max(80, prev - 10))}
+                  style={{
+                    width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
+                    alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>-</Text>
+                </Pressable>
+                <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>{fontSize}%</Text>
+                <Pressable
+                  onPress={() => setFontSize(prev => Math.min(180, prev + 10))}
+                  style={{
+                    width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
+                    alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>+</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Font Family Control */}
+            <View style={{ marginBottom: 24 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Font Family</Text>
+              <View style={{ flexDirection: "row", columnGap: 12 }}>
+                <Pressable
+                  onPress={() => setFontFamily("serif")}
+                  style={{
+                    flex: 1, height: 48, borderRadius: 12,
+                    backgroundColor: fontFamily === "serif" ? colors.primary : colors.secondaryContainer,
+                    alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: fontFamily === "serif" ? colors.onPrimary : colors.onSecondaryContainer, fontSize: 15, fontWeight: "600" }}>Serif</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setFontFamily("sans-serif")}
+                  style={{
+                    flex: 1, height: 48, borderRadius: 12,
+                    backgroundColor: fontFamily === "sans-serif" ? colors.primary : colors.secondaryContainer,
+                    alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: fontFamily === "sans-serif" ? colors.onPrimary : colors.onSecondaryContainer, fontSize: 15, fontWeight: "600" }}>Sans-Serif</Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Line Spacing Control */}
+            <View style={{ marginBottom: 12 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Line Spacing</Text>
+              <View style={{ flexDirection: "row", columnGap: 12 }}>
+                {[
+                  { label: "Narrow", val: 1.2 },
+                  { label: "Medium", val: 1.5 },
+                  { label: "Wide", val: 1.8 },
+                ].map(item => (
+                  <Pressable
+                    key={item.label}
+                    onPress={() => setLineHeight(item.val)}
+                    style={{
+                      flex: 1, height: 48, borderRadius: 12,
+                      backgroundColor: lineHeight === item.val ? colors.primary : colors.secondaryContainer,
+                      alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ color: lineHeight === item.val ? colors.onPrimary : colors.onSecondaryContainer, fontSize: 15, fontWeight: "600" }}>{item.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
