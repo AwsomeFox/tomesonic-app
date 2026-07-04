@@ -75,7 +75,7 @@ function ebookHtml(base64: string, bg: string, fg: string, accent: string, start
     try {
       var file = base64ToFile("${base64}", "book${ext}");
       var view = document.createElement('foliate-view');
-      view.setAttribute('margin', '20px');
+      view.setAttribute('margin', '16px');
       document.body.append(view);
 
       // Apply reading styles — theme colors and typography
@@ -207,7 +207,6 @@ export default function ReaderScreen({ route, navigation }: any) {
   // --- Ebook state (EPUB / MOBI / AZW3) ---
   const [ebookFileUri, setEbookFileUri] = useState<string | null>(null);
   const [ebookStatus, setEbookStatus] = useState<"idle" | "loading" | "ready" | "error" | "toobig">("idle");
-  const [webViewReady, setWebViewReady] = useState(false);
   const webRef = useRef<any>(null);
   const progressKey = `ebookCfi_${itemId}`;
 
@@ -220,7 +219,6 @@ export default function ReaderScreen({ route, navigation }: any) {
     // Reset synchronously so a previous book's rendered doc can't linger while
     // (or after, on failure) the new one loads.
     setEbookFileUri(null);
-    setWebViewReady(false);
     setEbookStatus("loading");
     let cancelled = false;
     (async () => {
@@ -265,28 +263,11 @@ export default function ReaderScreen({ route, navigation }: any) {
     return () => { cancelled = true; };
   }, [isFoliateFormat, ebookUri]);
 
-  // Inject exact margins to clear bottom miniplayer and safe area beautifully inside the WebView
-  useEffect(() => {
-    if (ebookStatus === "ready" && webViewReady && webRef.current) {
-      const injectJS = `
-        var style = document.getElementById('reader-margins');
-        if (style) {
-          style.innerHTML = 'foliate-view::part(head) { height: 20px !important; min-height: 20px !important; }' +
-            'foliate-view::part(foot) { height: ${bottomReserve + 20}px !important; min-height: ${bottomReserve + 20}px !important; }';
-        }
-        true;
-      `;
-      webRef.current.injectJavaScript(injectJS);
-    }
-  }, [bottomReserve, ebookStatus, webViewReady]);
-
   const onWebMessage = useCallback((event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.type === "location" && data.cfi) {
         storage.set(progressKey, data.cfi);
-      } else if (data.type === "ready") {
-        setWebViewReady(true);
       } else if (data.type === "error") {
         setEbookStatus("error");
       }
@@ -429,6 +410,8 @@ export default function ReaderScreen({ route, navigation }: any) {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       {Header}
       <View style={{ flex: 1 }}>{body}</View>
+      {/* Keep the page above the mini player + system nav bar, plus 24px extra buffer. */}
+      <View style={{ height: bottomReserve + 24, backgroundColor: colors.surface }} />
     </SafeAreaView>
   );
 }
