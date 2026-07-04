@@ -113,6 +113,59 @@ describe("TopAppBar — default (tab) mode", () => {
     addSpy.mockRestore();
   });
 
+  // REGRESSION: BackHandler is process-global and tab screens stay mounted
+  // under pushed screens. The Home bar's handler used to fire underneath
+  // AuthorDetail etc. — eating the first back press (closing the invisible
+  // search, blocking the pop) so back "did nothing" once, then skipped past
+  // the search results. An UNFOCUSED bar must decline the event.
+  it("hardware back is DECLINED (and search kept) while the bar's screen is not focused", async () => {
+    const handlers: Array<() => boolean> = [];
+    const addSpy = jest
+      .spyOn(BackHandler, "addEventListener")
+      .mockImplementation((_event: any, handler: any) => {
+        handlers.push(handler);
+        return { remove: jest.fn() } as any;
+      });
+
+    const navigation = makeNav();
+    navigation.isFocused = jest.fn(() => false); // a pushed screen is on top
+    useUiStore.setState({ isSearchActive: true, searchQuery: "hob" } as any);
+    await render(<TopAppBar navigation={navigation} />);
+    expect(handlers.length).toBeGreaterThan(0);
+
+    let claimed = true;
+    await act(async () => {
+      claimed = handlers[handlers.length - 1]();
+    });
+    expect(claimed).toBe(false); // let React Navigation pop the pushed screen
+    expect(useUiStore.getState().isSearchActive).toBe(true); // results survive
+    expect(useUiStore.getState().searchQuery).toBe("hob");
+    addSpy.mockRestore();
+  });
+
+  it("hardware back closes the search when the bar's screen IS focused", async () => {
+    const handlers: Array<() => boolean> = [];
+    const addSpy = jest
+      .spyOn(BackHandler, "addEventListener")
+      .mockImplementation((_event: any, handler: any) => {
+        handlers.push(handler);
+        return { remove: jest.fn() } as any;
+      });
+
+    const navigation = makeNav();
+    navigation.isFocused = jest.fn(() => true);
+    useUiStore.setState({ isSearchActive: true, searchQuery: "hob" } as any);
+    await render(<TopAppBar navigation={navigation} />);
+
+    let claimed = false;
+    await act(async () => {
+      claimed = handlers[handlers.length - 1]();
+    });
+    expect(claimed).toBe(true);
+    expect(useUiStore.getState().isSearchActive).toBe(false);
+    addSpy.mockRestore();
+  });
+
   it("account menu navigates to Account", async () => {
     const navigation = makeNav();
     await render(<TopAppBar navigation={navigation} />);
