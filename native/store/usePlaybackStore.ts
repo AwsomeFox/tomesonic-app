@@ -3,7 +3,7 @@ import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react
 import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
-import { syncProgress, closeSession } from "../utils/progressSync";
+import { syncProgress, closeSession, queueProgressPatch } from "../utils/progressSync";
 import { writeWidgetState } from "../utils/autoCreds";
 
 // Records when playback was paused so play() can apply the "auto rewind" nudge
@@ -88,6 +88,10 @@ export async function applyJumpOptions() {
 // original app), instead of the raw audio file name. No-op when the book has
 // no chapters. Tracks the last-applied chapter to avoid redundant native calls.
 let _lastMetaChapter = -2;
+// Local queue index whose metadata applyNowPlayingChapter last overrode — so a
+// cast disconnect can restore that item's true chapter title (while casting the
+// paused LOCAL item gets rewritten to whatever chapter the RECEIVER is in).
+let _metaAppliedIndex = -1;
 // Dedupe rapid duplicate startPlayback calls (Android Auto double-dispatch).
 let _lastStartKey = "";
 let _lastStartAt = 0;
@@ -106,9 +110,36 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     const meta: any = { title, artist: subtitle };
     if (session.coverUrl) meta.artwork = session.coverUrl;
     await TrackPlayer.updateMetadataForTrack(activeIndex, meta);
+    _metaAppliedIndex = activeIndex;
   } catch (e) {
     // Track not ready yet — the progress loop will retry on the next tick.
   }
+}
+
+// Undo the cast-time metadata override on the local queue: with a chapter
+// queue each item's intrinsic title IS its chapter, but while casting the
+// progress loop rewrites the paused active item to track the receiver's
+// chapter. Called by CastController on disconnect so the local notification
+// doesn't show a stale (wrong-chapter) title after handback.
+export async function restoreLocalNowPlayingMeta() {
+  const st = usePlaybackStore.getState();
+  _lastMetaChapter = -2; // single-track fallback: progress loop re-applies next tick
+  const idx = _metaAppliedIndex;
+  _metaAppliedIndex = -1;
+  if (idx < 0 || !st.chapterQueue) return;
+  const s = st.currentSession;
+  const ch = st.chapters?.[idx];
+  if (!s || !ch) return;
+  try {
+    const book = s.displayTitle || "Audiobook";
+    const author = s.displayAuthor || "";
+    const meta: any = {
+      title: ch.title || `Chapter ${idx + 1}`,
+      artist: [book, author].filter(Boolean).join(" • "),
+    };
+    if (s.coverUrl) meta.artwork = s.coverUrl;
+    await TrackPlayer.updateMetadataForTrack(idx, meta);
+  } catch {}
 }
 
 // Immediately persist the current session position to MMKV, bypassing the 5s
@@ -142,11 +173,20 @@ interface PlaybackState {
   isCasting: boolean;
   castClient: any | null;
   setCastState: (client: any | null) => void;
+  // Absolute-position seek handler registered by CastController. The raw cast
+  // client can only seek within the CURRENT queue item; this handler maps an
+  // absolute book position to the right track (reloading the queue when the
+  // target lies in a different file).
+  castSeekAbs: ((absSeconds: number) => Promise<void>) | null;
+  setCastSeekHandler: (fn: ((absSeconds: number) => Promise<void>) | null) => void;
 
   // Sleep timer
   sleepTimer: {
     endOfChapter: boolean;
     remaining: number; // seconds left, or seconds until end of chapter
+    // Chapter the end-of-chapter timer was armed in — lets the tick detect
+    // the boundary crossing even if a tick lands just past it.
+    chapterIdx?: number;
   } | null;
 
   // Actions
@@ -196,8 +236,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   setOnTabScreen: (isTab: boolean) => set({ onTabScreen: isTab }),
 
   setCastState: (client) => {
-    set({ castClient: client || null, isCasting: !!client });
+    // Dropping the client also drops the seek handler (it closes over it).
+    set({
+      castClient: client || null,
+      isCasting: !!client,
+      ...(client ? {} : { castSeekAbs: null }),
+    });
   },
+
+  castSeekAbs: null,
+  setCastSeekHandler: (fn) => set({ castSeekAbs: fn }),
 
   loadLastSession: async () => {
     const serverConfig = storageHelper.getServerConfig();
@@ -295,6 +343,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             if (chapterIndex !== get().currentChapterIndex) {
               set({ currentChapterIndex: chapterIndex });
             }
+            // The cast framework's own notification is suppressed (see
+            // plugins/withCastSingleNotification), so the app's normal media
+            // notification is the single control surface — keep its title
+            // tracking the RECEIVER's chapter ("Chapter" / "Book • Author").
+            // Works in both queue modes: the local player sits paused on the
+            // handoff item, whose metadata this rewrites in place
+            // (restoreLocalNowPlayingMeta undoes it on disconnect).
+            applyNowPlayingChapter(get().currentSession, chapters, chapterIndex);
           } else {
             const state = await TrackPlayer.getActiveTrack();
             if (!state) return;
@@ -406,6 +462,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
                   currentTime: absolutePosition,
                   timeListened: toSync,
                   duration: bookDuration,
+                  libraryItemId: currentSession.libraryItemId,
+                  episodeId: sessionEpisodeId || undefined,
                 }).catch(() => {});
               }
 
@@ -432,7 +490,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
                     progress: 1,
                     isFinished: true,
                   })
-                  .catch(() => {});
+                  .catch(() => {
+                    // Offline finish must still land once connectivity returns —
+                    // otherwise a book finished on a plane never gets marked.
+                    queueProgressPatch(libraryItemId, bookDuration, bookDuration, sessionEpisodeId, {
+                      isFinished: true,
+                    });
+                  });
                 useUserStore.setState({
                   mediaProgress: {
                     ...useUserStore.getState().mediaProgress,
@@ -602,6 +666,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       };
       const absoluteUrl = (url: string) => {
         if (!url) return url;
+        // Offline-fallback sessions carry on-device paths — pass them through
+        // instead of mangling them into https://server/data/user/0/... URLs.
+        if (url.startsWith("file://") || url.startsWith("content://")) return url;
+        if (url.startsWith("/data/") || url.startsWith("/storage/")) return `file://${url}`;
         const full = url.startsWith("http") ? url : `${serverAddress}${url}`;
         return withToken(full);
       };
@@ -753,8 +821,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       writeWidgetState({ title: bookTitle, author: bookAuthor });
 
       if (playWhenReady) {
-        await TrackPlayer.play();
-        set({ isPlaying: true, isPlayerExpanded: true });
+        if (get().isCasting) {
+          // Already casting: don't blast audio from the phone — leave the
+          // local player paused and let CastController (keyed on the new
+          // currentSession) load the book onto the receiver with autoplay.
+          set({ isPlaying: true, isPlayerExpanded: true });
+        } else {
+          await TrackPlayer.play();
+          set({ isPlaying: true, isPlayerExpanded: true });
+        }
       }
     } catch (err) {
       console.error("[PlaybackStore] Failed to prepare playback session:", err);
@@ -826,6 +901,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         currentTime: get().position,
         timeListened: toSync,
         duration: get().duration,
+        libraryItemId: session.libraryItemId,
+        episodeId: session.episodeId || undefined,
       }).catch(() => {});
     }
   },
@@ -838,11 +915,26 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const dur = get().duration;
     value = Math.max(0, dur > 0 ? Math.min(value, dur) : value);
     if (isCasting && castClient) {
-      try { await castClient.seek({ position: value }); } catch (e) { console.warn("[Cast] seek", e); }
+      const castSeekAbs = get().castSeekAbs;
+      // Optimistic: move the scrubber immediately — a cross-track cast seek
+      // reloads the receiver queue, which can take seconds. CastController's
+      // settle guard keeps stale receiver mirrors from fighting this.
       set({ position: value });
       // Persist immediately — a kill inside the 5s save throttle right after a
       // seek would otherwise resume at the pre-seek position.
       saveSessionPositionNow(value);
+      try {
+        if (castSeekAbs) {
+          // Track-aware absolute seek: maps into the right queue item and
+          // reloads the queue when crossing a file boundary (multi-file
+          // books) — the raw client.seek below is within-current-item only.
+          await castSeekAbs(value);
+        } else {
+          await castClient.seek({ position: value });
+        }
+      } catch (e) {
+        console.warn("[Cast] seek", e);
+      }
       return;
     }
     if (!get().isInitialized) return;
@@ -884,6 +976,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await TrackPlayer.skip(index);
       await TrackPlayer.seekTo(0);
       set({ currentChapterIndex: index, position: ch.start || 0 });
+      // Same immediate persist as seek() — a kill right after a chapter jump
+      // must not resume at the pre-jump position.
+      saveSessionPositionNow(ch.start || 0);
       return;
     }
     if (isCasting && castClient) {
@@ -966,7 +1061,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     // Make sure we start at full volume (a previous fade may have lowered it).
     if (!get().isCasting) TrackPlayer.setVolume(1).catch(() => {});
-    set({ sleepTimer: { endOfChapter, remaining: Math.max(0, Math.round(seconds)) } });
+    // End-of-chapter timers compute their own remaining from live position —
+    // callers pass 0, which used to display as "0:00" until the first 1s tick.
+    let initialRemaining = Math.max(0, Math.round(seconds));
+    let armedChapterIdx: number | undefined;
+    if (endOfChapter) {
+      const { chapters, currentChapterIndex, position } = get();
+      const ch = chapters?.[currentChapterIndex];
+      initialRemaining = ch ? Math.max(0, Math.round((ch.end || 0) - position)) : 0;
+      armedChapterIdx = currentChapterIndex;
+    }
+    set({ sleepTimer: { endOfChapter, remaining: initialRemaining, chapterIdx: armedChapterIdx } });
 
     sleepTimerInterval = setInterval(() => {
       const timer = get().sleepTimer;
@@ -979,13 +1084,33 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
 
       let remaining: number;
+      let armedIdx = timer.chapterIdx;
       if (timer.endOfChapter) {
         // Recompute against live position so it follows seeks.
         const { chapters, currentChapterIndex, position } = get();
-        const ch = chapters?.[currentChapterIndex];
-        remaining = ch ? Math.max(0, Math.round((ch.end || 0) - position)) : 0;
+        const armed = armedIdx ?? currentChapterIndex;
+        if (currentChapterIndex !== -1 && currentChapterIndex > armed) {
+          // Crossed the boundary between ticks (both loops run at 1s, so the
+          // crossing itself can land between them) — fire now instead of
+          // silently re-arming against the NEXT chapter's end.
+          remaining = 0;
+        } else if (currentChapterIndex !== -1 && currentChapterIndex < armed) {
+          // User seeked BACK into an earlier chapter — re-arm there.
+          const ch = chapters?.[currentChapterIndex];
+          remaining = ch ? Math.max(0, Math.round((ch.end || 0) - position)) : timer.remaining;
+          armedIdx = currentChapterIndex;
+        } else {
+          const ch = chapters?.[currentChapterIndex];
+          // Chapter unknown this tick (gap / boundary transient / chapterless
+          // book) — hold without firing; `remaining` may legitimately be 0
+          // here and must not trip the pause below.
+          if (!ch) return;
+          remaining = Math.max(0, Math.round((ch.end || 0) - position));
+        }
       } else {
-        remaining = timer.remaining - 1;
+        // Wall-clock countdown only while actually listening — pausing for 20
+        // minutes must not eat a 30-minute timer.
+        remaining = get().isPlaying ? timer.remaining - 1 : timer.remaining;
       }
 
       // Gently fade the volume down over the final SLEEP_FADE_SECONDS so playback
@@ -1006,7 +1131,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         if (!get().isCasting) TrackPlayer.setVolume(1).catch(() => {});
         return;
       }
-      set({ sleepTimer: { endOfChapter: timer.endOfChapter, remaining } });
+      set({ sleepTimer: { endOfChapter: timer.endOfChapter, remaining, chapterIdx: armedIdx } });
     }, 1000);
   },
 
@@ -1034,10 +1159,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           currentTime: get().position,
           timeListened: toSync,
           duration: get().duration,
+          libraryItemId: session.libraryItemId,
+          episodeId: session.episodeId || undefined,
         });
       } catch {
         // closeSession already queues on failure; never block teardown.
       }
+    }
+
+    // If casting, stop the receiver's playback too — otherwise dismissing
+    // playback on the phone leaves the TV playing with no session syncing.
+    const { isCasting, castClient } = get();
+    if (isCasting && castClient) {
+      try { await castClient.stop(); } catch {}
     }
 
     await TrackPlayer.reset();
@@ -1062,6 +1196,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       chapterQueue: false,
       currentChapterIndex: -1,
       sleepTimer: null,
+      // The cast seek handler closes over the CLOSED book's track offsets —
+      // drop it; CastController re-registers when the next session loads.
+      castSeekAbs: null,
     });
   },
 }));

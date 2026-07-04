@@ -45,10 +45,12 @@ function ErrorFallback({ error, onReset }: ErrorFallbackProps) {
           textAlign: "center",
         }}
       >
-        {error.message}
+        {error.message || "An unexpected error occurred."}
       </Text>
       <Pressable
         onPress={onReset}
+        accessibilityRole="button"
+        accessibilityLabel="Reload the app"
         style={{
           marginTop: 24,
           backgroundColor: colors.primary,
@@ -59,6 +61,16 @@ function ErrorFallback({ error, onReset }: ErrorFallbackProps) {
       >
         <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Reload</Text>
       </Pressable>
+      <Text
+        style={{
+          color: colors.onSurfaceVariant,
+          fontSize: 12,
+          marginTop: 16,
+          textAlign: "center",
+        }}
+      >
+        If this keeps happening, close and reopen the app.
+      </Text>
     </View>
   );
 }

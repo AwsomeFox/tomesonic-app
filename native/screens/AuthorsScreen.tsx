@@ -4,6 +4,7 @@ import {
   Text,
   FlatList,
   Pressable,
+  RefreshControl,
   useWindowDimensions,
 } from "react-native";
 import { Image } from "expo-image";
@@ -19,11 +20,11 @@ import TopAppBar from "../components/TopAppBar";
 import { GridSkeleton } from "../components/Skeleton";
 import Icon from "../components/Icon";
 import { useUiStore } from "../store/useUiStore";
+import { usePlaybackStore } from "../store/usePlaybackStore";
 import SearchContent from "../components/SearchContent";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const NUM_COLUMNS = 2;
 const GRID_PADDING = 16;
 const CARD_GAP = 16;
 
@@ -63,17 +64,23 @@ export default function AuthorsScreen({ navigation }: any) {
   const { width } = useWindowDimensions();
   const { currentLibraryId } = useLibraryStore();
   const { serverConnectionConfig } = useUserStore();
+  const hasSession = usePlaybackStore((s) => s.currentSession !== null);
 
   const [authors, setAuthors] = useState<Author[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("name");
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
 
-  // Card is a square: available width minus outer padding & inter-card gap, split 2-up.
+  // 2 columns on phones (unchanged); more on tablet widths so the square cards
+  // don't blow up to fill half the screen each.
+  const numColumns = Math.max(2, Math.floor((width - GRID_PADDING * 2) / 220));
+  // Card is a square: available width minus outer padding & inter-card gaps.
   const cardSize = Math.floor(
-    (width - GRID_PADDING * 2 - CARD_GAP) / NUM_COLUMNS
+    (width - GRID_PADDING * 2 - CARD_GAP * (numColumns - 1)) / numColumns
   );
 
   const getAuthorImageUrl = (author: Author) => {
@@ -89,6 +96,7 @@ export default function AuthorsScreen({ navigation }: any) {
   const fetchAuthors = useCallback(async () => {
     if (!currentLibraryId) return;
     setLoading(true);
+    setLoadError(false);
     try {
       const response = await api.get(
         `/api/libraries/${currentLibraryId}/authors`
@@ -98,6 +106,7 @@ export default function AuthorsScreen({ navigation }: any) {
       setAuthors(results);
     } catch (err) {
       console.error("[AuthorsScreen] Failed to fetch authors:", err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -106,6 +115,15 @@ export default function AuthorsScreen({ navigation }: any) {
   useEffect(() => {
     fetchAuthors();
   }, [fetchAuthors]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchAuthors();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const sortedAuthors = useMemo(() => {
     const list = [...authors];
@@ -147,6 +165,9 @@ export default function AuthorsScreen({ navigation }: any) {
             authorName: item.name,
           })
         }
+        android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
+        accessibilityRole="button"
+        accessibilityLabel={`Author: ${item.name}, ${numBooks} ${numBooks === 1 ? "book" : "books"}`}
         style={{
           width: cardSize,
           height: cardSize,
@@ -270,7 +291,7 @@ export default function AuthorsScreen({ navigation }: any) {
         style={{ flex: 1, backgroundColor: colors.surface }}
         edges={["top", "left", "right"]}
       >
-        <TopAppBar navigation={navigation} showSort />
+        <TopAppBar navigation={navigation} />
         <SearchContent navigation={navigation} />
       </SafeAreaView>
     );
@@ -282,8 +303,9 @@ export default function AuthorsScreen({ navigation }: any) {
         style={{ flex: 1, backgroundColor: colors.surface }}
         edges={["top", "left", "right"]}
       >
-        <TopAppBar navigation={navigation} showSort />
-        <GridSkeleton columns={NUM_COLUMNS} count={NUM_COLUMNS * 4} aspectRatio={0.78} />
+        <TopAppBar navigation={navigation} />
+        {/* Square tiles to match the real author cards (no snap on arrival). */}
+        <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
       </SafeAreaView>
     );
   }
@@ -293,7 +315,9 @@ export default function AuthorsScreen({ navigation }: any) {
       style={{ flex: 1, backgroundColor: colors.surface }}
       edges={["top", "left", "right"]}
     >
-      <TopAppBar navigation={navigation} showSort />
+      {/* No showSort here: sorting lives in the chip row below, so a top-bar
+          sort icon would be a dead control. */}
+      <TopAppBar navigation={navigation} />
 
       {/* Sort selector */}
       <View
@@ -308,10 +332,15 @@ export default function AuthorsScreen({ navigation }: any) {
           <Pressable
             key={opt.key}
             onPress={() => setSortKey(opt.key)}
+            android_ripple={{ color: colors.surfaceContainerHighest }}
+            accessibilityRole="button"
+            accessibilityState={{ selected: sortKey === opt.key }}
+            accessibilityLabel={`Sort by ${opt.label}`}
             style={{
               paddingVertical: 6,
               paddingHorizontal: 12,
               borderRadius: 16,
+              overflow: "hidden",
               marginRight: 8,
               backgroundColor:
                 sortKey === opt.key
@@ -335,7 +364,55 @@ export default function AuthorsScreen({ navigation }: any) {
         ))}
       </View>
 
-      {authors.length === 0 ? (
+      {loadError && authors.length === 0 ? (
+        <View
+          style={{
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 32,
+          }}
+        >
+          <Icon name="warning" size={48} color={colors.error} />
+          <Text
+            style={{
+              color: colors.onSurface,
+              fontSize: 17,
+              fontWeight: "600",
+              marginTop: 16,
+              marginBottom: 6,
+              textAlign: "center",
+            }}
+          >
+            Couldn't load authors
+          </Text>
+          <Text
+            style={{
+              color: colors.onSurfaceVariant,
+              fontSize: 14,
+              textAlign: "center",
+            }}
+          >
+            Check your connection to the server and try again.
+          </Text>
+          <Pressable
+            onPress={fetchAuthors}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading authors"
+            style={{
+              marginTop: 20,
+              paddingHorizontal: 24,
+              paddingVertical: 10,
+              borderRadius: 24,
+              overflow: "hidden",
+              backgroundColor: colors.primary,
+            }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : authors.length === 0 ? (
         <View
           style={{
             flex: 1,
@@ -368,17 +445,30 @@ export default function AuthorsScreen({ navigation }: any) {
         </View>
       ) : (
         <FlatList
+          key={`authors-grid-${numColumns}`}
           data={sortedAuthors}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
-          numColumns={NUM_COLUMNS}
-          columnWrapperStyle={{ justifyContent: "space-between" }}
+          numColumns={numColumns}
+          // gap (not space-between) so an incomplete last row packs left
+          // instead of stretching across the width.
+          columnWrapperStyle={{ gap: CARD_GAP }}
           contentContainerStyle={{
             paddingHorizontal: GRID_PADDING,
             paddingTop: 4,
-            paddingBottom: 32,
+            paddingBottom: hasSession ? 100 : 32,
           }}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={8}
+          windowSize={11}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surfaceContainerHigh}
+            />
+          }
         />
       )}
     </SafeAreaView>

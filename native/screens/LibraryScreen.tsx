@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
+import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
@@ -69,9 +70,17 @@ export default function LibraryScreen({ route, navigation }: any) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  // Only set when the FIRST page fails — a mid-pagination hiccup shouldn't
+  // blow away the list the user is already scrolling.
+  const [loadError, setLoadError] = useState(false);
   const [startingId, setStartingId] = useState<string | null>(null);
   const isFetchingRef = useRef(false);
   const fetchIdRef = useRef(0);
+  // Set when the server returns an empty page: with the hide-non-audiobooks
+  // client filter active, items.length can stay below `total` forever, which
+  // would otherwise make onEndReached refetch empty pages on every scroll-end.
+  const noMorePagesRef = useRef(false);
   const routeFilter = route.params?.filter;
 
   // Filter / sort state (raw query values matching the original app). Seeded
@@ -100,13 +109,19 @@ export default function LibraryScreen({ route, navigation }: any) {
   };
 
   const fetchItems = useCallback(
-    async (pageNum: number, reset = false) => {
+    async (pageNum: number, reset = false, showSkeleton = true) => {
       if (!currentLibraryId) return;
       if (!reset && isFetchingRef.current) return;
 
       const currentFetchId = ++fetchIdRef.current;
       isFetchingRef.current = true;
-      if (reset) setInitialLoading(true);
+      if (reset) {
+        noMorePagesRef.current = false;
+        setLoadError(false);
+        // Pull-to-refresh passes showSkeleton=false so the visible list isn't
+        // replaced by the skeleton mid-gesture.
+        if (showSkeleton) setInitialLoading(true);
+      }
       setLoading(true);
 
       try {
@@ -127,7 +142,9 @@ export default function LibraryScreen({ route, navigation }: any) {
         if (currentFetchId !== fetchIdRef.current) return;
 
         const data = response.data || {};
-        let results: LibraryItem[] = data.results || [];
+        const rawResults: LibraryItem[] = data.results || [];
+        if (rawResults.length === 0 && !reset) noMorePagesRef.current = true;
+        let results: LibraryItem[] = rawResults;
         // "Hide non-audiobooks globally": drop items that have no audio (e.g.
         // ebook-only entries) when the setting is on.
         if (useUserStore.getState().settings?.hideNonAudiobooksGlobal) {
@@ -142,6 +159,7 @@ export default function LibraryScreen({ route, navigation }: any) {
       } catch (err) {
         if (currentFetchId === fetchIdRef.current) {
           console.error("[LibraryScreen] Failed to fetch items:", err);
+          if (pageNum === 0) setLoadError(true);
         }
       } finally {
         if (currentFetchId === fetchIdRef.current) {
@@ -162,8 +180,17 @@ export default function LibraryScreen({ route, navigation }: any) {
   }, [currentLibraryId, fetchItems]);
 
   const handleLoadMore = () => {
-    if (loading || items.length >= total) return;
+    if (loading || noMorePagesRef.current || items.length >= total) return;
     fetchItems(page + 1);
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchItems(0, true, false);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handlePlay = async (item: LibraryItem) => {
@@ -291,10 +318,14 @@ export default function LibraryScreen({ route, navigation }: any) {
               <Pressable
                 onPress={() => (isEbookOnly ? handleReadRow(item) : handlePlay(item))}
                 hitSlop={6}
+                android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), radius: 28 }}
+                accessibilityRole="button"
+                accessibilityLabel={`${isEbookOnly ? "Read" : "Play"} ${title}`}
                 style={{
                   width: 56,
                   height: 56,
                   borderRadius: 28,
+                  overflow: "hidden",
                   alignItems: "center",
                   justifyContent: "center",
                   elevation: 2,
@@ -364,6 +395,25 @@ export default function LibraryScreen({ route, navigation }: any) {
         <SearchContent navigation={navigation} />
       ) : initialLoading ? (
         <ListSkeleton rows={9} />
+      ) : loadError && items.length === 0 ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <Icon name="warning" size={48} color={colors.error} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
+            Couldn't load your library
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
+            Check your connection to the server and try again.
+          </Text>
+          <Pressable
+            onPress={() => fetchItems(0, true)}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading library"
+            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
       ) : items.length === 0 ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
           <Icon name="library" size={48} color={colors.onSurfaceVariant} />
@@ -371,8 +421,32 @@ export default function LibraryScreen({ route, navigation }: any) {
             No items found
           </Text>
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-            Your library is empty. Add some audiobooks to get started.
+            {filterBy && filterBy !== "all"
+              ? "Nothing in this library matches the current filter."
+              : "Your library is empty. Add some audiobooks to get started."}
           </Text>
+          {filterBy && filterBy !== "all" && !routeFilter ? (
+            <Pressable
+              onPress={() => {
+                setFilterBy("all");
+                updateUserSettings({ mobileFilterBy: "all" }).catch(() => {});
+              }}
+              android_ripple={{ color: colors.surfaceContainerHighest }}
+              accessibilityRole="button"
+              accessibilityLabel="Clear filter"
+              style={{
+                marginTop: 20,
+                paddingHorizontal: 24,
+                paddingVertical: 10,
+                borderRadius: 24,
+                overflow: "hidden",
+                borderWidth: 1,
+                borderColor: colors.outline,
+              }}
+            >
+              <Text style={{ color: colors.primary, fontSize: 15, fontWeight: "600" }}>Clear filter</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : (
         <FlatList
@@ -385,6 +459,16 @@ export default function LibraryScreen({ route, navigation }: any) {
           onEndReachedThreshold={3.0}
           ListFooterComponent={renderFooter}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={12}
+          windowSize={11}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surfaceContainerHigh}
+            />
+          }
         />
       )}
     </SafeAreaView>

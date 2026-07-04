@@ -145,13 +145,27 @@ export const useUserStore = create<UserState>((set, get) => ({
       const res = await api.get("/api/me");
       const list = res.data?.mediaProgress || [];
       const next = indexMediaProgress(list);
+      const prev = get().mediaProgress;
+      // FRESHEST-WINS per entry: local writers (player tick, reader, finish
+      // toggles) stamp `updatedAt`; the server stamps `lastUpdate`. When a
+      // local write is meaningfully newer than the server's own update (its
+      // sync is still queued/in-flight — e.g. offline reading), a wholesale
+      // replace would visually regress progress until the queue flushes. Keep
+      // the fresher local entry instead; once the queued write lands, the
+      // server's lastUpdate moves past it and the server copy wins again.
+      const merged: Record<string, any> = { ...next };
+      for (const [key, p] of Object.entries(prev)) {
+        const localAt = Number((p as any)?.updatedAt) || 0;
+        const srv = merged[key];
+        const srvAt = srv ? Number(srv.lastUpdate) || 0 : 0;
+        if (localAt > srvAt + 10000) merged[key] = { ...(srv || {}), ...(p as any) };
+      }
       // Skip the setState when nothing changed: this runs on every Home focus,
       // and installing a fresh map object re-renders every card subscribed to
       // mediaProgress even when the data is identical. The map is small
       // (one entry per started book), so the compare is cheap.
-      const prev = get().mediaProgress;
-      if (JSON.stringify(prev) === JSON.stringify(next)) return;
-      set({ mediaProgress: next });
+      if (JSON.stringify(prev) === JSON.stringify(merged)) return;
+      set({ mediaProgress: merged });
     } catch (err) {
       console.error("[UserStore] Failed to load media progress:", err);
     }

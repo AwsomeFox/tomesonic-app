@@ -125,15 +125,15 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
       }
     }
 
-    // Finished semantics — mediaProgress.isFinished is an ITEM-level flag:
-    //  * ebook side: read to >=99%, or (ebook-only item) the server flag —
-    //    e.g. marked finished from ItemDetail without reading to the end.
-    //  * audio side: the server flag — EXCEPT when that flag was evidently set
-    //    by the reader (ebook >=99%) while the audio sits mid-way, in which
-    //    case the remaining listen time should stay visible.
-    const isEbookFinished =
-      itemHasEbook && (ebookFraction >= 0.99 || (!itemHasAudio && !!progressObj?.isFinished));
+    // Finished semantics — mediaProgress.isFinished is an ITEM-level flag. An
+    // EXPLICIT mark-as-finished finishes the whole book: BOTH formats display
+    // finished. The ONE exception is the reader auto-finish — ebook read to
+    // >=99% while the audio sits mid-way (1–98%) — where the audio side keeps
+    // its real remaining time visible. Mirrors ItemDetailScreen's progress
+    // card (audioFinished / ebookFinished) so badge and card never disagree.
     const readerSetFinished = ebookFraction >= 0.99 && audioFraction > 0 && audioFraction < 0.99;
+    const isEbookFinished =
+      itemHasEbook && (ebookFraction >= 0.99 || (!!progressObj?.isFinished && !readerSetFinished));
     const isAudioFinished = itemHasAudio && !!progressObj?.isFinished && !readerSetFinished;
 
     const isAudioInProgress = audioFraction > 0 && !isAudioFinished;

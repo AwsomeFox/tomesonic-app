@@ -25,7 +25,6 @@ import SearchScreen from "../screens/SearchScreen";
 import ItemDetailScreen from "../screens/ItemDetailScreen";
 import SettingsScreen from "../screens/SettingsScreen";
 import AccountScreen from "../screens/AccountScreen";
-import LocalMediaScreen from "../screens/LocalMediaScreen";
 import DownloadsScreen from "../screens/DownloadsScreen";
 import StatsScreen from "../screens/StatsScreen";
 import LogsScreen from "../screens/LogsScreen";
@@ -130,7 +129,9 @@ export default function AppNavigator() {
         }
       }}
     >
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      {/* Every pushed screen slides in from the right; MainTabs/Connect are
+          roots so the default has no visible effect on them. */}
+      <Stack.Navigator screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
         {user === null ? (
           // Connect/Login screen shown if session is unauthenticated
           <Stack.Screen name="Connect" component={ConnectScreen} />
@@ -138,118 +139,21 @@ export default function AppNavigator() {
           // Main app navigation stack
           <>
             <Stack.Screen name="MainTabs" component={TabNavigator} />
-            <Stack.Screen 
-              name="Library" 
-              component={LibraryScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="ItemDetail" 
-              component={ItemDetailScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="SeriesDetail" 
-              component={SeriesDetailScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="AuthorDetail" 
-              component={AuthorDetailScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="CollectionDetail" 
-              component={CollectionDetailScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="PlaylistDetail" 
-              component={PlaylistDetailScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="Search" 
-              component={SearchScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="LatestEpisodes" 
-              component={LatestEpisodesScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen
-              name="Settings"
-              component={SettingsScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen
-              name="Account"
-              component={AccountScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen
-              name="LocalMedia"
-              component={LocalMediaScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="Downloads" 
-              component={DownloadsScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen 
-              name="Stats" 
-              component={StatsScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen
-              name="Logs"
-              component={LogsScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen
-              name="ListeningHistory"
-              component={ListeningHistoryScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
-            <Stack.Screen
-              name="Reader"
-              component={ReaderScreen}
-              options={{
-                animation: "slide_from_right",
-              }}
-            />
+            <Stack.Screen name="Library" component={LibraryScreen} />
+            <Stack.Screen name="ItemDetail" component={ItemDetailScreen} />
+            <Stack.Screen name="SeriesDetail" component={SeriesDetailScreen} />
+            <Stack.Screen name="AuthorDetail" component={AuthorDetailScreen} />
+            <Stack.Screen name="CollectionDetail" component={CollectionDetailScreen} />
+            <Stack.Screen name="PlaylistDetail" component={PlaylistDetailScreen} />
+            <Stack.Screen name="Search" component={SearchScreen} />
+            <Stack.Screen name="LatestEpisodes" component={LatestEpisodesScreen} />
+            <Stack.Screen name="Settings" component={SettingsScreen} />
+            <Stack.Screen name="Account" component={AccountScreen} />
+            <Stack.Screen name="Downloads" component={DownloadsScreen} />
+            <Stack.Screen name="Stats" component={StatsScreen} />
+            <Stack.Screen name="Logs" component={LogsScreen} />
+            <Stack.Screen name="ListeningHistory" component={ListeningHistoryScreen} />
+            <Stack.Screen name="Reader" component={ReaderScreen} />
           </>
         )}
       </Stack.Navigator>

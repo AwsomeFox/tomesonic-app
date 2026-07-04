@@ -48,6 +48,7 @@
           }
         }
       ],
+      "./plugins/withCastSingleNotification",
       [
         "react-native-google-cast",
         {

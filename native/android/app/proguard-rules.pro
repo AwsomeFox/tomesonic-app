@@ -12,3 +12,7 @@
 -keep class com.facebook.react.turbomodule.** { *; }
 
 # Add any project specific keep options here:
+
+# Cast framework instantiates the OptionsProvider reflectively from manifest
+# meta-data — keep it or casting crashes on R8 builds (withCastSingleNotification).
+-keep class com.tomesonic.app.CastOptionsProvider { *; }

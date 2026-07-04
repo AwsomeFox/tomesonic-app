@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl, useWindowDimensions } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
+import { withAlpha } from "../theme/palette";
 import { LinearGradient } from "expo-linear-gradient";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -19,7 +20,6 @@ import SearchContent from "../components/SearchContent";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const NUM_COLUMNS = 2;
 const CARD_SIZE = 170;
 const PAGE_LIMIT = 20;
 
@@ -62,12 +62,18 @@ export default function SeriesListScreen({ navigation }: any) {
   const { currentLibraryId } = useLibraryStore();
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
   const { serverConnectionConfig } = useUserStore();
+  const { width } = useWindowDimensions();
+  // 2 columns on phones (unchanged); more on wide/tablet layouts so fixed-size
+  // cards don't float in oceans of whitespace.
+  const numColumns = Math.max(2, Math.floor((width - 16) / (CARD_SIZE + 16)));
 
   const [seriesList, setSeriesList] = useState<Series[]>([]);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const isFetchingRef = useRef(false);
   // Sort state (series support name / added at / total duration).
   const [orderBy, setOrderBy] = useState("name");
@@ -86,10 +92,15 @@ export default function SeriesListScreen({ navigation }: any) {
   };
 
   const fetchSeries = useCallback(
-    async (pageNum: number, reset = false) => {
+    async (pageNum: number, reset = false, showSkeleton = true) => {
       if (!currentLibraryId || isFetchingRef.current) return;
       isFetchingRef.current = true;
-      if (reset) setInitialLoading(true);
+      if (reset) {
+        setLoadError(false);
+        // Pull-to-refresh passes showSkeleton=false so the visible grid isn't
+        // replaced by the skeleton mid-gesture.
+        if (showSkeleton) setInitialLoading(true);
+      }
       setLoading(true);
 
       try {
@@ -107,6 +118,7 @@ export default function SeriesListScreen({ navigation }: any) {
         setPage(pageNum);
       } catch (err) {
         console.error("[SeriesListScreen] Failed to fetch series:", err);
+        if (pageNum === 0) setLoadError(true);
       } finally {
         setLoading(false);
         setInitialLoading(false);
@@ -154,6 +166,15 @@ export default function SeriesListScreen({ navigation }: any) {
   const handleLoadMore = () => {
     if (loading || seriesList.length >= total) return;
     fetchSeries(page + 1);
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchSeries(0, true, false);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   // Full-bleed series collage — mirrors .series-collage count-1..4 grid layouts.
@@ -240,6 +261,9 @@ export default function SeriesListScreen({ navigation }: any) {
             seriesName: item.name,
           })
         }
+        android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
+        accessibilityRole="button"
+        accessibilityLabel={`Series: ${seriesName}, ${booksInSeries} ${booksInSeries === 1 ? "book" : "books"}`}
         style={{
           borderRadius: 16,
           backgroundColor: colors.surfaceContainer,
@@ -312,61 +336,6 @@ export default function SeriesListScreen({ navigation }: any) {
     );
   };
 
-  if (initialLoading) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, backgroundColor: colors.surface }}
-        edges={["top", "left", "right"]}
-      >
-        <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
-        <GridSkeleton columns={NUM_COLUMNS} count={NUM_COLUMNS * 4} aspectRatio={1} />
-      </SafeAreaView>
-    );
-  }
-
-  if (isSearchActive) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, backgroundColor: colors.surface }}
-        edges={["top", "left", "right"]}
-      >
-        <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
-        <SearchContent navigation={navigation} />
-      </SafeAreaView>
-    );
-  }
-
-  if (!initialLoading && seriesList.length === 0) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, backgroundColor: colors.surface }}
-        edges={["top", "left", "right"]}
-      >
-        <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
-        <OrderModal
-          visible={sortOpen}
-          onClose={() => setSortOpen(false)}
-          orderBy={orderBy}
-          descending={descending}
-          series
-          onChange={(o, d) => {
-            setOrderBy(o);
-            setDescending(d);
-          }}
-        />
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <Icon name="series" size={48} color={colors.onSurfaceVariant} />
-          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "bold", marginTop: 16, marginBottom: 8 }}>
-            No series found
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-            No series have been created in this library yet.
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: colors.surface }}
@@ -386,19 +355,64 @@ export default function SeriesListScreen({ navigation }: any) {
         }}
       />
 
-      {/* Grid — flex flex-wrap justify-center, p-4 */}
-      <FlatList
-        data={seriesList}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        numColumns={NUM_COLUMNS}
-        columnWrapperStyle={{ justifyContent: "space-evenly", paddingHorizontal: 8 }}
-        contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32, paddingTop: 8 }}
-        onEndReached={handleLoadMore}
-        onEndReachedThreshold={0.5}
-        ListFooterComponent={renderFooter}
-        showsVerticalScrollIndicator={false}
-      />
+      {/* Search overlay wins over every other state (matches LibraryScreen). */}
+      {isSearchActive ? (
+        <SearchContent navigation={navigation} />
+      ) : initialLoading ? (
+        <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
+      ) : loadError && seriesList.length === 0 ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <Icon name="warning" size={48} color={colors.error} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
+            Couldn't load series
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
+            Check your connection to the server and try again.
+          </Text>
+          <Pressable
+            onPress={() => fetchSeries(0, true)}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading series"
+            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : seriesList.length === 0 ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <Icon name="series" size={48} color={colors.onSurfaceVariant} />
+          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "bold", marginTop: 16, marginBottom: 8 }}>
+            No series found
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
+            No series have been created in this library yet.
+          </Text>
+        </View>
+      ) : (
+        /* Grid — flex flex-wrap justify-center, p-4 */
+        <FlatList
+          key={`series-grid-${numColumns}`}
+          data={seriesList}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id}
+          numColumns={numColumns}
+          columnWrapperStyle={{ justifyContent: "space-evenly", paddingHorizontal: 8 }}
+          contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32, paddingTop: 8 }}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={renderFooter}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surfaceContainerHigh}
+            />
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }

@@ -18,8 +18,10 @@ export default function DownloadsScreen({ navigation }: any) {
     loadDownloadsFromDb();
   }, [loadDownloadsFromDb]);
 
+  // Alphabetical so the list doesn't reorder by whatever the DB load order was.
+  const byTitle = (a: any, b: any) => String(a.title || "").localeCompare(String(b.title || ""));
   const activeList = Object.values(activeDownloads);
-  const completedList = Object.values(completedDownloads);
+  const completedList = Object.values(completedDownloads).sort(byTitle);
 
   // fileSize can be 0 for parts whose size the server never reported (e.g. the
   // cover) — fall back to the bytes actually written so sizes aren't understated.
@@ -32,6 +34,11 @@ export default function DownloadsScreen({ navigation }: any) {
   const ebookPartOf = (item: any) => (item?.parts || []).find((p: any) => p.id === "ebook");
   // Ebook without any audio tracks — "playing" it means opening the reader.
   const isEbookOnly = (item: any) => !item?.meta?.tracks?.length && !!ebookPartOf(item);
+
+  // Prefer the downloaded cover file — item.coverUrl is the REMOTE server URL,
+  // which renders blank exactly when downloads matter most (offline).
+  const coverOf = (item: any) =>
+    (item?.parts || []).find((p: any) => p.id === "cover")?.localFilePath || item?.coverUrl;
 
   const handlePlayOffline = async (item: any) => {
     if (isEbookOnly(item)) {
@@ -132,6 +139,8 @@ export default function DownloadsScreen({ navigation }: any) {
           onPress={() => navigation.goBack()}
           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </Pressable>
@@ -156,6 +165,35 @@ export default function DownloadsScreen({ navigation }: any) {
           data={completedList}
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ padding: 16 }}
+          // Storage summary (absorbed from the old Local Media screen — the
+          // two screens were duplicates and were merged).
+          ListHeaderComponent={
+            completedList.length > 0 ? (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingHorizontal: 18,
+                  paddingVertical: 16,
+                  borderWidth: 1,
+                  borderColor: colors.outlineVariant,
+                  borderRadius: 20,
+                  marginBottom: 16,
+                }}
+              >
+                <Icon name="folder" size={24} color="#FBC02D" />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>
+                    Internal App Storage
+                  </Text>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+                    {completedList.length} {completedList.length === 1 ? "item" : "items"} ·{" "}
+                    {formatBytes(completedList.reduce((acc, it) => acc + itemBytes(it), 0))} used
+                  </Text>
+                </View>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={<EmptyState icon="download" label="No downloaded audiobooks found." />}
           renderItem={({ item }) => (
             <Pressable
@@ -170,7 +208,7 @@ export default function DownloadsScreen({ navigation }: any) {
                 marginBottom: 12,
               }}
             >
-              <Cover uri={item.coverUrl} />
+              <Cover uri={coverOf(item)} />
               <View style={{ flex: 1, paddingHorizontal: 12 }}>
                 <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600" }}>
                   {item.title}
@@ -194,6 +232,8 @@ export default function DownloadsScreen({ navigation }: any) {
                   marginRight: 4,
                 }}
                 hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel={isEbookOnly(item) ? `Read ${item.title}` : `Play ${item.title}`}
               >
                 <Icon name={isEbookOnly(item) ? "book" : "play"} size={24} color={colors.onPrimary} />
               </Pressable>
@@ -213,6 +253,8 @@ export default function DownloadsScreen({ navigation }: any) {
                 }
                 style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                 hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete download of ${item.title}`}
               >
                 <Icon name="trash" size={22} color={colors.onSurfaceVariant} />
               </Pressable>
@@ -235,7 +277,7 @@ export default function DownloadsScreen({ navigation }: any) {
               }}
             >
               <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Cover uri={item.coverUrl} />
+                <Cover uri={coverOf(item)} />
                 <View style={{ flex: 1, paddingHorizontal: 12 }}>
                   <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600" }}>
                     {item.title}
@@ -268,6 +310,8 @@ export default function DownloadsScreen({ navigation }: any) {
                     onPress={() => retryDownload(item.id)}
                     style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                     hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Retry download of ${item.title}`}
                   >
                     <Icon name="refresh" size={22} color={colors.primary} />
                   </Pressable>
@@ -276,6 +320,8 @@ export default function DownloadsScreen({ navigation }: any) {
                   onPress={() => cancelDownload(item.id)}
                   style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                   hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Cancel download of ${item.title}`}
                 >
                   <Icon name="close" size={22} color={colors.onSurfaceVariant} />
                 </Pressable>

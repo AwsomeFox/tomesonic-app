@@ -25,6 +25,9 @@ function AppShell() {
   const user = useUserStore((state) => state.user);
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
+      {/* Follow the app's resolved theme, not the OS scheme — the in-app
+          Theme setting can force light/dark independently of the system. */}
+      <StatusBar style={colors.isDark ? "light" : "dark"} />
       <OfflineBanner />
       <AppNavigator />
       <PlayerBottomSheet />
@@ -87,7 +90,6 @@ export default function App() {
           <AppShell />
         </ErrorBoundary>
       </DynamicThemeProvider>
-      <StatusBar style="auto" />
     </SafeAreaProvider>
   );
 }

@@ -67,6 +67,9 @@ export default function SettingSelectModal({
                     onClose();
                   }}
                   android_ripple={{ color: colors.surfaceContainerHighest }}
+                  accessibilityRole="radio"
+                  accessibilityLabel={opt.label}
+                  accessibilityState={{ checked: isSel }}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",

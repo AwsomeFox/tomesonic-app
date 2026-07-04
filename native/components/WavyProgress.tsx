@@ -95,6 +95,10 @@ export default function WavyProgress({
   const cy = height / 2;
   const clamped = Math.max(0, Math.min(1, progress || 0));
   const endX = Math.max(0, (width - STOP_R * 2) * clamped);
+  // Track ends short of the stop dot when shown; otherwise (scrubber mode,
+  // where the handle is the end marker) it runs to the full width so the bar
+  // lines up with the timestamps above it.
+  const trackEndX = showStopDot ? width - STOP_R * 3 : width - strokeWidth / 2;
 
   const waveProps = useAnimatedProps(() => {
     "worklet";
@@ -119,9 +123,9 @@ export default function WavyProgress({
       {width > 0 ? (
         <Svg width={width} height={height}>
           {/* Flat remainder track (starts after a gap from the wave). */}
-          {endX + GAP < width - STOP_R * 2 ? (
+          {endX + GAP < trackEndX ? (
             <Path
-              d={`M ${endX + GAP} ${cy} L ${width - STOP_R * 3} ${cy}`}
+              d={`M ${endX + GAP} ${cy} L ${trackEndX} ${cy}`}
               stroke={trackColor}
               strokeWidth={strokeWidth}
               strokeLinecap="round"

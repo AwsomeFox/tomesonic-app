@@ -53,6 +53,15 @@ export default function AccountScreen({ navigation }: any) {
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [changingPassword, setChangingPassword] = React.useState(false);
 
+  // Always drop typed passwords when the sheet closes (Cancel/back included) —
+  // they must never sit in state longer than the change attempt itself.
+  const closePasswordModal = () => {
+    setShowPasswordModal(false);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+  };
+
   const handleChangePassword = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
       Alert.alert("Error", "Please fill in all fields.");
@@ -69,10 +78,7 @@ export default function AccountScreen({ navigation }: any) {
         newPassword: newPassword,
       });
       Alert.alert("Success", "Password changed successfully!");
-      setShowPasswordModal(false);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
+      closePasswordModal();
     } catch (err: any) {
       console.warn("[Account] Change password failed:", err);
       const msg = err?.response?.data || err?.message || "Failed to update password.";
@@ -130,6 +136,8 @@ export default function AccountScreen({ navigation }: any) {
           onPress={() => navigation.goBack()}
           hitSlop={8}
           style={{ paddingRight: 16, paddingVertical: 4 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Icon name="back" size={26} color={colors.onSurface} />
         </Pressable>
@@ -243,7 +251,7 @@ export default function AccountScreen({ navigation }: any) {
         visible={showPasswordModal}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowPasswordModal(false)}
+        onRequestClose={closePasswordModal}
       >
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
           <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
@@ -310,7 +318,8 @@ export default function AccountScreen({ navigation }: any) {
 
             <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
               <Pressable
-                onPress={() => setShowPasswordModal(false)}
+                onPress={closePasswordModal}
+                accessibilityRole="button"
                 style={{ paddingHorizontal: 20, paddingVertical: 12, marginRight: 8 }}
               >
                 <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "600" }}>Cancel</Text>

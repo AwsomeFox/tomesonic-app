@@ -47,11 +47,22 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
             backgroundColor: colors.surfaceContainerHigh,
             borderTopLeftRadius: 28,
             borderTopRightRadius: 28,
+            paddingTop: 12,
           }}
         >
           <SafeAreaView edges={["bottom"]}>
+            {/* Drag handle (affordance parity with the other bottom sheets) */}
+            <View
+              style={{
+                alignSelf: "center",
+                width: 36,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: colors.outlineVariant,
+              }}
+            />
             {/* Header */}
-            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 20, paddingBottom: 12 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="speed" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
               <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Playback Speed</Text>
             </View>
@@ -61,6 +72,9 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
               <Pressable
                 onPress={decrement}
                 disabled={!canDecrement}
+                accessibilityRole="button"
+                accessibilityLabel="Decrease speed"
+                accessibilityState={{ disabled: !canDecrement }}
                 style={{
                   width: 56,
                   height: 56,
@@ -74,7 +88,10 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
                 <Text style={{ fontSize: 28, color: colors.onSecondaryContainer, marginTop: -2 }}>−</Text>
               </Pressable>
 
-              <Text style={{ fontSize: 44, fontWeight: "600", color: colors.onSurface, minWidth: 130, textAlign: "center" }}>
+              <Text
+                accessibilityLabel={`Current speed ${speed.toFixed(2)} times`}
+                style={{ fontSize: 44, fontWeight: "600", color: colors.onSurface, minWidth: 130, textAlign: "center" }}
+              >
                 {speed.toFixed(2)}
                 <Text style={{ fontSize: 28 }}>×</Text>
               </Text>
@@ -82,6 +99,9 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
               <Pressable
                 onPress={increment}
                 disabled={!canIncrement}
+                accessibilityRole="button"
+                accessibilityLabel="Increase speed"
+                accessibilityState={{ disabled: !canIncrement }}
                 style={{
                   width: 56,
                   height: 56,
@@ -104,6 +124,9 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
                   <Pressable
                     key={rate}
                     onPress={() => onChange(rate)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${rate} times speed`}
+                    accessibilityState={{ selected: active }}
                     style={{
                       paddingHorizontal: 18,
                       height: 44,

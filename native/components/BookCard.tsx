@@ -74,15 +74,15 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       ebookProgressPercent = Number(progress?.ebookProgress || progress?.progress || 0);
     }
   }
-  // Finished semantics (mirrors BookProgressBadge): the item-level isFinished
-  // flag counts as audio-finished, EXCEPT when it was evidently set by the
-  // READER (ebook read to >=99%) while the audio sits mid-way — the audio bar
-  // should keep showing then. An ebook-only item marked finished on the server
-  // (without reading to 99%) hides its ebook bar via the isFinished fallback.
+  // Finished semantics (mirrors BookProgressBadge + ItemDetailScreen): an
+  // EXPLICIT item-level isFinished finishes BOTH formats — both bars hide.
+  // The ONE exception is the reader auto-finish (ebook read to >=99% while the
+  // audio sits mid-way, 1–98%), where the audio bar keeps showing real
+  // progress.
   const readerSetFinished = ebookProgressPercent >= 0.99 && progressPercent > 0 && progressPercent < 0.99;
   const isFinished = itemHasAudio ? !!progress?.isFinished && !readerSetFinished : false;
   const isEbookFinished =
-    ebookProgressPercent >= 0.99 || (itemHasEbook && !itemHasAudio && !!progress?.isFinished);
+    ebookProgressPercent >= 0.99 || (!!progress?.isFinished && !readerSetFinished);
 
   // Podcast progress lives per-EPISODE under composite `${itemId}-${episodeId}`
   // map keys, so the plain-id lookup above finds nothing. Drive the bottom bar
@@ -130,6 +130,8 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       onPressIn={() => { scale.value = withSpring(0.96, { damping: 18, stiffness: 320 }); }}
       onPressOut={() => { scale.value = withSpring(1, { damping: 18, stiffness: 320 }); }}
       android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
+      accessibilityRole="button"
+      accessibilityLabel={author ? `${title} by ${author}` : title || "Book"}
       style={[
         {
           width: size,

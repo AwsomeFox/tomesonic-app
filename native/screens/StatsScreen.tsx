@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '../utils/api';
 import { useThemeColors } from '../theme/useThemeColors';
 import Icon from '../components/Icon';
@@ -68,7 +69,6 @@ function formatNumber(n: number): string {
   return n.toLocaleString('en-US');
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function ymd(d: Date): string {
@@ -76,6 +76,15 @@ function ymd(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/** Local calendar date N days before today. Uses setDate (not ms arithmetic)
+ *  so DST transitions can't skip or double-count a calendar day. */
+function daysAgo(n: number): Date {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0); // noon: immune to the 23/25-hour DST days
+  d.setDate(d.getDate() - n);
+  return d;
 }
 
 interface DayPoint {
@@ -86,10 +95,9 @@ interface DayPoint {
 
 // Build the last 7 days (oldest -> newest), matching DailyListeningChart.vue.
 function buildLast7Days(days: Record<string, number>): DayPoint[] {
-  const now = new Date();
   const out: DayPoint[] = [];
   for (let i = 6; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * DAY_MS);
+    const d = daysAgo(i);
     const key = ymd(d);
     out.push({
       label: DOW[d.getDay()],
@@ -109,20 +117,31 @@ export default function StatsScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // 'focus' fires on the initial mount too, so this both loads the screen and
+  // refreshes it when the user comes back — a listening session that ended
+  // since the last visit (or the mini player playing on top) shows up.
   useEffect(() => {
-    loadStats();
-    // Ensure the progress map is fresh (Items Finished counts from it).
-    loadMediaProgress().catch(() => {});
-  }, []);
+    const unsub = navigation.addListener('focus', () => {
+      loadStats();
+      // Ensure the progress map is fresh (Items Finished counts from it).
+      loadMediaProgress().catch(() => {});
+    });
+    return unsub;
+  }, [navigation]);
+
+  const hasDataRef = React.useRef(false);
 
   async function loadStats() {
     try {
-      setLoading(true);
+      // Full-screen spinner only on first load; focus refreshes are silent so
+      // the rendered stats don't flash away.
+      if (!hasDataRef.current) setLoading(true);
       setError(null);
       const response = await api.get<ListeningStats>('/api/me/listening-stats');
       setStats(response.data);
+      hasDataRef.current = true;
     } catch (err: any) {
-      setError(err?.message || 'Failed to load stats');
+      if (!hasDataRef.current) setError(err?.message || 'Failed to load stats');
     } finally {
       setLoading(false);
     }
@@ -144,23 +163,20 @@ export default function StatsScreen({ navigation }: any) {
 
   // Consecutive days (including today) with listening, matching daysInARow.
   let daysInARow = 0;
-  {
-    const now = new Date();
-    for (let i = 0; i < 10000; i++) {
-      const key = ymd(new Date(now.getTime() - i * DAY_MS));
-      if (!days[key]) break;
-      daysInARow++;
-    }
+  for (let i = 0; i < 10000; i++) {
+    const key = ymd(daysAgo(i));
+    if (!days[key]) break;
+    daysInARow++;
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.surface }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={['top', 'left', 'right']}>
       {/* Header */}
       <View
         style={{
           flexDirection: 'row',
           alignItems: 'center',
-          paddingTop: 56,
+          paddingTop: 8,
           paddingBottom: 16,
           paddingHorizontal: 16,
         }}
@@ -168,6 +184,8 @@ export default function StatsScreen({ navigation }: any) {
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={{ paddingRight: 16, paddingVertical: 4 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </TouchableOpacity>
@@ -298,7 +316,7 @@ export default function StatsScreen({ navigation }: any) {
           </View>
         </ScrollView>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

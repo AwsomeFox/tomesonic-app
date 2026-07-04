@@ -5,9 +5,10 @@ import {
   TextInput,
   Pressable,
   ScrollView,
-  ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -15,8 +16,13 @@ import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
 import Icon from "../components/Icon";
+import { isEbookOnly } from "../utils/bookMatch";
+import { encodeFilterValue } from "../components/FilterModal";
 import BookProgressBadge from "../components/BookProgressBadge";
+import { ListSkeleton } from "../components/Skeleton";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 interface SearchResults {
   book: any[];
@@ -114,7 +120,11 @@ export default function SearchScreen({ navigation }: any) {
     };
   }, [query, performSearch]);
 
-  const bookResults = results?.book || [];
+  const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
+  // "Hide non-audiobooks": drop ebook-only books from search results too.
+  const bookResults = (results?.book || []).filter(
+    (r: any) => !hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r)
+  );
   const seriesResults = results?.series || [];
   const authorResults = results?.authors || [];
   const narratorResults = results?.narrators || [];
@@ -152,8 +162,10 @@ export default function SearchScreen({ navigation }: any) {
     const coverUrl = getCoverUrl(libraryItem.id);
 
     return (
-      <Pressable
+      <AnimatedPressable
         key={libraryItem.id || index}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
           navigation.navigate("ItemDetail", { itemId: libraryItem.id })
         }
@@ -212,7 +224,7 @@ export default function SearchScreen({ navigation }: any) {
             style={{ marginTop: 4 }}
           />
         </View>
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
@@ -223,8 +235,10 @@ export default function SearchScreen({ navigation }: any) {
     const count = books.length;
 
     return (
-      <Pressable
+      <AnimatedPressable
         key={series.id || index}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
           navigation.navigate("SeriesDetail", { seriesId: series.id })
         }
@@ -287,7 +301,7 @@ export default function SearchScreen({ navigation }: any) {
             {count} {count === 1 ? "Book" : "Books"}
           </Text>
         </View>
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
@@ -296,10 +310,13 @@ export default function SearchScreen({ navigation }: any) {
     name: string,
     subtitle: string | null,
     onPress: () => void,
-    imageUri: string | null
+    imageUri: string | null,
+    index = 0
   ) => (
-    <Pressable
+    <AnimatedPressable
       key={key}
+      entering={listRowEnter(index)}
+      android_ripple={{ color: colors.surfaceContainerHighest }}
       onPress={onPress}
       style={{
         flexDirection: "row",
@@ -344,17 +361,21 @@ export default function SearchScreen({ navigation }: any) {
           </Text>
         ) : null}
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 
   const renderTagResult = (tag: any, index: number) => {
     const name = typeof tag === "string" ? tag : tag.name || "";
     return (
-      <Pressable
+      <AnimatedPressable
         key={name || index}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
+          // Filter values are base64-$encode'd (ABS convention) — a plain
+          // URI-encoded name fails the server's base64 decode and matches nothing.
           navigation.navigate("Library", {
-            filter: `tags.${encodeURIComponent(name)}`,
+            filter: `tags.${encodeFilterValue(name)}`,
             title: name,
             showBack: true,
           })
@@ -385,7 +406,7 @@ export default function SearchScreen({ navigation }: any) {
         >
           {name}
         </Text>
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
@@ -409,6 +430,9 @@ export default function SearchScreen({ navigation }: any) {
         <Pressable
           onPress={() => navigation.goBack()}
           hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
           style={{ padding: 10, borderRadius: 24 }}
         >
           <Icon name="back" size={24} color={colors.onSurface} />
@@ -452,6 +476,9 @@ export default function SearchScreen({ navigation }: any) {
                 setHasSearched(false);
               }}
               hitSlop={8}
+              android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 18 }}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
               style={{ padding: 2 }}
             >
               <Icon name="close" size={18} color={colors.onSurfaceVariant} />
@@ -460,31 +487,36 @@ export default function SearchScreen({ navigation }: any) {
         </View>
       </View>
 
-      {/* Content */}
-      {loading ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
+      {/* Content — skeleton rows only while there's nothing on screen yet;
+          refining an existing query keeps the previous results visible
+          (no flash to a bare loading state). */}
+      {loading && !hasResults ? (
+        <ListSkeleton rows={8} thumb={52} />
       ) : hasSearched && !hasResults ? (
         <View
           style={{
             flex: 1,
             alignItems: "center",
             justifyContent: "center",
-            padding: 24,
+            padding: 32,
           }}
         >
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 16 }}>
-            No items found
+          <Icon name="search" size={48} color={colors.onSurfaceVariant} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+            No results{query.trim() ? ` for “${query.trim()}”` : ""}
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+            Try a different title, author, series, or narrator.
           </Text>
         </View>
       ) : !hasSearched ? (
-        <View style={{ flex: 1, alignItems: "center", paddingTop: 96 }}>
+        <View style={{ flex: 1, alignItems: "center", paddingTop: 96, paddingHorizontal: 32 }}>
           <Icon name="search" size={48} color={colors.onSurfaceVariant} />
-          <Text
-            style={{ color: colors.onSurfaceVariant, fontSize: 16, marginTop: 12 }}
-          >
-            Search
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 12, textAlign: "center" }}>
+            Search your library
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+            Find books, series, authors, narrators, and tags.
           </Text>
         </View>
       ) : (
@@ -525,7 +557,8 @@ export default function SearchScreen({ navigation }: any) {
                       authorId: author.id,
                       authorName: author.name,
                     }),
-                  getAuthorImageUrl(author)
+                  getAuthorImageUrl(author),
+                  index
                 );
               })}
             </View>
@@ -543,11 +576,12 @@ export default function SearchScreen({ navigation }: any) {
                     : null,
                   () =>
                     navigation.navigate("Library", {
-                      filter: `narrators.${encodeURIComponent(narrator.name)}`,
+                      filter: `narrators.${encodeFilterValue(narrator.name)}`,
                       title: narrator.name,
                       showBack: true,
                     }),
-                  null
+                  null,
+                  index
                 )
               )}
             </View>

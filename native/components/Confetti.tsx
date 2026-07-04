@@ -7,6 +7,7 @@ import Animated, {
   withTiming,
   runOnJS,
   interpolate,
+  cancelAnimation,
   type SharedValue,
 } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -58,10 +59,14 @@ export default function Confetti({
   useEffect(() => {
     if (visible) {
       t.value = 0;
+      // Easing.out(quad) is deliberate (decelerating "physics" for the burst),
+      // not a UI transition — the M3 motion tokens don't apply here.
       t.value = withTiming(1, { duration: DURATION, easing: Easing.out(Easing.quad) }, (finished) => {
         if (finished && onDone) runOnJS(onDone)();
       });
     }
+    // Cancel on unmount so the burst can't outlive the player closing mid-flight.
+    return () => cancelAnimation(t);
   }, [visible]);
 
   if (!visible) return null;

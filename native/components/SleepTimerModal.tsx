@@ -47,6 +47,7 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
     alignItems: "center" as const,
     justifyContent: "center" as const,
   };
+  const rowA11y = { accessibilityRole: "button" as const };
 
   const renderBody = () => {
     // Active timer view
@@ -66,6 +67,7 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
               onCancel();
               onClose();
             }}
+            {...rowA11y}
             style={{ backgroundColor: colors.primary, borderRadius: 24, paddingVertical: 14, alignItems: "center" }}
           >
             <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600" }}>Cancel Timer</Text>
@@ -78,12 +80,20 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
     if (customMode) {
       return (
         <View style={{ paddingHorizontal: 24, paddingTop: 8, paddingBottom: 24 }}>
-          <Pressable onPress={() => setCustomMode(false)} style={{ marginBottom: 8, alignSelf: "flex-start", padding: 4 }}>
+          <Pressable
+            onPress={() => setCustomMode(false)}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back to presets"
+            style={{ marginBottom: 8, alignSelf: "flex-start", padding: 4 }}
+          >
             <Icon name="back" size={26} color={colors.onSurface} />
           </Pressable>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginVertical: 12 }}>
             <Pressable
               onPress={() => setCustomMin((m) => Math.max(1, m - 1))}
+              accessibilityRole="button"
+              accessibilityLabel="Decrease minutes"
               style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}
             >
               <Text style={{ fontSize: 24, color: colors.onSecondaryContainer, marginTop: -2 }}>−</Text>
@@ -91,6 +101,8 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
             <Text style={{ fontSize: 28, fontWeight: "600", color: colors.onSurface }}>{customMin} min</Text>
             <Pressable
               onPress={() => setCustomMin((m) => m + 1)}
+              accessibilityRole="button"
+              accessibilityLabel="Increase minutes"
               style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}
             >
               <Text style={{ fontSize: 24, color: colors.onSecondaryContainer, marginTop: -2 }}>+</Text>
@@ -101,6 +113,7 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
               onSet(customMin * 60, false);
               onClose();
             }}
+            {...rowA11y}
             style={{ backgroundColor: colors.primary, borderRadius: 24, paddingVertical: 14, alignItems: "center" }}
           >
             <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600" }}>Set Timer</Text>
@@ -119,6 +132,7 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
               onSet(min * 60, false);
               onClose();
             }}
+            {...rowA11y}
             style={rowStyle}
           >
             <Text style={{ fontSize: 18, color: colors.onSurface }}>{min} min</Text>
@@ -130,12 +144,13 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
               onSet(0, true);
               onClose();
             }}
+            {...rowA11y}
             style={rowStyle}
           >
             <Text style={{ fontSize: 18, color: colors.onSurface }}>End of chapter</Text>
           </Pressable>
         ) : null}
-        <Pressable onPress={() => setCustomMode(true)} style={rowStyle}>
+        <Pressable onPress={() => setCustomMode(true)} {...rowA11y} style={rowStyle}>
           <Text style={{ fontSize: 18, color: colors.onSurface }}>Custom</Text>
         </Pressable>
       </View>
@@ -147,10 +162,20 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
       <Pressable style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0, 0, 0, 0.4)" }} onPress={onClose}>
         <Pressable
           onPress={() => {}}
-          style={{ backgroundColor: colors.surfaceContainerHigh, borderTopLeftRadius: 28, borderTopRightRadius: 28 }}
+          style={{ backgroundColor: colors.surfaceContainerHigh, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 12 }}
         >
           <SafeAreaView edges={["bottom"]}>
-            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 20, paddingBottom: 12 }}>
+            {/* Drag handle (affordance parity with the other bottom sheets) */}
+            <View
+              style={{
+                alignSelf: "center",
+                width: 36,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: colors.outlineVariant,
+              }}
+            />
+            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="moon" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
               <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Sleep Timer</Text>
             </View>

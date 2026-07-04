@@ -4,7 +4,6 @@ import {
   Text,
   FlatList,
   Pressable,
-  ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -15,7 +14,9 @@ import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import { isEbookOnly } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
+import Skeleton, { ListSkeleton } from "../components/Skeleton";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -49,6 +50,8 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
 
   const [author, setAuthor] = useState<AuthorData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const [descExpanded, setDescExpanded] = useState(false);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
@@ -68,9 +71,11 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     const fetchAuthorDetail = async () => {
       if (!authorId) {
         setLoading(false);
+        setLoadError(true);
         return;
       }
       setLoading(true);
+      setLoadError(false);
       try {
         const response = await api.get(
           `/api/authors/${authorId}?include=items,series`
@@ -85,13 +90,14 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
         });
       } catch (err) {
         console.error("[AuthorDetailScreen] Failed to fetch author:", err);
+        setLoadError(true);
       } finally {
         setLoading(false);
       }
     };
 
     fetchAuthorDetail();
-  }, [authorId]);
+  }, [authorId, retryTick]);
 
   const renderBookCard = ({ item, index }: { item: AuthorBook; index: number }) => {
     const coverUri = getCoverUrl(item.id);
@@ -102,6 +108,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
       <AnimatedPressable
         entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         style={{
           flexDirection: "row",
           backgroundColor: colors.surfaceContainer,
@@ -183,7 +190,9 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   };
 
   const imageUri = getAuthorImageUrl();
-  const books = author?.libraryItems || [];
+  // "Hide non-audiobooks": ebook-only rows are dropped when the setting is on.
+  const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
+  const books = (author?.libraryItems || []).filter((b: any) => !hideNonAudiobooks || !isEbookOnly(b));
 
   const renderHeader = () => (
     <View style={{ paddingBottom: 8 }}>
@@ -254,30 +263,13 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     </View>
   );
 
-  if (loading) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, backgroundColor: colors.surface }}
-        edges={["top", "left", "right"]}
-      >
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text
-            style={{ color: colors.onSurface, marginTop: 12, fontSize: 14, opacity: 0.7 }}
-          >
-            Loading author…
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: colors.surface }}
       edges={["top", "left", "right"]}
     >
-      {/* Header bar */}
+      {/* Header bar — rendered in every state so back stays reachable even
+          while loading or after an error. */}
       <View
         style={{
           paddingHorizontal: 16,
@@ -291,6 +283,9 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
         <Pressable
           onPress={() => navigation.goBack()}
           hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
           style={{ marginRight: 8, padding: 6, borderRadius: 20 }}
         >
           <Icon name="back" size={24} color={colors.onSurface} />
@@ -303,7 +298,36 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
         </Text>
       </View>
 
-      {books.length === 0 ? (
+      {loading ? (
+        <View>
+          {/* Profile-circle + name placeholders matching the real header. */}
+          <View style={{ alignItems: "center", paddingTop: 12, paddingBottom: 16 }}>
+            <Skeleton width={120} height={120} radius={60} style={{ marginBottom: 14 }} />
+            <Skeleton width={180} height={20} radius={6} />
+            <Skeleton width={80} height={13} radius={5} style={{ marginTop: 8 }} />
+          </View>
+          <ListSkeleton rows={4} thumb={80} />
+        </View>
+      ) : loadError && !author ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <Icon name="warning" size={48} color={colors.error} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
+            Couldn't load author
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
+            Check your connection to the server and try again.
+          </Text>
+          <Pressable
+            onPress={() => setRetryTick((t) => t + 1)}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading author"
+            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : books.length === 0 ? (
         <FlatList
           data={[]}
           renderItem={null as any}

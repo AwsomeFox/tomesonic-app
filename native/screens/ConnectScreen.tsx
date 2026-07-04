@@ -215,6 +215,8 @@ export default function ConnectScreen() {
                 <Pressable
                   onPress={handleEditAddress}
                   hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Change server address"
                   style={({ pressed }) => ({
                     opacity: pressed ? 0.6 : 1
                   })}

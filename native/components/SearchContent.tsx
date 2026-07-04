@@ -4,9 +4,10 @@ import {
   Text,
   ScrollView,
   Pressable,
-  ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
@@ -15,7 +16,12 @@ import { useUserStore } from "../store/useUserStore";
 import { useUiStore } from "../store/useUiStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "./Icon";
+import { isEbookOnly } from "../utils/bookMatch";
+import { encodeFilterValue } from "./FilterModal";
 import BookProgressBadge from "./BookProgressBadge";
+import { ListSkeleton } from "./Skeleton";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 interface SearchResults {
   book: any[];
@@ -53,6 +59,11 @@ export default function SearchContent({ navigation }: { navigation: any }) {
     return `${serverAddress}/api/authors/${author.id}/image?width=400&format=webp&token=${token}`;
   };
 
+  // Monotonic id so a slow earlier response can't overwrite a newer one
+  // (type "cat" → slow; type "catalog" → fast; "cat" must be discarded).
+  // Mirrors SearchScreen's guard.
+  const searchIdRef = useRef(0);
+
   const performSearch = useCallback(
     async (searchQuery: string) => {
       if (!searchQuery.trim() || !currentLibraryId) {
@@ -62,6 +73,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         return;
       }
 
+      const searchId = ++searchIdRef.current;
       try {
         setLoading(true);
         const response = await api.get(
@@ -69,14 +81,16 @@ export default function SearchContent({ navigation }: { navigation: any }) {
             searchQuery.trim()
           )}&limit=5`
         );
+        if (searchId !== searchIdRef.current) return; // stale response
         setResults(response.data || null);
         setHasSearched(true);
       } catch (err: any) {
+        if (searchId !== searchIdRef.current) return;
         console.error("[Search] Search failed:", err);
         setResults(null);
         setHasSearched(true);
       } finally {
-        setLoading(false);
+        if (searchId === searchIdRef.current) setLoading(false);
       }
     },
     [currentLibraryId]
@@ -106,7 +120,11 @@ export default function SearchContent({ navigation }: { navigation: any }) {
     };
   }, [query, performSearch]);
 
-  const bookResults = results?.book || [];
+  const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
+  // "Hide non-audiobooks": drop ebook-only books from search results too.
+  const bookResults = (results?.book || []).filter(
+    (r: any) => !hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r)
+  );
   const seriesResults = results?.series || [];
   const authorResults = results?.authors || [];
   const narratorResults = results?.narrators || [];
@@ -144,8 +162,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
     const cUri = getCoverUrl(libraryItem.id);
 
     return (
-      <Pressable
+      <AnimatedPressable
         key={libraryItem.id || index}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
           navigation.navigate("ItemDetail", { itemId: libraryItem.id })
         }
@@ -203,7 +223,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
             style={{ marginTop: 4 }}
           />
         </View>
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
@@ -214,8 +234,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
     const count = books.length;
 
     return (
-      <Pressable
+      <AnimatedPressable
         key={series.id || index}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
           navigation.navigate("SeriesDetail", { seriesId: series.id })
         }
@@ -278,7 +300,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
             {count} {count === 1 ? "Book" : "Books"}
           </Text>
         </View>
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
@@ -287,10 +309,13 @@ export default function SearchContent({ navigation }: { navigation: any }) {
     name: string,
     subtitle: string | null,
     onPress: () => void,
-    imageUri: string | null
+    imageUri: string | null,
+    index = 0
   ) => (
-    <Pressable
+    <AnimatedPressable
       key={key}
+      entering={listRowEnter(index)}
+      android_ripple={{ color: colors.surfaceContainerHighest }}
       onPress={onPress}
       style={{
         flexDirection: "row",
@@ -335,17 +360,21 @@ export default function SearchContent({ navigation }: { navigation: any }) {
           </Text>
         ) : null}
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 
   const renderTagResult = (tag: any, index: number) => {
     const name = typeof tag === "string" ? tag : tag.name || "";
     return (
-      <Pressable
+      <AnimatedPressable
         key={name || index}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() =>
+          // Filter values are base64-$encode'd (ABS convention) — a plain
+          // URI-encoded name fails the server's base64 decode and matches nothing.
           navigation.navigate("Library", {
-            filter: `tags.${encodeURIComponent(name)}`,
+            filter: `tags.${encodeFilterValue(name)}`,
             title: name,
             showBack: true,
           })
@@ -376,14 +405,16 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         >
           {name}
         </Text>
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
-  if (loading) {
+  // Skeleton rows only when there's nothing on screen yet; while refining an
+  // existing query the previous results stay visible (no flash to a spinner).
+  if (loading && !hasResults) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface }}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={{ flex: 1, backgroundColor: colors.surface }}>
+        <ListSkeleton rows={8} thumb={52} />
       </View>
     );
   }
@@ -395,12 +426,16 @@ export default function SearchContent({ navigation }: { navigation: any }) {
           flex: 1,
           alignItems: "center",
           justifyContent: "center",
-          padding: 24,
+          padding: 32,
           backgroundColor: colors.surface,
         }}
       >
-        <Text style={{ color: colors.onSurfaceVariant, fontSize: 16 }}>
-          No items found
+        <Icon name="search" size={48} color={colors.onSurfaceVariant} />
+        <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+          No results{query.trim() ? ` for “${query.trim()}”` : ""}
+        </Text>
+        <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+          Try a different title, author, series, or narrator.
         </Text>
       </View>
     );
@@ -408,12 +443,13 @@ export default function SearchContent({ navigation }: { navigation: any }) {
 
   if (!hasSearched) {
     return (
-      <View style={{ flex: 1, alignItems: "center", paddingTop: 96, backgroundColor: colors.surface }}>
+      <View style={{ flex: 1, alignItems: "center", paddingTop: 96, paddingHorizontal: 32, backgroundColor: colors.surface }}>
         <Icon name="search" size={48} color={colors.onSurfaceVariant} />
-        <Text
-          style={{ color: colors.onSurfaceVariant, fontSize: 16, marginTop: 12 }}
-        >
-          Search
+        <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 12, textAlign: "center" }}>
+          Search your library
+        </Text>
+        <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+          Find books, series, authors, narrators, and tags.
         </Text>
       </View>
     );
@@ -457,7 +493,8 @@ export default function SearchContent({ navigation }: { navigation: any }) {
                   authorId: author.id,
                   authorName: author.name,
                 }),
-              getAuthorImageUrl(author)
+              getAuthorImageUrl(author),
+              index
             );
           })}
         </View>
@@ -475,11 +512,12 @@ export default function SearchContent({ navigation }: { navigation: any }) {
                 : null,
               () =>
                 navigation.navigate("Library", {
-                  filter: `narrators.${encodeURIComponent(narrator.name)}`,
+                  filter: `narrators.${encodeFilterValue(narrator.name)}`,
                   title: narrator.name,
                   showBack: true,
                 }),
-              null
+              null,
+              index
             )
           )}
         </View>

@@ -10,6 +10,7 @@ import { useUserStore } from "../store/useUserStore";
 import { api } from "../utils/api";
 import { storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import TopAppBar from "../components/TopAppBar";
 import BookCard from "../components/BookCard";
 import Icon from "../components/Icon";
@@ -20,7 +21,7 @@ import { ShelfSkeleton } from "../components/Skeleton";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { flushPendingSyncs } from "../utils/progressSync";
-import { hasEbook } from "../utils/bookMatch";
+import { hasEbook, isEbookOnly } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -53,6 +54,7 @@ export default function BookshelfScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const { isConnected } = useNetworkStatus();
+  const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
 
@@ -62,6 +64,9 @@ export default function BookshelfScreen({ navigation }: any) {
     // library's shelf (checked again before every setState below).
     const libId = currentLibraryId;
     if (!libId) return;
+    // "Hide non-audiobooks" suppresses the Continue Reading shelf — skip the
+    // whole item-batch fetch while it's on.
+    if (useUserStore.getState().settings?.hideNonAudiobooksGlobal) return;
     const libStillCurrent = () => useLibraryStore.getState().currentLibraryId === libId;
 
     try {
@@ -112,10 +117,11 @@ export default function BookshelfScreen({ navigation }: any) {
         fetchedItems = (await Promise.all(itemRequests)).filter(Boolean);
       }
       
-      // Filter so they belong to this library and contain an ebook
-      const filtered = fetchedItems.filter((item: any) => {
-        return item.libraryId === libId && hasEbook(item);
-      });
+      // Keep any item with an ebook — in-progress ebooks are shown GLOBALLY
+      // (ids come from the user's whole mediaProgress map), not just from the
+      // current library: ebook and audio versions often live in separate
+      // libraries, and the reading shelf must surface both.
+      const filtered = fetchedItems.filter((item: any) => hasEbook(item));
 
       try { storage.set(`continueReadingCache_${libId}`, JSON.stringify(filtered)); } catch {}
       if (libStillCurrent()) setContinueReadingItems(filtered);
@@ -344,9 +350,15 @@ export default function BookshelfScreen({ navigation }: any) {
   const displayShelves: any[] = [];
   {
     const seenShelfIds = new Set<string>();
+    // "Hide non-audiobooks": drop the reading shelf entirely and filter
+    // ebook-only items out of every book shelf (they appear in Recently
+    // Added / Discover etc. regardless of progress).
+    const filterEbooks = (entities: any[]) =>
+      hideNonAudiobooks ? (entities || []).filter((e: any) => !isEbookOnly(e)) : entities || [];
     for (const shelf of activeShelves) {
       if (!shelf?.id || seenShelfIds.has(shelf.id)) continue;
       seenShelfIds.add(shelf.id);
+      if (shelf.id === "continue-reading" && hideNonAudiobooks) continue;
       if (shelf.id === "continue-series") {
         displayShelves.push({ ...shelf, type: "series", entities: continueSeries });
       } else if (shelf.id === "continue-reading") {
@@ -357,13 +369,15 @@ export default function BookshelfScreen({ navigation }: any) {
           type: "book",
           entities: continueReadingItems.length > 0 ? continueReadingItems : shelf.entities || [],
         });
-      } else {
+      } else if (shelf.type === "authors" || shelf.type === "author" || shelf.type === "series") {
         displayShelves.push(shelf);
+      } else {
+        displayShelves.push({ ...shelf, entities: filterEbooks(shelf.entities) });
       }
     }
     // Synthetic Continue Reading ONLY when the server sent none at all
     // (older servers) — inserted right after Continue Listening.
-    if (!seenShelfIds.has("continue-reading") && continueReadingItems.length > 0) {
+    if (!seenShelfIds.has("continue-reading") && continueReadingItems.length > 0 && !hideNonAudiobooks) {
       const idx = displayShelves.findIndex((s) => s.id === "continue-listening");
       displayShelves.splice(idx + 1, 0, {
         id: "continue-reading",
@@ -404,6 +418,9 @@ export default function BookshelfScreen({ navigation }: any) {
         onPress={() =>
           navigation.navigate("SeriesDetail", { seriesId: series.id, seriesName: series.name || series.title })
         }
+        android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
+        accessibilityRole="button"
+        accessibilityLabel={`Series: ${series.name || series.title}`}
         style={{
           width: cardSize,
           height: cardSize,
@@ -510,6 +527,9 @@ export default function BookshelfScreen({ navigation }: any) {
             authorName: author.name || author.title || "Unknown Author",
           })
         }
+        android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
+        accessibilityRole="button"
+        accessibilityLabel={`Author: ${author.name || author.title || "Unknown Author"}`}
         style={{
           width: cardSize,
           height: cardSize,
@@ -571,7 +591,7 @@ export default function BookshelfScreen({ navigation }: any) {
         // Offline: the server is unreachable, so show the on-device library.
         // Covers come from the locally-downloaded cover file, playback falls
         // back to the offline local-session path automatically.
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 16, paddingBottom: hasSession ? 100 : 16 }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 16, paddingBottom: hasSession ? 100 : 32 }}>
           <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 8 }}>
             <View style={{ width: 5, height: 22, borderRadius: 3, marginRight: 10, backgroundColor: colors.primary }} />
             <Text style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 21 }}>
@@ -634,7 +654,8 @@ export default function BookshelfScreen({ navigation }: any) {
                     ) : null}
                   </View>
                   <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="play" size={22} color={colors.onPrimary} />
+                    {/* Ebook-only rows open the Reader, not the player. */}
+                    <Icon name={isEbookOnly ? "book" : "play"} size={22} color={colors.onPrimary} />
                   </View>
                 </Pressable>
               );
@@ -651,7 +672,7 @@ export default function BookshelfScreen({ navigation }: any) {
         <Animated.ScrollView
           entering={FadeIn.duration(200)}
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: 16, paddingBottom: hasSession ? 100 : 16 }}
+          contentContainerStyle={{ paddingTop: 16, paddingBottom: hasSession ? 100 : 32, flexGrow: 1 }}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -661,6 +682,20 @@ export default function BookshelfScreen({ navigation }: any) {
             />
           }
         >
+          {/* Loaded but nothing to shelve (fresh/empty library): a real empty
+              state instead of a blank scroll area. RefreshControl stays live
+              (flexGrow centers this within the scrollable viewport). */}
+          {!displayShelves.some((s: any) => s.entities && s.entities.length > 0) ? (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingBottom: 48 }}>
+              <Icon name="library" size={48} color={colors.onSurfaceVariant} />
+              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+                Nothing on the shelf yet
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+                Books added to this library will show up here. Pull down to refresh.
+              </Text>
+            </View>
+          ) : null}
           {displayShelves.map((shelf: any) => {
             // Dispatch by shelf type. We transform "Continue Series" into a
             // series-type shelf (folders that open the series list).

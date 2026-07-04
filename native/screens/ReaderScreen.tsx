@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Pressable, Linking, ActivityIndicator, Modal, FlatList, Animated } from "react-native";
+import { View, Text, Pressable, Linking, ActivityIndicator, Modal, FlatList, Animated, Alert } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { useKeepAwake } from "expo-keep-awake";
@@ -8,6 +8,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
 import { api } from "../utils/api";
+import { queueEbookProgressPatch } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { useDownloadStore } from "../store/useDownloadStore";
 
@@ -26,6 +27,10 @@ try { Sharing = require("expo-sharing"); } catch (e) { Sharing = null; }
 // Cap for inlining the ebook as base64 into the WebView. Most ebooks are 1–5MB;
 // beyond this the bridge transfer gets heavy, so we offer "open externally".
 const MAX_EBOOK_INLINE_BYTES = 12 * 1024 * 1024;
+
+// Text-size stepper bounds (percent of the publisher's base size).
+const FONT_SIZE_MIN = 80;
+const FONT_SIZE_MAX = 180;
 
 // CDN base for foliate-js — all ES module imports use absolute URLs.
 const FOLIATE_CDN = "https://cdn.jsdelivr.net/npm/foliate-js@1.0.1";
@@ -159,6 +164,9 @@ function ebookHtml(
       window.goNext = () => { try { view.goRight(); } catch(e) {} };
       window.goPrev = () => { try { view.goLeft(); } catch(e) {} };
       window.goToHref = (href) => { try { view.goTo(href); } catch(e) {} };
+      // Fraction navigation for the player's "Read from here" jump (percent
+      // format switching) — called from RN via injectJavaScript after 'ready'.
+      window.goToFraction = (f) => { try { view.goToFraction(f); } catch(e) {} };
       window.setReaderStyles = (css) => { try { view.renderer.setStyles(css); } catch(e) {} };
 
       // Touch gestures on the outer container — swipe and tap zones
@@ -225,6 +233,13 @@ export default function ReaderScreen({ route, navigation }: any) {
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const { itemId, ebookFormat, title } = route.params || {};
   const [pdfError, setPdfError] = useState(false);
+  // PDF page tracking: restore the last-read page and show a footer indicator,
+  // mirroring what the epub path gets from foliate relocations.
+  const pdfPageKey = `pdfPage_${itemId}`;
+  const initialPdfPageRef = useRef<number>(Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
+  const [pdfProgress, setPdfProgress] = useState<{ page: number; pages: number } | null>(null);
+  // Bumped by the error-state Retry button to re-run the ebook load effect.
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Bottom reserve spacing matches exactly what the floating mini-player consumes.
   // When no session exists, the mini-player slides completely down (height = 0),
@@ -356,6 +371,9 @@ export default function ReaderScreen({ route, navigation }: any) {
           ...(fraction >= 0.99 ? { isFinished: true } : {}),
         }).catch((e) => {
           console.warn("[Reader] Failed to sync ebook progress on unmount:", e);
+          // Offline (downloaded ebook) — queue so the cfi still reaches the
+          // server (and Storyteller/other devices) when connectivity returns.
+          queueEbookProgressPatch(itemId, cfi, fraction, fraction >= 0.99);
         });
       }
     };
@@ -432,7 +450,7 @@ export default function ReaderScreen({ route, navigation }: any) {
       }
     })();
     return () => { cancelled = true; };
-  }, [isFoliateFormat, ebookUri]);
+  }, [isFoliateFormat, ebookUri, reloadKey]);
 
   const onWebMessage = useCallback((event: any) => {
     try {
@@ -485,6 +503,13 @@ export default function ReaderScreen({ route, navigation }: any) {
             });
           } catch (e) {
             console.warn("[Reader] Failed to sync ebook progress:", e);
+            // Offline — queue (ebook fields only) instead of dropping it.
+            queueEbookProgressPatch(
+              itemId,
+              data.cfi || "",
+              data.fraction || 0,
+              (data.fraction || 0) >= 0.99
+            );
           }
         }, 2000);
       } else if (data.type === "toc") {
@@ -529,6 +554,8 @@ export default function ReaderScreen({ route, navigation }: any) {
         onPress={() => navigation.goBack()}
         style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
         hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel="Close reader"
       >
         <Icon name="back" size={24} color={colors.onSurface} />
       </Pressable>
@@ -541,6 +568,8 @@ export default function ReaderScreen({ route, navigation }: any) {
             onPress={() => setShowToc(true)}
             style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Table of contents"
           >
             <Icon name="list" size={24} color={colors.onSurface} />
           </Pressable>
@@ -548,6 +577,8 @@ export default function ReaderScreen({ route, navigation }: any) {
             onPress={() => setShowSettings(true)}
             style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
             hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Reading settings"
           >
             <Icon name="settings" size={24} color={colors.onSurface} />
           </Pressable>
@@ -556,7 +587,15 @@ export default function ReaderScreen({ route, navigation }: any) {
     </View>
   );
 
-  const Fallback = ({ message, showShare = true }: { message: string; showShare?: boolean }) => (
+  const Fallback = ({
+    message,
+    showShare = true,
+    onRetry,
+  }: {
+    message: string;
+    showShare?: boolean;
+    onRetry?: () => void;
+  }) => (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32 }}>
       <View
         style={{
@@ -569,16 +608,39 @@ export default function ReaderScreen({ route, navigation }: any) {
       <Text style={{ color: colors.onSurface, fontSize: 15, textAlign: "center", marginBottom: 20 }}>
         {message}
       </Text>
+      {onRetry ? (
+        <Pressable
+          onPress={onRetry}
+          accessibilityRole="button"
+          style={{
+            backgroundColor: colors.primary, paddingHorizontal: 24, height: 48, borderRadius: 24,
+            alignItems: "center", justifyContent: "center", flexDirection: "row", marginBottom: 12,
+          }}
+        >
+          <Icon name="refresh" size={20} color={colors.onPrimary} />
+          <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600", marginLeft: 8 }}>
+            Try again
+          </Text>
+        </Pressable>
+      ) : null}
       {showShare ? (
         <Pressable
           onPress={openExternally}
+          accessibilityRole="button"
           style={{
-            backgroundColor: colors.primary, paddingHorizontal: 24, height: 48, borderRadius: 24,
+            // Secondary action when Retry is present, primary otherwise.
+            backgroundColor: onRetry ? colors.secondaryContainer : colors.primary,
+            paddingHorizontal: 24, height: 48, borderRadius: 24,
             alignItems: "center", justifyContent: "center", flexDirection: "row",
           }}
         >
-          <Icon name="share" size={20} color={colors.onPrimary} />
-          <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600", marginLeft: 8 }}>
+          <Icon name="share" size={20} color={onRetry ? colors.onSecondaryContainer : colors.onPrimary} />
+          <Text
+            style={{
+              color: onRetry ? colors.onSecondaryContainer : colors.onPrimary,
+              fontSize: 15, fontWeight: "600", marginLeft: 8,
+            }}
+          >
             Open in another app
           </Text>
         </Pressable>
@@ -586,22 +648,39 @@ export default function ReaderScreen({ route, navigation }: any) {
     </View>
   );
 
-  // Recursive rendering helper for TOC hierarchical lists (subitems)
+  // Recursive rendering helper for TOC hierarchical lists (subitems).
+  // The section currently being read (foliate reports it on every relocate)
+  // is tinted primary so long TOCs are scannable for "where am I".
+  const currentTocLabel = pageProgress?.tocItem?.label || null;
   const renderTocItem = ({ item }: { item: any }) => {
+    const isCurrent = !!currentTocLabel && item.label === currentTocLabel;
     return (
       <View style={{ marginLeft: 8 }}>
         <Pressable
           onPress={() => selectTocItem(item.href)}
+          accessibilityRole="button"
+          accessibilityLabel={item.label || "Untitled Section"}
+          accessibilityState={{ selected: isCurrent }}
           style={{
             paddingVertical: 14,
             paddingHorizontal: 16,
             borderBottomWidth: 1,
             borderBottomColor: colors.outlineVariant,
+            flexDirection: "row",
+            alignItems: "center",
           }}
         >
-          <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "500" }}>
+          <Text
+            style={{
+              flex: 1,
+              color: isCurrent ? colors.primary : colors.onSurface,
+              fontSize: 16,
+              fontWeight: isCurrent ? "700" : "500",
+            }}
+          >
             {item.label || "Untitled Section"}
           </Text>
+          {isCurrent ? <Icon name="bookmark" size={18} color={colors.primary} /> : null}
         </Pressable>
         {item.subitems && item.subitems.length > 0 && (
           <View style={{ paddingLeft: 12, borderLeftWidth: 1, borderLeftColor: colors.outlineVariant }}>
@@ -622,11 +701,21 @@ export default function ReaderScreen({ route, navigation }: any) {
       <Pdf
         source={{ uri: ebookUri, headers: { Authorization: `Bearer ${token}` } }}
         style={{ flex: 1, backgroundColor: colors.surface }}
+        page={initialPdfPageRef.current}
+        onPageChanged={(page: number, numberOfPages: number) => {
+          setPdfProgress({ page, pages: numberOfPages });
+          // Remember where the user left off so reopening resumes here.
+          storage.set(pdfPageKey, page);
+        }}
         onError={() => setPdfError(true)}
       />
     );
   } else if (isFoliateFormat) {
-    if (ebookStatus === "loading" || ebookStatus === "idle") {
+    if (!WebView) {
+      // Native WebView module missing from this build — without this branch
+      // the screen would sit on the loading state forever.
+      body = <Fallback message="The in-app reader isn't available in this build. Open the ebook in another app instead." />;
+    } else if (ebookStatus === "loading" || ebookStatus === "idle") {
       body = (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface }}>
           <Animated.View style={{ opacity: pulseAnim, transform: [{ scale: pulseAnim }], marginBottom: 20 }}>
@@ -662,9 +751,14 @@ export default function ReaderScreen({ route, navigation }: any) {
         />
       );
     } else if (ebookStatus === "toobig") {
-      body = <Fallback message="This ebook is large — open it in a dedicated reader app for the best experience." />;
+      body = <Fallback message="This ebook is too large to display in-app — open it in a dedicated reader app for the best experience." />;
     } else {
-      body = <Fallback message={`Couldn't open this ${formatLabel} in-app.`} />;
+      body = (
+        <Fallback
+          message={`Couldn't open this ${formatLabel} in-app. Check your connection and try again, or open it in another app.`}
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
+      );
     }
   } else if (isShareOnly) {
     body = (
@@ -680,6 +774,25 @@ export default function ReaderScreen({ route, navigation }: any) {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       {Header}
       <View style={{ flex: 1 }}>{body}</View>
+
+      {/* PDF footer — page indicator matching the epub footer below */}
+      {canRenderPdf && pdfProgress && (
+        <View
+          style={{
+            alignItems: "center",
+            justifyContent: "center",
+            paddingVertical: 10,
+            paddingHorizontal: 24,
+            backgroundColor: colors.surface,
+            borderTopWidth: 1,
+            borderTopColor: colors.outlineVariant,
+          }}
+        >
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
+            Page {pdfProgress.page} of {pdfProgress.pages}
+          </Text>
+        </View>
+      )}
 
       {/* Footer Progress Indicators */}
       {isFoliateFormat && canRenderEbook && pageProgress && (
@@ -747,6 +860,8 @@ export default function ReaderScreen({ route, navigation }: any) {
               <Pressable
                 onPress={() => setShowToc(false)}
                 style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }}
+                accessibilityRole="button"
+                accessibilityLabel="Close table of contents"
               >
                 <Icon name="close" size={24} color={colors.onSurface} />
               </Pressable>
@@ -788,10 +903,12 @@ export default function ReaderScreen({ route, navigation }: any) {
           >
             {/* Modal Header */}
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Style Configurations</Text>
+              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Reading Settings</Text>
               <Pressable
                 onPress={() => setShowSettings(false)}
                 style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }}
+                accessibilityRole="button"
+                accessibilityLabel="Close reading settings"
               >
                 <Icon name="close" size={24} color={colors.onSurface} />
               </Pressable>
@@ -802,20 +919,28 @@ export default function ReaderScreen({ route, navigation }: any) {
               <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Text Size</Text>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                 <Pressable
-                  onPress={() => setFontSize(prev => Math.max(80, prev - 10))}
+                  onPress={() => setFontSize(prev => Math.max(FONT_SIZE_MIN, prev - 10))}
+                  disabled={fontSize <= FONT_SIZE_MIN}
+                  accessibilityRole="button"
+                  accessibilityLabel="Decrease text size"
                   style={{
                     width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
                     alignItems: "center", justifyContent: "center",
+                    opacity: fontSize <= FONT_SIZE_MIN ? 0.4 : 1,
                   }}
                 >
                   <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>-</Text>
                 </Pressable>
                 <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>{fontSize}%</Text>
                 <Pressable
-                  onPress={() => setFontSize(prev => Math.min(180, prev + 10))}
+                  onPress={() => setFontSize(prev => Math.min(FONT_SIZE_MAX, prev + 10))}
+                  disabled={fontSize >= FONT_SIZE_MAX}
+                  accessibilityRole="button"
+                  accessibilityLabel="Increase text size"
                   style={{
                     width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
                     alignItems: "center", justifyContent: "center",
+                    opacity: fontSize >= FONT_SIZE_MAX ? 0.4 : 1,
                   }}
                 >
                   <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>+</Text>
@@ -829,6 +954,8 @@ export default function ReaderScreen({ route, navigation }: any) {
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 <Pressable
                   onPress={() => setFontFamily("serif")}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: fontFamily === "serif" }}
                   style={{
                     flex: 1, height: 48, borderRadius: 12,
                     backgroundColor: fontFamily === "serif" ? colors.primary : colors.secondaryContainer,
@@ -839,6 +966,8 @@ export default function ReaderScreen({ route, navigation }: any) {
                 </Pressable>
                 <Pressable
                   onPress={() => setFontFamily("sans-serif")}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: fontFamily === "sans-serif" }}
                   style={{
                     flex: 1, height: 48, borderRadius: 12,
                     backgroundColor: fontFamily === "sans-serif" ? colors.primary : colors.secondaryContainer,
@@ -862,6 +991,9 @@ export default function ReaderScreen({ route, navigation }: any) {
                   <Pressable
                     key={item.label}
                     onPress={() => setLineHeight(item.val)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.label} line spacing`}
+                    accessibilityState={{ selected: lineHeight === item.val }}
                     style={{
                       flex: 1, height: 48, borderRadius: 12,
                       backgroundColor: lineHeight === item.val ? colors.primary : colors.secondaryContainer,

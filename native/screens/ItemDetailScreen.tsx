@@ -3,6 +3,7 @@ import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensio
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
+import { queueFinishedPatch } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -14,6 +15,7 @@ import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
+import { formatBytes } from "../utils/format";
 
 /** Strip HTML tags/entities from ABS descriptions (which contain markup). */
 function stripHtml(html: string): string {
@@ -49,7 +51,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const { itemId } = route.params || {};
   const { serverConnectionConfig } = useUserStore();
   const [descExpanded, setDescExpanded] = useState(false);
+  // Whether the collapsed description actually overflows 5 lines — drives the
+  // "Read more" affordance reliably (a char-count guess misfires on short
+  // paragraphs with many line breaks and on long single-line text).
+  const [descOverflows, setDescOverflows] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [startingEpisodeId, setStartingEpisodeId] = useState<string | null>(null);
   const [chaptersVisible, setChaptersVisible] = useState(false);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
@@ -76,6 +83,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // an active session AND reflects a just-toggled finished state (the refetch
   // bumps the snapshot's lastUpdate past the map's).
   const liveProgress = useUserStore((s) => (itemId ? s.mediaProgress[itemId] : null));
+  // Full map for podcast episode rows (their entries are keyed `${itemId}-${episodeId}`).
+  const progressMap = useUserStore((s) => s.mediaProgress);
   const itemProgress = item?.userMediaProgress || null;
   const progress = React.useMemo(() => {
     if (!liveProgress) return itemProgress;
@@ -91,25 +100,54 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   const handleToggleFinished = async () => {
     if (!item?.id) return;
-    try {
-      const next = !isFinished;
-      await api.patch(`/api/me/progress/${item.id}`, { isFinished: next });
-      // Merge into the global progress map immediately so badges/cards on
-      // already-rendered screens update without waiting for the next /api/me.
-      useUserStore.setState((s) => ({
-        mediaProgress: {
+    const next = !isFinished;
+    // Merge into the global progress map immediately so badges/cards on
+    // already-rendered screens update without waiting for the next /api/me —
+    // applied for BOTH the online and queued-offline outcomes below.
+    const applyLocally = () =>
+      useUserStore.setState((s) => {
+        const now = Date.now();
+        const nextMap: Record<string, any> = {
           ...s.mediaProgress,
           [item.id]: {
             ...s.mediaProgress[item.id],
             libraryItemId: item.id,
             isFinished: next,
-            updatedAt: Date.now(),
+            updatedAt: now,
           },
-        },
-      }));
+        };
+        if (counterpart?.id) {
+          nextMap[counterpart.id] = {
+            ...s.mediaProgress[counterpart.id],
+            libraryItemId: counterpart.id,
+            isFinished: next,
+            updatedAt: now,
+          };
+        }
+        return { mediaProgress: nextMap };
+      });
+    try {
+      await api.patch(`/api/me/progress/${item.id}`, { isFinished: next });
+      // Mark-as-finished means the BOOK is finished — when the ebook and the
+      // audiobook live as two separate library items (the fuzzy-matched
+      // counterpart), mirror the flag to the sibling so both formats agree.
+      // Best-effort: a failure here never blocks the primary toggle (but it
+      // does queue, so it still lands once connectivity returns).
+      if (counterpart?.id) {
+        api.patch(`/api/me/progress/${counterpart.id}`, { isFinished: next }).catch((e) => {
+          console.warn("[ItemDetail] Counterpart finished-toggle failed — queueing:", e);
+          queueFinishedPatch(counterpart.id, next);
+        });
+      }
+      applyLocally();
       refetchItem();
     } catch (err) {
-      console.warn("[ItemDetail] Toggle finished failed:", err);
+      // Offline — queue the toggle(s) and reflect the state locally anyway;
+      // flushPendingSyncs delivers them when the server is reachable again.
+      console.warn("[ItemDetail] Toggle finished failed — queueing for later:", err);
+      queueFinishedPatch(item.id, next);
+      if (counterpart?.id) queueFinishedPatch(counterpart.id, next);
+      applyLocally();
     }
   };
 
@@ -152,26 +190,27 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
 
+  const loadItem = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await api.get(`/api/items/${itemId}?expanded=1&include=progress`);
+      setItem(response.data);
+    } catch (err) {
+      console.error("[ItemDetail] Failed to fetch item:", err);
+      setError("Failed to load item details.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!itemId) {
       setError("No item ID provided.");
       setLoading(false);
       return;
     }
-    const fetchItem = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const response = await api.get(`/api/items/${itemId}?expanded=1&include=progress`);
-        setItem(response.data);
-      } catch (err) {
-        console.error("[ItemDetail] Failed to fetch item:", err);
-        setError("Failed to load item details.");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchItem();
+    loadItem();
   }, [itemId]);
 
   const metadata = item?.media?.metadata || {};
@@ -206,7 +245,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const readerSetFinished =
     ebookProgressFraction >= 0.99 && audioProgressFraction > 0 && audioProgressFraction < 0.99;
   const audioFinished = isFinished && !readerSetFinished && hasAudio(item);
-  const ebookFinished = ebookProgressFraction >= 0.99 || (isFinished && !hasAudio(item));
+  // An EXPLICIT mark-as-finished finishes the whole book — both rows. The one
+  // exception stays the reader auto-finish (ebook hit 99% while audio is
+  // mid-way), where the audio row keeps its real remaining time.
+  const ebookFinished = ebookProgressFraction >= 0.99 || (isFinished && !readerSetFinished);
   const showAudioRow = hasAudio(item) && (audioProgressFraction > 0 || audioFinished);
   const showEbookRow = itemHasEbook(item) && (ebookProgressFraction > 0 || ebookFinished);
   const audioPct = audioFinished
@@ -294,6 +336,30 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const genres: string[] = metadata.genres || [];
   const tags: string[] = item?.media?.tags || [];
   const publishedYear: string | undefined = metadata.publishedYear;
+  const publisher: string | undefined = metadata.publisher;
+  const language: string | undefined = metadata.language;
+  // Total media size in bytes (expanded responses carry it on the item).
+  const sizeBytes: number = Number(item?.size || item?.media?.size || 0);
+
+  // Podcast episodes, most recent first. Shown capped so a 500-episode feed
+  // doesn't render an unbounded list inside this ScrollView.
+  const EPISODE_CAP = 100;
+  const episodes: any[] = React.useMemo(() => {
+    if (!isPodcastItem) return [];
+    const eps = [...(item?.media?.episodes || [])];
+    eps.sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0));
+    return eps;
+  }, [isPodcastItem, item]);
+
+  const playEpisode = async (episode: any) => {
+    if (!episode?.id || startingEpisodeId || starting) return;
+    setStartingEpisodeId(episode.id);
+    try {
+      await startPlayback(itemId, episode.id);
+    } finally {
+      setStartingEpisodeId(null);
+    }
+  };
 
   // Series subtitle e.g. "Expeditionary Force, Book 10".
   const seriesSubtitle =
@@ -399,8 +465,23 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         </View>
       ) : error ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="close" size={40} color={colors.error} />
+          <Icon name="warning" size={40} color={colors.error} />
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 12 }}>{error}</Text>
+          {itemId ? (
+            <Pressable
+              onPress={loadItem}
+              accessibilityRole="button"
+              style={{
+                marginTop: 20,
+                backgroundColor: colors.primary,
+                paddingHorizontal: 24,
+                paddingVertical: 10,
+                borderRadius: 20,
+              }}
+            >
+              <Text style={{ color: colors.onPrimary, fontSize: 14, fontWeight: "600" }}>Retry</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : item ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 120 : 48 }}>
@@ -466,6 +547,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               <Pressable
                 onPress={onPlayPress}
                 disabled={starting}
+                accessibilityRole="button"
+                accessibilityLabel={!isFinished && audioProgressFraction > 0 ? "Continue listening" : "Play"}
                 style={{
                   flex: 1,
                   backgroundColor: colors.primary,
@@ -500,6 +583,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             {canRead ? (
               <Pressable
                 onPress={openReader}
+                accessibilityRole="button"
+                accessibilityLabel="Read ebook"
                 style={{
                   flex: 1,
                   backgroundColor: hasAudioMedia ? colors.secondaryContainer : colors.primary,
@@ -530,10 +615,20 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               </View>
             ) : null}
 
-            {/* Download Button — for items with their own audio or ebook. */}
-            {selfHasAudio || selfHasEbook ? (
+            {/* Download Button — for items with their own audio or ebook.
+                Hidden for podcasts: the downloader handles book tracks, not
+                episodes, so the button would silently no-op there. */}
+            {(selfHasAudio || selfHasEbook) && !isPodcastItem ? (
               <Pressable
                 onPress={handleDownloadPress}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isDownloaded
+                    ? "Delete download"
+                    : isDownloading
+                    ? `Cancel download, ${downloadPct} percent complete`
+                    : "Download"
+                }
                 style={{
                   marginLeft: 10,
                   width: 52,
@@ -569,6 +664,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             {hasChapters ? (
               <Pressable
                 onPress={() => setChaptersVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="View chapters"
                 style={{
                   marginLeft: 10,
                   width: 52,
@@ -586,6 +683,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             {/* Mark as Finished/Unfinished Button */}
             <Pressable
               onPress={handleToggleFinished}
+              accessibilityRole="button"
+              accessibilityLabel={isFinished ? "Mark as not finished" : "Mark as finished"}
+              accessibilityState={{ selected: isFinished }}
               style={{
                 marginLeft: 10,
                 width: 52,
@@ -727,7 +827,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           {/* Metadata table */}
           <View style={{ paddingHorizontal: 20, marginTop: 20 }}>
              {authors.length > 0 ? (
-              <MetaRow label="Author">
+              <MetaRow label={authors.length > 1 ? "Authors" : "Author"}>
                 <LinkList
                   items={authors.map((a) => ({
                     key: a.id,
@@ -767,7 +867,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             ) : null}
 
              {narrators.length > 0 ? (
-              <MetaRow label="Narrators">
+              <MetaRow label={narrators.length > 1 ? "Narrators" : "Narrator"}>
                 <LinkList
                   items={narrators.map((n) => ({
                     key: n,
@@ -784,7 +884,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             ) : null}
 
             {genres.length > 0 ? (
-              <MetaRow label="Genres">
+              <MetaRow label={genres.length > 1 ? "Genres" : "Genre"}>
                 <LinkList
                   items={genres.map((g) => ({
                     key: g,
@@ -801,7 +901,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             ) : null}
 
             {tags.length > 0 ? (
-              <MetaRow label="Tags">
+              <MetaRow label={tags.length > 1 ? "Tags" : "Tag"}>
                 <LinkList
                   items={tags.map((t) => ({
                     key: t,
@@ -822,20 +922,164 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 <Value text={String(publishedYear)} />
               </MetaRow>
             ) : null}
+
+            {publisher ? (
+              <MetaRow label="Publisher">
+                <Value text={publisher} />
+              </MetaRow>
+            ) : null}
+
+            {language ? (
+              <MetaRow label="Language">
+                <Value text={language} />
+              </MetaRow>
+            ) : null}
+
+            {sizeBytes > 0 ? (
+              <MetaRow label="Size">
+                <Value text={formatBytes(sizeBytes)} />
+              </MetaRow>
+            ) : null}
           </View>
 
           {/* Description with Read more */}
           {description ? (
             <View style={{ paddingHorizontal: 20, marginTop: 20 }}>
+              {/* Invisible unclamped copy measures the real line count — the
+                  clamped Text can't report overflow itself, and a char-count
+                  guess misfires on multi-paragraph or long-single-line text. */}
+              <Text
+                style={{
+                  position: "absolute",
+                  left: 20,
+                  right: 20,
+                  opacity: 0,
+                  fontSize: 14,
+                  lineHeight: 21,
+                }}
+                pointerEvents="none"
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                onTextLayout={(e) => {
+                  const overflows = e.nativeEvent.lines.length > 5;
+                  if (overflows !== descOverflows) setDescOverflows(overflows);
+                }}
+              >
+                {description}
+              </Text>
               <Text numberOfLines={descExpanded ? undefined : 5} style={{ color: colors.onSurface, fontSize: 14, lineHeight: 21 }}>
                 {description}
               </Text>
-              {description.length > 240 ? (
-                <Pressable onPress={() => setDescExpanded((v) => !v)}>
+              {descOverflows ? (
+                <Pressable
+                  onPress={() => setDescExpanded((v) => !v)}
+                  accessibilityRole="button"
+                  accessibilityLabel={descExpanded ? "Collapse description" : "Expand description"}
+                  hitSlop={8}
+                >
                   <Text style={{ color: colors.primary, fontSize: 14, fontWeight: "600", marginTop: 8 }}>
                     {descExpanded ? "Read less" : "Read more"}
                   </Text>
                 </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+
+          {/* Podcast episodes */}
+          {isPodcastItem && episodes.length > 0 ? (
+            <View style={{ paddingHorizontal: 20, marginTop: 24 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginBottom: 4 }}>
+                {episodes.length} {episodes.length === 1 ? "Episode" : "Episodes"}
+              </Text>
+              {episodes.slice(0, EPISODE_CAP).map((episode) => {
+                const epProgress = progressMap[`${itemId}-${episode.id}`];
+                const epFinished = !!epProgress?.isFinished;
+                const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
+                const pubDate = episode.publishedAt
+                  ? new Date(episode.publishedAt).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })
+                  : "";
+                const durationStr = elapsedPretty(episode.duration || episode.audioFile?.duration);
+                const subtitleStr = [pubDate, durationStr].filter(Boolean).join(" · ");
+                const isThisPlaying =
+                  currentSession?.libraryItemId === itemId && currentSession?.episodeId === episode.id;
+                return (
+                  <View
+                    key={episode.id}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      paddingVertical: 10,
+                      borderBottomWidth: 1,
+                      borderBottomColor: colors.outlineVariant,
+                      opacity: epFinished ? 0.55 : 1,
+                    }}
+                  >
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                      <Text numberOfLines={2} style={{ color: colors.onSurface, fontSize: 14, fontWeight: "600", lineHeight: 19 }}>
+                        {episode.title || "Untitled episode"}
+                      </Text>
+                      {subtitleStr ? (
+                        <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+                          {subtitleStr}
+                          {epFinished ? " · Finished" : ""}
+                        </Text>
+                      ) : null}
+                      {!epFinished && epFraction > 0 ? (
+                        <View
+                          style={{
+                            height: 3,
+                            borderRadius: 1.5,
+                            backgroundColor: colors.surfaceContainerHighest,
+                            marginTop: 6,
+                            overflow: "hidden",
+                          }}
+                        >
+                          <View
+                            style={{
+                              height: "100%",
+                              width: `${Math.min(99, Math.max(1, Math.round(epFraction * 100)))}%`,
+                              backgroundColor: colors.primary,
+                            }}
+                          />
+                        </View>
+                      ) : null}
+                    </View>
+                    <Pressable
+                      onPress={() => playEpisode(episode)}
+                      disabled={!!startingEpisodeId || isThisPlaying}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Play ${episode.title || "episode"}`}
+                      hitSlop={6}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 20,
+                        backgroundColor: isThisPlaying ? colors.primaryContainer : colors.secondaryContainer,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      {startingEpisodeId === episode.id ? (
+                        <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
+                      ) : (
+                        <Icon
+                          name={isThisPlaying ? "headphones" : "play"}
+                          size={22}
+                          color={isThisPlaying ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                        />
+                      )}
+                    </Pressable>
+                  </View>
+                );
+              })}
+              {episodes.length > EPISODE_CAP ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 10 }}>
+                  Showing the {EPISODE_CAP} most recent episodes.
+                </Text>
               ) : null}
             </View>
           ) : null}

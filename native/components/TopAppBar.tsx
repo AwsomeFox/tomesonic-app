@@ -80,6 +80,9 @@ export default function TopAppBar({
             setSearchQuery("");
           }}
           hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Close search"
           style={{ padding: 10, borderRadius: 24 }}
         >
           <Icon name="back" size={24} color={colors.onSurface} />
@@ -118,6 +121,9 @@ export default function TopAppBar({
             <Pressable
               onPress={() => setSearchQuery("")}
               hitSlop={8}
+              android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 18 }}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
               style={{ padding: 2 }}
             >
               <Icon name="close" size={18} color={colors.onSurfaceVariant} />
@@ -145,6 +151,9 @@ export default function TopAppBar({
         <Pressable
           onPress={() => navigation?.goBack()}
           hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
           style={{ padding: 10, borderRadius: 24, marginRight: 4 }}
         >
           <Icon name="back" size={24} color={colors.onSurface} />
@@ -174,11 +183,15 @@ export default function TopAppBar({
         <>
           <Pressable
             onPress={openLibrarySelector}
+            android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.12) }}
+            accessibilityRole="button"
+            accessibilityLabel={`Switch library. Current library: ${libraryName}`}
             style={{
               flexDirection: "row",
               alignItems: "center",
               backgroundColor: colors.secondaryContainer,
               borderRadius: 20,
+              overflow: "hidden",
               paddingHorizontal: 16,
               paddingVertical: 8,
               marginLeft: 4,
@@ -199,7 +212,12 @@ export default function TopAppBar({
             </Text>
           </Pressable>
 
-          <View style={{ marginLeft: 10 }}>
+          {/* Decorative sync indicator — hidden from screen readers. */}
+          <View
+            style={{ marginLeft: 10 }}
+            importantForAccessibility="no-hide-descendants"
+            accessibilityElementsHidden
+          >
             <Icon name="cloud" size={22} color={colors.primary} />
           </View>
           
@@ -209,21 +227,42 @@ export default function TopAppBar({
 
       {/* Download (series/item detail) */}
       {showDownload ? (
-        <Pressable onPress={onDownload} hitSlop={8} style={{ padding: 10 }}>
+        <Pressable
+          onPress={onDownload}
+          hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Download"
+          style={{ padding: 10 }}
+        >
           <Icon name="download" size={24} color={colors.onSurface} />
         </Pressable>
       ) : null}
 
       {/* Filter */}
       {showFilter ? (
-        <Pressable onPress={onFilter} hitSlop={8} style={{ padding: 10 }}>
+        <Pressable
+          onPress={onFilter}
+          hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Filter"
+          style={{ padding: 10 }}
+        >
           <Icon name="filter" size={24} color={colors.onSurface} />
         </Pressable>
       ) : null}
 
       {/* Sort */}
       {showSort ? (
-        <Pressable onPress={onSort} hitSlop={8} style={{ padding: 10 }}>
+        <Pressable
+          onPress={onSort}
+          hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Sort"
+          style={{ padding: 10 }}
+        >
           <Icon name="sort" size={24} color={colors.onSurface} />
         </Pressable>
       ) : null}
@@ -233,6 +272,9 @@ export default function TopAppBar({
         <Pressable
           onPress={() => setSearchActive(true)}
           hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Search"
           style={{ padding: 10 }}
         >
           <Icon name="search" size={24} color={colors.onSurface} />
@@ -243,6 +285,9 @@ export default function TopAppBar({
       <Pressable
         onPress={() => setMenuOpen(true)}
         hitSlop={8}
+        android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 20 }}
+        accessibilityRole="button"
+        accessibilityLabel="Account menu"
         style={{
           padding: 8,
           borderRadius: 20,

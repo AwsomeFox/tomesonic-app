@@ -19,9 +19,10 @@ import Animated, {
   withSpring,
   withTiming,
   interpolate,
-  Easing,
 } from "react-native-reanimated";
+import { SPATIAL_SHEET, EMPHASIZED } from "../theme/motion";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { useUserStore } from "../store/useUserStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { navigationRef } from "../navigation/navigationRef";
@@ -50,6 +51,64 @@ function secondsToTimestamp(seconds: number) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+// Circular transport helper button. Hoisted out of the player component:
+// defined inline it got a new component identity on every ~1s position
+// re-render, so React unmounted/remounted the button subtree each tick
+// (dropping in-flight press feedback).
+function CircleButton({
+  icon,
+  iconSize = 22,
+  onPress,
+  disabled,
+  label,
+  colors,
+}: {
+  icon: any;
+  iconSize?: number;
+  onPress: () => void;
+  disabled?: boolean;
+  label: string;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
+      style={{
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: colors.secondaryContainer,
+        alignItems: "center",
+        justifyContent: "center",
+        elevation: 1,
+      }}
+    >
+      <Icon
+        name={icon}
+        size={iconSize}
+        color={
+          disabled
+            ? withAlpha(colors.onSecondaryContainer, 0.4)
+            : colors.onSecondaryContainer
+        }
+      />
+    </Pressable>
+  );
+}
+
+// Maps a configured jump interval to the closest available glyph in the
+// rewind-N / fast-forward-N icon families (5/10/15/30/45/60).
+const JUMP_ICON_STEPS = [5, 10, 15, 30, 45, 60];
+function jumpIconName(direction: "back" | "fwd", seconds: number): any {
+  const n = JUMP_ICON_STEPS.reduce((best, step) =>
+    Math.abs(step - seconds) < Math.abs(best - seconds) ? step : best, 30);
+  return direction === "back" ? `rewind-${n}` : `fast-forward-${n}`;
+}
+
 export default function PlayerBottomSheet() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
@@ -63,12 +122,12 @@ export default function PlayerBottomSheet() {
   const isLandscape = screenWidth > screenHeight;
 
 
-  // Shallow-select only the slices this component actually renders. The old
+  // Select only the slices this component actually renders. The old
   // selector-less usePlaybackStore() re-rendered the whole player on EVERY store
   // write — including ones it doesn't use (isCasting, castClient, chapterQueue,
-  // onTabScreen, isInitialized). With useShallow it re-renders only when one of
-  // these values changes. (position/duration still tick ~1s while playing, which
-  // the scrubber needs — isolating those into a child is a further optimization.)
+  // onTabScreen, isInitialized). With per-slice selectors it re-renders only when
+  // one of these values changes. (position/duration still tick ~1s while playing,
+  // which the scrubber needs — isolating those into a child is a further optimization.)
   const currentSession = usePlaybackStore((s) => s.currentSession);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
   const playPause = usePlaybackStore((s) => s.playPause);
@@ -89,6 +148,11 @@ export default function PlayerBottomSheet() {
   const cancelSleepTimer = usePlaybackStore((s) => s.cancelSleepTimer);
   const isPlayerExpanded = usePlaybackStore((s) => s.isPlayerExpanded);
   const setPlayerExpanded = usePlaybackStore((s) => s.setPlayerExpanded);
+  // In-app jump buttons honor the Settings jump intervals — amount AND icon
+  // (they were hardcoded to 30s while the notification/Auto buttons already
+  // followed the setting via applyJumpOptions).
+  const jumpFwdSecs = useUserStore((s) => s.settings?.jumpForwardTime ?? 10);
+  const jumpBackSecs = useUserStore((s) => s.settings?.jumpBackwardTime ?? 10);
 
   const isPlayerExpandedRef = useRef(isPlayerExpanded);
   useEffect(() => {
@@ -103,15 +167,24 @@ export default function PlayerBottomSheet() {
   const playProgress = useSharedValue(isPlaying ? 1 : 0);
 
   useEffect(() => {
-    playProgress.value = withTiming(isPlaying ? 1 : 0, { duration: 300 });
+    playProgress.value = withTiming(isPlaying ? 1 : 0, { duration: 300, easing: EMPHASIZED });
   }, [isPlaying]);
 
-  // Celebrate when a book reaches its end — fires once per session.
+  // Celebrate when a book reaches its end — fires once per session, and only
+  // on CROSSING the finish line. Without the crossing check, restoring a
+  // session that was saved at the end (reopening an already-finished book)
+  // fired confetti on app launch.
   const [showConfetti, setShowConfetti] = useState(false);
   const celebratedRef = useRef<string | null>(null);
+  const prevPosRef = useRef<{ id: string; pos: number } | null>(null);
   useEffect(() => {
     const sessionId = currentSession?.id;
     if (!sessionId || !duration || duration <= 0) return;
+    const prev = prevPosRef.current;
+    prevPosRef.current = { id: sessionId, pos: position };
+    // First observation of this session (resume point) never celebrates,
+    // nor does a position already past the line.
+    if (!prev || prev.id !== sessionId || prev.pos >= duration - 2) return;
     if (position >= duration - 2 && celebratedRef.current !== sessionId) {
       celebratedRef.current = sessionId;
       setShowConfetti(true);
@@ -127,7 +200,7 @@ export default function PlayerBottomSheet() {
   useEffect(() => {
     bottomOffsetVal.value = withTiming(bottomOffset, {
       duration: 300,
-      easing: Easing.out(Easing.cubic),
+      easing: EMPHASIZED,
     });
   }, [bottomOffset]);
 
@@ -137,10 +210,10 @@ export default function PlayerBottomSheet() {
 
   useEffect(() => {
     if (isPlayerExpanded) {
-      sheetProgress.value = withSpring(1, { damping: 30, stiffness: 150, overshootClamping: true });
+      sheetProgress.value = withSpring(1, SPATIAL_SHEET);
     } else {
       setShowChapters(false);
-      sheetProgress.value = withSpring(0, { damping: 30, stiffness: 150, overshootClamping: true });
+      sheetProgress.value = withSpring(0, SPATIAL_SHEET);
     }
   }, [isPlayerExpanded]);
 
@@ -180,6 +253,17 @@ export default function PlayerBottomSheet() {
   const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + 36 + 20;
   const TRANSPORT_Y_EXP = TITLE_Y_EXP + 64 + 24;
 
+  // Layout values the sheet PanResponder needs. The responder is created ONCE
+  // (useRef), so reading `screenHeight`/`COVER_Y_EXP` directly in its callbacks
+  // would freeze them at first-render values — after a rotation the drag range
+  // and the expanded drag-zone check would still use the old orientation's
+  // numbers (same stale-closure pitfall the chapter scrubber's refs avoid).
+  const sheetLayoutRef = useRef({ screenHeight, dragTopLimit: 0 });
+  sheetLayoutRef.current = {
+    screenHeight,
+    dragTopLimit: COVER_Y_EXP + COVER_SIZE_EXP + 16,
+  };
+
   // PanResponder to drive sheet progress via vertical dragging
   const panResponder = useRef(
     PanResponder.create({
@@ -195,10 +279,10 @@ export default function PlayerBottomSheet() {
         }
 
         // Expanded: drag touch must start in the top region
-        return gestureState.y0 < COVER_Y_EXP + COVER_SIZE_EXP + 16;
+        return gestureState.y0 < sheetLayoutRef.current.dragTopLimit;
       },
       onPanResponderMove: (evt, gestureState) => {
-        const range = screenHeight - MINIPLAYER_HEIGHT - bottomOffsetVal.value;
+        const range = sheetLayoutRef.current.screenHeight - MINIPLAYER_HEIGHT - bottomOffsetVal.value;
         if (isPlayerExpandedRef.current) {
           const newProgress = 1 - gestureState.dy / range;
           sheetProgress.value = Math.max(0, Math.min(1, newProgress));
@@ -212,18 +296,18 @@ export default function PlayerBottomSheet() {
         // Fast swipe checks
         if (gestureState.vy < -0.3) {
           setPlayerExpanded(true);
-          sheetProgress.value = withSpring(1, { damping: 30, stiffness: 150, overshootClamping: true });
+          sheetProgress.value = withSpring(1, SPATIAL_SHEET);
         } else if (gestureState.vy > 0.3) {
           setPlayerExpanded(false);
-          sheetProgress.value = withSpring(0, { damping: 30, stiffness: 150, overshootClamping: true });
+          sheetProgress.value = withSpring(0, SPATIAL_SHEET);
         } else {
           // Slow drag snaps to closest state
           if (p > 0.5) {
             setPlayerExpanded(true);
-            sheetProgress.value = withSpring(1, { damping: 30, stiffness: 150, overshootClamping: true });
+            sheetProgress.value = withSpring(1, SPATIAL_SHEET);
           } else {
             setPlayerExpanded(false);
-            sheetProgress.value = withSpring(0, { damping: 30, stiffness: 150, overshootClamping: true });
+            sheetProgress.value = withSpring(0, SPATIAL_SHEET);
           }
         }
       },
@@ -231,10 +315,10 @@ export default function PlayerBottomSheet() {
         const p = sheetProgress.value;
         if (p > 0.5) {
           setPlayerExpanded(true);
-          sheetProgress.value = withSpring(1, { damping: 30, stiffness: 150, overshootClamping: true });
+          sheetProgress.value = withSpring(1, SPATIAL_SHEET);
         } else {
           setPlayerExpanded(false);
-          sheetProgress.value = withSpring(0, { damping: 30, stiffness: 150, overshootClamping: true });
+          sheetProgress.value = withSpring(0, SPATIAL_SHEET);
         }
       },
     })
@@ -273,6 +357,10 @@ export default function PlayerBottomSheet() {
         setDragFrac(null);
       },
       onPanResponderTerminate: () => setDragFrac(null),
+      // Never yield an in-flight scrub to the sheet pan — in landscape the
+      // sheet's "top region" drag zone can overlap the controls pane, and the
+      // default (yield) would drop the drag mid-scrub without seeking.
+      onPanResponderTerminationRequest: () => false,
     })
   ).current;
 
@@ -531,6 +619,30 @@ export default function PlayerBottomSheet() {
   const chapterElapsed = currentChapter ? chapterFrac * chapterSpan : position;
   const chapterRemaining = currentChapter ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
 
+  // Clean speed label — a server-restored playbackRate can carry float noise
+  // (e.g. 1.2999999), which "+toFixed(2)" collapses to 1.3 / 3 / 1.75.
+  const speedLabel = `${+playbackSpeed.toFixed(2)}×`;
+
+  // Screen-reader support for the chapter scrubber: a pan-only surface is
+  // invisible to TalkBack, so expose it as an adjustable with ±30s steps.
+  // Shared by the portrait and landscape scrub containers.
+  const scrubA11yProps = {
+    accessible: true,
+    accessibilityRole: "adjustable" as const,
+    accessibilityLabel: currentChapter ? "Chapter position" : "Book position",
+    accessibilityValue: {
+      text: `${secondsToTimestamp(chapterElapsed)} elapsed, ${secondsToTimestamp(chapterRemaining)} remaining`,
+    },
+    accessibilityActions: [
+      { name: "increment", label: `Forward ${jumpFwdSecs} seconds` },
+      { name: "decrement", label: `Back ${jumpBackSecs} seconds` },
+    ],
+    onAccessibilityAction: (e: { nativeEvent: { actionName: string } }) => {
+      if (e.nativeEvent.actionName === "increment") seekForward(jumpFwdSecs);
+      else if (e.nativeEvent.actionName === "decrement") seekBackward(jumpBackSecs);
+    },
+  };
+
   // Both orientation subtrees stay mounted (display-toggled), and BOTH
   // scrubbers call onLayout — only the visible one may own the width ref, or
   // the hidden subtree's stale width breaks seek accuracy after rotation.
@@ -540,43 +652,6 @@ export default function PlayerBottomSheet() {
     setChapterBarWidth(w);
     chapterBarWidthRef.current = w;
   };
-
-  // Circular transport helper button style
-  const CircleButton = ({
-    icon,
-    iconSize = 22,
-    onPress,
-    disabled,
-  }: {
-    icon: any;
-    iconSize?: number;
-    onPress: () => void;
-    disabled?: boolean;
-  }) => (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      style={{
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        backgroundColor: colors.secondaryContainer,
-        alignItems: "center",
-        justifyContent: "center",
-        elevation: 1,
-      }}
-    >
-      <Icon
-        name={icon}
-        size={iconSize}
-        color={
-          disabled
-            ? withAlpha(colors.onSecondaryContainer, 0.4)
-            : colors.onSecondaryContainer
-        }
-      />
-    </Pressable>
-  );
 
   return (
     <View
@@ -647,6 +722,8 @@ export default function PlayerBottomSheet() {
         {!isPlayerExpanded && (
           <Pressable
             onPress={() => setPlayerExpanded(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}`}
             style={{
               position: "absolute",
               top: 0,
@@ -693,6 +770,8 @@ export default function PlayerBottomSheet() {
               >
                 <Pressable
                   onPress={() => setPlayerExpanded(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Collapse player"
                   style={{
                     width: 56,
                     height: 56,
@@ -714,6 +793,8 @@ export default function PlayerBottomSheet() {
                         console.warn("Cast picker failed", err);
                       }
                     }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cast to device"
                     style={{
                       width: 56,
                       height: 56,
@@ -731,6 +812,9 @@ export default function PlayerBottomSheet() {
                   <Pressable
                     onPress={() => setShowChapters(true)}
                     disabled={!hasChapters}
+                    accessibilityRole="button"
+                    accessibilityLabel="Chapters"
+                    accessibilityState={{ disabled: !hasChapters }}
                     style={{
                       width: 56,
                       height: 56,
@@ -766,6 +850,8 @@ export default function PlayerBottomSheet() {
                         }, 300);
                       }
                     }}
+                    accessibilityRole="button"
+                    accessibilityLabel="View book details"
                     style={{
                       width: 56,
                       height: 56,
@@ -844,13 +930,15 @@ export default function PlayerBottomSheet() {
                 </View>
                 <View
                   {...chapterScrubPanResponder.panHandlers}
+                  {...scrubA11yProps}
                   onLayout={onChapterBarLayoutFor(false)}
                   style={{ height: 32, justifyContent: "center" }}
                   hitSlop={{ top: 8, bottom: 8 }}
                 >
                   {/* Wavy M3 slider: played chapter is a bold scrolling wave,
                       remainder a flat track, with a handle pinned exactly to the
-                      wave's end (handled inside WavyProgress). */}
+                      wave's end (handled inside WavyProgress). Settles flat while
+                      paused, like every other player wave. */}
                   <WavyProgress
                     progress={chapterFrac}
                     playing={isPlaying}
@@ -863,6 +951,7 @@ export default function PlayerBottomSheet() {
                     showStopDot={false}
                     showHandle
                     handleActive={dragFrac != null}
+                    flattenWhenPaused
                   />
                 </View>
               </View>
@@ -886,6 +975,8 @@ export default function PlayerBottomSheet() {
                   iconSize={24}
                   onPress={() => { haptic(); previousChapter(); }}
                   disabled={!hasChapters}
+                  label="Previous chapter"
+                  colors={colors}
                 />
                 {/* Replay placeholder */}
                 <View style={{ width: 56, height: 56 }} />
@@ -899,6 +990,8 @@ export default function PlayerBottomSheet() {
                   iconSize={24}
                   onPress={() => { haptic(); nextChapter(); }}
                   disabled={!hasChapters}
+                  label="Next chapter"
+                  colors={colors}
                 />
               </View>
 
@@ -914,6 +1007,12 @@ export default function PlayerBottomSheet() {
               >
                 <Pressable
                   onPress={() => { haptic(); setShowSleepTimer(true); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    sleepTimer
+                      ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining`
+                      : "Sleep timer"
+                  }
                   style={{
                     minWidth: 56,
                     paddingHorizontal: sleepTimer ? 16 : 0,
@@ -947,6 +1046,8 @@ export default function PlayerBottomSheet() {
                 </Pressable>
                 <Pressable
                   onPress={() => { haptic(); setShowSpeed(true); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Playback speed, ${speedLabel}`}
                   style={{
                     paddingHorizontal: 24,
                     height: 56,
@@ -958,11 +1059,13 @@ export default function PlayerBottomSheet() {
                   }}
                 >
                   <Text style={{ fontSize: 18, fontWeight: "500", color: colors.onSecondaryContainer }}>
-                    {playbackSpeed}×
+                    {speedLabel}
                   </Text>
                 </Pressable>
                 <Pressable
                   onPress={() => { haptic(); setShowBookmarks(true); }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Bookmarks"
                   style={{
                     width: 56,
                     height: 56,
@@ -1084,12 +1187,14 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); seekBackward(30); }}
+            onPress={() => { haptic(); seekBackward(jumpBackSecs); }}
             hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={`Back ${jumpBackSecs} seconds`}
             style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}
           >
             <Animated.View style={animatedSmallIconStyle}>
-              <Icon name="replay-30" size={24} color={colors.onSecondaryContainer} />
+              <Icon name={jumpIconName("back", jumpBackSecs)} size={24} color={colors.onSecondaryContainer} />
             </Animated.View>
           </Pressable>
         </Animated.View>
@@ -1110,6 +1215,8 @@ export default function PlayerBottomSheet() {
           <Pressable
             onPress={() => { haptic(); playPause(); }}
             hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={isPlaying ? "Pause" : "Play"}
             style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}
           >
             <Animated.View style={animatedPlayIconStyle}>
@@ -1132,12 +1239,14 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); seekForward(30); }}
+            onPress={() => { haptic(); seekForward(jumpFwdSecs); }}
             hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel={`Forward ${jumpFwdSecs} seconds`}
             style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}
           >
             <Animated.View style={animatedSmallIconStyle}>
-              <Icon name="forward-30" size={24} color={colors.onSecondaryContainer} />
+              <Icon name={jumpIconName("fwd", jumpFwdSecs)} size={24} color={colors.onSecondaryContainer} />
             </Animated.View>
           </Pressable>
         </Animated.View>
@@ -1166,6 +1275,7 @@ export default function PlayerBottomSheet() {
             trackColor={withAlpha(colors.primary, 0.2)}
             height={10}
             strokeWidth={2.5}
+            flattenWhenPaused
           />
         </Animated.View>
         </View>
@@ -1184,7 +1294,7 @@ export default function PlayerBottomSheet() {
               animatedLandscapeMiniStyle,
             ]}
           >
-            <Pressable onPress={() => setPlayerExpanded(true)} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
+            <Pressable onPress={() => setPlayerExpanded(true)} accessibilityRole="button" accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}`} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
               <View style={{ width: 50, height: 50, borderRadius: 8, overflow: "hidden", backgroundColor: colors.surfaceContainerHigh, alignItems: "center", justifyContent: "center" }}>
                 {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
               </View>
@@ -1193,15 +1303,29 @@ export default function PlayerBottomSheet() {
                 <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{authorName}</Text>
               </View>
             </Pressable>
-            <Pressable onPress={() => { haptic(); seekBackward(30); }} hitSlop={6} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-              <Icon name="replay-30" size={24} color={colors.onSecondaryContainer} />
+            <Pressable onPress={() => { haptic(); seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+              <Icon name={jumpIconName("back", jumpBackSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
-            <Pressable onPress={() => { haptic(); playPause(); }} hitSlop={6} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
+            <Pressable onPress={() => { haptic(); playPause(); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
               <Icon name={isPlaying ? "pause" : "play"} size={30} color={colors.onPrimary} />
             </Pressable>
-            <Pressable onPress={() => { haptic(); seekForward(30); }} hitSlop={6} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-              <Icon name="forward-30" size={24} color={colors.onSecondaryContainer} />
+            <Pressable onPress={() => { haptic(); seekForward(jumpFwdSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+              <Icon name={jumpIconName("fwd", jumpFwdSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
+            {/* Pinned progress wave — parity with the portrait miniplayer. Inset
+                to the text zone: cover ends x=62, the transport cluster starts
+                ~176 from the right edge (44+10+56+10+44 + 12 padding). */}
+            <View pointerEvents="none" style={{ position: "absolute", left: 74, right: 184, top: MINIPLAYER_HEIGHT - 10 }}>
+              <WavyProgress
+                progress={liveChapterFrac}
+                playing={isPlaying}
+                color={colors.primary}
+                trackColor={withAlpha(colors.primary, 0.2)}
+                height={10}
+                strokeWidth={2.5}
+                flattenWhenPaused
+              />
+            </View>
           </Animated.View>
 
           <Animated.View
@@ -1213,14 +1337,14 @@ export default function PlayerBottomSheet() {
           >
             {/* Top bar */}
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 56 }}>
-              <Pressable onPress={() => setPlayerExpanded(false)} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+              <Pressable onPress={() => setPlayerExpanded(false)} accessibilityRole="button" accessibilityLabel="Collapse player" style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                 <Icon name="chevron-down" size={28} color={colors.onSecondaryContainer} />
               </Pressable>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
-                <Pressable onPress={() => { try { CastContext.showCastDialog(); } catch (e) {} }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                <Pressable onPress={() => { try { CastContext.showCastDialog(); } catch (err) { console.warn("Cast picker failed", err); } }} accessibilityRole="button" accessibilityLabel="Cast to device" style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                   <View pointerEvents="none"><CastButton style={{ width: 28, height: 28, tintColor: colors.onSecondaryContainer }} /></View>
                 </Pressable>
-                <Pressable onPress={() => setShowChapters(true)} disabled={!hasChapters} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                <Pressable onPress={() => setShowChapters(true)} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                   <Icon name="list" size={22} color={hasChapters ? colors.onSecondaryContainer : withAlpha(colors.onSecondaryContainer, 0.4)} />
                 </Pressable>
                 <Pressable
@@ -1229,6 +1353,8 @@ export default function PlayerBottomSheet() {
                     const targetId = currentSession?.libraryItemId || currentSession?.libraryItem?.id || currentSession?.id;
                     if (targetId) setTimeout(() => { if (navigationRef.isReady()) (navigationRef.navigate as any)("ItemDetail", { itemId: targetId }); }, 300);
                   }}
+                  accessibilityRole="button"
+                  accessibilityLabel="View book details"
                   style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}
                 >
                   <Icon name="book" size={22} color={colors.onSecondaryContainer} />
@@ -1270,30 +1396,30 @@ export default function PlayerBottomSheet() {
                     <View style={{ flexGrow: 1 }} />
                     <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>
                   </View>
-                  <View {...chapterScrubPanResponder.panHandlers} onLayout={onChapterBarLayoutFor(true)} style={{ height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
-                    <WavyProgress progress={chapterFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.22)} height={22} strokeWidth={4} amplitude={3.5} wavelength={44} showStopDot={false} showHandle handleActive={dragFrac != null} />
+                  <View {...chapterScrubPanResponder.panHandlers} {...scrubA11yProps} onLayout={onChapterBarLayoutFor(true)} style={{ height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
+                    <WavyProgress progress={chapterFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.22)} height={22} strokeWidth={4} amplitude={3.5} wavelength={44} showStopDot={false} showHandle handleActive={dragFrac != null} flattenWhenPaused />
                   </View>
                 </View>
 
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 12 }}>
-                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { haptic(); previousChapter(); }} disabled={!hasChapters} />
-                  <CircleButton icon="replay-30" iconSize={24} onPress={() => { haptic(); seekBackward(30); }} />
-                  <Pressable onPress={() => { haptic(); playPause(); }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { haptic(); previousChapter(); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { haptic(); seekBackward(jumpBackSecs); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
+                  <Pressable onPress={() => { haptic(); playPause(); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
                     <Icon name={isPlaying ? "pause" : "play"} size={36} color={colors.onPrimary} />
                   </Pressable>
-                  <CircleButton icon="forward-30" iconSize={24} onPress={() => { haptic(); seekForward(30); }} />
-                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { haptic(); nextChapter(); }} disabled={!hasChapters} />
+                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { haptic(); seekForward(jumpFwdSecs); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
+                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { haptic(); nextChapter(); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
                 </View>
 
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 24, marginTop: 12 }}>
-                  <Pressable onPress={() => { haptic(); setShowSleepTimer(true); }} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { haptic(); setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                     <Icon name="moon" size={20} color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
                     {sleepTimer ? <Text style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", fontFamily: "monospace", marginLeft: 6 }}>{secondsToTimestamp(sleepTimer.remaining)}</Text> : null}
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowSpeed(true); }} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                    <Text style={{ fontSize: 16, fontWeight: "500", color: colors.onSecondaryContainer }}>{playbackSpeed}×</Text>
+                  <Pressable onPress={() => { haptic(); setShowSpeed(true); }} accessibilityRole="button" accessibilityLabel={`Playback speed, ${speedLabel}`} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                    <Text style={{ fontSize: 16, fontWeight: "500", color: colors.onSecondaryContainer }}>{speedLabel}</Text>
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowBookmarks(true); }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { haptic(); setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="bookmark" size={20} color={colors.onSecondaryContainer} />
                   </Pressable>
                 </View>

@@ -81,6 +81,9 @@ export default function LibrarySelector() {
                     key={lib.id}
                     onPress={() => select(lib.id)}
                     android_ripple={{ color: colors.surfaceContainerHighest }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`${lib.name}${active ? ", current library" : ""}`}
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
@@ -89,7 +92,7 @@ export default function LibrarySelector() {
                     }}
                   >
                     <Icon
-                      name={lib.mediaType === "podcast" ? "book" : "library"}
+                      name={lib.mediaType === "podcast" ? "podcast" : "library"}
                       size={22}
                       color={active ? colors.primary : colors.onSurfaceVariant}
                     />

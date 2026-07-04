@@ -10,9 +10,11 @@ import {
   Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { appLogger, type LogEntry } from '../utils/logger';
+import { appLogger, type LogEntry, type LogLevel } from '../utils/logger';
 import { useThemeColors } from '../theme/useThemeColors';
 import Icon from '../components/Icon';
+
+const LEVEL_FILTERS: (LogLevel | 'ALL')[] = ['ALL', 'INFO', 'WARN', 'ERROR'];
 
 export default function LogsScreen({ navigation }: any) {
   const colors = useThemeColors();
@@ -20,7 +22,10 @@ export default function LogsScreen({ navigation }: any) {
   const [copied, setCopied] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [maskServerAddress, setMaskServerAddress] = useState(true);
+  const [levelFilter, setLevelFilter] = useState<LogLevel | 'ALL'>('ALL');
   const scrollViewRef = useRef<ScrollView>(null);
+
+  const visibleLogs = levelFilter === 'ALL' ? logs : logs.filter((l) => l.level === levelFilter);
 
   useEffect(() => {
     setLogs(appLogger.getLogs());
@@ -62,8 +67,9 @@ export default function LogsScreen({ navigation }: any) {
       .replace(',', '');
   }
 
+  // Exports what's on screen: copying while filtered to ERROR gives errors only.
   function getLogsString(): string {
-    return logs
+    return visibleLogs
       .map(
         (log) =>
           `${formatTimestamp(log.timestamp)} [${log.level.toUpperCase()}]${
@@ -123,6 +129,8 @@ export default function LogsScreen({ navigation }: any) {
           onPress={() => navigation.goBack()}
           style={iconBtnStyle}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </TouchableOpacity>
@@ -138,18 +146,70 @@ export default function LogsScreen({ navigation }: any) {
           Logs
         </Text>
 
-        <TouchableOpacity onPress={handleCopyAll} style={iconBtnStyle} hitSlop={8}>
+        <TouchableOpacity
+          onPress={handleCopyAll}
+          style={iconBtnStyle}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={copied ? 'Logs copied' : 'Copy logs to clipboard'}
+        >
           <Icon name={copied ? 'check' : 'copy'} size={22} color={colors.onSurface} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={handleShare} style={iconBtnStyle} hitSlop={8}>
+        <TouchableOpacity
+          onPress={handleShare}
+          style={iconBtnStyle}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Share logs"
+        >
           <Icon name="share" size={22} color={colors.onSurface} />
         </TouchableOpacity>
 
         <View style={{ flex: 1 }} />
 
-        <TouchableOpacity onPress={() => setMenuVisible(true)} style={iconBtnStyle} hitSlop={8}>
+        <TouchableOpacity
+          onPress={() => setMenuVisible(true)}
+          style={iconBtnStyle}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="More options"
+        >
           <Icon name="more-vert" size={24} color={colors.onSurface} />
         </TouchableOpacity>
+      </View>
+
+      {/* Level filter chips */}
+      <View style={{ flexDirection: 'row', paddingHorizontal: 16, paddingBottom: 8, columnGap: 8 }}>
+        {LEVEL_FILTERS.map((lvl) => {
+          const selected = levelFilter === lvl;
+          return (
+            <Pressable
+              key={lvl}
+              onPress={() => setLevelFilter(lvl)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={lvl === 'ALL' ? 'Show all logs' : `Show ${lvl.toLowerCase()} logs`}
+              style={{
+                paddingHorizontal: 14,
+                paddingVertical: 6,
+                borderRadius: 16,
+                backgroundColor: selected ? colors.secondaryContainer : 'transparent',
+                borderWidth: 1,
+                borderColor: selected ? 'transparent' : colors.outlineVariant,
+              }}
+            >
+              <Text
+                style={{
+                  color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                  fontSize: 13,
+                  fontWeight: '600',
+                }}
+              >
+                {lvl === 'ALL' ? 'All' : lvl.charAt(0) + lvl.slice(1).toLowerCase()}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       {/* Log List */}
@@ -158,12 +218,14 @@ export default function LogsScreen({ navigation }: any) {
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 24 }}
       >
-        {logs.length === 0 ? (
+        {visibleLogs.length === 0 ? (
           <View style={{ paddingTop: 48, alignItems: 'center' }}>
-            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14 }}>No logs to display</Text>
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14 }}>
+              {logs.length === 0 ? 'No logs to display' : `No ${levelFilter.toLowerCase()} logs`}
+            </Text>
           </View>
         ) : (
-          logs.map((log, index) => (
+          visibleLogs.map((log, index) => (
             <View
               key={index}
               style={{

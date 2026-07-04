@@ -1,8 +1,12 @@
-import React from "react";
+import React, { useRef } from "react";
 import { View, Text, Pressable, Modal, ScrollView, useWindowDimensions } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
+
+// Fixed row metrics (52 height + 2+2 vertical margin) so we can jump the list
+// to the active chapter without measuring.
+const ROW_H = 56;
 
 interface Props {
   visible: boolean;
@@ -35,8 +39,20 @@ export default function ChaptersModal({
 }: Props) {
   const colors = useThemeColors();
   const { height: screenHeight } = useWindowDimensions();
+  const scrollRef = useRef<ScrollView>(null);
 
   const hasChapters = chapters && chapters.length > 0;
+
+  // Jump to the active chapter when the list content is measured (Modal
+  // remounts children on every open, so this fires per open) — on a
+  // 60-chapter book the current chapter would otherwise be far below the
+  // fold. Two rows of context are kept above it; not animated so it reads as
+  // the initial state rather than a scroll.
+  const scrollToActive = () => {
+    if (currentChapterIndex > 2) {
+      scrollRef.current?.scrollTo({ y: (currentChapterIndex - 2) * ROW_H, animated: false });
+    }
+  };
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -54,10 +70,21 @@ export default function ChaptersModal({
             backgroundColor: colors.surfaceContainerHigh,
             borderTopLeftRadius: 28,
             borderTopRightRadius: 28,
+            paddingTop: 12,
             maxHeight: screenHeight * 0.7, // Take at most 70% of screen height
           }}
         >
           <SafeAreaView edges={["bottom"]} style={{ paddingBottom: 16 }}>
+            {/* Drag handle (affordance parity with the other bottom sheets) */}
+            <View
+              style={{
+                alignSelf: "center",
+                width: 36,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: colors.outlineVariant,
+              }}
+            />
             {/* Modal Header */}
             <View
               style={{
@@ -65,7 +92,7 @@ export default function ChaptersModal({
                 alignItems: "center",
                 justifyContent: "space-between",
                 paddingHorizontal: 24,
-                paddingTop: 20,
+                paddingTop: 8,
                 paddingBottom: 12,
                 borderBottomWidth: 1,
                 borderBottomColor: colors.outlineVariant,
@@ -79,6 +106,9 @@ export default function ChaptersModal({
               </View>
               <Pressable
                 onPress={onClose}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
                 style={{
                   width: 40,
                   height: 40,
@@ -94,6 +124,8 @@ export default function ChaptersModal({
 
             {/* Chapters List */}
             <ScrollView
+              ref={scrollRef}
+              onContentSizeChange={scrollToActive}
               style={{ marginVertical: 8 }}
               contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}
             >
@@ -107,6 +139,9 @@ export default function ChaptersModal({
                         onSeekToChapter(i);
                         onClose();
                       }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${ch.title || `Chapter ${i + 1}`}, starts at ${secondsToTimestamp(ch.start || 0)}`}
+                      accessibilityState={{ selected: active }}
                       style={{
                         flexDirection: "row",
                         alignItems: "center",

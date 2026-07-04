@@ -12,6 +12,11 @@ interface SyncPayload {
   currentTime: number;
   timeListened: number;
   duration: number;
+  // Lets a sync against a session the server no longer knows (404 — e.g. the
+  // server restarted and dropped its in-memory open sessions) fall back to a
+  // direct media-progress PATCH instead of retrying forever.
+  libraryItemId?: string;
+  episodeId?: string;
 }
 
 const PENDING_PREFIX = "pendingSync_";
@@ -56,18 +61,79 @@ const PATCH_PREFIX = "pendingPatch_";
 
 // Offline/local sessions can't POST to /api/session/:id/sync (the session only
 // exists on-device). Instead we queue a direct media-progress PATCH, flushed
-// alongside pending syncs when connectivity returns. Latest wins per item.
-export function queueProgressPatch(libraryItemId: string, currentTime: number, duration: number) {
+// alongside pending syncs when connectivity returns. Latest wins per item
+// (episodes queue independently under a composite key). `extra` carries
+// additional PATCH fields — notably a one-way isFinished:true when a book is
+// finished offline, which would otherwise never reach the server.
+// Merges `fields` into the item's queued PATCH body (latest value per field
+// wins; fields queued by other writers — e.g. audio position vs ebook cfi —
+// are preserved and flushed together in one PATCH).
+function mergePendingPatch(
+  libraryItemId: string,
+  episodeId: string | null | undefined,
+  fields: Record<string, any>
+) {
   try {
     if (!libraryItemId) return;
-    const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+    const key = `${PATCH_PREFIX}${libraryItemId}${episodeId ? `-${episodeId}` : ""}`;
+    let prevBody: Record<string, any> = {};
+    try {
+      const prevRaw = storage.getString(key);
+      if (prevRaw) {
+        const prev = JSON.parse(prevRaw);
+        // Legacy entries stored audio fields at the top level.
+        prevBody = prev?.body || {
+          ...(typeof prev?.currentTime === "number"
+            ? { currentTime: prev.currentTime, duration: prev.duration, progress: prev.progress }
+            : {}),
+          ...(prev?.extra || {}),
+        };
+      }
+    } catch {}
     storage.set(
-      `${PATCH_PREFIX}${libraryItemId}`,
-      JSON.stringify({ libraryItemId, currentTime, duration, progress })
+      key,
+      JSON.stringify({
+        libraryItemId,
+        episodeId: episodeId || undefined,
+        body: { ...prevBody, ...fields },
+      })
     );
   } catch (e) {
     appLogger.warn(`Failed to queue progress patch: ${e}`, "ProgressSync");
   }
+}
+
+export function queueProgressPatch(
+  libraryItemId: string,
+  currentTime: number,
+  duration: number,
+  episodeId?: string | null,
+  extra?: Record<string, any>
+) {
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+  mergePendingPatch(libraryItemId, episodeId, { currentTime, duration, progress, ...(extra || {}) });
+}
+
+// Queue a bare finished/unfinished toggle (explicit user action, so unlike the
+// reader's one-way finish this may legitimately send isFinished:false).
+export function queueFinishedPatch(libraryItemId: string, finished: boolean) {
+  mergePendingPatch(libraryItemId, null, { isFinished: finished });
+}
+
+// EBOOK progress queue — ebook fields ONLY (plus the one-way finish). Never
+// includes `progress`/`currentTime`: those are the AUDIO fields, and flushing
+// them from a reader save would clobber audio progress on both-format books.
+export function queueEbookProgressPatch(
+  libraryItemId: string,
+  ebookLocation: string,
+  ebookProgress: number,
+  finished?: boolean
+) {
+  mergePendingPatch(libraryItemId, null, {
+    ebookLocation,
+    ebookProgress,
+    ...(finished ? { isFinished: true } : {}),
+  });
 }
 
 async function flushPendingPatches(): Promise<void> {
@@ -80,11 +146,20 @@ async function flushPendingPatches(): Promise<void> {
         continue;
       }
       const p = JSON.parse(raw);
-      await api.patch(`/api/me/progress/${p.libraryItemId}`, {
-        currentTime: p.currentTime,
-        duration: p.duration,
-        progress: p.progress,
-      });
+      const path = p.episodeId
+        ? `/api/me/progress/${p.libraryItemId}/${p.episodeId}`
+        : `/api/me/progress/${p.libraryItemId}`;
+      // New entries carry a ready-to-send body; legacy ones the old top-level
+      // audio fields.
+      const body =
+        p.body ||
+        {
+          currentTime: p.currentTime,
+          duration: p.duration,
+          progress: p.progress,
+          ...(p.extra || {}),
+        };
+      await api.patch(path, body);
       storage.remove(key);
     } catch (e) {
       // Still offline — keep it queued.
@@ -122,8 +197,22 @@ export function flushPendingSyncs(): Promise<void> {
             duration: pending.duration,
           });
           clearPending(sessionId);
-        } catch (e) {
-          // Still offline / server error — leave it queued for next attempt.
+        } catch (e: any) {
+          // 404 = the server no longer knows this session (restart drops open
+          // sessions) — it will NEVER succeed. Convert to a direct progress
+          // PATCH when we know the item; either way stop retrying forever.
+          if (e?.response?.status === 404) {
+            if (pending.libraryItemId) {
+              queueProgressPatch(
+                pending.libraryItemId,
+                pending.currentTime,
+                pending.duration,
+                pending.episodeId
+              );
+            }
+            clearPending(sessionId);
+          }
+          // Otherwise still offline / server error — leave it queued.
         }
       }
     } catch (e) {
@@ -154,7 +243,7 @@ export async function syncProgress(payload: SyncPayload): Promise<void> {
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
-    queueProgressPatch(sessionId.replace(/^local_/, ""), currentTime, duration);
+    queueProgressPatch(sessionId.replace(/^local_/, ""), currentTime, duration, payload.episodeId);
     // Opportunistically flush — if we regained connectivity, this lands now.
     flushPendingSyncs().catch(() => {});
     return;
@@ -164,7 +253,14 @@ export async function syncProgress(payload: SyncPayload): Promise<void> {
     // latest tick, so we don't double count on the next failure.
     await flushPendingSyncs();
     await api.post(`/api/session/${sessionId}/sync`, { currentTime, timeListened, duration });
-  } catch (e) {
+  } catch (e: any) {
+    // Session gone server-side (404, e.g. server restart) — a retry can never
+    // succeed; land the position via a direct progress PATCH instead.
+    if (e?.response?.status === 404 && payload.libraryItemId) {
+      queueProgressPatch(payload.libraryItemId, currentTime, duration, payload.episodeId);
+      flushPendingSyncs().catch(() => {});
+      return;
+    }
     queuePending(payload);
   }
 }
@@ -175,13 +271,18 @@ export async function closeSession(payload: SyncPayload): Promise<void> {
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
-    queueProgressPatch(sessionId.replace(/^local_/, ""), currentTime, duration);
+    queueProgressPatch(sessionId.replace(/^local_/, ""), currentTime, duration, payload.episodeId);
     flushPendingSyncs().catch(() => {});
     return;
   }
   try {
     await api.post(`/api/session/${sessionId}/close`, { currentTime, timeListened, duration });
-  } catch (e) {
+  } catch (e: any) {
+    if (e?.response?.status === 404 && payload.libraryItemId) {
+      queueProgressPatch(payload.libraryItemId, currentTime, duration, payload.episodeId);
+      flushPendingSyncs().catch(() => {});
+      return;
+    }
     queuePending(payload);
   }
 }

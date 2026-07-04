@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import TrackPlayer from "react-native-track-player";
 import { useRemoteMediaClient } from "react-native-google-cast";
-import { usePlaybackStore } from "../store/usePlaybackStore";
+import { usePlaybackStore, restoreLocalNowPlayingMeta } from "../store/usePlaybackStore";
 import { storageHelper } from "../utils/storage";
 
 /**
@@ -21,6 +21,16 @@ export default function CastController() {
   const wasCastingRef = useRef(false);
   const offsetsRef = useRef<number[]>([]); // cumulative start (s) per queue item
   const baseOffsetRef = useRef(0); // offset of the currently-playing item
+  const currentIdxRef = useRef(0); // queue index of the currently-playing item
+  const itemsRef = useRef<any[]>([]); // the built queue items (for cross-track jumps)
+  // Progress "settle" guard: right after loadMedia (connect or cross-track
+  // seek) the receiver briefly reports positions from BEFORE the pending seek
+  // (track start / stale item) — mirroring those makes the scrubber jump to
+  // the beginning then snap back. Skip mirroring until the receiver reports
+  // near the expected target (or the guard times out as a fail-safe).
+  const settleRef = useRef<{ target: number; until: number } | null>(null);
+  const SETTLE_EPSILON_S = 12;
+  const SETTLE_TIMEOUT_MS = 10000;
 
   // Register/unregister the client for transport routing, and resume local on
   // disconnect.
@@ -31,7 +41,12 @@ export default function CastController() {
     } else if (wasCastingRef.current) {
       wasCastingRef.current = false;
       loadedKeyRef.current = null;
+      settleRef.current = null;
+      usePlaybackStore.getState().setCastSeekHandler(null);
       const pos = usePlaybackStore.getState().position;
+      // Respect the receiver's play state at disconnect: if the cast was
+      // paused, resume LOCAL playback paused too instead of blasting audio.
+      const wasPlaying = usePlaybackStore.getState().isPlaying;
       (async () => {
         try {
           // Route through the store's seek — with a chapter-clipped local
@@ -39,8 +54,13 @@ export default function CastController() {
           // (each queue item is chapter-relative). setCastState(null) already
           // ran above, so seek() takes the local path with chapter mapping.
           await usePlaybackStore.getState().seek(pos);
-          await TrackPlayer.play();
-          usePlaybackStore.setState({ isPlaying: true });
+          // While casting the progress loop rewrote the paused local item's
+          // title to the receiver's chapter — put the true one back.
+          await restoreLocalNowPlayingMeta();
+          if (wasPlaying) {
+            await TrackPlayer.play();
+            usePlaybackStore.setState({ isPlaying: true });
+          }
         } catch (e) {
           console.warn("[Cast] resume local failed", e);
         }
@@ -54,7 +74,14 @@ export default function CastController() {
     const subs: any[] = [];
     subs.push(
       client.onMediaProgressUpdated((progress: number) => {
-        usePlaybackStore.setState({ position: baseOffsetRef.current + progress });
+        const abs = baseOffsetRef.current + progress;
+        const settle = settleRef.current;
+        if (settle) {
+          const settled = Math.abs(abs - settle.target) <= SETTLE_EPSILON_S;
+          if (!settled && Date.now() < settle.until) return; // pre-seek noise — don't mirror
+          settleRef.current = null;
+        }
+        usePlaybackStore.setState({ position: abs });
       }, 1)
     );
     subs.push(
@@ -64,6 +91,7 @@ export default function CastController() {
         const idx = items.findIndex((it: any) => it.itemId === status.currentItemId);
         if (idx >= 0 && offsetsRef.current[idx] != null) {
           baseOffsetRef.current = offsetsRef.current[idx];
+          currentIdxRef.current = idx;
         }
         const ps = status.playerState;
         if (ps === "playing" || ps === "buffering") usePlaybackStore.setState({ isPlaying: true });
@@ -95,7 +123,12 @@ export default function CastController() {
         };
 
         const tracks = currentSession.audioTracks || currentSession.tracks || [];
-        if (!tracks.length) return;
+        if (!tracks.length) {
+          // Clear the dedupe key so a later session for the same book (with
+          // tracks this time) isn't silently skipped.
+          loadedKeyRef.current = null;
+          return;
+        }
         const coverUrl =
           currentSession.coverUrl ||
           (itemId && serverAddress
@@ -126,22 +159,77 @@ export default function CastController() {
           } as any;
         });
         offsetsRef.current = offsets;
+        itemsRef.current = items;
 
         const pos = usePlaybackStore.getState().position || currentSession.currentTime || 0;
         let startIndex = offsets.findIndex((s, i) => pos < s + (tracks[i].duration || 0));
         if (startIndex < 0) startIndex = 0;
         const startTime = Math.max(0, pos - offsets[startIndex]);
         baseOffsetRef.current = offsets[startIndex];
+        currentIdxRef.current = startIndex;
         items[startIndex].startTime = startTime;
 
-        await client.loadMedia({
-          queueData: { items, startIndex } as any,
-          startTime,
-          autoplay: true,
-        });
+        // Hand off play state seamlessly: pause the LOCAL player BEFORE the
+        // receiver loads (no double-audio overlap), and only autoplay on the
+        // receiver if the book was actually playing — connecting while paused
+        // must not start blasting the TV.
+        const wasPlaying = usePlaybackStore.getState().isPlaying;
         try {
           await TrackPlayer.pause();
         } catch {}
+        // Don't mirror the receiver's pre-seek positions (it loads the item
+        // at 0 before seeking to startTime) — that's the visible "starts at
+        // the beginning then jumps" on connect.
+        settleRef.current = { target: pos, until: Date.now() + SETTLE_TIMEOUT_MS };
+        await client.loadMedia({
+          queueData: { items, startIndex } as any,
+          startTime,
+          autoplay: wasPlaying,
+        });
+        // Casting must respect the user's playback speed: the receiver starts
+        // at 1× on every load, so re-apply the current rate here (and again
+        // after any cross-track queue reload below).
+        const rate = usePlaybackStore.getState().playbackSpeed || 1;
+        if (rate !== 1) {
+          try { await client.setPlaybackRate(rate); } catch (e) { console.warn("[Cast] rate", e); }
+        }
+
+        // Register the ABSOLUTE seek handler for the store. The cast client's
+        // seek() only moves within the CURRENT queue item, so a seek crossing
+        // a file boundary (multi-file books: big jumps, chapter next/prev)
+        // must reload the queue at the target index — otherwise the position
+        // lands at the wrong spot inside the current file.
+        usePlaybackStore.getState().setCastSeekHandler(async (absSeconds: number) => {
+          const offs = offsetsRef.current;
+          const qItems = itemsRef.current;
+          if (!offs.length || !qItems.length) return;
+          let idx = offs.findIndex(
+            (s, i) => absSeconds >= s && (i === offs.length - 1 || absSeconds < offs[i + 1])
+          );
+          if (idx < 0) idx = absSeconds <= 0 ? 0 : offs.length - 1;
+          const within = Math.max(0, absSeconds - offs[idx]);
+          // Ignore progress mirrors until the receiver lands at the target —
+          // otherwise the last pre-seek tick rubber-bands the scrubber back.
+          settleRef.current = { target: absSeconds, until: Date.now() + SETTLE_TIMEOUT_MS };
+          if (idx === currentIdxRef.current) {
+            await client.seek({ position: within });
+          } else {
+            // Cross-track: reload the queue at the target item. Preserves
+            // play state via autoplay from the current store state.
+            const wasPlaying = usePlaybackStore.getState().isPlaying;
+            baseOffsetRef.current = offs[idx];
+            currentIdxRef.current = idx;
+            await client.loadMedia({
+              queueData: { items: qItems, startIndex: idx } as any,
+              startTime: within,
+              autoplay: wasPlaying,
+            });
+            const r = usePlaybackStore.getState().playbackSpeed || 1;
+            if (r !== 1) {
+              try { await client.setPlaybackRate(r); } catch {}
+            }
+          }
+        });
       } catch (e) {
         console.warn("[Cast] loadMedia failed", e);
         loadedKeyRef.current = null;

@@ -5,9 +5,9 @@ import Animated, {
   useAnimatedStyle,
   withDelay,
   withTiming,
-  Easing,
 } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
+import { EMPHASIZED_DECELERATE } from "../theme/motion";
 
 /**
  * Masks the multi-frame layout reflow on device rotation. The instant the
@@ -34,7 +34,7 @@ export default function RotationCurtain() {
         opacity.value = 1;
         opacity.value = withDelay(
           350,
-          withTiming(0, { duration: 250, easing: Easing.out(Easing.quad) })
+          withTiming(0, { duration: 250, easing: EMPHASIZED_DECELERATE })
         );
       }
     };

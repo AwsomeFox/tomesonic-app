@@ -7,14 +7,30 @@ import Icon from "../components/Icon";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
+import { usePlaybackStore } from "../store/usePlaybackStore";
 
 export default function LatestEpisodesScreen({ navigation }: any) {
   const colors = useThemeColors();
   const currentLibraryId = useLibraryStore((state) => state.currentLibraryId);
   const { serverConnectionConfig } = useUserStore();
+  const startPlayback = usePlaybackStore((state) => state.startPlayback);
+  const hasSession = usePlaybackStore((state) => state.currentSession !== null);
   const [episodes, setEpisodes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Episode id currently being started, so the tapped row shows a spinner and
+  // double-taps can't start two sessions.
+  const [startingId, setStartingId] = useState<string | null>(null);
+
+  const playEpisode = async (episode: any) => {
+    if (!episode?.libraryItemId || !episode?.id || startingId) return;
+    setStartingId(episode.id);
+    try {
+      await startPlayback(episode.libraryItemId, episode.id);
+    } finally {
+      setStartingId(null);
+    }
+  };
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -160,13 +176,10 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           </View>
         </View>
 
-        {/* Actions: play + download */}
+        {/* Play the episode right here; the row itself opens the podcast. */}
         <Pressable
-          onPress={() => {
-            if (episode.libraryItemId) {
-              navigation.navigate("ItemDetail", { itemId: episode.libraryItemId });
-            }
-          }}
+          onPress={() => playEpisode(episode)}
+          disabled={!!startingId}
           style={{
             width: 40,
             height: 40,
@@ -177,27 +190,16 @@ export default function LatestEpisodesScreen({ navigation }: any) {
             marginLeft: 8,
           }}
           hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={`Play ${episode.title || "episode"}`}
         >
-          <Icon name="play" size={22} color={colors.onSecondaryContainer} />
+          {startingId === episode.id ? (
+            <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
+          ) : (
+            <Icon name="play" size={22} color={colors.onSecondaryContainer} />
+          )}
         </Pressable>
-        <Pressable
-          onPress={() => {
-            if (episode.libraryItemId) {
-              navigation.navigate("ItemDetail", { itemId: episode.libraryItemId });
-            }
-          }}
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            alignItems: "center",
-            justifyContent: "center",
-            marginLeft: 4,
-          }}
-          hitSlop={6}
-        >
-          <Icon name="download" size={22} color={colors.onSurfaceVariant} />
-        </Pressable>
+        <Icon name="chevron-right" size={20} color={colors.onSurfaceVariant} style={{ marginLeft: 6 }} />
       </Pressable>
     );
   };
@@ -219,6 +221,8 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           onPress={() => navigation.goBack()}
           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", marginRight: 4 }}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </Pressable>
@@ -244,7 +248,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           </Text>
         </View>
       ) : (
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}>
           {/* Section header */}
           <View
             style={{

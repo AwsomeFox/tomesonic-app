@@ -5,6 +5,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Pressable,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeStore, ThemeMode } from '../store/useThemeStore';
@@ -14,6 +15,10 @@ import { useThemeColors } from '../theme/useThemeColors';
 import Icon, { IconName } from '../components/Icon';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
 import { haptic } from '../utils/haptics';
+
+// Single source of truth for the displayed version — the Expo app config.
+const APP_VERSION: string = require('../app.json').expo?.version || '';
+const GITHUB_URL = 'https://github.com/AwsomeFox/tomesonic-app';
 
 const THEME_LABEL: Record<ThemeMode, string> = {
   light: 'Light',
@@ -75,6 +80,8 @@ export default function SettingsScreen({ navigation }: any) {
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={{ padding: 8, marginRight: 4 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </TouchableOpacity>
@@ -86,17 +93,19 @@ export default function SettingsScreen({ navigation }: any) {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 48 }}>
         {/* ── ACCOUNT ── */}
         <SectionHeader label="Account" colors={colors} />
-        <RowBase
+        <NavRow
           icon="info"
           title="Server"
           subtitle={serverConnectionConfig?.address || 'Not connected'}
+          onPress={() => navigation.navigate('Account')}
           colors={colors}
         />
         <Divider colors={colors} />
-        <RowBase
+        <NavRow
           icon="person"
           title="Username"
           subtitle={user?.username || 'Guest'}
+          onPress={() => navigation.navigate('Account')}
           colors={colors}
         />
 
@@ -202,28 +211,21 @@ export default function SettingsScreen({ navigation }: any) {
 
         {/* ── APP ── */}
         <SectionHeader label="App" colors={colors} />
-        <SelectRow
+        <NavRow
           icon="download"
           title="Downloads"
           onPress={() => navigation.navigate('Downloads')}
           colors={colors}
         />
         <Divider colors={colors} />
-        <SelectRow
-          icon="folder"
-          title="Local Media"
-          onPress={() => navigation.navigate('LocalMedia')}
-          colors={colors}
-        />
-        <Divider colors={colors} />
-        <SelectRow
+        <NavRow
           icon="clock"
           title="Listening History"
           onPress={() => navigation.navigate('ListeningHistory')}
           colors={colors}
         />
         <Divider colors={colors} />
-        <SelectRow
+        <NavRow
           icon="logs"
           title="Logs"
           onPress={() => navigation.navigate('Logs')}
@@ -232,9 +234,15 @@ export default function SettingsScreen({ navigation }: any) {
 
         {/* ── ABOUT ── */}
         <SectionHeader label="About" colors={colors} />
-        <RowBase icon="info" title="Version" subtitle="1.0.0" colors={colors} />
+        <RowBase icon="info" title="Version" subtitle={APP_VERSION} colors={colors} />
         <Divider colors={colors} />
-        <RowBase icon="globe" title="GitHub" subtitle="audiobookshelf-app" colors={colors} />
+        <NavRow
+          icon="globe"
+          title="GitHub"
+          subtitle="Report bugs and request features"
+          onPress={() => Linking.openURL(GITHUB_URL)}
+          colors={colors}
+        />
       </ScrollView>
 
       {/* Dropdown pickers */}
@@ -314,6 +322,8 @@ function RowBase({
   trailing,
   onPress,
   colors,
+  accessibilityRole,
+  accessibilityState,
 }: {
   icon: IconName;
   title: string;
@@ -321,6 +331,8 @@ function RowBase({
   trailing?: React.ReactNode;
   onPress?: () => void;
   colors: any;
+  accessibilityRole?: 'button' | 'switch';
+  accessibilityState?: { checked?: boolean };
 }) {
   const inner = (
     <View
@@ -344,7 +356,16 @@ function RowBase({
     </View>
   );
   if (onPress) {
-    return <TouchableOpacity onPress={onPress}>{inner}</TouchableOpacity>;
+    return (
+      <TouchableOpacity
+        onPress={onPress}
+        accessibilityRole={accessibilityRole || 'button'}
+        accessibilityState={accessibilityState}
+        accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
+      >
+        {inner}
+      </TouchableOpacity>
+    );
   }
   return inner;
 }
@@ -373,8 +394,16 @@ function ToggleRow({
       subtitle={subtitle}
       onPress={() => onValueChange(!value)}
       colors={colors}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
       trailing={
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        // The row itself is the accessible switch — hide the visual knob so
+        // screen readers don't announce a second, redundant control.
+        <View
+          style={{ flexDirection: 'row', alignItems: 'center' }}
+          importantForAccessibility="no-hide-descendants"
+          accessibilityElementsHidden
+        >
           {info ? (
             <Icon
               name="info"
@@ -390,6 +419,7 @@ function ToggleRow({
   );
 }
 
+// Row that opens a picker sheet (trailing chevron-down = "expands a menu").
 function SelectRow({
   icon,
   title,
@@ -411,6 +441,32 @@ function SelectRow({
       onPress={onPress}
       colors={colors}
       trailing={<Icon name="chevron-down" size={26} color={colors.onSurface} />}
+    />
+  );
+}
+
+// Row that navigates to another screen (trailing chevron-right = "goes somewhere").
+function NavRow({
+  icon,
+  title,
+  subtitle,
+  onPress,
+  colors,
+}: {
+  icon: IconName;
+  title: string;
+  subtitle?: string;
+  onPress?: () => void;
+  colors: any;
+}) {
+  return (
+    <RowBase
+      icon={icon}
+      title={title}
+      subtitle={subtitle}
+      onPress={onPress}
+      colors={colors}
+      trailing={<Icon name="chevron-right" size={26} color={colors.onSurfaceVariant} />}
     />
   );
 }

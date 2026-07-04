@@ -3,11 +3,18 @@ import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-nati
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
+import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
+import { isEbookOnly, hasAudio } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
+import { ListSkeleton } from "../components/Skeleton";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 interface CollectionBook {
   id: string;
@@ -46,6 +53,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
   const [collection, setCollection] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const [starting, setStarting] = useState(false);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
@@ -78,14 +86,20 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     };
 
     fetchCollection();
-  }, [collectionId]);
+  }, [collectionId, retryTick]);
 
-  const bookItems: CollectionBook[] = collection?.books || [];
+  // "Hide non-audiobooks": ebook-only rows are dropped when the setting is on.
+  const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
+  const bookItems: CollectionBook[] = (collection?.books || []).filter(
+    (b: any) => !hideNonAudiobooks || !isEbookOnly(b)
+  );
   const collectionName = collection?.name || "";
   const description = collection?.description || "";
 
   const playableItems = bookItems.filter(
-    (b) => !b.isMissing && !b.isInvalid && (b.media?.tracks?.length || 0) > 0
+    // hasAudio also understands minified payloads (numTracks/numAudioFiles) —
+    // a raw media.tracks check hides play on collections the server minifies.
+    (b) => !b.isMissing && !b.isInvalid && hasAudio(b)
   );
   const showPlayButton = playableItems.length > 0;
   const totalDuration = bookItems.reduce((t, b) => t + (b.media?.duration || 0), 0);
@@ -112,17 +126,18 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     }
   };
 
-  const renderBookRow = (book: CollectionBook) => {
+  const renderBookRow = (book: CollectionBook, index: number) => {
     const coverUrl = getCoverUrl(book.id);
     const bookTitle = book.media?.metadata?.title || "";
     const bookAuthor = book.media?.metadata?.authorName || "";
     const duration = book.media?.duration || 0;
-    const showPlayBtn =
-      !book.isMissing && !book.isInvalid && (book.media?.tracks?.length || 0) > 0;
+    const showPlayBtn = !book.isMissing && !book.isInvalid && hasAudio(book);
 
     return (
-      <Pressable
+      <AnimatedPressable
         key={book.id}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 }}
         onPress={() => navigation.navigate("ItemDetail", { itemId: book.id })}
       >
@@ -173,10 +188,15 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
         {showPlayBtn ? (
           <Pressable
             onPress={() => playBook(book.id)}
+            hitSlop={6}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), radius: 24 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Play ${bookTitle || "book"}`}
             style={{
               width: 48,
               height: 48,
               borderRadius: 24,
+              overflow: "hidden",
               backgroundColor: colors.primary,
               alignItems: "center",
               justifyContent: "center",
@@ -191,7 +211,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
             <Icon name="play" size={26} color={colors.onPrimary} />
           </Pressable>
         ) : null}
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
@@ -208,7 +228,14 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           borderBottomColor: colors.outlineVariant,
         }}
       >
-        <Pressable onPress={() => navigation.goBack()} style={{ marginRight: 12, padding: 8, borderRadius: 20 }}>
+        <Pressable
+          onPress={() => navigation.goBack()}
+          hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          style={{ marginRight: 12, padding: 8, borderRadius: 20 }}
+        >
           <Icon name="back" size={20} color={colors.onSurface} />
         </Pressable>
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
@@ -217,16 +244,25 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
       </View>
 
       {loading ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
+        <ListSkeleton rows={7} thumb={64} />
       ) : error ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
           <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
+          {collectionId ? (
+            <Pressable
+              onPress={() => setRetryTick((t) => t + 1)}
+              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading collection"
+              style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+            >
+              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : collection ? (
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 40 }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}>
           {/* Detail header: cover collage + title + count + Play all */}
           <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 20, paddingBottom: 16 }}>
             <CollageCover bookItems={bookItems} size={120} getCoverUrl={getCoverUrl} colors={colors} />
@@ -279,9 +315,10 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           <View style={{ height: 1, backgroundColor: colors.outlineVariant, marginHorizontal: 16, marginBottom: 6 }} />
 
           {bookItems.length > 0 ? (
-            bookItems.map((book) => renderBookRow(book))
+            bookItems.map((book, index) => renderBookRow(book, index))
           ) : (
             <View style={{ alignItems: "center", paddingVertical: 60 }}>
+              <Icon name="collections" size={40} color={colors.onSurfaceVariant} style={{ marginBottom: 8 }} />
               <Text style={{ color: colors.onSurfaceVariant, fontSize: 15 }}>This collection is empty.</Text>
             </View>
           )}

@@ -9,8 +9,11 @@ import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
+import { ListSkeleton } from "../components/Skeleton";
 
 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
 const base64Encode = (input: string = '') => {
@@ -80,6 +83,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const [series, setSeries] = useState<SeriesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
@@ -148,9 +152,11 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     };
 
     fetchSeriesDetail();
-  }, [seriesId, currentLibraryId]);
+  }, [seriesId, currentLibraryId, retryTick]);
 
-  const books = series?.books || [];
+  // "Hide non-audiobooks": ebook-only rows are dropped when the setting is on.
+  const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
+  const books = (series?.books || []).filter((b: any) => !hideNonAudiobooks || !isEbookOnly(b));
   const bookCount = books.length;
   const totalDuration = books.reduce((t, b) => t + (b.media?.duration || 0), 0);
   const finishedCount = books.filter((b) => b.userMediaProgress?.isFinished).length;
@@ -163,6 +169,16 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
 
   const handlePlay = async (item?: SeriesBook) => {
     if (!item || startingId) return;
+    // Ebook-only entries have nothing to play — open the Reader instead of
+    // letting startPlayback silently no-op on an audio-less session.
+    if (isEbookOnly(item)) {
+      navigation.navigate("Reader", {
+        itemId: item.id,
+        ebookFormat: getEbookFormat(item),
+        title: (item as any).media?.metadata?.title,
+      });
+      return;
+    }
     setStartingId(item.id);
     try {
       await startPlayback(item.id);
@@ -245,14 +261,19 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           />
         </View>
 
-        {/* pine-green circular play (matches playlist rows) */}
+        {/* pine-green circular play (matches playlist rows); ebook-only rows
+            open the Reader instead */}
         <Pressable
           onPress={() => handlePlay(item)}
           hitSlop={6}
+          android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), radius: 24 }}
+          accessibilityRole="button"
+          accessibilityLabel={`${isEbookOnly(item) ? "Read" : "Play"} ${rawTitle}`}
           style={{
             width: 48,
             height: 48,
             borderRadius: 24,
+            overflow: "hidden",
             backgroundColor: startingThis ? colors.surfaceVariant : colors.primary,
             alignItems: "center",
             justifyContent: "center",
@@ -267,7 +288,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           {startingThis ? (
             <ActivityIndicator size="small" color={colors.onSurfaceVariant} />
           ) : (
-            <Icon name="play" size={26} color={colors.onPrimary} />
+            <Icon name={isEbookOnly(item) ? "book" : "play"} size={isEbookOnly(item) ? 22 : 26} color={colors.onPrimary} />
           )}
         </Pressable>
       </AnimatedPressable>
@@ -362,7 +383,14 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           borderBottomColor: colors.outlineVariant,
         }}
       >
-        <Pressable onPress={() => navigation.goBack()} style={{ marginRight: 12, padding: 8, borderRadius: 20 }}>
+        <Pressable
+          onPress={() => navigation.goBack()}
+          hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          style={{ marginRight: 12, padding: 8, borderRadius: 20 }}
+        >
           <Icon name="back" size={20} color={colors.onSurface} />
         </Pressable>
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
@@ -371,13 +399,20 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       </View>
 
       {loading ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
+        <ListSkeleton rows={7} thumb={72} />
       ) : error ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
           <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
+          <Pressable
+            onPress={() => setRetryTick((t) => t + 1)}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading series"
+            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
         </View>
       ) : bookCount === 0 ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>

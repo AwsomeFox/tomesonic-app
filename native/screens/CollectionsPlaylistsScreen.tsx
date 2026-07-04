@@ -4,19 +4,21 @@ import {
   Text,
   Pressable,
   ScrollView,
-  ActivityIndicator,
   RefreshControl,
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
+import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
+import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
 import Icon from "../components/Icon";
+import { ListSkeleton } from "../components/Skeleton";
 import { useUiStore } from "../store/useUiStore";
 import SearchContent from "../components/SearchContent";
 
@@ -36,6 +38,8 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
   const [playlists, setPlaylists] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const hasSession = usePlaybackStore((s) => s.currentSession !== null);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -47,6 +51,7 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
 
   const fetchData = useCallback(async () => {
     try {
+      setLoadError(false);
       if (activeTab === "collections" && currentLibraryId) {
         const res = await api.get(`/api/libraries/${currentLibraryId}/collections`);
         setCollections(res.data?.results || res.data?.collections || res.data || []);
@@ -56,6 +61,7 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
       }
     } catch (err) {
       console.error(`[CollectionsPlaylists] Failed to load ${activeTab}:`, err);
+      setLoadError(true);
     }
   }, [activeTab, currentLibraryId]);
 
@@ -107,6 +113,9 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
             playlistId: item.id,
           })
         }
+        android_ripple={{ color: colors.surfaceContainerHighest }}
+        accessibilityRole="button"
+        accessibilityLabel={`${isCollection ? "Collection" : "Playlist"}: ${name}, ${itemCount} ${itemCount === 1 ? "item" : "items"}`}
         style={{
           flexDirection: "row",
           alignItems: "center",
@@ -160,6 +169,9 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
               <Pressable
                 key={tab}
                 onPress={() => setActiveTab(tab)}
+                android_ripple={{ color: colors.surfaceContainerHighest }}
+                accessibilityRole="tab"
+                accessibilityState={{ selected }}
                 style={{
                   flex: 1,
                   flexDirection: "row",
@@ -194,29 +206,59 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
 
       {/* Content */}
       {loading && data.length === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
+        <ListSkeleton rows={7} thumb={72} />
+      ) : loadError && data.length === 0 ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <Icon name="warning" size={48} color={colors.error} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
+            Couldn't load {activeTab}
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
+            Check your connection to the server and try again.
+          </Text>
+          <Pressable
+            onPress={() => {
+              setLoading(true);
+              fetchData().finally(() => setLoading(false));
+            }}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            accessibilityRole="button"
+            accessibilityLabel={`Retry loading ${activeTab}`}
+            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
         </View>
       ) : (
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: 6, paddingBottom: 32 }}
+          contentContainerStyle={{ paddingTop: 6, paddingBottom: hasSession ? 100 : 32, flexGrow: 1 }}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surfaceContainerHigh}
+            />
           }
         >
           {data.length > 0 ? (
             data.map((item, index) => renderRow(item, index))
           ) : (
-            <View style={{ alignItems: "center", justifyContent: "center", paddingTop: 80 }}>
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
               <Icon
                 name={activeTab === "collections" ? "collections" : "list"}
                 size={48}
                 color={colors.onSurfaceVariant}
-                style={{ marginBottom: 8 }}
               />
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 16, textAlign: "center" }}>
-                No {activeTab} found.
+              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
+                No {activeTab} yet
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
+                {activeTab === "collections"
+                  ? "Collections you create on the server will show up here."
+                  : "Playlists you create will show up here."}
               </Text>
             </View>
           )}

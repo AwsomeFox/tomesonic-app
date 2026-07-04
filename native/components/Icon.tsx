@@ -105,7 +105,7 @@ const MAP: Record<IconName, [Family, string]> = {
   settings: ["mi", "settings"],
   logs: ["mi", "bug-report"],
   globe: ["mi", "language"],
-  logout: ["mi", "login"],
+  logout: ["mi", "logout"],
   play: ["mi", "play-arrow"],
   pause: ["mi", "pause"],
   download: ["mi", "file-download"],

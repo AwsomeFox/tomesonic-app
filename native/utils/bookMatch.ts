@@ -35,6 +35,15 @@ export function isKnownEbookFormat(fmt: string | null): boolean {
   return !!fmt && EBOOK_FORMATS.includes(fmt.toLowerCase());
 }
 
+/**
+ * True when the item should be hidden under the "Hide non-audiobooks"
+ * setting: a book item with no playable audio (ebook-only). Podcasts are
+ * never hidden — the setting exists to filter ebooks out of book libraries.
+ */
+export function isEbookOnly(item: any): boolean {
+  return item?.mediaType !== "podcast" && !hasAudio(item);
+}
+
 // --- Fuzzy title / author matching ------------------------------------------
 
 const STOPWORDS = new Set([

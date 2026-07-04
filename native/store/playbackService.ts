@@ -32,7 +32,12 @@ export async function playbackService() {
   // flushes a progress sync to the server (otherwise remote pauses never sync).
   TrackPlayer.addEventListener(Event.RemotePlay, () => {
     console.log("[PlaybackService] RemotePlay");
-    usePlaybackStore.getState().play();
+    const s = usePlaybackStore.getState();
+    // While casting the LOCAL player sits paused, so the notification only
+    // ever offers a play button — treat it as a toggle so the user can still
+    // pause the receiver from the notification.
+    if (s.isCasting && s.isPlaying) s.pause();
+    else s.play();
   });
 
   TrackPlayer.addEventListener(Event.RemotePause, () => {
@@ -75,6 +80,9 @@ export async function playbackService() {
     console.log("[PlaybackService] RemoteNext");
     const st = usePlaybackStore.getState();
     if (st.chapters && st.chapters.length > 1) st.nextChapter();
+    // No chapters + casting: skip the RECEIVER's queue item — skipping the
+    // paused local player would silently desync the two.
+    else if (st.isCasting && st.castClient) st.castClient.queueNext().catch(() => {});
     else TrackPlayer.skipToNext().catch(() => {});
   });
 
@@ -82,6 +90,7 @@ export async function playbackService() {
     console.log("[PlaybackService] RemotePrevious");
     const st = usePlaybackStore.getState();
     if (st.chapters && st.chapters.length > 1) st.previousChapter();
+    else if (st.isCasting && st.castClient) st.castClient.queuePrev().catch(() => {});
     else TrackPlayer.skipToPrevious().catch(() => {});
   });
 
@@ -96,8 +105,25 @@ export async function playbackService() {
     usePlaybackStore.getState().seekBackward(event.interval || 10);
   });
 
-  TrackPlayer.addEventListener(Event.RemoteSeek, (event) => {
+  // Notification/Auto seekbar. Route through the store (not TrackPlayer
+  // directly) so the seek gets clamping, cast routing, and the crash-safe
+  // immediate position save. In a chapter queue the remote seekbar is
+  // CHAPTER-relative (each queue item is a clipped chapter), so map it to the
+  // absolute book position the store expects.
+  TrackPlayer.addEventListener(Event.RemoteSeek, async (event) => {
     console.log(`[PlaybackService] RemoteSeek to ${event.position}s`);
-    TrackPlayer.seekTo(event.position);
+    const st = usePlaybackStore.getState();
+    if (st.chapterQueue && st.chapters?.length) {
+      // While casting the local active index is the stale handoff item —
+      // currentChapterIndex tracks the RECEIVER's chapter, which is the one
+      // the user is actually listening to.
+      const active = st.isCasting
+        ? st.currentChapterIndex
+        : (await TrackPlayer.getActiveTrackIndex().catch(() => null)) ?? st.currentChapterIndex;
+      const abs = (st.chapters[active]?.start || 0) + (event.position || 0);
+      st.seek(abs);
+    } else {
+      st.seek(event.position || 0);
+    }
   });
 }

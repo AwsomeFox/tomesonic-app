@@ -90,6 +90,8 @@ export default function ListeningHistoryScreen({ navigation }: any) {
           onPress={() => navigation.goBack()}
           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
           hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </Pressable>

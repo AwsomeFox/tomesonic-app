@@ -16,6 +16,13 @@ export const SPATIAL_EXPRESSIVE = { damping: 34, stiffness: 800 } as const; // r
 export const EFFECT_FAST = { damping: 123, stiffness: 3800, overshootClamping: true } as const;
 export const EFFECT_DEFAULT = { damping: 80, stiffness: 1600, overshootClamping: true } as const;
 
+// Full-screen sheet travel (the mini↔full player morph). Deliberately softer
+// than SPATIAL_DEFAULT — the sheet crosses the whole screen height and a stiff
+// spring reads as a flick — and clamped, because every morphing element
+// (cover, title, corners) interpolates off this progress and any overshoot
+// would visibly wobble them past their resting layout.
+export const SPATIAL_SHEET = { damping: 30, stiffness: 150, overshootClamping: true } as const;
+
 // M3 emphasized easing — for timing-based (non-spring) transitions.
 export const EMPHASIZED = Easing.bezier(0.2, 0, 0, 1);
 export const EMPHASIZED_ACCELERATE = Easing.bezier(0.3, 0, 0.8, 0.15);

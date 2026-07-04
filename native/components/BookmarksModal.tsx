@@ -42,7 +42,12 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
   const [loading, setLoading] = useState(false);
 
   const loadBookmarks = useCallback(async () => {
-    if (!libraryItemId) return;
+    if (!libraryItemId) {
+      // No server id (local-only item): clear rather than showing whatever the
+      // previously-opened book left in state.
+      setBookmarks([]);
+      return;
+    }
     setLoading(true);
     try {
       const res = await api.get("/api/me");
@@ -95,12 +100,23 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
             backgroundColor: colors.surfaceContainerHigh,
             borderTopLeftRadius: 28,
             borderTopRightRadius: 28,
+            paddingTop: 12,
             maxHeight: "80%",
           }}
         >
           <SafeAreaView edges={["bottom"]}>
+            {/* Drag handle (affordance parity with the other bottom sheets) */}
+            <View
+              style={{
+                alignSelf: "center",
+                width: 36,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: colors.outlineVariant,
+              }}
+            />
             {/* Header */}
-            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 20, paddingBottom: 12 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="bookmark" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
               <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Your Bookmarks</Text>
             </View>
@@ -124,6 +140,8 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
                         onSeek(bm.time);
                         onClose();
                       }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Bookmark ${bm.title}, ${fmt(bm.time)}`}
                       style={{
                         flexDirection: "row",
                         alignItems: "center",
@@ -149,7 +167,13 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
                       >
                         {fmt(bm.time)}
                       </Text>
-                      <Pressable onPress={() => deleteBookmark(bm)} hitSlop={8} style={{ padding: 4 }}>
+                      <Pressable
+                        onPress={() => deleteBookmark(bm)}
+                        hitSlop={12}
+                        accessibilityRole="button"
+                        accessibilityLabel="Delete bookmark"
+                        style={{ padding: 4 }}
+                      >
                         <Icon name="trash" size={20} color={colors.onSurfaceVariant} />
                       </Pressable>
                     </Pressable>
@@ -162,6 +186,8 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
             {!alreadyBookmarked ? (
               <Pressable
                 onPress={addBookmark}
+                accessibilityRole="button"
+                accessibilityLabel={`Add bookmark at ${fmt(currentTime)}`}
                 style={{
                   flexDirection: "row",
                   alignItems: "center",

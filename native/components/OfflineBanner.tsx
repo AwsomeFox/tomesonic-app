@@ -3,11 +3,20 @@ import { View, Text } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
+import Icon from "./Icon";
 
 /**
  * Thin banner shown at the very top of the app while offline, so users know
  * why fetches are failing / only downloaded content is available. Renders
  * nothing when connected.
+ *
+ * Inset handling: the banner paints the status-bar area itself (paddingTop),
+ * then gives that inset back to the layout (negative marginBottom) because
+ * every screen below already pads the top inset via SafeAreaView — without
+ * the give-back the inset is counted twice and a blank strip appears. zIndex
+ * keeps the banner above the screens' (blank) safe-area padding it overlaps,
+ * but below PlayerBottomSheet's zIndex 100 so the full-screen player is never
+ * covered.
  */
 export default function OfflineBanner() {
   const colors = useThemeColors();
@@ -18,12 +27,25 @@ export default function OfflineBanner() {
 
   return (
     <View
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
       style={{
         paddingTop: insets.top,
+        marginBottom: -insets.top,
+        zIndex: 10,
         backgroundColor: colors.errorContainer,
       }}
     >
-      <View style={{ paddingVertical: 6, paddingHorizontal: 16 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          paddingVertical: 6,
+          paddingHorizontal: 16,
+        }}
+      >
+        <Icon name="cloud-off" size={14} color={colors.onErrorContainer} style={{ marginRight: 6 }} />
         <Text style={{ color: colors.onErrorContainer, fontSize: 12, fontWeight: "600", textAlign: "center" }}>
           No internet connection — showing downloaded content
         </Text>

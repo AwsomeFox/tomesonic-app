@@ -3,11 +3,17 @@ import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-nati
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Animated from "react-native-reanimated";
+import { listRowEnter } from "../theme/motion";
+import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
 import BookProgressBadge from "../components/BookProgressBadge";
+import { ListSkeleton } from "../components/Skeleton";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 function elapsedPretty(seconds: number): string {
   if (!seconds || seconds <= 0) return "";
@@ -22,11 +28,15 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const { playlistId } = route.params || {};
   const { serverConnectionConfig } = useUserStore();
+  // Reactive subscription (not getState) so episode badges live-update while
+  // this screen is open (e.g. an episode playing in the background).
+  const mediaProgress = useUserStore((s) => s.mediaProgress);
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
   const [playlist, setPlaylist] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const [starting, setStarting] = useState(false);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
@@ -54,7 +64,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
     };
 
     fetchPlaylist();
-  }, [playlistId]);
+  }, [playlistId, retryTick]);
 
   const getCoverUrl = (itemId: string) => {
     if (!itemId || !serverAddress || !token) return null;
@@ -102,8 +112,10 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
     const coverUrl = getCoverUrl(libraryItemId);
 
     return (
-      <Pressable
+      <AnimatedPressable
         key={item.id || `${libraryItemId}-${index}`}
+        entering={listRowEnter(index)}
+        android_ripple={{ color: colors.surfaceContainerHighest }}
         onPress={() => {
           if (libraryItemId) navigation.navigate("ItemDetail", { itemId: libraryItemId });
         }}
@@ -152,7 +164,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
               // shows THIS episode's state, not a whole-podcast summary.
               progress={
                 item.episodeId
-                  ? useUserStore.getState().getMediaProgress(libraryItemId, item.episodeId)
+                  ? mediaProgress[`${libraryItemId}-${item.episodeId}`] || null
                   : undefined
               }
               downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
@@ -165,10 +177,15 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
         {libraryItemId ? (
           <Pressable
             onPress={() => startItem(item)}
+            hitSlop={6}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), radius: 24 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Play ${title}`}
             style={{
               width: 48,
               height: 48,
               borderRadius: 24,
+              overflow: "hidden",
               backgroundColor: colors.primary,
               alignItems: "center",
               justifyContent: "center",
@@ -183,7 +200,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
             <Icon name="play" size={26} color={colors.onPrimary} />
           </Pressable>
         ) : null}
-      </Pressable>
+      </AnimatedPressable>
     );
   };
 
@@ -200,7 +217,14 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           borderBottomColor: colors.outlineVariant,
         }}
       >
-        <Pressable onPress={() => navigation.goBack()} style={{ marginRight: 12, padding: 8, borderRadius: 20 }}>
+        <Pressable
+          onPress={() => navigation.goBack()}
+          hitSlop={8}
+          android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          style={{ marginRight: 12, padding: 8, borderRadius: 20 }}
+        >
           <Icon name="back" size={20} color={colors.onSurface} />
         </Pressable>
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
@@ -209,13 +233,22 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
       </View>
 
       {loading ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
+        <ListSkeleton rows={7} thumb={64} />
       ) : error ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
           <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
+          {playlistId ? (
+            <Pressable
+              onPress={() => setRetryTick((t) => t + 1)}
+              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading playlist"
+              style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+            >
+              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : playlist ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}>

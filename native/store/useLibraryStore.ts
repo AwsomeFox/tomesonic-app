@@ -155,8 +155,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       });
       return true;
     } catch (err) {
+      // Transient failure (offline start, server blip): KEEP the current
+      // library + list — clobbering them to null broke refresh/series/library
+      // switching until a later fetch happened to succeed, even though the
+      // saved library id was still perfectly valid.
       console.error("[LibraryStore] Failed to load libraries:", err);
-      set({ libraries: [], currentLibraryId: null });
       return false;
     }
   },
