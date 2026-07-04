@@ -52,17 +52,19 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       ? `${serverAddress}/api/items/${item.id}/cover?width=400&format=webp&token=${token}`
       : null);
 
-  // Shelf/list payloads often omit progress; fall back to the global map.
-  const progress = item?.userMediaProgress || item?.progress || (item?.id ? mediaProgress[item.id] : null) || null;
+  // The global map is authoritative — it's refreshed from the server on every
+  // Home focus and live-updated by the playback/reader loops, whereas a
+  // progress object embedded in a shelf payload is a snapshot from fetch time.
+  const progress = (item?.id ? mediaProgress[item.id] : null) || item?.userMediaProgress || item?.progress || null;
   const itemHasAudio = hasAudio(item);
   const itemHasEbook = hasEbook(item);
+  const isPodcast = item?.mediaType === "podcast";
 
   const duration = itemHasAudio ? Number(media?.duration || progress?.duration || 0) : 0;
   const currentTime = itemHasAudio ? Number(progress?.currentTime || 0) : 0;
   const progressPercent = itemHasAudio
     ? Math.max(Math.min(1, progress?.progress ?? (duration > 0 ? currentTime / duration : 0)), 0)
     : 0;
-  const isFinished = itemHasAudio ? !!progress?.isFinished : false;
 
   let ebookProgressPercent = 0;
   if (itemHasEbook) {
@@ -72,7 +74,39 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       ebookProgressPercent = Number(progress?.ebookProgress || progress?.progress || 0);
     }
   }
-  const isEbookFinished = ebookProgressPercent >= 0.99;
+  // Finished semantics (mirrors BookProgressBadge): the item-level isFinished
+  // flag counts as audio-finished, EXCEPT when it was evidently set by the
+  // READER (ebook read to >=99%) while the audio sits mid-way — the audio bar
+  // should keep showing then. An ebook-only item marked finished on the server
+  // (without reading to 99%) hides its ebook bar via the isFinished fallback.
+  const readerSetFinished = ebookProgressPercent >= 0.99 && progressPercent > 0 && progressPercent < 0.99;
+  const isFinished = itemHasAudio ? !!progress?.isFinished && !readerSetFinished : false;
+  const isEbookFinished =
+    ebookProgressPercent >= 0.99 || (itemHasEbook && !itemHasAudio && !!progress?.isFinished);
+
+  // Podcast progress lives per-EPISODE under composite `${itemId}-${episodeId}`
+  // map keys, so the plain-id lookup above finds nothing. Drive the bottom bar
+  // from the most recently played unfinished episode instead.
+  let podcastEpisodeFraction = 0;
+  if (isPodcast && item?.id) {
+    let latestAt = -1;
+    Object.values(mediaProgress).forEach((p: any) => {
+      if (!p || p.libraryItemId !== item.id || p.isFinished) return;
+      const frac = Number(p.progress || 0);
+      if (frac <= 0) return;
+      const at = Number(p.lastUpdate || p.updatedAt || 0);
+      if (at >= latestAt) {
+        latestAt = at;
+        podcastEpisodeFraction = Math.min(1, frac);
+      }
+    });
+  }
+
+  // What the bottom (primary-colored) bar shows: the book's audio progress, or
+  // the latest episode's progress for podcasts.
+  const audioBarFraction = isPodcast ? podcastEpisodeFraction : progressPercent;
+  const showAudioBar = audioBarFraction > 0 && !isFinished;
+  const showEbookBar = ebookProgressPercent > 0 && !isEbookFinished;
 
   const isDownloaded = !!(item?.id && completedDownloads[item.id]);
   const activeDownload = item?.id ? activeDownloads[item.id] : null;
@@ -204,16 +238,20 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
         </LinearGradient>
       ) : null}
 
-      {/* Progress bar at very bottom */}
-      {progressPercent > 0 && !isFinished ? (
+      {/* Audio progress bar at the very bottom (primary). When the ebook bar is
+          also visible it stacks directly above this one (tertiary), so a
+          both-format book in progress in both media shows both, consistently:
+          audio on the bottom, reading above it. */}
+      {showAudioBar ? (
         <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 3, backgroundColor: "rgba(255,255,255,0.2)", zIndex: 45 }}>
-          <View style={{ height: 3, width: `${progressPercent * 100}%`, backgroundColor: colors.primary }} />
+          <View style={{ height: 3, width: `${audioBarFraction * 100}%`, backgroundColor: colors.primary }} />
         </View>
       ) : null}
 
-      {/* Reading progress bar */}
-      {ebookProgressPercent > 0 && !isEbookFinished ? (
-        <View style={{ position: "absolute", bottom: progressPercent > 0 && !isFinished ? 3 : 0, left: 0, right: 0, height: 3, backgroundColor: progressPercent > 0 && !isFinished ? "transparent" : "rgba(255,255,255,0.2)", zIndex: 45 }}>
+      {/* Reading progress bar (tertiary). The track goes transparent when
+          stacked so the unfilled part doesn't double-darken the audio bar. */}
+      {showEbookBar ? (
+        <View style={{ position: "absolute", bottom: showAudioBar ? 3 : 0, left: 0, right: 0, height: 3, backgroundColor: showAudioBar ? "transparent" : "rgba(255,255,255,0.2)", zIndex: 45 }}>
           <View style={{ height: 3, width: `${ebookProgressPercent * 100}%`, backgroundColor: colors.tertiary }} />
         </View>
       ) : null}

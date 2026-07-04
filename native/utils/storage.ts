@@ -67,6 +67,20 @@ export const storageHelper = {
     return config?.refreshToken || null;
   },
 
+  // Identity of the last logged-in session ("address::userId" — no secrets, so
+  // plain storage). Unlike serverConfig this SURVIVES a forced 401 logout, so
+  // useUserStore.login can tell "same account re-logging in" (keep queued
+  // progress syncs) apart from "different account/server" (wipe them).
+  getLastSessionKey: () => {
+    return storage.getString("lastSessionKey") || null;
+  },
+  setLastSessionKey: (key: string) => {
+    storage.set("lastSessionKey", key);
+  },
+  removeLastSessionKey: () => {
+    storage.remove("lastSessionKey");
+  },
+
   // Theme mode ('light' | 'dark' | 'system')
   getThemeMode: () => {
     return storage.getString("themeMode") || null;

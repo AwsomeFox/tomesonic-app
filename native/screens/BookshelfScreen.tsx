@@ -57,7 +57,12 @@ export default function BookshelfScreen({ navigation }: any) {
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
 
   const loadContinueReading = async () => {
-    if (!currentLibraryId) return;
+    // Capture the library at call time: if the user switches libraries while
+    // the fetch is in flight, the stale result must not clobber the new
+    // library's shelf (checked again before every setState below).
+    const libId = currentLibraryId;
+    if (!libId) return;
+    const libStillCurrent = () => useLibraryStore.getState().currentLibraryId === libId;
 
     try {
       const mediaProgress = useUserStore.getState().mediaProgress || {};
@@ -72,6 +77,8 @@ export default function BookshelfScreen({ navigation }: any) {
           Object.values(mediaProgress)
             .filter((p: any) => {
               if (!p || p.isFinished || p.episodeId) return false;
+              // A fully-read ebook (>=99%) is done — don't offer to "continue".
+              if ((p.ebookProgress || 0) >= 0.99) return false;
               return p.ebookLocation || (p.ebookProgress !== undefined && p.ebookProgress > 0);
             })
             .map((p: any) => p.libraryItemId)
@@ -80,8 +87,8 @@ export default function BookshelfScreen({ navigation }: any) {
       );
 
       if (inProgressIds.length === 0) {
-        setContinueReadingItems([]);
-        try { storage.set(`continueReadingCache_${currentLibraryId}`, "[]"); } catch {}
+        try { storage.set(`continueReadingCache_${libId}`, "[]"); } catch {}
+        if (libStillCurrent()) setContinueReadingItems([]);
         return;
       }
 
@@ -105,20 +112,25 @@ export default function BookshelfScreen({ navigation }: any) {
         fetchedItems = (await Promise.all(itemRequests)).filter(Boolean);
       }
       
-      // Filter so they belong to the current library and contain an ebook
+      // Filter so they belong to this library and contain an ebook
       const filtered = fetchedItems.filter((item: any) => {
-        return item.libraryId === currentLibraryId && hasEbook(item);
+        return item.libraryId === libId && hasEbook(item);
       });
 
-      setContinueReadingItems(filtered);
-      try { storage.set(`continueReadingCache_${currentLibraryId}`, JSON.stringify(filtered)); } catch {}
+      try { storage.set(`continueReadingCache_${libId}`, JSON.stringify(filtered)); } catch {}
+      if (libStillCurrent()) setContinueReadingItems(filtered);
     } catch (e) {
       console.warn("[Bookshelf] failed to load continue reading items", e);
     }
   };
 
+  // Bumped by pull-to-refresh so the series-list effect below revalidates too
+  // (otherwise Continue Series folders keep stale covers/counts).
+  const [seriesRefreshTick, setSeriesRefreshTick] = useState(0);
+
   const onRefresh = async () => {
     setRefreshing(true);
+    setSeriesRefreshTick((t) => t + 1);
     try {
       await Promise.all([loadPersonalizedShelves(true), loadMediaProgress()]);
       await loadContinueReading();
@@ -177,8 +189,16 @@ export default function BookshelfScreen({ navigation }: any) {
     initData();
   }, [currentLibraryId]);
 
+  // Refresh progress (and the Continue Reading shelf derived from it) when
+  // returning to the tab — skipping the initial-mount focus event, which
+  // would double up initData's identical fetches at startup.
+  const firstFocusRef = React.useRef(true);
   useEffect(() => {
     const unsubscribe = navigation.addListener("focus", () => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
       loadMediaProgress().then(() => {
         loadContinueReading();
       });
@@ -247,7 +267,7 @@ export default function BookshelfScreen({ navigation }: any) {
       }
     })();
     return () => { cancelled = true; };
-  }, [currentLibraryId]);
+  }, [currentLibraryId, seriesRefreshTick]);
 
   useEffect(() => {
     // Pure transform: shelves + a series list → ordered continue-series rows.
@@ -408,7 +428,9 @@ export default function BookshelfScreen({ navigation }: any) {
               <Image
                 key={idx}
                 source={{ uri: coverUri }}
-                style={{ width: cardSize / 2, height: cardSize / 2 }}
+                // 2 covers: full-height halves (no empty bottom row) — matches
+                // the playlist/series-detail collage treatment.
+                style={{ width: cardSize / 2, height: covers.length <= 2 ? cardSize : cardSize / 2 }}
                 contentFit="cover"
               />
             ))}
@@ -569,12 +591,26 @@ export default function BookshelfScreen({ navigation }: any) {
           ) : (
             Object.values(completedDownloads).map((dl: any) => {
               const localCover = (dl.parts || []).find((p: any) => p.id === "cover")?.localFilePath;
+              // Ebook-only downloads (no audio tracks) open in the Reader —
+              // startPlayback would reset the player into an empty queue.
+              const ebookPart = (dl.parts || []).find((p: any) => p.id === "ebook");
+              const isEbookOnly = !dl?.meta?.tracks?.length && !!ebookPart;
+              const openOffline = () => {
+                if (isEbookOnly) {
+                  const filename: string = ebookPart?.filename || "book.epub";
+                  navigation.navigate("Reader", {
+                    itemId: dl.libraryItemId || dl.id,
+                    ebookFormat: filename.split(".").pop() || "epub",
+                    title: dl.title,
+                  });
+                } else {
+                  startPlayback(dl.libraryItemId || dl.id);
+                }
+              };
               return (
                 <Pressable
                   key={dl.id}
-                  onPress={async () => {
-                    const ok = await startPlayback(dl.libraryItemId || dl.id);
-                  }}
+                  onPress={openOffline}
                   android_ripple={{ color: colors.surfaceContainerHighest }}
                   style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10 }}
                 >

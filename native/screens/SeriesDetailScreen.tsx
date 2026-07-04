@@ -1,11 +1,5 @@
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  FlatList,
-  Pressable,
-  ActivityIndicator,
-} from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -15,7 +9,6 @@ import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
-import TopAppBar from "../components/TopAppBar";
 import Icon from "../components/Icon";
 import BookProgressBadge from "../components/BookProgressBadge";
 
@@ -72,6 +65,7 @@ interface SeriesBook {
 interface SeriesData {
   id: string;
   name: string;
+  description?: string;
   books: SeriesBook[];
 }
 
@@ -85,7 +79,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
 
   const [series, setSeries] = useState<SeriesData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<string | null>(null);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -99,6 +95,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     const fetchSeriesDetail = async () => {
       if (!seriesId || !currentLibraryId) return;
       setLoading(true);
+      setError(null);
 
       try {
         const seriesMetaResponse = await api.get(`/api/series/${seriesId}`).catch(() => null);
@@ -139,10 +136,12 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         setSeries({
           id: seriesId,
           name: seriesMeta.name || seriesName || "Unknown Series",
+          description: seriesMeta.description || "",
           books,
         });
       } catch (err) {
         console.error("[SeriesDetailScreen] Failed to fetch series books:", err);
+        setError("Failed to load series.");
       } finally {
         setLoading(false);
       }
@@ -151,17 +150,33 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     fetchSeriesDetail();
   }, [seriesId, currentLibraryId]);
 
-  const handlePlay = async (item: SeriesBook) => {
-    if (startingId) return;
+  const books = series?.books || [];
+  const bookCount = books.length;
+  const totalDuration = books.reduce((t, b) => t + (b.media?.duration || 0), 0);
+  const finishedCount = books.filter((b) => b.userMediaProgress?.isFinished).length;
+  const anyProgress = books.some(
+    (b) => b.userMediaProgress?.isFinished || (b.userMediaProgress?.progress || 0) > 0
+  );
+
+  // First unfinished book in sequence order — what the header button starts.
+  const nextUnfinished = books.find((b) => !b.userMediaProgress?.isFinished) || books[0];
+
+  const handlePlay = async (item?: SeriesBook) => {
+    if (!item || startingId) return;
     setStartingId(item.id);
     try {
-      const ok = await startPlayback(item.id);
+      await startPlayback(item.id);
     } finally {
       setStartingId(null);
     }
   };
 
-  const renderBookCard = ({ item, index }: { item: SeriesBook; index: number }) => {
+  const collageCovers = books
+    .slice(0, 4)
+    .map((b) => getCoverUrl(b.id))
+    .filter(Boolean) as string[];
+
+  const renderBookRow = ({ item, index }: { item: SeriesBook; index: number }) => {
     const coverUri = getCoverUrl(item.id);
     const rawTitle = item.media?.metadata?.title || "Untitled";
     const author = item.media?.metadata?.authorName || "";
@@ -179,157 +194,235 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
         android_ripple={{ color: colors.surfaceContainerHighest }}
-        style={{ paddingVertical: 10, paddingHorizontal: 16 }}
+        style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 }}
       >
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          {/* Cover — rounded ~12 */}
-          <View
-            style={{
-              width: COVER_WIDTH,
-              height: COVER_HEIGHT,
-              borderRadius: 12,
-              overflow: "hidden",
-              backgroundColor: colors.surfaceContainer,
-            }}
-          >
-            {coverUri ? (
-              <Image
-                source={{ uri: coverUri }}
-                style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
-                contentFit="cover"
-              />
-            ) : (
-              <View
-                style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-              >
-                <Icon name="book" size={28} color={colors.onSurfaceVariant} />
-              </View>
-            )}
-          </View>
-
-          {/* Info — title / author / duration / remaining chip */}
-          <View style={{ flex: 1, minWidth: 0, paddingLeft: 14, paddingRight: 12 }}>
-            <Text
-              numberOfLines={1}
-              style={{ color: colors.onSurface, fontSize: 15, fontWeight: "bold" }}
-            >
-              {title}
-            </Text>
-            {author ? (
-              <Text
-                numberOfLines={1}
-                style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}
-              >
-                {author}
-              </Text>
-            ) : null}
-            {duration > 0 ? (
-              <Text
-                numberOfLines={1}
-                style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}
-              >
-                {elapsedPretty(duration)}
-              </Text>
-            ) : null}
-
-            <BookProgressBadge
-              itemId={item.id}
-              item={item}
-              downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
-              style={{ marginTop: 6 }}
+        {/* Cover */}
+        <View
+          style={{
+            width: COVER_WIDTH,
+            height: COVER_HEIGHT,
+            borderRadius: 12,
+            overflow: "hidden",
+            backgroundColor: colors.surfaceContainerHigh,
+          }}
+        >
+          {coverUri ? (
+            <Image
+              source={{ uri: coverUri }}
+              style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
+              contentFit="cover"
             />
-          </View>
-
-          {/* Filled pine-green circular Play button (~56dp) */}
-          <Pressable
-            onPress={() => handlePlay(item)}
-            hitSlop={6}
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 28,
-              alignItems: "center",
-              justifyContent: "center",
-              elevation: 2,
-              backgroundColor: startingThis ? colors.surfaceVariant : colors.primary,
-            }}
-          >
-            {startingThis ? (
-              <ActivityIndicator size="small" color={colors.onSurfaceVariant} />
-            ) : (
-              <Icon name="play" size={30} color={colors.onPrimary} />
-            )}
-          </Pressable>
+          ) : (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+              <Icon name="book" size={28} color={colors.onSurfaceVariant} />
+            </View>
+          )}
         </View>
+
+        {/* Title / author / duration / progress badge */}
+        <View style={{ flex: 1, minWidth: 0, marginLeft: 14, paddingRight: 8 }}>
+          <Text
+            numberOfLines={2}
+            style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", lineHeight: 20 }}
+          >
+            {title}
+          </Text>
+          {author ? (
+            <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+              {author}
+            </Text>
+          ) : null}
+          {duration > 0 ? (
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+              {elapsedPretty(duration)}
+            </Text>
+          ) : null}
+          <BookProgressBadge
+            itemId={item.id}
+            item={item}
+            downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
+            style={{ marginTop: 4 }}
+          />
+        </View>
+
+        {/* pine-green circular play (matches playlist rows) */}
+        <Pressable
+          onPress={() => handlePlay(item)}
+          hitSlop={6}
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: 24,
+            backgroundColor: startingThis ? colors.surfaceVariant : colors.primary,
+            alignItems: "center",
+            justifyContent: "center",
+            marginLeft: 8,
+            elevation: 2,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.2,
+            shadowRadius: 2,
+          }}
+        >
+          {startingThis ? (
+            <ActivityIndicator size="small" color={colors.onSurfaceVariant} />
+          ) : (
+            <Icon name="play" size={26} color={colors.onPrimary} />
+          )}
+        </Pressable>
       </AnimatedPressable>
     );
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, backgroundColor: colors.surface }}
-        edges={["top", "left", "right"]}
-      >
-        <TopAppBar navigation={navigation} showDownload showBack title={seriesName || "Loading Series"} />
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text
-            style={{
-              color: colors.onSurface,
-              marginTop: 12,
-              fontSize: 14,
-              opacity: 0.7,
-            }}
-          >
-            Loading series…
+  // Hero header: collage + name + counts + continue/play — mirrors the
+  // playlist detail layout, plus the series description when the server has
+  // one (long ones collapse to 4 lines, tap to expand).
+  const ListHeader = (
+    <View>
+      <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 20, paddingBottom: 16 }}>
+        <SeriesCollage covers={collageCovers} size={120} colors={colors} />
+        <View style={{ flex: 1, marginLeft: 16, justifyContent: "center" }}>
+          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "800" }} numberOfLines={3}>
+            {series?.name || "Series"}
           </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 4 }}>
+            {bookCount} {bookCount === 1 ? "book" : "books"}
+            {totalDuration ? `  ·  ${elapsedPretty(totalDuration)}` : ""}
+          </Text>
+          {finishedCount > 0 ? (
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+              {finishedCount} of {bookCount} finished
+            </Text>
+          ) : null}
+          {bookCount > 0 ? (
+            <Pressable
+              onPress={() => handlePlay(nextUnfinished)}
+              disabled={!!startingId}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                alignSelf: "flex-start",
+                marginTop: 14,
+                paddingHorizontal: 20,
+                paddingVertical: 10,
+                borderRadius: 24,
+                backgroundColor: colors.primary,
+                opacity: startingId ? 0.6 : 1,
+              }}
+            >
+              {startingId === nextUnfinished?.id ? (
+                <ActivityIndicator size="small" color={colors.onPrimary} />
+              ) : (
+                <>
+                  <Icon name="play" size={20} color={colors.onPrimary} />
+                  <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600", marginLeft: 6 }}>
+                    {anyProgress ? "Continue" : "Play all"}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          ) : null}
         </View>
-      </SafeAreaView>
-    );
-  }
+      </View>
 
-  const bookCount = series?.books?.length || 0;
+      {series?.description ? (
+        <Pressable
+          onPress={() => setDescriptionExpanded((v) => !v)}
+          style={{ paddingHorizontal: 16, paddingBottom: 12 }}
+        >
+          <Text
+            numberOfLines={descriptionExpanded ? undefined : 4}
+            style={{ color: colors.onSurface, fontSize: 14, lineHeight: 20 }}
+          >
+            {series.description}
+          </Text>
+          {series.description.length > 220 ? (
+            <Text style={{ color: colors.primary, fontSize: 13, fontWeight: "600", marginTop: 4 }}>
+              {descriptionExpanded ? "Show less" : "Show more"}
+            </Text>
+          ) : null}
+        </Pressable>
+      ) : null}
+
+      <View style={{ height: 1, backgroundColor: colors.outlineVariant, marginHorizontal: 16, marginBottom: 6 }} />
+    </View>
+  );
 
   return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: colors.surface }}
-      edges={["top", "left", "right"]}
-    >
-      {/* Top app bar — download + search (matches screenshot 19) */}
-      <TopAppBar navigation={navigation} showDownload showBack title={series?.name} />
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
+      {/* Header bar (matches playlist detail) */}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          paddingHorizontal: 16,
+          paddingVertical: 14,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.outlineVariant,
+        }}
+      >
+        <Pressable onPress={() => navigation.goBack()} style={{ marginRight: 12, padding: 8, borderRadius: 20 }}>
+          <Icon name="back" size={20} color={colors.onSurface} />
+        </Pressable>
+        <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
+          {series?.name || seriesName || "Series"}
+        </Text>
+      </View>
 
-      {bookCount === 0 ? (
-        <View
-          style={{
-            flex: 1,
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 32,
-          }}
-        >
+      {loading ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : error ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
+        </View>
+      ) : bookCount === 0 ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
           <Icon name="series" size={48} color={colors.onSurfaceVariant} />
-          <View style={{ height: 16 }} />
-          <Text
-            style={{
-              color: colors.onSurface,
-              fontSize: 16,
-              fontWeight: "bold",
-              marginBottom: 8,
-            }}
-          >
+          <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "bold", marginTop: 16 }}>
             No books in this series
           </Text>
         </View>
       ) : (
         <FlatList
-          data={series?.books || []}
-          renderItem={renderBookCard}
+          data={books}
+          renderItem={renderBookRow}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={{ paddingTop: 8, paddingBottom: hasSession ? 100 : 32 }}
+          ListHeaderComponent={ListHeader}
+          contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
         />
       )}
     </SafeAreaView>
+  );
+}
+
+// Rounded collage over primary bg: single fills, else up-to-4 grid.
+// (Same treatment as the playlist detail collage.)
+function SeriesCollage({ covers, size, colors }: { covers: string[]; size: number; colors: any }) {
+  return (
+    <View style={{ width: size, height: size, borderRadius: 14, overflow: "hidden", backgroundColor: colors.primary }}>
+      {covers.length === 0 ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <Icon name="series" size={28} color={colors.onPrimary} />
+        </View>
+      ) : covers.length === 1 ? (
+        <Image source={{ uri: covers[0] }} style={{ width: size, height: size }} contentFit="cover" />
+      ) : (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", width: size, height: size }}>
+          {covers.slice(0, 4).map((uri, idx) => (
+            <Image
+              key={idx}
+              source={{ uri }}
+              style={{ width: size / 2, height: covers.length <= 2 ? size : size / 2 }}
+              contentFit="cover"
+            />
+          ))}
+        </View>
+      )}
+    </View>
   );
 }

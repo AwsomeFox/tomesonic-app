@@ -97,6 +97,12 @@ clean-android:
 	@rm -rf native/android/app/build native/android/build native/android/app/.cxx
 	@echo "✓ Caches cleared."
 
+# Full native Android rebuild after dependency/config changes
+full-rebuild: clean-android
+	@echo "Running Expo Android prebuild (clean) and rebuilding app..."
+	@cd native && npx expo prebuild --clean --platform android
+	@cd native && npx expo run:android
+
 # Start Metro bundler (Expo dev server)
 start:
 	@echo "Starting Metro bundler..."

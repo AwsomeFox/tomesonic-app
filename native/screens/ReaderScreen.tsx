@@ -344,11 +344,16 @@ export default function ReaderScreen({ route, navigation }: any) {
       if (latestProgressRef.current) {
         const { cfi, fraction } = latestProgressRef.current;
         console.log("[Reader] Unmounting, flushing ebook progress to server:", itemId, cfi, fraction);
+        // ONLY the ebook fields (matches the ABS web reader). Sending
+        // `progress`/`isFinished` here would clobber the AUDIO progress on
+        // both-format items — e.g. opening the ebook of a book you finished
+        // in audio would un-finish it.
         api.patch(`/api/me/progress/${itemId}`, {
           ebookLocation: cfi,
           ebookProgress: fraction,
-          progress: fraction,
-          isFinished: fraction >= 0.99,
+          // One-way: mark finished when the book is done reading, but never
+          // send isFinished:false (that would un-finish audio-finished items).
+          ...(fraction >= 0.99 ? { isFinished: true } : {}),
         }).catch((e) => {
           console.warn("[Reader] Failed to sync ebook progress on unmount:", e);
         });
@@ -395,10 +400,22 @@ export default function ReaderScreen({ route, navigation }: any) {
           FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
         }
         if (cancelled) return;
+        // Restore position: local (MMKV) vs server ebookLocation — prefer the
+        // FRESHER one, so reading ahead on another device isn't lost to a stale
+        // local cfi. The local save timestamp is written alongside every cfi in
+        // onWebMessage; the server side uses the progress entry's lastUpdate.
+        // Caveat (accepted): lastUpdate also bumps on audio-only syncs, but the
+        // reader mirrors every cfi to the server too, so when nobody else read
+        // further the two cfis match and the choice is moot.
         const localCfi = storage.getString(progressKey) || "";
+        const localCfiAt = storage.getNumber(`${progressKey}_at`) || 0;
         const serverProgress = useUserStore.getState().mediaProgress[itemId];
         const serverCfi = serverProgress?.ebookLocation || "";
-        const savedCfi = localCfi || serverCfi;
+        const serverCfiAt = Number(serverProgress?.lastUpdate || serverProgress?.updatedAt || 0);
+        const savedCfi =
+          serverCfi && serverCfi !== localCfi && serverCfiAt > localCfiAt
+            ? serverCfi
+            : localCfi || serverCfi;
 
         const mime = getMimeForFormat(format);
         const htmlContent = ebookHtml(base64, bg, fg, accent, savedCfi, mime, fontSize, fontFamily, lineHeight);
@@ -423,6 +440,9 @@ export default function ReaderScreen({ route, navigation }: any) {
       if (data.type === "location") {
         if (data.cfi) {
           storage.set(progressKey, data.cfi);
+          // Save-time timestamp so the restore logic can compare local vs
+          // server freshness (see the load effect above).
+          storage.set(`${progressKey}_at`, Date.now());
           latestProgressRef.current = { cfi: data.cfi, fraction: data.fraction || 0 };
         }
         setPageProgress({
@@ -432,13 +452,13 @@ export default function ReaderScreen({ route, navigation }: any) {
           tocItem: data.tocItem || null,
         });
 
-        // Update local store progress state instantly
+        // Update local store progress state instantly — EBOOK fields only.
+        // Touching `progress`/`isFinished` here would clobber the audio
+        // progress on both-format items (and un-finish finished audiobooks).
         const updatedProgress = {
           libraryItemId: itemId,
           ebookLocation: data.cfi || "",
           ebookProgress: data.fraction || 0,
-          progress: data.fraction || 0,
-          isFinished: (data.fraction || 0) >= 0.99,
           updatedAt: Date.now(),
         };
         useUserStore.setState({
@@ -451,7 +471,8 @@ export default function ReaderScreen({ route, navigation }: any) {
           },
         });
 
-        // Debounce progress PATCH to server
+        // Debounce progress PATCH to server (ebook fields only, matching the
+        // ABS web reader).
         if (syncTimeoutRef.current) {
           clearTimeout(syncTimeoutRef.current);
         }
@@ -460,8 +481,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             await api.patch(`/api/me/progress/${itemId}`, {
               ebookLocation: data.cfi || "",
               ebookProgress: data.fraction || 0,
-              progress: data.fraction || 0,
-              isFinished: (data.fraction || 0) >= 0.99,
+              ...((data.fraction || 0) >= 0.99 ? { isFinished: true } : {}),
             });
           } catch (e) {
             console.warn("[Reader] Failed to sync ebook progress:", e);
@@ -680,7 +700,14 @@ export default function ReaderScreen({ route, navigation }: any) {
             </Text>
           ) : null}
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
-            Page {pageProgress.page} of {pageProgress.pages} ({Math.round(pageProgress.fraction * 100)}%)
+            {/* Percent clamped to 1–99 while mid-book: never "0%" right after
+                starting, and "100%" only at the finished threshold (>=0.99,
+                matching the isFinished sync cutoff). */}
+            Page {pageProgress.page} of {pageProgress.pages} (
+            {pageProgress.fraction >= 0.99
+              ? 100
+              : Math.max(pageProgress.fraction > 0 ? 1 : 0, Math.min(99, Math.round(pageProgress.fraction * 100)))}
+            %)
           </Text>
         </View>
       )}

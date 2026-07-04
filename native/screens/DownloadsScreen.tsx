@@ -21,10 +21,30 @@ export default function DownloadsScreen({ navigation }: any) {
   const activeList = Object.values(activeDownloads);
   const completedList = Object.values(completedDownloads);
 
+  // fileSize can be 0 for parts whose size the server never reported (e.g. the
+  // cover) — fall back to the bytes actually written so sizes aren't understated.
   const itemBytes = (item: any) =>
-    (item?.parts || []).reduce((acc: number, p: any) => acc + (p.fileSize || 0), 0);
+    (item?.parts || []).reduce(
+      (acc: number, p: any) => acc + Math.max(p.fileSize || 0, p.bytesDownloaded || 0),
+      0
+    );
+
+  const ebookPartOf = (item: any) => (item?.parts || []).find((p: any) => p.id === "ebook");
+  // Ebook without any audio tracks — "playing" it means opening the reader.
+  const isEbookOnly = (item: any) => !item?.meta?.tracks?.length && !!ebookPartOf(item);
 
   const handlePlayOffline = async (item: any) => {
+    if (isEbookOnly(item)) {
+      // No audio to play — open the downloaded ebook in the reader instead
+      // (ReaderScreen prefers the offline file for downloaded items).
+      const filename: string = ebookPartOf(item)?.filename || "book.epub";
+      navigation.navigate("Reader", {
+        itemId: item.libraryItemId || item.id,
+        ebookFormat: filename.split(".").pop() || "epub",
+        title: item.title,
+      });
+      return;
+    }
     // The playback store already prefers locally-downloaded files when
     // available, so just start a normal playback session for this item.
     await startPlayback(item.libraryItemId || item.id);
@@ -175,7 +195,7 @@ export default function DownloadsScreen({ navigation }: any) {
                 }}
                 hitSlop={6}
               >
-                <Icon name="play" size={24} color={colors.onPrimary} />
+                <Icon name={isEbookOnly(item) ? "book" : "play"} size={24} color={colors.onPrimary} />
               </Pressable>
               <Pressable
                 onPress={() =>
@@ -232,6 +252,16 @@ export default function DownloadsScreen({ navigation }: any) {
                   >
                     {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
                   </Text>
+                  {item.status === "failed" && item.error ? (
+                    // Why it failed (storage full, auth expired, network…) so
+                    // the user knows whether retrying can help.
+                    <Text
+                      numberOfLines={2}
+                      style={{ color: colors.onSurfaceVariant, fontSize: 11, marginTop: 2 }}
+                    >
+                      {item.error}
+                    </Text>
+                  ) : null}
                 </View>
                 {item.status === "failed" ? (
                   <Pressable

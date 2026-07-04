@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { storageHelper } from "../utils/storage";
 import { api } from "../utils/api";
-import { writeAutoCreds } from "../utils/autoCreds";
+import { writeAutoCreds, readAutoCreds } from "../utils/autoCreds";
 import { useLibraryStore } from "./useLibraryStore";
 
 type HapticLevel = "off" | "light" | "medium" | "heavy";
@@ -85,16 +85,44 @@ export const useUserStore = create<UserState>((set, get) => ({
     // Only restore an authenticated session when we have a saved server + token.
     const hasSession = !!(savedConfig?.address && savedConfig?.token);
 
+    // The native Android Auto service refreshes tokens itself while the JS app
+    // is dead, and ABS ROTATES refresh tokens (the previous one dies ~60s
+    // after a refresh) — so after a drive, auto_creds.json can hold the ONLY
+    // valid pair. Both sides write that file, so when its token differs from
+    // the saved config it is the newer pair: adopt it here instead of
+    // clobbering the file with stale tokens below (which would force a logout
+    // on the first 401).
+    let config = savedConfig;
+    if (hasSession) {
+      try {
+        const fileCreds = await readAutoCreds();
+        const host = savedConfig.address.replace(/\/$/, "");
+        if (fileCreds && fileCreds.server === host && fileCreds.token && fileCreds.token !== savedConfig.token) {
+          config = {
+            ...savedConfig,
+            token: fileCreds.token,
+            refreshToken: fileCreds.refreshToken || savedConfig.refreshToken,
+          };
+          storageHelper.setServerConfig(config);
+        }
+      } catch {}
+      // Track the session identity so login() can tell same-account re-login
+      // apart from an account/server switch even across forced logouts.
+      storageHelper.setLastSessionKey(
+        `${savedConfig.address.replace(/\/$/, "")}::${savedConfig.userId || ""}`
+      );
+    }
+
     set({
       user: hasSession
-        ? { id: savedConfig.userId, username: savedConfig.username }
+        ? { id: config.userId, username: config.username }
         : null,
-      serverConnectionConfig: savedConfig || null,
+      serverConnectionConfig: config || null,
       settings: savedSettings ? { ...DEFAULT_SETTINGS, ...savedSettings } : DEFAULT_SETTINGS,
       isInitialized: true,
     });
     // Mirror creds for the native Android Auto browse service.
-    if (hasSession) writeAutoCreds(savedConfig.address, savedConfig.token, useLibraryStore.getState().currentLibraryId, savedConfig.refreshToken);
+    if (hasSession) writeAutoCreds(config.address, config.token, useLibraryStore.getState().currentLibraryId, config.refreshToken);
   },
 
   setUser: (user) => set({ user }),
@@ -116,7 +144,14 @@ export const useUserStore = create<UserState>((set, get) => ({
     try {
       const res = await api.get("/api/me");
       const list = res.data?.mediaProgress || [];
-      set({ mediaProgress: indexMediaProgress(list) });
+      const next = indexMediaProgress(list);
+      // Skip the setState when nothing changed: this runs on every Home focus,
+      // and installing a fresh map object re-renders every card subscribed to
+      // mediaProgress even when the data is identical. The map is small
+      // (one entry per started book), so the compare is cheap.
+      const prev = get().mediaProgress;
+      if (JSON.stringify(prev) === JSON.stringify(next)) return;
+      set({ mediaProgress: next });
     } catch (err) {
       console.error("[UserStore] Failed to load media progress:", err);
     }
@@ -129,6 +164,43 @@ export const useUserStore = create<UserState>((set, get) => ({
   },
 
   login: (config, user) => {
+    // A login targeting a DIFFERENT server or account than the previous
+    // session must wipe that session's leftovers — queued offline progress
+    // syncs, cached shelves, library selection, last playback session — so
+    // none of it can ever flush/render under the new account's credentials.
+    // The session key lives in plain storage, so this also catches re-login
+    // after a forced 401 logout or an app restart (where in-memory state is
+    // gone). The SAME account re-logging in keeps its queued offline progress,
+    // which flushes normally once the new token is in place.
+    const newKey = `${(config?.address || "").replace(/\/$/, "")}::${config?.userId || user?.id || ""}`;
+    const prevKey = storageHelper.getLastSessionKey();
+    if (prevKey && prevKey !== newKey) {
+      try {
+        const { clearAllPending } = require("../utils/progressSync");
+        clearAllPending();
+      } catch {}
+      storageHelper.removeLastLibraryId();
+      storageHelper.removeLastPlaybackSession();
+      try {
+        const { storage } = require("../utils/storage");
+        storage
+          .getAllKeys()
+          .filter(
+            (k: string) =>
+              k.startsWith("shelvesCache_") ||
+              k.startsWith("seriesListCache_") ||
+              k.startsWith("continueReadingCache_")
+          )
+          .forEach((k: string) => storage.remove(k));
+      } catch {}
+      // Reset BEFORE writeAutoCreds below so the old server's libraryId can't
+      // be mirrored into the new server's Android Auto creds file.
+      try {
+        useLibraryStore.getState().reset();
+      } catch {}
+    }
+    storageHelper.setLastSessionKey(newKey);
+
     storageHelper.setServerConfig(config);
     writeAutoCreds(config?.address, config?.token, useLibraryStore.getState().currentLibraryId, config?.refreshToken);
     set({
@@ -172,6 +244,9 @@ export const useUserStore = create<UserState>((set, get) => ({
     writeAutoCreds(null, null, null);
     storageHelper.removeLastLibraryId();
     storageHelper.removeLastPlaybackSession();
+    // Explicit logout fully ends the session — clear its identity key too so
+    // the next login starts from a clean slate (everything is wiped here).
+    storageHelper.removeLastSessionKey();
 
     // Wipe cached shelves/series lists so the next account never sees the
     // previous account's home content (stale-while-revalidate caches).

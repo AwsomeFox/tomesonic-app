@@ -124,8 +124,14 @@ export const db = {
     const downloads: any[] = [];
     keys.forEach(key => {
       const val = dbStorage.getString(key);
-      if (val) {
+      if (!val) return;
+      // A single corrupt record must not crash the whole downloads restore
+      // (this runs on app start) — drop it instead.
+      try {
         downloads.push(JSON.parse(val));
+      } catch (e) {
+        console.warn("[db] Dropping corrupt download record", key, e);
+        dbStorage.remove(key);
       }
     });
     return downloads;

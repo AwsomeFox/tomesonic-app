@@ -89,9 +89,20 @@ export async function loginWithOpenId(serverAddress: string): Promise<any | null
     throw new Error(`Browser returned '${result.type}' without a redirect URL.`);
   }
 
+  // Only parse params out of OUR registered redirect scheme — never trust a
+  // code from an unexpected URL the browser session might hand back.
+  if (!result.url.startsWith(REDIRECT_URI)) {
+    throw new Error("Unexpected redirect URL from the auth session.");
+  }
+
   const err = getParam(result.url, "error");
   if (err) throw new Error(`Provider error: ${err}`);
   const code = getParam(result.url, "code");
+  // NOTE on `state`: in ABS's flow the SERVER generates the state (the app
+  // never sees it before this redirect), binds it to the connect.sid session
+  // cookie from step 1, and validates the pair at /auth/openid/callback. The
+  // app cannot pre-validate a value it didn't create — CSRF protection here is
+  // the cookie⇄state binding enforced server-side, so we forward both intact.
   const state = getParam(result.url, "state");
   if (!code) throw new Error("No authorization code in the redirect.");
 

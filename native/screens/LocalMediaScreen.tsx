@@ -27,11 +27,22 @@ function formatBytes(bytes: number): string {
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
+// fileSize can be 0 for parts whose size the server never reported (e.g. the
+// cover) — fall back to the bytes actually written so sizes aren't understated.
 function itemBytes(item: any): number {
   return (item?.parts || []).reduce(
-    (acc: number, p: any) => acc + (p.fileSize || 0),
+    (acc: number, p: any) => acc + Math.max(p.fileSize || 0, p.bytesDownloaded || 0),
     0
   );
+}
+
+function ebookPartOf(item: any) {
+  return (item?.parts || []).find((p: any) => p.id === "ebook");
+}
+
+// Ebook without any audio tracks — "playing" it means opening the reader.
+function isEbookOnly(item: any): boolean {
+  return !item?.meta?.tracks?.length && !!ebookPartOf(item);
 }
 
 /**
@@ -63,9 +74,20 @@ export default function LocalMediaScreen({ navigation }: any) {
   const play = async (item: any) => {
     if (busyId) return;
     haptic();
+    if (isEbookOnly(item)) {
+      // No audio to play — open the downloaded ebook in the reader instead
+      // (ReaderScreen prefers the offline file for downloaded items).
+      const filename: string = ebookPartOf(item)?.filename || "book.epub";
+      navigation.navigate("Reader", {
+        itemId: item.libraryItemId || item.id,
+        ebookFormat: filename.split(".").pop() || "epub",
+        title: item.title,
+      });
+      return;
+    }
     setBusyId(item.id);
     try {
-      const ok = await startPlayback(item.libraryItemId || item.id);
+      await startPlayback(item.libraryItemId || item.id);
     } finally {
       setBusyId(null);
     }
@@ -235,7 +257,7 @@ export default function LocalMediaScreen({ navigation }: any) {
                 {busyId === item.id ? (
                   <ActivityIndicator size="small" color={colors.onPrimary} />
                 ) : (
-                  <Icon name="play" size={22} color={colors.onPrimary} />
+                  <Icon name={isEbookOnly(item) ? "book" : "play"} size={22} color={colors.onPrimary} />
                 )}
               </Pressable>
 

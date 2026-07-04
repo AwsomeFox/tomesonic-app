@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
@@ -65,17 +65,48 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const activeDownloads = useDownloadStore((s) => s.activeDownloads);
   const cancelDownload = useDownloadStore((s) => s.cancelDownload);
+  const removeDownload = useDownloadStore((s) => s.removeDownload);
 
   const isDownloaded = !!(item?.id && completedDownloads[item.id]);
   const isDownloading = !!(item?.id && activeDownloads[item.id]);
-  const isFinished = !!item?.userMediaProgress?.isFinished;
+
+  // Progress source: the global map entry is live-updated every second while
+  // playing/reading, whereas item.userMediaProgress is a snapshot from the
+  // item fetch — prefer whichever is fresher so the Your Progress card tracks
+  // an active session AND reflects a just-toggled finished state (the refetch
+  // bumps the snapshot's lastUpdate past the map's).
+  const liveProgress = useUserStore((s) => (itemId ? s.mediaProgress[itemId] : null));
+  const itemProgress = item?.userMediaProgress || null;
+  const progress = React.useMemo(() => {
+    if (!liveProgress) return itemProgress;
+    if (!itemProgress) return liveProgress;
+    const liveAt = Number(liveProgress.lastUpdate || liveProgress.updatedAt || 0);
+    const itemAt = Number(itemProgress.lastUpdate || itemProgress.updatedAt || 0);
+    // Merge so ebook-only live writes (reader) keep the snapshot's audio fields.
+    return liveAt >= itemAt ? { ...itemProgress, ...liveProgress } : itemProgress;
+  }, [liveProgress, itemProgress]);
+  const isFinished = !!progress?.isFinished;
   const activeDownload = item?.id ? activeDownloads[item.id] : null;
   const downloadPct = activeDownload ? Math.round(activeDownload.progress * 100) : 0;
 
   const handleToggleFinished = async () => {
     if (!item?.id) return;
     try {
-      await api.patch(`/api/me/progress/${item.id}`, { isFinished: !isFinished });
+      const next = !isFinished;
+      await api.patch(`/api/me/progress/${item.id}`, { isFinished: next });
+      // Merge into the global progress map immediately so badges/cards on
+      // already-rendered screens update without waiting for the next /api/me.
+      useUserStore.setState((s) => ({
+        mediaProgress: {
+          ...s.mediaProgress,
+          [item.id]: {
+            ...s.mediaProgress[item.id],
+            libraryItemId: item.id,
+            isFinished: next,
+            updatedAt: Date.now(),
+          },
+        },
+      }));
       refetchItem();
     } catch (err) {
       console.warn("[ItemDetail] Toggle finished failed:", err);
@@ -85,10 +116,20 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const handleDownloadPress = async () => {
     if (!item?.id) return;
     if (isDownloaded) {
+      // A completed download must go through removeDownload (cancelDownload
+      // only touches in-flight downloads and would silently no-op here).
+      // Destructive — deletes the files — so confirm first.
+      Alert.alert(
+        "Delete download",
+        `Remove "${metadata.title || "this book"}" from this device? You can download it again later.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: () => removeDownload(item.id) },
+        ]
+      );
+    } else if (isDownloading) {
       cancelDownload(item.id);
-      refetchItem();
     } else {
-      if (isDownloading) return;
       try {
         await downloader.downloadBook(item, serverAddress, token);
         refetchItem();
@@ -134,14 +175,46 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   }, [itemId]);
 
   const metadata = item?.media?.metadata || {};
-  const progress = item?.userMediaProgress || null;
   const coverUrl =
     itemId && serverAddress && token ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}` : null;
 
   const description = stripHtml(metadata.description || "");
   const duration = item?.media?.duration || 0;
-  const progressPercent = progress ? Math.min(Math.round((progress.progress || 0) * 100), 100) : 0;
-  const timeRemaining = progress ? elapsedPretty(duration - (progress.currentTime || 0)) : "";
+  // Audio and reading progress tracked separately — the player only writes
+  // `progress`, the reader only writes `ebookProgress`, and on both-format
+  // items neither may masquerade as the other.
+  const audioProgressFraction = Math.max(0, Math.min(1, Number(progress?.progress || 0)));
+  const ebookProgressFraction = Math.max(0, Math.min(1, Number(progress?.ebookProgress || 0)));
+  // Headline % prefers audio, falling back to reading progress (ebook-only
+  // items). Displayed value is clamped to 1–99 while in progress so a book
+  // never reads "0%" just after starting or "100%" before it's finished;
+  // finished always reads 100% (even when marked finished mid-way).
+  const headlineFraction = audioProgressFraction > 0 ? audioProgressFraction : ebookProgressFraction;
+  const progressPercent = isFinished
+    ? 100
+    : headlineFraction > 0
+    ? Math.min(99, Math.max(1, Math.round(headlineFraction * 100)))
+    : 0;
+  const timeRemaining =
+    progress && duration > 0 ? elapsedPretty(duration - (progress.currentTime || 0)) : "";
+
+  // Per-format rows for the Your Progress card: Listening (headphones) and
+  // Reading (book) each get their own icon, percent, and bar so the two kinds
+  // of progress can never be confused. `isFinished` is ITEM-level in ABS; when
+  // it was evidently set by the reader (ebook ≥99%) while the audio sits
+  // mid-way, the audio row keeps showing its real remaining time.
+  const readerSetFinished =
+    ebookProgressFraction >= 0.99 && audioProgressFraction > 0 && audioProgressFraction < 0.99;
+  const audioFinished = isFinished && !readerSetFinished && hasAudio(item);
+  const ebookFinished = ebookProgressFraction >= 0.99 || (isFinished && !hasAudio(item));
+  const showAudioRow = hasAudio(item) && (audioProgressFraction > 0 || audioFinished);
+  const showEbookRow = itemHasEbook(item) && (ebookProgressFraction > 0 || ebookFinished);
+  const audioPct = audioFinished
+    ? 100
+    : Math.min(99, Math.max(1, Math.round(audioProgressFraction * 100)));
+  const ebookPct = ebookFinished
+    ? 100
+    : Math.min(99, Math.max(1, Math.round(ebookProgressFraction * 100)));
 
   const chapters = item?.media?.chapters || [];
   const hasChapters = chapters.length > 0;
@@ -238,7 +311,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     setStarting(true);
     storage.set(`last_interaction_${itemId}`, "listen");
     setLastInteractionState("listen");
-    const ok = await startPlayback(id);
+    await startPlayback(id);
     setStarting(false);
   };
   const handlePlay = () => startAudio(itemId);
@@ -354,7 +427,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   <Icon name="book" size={64} color={colors.onSurfaceVariant} />
                 </View>
               )}
-              {/* Thin pine-green progress bar along the cover's bottom edge */}
+              {/* Thin pine-green progress bar along the cover's bottom edge.
+                  Finished renders as a full-width tertiary bar (progressPercent
+                  is forced to 100 above, even when marked finished mid-way). */}
               {progressPercent > 0 ? (
                 <View
                   style={{
@@ -412,7 +487,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   <>
                     <Icon name="play" size={22} color={colors.onPrimary} />
                     <Text numberOfLines={1} style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600", marginLeft: 8 }}>
-                      {progress && !isFinished && progressPercent > 0 ? "Continue" : "Play"}
+                      {/* "Continue" only when there's AUDIO progress — reading
+                          progress alone must not relabel the play button on a
+                          both-format item. */}
+                      {!isFinished && audioProgressFraction > 0 ? "Continue" : "Play"}
                     </Text>
                   </>
                 )}
@@ -527,8 +605,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             </Pressable>
           </View>
 
-          {/* Your Progress card */}
-          {progressPercent > 0 ? (
+          {/* Your Progress card — one icon-labeled row per format so listening
+              and reading progress can never be mistaken for each other. */}
+          {showAudioRow || showEbookRow ? (
             <View style={{ paddingHorizontal: 20, marginTop: 18 }}>
               <View
                 style={{
@@ -536,20 +615,110 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   borderRadius: 16,
                   borderWidth: 1,
                   borderColor: colors.outlineVariant,
-                  paddingVertical: 16,
+                  paddingVertical: 14,
                   paddingHorizontal: 16,
-                  alignItems: "center",
+                  rowGap: 14,
                 }}
               >
-                <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600" }}>
-                  Your Progress: {progressPercent}%
-                </Text>
-                {isFinished ? (
-                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 4 }}>Finished</Text>
-                ) : timeRemaining ? (
-                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 4 }}>
-                    {timeRemaining} remaining
-                  </Text>
+                {showAudioRow ? (
+                  <View>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <View
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 15,
+                          backgroundColor: colors.secondaryContainer,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          marginRight: 10,
+                        }}
+                      >
+                        <Icon
+                          name={audioFinished ? "check" : "headphones"}
+                          size={16}
+                          color={colors.onSecondaryContainer}
+                        />
+                      </View>
+                      <Text style={{ flex: 1, color: colors.onSurface, fontSize: 14, fontWeight: "600" }}>
+                        Listening
+                      </Text>
+                      <Text style={{ color: colors.onSurface, fontSize: 14, fontWeight: "700" }}>
+                        {audioFinished ? "Finished" : `${audioPct}%`}
+                      </Text>
+                    </View>
+                    <View
+                      style={{
+                        height: 6,
+                        borderRadius: 3,
+                        backgroundColor: colors.surfaceContainerHighest,
+                        marginTop: 8,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <View
+                        style={{
+                          height: "100%",
+                          width: `${audioFinished ? 100 : audioPct}%`,
+                          backgroundColor: colors.primary,
+                          borderRadius: 3,
+                        }}
+                      />
+                    </View>
+                    {!audioFinished && timeRemaining ? (
+                      <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 4 }}>
+                        {timeRemaining} remaining
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
+
+                {showEbookRow ? (
+                  <View>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <View
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 15,
+                          backgroundColor: colors.secondaryContainer,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          marginRight: 10,
+                        }}
+                      >
+                        <Icon
+                          name={ebookFinished ? "check" : "book"}
+                          size={16}
+                          color={colors.onSecondaryContainer}
+                        />
+                      </View>
+                      <Text style={{ flex: 1, color: colors.onSurface, fontSize: 14, fontWeight: "600" }}>
+                        Reading
+                      </Text>
+                      <Text style={{ color: colors.onSurface, fontSize: 14, fontWeight: "700" }}>
+                        {ebookFinished ? "Finished" : `${ebookPct}%`}
+                      </Text>
+                    </View>
+                    <View
+                      style={{
+                        height: 6,
+                        borderRadius: 3,
+                        backgroundColor: colors.surfaceContainerHighest,
+                        marginTop: 8,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <View
+                        style={{
+                          height: "100%",
+                          width: `${ebookFinished ? 100 : ebookPct}%`,
+                          backgroundColor: colors.tertiary,
+                          borderRadius: 3,
+                        }}
+                      />
+                    </View>
+                  </View>
                 ) : null}
               </View>
             </View>

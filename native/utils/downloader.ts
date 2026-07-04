@@ -6,17 +6,72 @@ import { downloadNotifications } from "./downloadNotifications";
 import { absoluteUrl, coverUrl as buildCoverUrl } from "./urls";
 import { api } from "./api";
 import { useUserStore } from "../store/useUserStore";
+import { storageHelper } from "./storage";
 import { hasEbook, getEbookFormat } from "./bookMatch";
 
 // In-memory reference to active download processes so they can be cancelled
 const activeDownloadsMap: Record<string, FileSystem.DownloadResumable> = {};
 
+// Per-book run generation. Each downloadBook/resumeDownload invocation bumps
+// the counter and captures its own runId; any state mutation (fail/complete)
+// is skipped if a newer run has since taken over. This prevents a stale loop
+// (e.g. cancel → immediate re-download while a part is still aborting) from
+// failing/completing the NEW download's store entry.
+const bookRunSeq: Record<string, number> = {};
+// Books that currently have a live download loop — used to reject duplicate
+// concurrent starts (double-tap, retry-while-running, auto-next races).
+const runningBooks = new Set<string>();
+
 // Guards auto-download-next-in-series against triggering more than once per
 // completion chain (e.g. if a user has several books mid-series queued up).
 const autoNextInFlight = new Set<string>();
 
+// Leave some headroom beyond the estimated download size when checking free
+// disk space so we don't fill the device to the last byte.
+const FREE_SPACE_MARGIN_BYTES = 50 * 1024 * 1024;
+
 function cleanStringForFileSystem(str: string): string {
   return str.replace(/[/\\?%*:|"<>\s]/g, "_");
+}
+
+function bookFolderPath(id: string, title: string): string {
+  return `${FileSystem.documentDirectory}downloads/${id}_${cleanStringForFileSystem(title)}/`;
+}
+
+/** Human-readable message for a non-2xx download response. */
+function describeHttpFailure(status: number, filename: string): string {
+  if (status === 401 || status === 403) return `Not authorized to download "${filename}" (session expired?)`;
+  if (status === 404) return `"${filename}" was not found on the server`;
+  return `Server returned ${status} for "${filename}"`;
+}
+
+/** Map raw filesystem/network errors to something meaningful for the UI. */
+function friendlyError(err: any): string {
+  const msg = String(err?.message || err || "Unknown error");
+  if (/ENOSPC|no space left|disk.*full|not enough (free )?(disk )?space/i.test(msg)) {
+    return "Not enough storage space on this device";
+  }
+  return msg;
+}
+
+/**
+ * Best-effort preflight: if the server metadata gives us an expected size and
+ * the device clearly doesn't have room for it, fail fast with a clear message
+ * instead of writing until the disk fills mid-download.
+ */
+async function assertEnoughFreeSpace(parts: { fileSize: number }[]) {
+  const needed = parts.reduce((acc, p) => acc + (p.fileSize || 0), 0);
+  if (needed <= 0) return; // sizes unknown — can't preflight
+  let free = 0;
+  try {
+    free = await FileSystem.getFreeDiskStorageAsync();
+  } catch {
+    return; // API unavailable — skip the check rather than block downloads
+  }
+  if (free > 0 && needed + FREE_SPACE_MARGIN_BYTES > free) {
+    const mb = (n: number) => `${Math.ceil(n / (1024 * 1024))} MB`;
+    throw new Error(`Not enough free space: needs ${mb(needed)}, only ${mb(free)} available`);
+  }
 }
 
 /** Downloads a single part to destPath, wiring progress/completion into the store + notifications. */
@@ -28,6 +83,9 @@ async function downloadPart(
   token: string
 ) {
   const callback = (downloadProgress: FileSystem.DownloadProgressData) => {
+    // Cancelled mid-flight: a late native callback must not touch the store or
+    // resurrect the (already cleared) progress notification.
+    if (!useDownloadStore.getState().activeDownloads[id]) return;
     const bytesWritten = downloadProgress.totalBytesWritten;
     const bytesExpected = downloadProgress.totalBytesExpectedToWrite;
     useDownloadStore.getState().updateDownloadProgress(id, part.id, bytesWritten, bytesExpected);
@@ -43,17 +101,70 @@ async function downloadPart(
     callback
   );
 
-  activeDownloadsMap[`${id}_${part.id}`] = downloadResumable;
+  const mapKey = `${id}_${part.id}`;
+  activeDownloadsMap[mapKey] = downloadResumable;
 
   console.log(`[Downloader] Starting download part ${part.id} to ${destPath}`);
-  const result = await downloadResumable.downloadAsync();
+  let result: FileSystem.FileSystemDownloadResult | undefined;
+  try {
+    result = await downloadResumable.downloadAsync();
+  } finally {
+    // Always drop the handle, even when downloadAsync throws (network drop),
+    // so abortBookParts never tries to cancel a dead resumable.
+    delete activeDownloadsMap[mapKey];
+  }
 
-  delete activeDownloadsMap[`${id}_${part.id}`];
+  // downloadAsync resolves undefined when cancelAsync was called on it.
+  if (!result) {
+    if (useDownloadStore.getState().activeDownloads[id]) {
+      // Not a user cancel — the native task ended without a result.
+      throw new Error(`Download of "${part.filename}" stopped unexpectedly`);
+    }
+    return; // cancelled — the caller's loop check will bail out
+  }
 
-  if (result && result.status === 200) {
+  if (result.status === 200 || result.status === 206) {
     useDownloadStore.getState().completeDownloadPart(id, part.id, destPath);
-  } else {
-    throw new Error(`Failed to download part ${part.id}, status code: ${result?.status || "unknown"}`);
+    return;
+  }
+
+  // Non-2xx: the server's error body (HTML/JSON) was written to destPath —
+  // delete it so a garbage file can't be mistaken for real media later.
+  try {
+    await FileSystem.deleteAsync(destPath, { idempotent: true });
+  } catch {}
+  const err: any = new Error(describeHttpFailure(result.status, part.filename));
+  err.status = result.status;
+  throw err;
+}
+
+/**
+ * downloadPart with a single retry on 401: the access token can expire during
+ * a long multi-part download. On 401 we poke an authenticated API endpoint
+ * (which drives the axios refresh interceptor), re-read the stored token, and
+ * retry the part once with a freshly-tokenized URL + Authorization header.
+ */
+async function downloadPartWithAuthRetry(
+  id: string,
+  title: string,
+  part: { id: string; filename: string; url: string; fileSize: number },
+  destPath: string,
+  token: string
+) {
+  try {
+    await downloadPart(id, title, part, destPath, token);
+  } catch (err: any) {
+    if (err?.status !== 401) throw err;
+    console.log(`[Downloader] 401 on part ${part.id} — refreshing token and retrying once`);
+    try {
+      await api.get("/api/me"); // triggers the interceptor's refresh flow on 401
+    } catch {}
+    const config = storageHelper.getServerConfig();
+    const freshToken = config?.token;
+    // No refresh happened (same/absent token) — surface the original error.
+    if (!freshToken || freshToken === token) throw err;
+    const freshUrl = absoluteUrl(part.url.split("?")[0], config.address || "", freshToken);
+    await downloadPart(id, title, { ...part, url: freshUrl }, destPath, freshToken);
   }
 }
 
@@ -116,6 +227,14 @@ async function maybeAutoDownloadNext(libraryItem: any, serverAddress: string, to
 export const downloader = {
   downloadBook: async (libraryItem: any, serverAddress: string, token: string) => {
     const id = libraryItem.id;
+
+    // Duplicate-start guard: if a loop is already driving this book (double
+    // tap, auto-next racing a manual download, retry-while-running), ignore.
+    if (runningBooks.has(id)) {
+      console.log("[Downloader] Download already running for", id, "— ignoring duplicate start");
+      return;
+    }
+
     const media = libraryItem.media || {};
     const metadata = media.metadata || {};
     const title = metadata.title || "Unknown Title";
@@ -125,15 +244,14 @@ export const downloader = {
     const tracks = media.tracks || [];
     const partsToDownload: any[] = [];
 
-    // Add cover download if available
+    // Add cover download if available (skip when the URL can't be built, e.g.
+    // missing server address — an empty URL would fail the whole download).
     const coverPath = media.coverPath;
-    let coverLocalPath = "";
-    if (coverPath) {
-      const coverDownloadUrl = buildCoverUrl(id, serverAddress, token) || "";
-      coverLocalPath = `cover.${coverPath.split(".").pop() || "jpg"}`;
+    const coverDownloadUrl = coverPath ? buildCoverUrl(id, serverAddress, token) : null;
+    if (coverDownloadUrl) {
       partsToDownload.push({
         id: "cover",
-        filename: coverLocalPath,
+        filename: `cover.${coverPath.split(".").pop() || "jpg"}`,
         url: coverDownloadUrl,
         fileSize: 0, // dynamic
       });
@@ -184,6 +302,10 @@ export const downloader = {
       })),
     };
 
+    // Target directory — recorded on the store item from the start so cancel/
+    // remove can always find (and delete) partial files, not just completed ones.
+    const localFolderPath = bookFolderPath(id, title);
+
     // Initialize state
     useDownloadStore.getState().startDownload(
       {
@@ -191,7 +313,8 @@ export const downloader = {
         libraryItemId: id,
         title,
         author,
-        coverUrl: coverPath ? buildCoverUrl(id, serverAddress, token) || "" : "",
+        coverUrl: coverDownloadUrl || "",
+        localFolderPath,
         meta,
       },
       partsToDownload.map(p => ({
@@ -203,11 +326,14 @@ export const downloader = {
     );
     downloadNotifications.start(id, title);
 
-    // Create target directory
-    const cleanTitle = cleanStringForFileSystem(title);
-    const localFolderPath = `${FileSystem.documentDirectory}downloads/${id}_${cleanTitle}/`;
+    const runId = (bookRunSeq[id] = (bookRunSeq[id] || 0) + 1);
+    const isCurrent = () => bookRunSeq[id] === runId;
+    runningBooks.add(id);
 
     try {
+      // Fail fast (with a clear message) when the device clearly lacks space.
+      await assertEnoughFreeSpace(partsToDownload);
+
       const dirInfo = await FileSystem.getInfoAsync(localFolderPath);
       if (!dirInfo.exists) {
         await FileSystem.makeDirectoryAsync(localFolderPath, { intermediates: true });
@@ -216,13 +342,15 @@ export const downloader = {
       // Download each part sequentially. Bail if the user cancelled mid-flight —
       // otherwise the finished loop would "complete" a cancelled download.
       for (const part of partsToDownload) {
+        if (!isCurrent()) return; // a newer run owns this book's state now
         if (!useDownloadStore.getState().activeDownloads[id]) {
           downloadNotifications.clear(id);
           return;
         }
         const destPath = `${localFolderPath}${part.filename}`;
-        await downloadPart(id, title, part, destPath, token);
+        await downloadPartWithAuthRetry(id, title, part, destPath, token);
       }
+      if (!isCurrent()) return;
       if (!useDownloadStore.getState().activeDownloads[id]) {
         downloadNotifications.clear(id);
         return;
@@ -233,12 +361,20 @@ export const downloader = {
       downloadNotifications.complete(id, title);
       console.log(`[Downloader] Download completed successfully for book: ${title}`);
 
+      // This book is done — release the running guard BEFORE the auto-next
+      // chain (which awaits the entire next book) so a delete + re-download of
+      // this book isn't blocked for the duration of the next one.
+      runningBooks.delete(id);
+
       // Best-effort: queue up the next book in the series if the user wants that.
       await maybeAutoDownloadNext(libraryItem, serverAddress, token);
     } catch (err: any) {
+      if (!isCurrent()) return; // superseded — don't fail the new run's state
       console.error(`[Downloader] Download failed for book ${title}:`, err);
-      useDownloadStore.getState().failDownload(id, err.message || "Unknown error");
+      useDownloadStore.getState().failDownload(id, friendlyError(err));
       downloadNotifications.clear(id);
+    } finally {
+      if (isCurrent()) runningBooks.delete(id);
     }
   },
 
@@ -251,11 +387,23 @@ export const downloader = {
   resumeDownload: async (downloadItem: DownloadItem, serverAddress: string, token: string) => {
     const { id, title } = downloadItem;
 
+    // Duplicate-start guard, same as downloadBook (double-tapped retry etc.).
+    if (runningBooks.has(id)) {
+      console.log("[Downloader] Download already running for", id, "— ignoring duplicate resume");
+      return;
+    }
+
     let localFolderPath = downloadItem.localFolderPath;
     if (!localFolderPath) {
-      const cleanTitle = cleanStringForFileSystem(title);
-      localFolderPath = `${FileSystem.documentDirectory}downloads/${id}_${cleanTitle}/`;
+      localFolderPath = bookFolderPath(id, title);
+      // Persist it so cancel/remove can locate the partial files (older DB
+      // rows from before localFolderPath was set at start won't have it).
+      useDownloadStore.getState().setDownloadFolder(id, localFolderPath);
     }
+
+    const runId = (bookRunSeq[id] = (bookRunSeq[id] || 0) + 1);
+    const isCurrent = () => bookRunSeq[id] === runId;
+    runningBooks.add(id);
 
     try {
       const dirInfo = await FileSystem.getInfoAsync(localFolderPath);
@@ -266,7 +414,12 @@ export const downloader = {
       downloadNotifications.start(id, title);
 
       const remainingParts = (downloadItem.parts || []).filter((p: DownloadPart) => !p.completed);
+
+      // Only the not-yet-downloaded remainder needs to fit on disk.
+      await assertEnoughFreeSpace(remainingParts);
+
       for (const part of remainingParts) {
+        if (!isCurrent()) return;
         if (!useDownloadStore.getState().activeDownloads[id]) {
           downloadNotifications.clear(id);
           return;
@@ -275,8 +428,9 @@ export const downloader = {
         // Token may have rotated since the original attempt; rebuild the url with the current one.
         const refreshedUrl = part.url.split("?")[0];
         const url = absoluteUrl(refreshedUrl, serverAddress, token);
-        await downloadPart(id, title, { ...part, url }, destPath, token);
+        await downloadPartWithAuthRetry(id, title, { ...part, url }, destPath, token);
       }
+      if (!isCurrent()) return;
       if (!useDownloadStore.getState().activeDownloads[id]) {
         downloadNotifications.clear(id);
         return;
@@ -286,9 +440,12 @@ export const downloader = {
       downloadNotifications.complete(id, title);
       console.log(`[Downloader] Resume completed successfully for book: ${title}`);
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error(`[Downloader] Resume failed for book ${title}:`, err);
-      useDownloadStore.getState().failDownload(id, err.message || "Unknown error");
+      useDownloadStore.getState().failDownload(id, friendlyError(err));
       downloadNotifications.clear(id);
+    } finally {
+      if (isCurrent()) runningBooks.delete(id);
     }
   },
 
@@ -298,6 +455,35 @@ export const downloader = {
    * cancelDownload so that every cancel path (screens call the store directly)
    * actually stops the bytes, not just the UI entry.
    */
+  /**
+   * Deletes subfolders of downloads/ that no download record owns — partial
+   * files orphaned by old cancel/fail paths that never cleaned up. Ownership
+   * is re-checked against the LIVE store right before each delete so a
+   * download started while the sweep is in flight can't lose its folder
+   * (startDownload registers the item before any file is written).
+   */
+  sweepOrphanFolders: async () => {
+    try {
+      const root = `${FileSystem.documentDirectory}downloads/`;
+      const rootInfo = await FileSystem.getInfoAsync(root);
+      if (!rootInfo.exists) return;
+      const entries = await FileSystem.readDirectoryAsync(root);
+      for (const name of entries) {
+        const { activeDownloads, completedDownloads } = useDownloadStore.getState();
+        const ownedBy = (ids: string[]) => ids.some(id => name === id || name.startsWith(`${id}_`));
+        if (ownedBy(Object.keys(activeDownloads)) || ownedBy(Object.keys(completedDownloads))) continue;
+        console.log("[Downloader] Removing orphaned download folder:", name);
+        try {
+          await FileSystem.deleteAsync(`${root}${name}`, { idempotent: true });
+        } catch (e) {
+          console.warn("[Downloader] Failed to remove orphaned folder:", name, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[Downloader] Orphan sweep failed:", e);
+    }
+  },
+
   abortBookParts: async (id: string) => {
     const activeKeys = Object.keys(activeDownloadsMap).filter(k => k.startsWith(`${id}_`));
     for (const key of activeKeys) {

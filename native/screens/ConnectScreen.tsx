@@ -37,6 +37,9 @@ export default function ConnectScreen() {
   const finishLogin = (user: any) => {
     const token = user.accessToken || user.token;
     const refreshToken = user.refreshToken || null;
+    // Don't keep the password in component state any longer than needed — the
+    // session tokens are what get persisted, never the password itself.
+    setPassword("");
     login(
       {
         address: address.replace(/\/$/, ""),
@@ -220,6 +223,18 @@ export default function ConnectScreen() {
                 </Pressable>
               </View>
               <View style={{ height: 1, backgroundColor: colors.outlineVariant, marginVertical: 16 }} />
+
+              {/* Cleartext warning — plain-http LAN servers are supported on
+                  purpose (usesCleartextTraffic), but the user should know the
+                  password and tokens travel unencrypted on this connection. */}
+              {address.startsWith("http://") ? (
+                <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 16 }}>
+                  <Icon name="warning" size={16} color={colors.onSurfaceVariant} />
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontFamily: "sans-serif", flex: 1, marginLeft: 8 }}>
+                    This connection uses unencrypted HTTP. Only sign in over a network you trust (e.g. your home LAN or a VPN).
+                  </Text>
+                </View>
+              ) : null}
 
               {/* Local username/password auth */}
               {isLocalAuth ? (

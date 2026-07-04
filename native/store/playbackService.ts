@@ -6,6 +6,17 @@ import { usePlaybackStore } from "./usePlaybackStore";
 const SPEEDS = [0.8, 1.0, 1.2, 1.5, 1.75, 2.0, 3.0];
 
 export async function playbackService() {
+  // HEADLESS BOOT (Android Auto cold start): this service can be the first —
+  // and only — JS to run, with App.tsx never mounted. Load the downloads DB
+  // here so preparePlaybackSession can prefer local files in the car (poor
+  // signal is exactly when this matters). Idempotent and cheap (MMKV read).
+  try {
+    const { useDownloadStore } = require("./useDownloadStore");
+    useDownloadStore.getState().loadDownloadsFromDb();
+  } catch (e) {
+    console.warn("[PlaybackService] headless downloads load failed", e);
+  }
+
   // Android Auto "playback speed" button (native emits this custom event).
   DeviceEventEmitter.addListener("remote-playback-speed", () => {
     const st = usePlaybackStore.getState();

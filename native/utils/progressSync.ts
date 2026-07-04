@@ -95,31 +95,44 @@ async function flushPendingPatches(): Promise<void> {
 // Reads all pendingSync_* keys from MMKV and re-POSTs each. Removes on
 // success, keeps on failure. Safe to call opportunistically (e.g. on app
 // foreground) or after every successful sync.
-export async function flushPendingSyncs(): Promise<void> {
-  try {
-    await flushPendingPatches();
-    const keys = storage.getAllKeys().filter((k) => k.startsWith(PENDING_PREFIX));
-    for (const key of keys) {
-      const sessionId = key.slice(PENDING_PREFIX.length);
-      const pending = readPending(sessionId);
-      if (!pending) {
-        clearPending(sessionId);
-        continue;
+//
+// MUTEX: invoked from several triggers (app foreground, connectivity regained,
+// every syncProgress). Two concurrent flushes could both read the same pending
+// entry before either clears it and double-POST the same timeListened —
+// concurrent callers share one in-flight run instead.
+let _flushInFlight: Promise<void> | null = null;
+
+export function flushPendingSyncs(): Promise<void> {
+  if (_flushInFlight) return _flushInFlight;
+  _flushInFlight = (async () => {
+    try {
+      await flushPendingPatches();
+      const keys = storage.getAllKeys().filter((k) => k.startsWith(PENDING_PREFIX));
+      for (const key of keys) {
+        const sessionId = key.slice(PENDING_PREFIX.length);
+        const pending = readPending(sessionId);
+        if (!pending) {
+          clearPending(sessionId);
+          continue;
+        }
+        try {
+          await api.post(`/api/session/${sessionId}/sync`, {
+            currentTime: pending.currentTime,
+            timeListened: pending.timeListened,
+            duration: pending.duration,
+          });
+          clearPending(sessionId);
+        } catch (e) {
+          // Still offline / server error — leave it queued for next attempt.
+        }
       }
-      try {
-        await api.post(`/api/session/${sessionId}/sync`, {
-          currentTime: pending.currentTime,
-          timeListened: pending.timeListened,
-          duration: pending.duration,
-        });
-        clearPending(sessionId);
-      } catch (e) {
-        // Still offline / server error — leave it queued for next attempt.
-      }
+    } catch (e) {
+      appLogger.warn(`flushPendingSyncs failed: ${e}`, "ProgressSync");
+    } finally {
+      _flushInFlight = null;
     }
-  } catch (e) {
-    appLogger.warn(`flushPendingSyncs failed: ${e}`, "ProgressSync");
-  }
+  })();
+  return _flushInFlight;
 }
 
 // Wipes all queued syncs/patches. Called on logout so a previous account's

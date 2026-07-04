@@ -111,6 +111,19 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
   }
 }
 
+// Immediately persist the current session position to MMKV, bypassing the 5s
+// throttle — called on seek/pause so an app kill right after either can lose
+// at most a moment of progress (the 1s loop alone leaves a 5s window).
+function saveSessionPositionNow(position: number) {
+  try {
+    const s = usePlaybackStore.getState().currentSession;
+    if (!s) return;
+    const now = Date.now();
+    _lastLocalSaveAt = now;
+    storageHelper.setLastPlaybackSession({ ...s, currentTime: position, updatedAt: now });
+  } catch {}
+}
+
 interface PlaybackState {
   currentSession: any | null;
   isPlaying: boolean;
@@ -195,6 +208,35 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const session = storageHelper.getLastPlaybackSession();
     if (session) {
       console.log("[PlaybackStore] Found saved session, restoring...");
+      // Cross-device freshness: if another device listened further since this
+      // local save, prefer the server's position. Best-effort and capped at
+      // 3s so a slow/unreachable server never delays app startup.
+      try {
+        const itemId = session.libraryItemId || session.libraryItem?.id;
+        if (itemId) {
+          const res: any = await Promise.race([
+            api.get(`/api/me/progress/${itemId}`),
+            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
+          ]);
+          const p = res?.data;
+          const serverUpdatedAt = Number(p?.lastUpdate) || 0;
+          const localUpdatedAt = Number(session.updatedAt) || 0;
+          if (
+            p &&
+            typeof p.currentTime === "number" &&
+            serverUpdatedAt > localUpdatedAt + 10000 &&
+            Math.abs(p.currentTime - (session.currentTime || 0)) > 2
+          ) {
+            console.log(
+              `[PlaybackStore] Server progress is fresher (${p.currentTime}s vs ${session.currentTime}s) — resuming from server.`
+            );
+            session.currentTime = p.currentTime;
+            session.updatedAt = serverUpdatedAt;
+          }
+        }
+      } catch {
+        // Offline / timeout — the local save stands.
+      }
       try {
         await get().preparePlaybackSession(session, false);
       } catch (err) {
@@ -323,10 +365,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
               // Update global mediaProgress map in useUserStore for UI binding.
               // Preserve the finished flag once this session has been marked
               // finished, otherwise this per-tick write would clobber it back
-              // to false on the next tick.
+              // to false on the next tick. NOTE: merged over the existing entry
+              // below — replacing it wholesale would drop the EBOOK fields
+              // (ebookProgress/ebookLocation) while listening to a both-format
+              // book.
               const alreadyFinished = _finishedSessionId === currentSession.id;
+              // Podcast EPISODES key the map by `${itemId}-${episodeId}` (the
+              // same convention as /api/me) — a plain-itemId write for an
+              // episode would pollute the map with a bogus item-level entry.
+              const sessionEpisodeId = currentSession.episodeId || null;
+              const progressMapKey = sessionEpisodeId
+                ? `${currentSession.libraryItemId}-${sessionEpisodeId}`
+                : currentSession.libraryItemId;
               const progressObj = {
                 libraryItemId: currentSession.libraryItemId,
+                ...(sessionEpisodeId ? { episodeId: sessionEpisodeId } : {}),
                 currentTime: absolutePosition,
                 duration: bookDuration,
                 progress: bookDuration > 0 ? Math.min(1, absolutePosition / bookDuration) : 0,
@@ -336,7 +389,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
               useUserStore.setState({
                 mediaProgress: {
                   ...useUserStore.getState().mediaProgress,
-                  [currentSession.libraryItemId]: progressObj,
+                  [progressMapKey]: {
+                    ...useUserStore.getState().mediaProgress[progressMapKey],
+                    ...progressObj,
+                  },
                 },
               });
 
@@ -353,8 +409,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
                 }).catch(() => {});
               }
 
-              // Auto mark-finished: within 5s of the end of the book, once per
-              // session. Fires the isFinished PATCH and updates local state.
+              // Auto mark-finished: within 5s of the end of the book/episode,
+              // once per session. Fires the isFinished PATCH and updates local
+              // state. Podcast episodes PATCH the episode-scoped endpoint and
+              // key the map by the composite id — an item-level PATCH would
+              // create bogus whole-podcast progress on the server.
               const libraryItemId = currentSession.libraryItemId;
               if (
                 bookDuration > 0 &&
@@ -363,8 +422,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
                 _finishedSessionId !== currentSession.id
               ) {
                 _finishedSessionId = currentSession.id;
+                const patchPath = sessionEpisodeId
+                  ? `/api/me/progress/${libraryItemId}/${sessionEpisodeId}`
+                  : `/api/me/progress/${libraryItemId}`;
                 api
-                  .patch(`/api/me/progress/${libraryItemId}`, {
+                  .patch(patchPath, {
                     currentTime: bookDuration,
                     duration: bookDuration,
                     progress: 1,
@@ -374,9 +436,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
                 useUserStore.setState({
                   mediaProgress: {
                     ...useUserStore.getState().mediaProgress,
-                    [libraryItemId]: {
-                      ...useUserStore.getState().mediaProgress[libraryItemId],
+                    [progressMapKey]: {
+                      ...useUserStore.getState().mediaProgress[progressMapKey],
                       libraryItemId,
+                      ...(sessionEpisodeId ? { episodeId: sessionEpisodeId } : {}),
                       currentTime: bookDuration,
                       duration: bookDuration,
                       progress: 1,
@@ -473,7 +536,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         const { useDownloadStore } = require("./useDownloadStore");
         const dl = useDownloadStore.getState().completedDownloads[itemId];
-        if (dl?.meta && dl.localFolderPath && !episodeId) {
+        // Requires actual AUDIO tracks — an ebook-only download has meta but an
+        // empty tracks list, and "playing" it would reset the player into an
+        // empty queue (the reader is its playback surface, not us).
+        if (dl?.meta?.tracks?.length && dl.localFolderPath && !episodeId) {
           const lastLocal = useUserStore.getState().getMediaProgress(itemId);
           const localSession = {
             id: `local_${itemId}`,
@@ -629,7 +695,38 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await TrackPlayer.setRate(playbackSpeed);
 
       // Seek to the saved absolute position, mapping into the right chapter clip.
-      const startAbs = session.currentTime || 0;
+      // FRESHEST-WINS: the server's session.currentTime is its last-known
+      // progress, which is STALE if we listened offline (those syncs are still
+      // queued locally). Losing an offline listening session's position is the
+      // worst progress bug an audiobook app can have — so if our local save for
+      // this same book is meaningfully newer than the server's own progress
+      // timestamp, resume from the local position instead. (Cross-device safety:
+      // if another device listened further, the server timestamp is newer and
+      // the server position wins.)
+      let startAbs = session.currentTime || 0;
+      try {
+        const saved = storageHelper.getLastPlaybackSession();
+        const savedItemId = saved?.libraryItemId || saved?.libraryItem?.id;
+        if (
+          saved &&
+          savedItemId === libraryItemId &&
+          typeof saved.currentTime === "number" &&
+          Math.abs(saved.currentTime - startAbs) > 2
+        ) {
+          const serverProg = useUserStore.getState().getMediaProgress(libraryItemId);
+          // ABS progress rows carry server-side lastUpdate (ms). Fall back to 0
+          // (unknown) so a local save always beats a server we know nothing about.
+          const serverUpdatedAt = Number(serverProg?.lastUpdate) || 0;
+          const localUpdatedAt = Number(saved.updatedAt) || 0;
+          // 10s margin absorbs clock skew and in-flight sync races.
+          if (localUpdatedAt > serverUpdatedAt + 10000) {
+            console.log(
+              `[PlaybackStore] Local position is fresher than server (${saved.currentTime}s vs ${startAbs}s) — resuming from local.`
+            );
+            startAbs = saved.currentTime;
+          }
+        }
+      } catch {}
       if (chapterQueue) {
         let idx = chapters.findIndex((c: any) => startAbs >= (c.start || 0) && startAbs < (c.end || 0));
         if (idx < 0) idx = 0;
@@ -643,12 +740,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       set({
         // Persist the resolved cover URL on the session so the Player and
         // MiniPlayer can render artwork (the raw session has no coverUrl).
-        currentSession: { ...session, coverUrl: artworkUrl || session.coverUrl || "" },
+        // currentTime reflects the RECONCILED position (see freshest-wins above).
+        currentSession: { ...session, currentTime: startAbs, coverUrl: artworkUrl || session.coverUrl || "" },
         playbackSpeed,
         chapters,
         chapterQueue,
         duration: session.duration || 0,
-        position: session.currentTime || 0,
+        position: startAbs,
       });
 
       // Mirror the current book to the home-screen resume widget.
@@ -705,13 +803,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     if (isCasting && castClient) {
       try { await castClient.pause(); } catch (e) { console.warn("[Cast] pause", e); }
       set({ isPlaying: false });
-      return;
+    } else {
+      if (!get().isInitialized) return;
+      await TrackPlayer.pause();
+      set({ isPlaying: false });
     }
-    if (!get().isInitialized) return;
-    await TrackPlayer.pause();
-    set({ isPlaying: false });
 
-    // Flush current progress + accumulated listening time immediately on pause.
+    // Persist the paused position locally right now (bypasses the 5s throttle
+    // so an app kill immediately after pausing can't lose the position)...
+    saveSessionPositionNow(get().position);
+
+    // ...and flush accumulated listening time to the server. Runs for BOTH the
+    // cast and local paths — this used to be skipped while casting, so a cast
+    // session's listening time only landed on the next 15s tick.
     const session = get().currentSession;
     if (session?.id && _timeListenedAccum > 0) {
       const toSync = _timeListenedAccum;
@@ -736,6 +840,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     if (isCasting && castClient) {
       try { await castClient.seek({ position: value }); } catch (e) { console.warn("[Cast] seek", e); }
       set({ position: value });
+      // Persist immediately — a kill inside the 5s save throttle right after a
+      // seek would otherwise resume at the pre-seek position.
+      saveSessionPositionNow(value);
       return;
     }
     if (!get().isInitialized) return;
@@ -747,10 +854,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (idx !== active) await TrackPlayer.skip(idx);
       await TrackPlayer.seekTo(Math.max(0, value - (chapters[idx].start || 0)));
       set({ position: value, currentChapterIndex: idx });
+      saveSessionPositionNow(value);
       return;
     }
     await TrackPlayer.seekTo(value);
     set({ position: value });
+    saveSessionPositionNow(value);
   },
 
   // seekForward/Backward funnel through seek() so they inherit cast routing.

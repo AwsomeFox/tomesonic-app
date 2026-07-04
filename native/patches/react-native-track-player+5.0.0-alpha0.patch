@@ -127,7 +127,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..15c4860 100644
+index b495b5a..36f91cf 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -138,7 +138,7 @@ index b495b5a..15c4860 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,23 +105,489 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,23 +105,521 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -627,21 +627,53 @@ index b495b5a..15c4860 100644
 +    }
 +
 +    private fun absResolvePlayUrl(itemId: String, episodeId: String?): String? {
++        return absResolvePlayResumable(itemId, episodeId, null)?.first
++    }
++
++    /**
++     * Resolves a direct-play stream URL AND the resume position for cold-start
++     * (JS-dead) playback. The /play response carries the server's saved
++     * `currentTime` (absolute book seconds); for multi-file books we pick the
++     * track containing that position and return the offset *within* it.
++     * `overrideSec`, when set (Android Auto bookmark "@@<seconds>" ids),
++     * replaces the server position.
++     */
++    private fun absResolvePlayResumable(
++        itemId: String,
++        episodeId: String?,
++        overrideSec: Double?
++    ): Pair<String, Long>? {
 +        val creds = absCreds() ?: return null
 +        val path = if (episodeId != null) "/api/items/$itemId/play/$episodeId" else "/api/items/$itemId/play"
 +        val body = absPost(path, "{\"mediaPlayer\":\"exo-player\"}") ?: return null
-+        val tracks = org.json.JSONObject(body).optJSONArray("audioTracks") ?: return null
++        val json = org.json.JSONObject(body)
++        val tracks = json.optJSONArray("audioTracks") ?: return null
 +        if (tracks.length() == 0) return null
-+        val rel = tracks.getJSONObject(0).optString("contentUrl")
++        val target = overrideSec ?: json.optDouble("currentTime", 0.0)
++        // Find the track whose window contains the target position; fall back
++        // to the first track (single-file books, or target beyond the end).
++        var chosen = tracks.getJSONObject(0)
++        for (i in 0 until tracks.length()) {
++            val t = tracks.getJSONObject(i)
++            val start = t.optDouble("startOffset", 0.0)
++            val dur = t.optDouble("duration", 0.0)
++            if (target >= start && (dur <= 0.0 || target < start + dur)) {
++                chosen = t
++                break
++            }
++        }
++        val rel = chosen.optString("contentUrl")
 +        if (rel.isEmpty()) return null
 +        val full = if (rel.startsWith("http")) rel else "${creds.server}$rel"
-+        return if (full.contains("token=")) full else full + (if (full.contains("?")) "&" else "?") + "token=${creds.token}"
++        val url = if (full.contains("token=")) full else full + (if (full.contains("?")) "&" else "?") + "token=${creds.token}"
++        val withinSec = (target - chosen.optDouble("startOffset", 0.0)).coerceAtLeast(0.0)
++        return Pair(url, (withinSec * 1000).toLong())
 +    }
 +
      enum class AppKilledPlaybackBehavior(val string: String) {
          CONTINUE_PLAYBACK("continue-playback"),
          PAUSE_PLAYBACK("pause-playback"),
-@@ -293,9 +760,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +792,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -653,7 +685,7 @@ index b495b5a..15c4860 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +773,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +805,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -715,7 +747,7 @@ index b495b5a..15c4860 100644
          }
      }
  
-@@ -449,6 +950,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +982,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -726,7 +758,7 @@ index b495b5a..15c4860 100644
      }
  
      @MainThread
-@@ -792,9 +1297,17 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,9 +1329,17 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -746,7 +778,7 @@ index b495b5a..15c4860 100644
              player.destroy()
          }
  
-@@ -925,6 +1438,101 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +1470,144 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -811,6 +843,49 @@ index b495b5a..15c4860 100644
 +            return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(results), params))
 +        }
 +
++        // Cold-start play WITH RESUME. Android Auto item taps arrive through
++        // setMediaItems; the default pipeline delegates to onAddMediaItems,
++        // which cannot supply a start position — so a JS-dead cold-start play
++        // used to begin at 0:00. Here, when JS is NOT alive, we resolve the
++        // stream natively and start at the server's saved position (or the
++        // "@@<seconds>" bookmark suffix). With JS alive we defer to the
++        // default pipeline so the rich JS session path stays unchanged.
++        override fun onSetMediaItems(
++            mediaSession: MediaSession,
++            controller: MediaSession.ControllerInfo,
++            mediaItems: MutableList<MediaItem>,
++            startIndex: Int,
++            startPositionMs: Long
++        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
++            val playItem = mediaItems.firstOrNull { it.mediaId.startsWith("play:") }
++            if (playItem == null || reactContext != null) {
++                return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
++            }
++            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
++            absBrowseExecutor.execute {
++                val id = playItem.mediaId.removePrefix("play:")
++                val raw = id.substringBefore("@@")
++                // Bookmark ids carry an absolute-seconds override after "@@".
++                val overrideSec = id.substringAfter("@@", "").toDoubleOrNull()
++                val itemId = raw.substringBefore("::")
++                val episodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++                val resolved = try {
++                    absResolvePlayResumable(itemId, episodeId, overrideSec)
++                } catch (e: Exception) {
++                    Timber.w(e, "AA cold-start resolve failed")
++                    null
++                }
++                if (resolved != null) {
++                    Timber.i("AA cold-start play %s from %dms", itemId, resolved.second)
++                    val item = playItem.buildUpon().setUri(resolved.first).build()
++                    future.set(MediaSession.MediaItemsWithStartPosition(mutableListOf(item), 0, resolved.second))
++                } else {
++                    future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
++                }
++            }
++            return future
++        }
++
 +        override fun onAddMediaItems(
 +            mediaSession: MediaSession,
 +            controller: MediaSession.ControllerInfo,
@@ -848,7 +923,7 @@ index b495b5a..15c4860 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +1543,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +1618,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }

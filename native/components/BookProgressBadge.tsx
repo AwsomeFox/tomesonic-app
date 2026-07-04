@@ -15,6 +15,13 @@ function remainingPretty(seconds: number): string {
   return `${Math.floor(seconds)}s`;
 }
 
+/** In-progress percent for display, clamped to 1–99: a just-started book must
+ *  never read "0%" and a nearly-done one must never read "100%" (100% is
+ *  reserved for actually-finished, which renders as "Finished" instead). */
+function pctLabel(fraction: number): string {
+  return `${Math.min(99, Math.max(1, Math.round(fraction * 100)))}%`;
+}
+
 interface Props {
   itemId: string;
   item?: any;
@@ -30,50 +37,135 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
 
   const isDownloaded = !!downloaded || !!(itemId && completedDownloads[itemId]);
 
-  const progressObj = progress || (itemId ? mediaProgress[itemId] : null);
-  const itemHasAudio = item ? hasAudio(item) : (progressObj?.duration > 0 || progressObj?.currentTime > 0);
-  const itemHasEbook = item ? hasEbook(item) : (progressObj?.ebookProgress > 0 || progressObj?.ebookLocation);
-
-  const isFinished = itemHasAudio ? !!progressObj?.isFinished : false;
-  const duration = itemHasAudio ? Number(progressObj?.duration || 0) : 0;
-  const currentTime = itemHasAudio ? Number(progressObj?.currentTime || 0) : 0;
-  const progressPercent = itemHasAudio
-    ? Math.max(Math.min(1, progressObj?.progress ?? (duration > 0 ? currentTime / duration : 0)), 0)
-    : 0;
-  const isInProgress = progressPercent > 0 && !isFinished;
-
-  let ebookProgressPercent = 0;
-  if (itemHasEbook) {
-    if (itemHasAudio) {
-      ebookProgressPercent = Number(progressObj?.ebookProgress || 0);
-    } else {
-      ebookProgressPercent = Number(progressObj?.ebookProgress || progressObj?.progress || 0);
-    }
-  }
-  const isEbookFinished = ebookProgressPercent >= 0.99;
-  const isEbookInProgress = ebookProgressPercent > 0 && !isEbookFinished;
-
-  if (!isDownloaded && !isFinished && !isInProgress && !isEbookInProgress && !isEbookFinished) {
-    return null;
-  }
-
+  // What the chip shows — filled in per media type below, rendered once at the
+  // bottom. The cloud (downloaded) icon is independent of progress state so a
+  // downloaded book keeps its offline indicator while in progress / finished.
+  let showCheck = false;
+  let showHeadphones = false;
+  let showBook = false;
   let label = "";
-  const showListenProgress = isInProgress;
-  const showEbookProgress = isEbookInProgress;
 
-  if (isFinished && (isEbookFinished || ebookProgressPercent === 0)) {
-    label = "Finished";
-  } else if (showListenProgress && showEbookProgress) {
-    const listenLabel = duration > 0 ? remainingPretty(duration * (1 - progressPercent)) : `${Math.round(progressPercent * 100)}%`;
-    label = `${listenLabel} • ${Math.round(ebookProgressPercent * 100)}%`;
-  } else if (showListenProgress) {
-    label = duration > 0 ? remainingPretty(duration * (1 - progressPercent)) : `${Math.round(progressPercent * 100)}%`;
-  } else if (showEbookProgress) {
-    label = `${Math.round(ebookProgressPercent * 100)}%`;
-  } else if (isEbookFinished) {
-    label = "Read Finished";
-  } else if (isDownloaded) {
-    label = "Downloaded";
+  const isPodcast = item?.mediaType === "podcast";
+
+  if (isPodcast) {
+    // Podcast progress lives per-EPISODE under composite `${itemId}-${episodeId}`
+    // keys in the mediaProgress map, so the plain item-id lookup used for books
+    // finds nothing. Summarize the episodes instead: surface the most recently
+    // played unfinished episode, and "Finished" only when every known episode
+    // is done. (Entries written by the playback tick loop under the plain item
+    // key have libraryItemId === itemId too, so they're picked up here.)
+    let latest: any = null;
+    let explicitFinished = false;
+    let finishedCount = 0;
+    if (progress) {
+      // A caller passed a specific episode's progress entry (episode rows) —
+      // show exactly that instead of the whole-podcast summary.
+      if (progress.isFinished) explicitFinished = true;
+      else if (Number(progress.progress || 0) > 0 || Number(progress.currentTime || 0) > 0) latest = progress;
+    } else {
+      let latestAt = -1;
+      Object.values(mediaProgress).forEach((p: any) => {
+        if (!p || p.libraryItemId !== itemId) return;
+        if (p.isFinished) {
+          // Only composite (per-episode) entries count toward "all finished" —
+          // a plain-key entry from the tick loop would double-count an episode
+          // that also has a server-side composite entry.
+          if (p.episodeId) finishedCount++;
+          return;
+        }
+        const fraction = Number(p.progress || 0);
+        const currentTime = Number(p.currentTime || 0);
+        if (fraction <= 0 && currentTime <= 0) return;
+        const at = Number(p.lastUpdate || p.updatedAt || 0);
+        if (at >= latestAt) {
+          latestAt = at;
+          latest = p;
+        }
+      });
+    }
+    const totalEpisodes = Number(item?.media?.numEpisodes ?? item?.media?.episodes?.length ?? 0);
+
+    if (explicitFinished) {
+      showCheck = true;
+      label = "Finished";
+    } else if (latest) {
+      showHeadphones = true;
+      const duration = Number(latest.duration || 0);
+      const currentTime = Number(latest.currentTime || 0);
+      const fraction = Number(latest.progress ?? 0) || (duration > 0 ? currentTime / duration : 0);
+      label = duration > 0 ? remainingPretty(duration - currentTime) : pctLabel(fraction);
+    } else if (!progress && totalEpisodes > 0 && finishedCount >= totalEpisodes) {
+      showCheck = true;
+      label = "Finished";
+    } else if (isDownloaded) {
+      label = "Downloaded";
+    } else {
+      return null;
+    }
+  } else {
+    const progressObj = progress || (itemId ? mediaProgress[itemId] : null);
+    // Prefer the item payload for format detection; fall back to inferring
+    // from the progress entry's fields when only an id was provided.
+    const itemHasAudio = item ? hasAudio(item) : progressObj?.duration > 0 || progressObj?.currentTime > 0;
+    const itemHasEbook = item ? hasEbook(item) : !!(progressObj?.ebookProgress > 0 || progressObj?.ebookLocation);
+
+    const duration = itemHasAudio ? Number(progressObj?.duration || 0) : 0;
+    const currentTime = itemHasAudio ? Number(progressObj?.currentTime || 0) : 0;
+    const audioFraction = itemHasAudio
+      ? Math.max(Math.min(1, progressObj?.progress ?? (duration > 0 ? currentTime / duration : 0)), 0)
+      : 0;
+
+    let ebookFraction = 0;
+    if (itemHasEbook) {
+      if (itemHasAudio) {
+        ebookFraction = Number(progressObj?.ebookProgress || 0);
+      } else {
+        // Ebook-only: some payloads store reading progress in `progress`.
+        ebookFraction = Number(progressObj?.ebookProgress || progressObj?.progress || 0);
+      }
+    }
+
+    // Finished semantics — mediaProgress.isFinished is an ITEM-level flag:
+    //  * ebook side: read to >=99%, or (ebook-only item) the server flag —
+    //    e.g. marked finished from ItemDetail without reading to the end.
+    //  * audio side: the server flag — EXCEPT when that flag was evidently set
+    //    by the reader (ebook >=99%) while the audio sits mid-way, in which
+    //    case the remaining listen time should stay visible.
+    const isEbookFinished =
+      itemHasEbook && (ebookFraction >= 0.99 || (!itemHasAudio && !!progressObj?.isFinished));
+    const readerSetFinished = ebookFraction >= 0.99 && audioFraction > 0 && audioFraction < 0.99;
+    const isAudioFinished = itemHasAudio && !!progressObj?.isFinished && !readerSetFinished;
+
+    const isAudioInProgress = audioFraction > 0 && !isAudioFinished;
+    const isEbookInProgress = itemHasEbook && ebookFraction > 0 && !isEbookFinished;
+
+    const anyFinished = isAudioFinished || isEbookFinished;
+    const anyInProgress = isAudioInProgress || isEbookInProgress;
+
+    if (!isDownloaded && !anyFinished && !anyInProgress) {
+      return null;
+    }
+
+    showCheck = anyFinished;
+    showHeadphones = isAudioInProgress;
+    showBook = isEbookInProgress;
+
+    const listenLabel = duration > 0 ? remainingPretty(duration * (1 - audioFraction)) : pctLabel(audioFraction);
+    if (anyFinished && !anyInProgress) {
+      // Everything the user has touched is done. "Finished" is the item-level
+      // state, so an untouched second format doesn't block it — but a format
+      // still mid-flight does (handled by the in-progress branches, which keep
+      // the check icon alongside).
+      label = "Finished";
+    } else if (isAudioInProgress && isEbookInProgress) {
+      label = `${listenLabel} • ${pctLabel(ebookFraction)}`;
+    } else if (isAudioInProgress) {
+      label = listenLabel;
+    } else if (isEbookInProgress) {
+      label = pctLabel(ebookFraction);
+    } else if (isDownloaded) {
+      label = "Downloaded";
+    }
   }
 
   return (
@@ -91,7 +183,7 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
         style,
       ]}
     >
-      {/* Icon cluster */}
+      {/* Icon cluster: cloud (downloaded) + check (finished) + format icons */}
       <View
         style={{
           flexDirection: "row",
@@ -100,14 +192,10 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
           columnGap: 4,
         }}
       >
-        {isDownloaded && !isInProgress && !isEbookInProgress && !isFinished && !isEbookFinished && (
-          <Icon name="cloud" size={12} color={colors.onTertiaryContainer} />
-        )}
-        {(isFinished || isEbookFinished) && !isInProgress && !isEbookInProgress && (
-          <Icon name="check" size={12} color={colors.onTertiaryContainer} />
-        )}
-        {showListenProgress && <Icon name="headphones" size={12} color={colors.onTertiaryContainer} />}
-        {showEbookProgress && <Icon name="book" size={12} color={colors.onTertiaryContainer} />}
+        {isDownloaded && <Icon name="cloud" size={12} color={colors.onTertiaryContainer} />}
+        {showCheck && <Icon name="check" size={12} color={colors.onTertiaryContainer} />}
+        {showHeadphones && <Icon name="headphones" size={12} color={colors.onTertiaryContainer} />}
+        {showBook && <Icon name="book" size={12} color={colors.onTertiaryContainer} />}
       </View>
 
       {/* Label */}

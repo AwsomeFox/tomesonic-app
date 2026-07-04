@@ -75,7 +75,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
     if (!libraryItemId || starting) return;
     setStarting(true);
     try {
-      const ok = await startPlayback(libraryItemId, item.episodeId);
+      await startPlayback(libraryItemId, item.episodeId);
     } finally {
       setStarting(false);
     }
@@ -148,6 +148,13 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
             <BookProgressBadge
               itemId={libraryItemId}
               item={(item as any).libraryItem || item}
+              // Episode rows pass their composite-key progress so the badge
+              // shows THIS episode's state, not a whole-podcast summary.
+              progress={
+                item.episodeId
+                  ? useUserStore.getState().getMediaProgress(libraryItemId, item.episodeId)
+                  : undefined
+              }
               downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
               style={{ marginTop: 4 }}
             />

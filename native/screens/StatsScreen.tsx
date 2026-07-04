@@ -102,7 +102,8 @@ function buildLast7Days(days: Record<string, number>): DayPoint[] {
 
 export default function StatsScreen({ navigation }: any) {
   const colors = useThemeColors();
-  const user = useUserStore((state) => state.user);
+  const progressMap = useUserStore((state) => state.mediaProgress);
+  const loadMediaProgress = useUserStore((state) => state.loadMediaProgress);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const [stats, setStats] = useState<ListeningStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,6 +111,8 @@ export default function StatsScreen({ navigation }: any) {
 
   useEffect(() => {
     loadStats();
+    // Ensure the progress map is fresh (Items Finished counts from it).
+    loadMediaProgress().catch(() => {});
   }, []);
 
   async function loadStats() {
@@ -125,8 +128,10 @@ export default function StatsScreen({ navigation }: any) {
     }
   }
 
-  const mediaProgress: any[] = Array.isArray(user?.mediaProgress) ? user.mediaProgress : [];
-  const itemsFinished = mediaProgress.filter((lip) => !!lip?.isFinished).length;
+  // Count from the store's progress map — the `user` object only carries a
+  // mediaProgress array right after a fresh login (not after app restart),
+  // which made this stat read 0 most of the time.
+  const itemsFinished = Object.values(progressMap || {}).filter((p: any) => !!p?.isFinished).length;
   const days = stats?.days ?? {};
   const daysListened = Object.keys(days).length;
   const minutesListening = stats ? Math.round(stats.totalTime / 60) : 0;

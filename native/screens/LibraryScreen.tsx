@@ -170,7 +170,7 @@ export default function LibraryScreen({ route, navigation }: any) {
     if (startingId) return;
     setStartingId(item.id);
     try {
-      const ok = await startPlayback(item.id);
+      await startPlayback(item.id);
     } finally {
       setStartingId(null);
     }
@@ -212,7 +212,12 @@ export default function LibraryScreen({ route, navigation }: any) {
     );
     const isInProgress = progressPercent > 0 && !isFinished;
     const isLocal = (item as any).isLocal || !!(item as any).localLibraryItem || !!completedDownloads[item.id];
-    const hasBadge = isLocal || isFinished || isInProgress;
+    // Reading progress and podcast-episode progress count too — the badge
+    // itself renders null when there's truly nothing to show, so this gate
+    // only needs to be generous, not exact.
+    const hasEbookProgress = !!(progress?.ebookLocation || (progress?.ebookProgress || 0) > 0);
+    const isPodcastRow = item.mediaType === "podcast";
+    const hasBadge = isLocal || isFinished || isInProgress || hasEbookProgress || isPodcastRow;
 
     return (
       // material-3-list-card embedded-list-row z-10 cursor-pointer py-1 px-2 mx-0

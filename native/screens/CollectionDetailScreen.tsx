@@ -96,7 +96,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     if (!next || starting) return;
     setStarting(true);
     try {
-      const ok = await startPlayback(next.id);
+      await startPlayback(next.id);
     } finally {
       setStarting(false);
     }
@@ -106,7 +106,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     if (starting) return;
     setStarting(true);
     try {
-      const ok = await startPlayback(bookId);
+      await startPlayback(bookId);
     } finally {
       setStarting(false);
     }

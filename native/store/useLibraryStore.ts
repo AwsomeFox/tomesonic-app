@@ -105,6 +105,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     // Swap shelves to the new library's cache (never show the old library's
     // shelves under the new library's name while the fresh fetch runs).
     set({ currentLibraryId: id, personalizedShelves: readShelvesCache(id) });
+    // Mirror the selection into auto_creds.json so the Android Auto browse
+    // service switches libraries too (it otherwise keeps browsing the library
+    // mirrored at login until the next app initialize).
+    try {
+      const { storageHelper: sh } = require("../utils/storage");
+      const { writeAutoCreds } = require("../utils/autoCreds");
+      const cfg = sh.getServerConfig();
+      if (id && cfg?.address && cfg?.token) {
+        writeAutoCreds(cfg.address, cfg.token, id, cfg.refreshToken).catch(() => {});
+      }
+    } catch {}
   },
 
   loadLibraries: async (force = false) => {

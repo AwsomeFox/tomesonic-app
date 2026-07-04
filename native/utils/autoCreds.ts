@@ -34,6 +34,32 @@ export async function writeAutoDownloads(ids: string[]) {
   }
 }
 
+export interface AutoCreds {
+  server: string;
+  token: string;
+  refreshToken?: string | null;
+  libraryId?: string | null;
+}
+
+// Reads the creds file back. The native Android Auto service refreshes the
+// access token itself while JS is backgrounded, and ABS ROTATES refresh tokens
+// on every /auth/refresh (the previous one dies ~60s later) — so after a drive
+// this file can hold the ONLY valid token pair. Callers (api.ts 401 handler,
+// useUserStore.initialize) use it to recover the freshest pair instead of
+// forcing a logout with a stale one.
+export async function readAutoCreds(): Promise<AutoCreds | null> {
+  try {
+    const info = await FileSystem.getInfoAsync(CREDS_PATH);
+    if (!info.exists) return null;
+    const raw = await FileSystem.readAsStringAsync(CREDS_PATH);
+    const creds = JSON.parse(raw);
+    if (!creds?.server || !creds?.token) return null;
+    return creds as AutoCreds;
+  } catch (e) {
+    return null;
+  }
+}
+
 export async function writeAutoCreds(
   address?: string | null,
   token?: string | null,
@@ -50,6 +76,14 @@ export async function writeAutoCreds(
       }
       if (libraryId) {
         creds.libraryId = libraryId;
+      } else {
+        // No library specified (e.g. a token-refresh rewrite from api.ts):
+        // keep whatever library the file already has for this server so the
+        // native browse service doesn't lose its selection on every refresh.
+        const existing = await readAutoCreds();
+        if (existing?.libraryId && existing.server === creds.server) {
+          creds.libraryId = existing.libraryId;
+        }
       }
       await FileSystem.writeAsStringAsync(
         CREDS_PATH,

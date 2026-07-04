@@ -7,13 +7,15 @@ import { storageHelper } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
 
-/** Formats seconds listened as "Xh Ym" / "Xm", mirroring elapsedPretty conventions. */
+/** Formats seconds listened as "Xh Ym" / "Xm" / "Xs", mirroring the
+ *  remainingPretty conventions (a 40-second session must not read "0m"). */
 function formatListened(seconds: number | undefined): string {
   if (!seconds || seconds <= 0) return "0m";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${Math.floor(seconds)}s`;
 }
 
 /** Resolves a session's timestamp from whichever field is present, in ms. */
