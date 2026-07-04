@@ -66,7 +66,9 @@
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "e2e": "maestro test .maestro",
+    "e2e:smoke": "maestro test .maestro/flows/00-launch.yaml"
   },
   "private": true
 }

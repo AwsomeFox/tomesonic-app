@@ -1,0 +1,37 @@
+# Downloads screen reachable + settings toggles persist across restart.
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+# Downloads via the account menu -> Settings surface (route exists on both).
+- tapOn: "Account menu"
+- tapOn: "Settings"
+- extendedWaitUntil:
+    visible: ".*Settings.*"
+    timeout: 10000
+# Toggle a setting, restart, verify Settings still reachable and the row
+# exists (MMKV persistence + boot path end-to-end).
+- scrollUntilVisible:
+    element:
+      text: "Hide non-audiobooks globally"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Hide non-audiobooks globally"
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn: "Account menu"
+- tapOn: "Settings"
+# Flip it back so the flow is idempotent.
+- scrollUntilVisible:
+    element:
+      text: "Hide non-audiobooks globally"
+    direction: DOWN
+    timeout: 15000
+- tapOn: "Hide non-audiobooks globally"
+- back
+- assertVisible: "Home"

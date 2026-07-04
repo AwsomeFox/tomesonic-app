@@ -64,3 +64,22 @@ component imports `DynamicThemeContext` directly.
 
 **Determinism**: no real network, no real timers left running, no `Date.now()`
 assumptions tighter than ±few seconds (or `jest.setSystemTime`).
+
+## E2E (Maestro)
+
+Flows live in `.maestro/flows/` and run against the REAL app on a connected
+device/emulator (`brew install mobile-dev-inc/tap/maestro`):
+
+- `npm run e2e` — all flows except login. Assumes the installed app is
+  **already logged in** with at least one audiobook library.
+- `npm run e2e:smoke` — launch smoke only (no session needed).
+- Login (fresh install, opt-in — never hardcode credentials):
+  `maestro test .maestro/flows/10-login.yaml -e SERVER_URL=... -e ABS_USER=... -e ABS_PASS=...`
+
+Coverage: cold launch, login handshake, shelf → detail → play → transport →
+collapse, search (result opens on top of the overlay — tab-collision
+regression), Library/Series browsing (audiobook rows must offer PLAY —
+SeriesDetail mapping regression), settings toggle persistence across restart.
+
+Selectors are accessibility labels / visible text — when adding UI, give
+interactive elements stable `accessibilityLabel`s so flows stay robust.

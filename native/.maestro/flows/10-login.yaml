@@ -1,0 +1,28 @@
+# Fresh-install login with username/password. OPT-IN (tagged manual):
+#   maestro test .maestro/flows/10-login.yaml \
+#     -e SERVER_URL=https://your-abs-server -e ABS_USER=you -e ABS_PASS=secret
+appId: com.tomesonic.app
+tags:
+  - manual
+---
+- launchApp:
+    clearState: true
+# Server discovery step.
+- tapOn:
+    text: "http://55.55.55.55:13378" # address field (matched by placeholder)
+- inputText: ${SERVER_URL}
+- tapOn: "Continue"
+# Credential step.
+- extendedWaitUntil:
+    visible: "Username"
+    timeout: 15000
+- tapOn: "Username"
+- inputText: ${ABS_USER}
+- tapOn: "Password"
+- inputText: ${ABS_PASS}
+- hideKeyboard
+- tapOn: "Login"
+# Landing on the bookshelf proves the whole handshake worked.
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000

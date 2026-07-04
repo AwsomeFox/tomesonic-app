@@ -1,0 +1,10 @@
+# Smoke: the app cold-starts without crashing and reaches a real screen —
+# either the Connect screen (fresh install) or the bookshelf (logged in).
+appId: com.tomesonic.app
+---
+- launchApp:
+    clearState: false
+- extendedWaitUntil:
+    visible:
+      text: ".*(Home|Server address|Username).*"
+    timeout: 20000

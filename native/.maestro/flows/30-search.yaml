@@ -1,0 +1,35 @@
+# Search: activate from the top bar, type a query, results render, and a
+# result tap OPENS ON TOP of the search (regression guard for the tab-name
+# collision where narrator/tag taps switched tabs underneath the overlay).
+# Env (optional): SEARCH_QUERY (default "the").
+appId: com.tomesonic.app
+env:
+  SEARCH_QUERY: "the"
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn: "Search"
+- extendedWaitUntil:
+    visible: "Search library..."
+    timeout: 5000
+- inputText: ${SEARCH_QUERY}
+# Debounced results: at least one section header shows up.
+- extendedWaitUntil:
+    visible: ".*(Books|Series|Authors|Narrators|Tags).*"
+    timeout: 15000
+# Tap the first book row (title text under the Books section) and verify a
+# detail surface replaced the search results.
+- tapOn:
+    text: ".* by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue|Read).*"
+    timeout: 15000
+# Back returns to the still-open search results.
+- back
+- assertVisible: "Search library..."
+# Closing search restores the bookshelf.
+- tapOn: "Close search"
+- assertVisible: "Home"

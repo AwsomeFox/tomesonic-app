@@ -1,0 +1,50 @@
+name: E2E smoke (Maestro)
+
+# Opt-in (manual trigger): boots an Android emulator, installs the debug APK,
+# and runs the launch-smoke Maestro flow. Only the no-session flow runs in CI —
+# the rest need a logged-in Audiobookshelf server. Catches native boot crashes
+# jest can't see (bad manifest/provider/JNI), at the cost of ~15 min of runner.
+on:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Set up Java
+        uses: actions/setup-java@v2
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      - name: install dependencies
+        run: npm ci --prefix native
+
+      - name: build debug APK
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: install Maestro
+        run: curl -Ls https://get.maestro.mobile.dev | bash
+
+      - name: run launch smoke on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install native/android/app/build/outputs/apk/debug/app-debug.apk
+            export PATH="$PATH:$HOME/.maestro/bin"
+            maestro test native/.maestro/flows/00-launch.yaml
