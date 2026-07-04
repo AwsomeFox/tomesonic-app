@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Pressable, Linking, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, Linking, ActivityIndicator, Platform } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { storageHelper, storage } from "../utils/storage";
@@ -19,106 +19,154 @@ try { WebView = require("react-native-webview").WebView; } catch (e) { WebView =
 let Sharing: any = null;
 try { Sharing = require("expo-sharing"); } catch (e) { Sharing = null; }
 
-// Cap for inlining the epub as base64 into the WebView. Most epubs are 1–5MB;
+// Cap for inlining the ebook as base64 into the WebView. Most ebooks are 1–5MB;
 // beyond this the bridge transfer gets heavy, so we offer "open externally".
-const MAX_EPUB_INLINE_BYTES = 12 * 1024 * 1024;
+const MAX_EBOOK_INLINE_BYTES = 12 * 1024 * 1024;
 
-// Builds the epub.js reader HTML. epub.js + jszip are loaded from a CDN; the
-// book bytes are passed in as base64 so no CORS/auth request happens in the
-// WebView. Themed to the app surface, paginated, with swipe + tap-to-turn
-// gestures and an animated page transition; progress is reported back to RN via
-// postMessage. Colors are the palette's `rgb(...)` strings, valid CSS as-is.
-function epubHtml(base64: string, bg: string, fg: string, accent: string, startCfi: string): string {
+// CDN base for foliate-js — all ES module relative imports resolve from here.
+const FOLIATE_CDN = "https://cdn.jsdelivr.net/npm/foliate-js@1.0.1/";
+
+// Builds the foliate-js reader HTML. The book bytes are passed in as base64
+// so no CORS/auth request happens in the WebView. Themed to the app surface,
+// paginated, with swipe + tap-to-turn gestures and animated page transitions;
+// progress is reported back to RN via postMessage.
+function ebookHtml(base64: string, bg: string, fg: string, accent: string, startCfi: string, mimeHint: string): string {
   return `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
   html,body{margin:0;padding:0;height:100%;background:${bg};overflow:hidden;}
-  #viewer{height:100vh;width:100vw;will-change:transform,opacity;}
+  foliate-view{height:100vh;width:100vw;}
   #msg{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;
-    color:${fg};font-family:sans-serif;padding:24px;text-align:center;}
+    color:${fg};font-family:sans-serif;padding:24px;text-align:center;z-index:10;}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
 </head><body>
 <div id="msg">Loading…</div>
-<div id="viewer"></div>
-<script>
+<script type="module">
+  import './view.js';
+
+  const bg = "${bg}";
+  const fg = "${fg}";
+  const accent = "${accent}";
+
   function post(o){ try{ window.ReactNativeWebView.postMessage(JSON.stringify(o)); }catch(e){} }
-  try {
-    var book = ePub("${base64}", { encoding: "base64" });
-    var rendition = book.renderTo("viewer", { width:"100%", height:"100%", flow:"paginated", spread:"none" });
-    rendition.themes.default({
-      body:{ background:"${bg}", color:"${fg}", "padding":"0 8px" },
-      a:{ color:"${accent}" }
-    });
-    var viewer = document.getElementById("viewer");
-    var turning = false;
 
-    // Animated page turn: slide+fade the current page out in the travel
-    // direction, swap content, then slide the new page in from the far side.
-    function turn(dir, fn){
-      if (turning) return;
-      turning = true;
-      var W = window.innerWidth || 360;
-      var out = Math.round(W * 0.28) * (dir > 0 ? -1 : 1);
-      viewer.style.transition = "transform 140ms ease-in, opacity 140ms ease-in";
-      viewer.style.transform = "translateX(" + out + "px)";
-      viewer.style.opacity = "0";
-      setTimeout(function(){
-        Promise.resolve(fn()).then(function(){
-          viewer.style.transition = "none";
-          viewer.style.transform = "translateX(" + (-out) + "px)";
-          void viewer.offsetHeight; // reflow
-          viewer.style.transition = "transform 160ms ease-out, opacity 160ms ease-out";
-          viewer.style.transform = "translateX(0)";
-          viewer.style.opacity = "1";
-          setTimeout(function(){ turning = false; }, 170);
-        }).catch(function(){ turning = false; });
-      }, 145);
-    }
-    window.goNext = function(){ turn(1, function(){ return rendition.next(); }); };
-    window.goPrev = function(){ turn(-1, function(){ return rendition.prev(); }); };
+  // Decode base64 to a File/Blob for foliate-js
+  function base64ToFile(b64, name) {
+    var bin = atob(b64);
+    var len = bin.length;
+    var bytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], name, { type: "${mimeHint}" });
+  }
 
-    var startCfi = ${startCfi ? `"${startCfi}"` : "undefined"};
-    rendition.display(startCfi).then(function(){ document.getElementById("msg").style.display="none"; })
-      .catch(function(e){ post({type:"error", message:String(e)}); });
-    book.ready.then(function(){ return book.locations.generate(1600); }).then(function(){
-      rendition.on("relocated", function(loc){
-        post({ type:"location", cfi: loc.start.cfi, percentage: (loc.start.percentage||0) });
+  async function init() {
+    try {
+      var file = base64ToFile("${base64}", "book${mimeHint === "application/epub+zip" ? ".epub" : mimeHint === "application/x-mobipocket-ebook" ? ".mobi" : ".azw3"}");
+      var view = document.createElement('foliate-view');
+      document.body.append(view);
+
+      // Apply reading styles — theme colors and typography
+      var readerCSS = \`
+        @namespace epub "http://www.idpf.org/2007/ops";
+        html { color-scheme: light dark; }
+        body { background: \${bg} !important; color: \${fg} !important; }
+        a:link, a:visited { color: \${accent}; }
+        p, li, blockquote, dd {
+          line-height: 1.5;
+          text-align: start;
+          -webkit-hyphens: auto;
+          hyphens: auto;
+        }
+        pre { white-space: pre-wrap !important; }
+      \`;
+      view.addEventListener('load', e => {
+        e.detail?.doc?.documentElement?.setAttribute?.('style',
+          'background:' + bg + ' !important; color:' + fg + ' !important;');
       });
-    });
 
-    // Gestures live INSIDE each rendered chapter iframe (that's what fills the
-    // screen), registered via epub.js's content hook: swipe left/right to turn,
-    // and tap the left/right third to turn (middle third ignored).
-    rendition.hooks.content.register(function(contents){
-      var doc = contents.document, sx=0, sy=0, st=0;
-      doc.addEventListener("touchstart", function(e){
-        var t = e.changedTouches[0]; sx=t.clientX; sy=t.clientY; st=Date.now();
-      }, {passive:true});
-      doc.addEventListener("touchend", function(e){
+      // Track relocations — report progress back to React Native
+      view.addEventListener('relocate', e => {
+        var detail = e.detail;
+        if (detail) {
+          post({
+            type: 'location',
+            cfi: detail.cfi || '',
+            fraction: detail.fraction || 0,
+            section: detail.section || 0,
+            tocItem: detail.tocItem ? { label: detail.tocItem.label || '' } : null,
+          });
+        }
+      });
+
+      await view.open(file);
+      document.getElementById('msg').style.display = 'none';
+
+      // Apply styles after opening
+      view.renderer.setStyles?.(readerCSS);
+
+      // Restore saved position
+      var startCfi = ${startCfi ? `"${startCfi}"` : "null"};
+      if (startCfi) {
+        try { await view.goTo(startCfi); } catch(e) {}
+      }
+
+      // Expose navigation functions for RN injection and gesture handling
+      window.goNext = () => { try { view.goRight(); } catch(e) {} };
+      window.goPrev = () => { try { view.goLeft(); } catch(e) {} };
+
+      // Touch gestures on the outer container — swipe and tap zones
+      var sx = 0, sy = 0, st = 0;
+      document.addEventListener('touchstart', function(e) {
+        var t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY; st = Date.now();
+      }, { passive: true });
+      document.addEventListener('touchend', function(e) {
         var t = e.changedTouches[0];
-        var dx = t.clientX-sx, dy = t.clientY-sy, dt = Date.now()-st;
-        var w = (contents.window && contents.window.innerWidth) || 360;
+        var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
+        var w = window.innerWidth || 360;
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 300) {
-          if (t.clientX < w*0.3) window.goPrev();
-          else if (t.clientX > w*0.7) window.goNext();
-        } else if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)*1.2 && dt < 700) {
+          if (t.clientX < w * 0.3) window.goPrev();
+          else if (t.clientX > w * 0.7) window.goNext();
+        } else if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.2 && dt < 700) {
           if (dx < 0) window.goNext(); else window.goPrev();
         }
-      }, {passive:true});
-    });
-    // Also allow keyboard/RN-injected arrow turns.
-    document.addEventListener("keyup", function(e){
-      if (e.key === "ArrowRight") window.goNext();
-      else if (e.key === "ArrowLeft") window.goPrev();
-    });
-  } catch (e) {
-    document.getElementById("msg").innerText = "Could not open this ebook.";
-    post({ type:"error", message:String(e) });
+      }, { passive: true });
+
+      // Keyboard navigation
+      document.addEventListener('keyup', function(e) {
+        if (e.key === 'ArrowRight') window.goNext();
+        else if (e.key === 'ArrowLeft') window.goPrev();
+      });
+
+      post({ type: 'ready' });
+    } catch (e) {
+      document.getElementById('msg').innerText = 'Could not open this ebook: ' + e.message;
+      post({ type: 'error', message: String(e) });
+    }
   }
+  init();
 </script>
 </body></html>`;
+}
+
+// Map file extensions to MIME types for foliate-js File constructor
+function getMimeForFormat(format: string): string {
+  switch (format) {
+    case "epub": return "application/epub+zip";
+    case "mobi": return "application/x-mobipocket-ebook";
+    case "azw3": case "azw": case "kf8": return "application/x-mobipocket-ebook";
+    default: return "application/octet-stream";
+  }
+}
+
+// Map file extensions to expected filename suffixes for foliate-js format detection
+function getExtForFormat(format: string): string {
+  switch (format) {
+    case "epub": return ".epub";
+    case "mobi": return ".mobi";
+    case "azw3": case "kf8": return ".azw3";
+    case "azw": return ".azw";
+    default: return "." + format;
+  }
 }
 
 export default function ReaderScreen({ route, navigation }: any) {
@@ -139,12 +187,13 @@ export default function ReaderScreen({ route, navigation }: any) {
 
   const format = String(ebookFormat || "").replace(/^\./, "").toLowerCase();
   const isPdf = format === "pdf" || (!format && !!ebookUri);
-  const isEpub = format === "epub";
-  const isShareOnly = !isPdf && !isEpub; // mobi / azw3 / others
+  // foliate-js supports epub, mobi, azw3, azw, kf8
+  const isFoliateFormat = ["epub", "mobi", "azw3", "azw", "kf8"].includes(format);
+  const isShareOnly = !isPdf && !isFoliateFormat;
 
-  // --- EPUB state ---
-  const [epubHtmlDoc, setEpubHtmlDoc] = useState<string | null>(null);
-  const [epubStatus, setEpubStatus] = useState<"idle" | "loading" | "ready" | "error" | "toobig">("idle");
+  // --- Ebook state (EPUB / MOBI / AZW3) ---
+  const [ebookHtmlDoc, setEbookHtmlDoc] = useState<string | null>(null);
+  const [ebookStatus, setEbookStatus] = useState<"idle" | "loading" | "ready" | "error" | "toobig">("idle");
   const webRef = useRef<any>(null);
   const progressKey = `ebookCfi_${itemId}`;
 
@@ -153,22 +202,23 @@ export default function ReaderScreen({ route, navigation }: any) {
   const accent = colors.primary;
 
   useEffect(() => {
-    if (!isEpub || !WebView || !ebookUri) return;
+    if (!isFoliateFormat || !WebView || !ebookUri) return;
     // Reset synchronously so a previous book's rendered doc can't linger while
     // (or after, on failure) the new one loads.
-    setEpubHtmlDoc(null);
-    setEpubStatus("loading");
+    setEbookHtmlDoc(null);
+    setEbookStatus("loading");
     let cancelled = false;
     (async () => {
       try {
-        const localPath = `${FileSystem.cacheDirectory}reader_${itemId}.epub`;
+        const ext = getExtForFormat(format);
+        const localPath = `${FileSystem.cacheDirectory}reader_${itemId}${ext}`;
         const dl = await FileSystem.downloadAsync(ebookUri, localPath, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const info = await FileSystem.getInfoAsync(dl.uri);
-        if ((info as any).size && (info as any).size > MAX_EPUB_INLINE_BYTES) {
+        if ((info as any).size && (info as any).size > MAX_EBOOK_INLINE_BYTES) {
           FileSystem.deleteAsync(dl.uri, { idempotent: true }).catch(() => {});
-          if (!cancelled) setEpubStatus("toobig");
+          if (!cancelled) setEbookStatus("toobig");
           return;
         }
         const base64 = await FileSystem.readAsStringAsync(dl.uri, {
@@ -179,15 +229,16 @@ export default function ReaderScreen({ route, navigation }: any) {
         FileSystem.deleteAsync(dl.uri, { idempotent: true }).catch(() => {});
         if (cancelled) return;
         const savedCfi = storage.getString(progressKey) || "";
-        setEpubHtmlDoc(epubHtml(base64, bg, fg, accent, savedCfi));
-        setEpubStatus("ready");
+        const mime = getMimeForFormat(format);
+        setEbookHtmlDoc(ebookHtml(base64, bg, fg, accent, savedCfi, mime));
+        setEbookStatus("ready");
       } catch (e) {
-        console.warn("[Reader] epub load failed", e);
-        if (!cancelled) setEpubStatus("error");
+        console.warn("[Reader] ebook load failed", e);
+        if (!cancelled) setEbookStatus("error");
       }
     })();
     return () => { cancelled = true; };
-  }, [isEpub, ebookUri]);
+  }, [isFoliateFormat, ebookUri]);
 
   const onWebMessage = useCallback((event: any) => {
     try {
@@ -195,7 +246,7 @@ export default function ReaderScreen({ route, navigation }: any) {
       if (data.type === "location" && data.cfi) {
         storage.set(progressKey, data.cfi);
       } else if (data.type === "error") {
-        setEpubStatus("error");
+        setEbookStatus("error");
       }
     } catch {}
   }, [progressKey]);
@@ -218,7 +269,9 @@ export default function ReaderScreen({ route, navigation }: any) {
   };
 
   const canRenderPdf = Pdf !== null && isPdf && !pdfError && !!ebookUri;
-  const canRenderEpub = WebView !== null && isEpub && epubStatus === "ready" && !!epubHtmlDoc;
+  const canRenderEbook = WebView !== null && isFoliateFormat && ebookStatus === "ready" && !!ebookHtmlDoc;
+
+  const formatLabel = format ? format.toUpperCase() : "ebook";
 
   const Header = (
     <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 }}>
@@ -232,7 +285,7 @@ export default function ReaderScreen({ route, navigation }: any) {
       <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginLeft: 4, flex: 1 }}>
         {title || "Reader"}
       </Text>
-      {isEpub && canRenderEpub ? (
+      {isFoliateFormat && canRenderEbook ? (
         <View style={{ flexDirection: "row" }}>
           <Pressable
             onPress={() => webRef.current?.injectJavaScript("window.goPrev&&window.goPrev();true;")}
@@ -292,32 +345,36 @@ export default function ReaderScreen({ route, navigation }: any) {
         onError={() => setPdfError(true)}
       />
     );
-  } else if (isEpub) {
-    if (epubStatus === "loading" || epubStatus === "idle") {
+  } else if (isFoliateFormat) {
+    if (ebookStatus === "loading" || ebookStatus === "idle") {
       body = (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={{ color: colors.onSurfaceVariant, marginTop: 12 }}>Preparing your book…</Text>
         </View>
       );
-    } else if (canRenderEpub) {
+    } else if (canRenderEbook) {
       body = (
         <WebView
           ref={webRef}
           originWhitelist={["*"]}
-          source={{ html: epubHtmlDoc as string }}
+          source={{
+            html: ebookHtmlDoc as string,
+            baseUrl: FOLIATE_CDN,
+          }}
           style={{ flex: 1, backgroundColor: colors.surface }}
           onMessage={onWebMessage}
           javaScriptEnabled
           domStorageEnabled
           allowFileAccess
+          allowUniversalAccessFromFileURLs
           mixedContentMode="always"
         />
       );
-    } else if (epubStatus === "toobig") {
+    } else if (ebookStatus === "toobig") {
       body = <Fallback message="This ebook is large — open it in a dedicated reader app for the best experience." />;
     } else {
-      body = <Fallback message="Couldn't open this EPUB in-app." />;
+      body = <Fallback message={`Couldn't open this ${formatLabel} in-app.`} />;
     }
   } else if (isShareOnly) {
     body = (
