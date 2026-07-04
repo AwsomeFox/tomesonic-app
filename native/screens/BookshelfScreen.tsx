@@ -27,16 +27,38 @@ export default function BookshelfScreen({ navigation }: any) {
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
   const { personalizedShelves, loadPersonalizedShelves, currentLibraryId, loadLibraries } = useLibraryStore();
+  const [continueReadingItems, setContinueReadingItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const { isConnected } = useNetworkStatus();
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
 
+  const loadContinueReading = async () => {
+    if (!currentLibraryId) return;
+    try {
+      const res = await api.get(`/api/libraries/${currentLibraryId}/items?filter=progress&limit=20`);
+      const items = res.data?.results || [];
+      const ebooks = items.filter((item: any) => {
+        const progress = item?.userMediaProgress;
+        if (!progress || progress.isFinished) return false;
+        if (progress.ebookLocation || (progress.ebookProgress !== undefined && progress.ebookProgress > 0)) {
+          return true;
+        }
+        const numAudio = item?.media?.numAudioFiles ?? 0;
+        const numEbook = item?.media?.numEbookFiles ?? 0;
+        return numAudio === 0 && numEbook > 0;
+      });
+      setContinueReadingItems(ebooks);
+    } catch (e) {
+      console.warn("[Bookshelf] failed to load continue reading items", e);
+    }
+  };
+
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([loadPersonalizedShelves(true), loadMediaProgress()]);
+      await Promise.all([loadPersonalizedShelves(true), loadMediaProgress(), loadContinueReading()]);
     } finally {
       setRefreshing(false);
     }
@@ -59,7 +81,7 @@ export default function BookshelfScreen({ navigation }: any) {
     const initData = async () => {
       setLoading(true);
       await loadLibraries();
-      await Promise.all([loadPersonalizedShelves(), loadMediaProgress()]);
+      await Promise.all([loadPersonalizedShelves(), loadMediaProgress(), loadContinueReading()]);
       setLoading(false);
     };
     initData();
@@ -223,12 +245,22 @@ export default function BookshelfScreen({ navigation }: any) {
     return () => { cancelled = true; };
   }, [personalizedShelves, currentLibraryId]);
 
-  const displayShelves = activeShelves.map((shelf: any) => {
+  const displayShelves = activeShelves.reduce((acc: any[], shelf: any) => {
     if (shelf.id === "continue-series" && personalizedShelves.length > 0) {
-      return { ...shelf, type: "series", entities: continueSeries };
+      acc.push({ ...shelf, type: "series", entities: continueSeries });
+    } else {
+      acc.push(shelf);
     }
-    return shelf;
-  });
+    if (shelf.id === "continue-listening" && continueReadingItems.length > 0) {
+      acc.push({
+        id: "continue-reading",
+        label: "Continue Reading",
+        type: "book",
+        entities: continueReadingItems,
+      });
+    }
+    return acc;
+  }, []);
 
   const renderBookCard = (item: any, index: number) => {
     return (

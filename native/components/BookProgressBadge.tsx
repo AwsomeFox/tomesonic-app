@@ -46,8 +46,12 @@ export default function BookProgressBadge({ itemId, downloaded, progress, style 
   if (isFinished) {
     label = "Finished";
   } else if (isInProgress) {
-    const remaining = duration > 0 ? duration * (1 - progressPercent) : 0;
-    label = remainingPretty(remaining);
+    if (duration > 0) {
+      const remaining = duration * (1 - progressPercent);
+      label = remainingPretty(remaining);
+    } else {
+      label = `${Math.round(progressPercent * 100)}%`;
+    }
   } else if (isDownloaded) {
     label = "Downloaded";
   }
