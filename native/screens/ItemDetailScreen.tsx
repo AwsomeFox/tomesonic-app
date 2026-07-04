@@ -616,7 +616,19 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 <Text style={{ color: colors.onSurfaceVariant, fontSize: 14 }}>No playable media</Text>
               </View>
             ) : null}
+          </View>
 
+          {/* Secondary actions on their own row — sharing the primary line
+              squeezed Play/Read into slivers once all four icons showed. */}
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "center",
+              paddingHorizontal: 20,
+              marginTop: 12,
+              columnGap: 12,
+            }}
+          >
             {/* Download Button — for items with their own audio or ebook.
                 Hidden for podcasts: the downloader handles book tracks, not
                 episodes, so the button would silently no-op there. */}
@@ -632,7 +644,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     : "Download"
                 }
                 style={{
-                  marginLeft: 10,
                   width: 52,
                   height: 52,
                   borderRadius: 26,
@@ -669,7 +680,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 accessibilityRole="button"
                 accessibilityLabel="View chapters"
                 style={{
-                  marginLeft: 10,
                   width: 52,
                   height: 52,
                   borderRadius: 26,
@@ -689,7 +699,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               accessibilityLabel={isFinished ? "Mark as not finished" : "Mark as finished"}
               accessibilityState={{ selected: isFinished }}
               style={{
-                marginLeft: 10,
                 width: 52,
                 height: 52,
                 borderRadius: 26,
@@ -715,7 +724,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 accessibilityRole="button"
                 accessibilityLabel="Add to collection or playlist"
                 style={{
-                  marginLeft: 10,
                   width: 52,
                   height: 52,
                   borderRadius: 26,
