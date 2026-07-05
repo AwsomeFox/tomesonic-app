@@ -109,7 +109,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add native/android/app/build.gradle native/app.json native/package.json
+          # -f: native/.gitignore has /android, and pathspecs into an ignored
+          # dir make `git add` exit 1 even though these files ARE tracked.
+          git add -f native/android/app/build.gradle native/app.json native/package.json
           if git diff --cached --quiet; then
             echo "version files already at ${{ steps.resolve.outputs.version }} — nothing to commit"
           else
