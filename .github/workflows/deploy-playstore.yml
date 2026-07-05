@@ -136,10 +136,11 @@ jobs:
               mkdir -p ~/.ssh
               printf '%s\n' "${{ secrets.RELEASE_DEPLOY_KEY }}" > ~/.ssh/release_key
               chmod 600 ~/.ssh/release_key
-              ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+              ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
               GIT_SSH_COMMAND="ssh -i ~/.ssh/release_key -o IdentitiesOnly=yes" \
                 git push "git@github.com:${{ github.repository }}.git" "HEAD:${GITHUB_REF_NAME}" \
-                || echo "::warning::deploy-key push of the version bump failed — releasing from the in-workspace bump"
+                || git push origin "HEAD:${GITHUB_REF_NAME}" \
+                || echo "::warning::could not push the version bump (deploy key and checkout creds both failed) — releasing from the in-workspace bump"
             else
               git push origin "HEAD:${GITHUB_REF_NAME}" \
                 || echo "::warning::could not push the version bump to ${GITHUB_REF_NAME} (branch protection?) — add the RELEASE_DEPLOY_KEY secret to fix; releasing from the in-workspace bump"
