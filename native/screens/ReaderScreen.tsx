@@ -74,6 +74,32 @@ function ebookHtml(
 </style>
 </head><body>
 <div id="msg">Loading…</div>
+<script>
+  // Polyfills for foliate-js on OLDER Android System WebViews. foliate-js
+  // uses Object.groupBy / Map.groupBy (Chrome 117+, late 2023); many devices
+  // run an older, non-auto-updating System WebView, where the reader would
+  // otherwise fail with "Object.groupBy is not a function". Must run BEFORE
+  // the foliate module below (classic script executes first).
+  (function(){
+    function groupByInto(make, get, set, items, cb){
+      var res = make(), i = 0;
+      for (var it of items){ var k = cb(it, i++); var a = get(res, k); if (a) a.push(it); else set(res, k, [it]); }
+      return res;
+    }
+    if (typeof Object.groupBy !== 'function') {
+      Object.groupBy = function(items, cb){
+        return groupByInto(function(){return Object.create(null);},
+          function(o,k){return o[k];}, function(o,k,v){o[k]=v;}, items, cb);
+      };
+    }
+    if (typeof Map.groupBy !== 'function') {
+      Map.groupBy = function(items, cb){
+        return groupByInto(function(){return new Map();},
+          function(m,k){return m.get(k);}, function(m,k,v){m.set(k,v);}, items, cb);
+      };
+    }
+  })();
+</script>
 <script type="module">
   // Vendored foliate-js, inlined (no network). Registers the <foliate-view>
   // custom element as a side effect; inline module scripts avoid the file://
