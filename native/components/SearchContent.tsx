@@ -173,6 +173,8 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         key={libraryItem.id || index}
         entering={listRowEnter(index)}
         android_ripple={{ color: colors.surfaceContainerHighest }}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${metadata.title || "book"}`}
         onPress={() =>
           rootNav.navigate("ItemDetail", { itemId: libraryItem.id })
         }

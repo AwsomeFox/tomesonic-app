@@ -19,10 +19,10 @@ env:
 - extendedWaitUntil:
     visible: ".*(Books|Series|Authors|Narrators|Tags).*"
     timeout: 15000
-# Tap the first book row (title text under the Books section) and verify a
-# detail surface replaced the search results.
+# Tap the first book row (a11y label "Open <title>") and verify a detail
+# surface replaced the search results.
 - tapOn:
-    text: ".* by .*"
+    text: "Open .*"
     index: 0
 - extendedWaitUntil:
     visible: ".*(Play|Continue|Read).*"
