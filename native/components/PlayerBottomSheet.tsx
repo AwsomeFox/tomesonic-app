@@ -235,8 +235,12 @@ export default function PlayerBottomSheet() {
   // screenWidth so nothing changes. On tablets the whole block is also centered
   // vertically instead of anchored to the top.
   const isTablet = Math.min(screenWidth, screenHeight) >= 600;
-  // Landscape cover: sized to fit the (short) height, capped by width.
-  const LS_COVER = Math.round(Math.min(screenHeight - insets.top - insets.bottom - 48, screenWidth * 0.42));
+  // Landscape cover: sized to fit the (short) height, capped by width. Budget
+  // the 56px top bar + margins — the old 48px budget let the vertically-
+  // centered cover overflow up underneath the collapse button on phones.
+  const LS_COVER = Math.round(
+    Math.min(screenHeight - insets.top - insets.bottom - 56 - 32, screenWidth * 0.42)
+  );
   const PW = Math.min(screenWidth, 480); // content column width
   const PX = (screenWidth - PW) / 2; // column left inset
   const COVER_SIZE_EXP = Math.min(PW - 80, Math.round(screenHeight * 0.42), isTablet ? 420 : 320);
@@ -417,70 +421,44 @@ export default function PlayerBottomSheet() {
     };
   });
 
-  // Book-spine sheen width scales with the cover (subtle at mini size, a real
-  // spine highlight once expanded).
-  const animatedSpineStyle = useAnimatedStyle(() => {
-    const p = sheetProgress.value;
-    return { width: interpolate(p, [0, 1], [4, 22]) };
-  });
-
-  // Morph Cover Art layout
+  // Morph Cover Art via TRANSFORMS ONLY. The old width/height/left/top
+  // interpolation re-laid-out (and re-sampled) the cover Image on every frame
+  // of the open/close spring — the main source of jank. The view is now laid
+  // out ONCE at its expanded size/position and translated+scaled into the
+  // mini slot; borderRadius is divided by the collapsed scale so the VISUAL
+  // radius still reads ~8 at mini size.
+  const COVER_MINI = 50;
+  const coverScale0 = COVER_MINI / COVER_SIZE_EXP;
+  const coverLeftExpanded = PX + (PW - COVER_SIZE_EXP) / 2;
   const animatedCoverStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
-    const leftCollapsed = 12;
-    const leftExpanded = PX + (PW - COVER_SIZE_EXP) / 2;
-    const topCollapsed = 9;
-    const topExpanded = COVER_Y_EXP;
-
+    const dx0 = 12 + COVER_MINI / 2 - (coverLeftExpanded + COVER_SIZE_EXP / 2);
+    const dy0 = 9 + COVER_MINI / 2 - (COVER_Y_EXP + COVER_SIZE_EXP / 2);
     return {
-      width: interpolate(p, [0, 1], [50, COVER_SIZE_EXP]),
-      height: interpolate(p, [0, 1], [50, COVER_SIZE_EXP]),
-      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
-      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
-      borderRadius: interpolate(p, [0, 1], [8, 20]),
+      transform: [
+        { translateX: interpolate(p, [0, 1], [dx0, 0]) },
+        { translateY: interpolate(p, [0, 1], [dy0, 0]) },
+        { scale: interpolate(p, [0, 1], [coverScale0, 1]) },
+      ],
+      borderRadius: interpolate(p, [0, 1], [8 / coverScale0, 20]),
     };
   });
 
-  // Morph Title & Author text block
-  const animatedTitleBlockStyle = useAnimatedStyle(() => {
-    const p = sheetProgress.value;
-    const leftCollapsed = 74;
-    const leftExpanded = PX + 24;
-    const topCollapsed = 12;
-    const topExpanded = TITLE_Y_EXP;
-    const widthCollapsed = screenWidth - 74 - 176;
-    const widthExpanded = PW - 48;
-
-    return {
-      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
-      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
-      width: interpolate(p, [0, 1], [widthCollapsed, widthExpanded]),
-    };
-  });
-
-  const animatedTitleStyle = useAnimatedStyle(() => {
+  // Title & Author: CROSSFADE between two statically-laid-out blocks (mini,
+  // left-aligned / expanded, centered) instead of morphing one block. The old
+  // single block interpolated fontSize/width/left and snapped textAlign from
+  // left to center at the halfway point — the visible "text jumps to the
+  // middle" — and re-laid-out the text on every frame (jank). Opacity +
+  // transform only: zero per-frame layout.
+  const animatedMiniTextStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(sheetProgress.value, [0, 0.25], [1, 0]),
+  }));
+  const animatedFullTextStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     return {
-      fontSize: interpolate(p, [0, 1], [15, 22]),
-      lineHeight: interpolate(p, [0, 1], [20, 28]),
-      textAlign: p > 0.5 ? "center" : "left" as any,
-    };
-  });
-
-  const animatedAuthorStyle = useAnimatedStyle(() => {
-    const p = sheetProgress.value;
-    return {
-      fontSize: interpolate(p, [0, 1], [13, 15]),
-      textAlign: p > 0.5 ? "center" : "left" as any,
-    };
-  });
-
-  // "Chapter X of Y" caption — only meaningful (and only has room) when expanded.
-  const animatedChapterCaptionStyle = useAnimatedStyle(() => {
-    const p = sheetProgress.value;
-    return {
-      opacity: Math.max(0, Math.min(1, (p - 0.7) / 0.3)),
-      textAlign: "center" as any,
+      opacity: interpolate(p, [0.6, 0.95], [0, 1]),
+      // Slight upward settle as it fades in, matching the sheet's motion.
+      transform: [{ translateY: interpolate(p, [0.6, 1], [14, 0]) }],
     };
   });
 
@@ -1084,12 +1062,17 @@ export default function PlayerBottomSheet() {
 
         {/* --- MORPHING ELEMENTS (ABSOLUTE OVERLAYS) --- */}
 
-        {/* 1. Cover Art */}
+        {/* 1. Cover Art — laid out ONCE at expanded size/position; the
+            animated style translates+scales it into the mini slot. */}
         <Animated.View
           pointerEvents="none"
           style={[
             {
               position: "absolute",
+              left: coverLeftExpanded,
+              top: COVER_Y_EXP,
+              width: COVER_SIZE_EXP,
+              height: COVER_SIZE_EXP,
               overflow: "hidden",
               backgroundColor: colors.surfaceContainerHigh,
               alignItems: "center",
@@ -1105,13 +1088,17 @@ export default function PlayerBottomSheet() {
           {coverUrl ? (
             <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" />
           ) : (
-            <Icon name="book" size={32} color={withAlpha(colors.onSurface, 0.4)} />
+            // Sized relative to the (expanded) box so the scale transform
+            // keeps it proportional in the mini thumb too.
+            <Icon name="book" size={Math.round(COVER_SIZE_EXP * 0.5)} color={withAlpha(colors.onSurface, 0.4)} />
           )}
-          {/* Book-spine sheen: a dark edge + thin highlight on the left. */}
+          {/* Book-spine sheen: a dark edge + thin highlight on the left. Fixed
+              at the expanded width — the cover's scale transform shrinks it to
+              a hairline at mini size, replacing the old width animation. */}
           {coverUrl ? (
-            <Animated.View
+            <View
               pointerEvents="none"
-              style={[{ position: "absolute", left: 0, top: 0, bottom: 0 }, animatedSpineStyle]}
+              style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 22 }}
             >
               <LinearGradient
                 colors={["rgba(0,0,0,0.35)", "rgba(0,0,0,0.12)", "rgba(255,255,255,0.10)", "rgba(0,0,0,0)"]}
@@ -1120,56 +1107,95 @@ export default function PlayerBottomSheet() {
                 end={{ x: 1, y: 0.5 }}
                 style={{ flex: 1 }}
               />
-            </Animated.View>
+            </View>
           ) : null}
         </Animated.View>
 
-        {/* 2. Title & Author */}
+        {/* 2a. Title & Author — MINI (left-aligned beside the thumb). */}
         <Animated.View
           pointerEvents="none"
           style={[
             {
               position: "absolute",
+              left: 74,
+              top: 12,
+              width: screenWidth - 74 - 176,
               justifyContent: "center",
             },
-            animatedTitleBlockStyle,
+            animatedMiniTextStyle,
           ]}
         >
-          <Animated.Text
+          <Text
             numberOfLines={1}
-            style={[
-              {
-                color: colors.onSurface,
-                fontWeight: "700",
-                fontFamily: "serif",
-              },
-              animatedTitleStyle,
-            ]}
+            style={{
+              color: colors.onSurface,
+              fontWeight: "700",
+              fontFamily: "serif",
+              fontSize: 15,
+              lineHeight: 20,
+            }}
           >
             {title}
-          </Animated.Text>
-          <Animated.Text
+          </Text>
+          <Text
             numberOfLines={1}
-            style={[
-              {
-                color: colors.onSurfaceVariant,
-                marginTop: 1,
-              },
-              animatedAuthorStyle,
-            ]}
+            style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 1 }}
           >
             {authorName}
-          </Animated.Text>
+          </Text>
+        </Animated.View>
+
+        {/* 2b. Title & Author — EXPANDED (centered under the cover). */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            {
+              position: "absolute",
+              left: PX + 24,
+              top: TITLE_Y_EXP,
+              width: PW - 48,
+              justifyContent: "center",
+            },
+            animatedFullTextStyle,
+          ]}
+        >
+          <Text
+            numberOfLines={1}
+            style={{
+              color: colors.onSurface,
+              fontWeight: "700",
+              fontFamily: "serif",
+              fontSize: 22,
+              lineHeight: 28,
+              textAlign: "center",
+            }}
+          >
+            {title}
+          </Text>
+          <Text
+            numberOfLines={1}
+            style={{
+              color: colors.onSurfaceVariant,
+              fontSize: 15,
+              marginTop: 1,
+              textAlign: "center",
+            }}
+          >
+            {authorName}
+          </Text>
           {hasChapters && currentChapterIndex >= 0 ? (
-            <Animated.Text
+            <Text
               numberOfLines={1}
-              style={[
-                { color: colors.onSurfaceVariant, fontSize: 12, marginTop: 4, letterSpacing: 0.4 },
-                animatedChapterCaptionStyle,
-              ]}
+              style={{
+                color: colors.onSurfaceVariant,
+                fontSize: 12,
+                marginTop: 4,
+                letterSpacing: 0.4,
+                textAlign: "center",
+              }}
             >
               Chapter {currentChapterIndex + 1} of {chapters.length}
-            </Animated.Text>
+            </Text>
           ) : null}
         </Animated.View>
 
