@@ -264,6 +264,12 @@ interface PlaybackState {
   setOnTabScreen: (isTab: boolean) => void;
 }
 
+// Wall-clock stamp of the previous sleep tick. Android throttles JS timers in
+// the background, so ticks can arrive many seconds apart — fixed timers must
+// subtract REAL elapsed time (while playing), not 1s per tick, or a 30-minute
+// timer stretches far past 30 minutes with the screen off.
+let _sleepLastTickAt: number | null = null;
+
 // Ticks the sleep-timer countdown once per second, independent of the player
 // progress poll. Pauses playback when it hits zero.
 let sleepTimerInterval: ReturnType<typeof setInterval> | null = null;
@@ -1031,7 +1037,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (!disabled) {
         const rewind = autoRewindSeconds(Date.now() - _lastPausedAt);
         if (rewind > 0) {
-          const target = Math.max(0, get().position - rewind);
+          // LIVE position: the snapshot can be stale after backgrounding
+          // (throttled 1s interval) — see getLiveAbsolutePosition.
+          const pos = await getLiveAbsolutePosition(get);
+          const target = Math.max(0, pos - rewind);
           await get().seek(target);
         }
       }
@@ -1062,9 +1071,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       set({ isPlaying: false });
     }
 
+    // LIVE position: pausing from the NOTIFICATION after backgrounded
+    // playback is exactly when the store snapshot is minutes stale (throttled
+    // 1s interval) — persisting/syncing the snapshot rolled real progress
+    // back. Read the player itself and correct the snapshot too.
+    const pausedAt = await getLiveAbsolutePosition(get);
+    set({ position: pausedAt });
+
     // Persist the paused position locally right now (bypasses the 5s throttle
     // so an app kill immediately after pausing can't lose the position)...
-    saveSessionPositionNow(get().position);
+    saveSessionPositionNow(pausedAt);
 
     // ...and flush accumulated listening time to the server. Runs for BOTH the
     // cast and local paths — this used to be skipped while casting, so a cast
@@ -1076,7 +1092,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       _lastSyncAt = Date.now();
       syncProgress({
         sessionId: session.id,
-        currentTime: get().position,
+        currentTime: pausedAt,
         timeListened: toSync,
         duration: get().duration,
         libraryItemId: session.libraryItemId,
@@ -1305,7 +1321,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     set({ sleepTimer: { endOfChapter, remaining: initialRemaining, chapterIdx: armedChapterIdx } });
 
-    sleepTimerInterval = setInterval(() => {
+    _sleepLastTickAt = Date.now();
+    sleepTimerInterval = setInterval(async () => {
       const timer = get().sleepTimer;
       if (!timer) {
         if (sleepTimerInterval) {
@@ -1315,24 +1332,36 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         return;
       }
 
+      // Real elapsed time since the previous tick — background throttling can
+      // stretch the nominal 1s far longer, and the countdown must not stretch
+      // with it.
+      const now = Date.now();
+      const elapsedS = _sleepLastTickAt != null ? Math.max(0, (now - _sleepLastTickAt) / 1000) : 1;
+      _sleepLastTickAt = now;
+
       let remaining: number;
       let armedIdx = timer.chapterIdx;
       if (timer.endOfChapter) {
-        // Recompute against live position so it follows seeks.
-        const { chapters, currentChapterIndex, position } = get();
-        const armed = armedIdx ?? currentChapterIndex;
-        if (currentChapterIndex !== -1 && armed >= 0 && currentChapterIndex > armed) {
-          // Crossed the boundary between ticks (both loops run at 1s, so the
-          // crossing itself can land between them) — fire now instead of
+        // LIVE position (not the 1s-interval snapshot, which freezes in the
+        // background): derive the current chapter from it so seeks AND
+        // background playback both re-anchor correctly.
+        const { chapters } = get();
+        const position = await getLiveAbsolutePosition(get);
+        const liveIdx = chapters?.length
+          ? chapters.findIndex((c: any) => position >= (c.start || 0) && position < (c.end || 0))
+          : -1;
+        const armed = armedIdx ?? liveIdx;
+        if (liveIdx !== -1 && armed >= 0 && liveIdx > armed) {
+          // Crossed the boundary between ticks — fire now instead of
           // silently re-arming against the NEXT chapter's end.
           remaining = 0;
-        } else if (currentChapterIndex !== -1 && currentChapterIndex < armed) {
+        } else if (liveIdx !== -1 && liveIdx < armed) {
           // User seeked BACK into an earlier chapter — re-arm there.
-          const ch = chapters?.[currentChapterIndex];
+          const ch = chapters?.[liveIdx];
           remaining = ch ? Math.max(0, Math.round((ch.end || 0) - position)) : timer.remaining;
-          armedIdx = currentChapterIndex;
+          armedIdx = liveIdx;
         } else {
-          const ch = chapters?.[currentChapterIndex];
+          const ch = chapters?.[liveIdx];
           // Chapter unknown this tick (gap / boundary transient / chapterless
           // book) — hold without firing; `remaining` may legitimately be 0
           // here and must not trip the pause below.
@@ -1340,9 +1369,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           remaining = Math.max(0, Math.round((ch.end || 0) - position));
         }
       } else {
-        // Wall-clock countdown only while actually listening — pausing for 20
-        // minutes must not eat a 30-minute timer.
-        remaining = get().isPlaying ? timer.remaining - 1 : timer.remaining;
+        // Count down real listening time only — pausing for 20 minutes must
+        // not eat a 30-minute timer, and a throttled background gap while
+        // PLAYING must consume its full duration on the next tick.
+        remaining = get().isPlaying ? timer.remaining - elapsedS : timer.remaining;
       }
 
       // Gently fade the volume down over the final SLEEP_FADE_SECONDS so playback
@@ -1365,7 +1395,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         TrackPlayer.setVolume(1).catch(() => {});
         return;
       }
-      set({ sleepTimer: { endOfChapter: timer.endOfChapter, remaining, chapterIdx: armedIdx } });
+      set({
+        sleepTimer: {
+          endOfChapter: timer.endOfChapter,
+          remaining: Math.round(remaining * 10) / 10,
+          chapterIdx: armedIdx,
+        },
+      });
     }, 1000);
   },
 
@@ -1374,6 +1410,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       clearInterval(sleepTimerInterval);
       sleepTimerInterval = null;
     }
+    _sleepLastTickAt = null;
     // Undo any in-progress fade (unconditional — see setSleepTimer).
     TrackPlayer.setVolume(1).catch(() => {});
     set({ sleepTimer: null });
@@ -1387,6 +1424,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _trackOffsets = [];
 
     // Final flush + close the ABS session before tearing down the player.
+    // LIVE position (read BEFORE reset clears the player): dismissing playback
+    // from the notification after backgrounded listening is exactly when the
+    // snapshot is minutes stale — closing the session with it regressed the
+    // server-side position.
+    const closeAt = await getLiveAbsolutePosition(get);
     const session = get().currentSession;
     if (session?.id) {
       const toSync = _timeListenedAccum;
@@ -1394,7 +1436,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         await closeSession({
           sessionId: session.id,
-          currentTime: get().position,
+          currentTime: closeAt,
           timeListened: toSync,
           duration: get().duration,
           libraryItemId: session.libraryItemId,

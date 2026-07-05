@@ -78,6 +78,9 @@ describe("usePlaybackStore transport", () => {
 
     it.each(cases)("pausing for %dms rewinds %ds on resume", async (pausedForMs, rewind) => {
       setupLocal({ isPlaying: true });
+      // Auto-rewind (and pause persistence) read the LIVE player position —
+      // the store snapshot can be stale after background throttling.
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 100, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().pause();
       jest.mocked(TrackPlayer.seekTo).mockClear();
 
@@ -95,6 +98,7 @@ describe("usePlaybackStore transport", () => {
 
     it("clamps the rewind target at zero", async () => {
       setupLocal({ position: 1 });
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 1, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().pause();
       jest.setSystemTime(BASE + 30_000);
       await usePlaybackStore.getState().play();
@@ -127,8 +131,11 @@ describe("usePlaybackStore transport", () => {
   });
 
   describe("pause()", () => {
-    it("pauses the local player and persists the position immediately", async () => {
-      setupLocal({ isPlaying: true, position: 123 });
+    it("pauses the local player and persists the LIVE position immediately", async () => {
+      // Snapshot deliberately stale (position: 5) — the persisted position
+      // must come from the player, not the background-throttled snapshot.
+      setupLocal({ isPlaying: true, position: 5 });
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 123, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().pause();
       expect(TrackPlayer.pause).toHaveBeenCalled();
       expect(usePlaybackStore.getState().isPlaying).toBe(false);

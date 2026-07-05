@@ -47,6 +47,13 @@ const tick = async (ms = 1000) => {
   await jest.advanceTimersByTimeAsync(ms);
 };
 
+// The EOC tick reads the LIVE player position (the store snapshot freezes
+// under background throttling) — tests drive it through the player mock.
+const livePosition = (position: number) =>
+  jest
+    .mocked(TrackPlayer.getProgress)
+    .mockResolvedValue({ position, duration: 300, buffered: 0 } as any);
+
 describe("usePlaybackStore sleep timer", () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -141,7 +148,7 @@ describe("usePlaybackStore sleep timer", () => {
       usePlaybackStore.getState().setSleepTimer(0, true);
       expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(50);
 
-      usePlaybackStore.setState({ position: 90 } as any);
+      livePosition(90);
       await tick(1000);
       expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(10);
     });
@@ -151,7 +158,7 @@ describe("usePlaybackStore sleep timer", () => {
       usePlaybackStore.getState().setSleepTimer(0, true);
 
       // Playback rolled into chapter 2 before the next tick landed.
-      usePlaybackStore.setState({ position: 101, currentChapterIndex: 1 } as any);
+      livePosition(101);
       await tick(1000);
 
       expect(usePlaybackStore.getState().sleepTimer).toBeNull();
@@ -162,7 +169,7 @@ describe("usePlaybackStore sleep timer", () => {
       setup({ position: 150, currentChapterIndex: 1 });
       usePlaybackStore.getState().setSleepTimer(0, true); // armed in ch2, remaining 50
 
-      usePlaybackStore.setState({ position: 30, currentChapterIndex: 0 } as any);
+      livePosition(30);
       await tick(1000);
 
       const t = usePlaybackStore.getState().sleepTimer!;
@@ -172,12 +179,13 @@ describe("usePlaybackStore sleep timer", () => {
     });
 
     it("holds without firing while the chapter is unknown", async () => {
-      // Chapterless/transient state: currentChapterIndex -1 → remaining computes
-      // to 0 at arm time but must NOT trip the pause.
-      setup({ position: 50, currentChapterIndex: -1 });
+      // Chapterless/transient state: no chapter owns the live position →
+      // remaining computes to 0 at arm time but must NOT trip the pause.
+      setup({ position: 50, currentChapterIndex: -1, chapters: [] });
       usePlaybackStore.getState().setSleepTimer(0, true);
       expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(0);
 
+      livePosition(50);
       await tick(3000);
 
       expect(usePlaybackStore.getState().sleepTimer).not.toBeNull();
@@ -188,11 +196,11 @@ describe("usePlaybackStore sleep timer", () => {
       setup({ position: 98, currentChapterIndex: 0 });
       usePlaybackStore.getState().setSleepTimer(0, true); // remaining 2
 
-      usePlaybackStore.setState({ position: 99 } as any);
+      livePosition(99);
       await tick(1000); // remaining 1
       expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(1);
 
-      usePlaybackStore.setState({ position: 100, currentChapterIndex: 1 } as any);
+      livePosition(100);
       await tick(1000);
       expect(usePlaybackStore.getState().sleepTimer).toBeNull();
       expect(TrackPlayer.pause).toHaveBeenCalled();

@@ -8,7 +8,19 @@
  * could leap back MINUTES (stale position − 10) instead of 10 seconds.
  * Relative seeks must read the live player position.
  */
+jest.mock("../../utils/progressSync", () => ({
+  syncProgress: jest.fn().mockResolvedValue(undefined),
+  closeSession: jest.fn().mockResolvedValue(undefined),
+  queueProgressPatch: jest.fn(),
+  queueFinishedPatch: jest.fn(),
+  queueEbookProgressPatch: jest.fn(),
+  flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
+  clearAllPending: jest.fn(),
+}));
+
 import TrackPlayer from "react-native-track-player";
+import { closeSession } from "../../utils/progressSync";
+import { storage } from "../../utils/storage";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 
 const mockedTP = jest.mocked(TrackPlayer);
@@ -73,6 +85,76 @@ describe("remote jumps read the LIVE player position", () => {
     await usePlaybackStore.getState().seekBackward(10);
 
     expect(mockedTP.seekTo).toHaveBeenCalledWith(190);
+  });
+
+  it("pause() persists and corrects to the LIVE position, not the stale snapshot", async () => {
+    // Pausing FROM THE NOTIFICATION after backgrounded playback is exactly
+    // when the snapshot lags — persisting it rolled real progress back.
+    usePlaybackStore.setState({ position: 100, chapterQueue: false, chapters: [], isPlaying: true } as any);
+    mockedTP.getProgress.mockResolvedValue({ position: 500, duration: 3600, buffered: 0 } as any);
+
+    await usePlaybackStore.getState().pause();
+
+    expect(usePlaybackStore.getState().position).toBe(500); // snapshot corrected
+    const saved = JSON.parse(storage.getString("lastPlaybackSession")!);
+    expect(saved.currentTime).toBe(500); // NOT 100
+  });
+
+  it("closePlayback() closes the ABS session at the LIVE position", async () => {
+    usePlaybackStore.setState({ position: 100, chapterQueue: false, chapters: [] } as any);
+    mockedTP.getProgress.mockResolvedValue({ position: 500, duration: 3600, buffered: 0 } as any);
+
+    await usePlaybackStore.getState().closePlayback();
+
+    expect(closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "s1", currentTime: 500 }) // NOT 100
+    );
+  });
+
+  it("play() auto-rewind rewinds from the LIVE position", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(1_000_000);
+    try {
+      usePlaybackStore.setState({ position: 100, chapterQueue: false, chapters: [], isPlaying: true } as any);
+      mockedTP.getProgress.mockResolvedValue({ position: 500, duration: 3600, buffered: 0 } as any);
+
+      await usePlaybackStore.getState().pause();
+      mockedTP.seekTo.mockClear();
+
+      jest.setSystemTime(1_000_000 + 5 * 60_000); // paused 5 min → 10s rewind
+      await usePlaybackStore.getState().play();
+
+      expect(mockedTP.seekTo).toHaveBeenCalledWith(490); // NOT 90
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("a throttled sleep-timer tick consumes the REAL elapsed time", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(2_000_000);
+    try {
+      usePlaybackStore.setState({
+        isPlaying: true,
+        chapterQueue: false,
+        chapters: [],
+      } as any);
+      usePlaybackStore.getState().setSleepTimer(60);
+
+      await jest.advanceTimersByTimeAsync(1000); // normal tick: 60 → 59
+      expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(59);
+
+      // Background throttle: 30s of wall clock pass before the next tick
+      // lands. The single late tick must consume all ~31s, not 1s.
+      jest.setSystemTime(2_000_000 + 1000 + 31_000);
+      await jest.advanceTimersByTimeAsync(1000);
+      const remaining = usePlaybackStore.getState().sleepTimer!.remaining;
+      expect(remaining).toBeLessThanOrEqual(28);
+      expect(remaining).toBeGreaterThan(20);
+    } finally {
+      usePlaybackStore.getState().cancelSleepTimer();
+      jest.useRealTimers();
+    }
   });
 
   it("while casting, uses the store position (receiver mirror is the truth)", async () => {
