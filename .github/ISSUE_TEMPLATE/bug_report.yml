@@ -1,5 +1,5 @@
-name: 🐞 ABS App Bug Report
-description: File a bug/issue and help us improve the Audiobookshelf mobile apps.
+name: 🐞 TomeSonic Bug Report
+description: File a bug/issue and help us improve TomeSonic.
 title: '[Bug]: '
 labels: ['bug', 'triage']
 body:
@@ -54,7 +54,7 @@ body:
     attributes:
       label: Phone Model
       description: What kind of phone are you using?
-      placeholder: e.g. Pixel 6, iPhone 14, Samsung Galaxy s23, etc
+      placeholder: e.g. Pixel 8, Samsung Galaxy S23, etc
     validations:
       required: true
   - type: input
@@ -62,20 +62,15 @@ body:
     attributes:
       label: Phone OS
       description: What operating system? If Android, is it stock or a custom system?
-      placeholder: e.g. Android 14, iOS 17.4, etc
+      placeholder: e.g. Android 14 (stock, OneUI, GrapheneOS, ...)
     validations:
       required: true
-  - type: dropdown
+  - type: input
     id: app-version
     attributes:
-      label: Audiobookshelf App Version
-      description: Please ensure your app is up to date. *If you are using a 3rd-party app, please reach out to them directly.*
-      multiple: true
-      options:
-        - 'Android App - 0.10.0'
-        - 'iOS App - 0.10.0'
-        - 'Android App - 0.9.81'
-        - 'iOS App - 0.9.81'
+      label: TomeSonic App Version
+      description: Settings → About shows the version. Please ensure your app is up to date.
+      placeholder: e.g. 1.0.3
     validations:
       required: true
   - type: dropdown
@@ -85,8 +80,8 @@ body:
       multiple: true
       options:
         - 'Google Play Store'
-        - 'Testflight'
-        - 'SideStore'
+        - 'GitHub Release APK'
+        - 'Built from source'
         - 'Other (List in "Additional Notes")'
     validations:
       required: true

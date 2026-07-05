@@ -19,6 +19,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
+          cache-dependency-path: native/package-lock.json
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -26,51 +27,44 @@ jobs:
           distribution: 'temurin'
           java-version: 21
 
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefix native
 
-      - name: Build Nuxt project
-        run: npm run generate
-
-      - name: Sync Capacitor
-        run: npx cap sync android
-
-      - name: Build debug APK
-        run: ./android/gradlew assembleDebug -p android --no-daemon
+      - name: Build release APK
+        # Run from native/android — the Sentry gradle snippet resolves its
+        # script path relative to the working directory (see build-apk.yml).
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=arm64-v8a,x86_64
 
       - name: Rename APK
-        working-directory: android/app/build/outputs/apk/debug/
+        working-directory: native/android/app/build/outputs/apk/release/
         run: |
           version="${GITHUB_REF#refs/tags/}"
-          mv app-debug.apk "tomesonic-${version}.apk"
+          mv app-release.apk "tomesonic-${version}.apk"
 
       - name: Generate Release Notes
         id: release_notes
         run: |
-          # Extract version from tag
           VERSION="${GITHUB_REF#refs/tags/}"
-          
-          # Create release notes
-          cat > release_notes.md << 'EOF'
+          cat > release_notes.md << EOF
           ## 🎉 TomeSonic ${VERSION}
-          
+
           ### 📱 Download
           - **Android**: Download the APK below and install on your device
           - **Play Store**: Available on [Google Play Store](https://play.google.com/store/apps/details?id=com.tomesonic.app)
-          
-          ### ✨ What's New
-          <!-- Add release highlights here or extract from CHANGELOG -->
-          - Bug fixes and performance improvements
-          - Latest features and enhancements
-          
+
           ### 🔧 Technical Details
           - Built from commit: ${GITHUB_SHA:0:7}
           - Build date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          
+
           ### 📖 Full Documentation
           See the [README](https://github.com/AwsomeFox/tomesonic-app#readme) for setup instructions and features.
           EOF
-          
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create Release
@@ -80,15 +74,9 @@ jobs:
           name: "TomeSonic ${{ steps.release_notes.outputs.VERSION }}"
           body_path: release_notes.md
           files: |
-            android/app/build/outputs/apk/debug/tomesonic-*.apk
+            native/android/app/build/outputs/apk/release/tomesonic-*.apk
           draft: false
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update latest release info
-        run: |
-          echo "✅ Release ${{ steps.release_notes.outputs.VERSION }} created successfully!"
-          echo "📱 APK available for download in the release"
-          echo "🚀 Play Store deployment will trigger automatically"

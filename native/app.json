@@ -1,0 +1,79 @@
+{
+  "expo": {
+    "name": "TomeSonic",
+    "slug": "native",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": [
+      "tomesonic",
+      "audiobookshelf"
+    ],
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tomesonic.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#007988",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.tomesonic.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sharing",
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#007988"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#141218"
+          }
+        }
+      ],
+      "./plugins/withCastSingleNotification",
+      "./plugins/withUploadSigning",
+      "./plugins/withAutoBrowseIcons",
+      [
+        "react-native-google-cast",
+        {
+          "receiverAppId": "D887A434",
+          "androidReceiverCompatibility": true
+        }
+      ],
+      "./plugins/withAndroidAuto",
+      "./plugins/withResumeWidget",
+      "./plugins/withRotationCrossfade",
+      "./plugins/withSecureBackupRules",
+      "./plugins/withMedia3NotificationIcon",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-secure-store",
+      "expo-image",
+      "@sentry/react-native"
+    ]
+  }
+}

@@ -1,16 +1,25 @@
 name: Build APK
 
+# One build per change: pushes only build the default branch; feature branches
+# build through their pull_request runs (previously push+pull_request BOTH
+# fired on every PR-branch push, doubling every build).
+# No paths-ignore: unit-tests and build-apk are REQUIRED merge checks, and a
+# path-skipped required check never reports — blocking the merge forever.
 on:
   push:
-    paths-ignore:
-      - 'ios/**'
-      - 'readme.md'
+    branches:
+      - master
   pull_request:
-    paths-ignore:
-      - 'ios/**'
-      - 'readme.md'
+
+# A new push to the same branch/PR cancels the still-running previous build.
+concurrency:
+  group: build-apk-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  main:
+  test:
+    # Stable check-run name for branch protection.
+    name: unit-tests
     runs-on: ubuntu-latest
     steps:
       - name: checkout sources
@@ -20,6 +29,32 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: native/package-lock.json
+
+      - name: install dependencies
+        run: npm ci --prefix native
+
+      - name: typecheck
+        run: npm run typecheck --prefix native
+
+      - name: jest
+        run: npm test --prefix native -- --ci --maxWorkers=2
+
+  main:
+    # Stable check-run name for branch protection.
+    name: build-apk
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/package-lock.json
 
       - name: Set up Java
         uses: actions/setup-java@v2
@@ -27,20 +62,28 @@ jobs:
           distribution: 'temurin'
           java-version: 21
 
+      # Caches the Gradle distribution + dependency jars between runs —
+      # without it every build cold-downloads ~1GB before compiling.
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: install dependencies
-        run: npm ci
-
-      - name: build Nuxt project
-        run: npm run generate
-
-      - name: copy to Android project
-        run: npx cap sync
+        run: npm ci --prefix native
 
       - name: build Android app
-        run: ./android/gradlew assembleDebug -p android --no-daemon
+        # Run from native/android (not the repo root): the Sentry gradle
+        # snippet resolves its script path via `node --print require.resolve`,
+        # which needs native/node_modules reachable from the working directory.
+        # arm64-v8a covers every phone from ~2015 on; x86_64 covers emulators.
+        # The New Architecture CMake-compiles all native libs per ABI, so
+        # dropping the dead 32-bit ABIs halves the native compile time.
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a,x86_64
 
       - name: rename apk
-        working-directory: android/app/build/outputs/apk/debug/
+        working-directory: native/android/app/build/outputs/apk/debug/
         run: |
           build="$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
           name="audiobookshelf-${build}.apk"
@@ -50,4 +93,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: audiobookshelf-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: native/android/app/build/outputs/apk/debug/*.apk

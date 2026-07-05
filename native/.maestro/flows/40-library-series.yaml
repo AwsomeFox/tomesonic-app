@@ -1,0 +1,30 @@
+# Library tab browse + series detail routing (regression guard for the
+# SeriesDetail mapping bug: audiobook rows must show PLAY buttons, not Read).
+# Assumes the library has at least one series.
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+# Library tab renders rows.
+- tapOn: "Library"
+- extendedWaitUntil:
+    visible: ".*(Play|Read) .*"
+    timeout: 20000
+# Series tab -> first series -> detail must offer Play/Continue (audio rows).
+- tapOn: "Series"
+- extendedWaitUntil:
+    visible: "Series: .*"
+    timeout: 20000
+- tapOn:
+    text: "Series: .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play all|Continue).*"
+    timeout: 15000
+# At least one row-level play control exists (a11y label "Play <title>").
+- assertVisible: "Play .*"
+- back
+- tapOn: "Home"
+- assertVisible: "Home"

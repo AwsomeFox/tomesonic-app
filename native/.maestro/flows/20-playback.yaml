@@ -1,0 +1,44 @@
+# Core playback: open a book from the shelf, start playback, verify the
+# player surfaces, drive transport (pause/play, jump), and collapse back.
+# Assumes: logged in, current library has at least one audiobook shelf row.
+appId: com.tomesonic.app
+env:
+  # Which shelf card to open — CI pins the seeded audiobook so the seeded
+  # EBOOK (also "<title> by <author>") can't be picked up instead.
+  BOOK: ".* by .*"
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+# Open the first book card on the shelves (BookCard a11y label is "<title> by <author>").
+- tapOn:
+    text: ${BOOK}
+    index: 0
+# Item detail: start (or continue) playback.
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn:
+    text: "^(Play|Continue)$"
+# The app auto-expands the FULL player when playback starts — wait for it
+# (a real session means audio is actually loaded and playing).
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+# Transport: pause, resume, jump both ways.
+- tapOn: "Pause"
+- assertVisible: "Play"
+- tapOn: "Play"
+- assertVisible: "Pause"
+- tapOn: "Forward .* seconds"
+- tapOn: "Back .* seconds"
+# Speed modal opens and closes.
+- tapOn: "Playback speed.*"
+- assertVisible: ".*×.*"
+- back
+# Collapse and confirm the miniplayer takes over.
+- tapOn: "Collapse player"
+- extendedWaitUntil:
+    visible: "Expand player.*"
+    timeout: 10000

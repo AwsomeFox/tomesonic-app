@@ -1,0 +1,52 @@
+# Ebook reader: open an ebook-only item from the Library tab, wait for the
+# VENDORED foliate-js to render the epub (page indicator appears), exercise the
+# TOC and reading-settings sheets, and close cleanly back into the app. This
+# proves the offline reader works end to end (open → render → navigate → close).
+#
+# The reader→PATCH→Continue-Reading-shelf pipeline is covered by unit tests
+# (ReaderScreen.test asserts the ebook progress PATCH; BookshelfScreen.test
+# asserts the shelf build) — not re-asserted here, because the cross-screen
+# post-read Home refresh flakes on the CI emulator's GPU (a WebView teardown
+# triggers "Failed to find ColorBuffer" and drops the app during the idle wait).
+#
+# CI passes EBOOK_ROW pinned to the seeded ebook; locally it defaults to the
+# first ebook-only row.
+appId: com.tomesonic.app
+env:
+  EBOOK_ROW: "Read .*"
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn: "Library"
+- extendedWaitUntil:
+    visible: ${EBOOK_ROW}
+    timeout: 20000
+- tapOn:
+    text: ${EBOOK_ROW}
+    index: 0
+# Foliate parses the epub inside the WebView; the RN chrome's page indicator
+# only renders once the first location event arrives.
+- extendedWaitUntil:
+    visible: "Page .* of .*"
+    timeout: 60000
+# Table of contents opens and closes.
+- tapOn: "Table of contents"
+- extendedWaitUntil:
+    visible: "Close table of contents"
+    timeout: 5000
+- tapOn: "Close table of contents"
+# Reading settings opens and closes.
+- tapOn: "Reading settings"
+- extendedWaitUntil:
+    visible: "Increase text size"
+    timeout: 5000
+- tapOn: "Close reading settings"
+# Close the reader (unmount flushes the cfi to the server) and confirm we land
+# back in the app on the Library tab — i.e. the reader opened, rendered, and
+# closed without crashing.
+- tapOn: "Close reader"
+- extendedWaitUntil:
+    visible: ${EBOOK_ROW}
+    timeout: 15000

@@ -1,0 +1,1577 @@
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
+index 5a1b2bf..9f41d74 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
+@@ -14,7 +14,11 @@ open class AudioItem(
+     open val artwork: String? = null,
+     open val duration: Long? = null,
+     open val options: AudioItemOptions? = null,
+-    open val mediaId: String? = null
++    open val mediaId: String? = null,
++    // Chapter-as-queue support: when set, the underlying file is clipped to this
++    // window so one physical audio file can back many chapter queue items.
++    open val clipStartMs: Long? = null,
++    open val clipEndMs: Long? = null
+ ) {
+     fun toMediaItem(): MediaItem {
+         val extras = Bundle().apply {
+@@ -30,24 +34,70 @@ open class AudioItem(
+             putString("type", type.toString())
+             putString("uri", audioUrl)
+         }
+-        val mediaMetadata = MediaMetadata.Builder()
++        val mdBuilder = MediaMetadata.Builder()
+             .setTitle(title)
+             .setArtist(artist)
+             .setArtworkUri(Uri.parse(artwork))
+             .setExtras(extras)
+-            .build()
+-        return MediaItem.Builder()
++        // Android Auto's QUEUE view builds row icons ONLY from inline
++        // artworkData (media3's legacy stub never loads artworkUri for queue
++        // items, and the car process can't read app-private file:// paths
++        // anyway). Local covers get inlined as scaled bytes; http artwork
++        // keeps the URI, which the queue's iconUri path can fetch.
++        localArtworkBytes(artwork)?.let {
++            mdBuilder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
++        }
++        val mediaMetadata = mdBuilder.build()
++        val builder = MediaItem.Builder()
+             .setMediaId(mediaId ?: audioUrl)
+             .setUri(audioUrl)
+             .setMediaMetadata(mediaMetadata)
+             .setTag(this)
+-            .build()
++        if (clipStartMs != null || clipEndMs != null) {
++            val clip = MediaItem.ClippingConfiguration.Builder()
++                .setStartPositionMs(clipStartMs ?: 0L)
++            if (clipEndMs != null) clip.setEndPositionMs(clipEndMs!!)
++            builder.setClippingConfiguration(clip.build())
++        }
++        return builder.build()
+     }
+ 
+     companion object {
+         fun fromMediaItem(item: MediaItem): AudioItem {
+             return item.localConfiguration!!.tag as AudioItem
+         }
++
++        // One book cover backs every chapter queue item, so cache the encoded
++        // bytes by path — a whole queue costs a single decode.
++        private val artByteCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
++
++        private fun localArtworkBytes(artwork: String?): ByteArray? {
++            if (artwork.isNullOrEmpty()) return null
++            val path = when {
++                artwork.startsWith("file://") -> Uri.parse(artwork).path ?: return null
++                artwork.startsWith("/") -> artwork
++                else -> return null // http(s)/content: leave as artworkUri
++            }
++            artByteCache[path]?.let { return it }
++            return try {
++                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
++                android.graphics.BitmapFactory.decodeFile(path, bounds)
++                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
++                var sample = 1
++                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 512) sample *= 2
++                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
++                val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return null
++                val out = java.io.ByteArrayOutputStream()
++                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out)
++                bmp.recycle()
++                val bytes = out.toByteArray()
++                if (artByteCache.size >= 4) artByteCache.clear()
++                artByteCache[path] = bytes
++                bytes
++            } catch (e: Exception) {
++                null
++            }
++        }
+     }
+ }
+ 
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt
+index f8b9ca1..30df26d 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt
+@@ -20,6 +20,7 @@ import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
+ import androidx.media3.exoplayer.hls.HlsMediaSource
+ import androidx.media3.exoplayer.smoothstreaming.DefaultSsChunkSource
+ import androidx.media3.exoplayer.smoothstreaming.SsMediaSource
++import androidx.media3.exoplayer.source.ClippingMediaSource
+ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+ import androidx.media3.exoplayer.source.MediaSource
+ import androidx.media3.exoplayer.source.ProgressiveMediaSource
+@@ -87,12 +88,26 @@ class MediaFactory (
+             }
+         }
+ 
+-        return when (resourceType) {
++        val source = when (resourceType) {
+             "dash" -> createDashSource(mediaItem, factory)
+             "hls" -> createHlsSource(mediaItem, factory)
+             "smoothstreaming" -> createSsSource(mediaItem, factory)
+             else -> createProgressiveSource(mediaItem, factory)
+         }
++
++        // This custom factory bypasses DefaultMediaSourceFactory, so we must apply
++        // the MediaItem's clipping ourselves — otherwise chapter-queue clips (one
++        // item per chapter over a single file) are ignored and every item reports
++        // the whole-file position/duration.
++        val clip = mediaItem.clippingConfiguration
++        return if (clip.startPositionMs != 0L || clip.endPositionMs != androidx.media3.common.C.TIME_END_OF_SOURCE) {
++            ClippingMediaSource.Builder(source)
++                .setStartPositionMs(clip.startPositionMs)
++                .setEndPositionMs(clip.endPositionMs)
++                .build()
++        } else {
++            source
++        }
+     }
+ 
+     private fun createDashSource(mediaItem: MediaItem, factory: DataSource.Factory?): MediaSource {
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
+index 6527258..f9a0254 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
+@@ -25,6 +25,9 @@ class Track
+     var originalItem: Bundle
+     var headers: HashMap<String, String>? = null
+     val queueId: Long
++    // Chapter-as-queue: optional clip window (ms) into the underlying audio file.
++    var clipStartMs: Long? = null
++    var clipEndMs: Long? = null
+ 
+     override fun setMetadata(context: Context, bundle: Bundle?, ratingType: Int) {
+         super.setMetadata(context, bundle, ratingType)
+@@ -42,7 +45,9 @@ class Track
+             artwork = artwork.toString(),
+             duration = duration,
+             options = AudioItemOptions(headers, userAgent, resourceId),
+-            mediaId = mediaId
++            mediaId = mediaId,
++            clipStartMs = clipStartMs,
++            clipEndMs = clipEndMs
+         )
+     }
+ 
+@@ -74,6 +79,8 @@ class Track
+                 headers!![header] = httpHeaders.getString(header)!!
+             }
+         }
++        (bundle.get("clipStartMs") as? Number)?.let { clipStartMs = it.toLong() }
++        (bundle.get("clipEndMs") as? Number)?.let { clipEndMs = it.toLong() }
+         setMetadata(context, bundle, ratingType)
+         queueId = System.currentTimeMillis()
+     }
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
+index d6e3483..8cccb17 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
+@@ -14,5 +14,7 @@ data class TrackAudioItem(
+     override val artwork: String? = null,
+     override val duration: Long? = null,
+     override val options: AudioItemOptions? = null,
+-    override val mediaId: String? = null
+-): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId)
+\ No newline at end of file
++    override val mediaId: String? = null,
++    override val clipStartMs: Long? = null,
++    override val clipEndMs: Long? = null
++): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
+\ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
+index b495b5a..f4c6e4f 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
+@@ -19,6 +19,7 @@ import androidx.media3.common.Player
+ import androidx.media3.common.util.UnstableApi
+ import androidx.media3.session.CacheBitmapLoader
+ import androidx.media3.session.LibraryResult
++import androidx.media3.session.MediaLibraryService
+ import androidx.media3.common.MediaItem
+ import androidx.media3.common.Rating
+ import androidx.media3.common.util.BitmapLoader
+@@ -104,21 +105,1023 @@ class MusicService : HeadlessJsMediaService() {
+             data = Uri.parse("trackplayer://notification.click")
+             action = Intent.ACTION_VIEW
+         }
+-        mediaSession = MediaLibrarySession.Builder(this, fakePlayer,
+-            InnerMediaSessionCallback()
++        // Media3 keeps a static (per-process) SESSION_ID_TO_SESSION_MAP that can
++        // retain a "zombie" entry if the process was killed without a clean
++        // onDestroy() (aggressive OEM battery managers, Android Auto rebind
++        // churn), causing "Session ID must be unique. ID=" on the next build.
++        // See doublesymmetry/react-native-track-player#2485 / #2567. Purge stale
++        // registrations + retry with fresh unique IDs; never crash if it fails.
++        purgeStaleSessionRegistrations()
++        val sessionActivity = PendingIntent.getActivity(
++            this,
++            0,
++            openAppIntent,
++            getPendingIntentFlags()
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
++        var built: MediaLibrarySession? = null
++        for (attempt in 1..5) {
++            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
++            try {
++                built = MediaLibrarySession.Builder(this, fakePlayer, InnerMediaSessionCallback())
++                    .setId(id)
++                    .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
++                    // https://github.com/androidx/media/issues/1218
++                    .setSessionActivity(sessionActivity)
++                    // Media3 re-publishes the PlaybackState (~every 3s) while
++                    // playing to keep position current for legacy/AVRCP clients.
++                    // Android Auto rebuilds its now-playing template on each such
++                    // update, re-centering (scroll-resetting) the chapter queue.
++                    // Controllers extrapolate position from speed+timestamp, so
++                    // disabling the periodic push keeps the queue scroll stable.
++                    .setPeriodicPositionUpdateEnabled(false)
++                    .build()
++                Timber.i("MediaLibrarySession built on attempt %d id=%s", attempt, id)
++                break
++            } catch (e: IllegalStateException) {
++                Timber.w(e, "MediaLibrarySession build attempt %d failed: %s", attempt, e.message)
++                purgeStaleSessionRegistrations()
++            }
++        }
++        mediaSession = built!!
++        // Track connectivity so Android Auto browse flips between the online
++        // catalog and downloaded-only (and back) via notifyChildrenChanged.
++        absRegisterNetworkCallback()
++        super.onCreate()
++    }
++
++    /**
++     * Reflectively clears Media3's private static
++     * MediaSession.SESSION_ID_TO_SESSION_MAP to drop any "zombie" session
++     * registrations that survived an unclean process kill. Safe no-op if the
++     * field is missing/empty; never throws.
++     */
++    private fun purgeStaleSessionRegistrations() {
++        try {
++            val cls = Class.forName("androidx.media3.session.MediaSession")
++            val field = cls.getDeclaredField("SESSION_ID_TO_SESSION_MAP")
++            field.isAccessible = true
++            val map = field.get(null) as? MutableMap<*, *>
++            if (map != null && map.isNotEmpty()) {
++                Timber.w("Purging %d stale MediaSession registration(s): %s", map.size, map.keys)
++                // Actually RELEASE the old sessions, not just drop them from the
++                // static map — otherwise the previous session's framework
++                // MediaSession stays "active", so Android Auto sees two active
++                // sessions from this app and keeps re-resolving/rebuilding the
++                // now-playing template (queue scroll resets). onCreate runs before
++                // we build our own session, so the map only holds stale ones here.
++                for (s in map.values.toList()) {
++                    try {
++                        s?.javaClass?.getMethod("release")?.invoke(s)
++                    } catch (e: Throwable) {
++                        Timber.w("release() on stale session failed: %s", e.message)
++                    }
++                }
++                map.clear()
++            }
++        } catch (e: Throwable) {
++            Timber.w("purgeStaleSessionRegistrations no-op: %s", e.message)
++        }
++    }
++
++    // ===== Android Auto browse (ABS library) =====
++    // Small pool: a single slow request must not queue every subsequent
++    // browse tap behind it (the car UI shows a spinner per folder).
++    private val absBrowseExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
++
++    // Holds a freshly-refreshed access token in memory so we don't keep hitting
++    // the file (the JS side rewrites the file too, but not while backgrounded).
++    @Volatile private var absTokenOverride: String? = null
++
++    private data class AbsCreds(val server: String, val token: String, val refreshToken: String?)
++
++    private fun absCreds(): AbsCreds? {
++        return try {
++            val f = java.io.File(filesDir, "auto_creds.json")
++            if (!f.exists()) return null
++            val o = org.json.JSONObject(f.readText())
++            val server = o.optString("server").trimEnd('/')
++            val token = absTokenOverride ?: o.optString("token")
++            // isNull guard: a JS-written `refreshToken: null` would otherwise
++            // read back as the string "null" (org.json optString behavior).
++            val refresh = if (o.isNull("refreshToken")) null else o.optString("refreshToken").ifEmpty { null }
++            if (server.isEmpty() || token.isEmpty()) null else AbsCreds(server, token, refresh)
++        } catch (e: Exception) { null }
++    }
++
++    // Refresh the ABS access token natively using the stored refresh token, so
++    // browse keeps working even when the app JS has been backgrounded for hours.
++    @Synchronized
++    private fun absRefreshToken(): String? {
++        val creds = absCreds() ?: return null
++        val refresh = creds.refreshToken ?: return null
++        return try {
++            val conn = java.net.URL("${creds.server}/auth/refresh").openConnection() as java.net.HttpURLConnection
++            conn.requestMethod = "POST"
++            conn.setRequestProperty("x-refresh-token", refresh)
++            conn.setRequestProperty("Content-Type", "application/json")
++            conn.connectTimeout = 8000; conn.readTimeout = 12000
++            conn.doOutput = true
++            conn.outputStream.use { it.write("{}".toByteArray()) }
++            if (conn.responseCode !in 200..299) { Timber.w("absRefreshToken HTTP %d", conn.responseCode); return null }
++            val resp = org.json.JSONObject(conn.inputStream.bufferedReader().readText())
++            val newToken = resp.optJSONObject("user")?.optString("accessToken")?.ifEmpty { null } ?: return null
++            val newRefresh = resp.optJSONObject("user")?.optString("refreshToken")?.ifEmpty { null } ?: refresh
++            absTokenOverride = newToken
++            // Persist so subsequent cold starts also get the fresh token.
++            try {
++                val f = java.io.File(filesDir, "auto_creds.json")
++                val o = if (f.exists()) org.json.JSONObject(f.readText()) else org.json.JSONObject()
++                o.put("server", creds.server); o.put("token", newToken); o.put("refreshToken", newRefresh)
++                f.writeText(o.toString())
++            } catch (e: Exception) { Timber.w(e, "absRefreshToken persist failed") }
++            Timber.i("absRefreshToken: refreshed access token natively")
++            newToken
++        } catch (e: Exception) { Timber.w(e, "absRefreshToken failed"); null }
++    }
++
++    private fun absRequest(method: String, path: String, body: String?, allowRefresh: Boolean = true): String? {
++        val creds = absCreds() ?: return null
++        return try {
++            val conn = java.net.URL("${creds.server}$path").openConnection() as java.net.HttpURLConnection
++            conn.requestMethod = method
++            conn.setRequestProperty("Authorization", "Bearer ${creds.token}")
++            // Snappy failure matters in a car: the browse cache serves stale
++            // results when this times out, which beats a 20s spinner.
++            conn.connectTimeout = 5000; conn.readTimeout = 10000
++            if (body != null) {
++                conn.doOutput = true
++                conn.setRequestProperty("Content-Type", "application/json")
++                conn.outputStream.use { it.write(body.toByteArray()) }
++            }
++            val code = conn.responseCode
++            when {
++                code in 200..299 -> conn.inputStream.bufferedReader().readText()
++                code == 401 && allowRefresh && absRefreshToken() != null -> absRequest(method, path, body, allowRefresh = false)
++                else -> { Timber.w("absRequest %s %s HTTP %d", method, path, code); null }
++            }
++        } catch (e: Exception) { Timber.w(e, "absRequest %s %s failed", method, path); null }
++    }
++
++    private fun absGet(path: String): String? = absRequest("GET", path, null)
++
++    private fun absPost(path: String, body: String): String? = absRequest("POST", path, body)
++
++    private fun absArtwork(path: String): Uri? {
++        val creds = absCreds() ?: return null
++        return Uri.parse("${creds.server}$path?token=${creds.token}")
++    }
++
++    // Android Auto content-style hints (legacy MediaBrowser extras, forwarded
++    // by Media3): set on a FOLDER to control how its CHILDREN render.
++    // 1 = list, 2 = grid (cover tiles), 3 = category list (tinted icons),
++    // 4 = category grid. Status badges (checkmark/progress/download) overlay
++    // grid tiles too, so grids keep all the indicators.
++    private val STYLE_LIST = 1
++    private val STYLE_GRID = 2
++    private val STYLE_CATEGORY_LIST = 3
++
++    private fun absBrowsableItem(
++        id: String,
++        title: String,
++        subtitle: String? = null,
++        artworkPath: String? = null,
++        iconRes: String? = null,
++        childPlayableStyle: Int? = null,
++        childBrowsableStyle: Int? = null
++    ): MediaItem {
++        val md = androidx.media3.common.MediaMetadata.Builder()
++            .setTitle(title).setIsBrowsable(true).setIsPlayable(false)
++            .setMediaType(androidx.media3.common.MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
++        if (!subtitle.isNullOrEmpty()) md.setSubtitle(subtitle)
++        if (artworkPath != null) absArtwork(artworkPath)?.let { md.setArtworkUri(it) }
++        // Category icon from an app drawable (android.resource URI) — used for
++        // the root/library category folders so browsing scans faster in the car.
++        if (artworkPath == null && iconRes != null) {
++            md.setArtworkUri(Uri.parse("android.resource://$packageName/drawable/$iconRes"))
++        }
++        if (childPlayableStyle != null || childBrowsableStyle != null) {
++            val extras = android.os.Bundle()
++            childPlayableStyle?.let { extras.putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", it) }
++            childBrowsableStyle?.let { extras.putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", it) }
++            md.setExtras(extras)
++        }
++        return MediaItem.Builder().setMediaId(id).setMediaMetadata(md.build()).build()
++    }
++
++    // Null-safe optString: org.json returns the STRING "null" for explicit
++    // JSON nulls, which would render literally in the car UI.
++    private fun absStr(o: org.json.JSONObject?, key: String): String? {
++        if (o == null || o.isNull(key)) return null
++        return o.optString(key).ifEmpty { null }
++    }
++
++    // A book item is Android-Auto-relevant only if it has AUDIO — ebook-only
++    // items (and items whose progress is reading-only) are filtered everywhere.
++    // Handles both minified (numTracks/numAudioFiles) and expanded (arrays)
++    // media payloads.
++    private fun absHasAudio(mediaObj: org.json.JSONObject?): Boolean {
++        if (mediaObj == null) return false
++        if (mediaObj.optInt("numTracks", 0) > 0) return true
++        if (mediaObj.optInt("numAudioFiles", 0) > 0) return true
++        if ((mediaObj.optJSONArray("tracks")?.length() ?: 0) > 0) return true
++        if ((mediaObj.optJSONArray("audioFiles")?.length() ?: 0) > 0) return true
++        return mediaObj.optDouble("duration", 0.0) > 0.0
++    }
++
++    // Android Auto natively renders a checkmark / progress bar / download icon
++    // from these legacy MediaDescription extras (Media3 forwards metadata
++    // extras to the legacy browser AA uses). Values per androidx.media
++    // MediaConstants / MediaDescriptionCompat.
++    private fun absItemExtras(prog: org.json.JSONObject?, downloaded: Boolean): android.os.Bundle {
++        val b = android.os.Bundle()
++        if (downloaded) {
++            b.putLong("android.media.extra.DOWNLOAD_STATUS", 2L) // STATUS_DOWNLOADED
++        }
++        if (prog != null) {
++            val finished = prog.optBoolean("isFinished", false)
++            val duration = prog.optDouble("duration", 0.0)
++            val current = prog.optDouble("currentTime", 0.0)
++            // Key strings verified against media3 1.8 MediaConstants — the
++            // "obvious" android.media.description.extra.* names are wrong and
++            // render nothing (DESCRIPTION_EXTRAS_KEY_COMPLETION_STATUS is
++            // literally "android.media.extra.PLAYBACK_STATUS").
++            when {
++                finished -> b.putInt("android.media.extra.PLAYBACK_STATUS", 2) // checkmark
++                current > 0 && duration > 0 -> {
++                    b.putInt("android.media.extra.PLAYBACK_STATUS", 1) // partially played
++                    b.putDouble(
++                        "androidx.media.MediaItem.Extras.COMPLETION_PERCENTAGE",
++                        (current / duration).coerceIn(0.0, 1.0)
++                    )
++                }
++            }
++        }
++        return b
++    }
++
++    // Downloaded books, mirrored by JS into auto_downloads.json — rich entries
++    // (title/author/local files/resume time) so the car can browse AND play
++    // them fully offline. Legacy id-array files still parse (badge-only).
++    private data class AbsDownload(
++        val id: String,
++        val title: String,
++        val author: String?,
++        val folder: String?,
++        val coverPath: String?,
++        val currentTime: Double,
++        val duration: Double,
++        val tracks: List<Triple<String, Double, Double>> // filename, startOffset, duration
++    )
++
++    @Volatile private var absDownloads: Map<String, AbsDownload> = emptyMap()
++
++    private fun absRefreshDownloaded() {
++        absDownloads = try {
++            val f = java.io.File(filesDir, "auto_downloads.json")
++            if (!f.exists()) {
++                emptyMap()
++            } else {
++                val arr = org.json.JSONArray(f.readText())
++                val out = HashMap<String, AbsDownload>()
++                for (i in 0 until arr.length()) {
++                    val v = arr.opt(i)
++                    if (v is String) {
++                        // Legacy format: bare item id (badge only, no offline play).
++                        out[v] = AbsDownload(v, "Audiobook", null, null, null, 0.0, 0.0, emptyList())
++                    } else if (v is org.json.JSONObject) {
++                        val id = v.optString("id")
++                        if (id.isEmpty()) continue
++                        val tracks = mutableListOf<Triple<String, Double, Double>>()
++                        v.optJSONArray("tracks")?.let { ts ->
++                            for (j in 0 until ts.length()) {
++                                val t = ts.getJSONObject(j)
++                                tracks.add(Triple(t.optString("filename"), t.optDouble("startOffset", 0.0), t.optDouble("duration", 0.0)))
++                            }
++                        }
++                        out[id] = AbsDownload(
++                            id,
++                            v.optString("title", "Audiobook"),
++                            v.optString("author").ifEmpty { null },
++                            v.optString("folder").ifEmpty { null },
++                            v.optString("coverPath").ifEmpty { null },
++                            v.optDouble("currentTime", 0.0),
++                            v.optDouble("duration", 0.0),
++                            tracks
++                        )
++                    }
++                }
++                out
++            }
++        } catch (e: Exception) { Timber.w(e, "auto_downloads parse failed"); emptyMap() }
++    }
++
++    // ===== Connectivity: offline browse falls back to downloads; when the
++    // network returns, notifyChildrenChanged re-adds the online catalog. =====
++    @Volatile private var absNetworkAvailable = true
++
++    private fun absOnline(): Boolean = absNetworkAvailable
++
++    private var absNetworkCallback: android.net.ConnectivityManager.NetworkCallback? = null
++
++    private fun absRegisterNetworkCallback() {
++        try {
++            val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
++            // Seed the flag from current state so a cold start in the garage
++            // (no signal) immediately browses offline.
++            absNetworkAvailable = cm.activeNetwork?.let { n ->
++                cm.getNetworkCapabilities(n)
++                    ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++            } ?: false
++            val cb = object : android.net.ConnectivityManager.NetworkCallback() {
++                override fun onAvailable(network: android.net.Network) {
++                    val was = absNetworkAvailable
++                    absNetworkAvailable = true
++                    if (!was) absNotifyBrowseChanged("network available")
++                }
++                override fun onLost(network: android.net.Network) {
++                    val cmNow = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
++                    val stillUp = cmNow.activeNetwork != null
++                    val was = absNetworkAvailable
++                    absNetworkAvailable = stillUp
++                    if (was && !stillUp) absNotifyBrowseChanged("network lost")
++                }
++            }
++            cm.registerDefaultNetworkCallback(cb)
++            absNetworkCallback = cb
++        } catch (e: Exception) { Timber.w(e, "network callback registration failed") }
++    }
++
++    private fun absUnregisterNetworkCallback() {
++        try {
++            absNetworkCallback?.let {
++                val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
++                cm.unregisterNetworkCallback(it)
++            }
++        } catch (_: Exception) {}
++        absNetworkCallback = null
++    }
++
++    // Tell every connected browser (Android Auto) the tree changed so it
++    // re-queries — used when connectivity flips either way.
++    private fun absNotifyBrowseChanged(reason: String) {
++        try {
++            Timber.i("AA browse: notifyChildrenChanged (%s)", reason)
++            // A connectivity flip invalidates everything cached: an online tree
++            // must never be served while offline, and vice versa.
++            absChildrenCache.clear()
++            absProgressCache = null
++            mediaSession.notifyChildrenChanged("__ROOT__", Int.MAX_VALUE, null)
++            mediaSession.notifyChildrenChanged("__DOWNLOADS__", Int.MAX_VALUE, null)
++        } catch (e: Exception) { Timber.w(e, "notifyChildrenChanged failed") }
++    }
++
++    // Downloaded covers, decoded + scaled once and inlined as BYTES: Android
++    // Auto's process cannot read this app's private files, so a file:// art
++    // URI renders as a BLANK tile — bytes pass through the session bridge.
++    private val absArtCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
++
++    private fun absLocalArtBytes(itemId: String): ByteArray? {
++        absArtCache[itemId]?.let { return it }
++        val cover = absDownloads[itemId]?.coverPath ?: return null
++        val path = cover.removePrefix("file://")
++        return try {
++            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
++            android.graphics.BitmapFactory.decodeFile(path, bounds)
++            var sample = 1
++            while (bounds.outWidth / (sample * 2) >= 512) sample *= 2
++            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
++            val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return null
++            val out = java.io.ByteArrayOutputStream()
++            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out)
++            bmp.recycle()
++            val bytes = out.toByteArray()
++            if (absArtCache.size < 60) absArtCache[itemId] = bytes
++            bytes
++        } catch (e: Exception) { Timber.w(e, "local art decode failed for %s", itemId); null }
++    }
++
++    private fun absPlayableItem(
++        mediaId: String,
++        coverItemId: String,
++        title: String,
++        author: String?,
++        subtitle: String?,
++        prog: org.json.JSONObject? = null
++    ): MediaItem {
++        val creds = absCreds()
++        val downloaded = absDownloads.containsKey(coverItemId)
++        // Progress state goes at the FRONT of the title ("42% • Critical Mass",
++        // "✓ Critical Mass") — car screens truncate subtitles so early that
++        // trailing progress text never showed, the native badges are
++        // unreliable across head units, and the cover already identifies the
++        // book.
++        val pct = absProgressPct(prog)
++        val displayTitle = when {
++            prog?.optBoolean("isFinished", false) == true -> "✓ $title"
++            pct != null -> "$pct% • $title"
++            else -> title
++        }
++        val md = androidx.media3.common.MediaMetadata.Builder()
++            .setTitle(displayTitle).setArtist(author ?: "")
++            .setIsBrowsable(false).setIsPlayable(true)
++            .setMediaType(androidx.media3.common.MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
++            // Native badges: download icon, finished checkmark, progress bar.
++            .setExtras(absItemExtras(prog, downloaded))
++        // Artwork: server URL while online (the car loads http itself);
++        // offline, inline the downloaded cover as bytes — NEVER file:// (the
++        // car process can't read the app's private storage → blank tiles).
++        if (absOnline() && creds != null) {
++            md.setArtworkUri(Uri.parse("${creds.server}/api/items/$coverItemId/cover?token=${creds.token}"))
++        } else {
++            absLocalArtBytes(coverItemId)?.let {
++                md.setArtworkData(it, androidx.media3.common.MediaMetadata.PICTURE_TYPE_FRONT_COVER)
++            }
++        }
++        if (!subtitle.isNullOrEmpty()) md.setSubtitle(subtitle)
++        return MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(md.build()).build()
++    }
++
++    // Progress maps from /api/me, cached ~15s — nearly every browse category
++    // needs them, and refetching per drill-in wastes time on flaky car links.
++    //   items:    itemId            -> mediaProgress (books)
++    //   episodes: "itemId-episodeId" -> mediaProgress (podcast episodes)
++    private data class AbsProgress(
++        val items: HashMap<String, org.json.JSONObject>,
++        val episodes: HashMap<String, org.json.JSONObject>
++    )
++
++    @Volatile private var absProgressCache: Pair<Long, AbsProgress>? = null
++
++    private fun absProgress(): AbsProgress {
++        val now = System.currentTimeMillis()
++        absProgressCache?.let { (at, p) -> if (now - at < 15_000) return p }
++        val items = HashMap<String, org.json.JSONObject>()
++        val episodes = HashMap<String, org.json.JSONObject>()
++        absGet("/api/me")?.let { meBody ->
++            org.json.JSONObject(meBody).optJSONArray("mediaProgress")?.let { mp ->
++                for (i in 0 until mp.length()) {
++                    val p = mp.getJSONObject(i)
++                    val itemId = p.optString("libraryItemId")
++                    if (itemId.isEmpty()) continue
++                    // org.json GOTCHA: optString on an explicit JSON null
++                    // returns the STRING "null" — books carry episodeId: null,
++                    // and treating that as an episode key silently emptied the
++                    // items map (killed time-left, checkmarks, finished counts).
++                    val epId = if (p.isNull("episodeId")) "" else p.optString("episodeId")
++                    if (epId.isNotEmpty()) episodes["$itemId-$epId"] = p
++                    else items[itemId] = p
++                }
++            }
++        }
++        val result = AbsProgress(items, episodes)
++        // Only cache non-empty results — an offline fetch shouldn't poison the
++        // cache with emptiness for 15s after the network returns.
++        if (items.isNotEmpty() || episodes.isNotEmpty()) absProgressCache = Pair(now, result)
++        return result
++    }
++
++    private fun absProgressMap(): HashMap<String, org.json.JSONObject> = absProgress().items
++
++    // Continue Listening: annotate each in-progress book with "author • Xh Ym left".
++    // Ebook-only items and items whose progress is READING-only are filtered —
++    // this category is about audio you can resume in the car.
++    private fun absContinueListening(): List<MediaItem> {
++        val body = absGet("/api/me/items-in-progress?limit=25") ?: return emptyList()
++        val arr = org.json.JSONObject(body).optJSONArray("libraryItems") ?: return emptyList()
++        val progById = absProgressMap()
++        return (0 until arr.length()).mapNotNull { i ->
++            val o = arr.getJSONObject(i)
++            val id = o.optString("id").ifEmpty { return@mapNotNull null }
++            if (!absHasAudio(o.optJSONObject("media"))) return@mapNotNull null
++            val prog = progById[id]
++            // Reading-only progress (ebook side of a dual-format book) doesn't
++            // belong in Continue LISTENING.
++            if (prog != null && prog.optDouble("currentTime", 0.0) <= 0.0 && !prog.optBoolean("isFinished", false)) return@mapNotNull null
++            val md = o.optJSONObject("media")?.optJSONObject("metadata")
++            val title = absStr(md, "title") ?: "Audiobook"
++            val author = absStr(md, "authorName")
++            // Android Auto renders the *artist* line under the title for playable
++            // items, so put the "author • Xh Ym left" progress there (and in the
++            // subtitle) to guarantee it shows.
++            val line = absProgressSubtitle(prog, author)
++            absPlayableItem("play:$id", id, title, line, line, prog)
++        }
++    }
++
++    // Downloaded books as a browse category — playable OFFLINE via local files.
++    private fun absDownloadsCategory(): List<MediaItem> {
++        val prog = if (absOnline()) absProgressMap() else HashMap()
++        return absDownloads.values
++            .filter { it.tracks.isNotEmpty() } // rich entries only (legacy = badge-only)
++            .sortedBy { it.title.lowercase() }
++            .map { d ->
++                val p = prog[d.id]
++                val line = absProgressSubtitle(p, d.author)
++                absPlayableItem("play:${d.id}", d.id, d.title, line, line, p)
++            }
++    }
++
++    // In-progress percent (1-99), or null when there's nothing meaningful to
++    // show. absPlayableItem prefixes it onto the TITLE.
++    private fun absProgressPct(prog: org.json.JSONObject?): Int? {
++        if (prog == null || prog.optBoolean("isFinished", false)) return null
++        val duration = prog.optDouble("duration", 0.0)
++        val current = prog.optDouble("currentTime", 0.0)
++        if (duration <= 0 || current <= 0) return null
++        return ((current / duration) * 100).toInt().coerceIn(1, 99)
++    }
++
++    private fun absProgressSubtitle(prog: org.json.JSONObject?, author: String?): String {
++        if (prog == null) return author ?: ""
++        if (prog.optBoolean("isFinished", false)) return if (author.isNullOrEmpty()) "Finished" else "$author • Finished"
++        val duration = prog.optDouble("duration", 0.0)
++        val current = prog.optDouble("currentTime", 0.0)
++        val remaining = duration - current
++        if (remaining <= 0 || current <= 0) return author ?: ""
++        val h = (remaining / 3600).toInt()
++        val m = ((remaining % 3600) / 60).toInt()
++        val left = if (h > 0) "${h}h ${m}m left" else "${m}m left"
++        // Percent lives in the title prefix (absPlayableItem); keep the
++        // subtitle short so "…left" survives car-screen truncation.
++        return if (author.isNullOrEmpty()) left else "$author • $left"
++    }
++
++    private fun absItemToMedia(o: org.json.JSONObject, prog: org.json.JSONObject? = null): MediaItem? {
++        val id = o.optString("id").ifEmpty { return null }
++        if (!absHasAudio(o.optJSONObject("media"))) return null // ebook-only: filtered everywhere
++        val md = o.optJSONObject("media")?.optJSONObject("metadata")
++        val title = absStr(md, "title") ?: absStr(o, "title") ?: "Audiobook"
++        val author = absStr(md, "authorName")
++        val series = absStr(md, "seriesName")
++        return absPlayableItem("play:$id", id, title, author, series, prog)
++    }
++
++    // ABS library-item filters are base64(id) of the entity id, URL-encoded (matches the web client).
++    private fun absB64(s: String): String =
++        java.net.URLEncoder.encode(
++            android.util.Base64.encodeToString(s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP),
++            "UTF-8"
++        )
++
++    private fun absItemsFromResults(
++        path: String,
++        withProgress: Boolean = false,
++        sortByTitle: Boolean = false,
++        // Series drill-in: lead the subtitle with "Book N" (the sequence) —
++        // the author repeats on every tile there and says nothing useful.
++        sequenceSubtitle: Boolean = false
++    ): List<MediaItem> {
++        val body = absGet(path) ?: return emptyList()
++        val arr = org.json.JSONObject(body).optJSONArray("results") ?: org.json.JSONArray()
++        val items: List<MediaItem> = if (!withProgress) {
++            (0 until arr.length()).mapNotNull { absItemToMedia(arr.getJSONObject(it)) }
++        } else {
++            val prog = absProgressMap()
++            (0 until arr.length()).mapNotNull { i ->
++                val o = arr.getJSONObject(i)
++                val id = o.optString("id").ifEmpty { return@mapNotNull null }
++                if (!absHasAudio(o.optJSONObject("media"))) return@mapNotNull null
++                val md = o.optJSONObject("media")?.optJSONObject("metadata")
++                val title = absStr(md, "title") ?: "Audiobook"
++                val author = absStr(md, "authorName")
++                val lead = if (sequenceSubtitle) absSequenceLabel(md) ?: author else author
++                val p = prog[id]
++                // Progress/"Finished" in the artist line (Android Auto shows it
++                // under the title); native checkmark/progress-bar via extras.
++                val line = absProgressSubtitle(p, lead)
++                absPlayableItem("play:$id", id, title, line, line, p)
++            }
++        }
++        return if (sortByTitle) items.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() } else items
++    }
++
++    // "Book 3" from the item's series sequence. Series-filtered results carry
++    // it in metadata.series.sequence; minified rows fall back to the
++    // "Name #3" suffix on seriesName.
++    private fun absSequenceLabel(md: org.json.JSONObject?): String? {
++        val seq = md?.optJSONObject("series")?.let { absStr(it, "sequence") }
++            ?: absStr(md, "seriesName")?.substringAfterLast('#', "")?.trim()?.ifEmpty { null }
++        return seq?.let { "Book $it" }
++    }
++
++    private fun absItemsFiltered(
++        libId: String,
++        type: String,
++        id: String,
++        sort: String? = null,
++        withProgress: Boolean = false,
++        sequenceSubtitle: Boolean = false
++    ): List<MediaItem> {
++        var path = "/api/libraries/$libId/items?filter=$type.${absB64(id)}&limit=200&minified=1"
++        if (sort != null) path += "&sort=$sort"
++        return absItemsFromResults(path, withProgress, sequenceSubtitle = sequenceSubtitle)
++    }
++
++    private fun absLibraryCategories(parentId: String): List<MediaItem> {
++        // parentId = "lib:{id}:{mediaType}"
++        val rest = parentId.removePrefix("lib:")
++        val libId = rest.substringBefore(":")
++        val mediaType = rest.substringAfter(":", "book")
++        if (mediaType == "podcast") {
++            val body = absGet("/api/libraries/$libId/items?limit=200&minified=1") ?: return emptyList()
++            val arr = org.json.JSONObject(body).optJSONArray("results") ?: org.json.JSONArray()
++            return (0 until arr.length()).mapNotNull { absPodcastBrowsable(arr.getJSONObject(it)) }
++                .sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++        }
++        return listOf(
++            absBrowsableItem("latest:$libId", "Recently Added", iconRes = "aa_recent", childPlayableStyle = STYLE_GRID),
++            absBrowsableItem("authors:$libId", "Authors", iconRes = "aa_author", childBrowsableStyle = STYLE_CATEGORY_LIST),
++            absBrowsableItem("serieslist:$libId", "Series", iconRes = "aa_series", childBrowsableStyle = STYLE_CATEGORY_LIST),
++            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
++            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
++            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
++        )
++    }
++
++    // Continue Series: one browsable folder per series you're ACTIVE in —
++    // merged from (a) the server's continue-series shelf (finished one book,
++    // next one up) and (b) the series of books currently in progress, matching
++    // the app's bookshelf Continue Series row. Alphabetical by series name.
++    private fun absContinueSeries(): List<MediaItem> {
++        val libsBody = absGet("/api/libraries") ?: return emptyList()
++        val libs = org.json.JSONObject(libsBody).optJSONArray("libraries") ?: return emptyList()
++        data class Entry(val id: String, val name: String, val coverId: String)
++        val entries = mutableListOf<Entry>()
++        val seen = HashSet<String>()
++
++        // (b)'s series only carry a NAME on the item — resolve name -> id via
++        // each library's series list.
++        val nameToId = HashMap<String, String>() // "libId:name(lower)" -> "libId:seriesId"
++        for (i in 0 until libs.length()) {
++            val libId = libs.getJSONObject(i).optString("id")
++            if (libs.getJSONObject(i).optString("mediaType", "book") != "book") continue
++            absGet("/api/libraries/$libId/series?limit=1000&minified=1")?.let { sBody ->
++                org.json.JSONObject(sBody).optJSONArray("results")?.let { sArr ->
++                    for (j in 0 until sArr.length()) {
++                        val s = sArr.getJSONObject(j)
++                        val sid = s.optString("id")
++                        val sname = s.optString("name")
++                        if (sid.isNotEmpty() && sname.isNotEmpty()) nameToId["$libId:${sname.lowercase()}"] = "$libId:$sid"
++                    }
++                }
++            }
++
++            // (a) The server's between-books shelf.
++            absGet("/api/libraries/$libId/personalized?limit=25")?.let { pBody ->
++                val shelves = try { org.json.JSONArray(pBody) } catch (e: Exception) { null }
++                if (shelves != null) for (j in 0 until shelves.length()) {
++                    val shelf = shelves.getJSONObject(j)
++                    if (shelf.optString("id") != "continue-series") continue
++                    val entities = shelf.optJSONArray("entities") ?: continue
++                    for (k in 0 until entities.length()) {
++                        val ent = entities.getJSONObject(k)
++                        val series = ent.optJSONObject("media")?.optJSONObject("metadata")?.optJSONObject("series") ?: continue
++                        val sid = series.optString("id")
++                        if (sid.isEmpty() || !seen.add("$libId:$sid")) continue
++                        entries.add(Entry("series:$libId:$sid", series.optString("name", "Series"), ent.optString("id")))
++                    }
++                }
++            }
++        }
++
++        // (b) Series of books currently in progress (audio progress only).
++        absGet("/api/me/items-in-progress?limit=25")?.let { body ->
++            org.json.JSONObject(body).optJSONArray("libraryItems")?.let { arr ->
++                for (i in 0 until arr.length()) {
++                    val o = arr.getJSONObject(i)
++                    if (!absHasAudio(o.optJSONObject("media"))) continue
++                    val md = o.optJSONObject("media")?.optJSONObject("metadata") ?: continue
++                    // seriesName can carry a "#seq" suffix — strip it for lookup.
++                    val rawName = md.optString("seriesName")
++                    if (rawName.isEmpty()) continue
++                    val name = rawName.replace(Regex("\\s+#[\\d.]+\\s*$"), "").trim()
++                    val libId = o.optString("libraryId")
++                    val key = nameToId["$libId:${name.lowercase()}"] ?: continue
++                    if (!seen.add(key)) continue
++                    entries.add(Entry("series:$key", name, o.optString("id")))
++                }
++            }
++        }
++
++        // Subtitle each series with "X of Y finished" — the bounded set here
++        // (only ACTIVE series) keeps the per-series item queries cheap, and
++        // it's the most glanceable series info possible while driving.
++        val prog = absProgressMap()
++        return entries
++            .sortedBy { it.name.lowercase() }
++            .map { e ->
++                var subtitle = "Series"
++                val libId = e.id.removePrefix("series:").substringBefore(":")
++                val sid = e.id.substringAfterLast(":")
++                absGet("/api/libraries/$libId/items?filter=series.${absB64(sid)}&limit=100&minified=1")?.let { body ->
++                    org.json.JSONObject(body).optJSONArray("results")?.let { arr ->
++                        var total = 0; var finished = 0
++                        for (i in 0 until arr.length()) {
++                            val o = arr.getJSONObject(i)
++                            if (!absHasAudio(o.optJSONObject("media"))) continue
++                            total++
++                            if (prog[o.optString("id")]?.optBoolean("isFinished", false) == true) finished++
++                        }
++                        if (total > 0) subtitle = "$finished of $total finished"
++                    }
++                }
++                absBrowsableItem(e.id, e.name, subtitle, "/api/items/${e.coverId}/cover", childPlayableStyle = STYLE_GRID)
++            }
++    }
++
++    // Android Auto voice/text search across all libraries → playable books.
++    private val absSearchCache = java.util.concurrent.ConcurrentHashMap<String, List<MediaItem>>()
++
++    private fun absSearch(query: String): List<MediaItem> {
++        val libsBody = absGet("/api/libraries") ?: return emptyList()
++        val libs = org.json.JSONObject(libsBody).optJSONArray("libraries") ?: return emptyList()
++        val q = java.net.URLEncoder.encode(query, "UTF-8")
++        val prog = absProgressMap()
++        val out = mutableListOf<MediaItem>()
++        val seen = HashSet<String>()
++        for (i in 0 until libs.length()) {
++            val libId = libs.getJSONObject(i).optString("id")
++            val body = absGet("/api/libraries/$libId/search?q=$q&limit=20") ?: continue
++            val books = org.json.JSONObject(body).optJSONArray("book") ?: continue
++            for (j in 0 until books.length()) {
++                val li = books.getJSONObject(j).optJSONObject("libraryItem") ?: continue
++                val id = li.optString("id")
++                if (id.isEmpty() || !seen.add(id)) continue
++                if (!absHasAudio(li.optJSONObject("media"))) continue // ebook-only: filtered
++                val md = li.optJSONObject("media")?.optJSONObject("metadata")
++                val title = absStr(md, "title") ?: "Audiobook"
++                val author = absStr(md, "authorName")
++                val p = prog[id]
++                val line = absProgressSubtitle(p, author)
++                out.add(absPlayableItem("play:$id", id, title, line, line, p))
++            }
++        }
++        return out
++    }
++
++    private fun absPodcastBrowsable(o: org.json.JSONObject): MediaItem? {
++        val id = o.optString("id").ifEmpty { return null }
++        val md = o.optJSONObject("media")?.optJSONObject("metadata")
++        val title = absStr(md, "title") ?: "Podcast"
++        val author = absStr(md, "author")
++        // Episode lists read best as text rows (titles are long, art repeats).
++        return absBrowsableItem("podcast:$id", title, author, "/api/items/$id/cover", childPlayableStyle = STYLE_LIST)
++    }
++
++    private fun absPodcastEpisodes(itemId: String): List<MediaItem> {
++        val body = absGet("/api/items/$itemId?expanded=1") ?: return emptyList()
++        val media = org.json.JSONObject(body).optJSONObject("media") ?: return emptyList()
++        val podTitle = absStr(media.optJSONObject("metadata"), "title")
++        val episodes = media.optJSONArray("episodes") ?: return emptyList()
++        val epProg = absProgress().episodes
++        // Newest first — that's how podcasts are consumed — capped so a
++        // 500-episode feed doesn't drown the car UI.
++        return (0 until episodes.length())
++            .mapNotNull { i -> episodes.getJSONObject(i) }
++            .sortedByDescending { it.optLong("publishedAt", 0L) }
++            .take(50)
++            .mapNotNull { ep ->
++                val epId = ep.optString("id")
++                if (epId.isEmpty()) return@mapNotNull null
++                val title = ep.optString("title", "Episode")
++                val p = epProg["$itemId-$epId"]
++                val line = absProgressSubtitle(p, podTitle)
++                absPlayableItem("play:$itemId::$epId", itemId, title, line, line, p)
++            }
++    }
++
++    // Browse cache: fresh entries serve instantly; on a FAILED refresh (dead
++    // zone mid-drive) stale entries keep the tree browsable instead of showing
++    // an empty screen. Cleared whenever connectivity flips (an online tree
++    // must never render while offline, and vice versa).
++    private data class AbsCacheEntry(val at: Long, val items: List<MediaItem>)
++    private val absChildrenCache = java.util.concurrent.ConcurrentHashMap<String, AbsCacheEntry>()
++    private val ABS_CACHE_FRESH_MS = 45_000L
++    private val ABS_CACHE_STALE_MS = 10 * 60_000L
++
++    private fun absLoadChildren(parentId: String): List<MediaItem> {
++        // Downloads render from local state — always live, never cached.
++        val cacheable = absOnline() && parentId != "__DOWNLOADS__"
++        val now = System.currentTimeMillis()
++        if (cacheable) {
++            absChildrenCache[parentId]?.let { c ->
++                if (now - c.at < ABS_CACHE_FRESH_MS) return c.items
++            }
++        }
++        val fresh = absLoadChildrenUncached(parentId)
++        if (cacheable) {
++            if (fresh.isNotEmpty()) {
++                absChildrenCache[parentId] = AbsCacheEntry(now, fresh)
++            } else {
++                // Likely a network failure — serve the stale copy if recent.
++                absChildrenCache[parentId]?.let { c ->
++                    if (now - c.at < ABS_CACHE_STALE_MS) {
++                        Timber.i("AA browse: serving stale children for %s", parentId)
++                        return c.items
++                    }
++                }
++            }
++        }
++        return fresh
++    }
++
++    private fun absLoadChildrenUncached(parentId: String): List<MediaItem> {
++        absRefreshDownloaded()
++        Timber.i("AA browse: onGetChildren parentId=%s online=%s", parentId, absOnline())
++        // OFFLINE: the whole tree collapses to the downloaded books, playable
++        // from local files. When the network returns, the connectivity callback
++        // fires notifyChildrenChanged and the online catalog is re-added.
++        if (!absOnline()) {
++            return when (parentId) {
++                "__ROOT__" -> listOf(
++                    absBrowsableItem("__DOWNLOADS__", "Downloads", "Available offline", iconRes = "aa_downloads")
+                 )
++                "__DOWNLOADS__" -> absDownloadsCategory()
++                else -> absDownloadsCategory()
++            }
++        }
++        when {
++            parentId == "__ROOT__" -> return listOf(
++                absBrowsableItem("__CONTINUE__", "Continue Listening", iconRes = "aa_continue", childPlayableStyle = STYLE_GRID),
++                absBrowsableItem("__CONTINUE_SERIES__", "Continue Series", iconRes = "aa_series", childBrowsableStyle = STYLE_GRID),
++                absBrowsableItem("__DOWNLOADS__", "Downloads", iconRes = "aa_downloads", childPlayableStyle = STYLE_GRID),
++                absBrowsableItem("__LIBRARIES__", "Libraries", iconRes = "aa_library", childBrowsableStyle = STYLE_CATEGORY_LIST)
+             )
+-            .build()
+-        super.onCreate()
++            parentId == "__CONTINUE__" -> return absContinueListening()
++            parentId == "__CONTINUE_SERIES__" -> return absContinueSeries()
++            parentId == "__DOWNLOADS__" -> return absDownloadsCategory()
++            parentId == "__LIBRARIES__" -> {
++                val body = absGet("/api/libraries")
++                if (body == null) { Timber.w("AA browse: /api/libraries returned null"); return emptyList() }
++                val arr = org.json.JSONObject(body).optJSONArray("libraries") ?: org.json.JSONArray()
++                Timber.i("AA browse: libraries count=%d", arr.length())
++                return (0 until arr.length()).map { i ->
++                    val lib = arr.getJSONObject(i)
++                    val mediaType = lib.optString("mediaType", "book")
++                    // Book libraries open into icon categories; podcast
++                    // libraries open straight into a cover grid of shows.
++                    absBrowsableItem(
++                        "lib:${lib.optString("id")}:$mediaType",
++                        lib.optString("name", "Library"),
++                        iconRes = "aa_library",
++                        childBrowsableStyle = if (mediaType == "podcast") STYLE_GRID else STYLE_CATEGORY_LIST
++                    )
++                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++            }
++            parentId.startsWith("lib:") -> return absLibraryCategories(parentId)
++            // Recently Added keeps recency order — that IS the category. Every
++            // other list below is alphabetical.
++            parentId.startsWith("latest:") ->
++                return absItemsFromResults("/api/libraries/${parentId.removePrefix("latest:")}/items?sort=addedAt&desc=1&limit=100&minified=1")
++            parentId.startsWith("allbooks:") ->
++                return absItemsFromResults("/api/libraries/${parentId.removePrefix("allbooks:")}/items?sort=media.metadata.title&limit=200&minified=1", sortByTitle = true)
++            parentId.startsWith("authors:") -> {
++                val libId = parentId.removePrefix("authors:")
++                val body = absGet("/api/libraries/$libId/authors") ?: return emptyList()
++                val arr = org.json.JSONObject(body).optJSONArray("authors") ?: org.json.JSONArray()
++                return (0 until arr.length()).map { i ->
++                    val a = arr.getJSONObject(i)
++                    val n = a.optInt("numBooks", 0)
++                    val sub = if (n > 0) (if (n == 1) "1 book" else "$n books") else null
++                    absBrowsableItem("author:$libId:${a.optString("id")}", a.optString("name", "Author"), sub, iconRes = "aa_author", childPlayableStyle = STYLE_GRID)
++                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++            }
++            parentId.startsWith("listenagain:") -> {
++                // Finished books, alphabetical — quick re-listens without
++                // hunting through the full library.
++                val libId = parentId.removePrefix("listenagain:")
++                return absItemsFromResults(
++                    "/api/libraries/$libId/items?filter=progress.${absB64("finished")}&limit=200&minified=1",
++                    withProgress = true, sortByTitle = true
++                )
++            }
++            parentId.startsWith("author:") -> {
++                val rest = parentId.removePrefix("author:")
++                return absItemsFiltered(rest.substringBefore(":"), "authors", rest.substringAfter(":"), withProgress = true)
++                    .sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++            }
++            parentId.startsWith("serieslist:") -> {
++                val libId = parentId.removePrefix("serieslist:")
++                val body = absGet("/api/libraries/$libId/series?limit=500&minified=1&sort=name") ?: return emptyList()
++                val arr = org.json.JSONObject(body).optJSONArray("results") ?: org.json.JSONArray()
++                return (0 until arr.length()).map { i ->
++                    val s = arr.getJSONObject(i)
++                    val books = s.optJSONArray("books")
++                    val n = s.optInt("numBooks", books?.length() ?: 0)
++                    val sub = if (n > 0) (if (n == 1) "1 book" else "$n books") else null
++                    // "Series • Author" — the author of a series matters when
++                    // scanning the list and isn't visible anywhere else here.
++                    val author = books?.optJSONObject(0)
++                        ?.optJSONObject("media")?.optJSONObject("metadata")
++                        ?.let { absStr(it, "authorName") }
++                    val name = s.optString("name", "Series")
++                    val label = if (author.isNullOrEmpty()) name else "$name • $author"
++                    absBrowsableItem("series:$libId:${s.optString("id")}", label, sub, iconRes = "aa_series", childPlayableStyle = STYLE_GRID)
++                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++            }
++            // Inside a series: SEQUENCE order (book 1, 2, 3…) with "Book N"
++            // subtitles and per-book finished/time-left, which is what you
++            // want in a car.
++            parentId.startsWith("series:") -> {
++                val rest = parentId.removePrefix("series:")
++                return absItemsFiltered(
++                    rest.substringBefore(":"), "series", rest.substringAfter(":"),
++                    "media.metadata.series.sequence",
++                    withProgress = true, sequenceSubtitle = true
++                )
++            }
++            parentId.startsWith("collections:") -> {
++                val libId = parentId.removePrefix("collections:")
++                val body = absGet("/api/libraries/$libId/collections?limit=200&minified=1") ?: return emptyList()
++                val arr = org.json.JSONObject(body).optJSONArray("results") ?: org.json.JSONArray()
++                return (0 until arr.length()).map { i ->
++                    val c = arr.getJSONObject(i)
++                    absBrowsableItem("collection:${c.optString("id")}", c.optString("name", "Collection"), iconRes = "aa_collections")
++                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++            }
++            parentId.startsWith("collection:") -> {
++                val colId = parentId.removePrefix("collection:")
++                val body = absGet("/api/collections/$colId") ?: return emptyList()
++                val arr = org.json.JSONObject(body).optJSONArray("books") ?: org.json.JSONArray()
++                val prog = absProgressMap()
++                return (0 until arr.length()).mapNotNull { i ->
++                    val o = arr.getJSONObject(i)
++                    absItemToMedia(o, prog[o.optString("id")])
++                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++            }
++            parentId.startsWith("podcast:") -> return absPodcastEpisodes(parentId.removePrefix("podcast:"))
++        }
++        return emptyList()
++    }
++
++    private fun absResolvePlayUrl(itemId: String, episodeId: String?): String? {
++        return absResolvePlayResumable(itemId, episodeId, null)?.first
++    }
++
++    /**
++     * Resolves a direct-play stream URL AND the resume position for cold-start
++     * (JS-dead) playback. The /play response carries the server's saved
++     * `currentTime` (absolute book seconds); for multi-file books we pick the
++     * track containing that position and return the offset *within* it.
++     * `overrideSec`, when set (Android Auto bookmark "@@<seconds>" ids),
++     * replaces the server position.
++     */
++    // OFFLINE cold-start playback: resolve a downloaded book's local file +
++    // resume position from the mirrored download entry (no server involved).
++    // Note: with JS alive the RemotePlayId path plays the full local session
++    // with exact progress; this is the JS-dead fallback.
++    private fun absResolveOfflinePlay(itemId: String, overrideSec: Double?): Pair<String, Long>? {
++        val d = absDownloads[itemId] ?: return null
++        if (d.folder == null || d.tracks.isEmpty()) return null
++        val target = overrideSec ?: d.currentTime
++        var chosen = d.tracks[0]
++        for (t in d.tracks) {
++            val (_, start, dur) = t
++            if (target >= start && (dur <= 0.0 || target < start + dur)) { chosen = t; break }
++        }
++        val folder = d.folder.trimEnd('/')
++        val base = if (folder.startsWith("file://")) folder else "file://$folder"
++        val url = "$base/${chosen.first}"
++        val within = (target - chosen.second).coerceAtLeast(0.0)
++        Timber.i("AA offline play: %s -> %s @%ds", itemId, chosen.first, within.toLong())
++        return Pair(url, (within * 1000).toLong())
++    }
++
++    private fun absResolvePlayResumable(
++        itemId: String,
++        episodeId: String?,
++        overrideSec: Double?
++    ): Pair<String, Long>? {
++        // Offline (or the server unreachable below): play the downloaded copy.
++        if (!absOnline() && episodeId == null) {
++            absResolveOfflinePlay(itemId, overrideSec)?.let { return it }
++        }
++        val creds = absCreds() ?: return null
++        val path = if (episodeId != null) "/api/items/$itemId/play/$episodeId" else "/api/items/$itemId/play"
++        val body = absPost(path, "{\"mediaPlayer\":\"exo-player\"}")
++            ?: return if (episodeId == null) absResolveOfflinePlay(itemId, overrideSec) else null
++        val json = org.json.JSONObject(body)
++        val tracks = json.optJSONArray("audioTracks") ?: return null
++        if (tracks.length() == 0) return null
++        val target = overrideSec ?: json.optDouble("currentTime", 0.0)
++        // Find the track whose window contains the target position; fall back
++        // to the first track (single-file books, or target beyond the end).
++        var chosen = tracks.getJSONObject(0)
++        for (i in 0 until tracks.length()) {
++            val t = tracks.getJSONObject(i)
++            val start = t.optDouble("startOffset", 0.0)
++            val dur = t.optDouble("duration", 0.0)
++            if (target >= start && (dur <= 0.0 || target < start + dur)) {
++                chosen = t
++                break
++            }
++        }
++        val rel = chosen.optString("contentUrl")
++        if (rel.isEmpty()) return null
++        val full = if (rel.startsWith("http")) rel else "${creds.server}$rel"
++        val url = if (full.contains("token=")) full else full + (if (full.contains("?")) "&" else "?") + "token=${creds.token}"
++        val withinSec = (target - chosen.optDouble("startOffset", 0.0)).coerceAtLeast(0.0)
++        return Pair(url, (withinSec * 1000).toLong())
+     }
+ 
+     enum class AppKilledPlaybackBehavior(val string: String) {
+@@ -293,9 +1296,10 @@ class MusicService : HeadlessJsMediaService() {
+                 else -> {}
+             }
+         }
+-        customLayout = CustomCommandButton.entries
++        baseCustomLayout = CustomCommandButton.entries
+             .filter { notificationCapabilities.contains(it.capability) }
+             .map { c -> c.commandButton }
++        customLayout = baseCustomLayout + speedButton()
+         val sessionCommandsBuilder =
+             MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
+         customLayout.forEach { v ->
+@@ -305,17 +1309,50 @@ class MusicService : HeadlessJsMediaService() {
+         sessionCommands = sessionCommandsBuilder.build()
+         playerCommands = playerCommandsBuilder.build()
+ 
+-        if (mediaSession.mediaNotificationControllerInfo != null) {
+-            // https://github.com/androidx/media/blob/c35a9d62baec57118ea898e271ac66819399649b/demos/session_service/src/main/java/androidx/media3/demo/session/DemoMediaLibrarySessionCallback.kt#L107
+-            mediaSession.setCustomLayout(
+-                mediaSession.mediaNotificationControllerInfo!!,
+-                customLayout
+-            )
+-            mediaSession.setAvailableCommands(
+-                mediaSession.mediaNotificationControllerInfo!!,
+-                sessionCommandsBuilder.build(),
+-                playerCommands!!
+-            )
++        pushCustomLayoutToControllers()
++    }
++
++    // Base custom buttons (jump/skip) without the dynamic speed button.
++    private var baseCustomLayout: List<CommandButton> = listOf()
++
++    private fun speedIconRes(speed: Float): Int = when {
++        speed <= 0.85f -> androidx.media3.session.R.drawable.media3_icon_playback_speed_0_8
++        speed <= 1.1f -> androidx.media3.session.R.drawable.media3_icon_playback_speed_1_0
++        speed <= 1.35f -> androidx.media3.session.R.drawable.media3_icon_playback_speed_1_2
++        speed <= 1.65f -> androidx.media3.session.R.drawable.media3_icon_playback_speed_1_5
++        speed <= 1.9f -> androidx.media3.session.R.drawable.media3_icon_playback_speed_1_8
++        else -> androidx.media3.session.R.drawable.media3_icon_playback_speed_2_0
++    }
++
++    // Playback-speed button whose icon reflects the current rate (like the
++    // original app). Handled in onCustomCommand → emits "remote-playback-speed".
++    private fun speedButton(): CommandButton {
++        val speed = try { if (::player.isInitialized) player.playbackSpeed else 1f } catch (e: Exception) { 1f }
++        return CommandButton.Builder()
++            .setDisplayName("Playback speed")
++            .setSessionCommand(SessionCommand("PLAYBACK_SPEED", Bundle()))
++            .setIconResId(speedIconRes(speed))
++            .build()
++    }
++
++    // Push the current custom layout + available commands to EVERY connected
++    // controller (notification, Android Auto, Automotive) — RNTP originally only
++    // updated the notification controller, so Auto never saw the buttons.
++    private fun pushCustomLayoutToControllers() {
++        try {
++            customLayout = baseCustomLayout + speedButton()
++            val cmds = sessionCommands ?: return
++            val pCmds = playerCommands ?: return
++            mediaSession.mediaNotificationControllerInfo?.let {
++                mediaSession.setCustomLayout(it, customLayout)
++                mediaSession.setAvailableCommands(it, cmds, pCmds)
++            }
++            for (c in mediaSession.connectedControllers) {
++                mediaSession.setCustomLayout(c, customLayout)
++                mediaSession.setAvailableCommands(c, cmds, pCmds)
++            }
++        } catch (e: Exception) {
++            Timber.w(e, "pushCustomLayoutToControllers failed")
+         }
+     }
+ 
+@@ -449,6 +1486,10 @@ class MusicService : HeadlessJsMediaService() {
+     @MainThread
+     fun setRate(value: Float) {
+         player.playbackSpeed = value
++        // Refresh the Android Auto playback-speed button so its icon reflects the
++        // new rate (the custom layout is otherwise only built once at init, when
++        // the rate is still 1x — so the icon was stuck at 1x until first tapped).
++        pushCustomLayoutToControllers()
+     }
+ 
+     @MainThread
+@@ -792,12 +1833,21 @@ class MusicService : HeadlessJsMediaService() {
+ 
+     @MainThread
+     override fun onDestroy() {
+-        if (::player.isInitialized) {
+-            Timber.d("Releasing media session and destroying player")
++        // Always release the session — even if the player was never initialized
++        // (e.g. Android Auto browsed/connected but playback never started). The
++        // original guard skipped release in that case, leaking the framework
++        // MediaSession → the app ended up with two active sessions and Android
++        // Auto kept re-resolving/rebuilding the now-playing template.
++        if (::mediaSession.isInitialized) {
++            Timber.d("Releasing media session")
+             mediaSession.release()
++        }
++        if (::player.isInitialized) {
++            Timber.d("Destroying player")
+             player.destroy()
+         }
+ 
++        absUnregisterNetworkCallback()
+         progressUpdateJob?.cancel()
+         super.onDestroy()
+     }
+@@ -925,6 +1975,168 @@ class MusicService : HeadlessJsMediaService() {
+             }
+         }
+ 
++        // --- Android Auto / Automotive browse tree (fetched from the ABS server
++        // using credentials mirrored to filesDir/auto_creds.json by the JS app) ---
++        override fun onGetLibraryRoot(
++            session: MediaLibrarySession,
++            browser: MediaSession.ControllerInfo,
++            params: MediaLibraryService.LibraryParams?
++        ): ListenableFuture<LibraryResult<MediaItem>> {
++            // Global content-style defaults: playable children render as COVER
++            // GRIDS (fast visual scanning), browsable children as category
++            // lists with tinted icons. Folders override per-level.
++            val rootExtras = android.os.Bundle().apply {
++                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
++                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
++                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
++            }
++            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
++            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
++        }
++
++        override fun onGetItem(
++            session: MediaLibrarySession,
++            browser: MediaSession.ControllerInfo,
++            mediaId: String
++        ): ListenableFuture<LibraryResult<MediaItem>> {
++            // Controllers (Auto/Assistant) may resolve an id straight to an item
++            // before playing — a "play:" id must come back playable, not as a
++            // bare browsable folder named after the raw id.
++            if (mediaId.startsWith("play:")) {
++                val itemId = mediaId.removePrefix("play:").substringBefore("@@").substringBefore("::")
++                val dl = absDownloads[itemId]
++                return Futures.immediateFuture(
++                    LibraryResult.ofItem(
++                        absPlayableItem(mediaId, itemId, dl?.title ?: "Audiobook", dl?.author, null),
++                        null
++                    )
++                )
++            }
++            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem(mediaId, mediaId), null))
++        }
++
++        override fun onGetChildren(
++            session: MediaLibrarySession,
++            browser: MediaSession.ControllerInfo,
++            parentId: String,
++            page: Int,
++            pageSize: Int,
++            params: MediaLibraryService.LibraryParams?
++        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
++            val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
++            absBrowseExecutor.execute {
++                val children = try { absLoadChildren(parentId) } catch (e: Exception) { Timber.w(e, "absLoadChildren failed"); emptyList() }
++                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
++            }
++            return future
++        }
++
++        override fun onSearch(
++            session: MediaLibrarySession,
++            browser: MediaSession.ControllerInfo,
++            query: String,
++            params: MediaLibraryService.LibraryParams?
++        ): ListenableFuture<LibraryResult<Void>> {
++            val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<Void>>()
++            absBrowseExecutor.execute {
++                val results = try { absSearch(query) } catch (e: Exception) { Timber.w(e, "absSearch failed"); emptyList() }
++                absSearchCache[query] = results
++                Timber.i("AA search '%s' -> %d results", query, results.size)
++                session.notifySearchResultChanged(browser, query, results.size, params)
++                future.set(LibraryResult.ofVoid(params))
++            }
++            return future
++        }
++
++        override fun onGetSearchResult(
++            session: MediaLibrarySession,
++            browser: MediaSession.ControllerInfo,
++            query: String,
++            page: Int,
++            pageSize: Int,
++            params: MediaLibraryService.LibraryParams?
++        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
++            val results = absSearchCache[query] ?: emptyList()
++            return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(results), params))
++        }
++
++        // Cold-start play WITH RESUME. Android Auto item taps arrive through
++        // setMediaItems; the default pipeline delegates to onAddMediaItems,
++        // which cannot supply a start position — so a JS-dead cold-start play
++        // used to begin at 0:00. Here, when JS is NOT alive, we resolve the
++        // stream natively and start at the server's saved position (or the
++        // "@@<seconds>" bookmark suffix). With JS alive we defer to the
++        // default pipeline so the rich JS session path stays unchanged.
++        override fun onSetMediaItems(
++            mediaSession: MediaSession,
++            controller: MediaSession.ControllerInfo,
++            mediaItems: MutableList<MediaItem>,
++            startIndex: Int,
++            startPositionMs: Long
++        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
++            val playItem = mediaItems.firstOrNull { it.mediaId.startsWith("play:") }
++            if (playItem == null || reactContext != null) {
++                return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
++            }
++            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
++            absBrowseExecutor.execute {
++                val id = playItem.mediaId.removePrefix("play:")
++                val raw = id.substringBefore("@@")
++                // Bookmark ids carry an absolute-seconds override after "@@".
++                val overrideSec = id.substringAfter("@@", "").toDoubleOrNull()
++                val itemId = raw.substringBefore("::")
++                val episodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++                val resolved = try {
++                    absResolvePlayResumable(itemId, episodeId, overrideSec)
++                } catch (e: Exception) {
++                    Timber.w(e, "AA cold-start resolve failed")
++                    null
++                }
++                if (resolved != null) {
++                    Timber.i("AA cold-start play %s from %dms", itemId, resolved.second)
++                    val item = playItem.buildUpon().setUri(resolved.first).build()
++                    future.set(MediaSession.MediaItemsWithStartPosition(mutableListOf(item), 0, resolved.second))
++                } else {
++                    future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
++                }
++            }
++            return future
++        }
++
++        override fun onAddMediaItems(
++            mediaSession: MediaSession,
++            controller: MediaSession.ControllerInfo,
++            mediaItems: MutableList<MediaItem>
++        ): ListenableFuture<MutableList<MediaItem>> {
++            val playItem = mediaItems.firstOrNull { it.mediaId.startsWith("play:") }
++            // When the JS engine is alive, route Android Auto playback through it so the
++            // now-playing screen gets the full queue, chapters, title/subtitle, progress
++            // reporting and transport buttons — identical to phone-initiated playback.
++            if (playItem != null && reactContext != null) {
++                val raw = playItem.mediaId.removePrefix("play:") // "itemId" or "itemId::episodeId"
++                Timber.i("AA onAddMediaItems -> routing to JS remote-play-id=%s", raw)
++                scope.launch { emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply { putString("id", raw) }) }
++                return Futures.immediateFuture(mutableListOf())
++            }
++            // Cold start (JS not ready): resolve natively so playback still works.
++            val future = com.google.common.util.concurrent.SettableFuture.create<MutableList<MediaItem>>()
++            absBrowseExecutor.execute {
++                val resolved = mediaItems.map { item ->
++                    val id = item.mediaId
++                    if (id.startsWith("play:")) {
++                        // Strip any "@@<bookmarkTime>" suffix before resolving the URL.
++                        val raw = id.removePrefix("play:").substringBefore("@@")
++                        val itemId = raw.substringBefore("::")
++                        val episodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++                        val url = try { absResolvePlayUrl(itemId, episodeId) } catch (e: Exception) { null }
++                        if (url != null) item.buildUpon().setUri(url).build() else item
++                    } else item
++                }.toMutableList()
++                future.set(resolved)
++            }
++            return future
++        }
++
+         override fun onCustomCommand(
+             session: MediaSession,
+             controller: MediaSession.ControllerInfo,
+@@ -935,8 +2147,18 @@ class MusicService : HeadlessJsMediaService() {
+                 when (command.customAction) {
+                     CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
+                     CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
+-                    CustomCommandButton.NEXT.customAction -> { it.seekToNext() }
+-                    CustomCommandButton.PREVIOUS.customAction -> { it.seekToPrevious() }
++                    // Next/Previous act on chapters — route to JS which knows the
++                    // book's chapter boundaries (native player is a single track).
++                    CustomCommandButton.NEXT.customAction -> { scope.launch { emit(MusicEvents.BUTTON_SKIP_NEXT) } }
++                    CustomCommandButton.PREVIOUS.customAction -> { scope.launch { emit(MusicEvents.BUTTON_SKIP_PREVIOUS) } }
++                    "PLAYBACK_SPEED" -> {
++                        scope.launch {
++                            emit("remote-playback-speed")
++                            // JS applies the new rate async; refresh the icon after.
++                            delay(700)
++                            pushCustomLayoutToControllers()
++                        }
++                    }
+                 }
+             }
+             return super.onCustomCommand(session, controller, command, args)
+@@ -955,6 +2177,11 @@ class MusicService : HeadlessJsMediaService() {
+             )
+         }
+ 
++        // Android Auto's home-screen "resume last media" card. The default
++        // super implementation FAILS, so with JS asleep the card was dead.
++        // Resolve the last-played book natively from widget_state.json (JS
++        // mirrors itemId/title/author there on every session) and start it at
++        // the server's saved position — same pipeline as cold-start browse.
+         override fun onPlaybackResumption(
+             mediaSession: MediaSession,
+             controller: MediaSession.ControllerInfo
+@@ -962,7 +2189,34 @@ class MusicService : HeadlessJsMediaService() {
+             emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
+                 putString("package", controller.packageName)
+             })
+-            return super.onPlaybackResumption(mediaSession, controller)
++            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
++            absBrowseExecutor.execute {
++                try {
++                    val f = java.io.File(filesDir, "widget_state.json")
++                    val o = if (f.exists()) org.json.JSONObject(f.readText()) else null
++                    val itemId = absStr(o, "itemId") ?: ""
++                    if (itemId.isEmpty()) {
++                        future.setException(UnsupportedOperationException("no last session"))
++                        return@execute
++                    }
++                    absRefreshDownloaded()
++                    val resolved = absResolvePlayResumable(itemId, null, null)
++                    if (resolved == null) {
++                        future.setException(UnsupportedOperationException("unresolvable last session"))
++                        return@execute
++                    }
++                    val item = absPlayableItem(
++                        "play:$itemId", itemId,
++                        absStr(o, "title") ?: "Audiobook",
++                        absStr(o, "author"), null
++                    ).buildUpon().setUri(resolved.first).build()
++                    Timber.i("AA resumption: %s from %dms", itemId, resolved.second)
++                    future.set(MediaSession.MediaItemsWithStartPosition(mutableListOf(item), 0, resolved.second))
++                } catch (e: Exception) {
++                    future.setException(e)
++                }
++            }
++            return future
+         }
+ 
+         override fun onSetRating(

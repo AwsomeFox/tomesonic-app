@@ -1,0 +1,218 @@
+name: E2E (Maestro)
+
+# Full end-to-end run on an Android emulator against a THROWAWAY Audiobookshelf
+# server spun up inside the job — no real server or secrets. Split into two
+# jobs so neither runs out of the runner's ~14 GB disk (packageRelease hit
+# ENOSPC when the gradle build, docker ABS image, emulator system image, and
+# NDK objects all stacked in one job):
+#   build:  compile the x86_64 release APK, upload it as an artifact
+#   e2e:    download the APK, spin up ABS + a seeded library, boot the
+#           emulator, and run every flow (login → playback → chapters/sleep →
+#           search → series → settings → resume → reader → download → offline)
+# Catches what jest can't: native boot crashes, real Media3 playback, real
+# navigation, the ABS login/session handshake, and the offline ebook reader.
+#
+# Runs on EVERY pull request and is a REQUIRED check on master (branch
+# protection requires the e2e-build + e2e contexts — both, because if only
+# e2e were required, a build failure would leave e2e "skipped", which GitHub
+# counts as passing). Deliberately NOT paths-filtered: a required check that
+# path-skips never reports and blocks the merge forever. PRs that don't touch
+# app sources reuse the cached APK, so their runs are mostly emulator time.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - master
+    paths:
+      - 'native/.maestro/**'
+      - '.github/workflows/e2e-smoke.yml'
+
+# A newer push to the same PR/branch supersedes the in-flight run — the
+# required check only needs to be green for the latest commit.
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Stable check-run name for branch protection.
+    name: e2e-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      # Reclaim ~20 GB of unused preinstalled toolchains so the NDK compile +
+      # APK packaging have headroom (keep the Android SDK/NDK the build needs).
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            "$AGENT_TOOLSDIRECTORY"/Ruby "$AGENT_TOOLSDIRECTORY"/PyPy || true
+          df -h /
+
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v2
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # Flow-only iterations (the common trigger: .maestro/** changed) reuse
+      # the previously built APK — no npm ci, no gradle. Any change to app
+      # sources produces a new key and rebuilds.
+      - name: cache built APK
+        id: apk-cache
+        uses: actions/cache@v4
+        with:
+          path: native/android/app/build/outputs/apk/release/app-release.apk
+          key: e2e-apk-x86_64-${{ hashFiles('native/**', '!native/.maestro/**') }}
+
+      # Compiler cache for the NDK/C++ compile — source-change rebuilds hit
+      # warm object caches (~8-10 min → ~3-4).
+      - name: ccache
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: e2e-ndk-x86_64
+          max-size: 1G
+
+      - name: install dependencies
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        run: npm ci --prefix native
+
+      - name: build release APK (x86_64 only)
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        # RELEASE, not debug: debug APKs load JS from a Metro dev server that
+        # doesn't exist on the CI emulator. x86_64 ONLY: the New Architecture
+        # CMake-compiles every native lib per ABI and the emulator only runs
+        # x86_64, so one ABI cuts the native compile ~4x.
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
+
+      - name: upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-release-apk
+          path: native/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+  e2e:
+    # Stable check-run name for branch protection.
+    name: e2e
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # This job runs the docker ABS image + emulator system image; free the
+      # same headroom so packaging/booting has room (no gradle/NDK here).
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            "$AGENT_TOOLSDIRECTORY"/Ruby "$AGENT_TOOLSDIRECTORY"/PyPy || true
+          df -h /
+
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      # Land the built APK where ci-flows.sh installs it from.
+      - name: download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-release-apk
+          path: native/android/app/build/outputs/apk/release/
+
+      - name: seed media fixture (generated audiobook + ebook)
+        run: |
+          # ubuntu-latest no longer preinstalls ffmpeg.
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+          # Author/Series/Book folder layout so ABS derives a series too
+          # (the 40-library-series flow needs one). Two 90s sine-tone tracks.
+          mkdir -p "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
+          cd "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=90" \
+            -metadata title="Chapter 1" -metadata artist="Test Author" \
+            -metadata album="The Test Book" track1.mp3
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=550:duration=90" \
+            -metadata title="Chapter 2" -metadata artist="Test Author" \
+            -metadata album="The Test Book" track2.mp3
+          # Ebook-only item for the reader flow: a minimal valid EPUB 3
+          # (mimetype stored first, container.xml, OPF, nav, two chapters).
+          mkdir -p "$GITHUB_WORKSPACE/e2e-media/Test Author/The Test Ebook"
+          python3 "$GITHUB_WORKSPACE/native/.maestro/make-epub.py" \
+            "$GITHUB_WORKSPACE/e2e-media/Test Author/The Test Ebook/the-test-ebook.epub"
+
+      - name: start + provision Audiobookshelf
+        run: |
+          docker run -d --name abs -p 13378:80 \
+            -v "$PWD/e2e-media":/media:ro \
+            ghcr.io/advplyr/audiobookshelf:latest
+          # Wait for the server, then create the root user and a library.
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:13378/status > /dev/null && break; sleep 2
+          done
+          curl -sf http://localhost:13378/status
+          curl -sf -X POST http://localhost:13378/init \
+            -H 'Content-Type: application/json' \
+            -d '{"newRoot":{"username":"root","password":"testpass"}}'
+          TOKEN=$(curl -sf -X POST http://localhost:13378/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"root","password":"testpass"}' | jq -r '.user.token')
+          LIB=$(curl -sf -X POST http://localhost:13378/api/libraries \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"name":"Test Library","folders":[{"fullPath":"/media"}],"mediaType":"book","provider":"custom"}' \
+            | jq -r '.id')
+          curl -sf -X POST "http://localhost:13378/api/libraries/$LIB/scan" \
+            -H "Authorization: Bearer $TOKEN" || true
+          # Wait until the scan surfaces the seeded book.
+          for i in $(seq 1 60); do
+            COUNT=$(curl -sf "http://localhost:13378/api/libraries/$LIB/items?limit=1" \
+              -H "Authorization: Bearer $TOKEN" | jq -r '.total // 0')
+            [ "$COUNT" -ge 1 ] && break; sleep 2
+          done
+          echo "library items: $COUNT"
+          [ "$COUNT" -ge 1 ]
+
+      - name: install Maestro
+        run: curl -Ls https://get.maestro.mobile.dev | bash
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: run E2E flows on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          # NOTE: the action runs EACH line in its own shell — keep this a
+          # single command (the script owns PATH/cd and the flow order).
+          script: bash native/.maestro/ci-flows.sh
+
+      - name: upload maestro artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-debug
+          path: ~/.maestro/tests/
+          if-no-files-found: ignore

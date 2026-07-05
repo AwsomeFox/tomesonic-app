@@ -1,0 +1,18 @@
+# Maestro workspace for TomeSonic E2E flows.
+#
+# Run everything (assumes a logged-in app on the connected device/emulator):
+#   npm run e2e
+# Run one flow:
+#   maestro test .maestro/flows/20-playback.yaml
+# Fresh-install login (parameterized; never hardcode credentials):
+#   maestro test .maestro/flows/10-login.yaml \
+#     -e SERVER_URL=https://abs.example.com -e ABS_USER=me -e ABS_PASS=secret
+#
+# Flows are numbered by dependency order: 10-login only for fresh installs,
+# 20+ assume an authenticated session with at least one audiobook library.
+flows:
+  - "flows/*.yaml"
+
+includeTags: []
+excludeTags:
+  - manual # login is opt-in (needs -e credentials); everything else runs by default

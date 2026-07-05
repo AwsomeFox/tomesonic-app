@@ -27,19 +27,19 @@ jobs:
           java-version: 21
 
       - name: install dependencies
-        run: npm ci
-
-      - name: build Nuxt project
-        run: npm run generate
-
-      - name: copy to Android project
-        run: npx cap sync
+        run: npm ci --prefix native
 
       - name: build Android app
-        run: ./android/gradlew assembleDebug -p android --no-daemon
+        # Run from native/android (not the repo root): the Sentry gradle
+        # snippet resolves its script path via `node --print require.resolve`,
+        # which needs native/node_modules reachable from the working directory.
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: rename apk
-        working-directory: android/app/build/outputs/apk/debug/
+        working-directory: native/android/app/build/outputs/apk/debug/
         run: |
           build="$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
           name="audiobookshelf-${build}.apk"
@@ -55,8 +55,8 @@ jobs:
           mkdir -p ghpages/docs
 
           # Set up the test page directory
-          cp android/app/build/outputs/apk/debug/*apk ghpages/test/
-          cp static/Logo.png ghpages/test/logo.png
+          cp native/android/app/build/outputs/apk/debug/*apk ghpages/test/
+          cp native/assets/icon.png ghpages/test/logo.png
           cp .github/testing-page-template.html ghpages/test/index.html
 
           # Copy documentation to the docs directory

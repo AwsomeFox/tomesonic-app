@@ -1,0 +1,74 @@
+# Chapter navigation (next/prev buttons + the chapters modal) and the sleep
+# timer (set a preset, countdown chip appears, cancel restores the plain
+# button). Assumes a logged-in library whose first book has ≥2 chapters (the
+# CI-seeded book has exactly 2).
+appId: com.tomesonic.app
+env:
+  # Which shelf card to open — CI pins the seeded audiobook so the seeded
+  # EBOOK (also "<title> by <author>") can't be picked up instead.
+  BOOK: ".* by .*"
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: ${BOOK}
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+# A fresh play auto-expands the full player; but if a prior flow left a
+# session for this same book, tapping Continue resumes it in the (collapsed)
+# miniplayer instead — open it explicitly in that case. optional:true keeps
+# the auto-expanded path from failing on a missing miniplayer handle.
+- tapOn:
+    text: "Expand player.*"
+    optional: true
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+# Pause FIRST so the position stops drifting — a prior flow may have left the
+# session mid-book and still playing, so we can't assume which chapter we
+# resume in. Everything below is then deterministic.
+- tapOn: "Pause"
+- assertVisible: "Chapter . of 2"
+# Jump to a KNOWN chapter via the modal (absolute), not by assuming resume.
+# Modal rows carry a "Chapter N, starts at …" label — distinct from the
+# now-playing "Chapter N of 2" caption, so the tap is unambiguous.
+- tapOn: "Chapters"
+- extendedWaitUntil:
+    visible: "Chapter 1, starts at .*"
+    timeout: 5000
+- tapOn: "Chapter 1, starts at .*"
+- extendedWaitUntil:
+    visible: "Chapter 1 of 2"
+    timeout: 10000
+# Next-chapter button.
+- tapOn: "Next chapter"
+- extendedWaitUntil:
+    visible: "Chapter 2 of 2"
+    timeout: 10000
+# Previous-chapter button: paused at chapter 2's start (within < 3s), so it
+# goes to the PREVIOUS chapter rather than restarting the current one.
+- tapOn: "Previous chapter"
+- extendedWaitUntil:
+    visible: "Chapter 1 of 2"
+    timeout: 10000
+# Sleep timer: set the smallest preset, chip shows remaining, cancel.
+- tapOn: "Sleep timer"
+- extendedWaitUntil:
+    visible: "5 min"
+    timeout: 5000
+- tapOn: "5 min"
+- extendedWaitUntil:
+    visible: "Sleep timer, .* remaining"
+    timeout: 5000
+- tapOn: "Sleep timer, .* remaining"
+- tapOn: "Cancel Timer"
+- extendedWaitUntil:
+    visible: "Sleep timer"
+    timeout: 5000
+# Already paused above — just collapse for the next flow.
+- tapOn: "Collapse player"

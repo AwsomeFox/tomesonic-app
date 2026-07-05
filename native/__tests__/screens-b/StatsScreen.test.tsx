@@ -1,0 +1,247 @@
+/**
+ * StatsScreen — /api/me/listening-stats totals, DST-safe last-7-days chart
+ * math, days-in-a-row streak, itemsFinished derived from the store's progress
+ * map (not the login payload), recent sessions list, error/retry.
+ */
+jest.mock("react-native-safe-area-context", () =>
+  require("react-native-safe-area-context/jest/mock").default
+);
+jest.mock("react-native-reanimated", () => {
+  const RN = require("react-native");
+  const chainable = () => {
+    const o: any = {};
+    [
+      "delay", "duration", "springify", "damping", "stiffness", "mass",
+      "easing", "build", "withInitialValues", "randomDelay", "reduceMotion",
+      "withCallback",
+    ].forEach((k) => (o[k] = () => o));
+    return o;
+  };
+  const id = (v: any) => v;
+  const easing = (t: number) => t;
+  return {
+    __esModule: true,
+    default: {
+      createAnimatedComponent: (C: any) => C,
+      View: RN.View, Text: RN.Text, Image: RN.Image,
+      ScrollView: RN.ScrollView, FlatList: RN.FlatList,
+    },
+    useSharedValue: (v: any) => ({ value: v }),
+    useAnimatedStyle: () => ({}),
+    useAnimatedProps: () => ({}),
+    useDerivedValue: (fn: any) => ({ value: typeof fn === "function" ? fn() : fn }),
+    useAnimatedRef: () => ({ current: null }),
+    useAnimatedScrollHandler: () => () => {},
+    useAnimatedReaction: () => {},
+    useReducedMotion: () => false,
+    withTiming: id, withSpring: id, withDelay: (_d: any, v: any) => v,
+    withRepeat: id, withSequence: id,
+    cancelAnimation: () => {},
+    interpolate: () => 0,
+    interpolateColor: () => "rgb(0, 0, 0)",
+    Extrapolation: { CLAMP: "clamp", EXTEND: "extend", IDENTITY: "identity" },
+    Extrapolate: { CLAMP: "clamp", EXTEND: "extend", IDENTITY: "identity" },
+    runOnJS: (fn: any) => fn, runOnUI: (fn: any) => fn,
+    Easing: {
+      linear: easing, ease: easing, quad: easing, cubic: easing,
+      bezier: () => ({ factory: () => easing }),
+      in: (f: any) => f || easing, out: (f: any) => f || easing, inOut: (f: any) => f || easing,
+    },
+    FadeIn: chainable(), FadeOut: chainable(), FadeInDown: chainable(),
+    FadeInUp: chainable(), FadeInRight: chainable(), FadeInLeft: chainable(),
+    FadeOutDown: chainable(), FadeOutUp: chainable(),
+    SlideInDown: chainable(), SlideOutDown: chainable(),
+    LinearTransition: chainable(),
+    ReduceMotion: { System: "system", Always: "always", Never: "never" },
+  };
+});
+jest.mock("../../utils/api", () => ({
+  api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+
+import React from "react";
+import { render, screen, fireEvent } from "@testing-library/react-native";
+import StatsScreen from "../../screens/StatsScreen";
+import { api } from "../../utils/api";
+import { useUserStore } from "../../store/useUserStore";
+import { usePlaybackStore } from "../../store/usePlaybackStore";
+
+const initialUser = useUserStore.getState();
+const initialPlayback = usePlaybackStore.getState();
+
+// Mirror the screen's local-calendar helpers so the fixture keys land on the
+// exact same YYYY-MM-DD strings regardless of the machine's timezone.
+function ymd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function daysAgo(n: number): Date {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - n);
+  return d;
+}
+
+// Focus fires on initial mount in the real navigator — replicate that.
+function makeNavigation() {
+  const navigation: any = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    addListener: jest.fn((event: string, cb: () => void) => {
+      if (event === "focus") cb();
+      return jest.fn();
+    }),
+  };
+  navigation.getParent = jest.fn(() => navigation);
+  return navigation;
+}
+
+async function renderStats() {
+  const navigation = makeNavigation();
+  await render(<StatsScreen navigation={navigation} />);
+  return navigation;
+}
+
+beforeEach(() => {
+  jest.useFakeTimers();
+  // Monday after the US DST fall-back (Nov 2, 2025): daysAgo() must count the
+  // 25-hour day exactly once. In non-DST timezones this is a plain Monday and
+  // the math is identical.
+  jest.setSystemTime(new Date(2025, 10, 3, 15, 30, 0));
+
+  useUserStore.setState(initialUser, true);
+  usePlaybackStore.setState(initialPlayback, true);
+  usePlaybackStore.setState({ currentSession: null } as any);
+  useUserStore.setState({
+    loadMediaProgress: jest.fn().mockResolvedValue(undefined),
+    mediaProgress: {
+      done1: { libraryItemId: "done1", isFinished: true },
+      done2: { libraryItemId: "done2", isFinished: true },
+      inflight: { libraryItemId: "inflight", progress: 0.4 },
+    },
+  } as any);
+
+  const days: Record<string, number> = {
+    [ymd(daysAgo(0))]: 600, // today: 10 min
+    [ymd(daysAgo(1))]: 1200, // yesterday (DST day): 20 min
+    [ymd(daysAgo(2))]: 300, // 5 min
+    // gap at daysAgo(3) ends the streak at 3
+    [ymd(daysAgo(5))]: 60, // outside the streak, still a listened day
+  };
+  (api.get as jest.Mock).mockResolvedValue({
+    data: {
+      totalTime: 7260, // -> 121 minutes
+      today: 600,
+      days,
+      recentSessions: [
+        {
+          id: "sess1",
+          mediaMetadata: { title: "Latest Listen" },
+          timeListening: 3660, // 61 min (< 70 stays minutes)
+          updatedAt: Date.now() - 2 * 3600 * 1000, // "2h ago"
+        },
+        {
+          id: "sess2",
+          displayTitle: "Quick Peek",
+          timeListening: 45, // "45 sec"
+          updatedAt: Date.now() - 30 * 60 * 1000, // "30m ago"
+        },
+        {
+          id: "sess3",
+          mediaMetadata: { title: "Long Haul" },
+          timeListening: 4200, // 70 min -> "1 hr 10 min"
+          updatedAt: Date.now() - 26 * 3600 * 1000, // "1d ago"
+        },
+      ],
+    },
+  });
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
+describe("StatsScreen", () => {
+  it("loads stats on focus and renders the three totals", async () => {
+    await renderStats();
+
+    expect(await screen.findByText("Minutes Listening")).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith("/api/me/listening-stats");
+    // Items Finished comes from the store's progress map: 2 finished.
+    expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("Items Finished")).toBeTruthy();
+    // 4 day keys -> Days Listened ("4" also appears as a chart Y-axis label).
+    expect(screen.getAllByText("4").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Days Listened")).toBeTruthy();
+    // totalTime 7260s -> 121 minutes.
+    expect(screen.getByText("121")).toBeTruthy();
+    // loadMediaProgress refresh was kicked off too.
+    expect(useUserStore.getState().loadMediaProgress).toHaveBeenCalled();
+  });
+
+  it("computes week minutes, daily average, best day and the DST-safe streak", async () => {
+    await renderStats();
+    await screen.findByText("Week Listening");
+
+    // 10 + 20 + 5 = 35 minutes across the last 7 days (the day-5 entry counts).
+    // wait: 60s -> 1 min, daysAgo(5) is inside the last 7 days -> 36 total.
+    expect(screen.getByText("36")).toBeTruthy(); // Week Listening
+    expect(screen.getByText("5")).toBeTruthy(); // Daily Average round(36/7)
+    // Best Day 20 (also present as a chart Y-axis label).
+    expect(screen.getAllByText("20").length).toBeGreaterThanOrEqual(2);
+    // Streak: today + yesterday (the 25h DST day counts once) + 2 days ago.
+    expect(screen.getByText("3")).toBeTruthy();
+    expect(screen.getByText("in a row")).toBeTruthy();
+    // Chart Y axis derives from best day: factor ceil(20/5)=4 -> top label 24.
+    expect(screen.getByText("24")).toBeTruthy();
+    expect(screen.getByText("Minutes Listening (last 7 days)")).toBeTruthy();
+  });
+
+  it("renders recent sessions with pretty times and relative dates", async () => {
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    expect(screen.getByText("Latest Listen")).toBeTruthy();
+    expect(screen.getByText("61 min")).toBeTruthy();
+    expect(screen.getByText("2h ago")).toBeTruthy();
+
+    expect(screen.getByText("Quick Peek")).toBeTruthy();
+    expect(screen.getByText("45 sec")).toBeTruthy();
+    expect(screen.getByText("30m ago")).toBeTruthy();
+
+    expect(screen.getByText("Long Haul")).toBeTruthy();
+    expect(screen.getByText("1 hr 10 min")).toBeTruthy();
+    expect(screen.getByText("1d ago")).toBeTruthy();
+  });
+
+  it("shows the no-sessions placeholder when the history is empty", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: { totalTime: 0, today: 0, days: {}, recentSessions: [] },
+    });
+    await renderStats();
+
+    expect(await screen.findByText("No listening sessions yet")).toBeTruthy();
+    // Empty days map -> zeroed streak/averages render fine.
+    expect(screen.getByText("Days Listened")).toBeTruthy();
+  });
+
+  it("shows an error with retry when the stats fetch fails", async () => {
+    (api.get as jest.Mock).mockRejectedValueOnce(new Error("stats down"));
+    await renderStats();
+
+    expect(await screen.findByText("stats down")).toBeTruthy();
+
+    await fireEvent.press(screen.getByText("Retry"));
+    expect(await screen.findByText("Recent Sessions")).toBeTruthy();
+  });
+
+  it("back button goes back", async () => {
+    const navigation = await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    await fireEvent.press(screen.getByLabelText("Go back"));
+    expect(navigation.goBack).toHaveBeenCalled();
+  });
+});

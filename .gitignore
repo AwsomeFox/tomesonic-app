@@ -94,4 +94,6 @@ sw.*
 
 # Kotlin build artifacts
 /android/.kotlin/
-package-lock.json
+
+# Expo local state (root and native both)
+.expo/

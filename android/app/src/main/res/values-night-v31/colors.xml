@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Android 12+ dark mode: use Material You dynamic accent (same shade as app primary) -->
-    <color name="splash_icon_color">@android:color/system_accent1_200</color>
-</resources>

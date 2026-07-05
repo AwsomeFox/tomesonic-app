@@ -1,0 +1,29 @@
+# OFFLINE playback of the downloaded book. Requires networking to be OFF
+# (ci-flows.sh disables wifi+data via adb before running this and re-enables
+# after) — tagged manual so plain `npm run e2e` skips it.
+appId: com.tomesonic.app
+tags:
+  - manual
+---
+- launchApp:
+    stopApp: true
+# The bookshelf switches to the offline view.
+- extendedWaitUntil:
+    visible: "Available Offline"
+    timeout: 30000
+# Play the downloaded book — startPlayback falls back to the on-device local
+# session (no server reachable) and the player must still open and play.
+- tapOn:
+    text: "Play .* offline"
+    index: 0
+# Expand-agnostic: a fresh offline play auto-expands, but a resumed session
+# for the same downloaded book stays in the miniplayer — both expose Pause.
+# What matters here is that a downloaded book plays with no server reachable.
+- extendedWaitUntil:
+    visible: "Pause"
+    timeout: 30000
+- tapOn: "Pause"
+- assertVisible: "Play"
+- tapOn:
+    text: "Collapse player"
+    optional: true

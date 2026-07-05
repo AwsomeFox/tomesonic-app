@@ -1,0 +1,304 @@
+/**
+ * SeriesDetailScreen — hero header (name, counts, finished count), sequence
+ * sorting, Continue/Play-all targeting nextUnfinished, ebook/Reader routing,
+ * hideNonAudiobooksGlobal filtering, description expand, error/empty states.
+ *
+ * REGRESSION GUARD: fetchSeriesDetail()'s item mapping must preserve the
+ * format-detection fields (mediaType, numTracks/numAudioFiles/tracks/
+ * audioFiles, ebookFile/ebookFormat). A past version dropped them, which made
+ * isEbookOnly() true for EVERY row — audiobooks rendered "Read" buttons
+ * routed to the Reader, the Reader got ebookFormat null for real epubs, and
+ * hideNonAudiobooksGlobal emptied the whole series. The routing tests below
+ * pin the CORRECT behavior.
+ */
+jest.mock("react-native-safe-area-context", () =>
+  require("react-native-safe-area-context/jest/mock").default
+);
+jest.mock("react-native-reanimated", () => {
+  const RN = require("react-native");
+  const chainable = () => {
+    const o: any = {};
+    [
+      "delay", "duration", "springify", "damping", "stiffness", "mass",
+      "easing", "build", "withInitialValues", "randomDelay", "reduceMotion",
+      "withCallback",
+    ].forEach((k) => (o[k] = () => o));
+    return o;
+  };
+  const id = (v: any) => v;
+  const easing = (t: number) => t;
+  return {
+    __esModule: true,
+    default: {
+      createAnimatedComponent: (C: any) => C,
+      View: RN.View, Text: RN.Text, Image: RN.Image,
+      ScrollView: RN.ScrollView, FlatList: RN.FlatList,
+    },
+    useSharedValue: (v: any) => ({ value: v }),
+    useAnimatedStyle: () => ({}),
+    useAnimatedProps: () => ({}),
+    useDerivedValue: (fn: any) => ({ value: typeof fn === "function" ? fn() : fn }),
+    useAnimatedRef: () => ({ current: null }),
+    useAnimatedScrollHandler: () => () => {},
+    useAnimatedReaction: () => {},
+    useReducedMotion: () => false,
+    withTiming: id, withSpring: id, withDelay: (_d: any, v: any) => v,
+    withRepeat: id, withSequence: id,
+    cancelAnimation: () => {},
+    interpolate: () => 0,
+    interpolateColor: () => "rgb(0, 0, 0)",
+    Extrapolation: { CLAMP: "clamp", EXTEND: "extend", IDENTITY: "identity" },
+    Extrapolate: { CLAMP: "clamp", EXTEND: "extend", IDENTITY: "identity" },
+    runOnJS: (fn: any) => fn, runOnUI: (fn: any) => fn,
+    Easing: {
+      linear: easing, ease: easing, quad: easing, cubic: easing,
+      bezier: () => ({ factory: () => easing }),
+      in: (f: any) => f || easing, out: (f: any) => f || easing, inOut: (f: any) => f || easing,
+    },
+    FadeIn: chainable(), FadeOut: chainable(), FadeInDown: chainable(),
+    FadeInUp: chainable(), FadeInRight: chainable(), FadeInLeft: chainable(),
+    FadeOutDown: chainable(), FadeOutUp: chainable(),
+    SlideInDown: chainable(), SlideOutDown: chainable(),
+    LinearTransition: chainable(),
+    ReduceMotion: { System: "system", Always: "always", Never: "never" },
+  };
+});
+jest.mock("../../utils/api", () => ({
+  api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+
+import React from "react";
+import { render, screen, fireEvent } from "@testing-library/react-native";
+import SeriesDetailScreen from "../../screens/SeriesDetailScreen";
+import { api } from "../../utils/api";
+import { useUserStore } from "../../store/useUserStore";
+import { useLibraryStore } from "../../store/useLibraryStore";
+import { usePlaybackStore } from "../../store/usePlaybackStore";
+
+const initialUser = useUserStore.getState();
+const initialLibrary = useLibraryStore.getState();
+const initialPlayback = usePlaybackStore.getState();
+
+const LONG_DESC =
+  "An epic multi-generational saga that sweeps across continents and decades, " +
+  "following unlikely heroes, reluctant villains, and every flavor of magic " +
+  "system between them, building toward a finale nobody saw coming at all. " +
+  "It keeps going and going well past the fold.";
+
+// Deliberately out of sequence order (2, 1, 3) to exercise the sort. Every
+// item carries audio info in the RAW payload; the screen's mapping drops it.
+const RAW_ITEMS = [
+  {
+    id: "b2",
+    mediaType: "book",
+    media: {
+      metadata: { title: "Beta", authorName: "Author X", series: [{ id: "ser1", sequence: "2" }] },
+      duration: 3600,
+      numTracks: 4,
+    },
+    userMediaProgress: null,
+  },
+  {
+    id: "b1",
+    mediaType: "book",
+    media: {
+      metadata: { title: "Alpha", authorName: "Author X", series: [{ id: "ser1", sequence: "1" }] },
+      duration: 3600,
+      numTracks: 5,
+    },
+    userMediaProgress: { isFinished: true },
+  },
+  {
+    id: "b3",
+    mediaType: "book",
+    media: {
+      metadata: { title: "Gamma", authorName: "Author X", series: { id: "ser1", sequence: "3" } },
+      duration: 3600,
+      ebookFile: { ebookFormat: "epub" },
+    },
+    userMediaProgress: { progress: 0.5, currentTime: 1800, duration: 3600 },
+  },
+];
+
+function mockSeriesApi({
+  meta = { name: "Wax & Wayne", description: LONG_DESC },
+  items = RAW_ITEMS,
+  metaFails = false,
+  itemsFail = false,
+}: any = {}) {
+  (api.get as jest.Mock).mockImplementation((url: string) => {
+    if (url.startsWith("/api/series/")) {
+      return metaFails
+        ? Promise.reject(new Error("meta down"))
+        : Promise.resolve({ data: meta });
+    }
+    if (url.includes("/items?filter=series.")) {
+      return itemsFail
+        ? Promise.reject(new Error("items down"))
+        : Promise.resolve({ data: { results: items } });
+    }
+    return Promise.reject(new Error(`unexpected GET ${url}`));
+  });
+}
+
+let startPlayback: jest.Mock;
+
+function makeNavigation() {
+  const navigation: any = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    addListener: jest.fn(() => jest.fn()),
+  };
+  navigation.getParent = jest.fn(() => navigation);
+  return navigation;
+}
+
+async function renderSeries(params: any = { seriesId: "ser1", seriesName: "Wax & Wayne" }) {
+  const navigation = makeNavigation();
+  await render(<SeriesDetailScreen navigation={navigation} route={{ params }} />);
+  return navigation;
+}
+
+beforeEach(() => {
+  useUserStore.setState(initialUser, true);
+  useLibraryStore.setState(initialLibrary, true);
+  usePlaybackStore.setState(initialPlayback, true);
+  useUserStore.setState({
+    serverConnectionConfig: { address: "https://abs.example.com", token: "tok" },
+  } as any);
+  useLibraryStore.setState({ currentLibraryId: "lib1" } as any);
+  startPlayback = jest.fn().mockResolvedValue(true);
+  usePlaybackStore.setState({ startPlayback, currentSession: null } as any);
+  mockSeriesApi();
+});
+
+describe("SeriesDetailScreen", () => {
+  it("fetches by base64-encoded series filter and renders the hero header", async () => {
+    await renderSeries();
+
+    expect(await screen.findAllByText("Wax & Wayne")).toHaveLength(2); // bar + hero
+    // 3 books x 1h -> "3 books · 3 hr 0 min", 1 finished.
+    expect(screen.getByText(/3 books\s+·\s+3 hr 0 min/)).toBeTruthy();
+    expect(screen.getByText("1 of 3 finished")).toBeTruthy();
+    // "ser1" -> base64 "c2VyMQ==" -> URI-encoded.
+    expect(api.get).toHaveBeenCalledWith(
+      "/api/libraries/lib1/items?filter=series.c2VyMQ%3D%3D&include=progress"
+    );
+  });
+
+  it("sorts rows by sequence and prefixes titles with #N", async () => {
+    await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    const rows = screen.getAllByText(/^#\d /);
+    expect(rows.map((r) => r.props.children)).toEqual(["#1 Alpha", "#2 Beta", "#3 Gamma"]);
+    // Per-row duration lines render too.
+    expect(screen.getAllByText("1 hr 0 min").length).toBe(3);
+  });
+
+  it("labels the header button Continue when any progress exists and targets nextUnfinished", async () => {
+    const navigation = await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    const continueBtn = screen.getByText("Continue");
+    await fireEvent.press(continueBtn);
+
+    // nextUnfinished skips finished #1 Alpha and lands on #2 Beta — a real
+    // audiobook (numTracks: 4), so it PLAYS instead of opening the Reader.
+    expect(startPlayback).toHaveBeenCalledWith("b2");
+    expect(navigation.navigate).not.toHaveBeenCalledWith(
+      "Reader",
+      expect.objectContaining({ itemId: "b2" })
+    );
+  });
+
+  it("labels the header button Play all when nothing has progress", async () => {
+    mockSeriesApi({
+      items: RAW_ITEMS.map((i) => ({ ...i, userMediaProgress: null })),
+    });
+    await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    expect(screen.getByText("Play all")).toBeTruthy();
+    expect(screen.queryByText("Continue")).toBeNull();
+  });
+
+  it("routes ebook-only rows to the Reader (with format) and audiobook rows to playback", async () => {
+    const navigation = await renderSeries();
+    await screen.findByText("#3 Gamma");
+
+    // The genuinely ebook-only row routes to the Reader with its real format.
+    await fireEvent.press(screen.getByLabelText("Read Gamma"));
+    expect(navigation.navigate).toHaveBeenCalledWith("Reader", {
+      itemId: "b3",
+      ebookFormat: "epub",
+      title: "Gamma",
+    });
+
+    // Audiobook rows keep Play buttons that start playback.
+    expect(screen.getByLabelText("Play Alpha")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Play Beta"));
+    expect(startPlayback).toHaveBeenCalledWith("b2");
+  });
+
+  it("row tap opens the item detail", async () => {
+    const navigation = await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    await fireEvent.press(screen.getByText("#1 Alpha"));
+    expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "b1" });
+  });
+
+  it("hideNonAudiobooksGlobal filters only the ebook-only rows", async () => {
+    useUserStore.setState({
+      settings: { ...useUserStore.getState().settings, hideNonAudiobooksGlobal: true },
+    } as any);
+    await renderSeries();
+
+    // Alpha and Beta are audiobooks — they survive; ebook-only Gamma is hidden.
+    expect(await screen.findByText("#1 Alpha")).toBeTruthy();
+    expect(screen.getByText("#2 Beta")).toBeTruthy();
+    expect(screen.queryByText("#3 Gamma")).toBeNull();
+  });
+
+  it("long descriptions collapse to Show more and expand on tap", async () => {
+    await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    expect(screen.getByText(LONG_DESC)).toBeTruthy();
+    const showMore = screen.getByText("Show more");
+    await fireEvent.press(showMore);
+    expect(screen.getByText("Show less")).toBeTruthy();
+
+    await fireEvent.press(screen.getByText("Show less"));
+    expect(screen.getByText("Show more")).toBeTruthy();
+  });
+
+  it("falls back to the route's series name when the meta fetch fails", async () => {
+    mockSeriesApi({ metaFails: true });
+    await renderSeries({ seriesId: "ser1", seriesName: "Fallback Name" });
+
+    expect(await screen.findAllByText("Fallback Name")).toHaveLength(2);
+    // No description -> no expand affordance.
+    expect(screen.queryByText("Show more")).toBeNull();
+  });
+
+  it("shows the error state when the items fetch fails, then retries", async () => {
+    mockSeriesApi({ itemsFail: true });
+    await renderSeries();
+
+    expect(await screen.findByText("Failed to load series.")).toBeTruthy();
+
+    mockSeriesApi();
+    await fireEvent.press(screen.getByLabelText("Retry loading series"));
+
+    expect(await screen.findByText("#1 Alpha")).toBeTruthy();
+  });
+
+  it("shows the empty state when the series has no books", async () => {
+    mockSeriesApi({ items: [] });
+    await renderSeries();
+
+    expect(await screen.findByText("No books in this series")).toBeTruthy();
+  });
+});

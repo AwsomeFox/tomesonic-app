@@ -1,0 +1,241 @@
+/**
+ * CollectionDetailScreen — rows render from the collection payload; play
+ * buttons are hasAudio-based (minified numTracks payloads included) and hidden
+ * for ebook-only/missing items; header Play all targets the first unfinished
+ * playable book; hideNonAudiobooksGlobal filters ebook-only rows.
+ */
+jest.mock("react-native-safe-area-context", () =>
+  require("react-native-safe-area-context/jest/mock").default
+);
+jest.mock("react-native-reanimated", () => {
+  const RN = require("react-native");
+  const chainable = () => {
+    const o: any = {};
+    [
+      "delay", "duration", "springify", "damping", "stiffness", "mass",
+      "easing", "build", "withInitialValues", "randomDelay", "reduceMotion",
+      "withCallback",
+    ].forEach((k) => (o[k] = () => o));
+    return o;
+  };
+  const id = (v: any) => v;
+  const easing = (t: number) => t;
+  return {
+    __esModule: true,
+    default: {
+      createAnimatedComponent: (C: any) => C,
+      View: RN.View, Text: RN.Text, Image: RN.Image,
+      ScrollView: RN.ScrollView, FlatList: RN.FlatList,
+    },
+    useSharedValue: (v: any) => ({ value: v }),
+    useAnimatedStyle: () => ({}),
+    useAnimatedProps: () => ({}),
+    useDerivedValue: (fn: any) => ({ value: typeof fn === "function" ? fn() : fn }),
+    useAnimatedRef: () => ({ current: null }),
+    useAnimatedScrollHandler: () => () => {},
+    useAnimatedReaction: () => {},
+    useReducedMotion: () => false,
+    withTiming: id, withSpring: id, withDelay: (_d: any, v: any) => v,
+    withRepeat: id, withSequence: id,
+    cancelAnimation: () => {},
+    interpolate: () => 0,
+    interpolateColor: () => "rgb(0, 0, 0)",
+    Extrapolation: { CLAMP: "clamp", EXTEND: "extend", IDENTITY: "identity" },
+    Extrapolate: { CLAMP: "clamp", EXTEND: "extend", IDENTITY: "identity" },
+    runOnJS: (fn: any) => fn, runOnUI: (fn: any) => fn,
+    Easing: {
+      linear: easing, ease: easing, quad: easing, cubic: easing,
+      bezier: () => ({ factory: () => easing }),
+      in: (f: any) => f || easing, out: (f: any) => f || easing, inOut: (f: any) => f || easing,
+    },
+    FadeIn: chainable(), FadeOut: chainable(), FadeInDown: chainable(),
+    FadeInUp: chainable(), FadeInRight: chainable(), FadeInLeft: chainable(),
+    FadeOutDown: chainable(), FadeOutUp: chainable(),
+    SlideInDown: chainable(), SlideOutDown: chainable(),
+    LinearTransition: chainable(),
+    ReduceMotion: { System: "system", Always: "always", Never: "never" },
+  };
+});
+jest.mock("../../utils/api", () => ({
+  api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+
+import React from "react";
+import { render, screen, fireEvent } from "@testing-library/react-native";
+import CollectionDetailScreen from "../../screens/CollectionDetailScreen";
+import { api } from "../../utils/api";
+import { useUserStore } from "../../store/useUserStore";
+import { usePlaybackStore } from "../../store/usePlaybackStore";
+
+const initialUser = useUserStore.getState();
+const initialPlayback = usePlaybackStore.getState();
+
+const COLLECTION = {
+  id: "col1",
+  name: "Space Operas",
+  description: "The best of the void.",
+  books: [
+    {
+      // Minified payload: audio signalled only via numTracks.
+      id: "b1",
+      media: { metadata: { title: "Finished Book", authorName: "Author One" }, duration: 3600, numTracks: 2 },
+      userMediaProgress: { isFinished: true },
+    },
+    {
+      // Full payload: audio via tracks array.
+      id: "b2",
+      media: { metadata: { title: "Unfinished Book", authorName: "Author Two" }, duration: 1800, tracks: [{}, {}] },
+      userMediaProgress: { progress: 0.2 },
+    },
+    {
+      // Ebook-only: no audio at all.
+      id: "b3",
+      media: { metadata: { title: "Ebook Only" }, ebookFile: { ebookFormat: "epub" } },
+    },
+    {
+      // Missing item: has audio but flagged missing.
+      id: "b4",
+      isMissing: true,
+      media: { metadata: { title: "Missing Book" }, numTracks: 1, duration: 60 },
+    },
+  ],
+};
+
+let startPlayback: jest.Mock;
+
+function makeNavigation() {
+  const navigation: any = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    addListener: jest.fn(() => jest.fn()),
+  };
+  navigation.getParent = jest.fn(() => navigation);
+  return navigation;
+}
+
+async function renderCollection(params: any = { collectionId: "col1" }) {
+  const navigation = makeNavigation();
+  await render(<CollectionDetailScreen navigation={navigation} route={{ params }} />);
+  return navigation;
+}
+
+beforeEach(() => {
+  useUserStore.setState(initialUser, true);
+  usePlaybackStore.setState(initialPlayback, true);
+  useUserStore.setState({
+    serverConnectionConfig: { address: "https://abs.example.com", token: "tok" },
+  } as any);
+  startPlayback = jest.fn().mockResolvedValue(true);
+  usePlaybackStore.setState({ startPlayback, currentSession: null } as any);
+  (api.get as jest.Mock).mockResolvedValue({ data: COLLECTION });
+});
+
+describe("CollectionDetailScreen", () => {
+  it("renders the header, description, item count and rows", async () => {
+    await renderCollection();
+
+    expect(await screen.findAllByText("Space Operas")).toHaveLength(2); // bar + hero
+    expect(screen.getByText("The best of the void.")).toBeTruthy();
+    // 4 items, total duration 3600+1800+0+60 = 5460s -> "1 hr 31 min"
+    expect(screen.getByText(/4 items\s+·\s+1 hr 31 min/)).toBeTruthy();
+    expect(screen.getByText("Finished Book")).toBeTruthy();
+    expect(screen.getByText("Unfinished Book")).toBeTruthy();
+    expect(screen.getByText("Ebook Only")).toBeTruthy();
+    expect(screen.getByText("Missing Book")).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith("/api/collections/col1");
+  });
+
+  it("shows row play buttons only for non-missing items with audio (incl. minified numTracks)", async () => {
+    await renderCollection();
+    await screen.findByText("Finished Book");
+
+    expect(screen.getByLabelText("Play Finished Book")).toBeTruthy();
+    expect(screen.getByLabelText("Play Unfinished Book")).toBeTruthy();
+    // Ebook-only and missing rows get no play affordance.
+    expect(screen.queryByLabelText("Play Ebook Only")).toBeNull();
+    expect(screen.queryByLabelText("Play Missing Book")).toBeNull();
+  });
+
+  it("header Play all starts the first unfinished playable book", async () => {
+    await renderCollection();
+    await screen.findByText("Finished Book");
+
+    await fireEvent.press(screen.getByText("Play all"));
+    // b1 is finished, so playback starts at b2.
+    expect(startPlayback).toHaveBeenCalledWith("b2");
+  });
+
+  it("row play button starts that specific book", async () => {
+    await renderCollection();
+    await screen.findByText("Finished Book");
+
+    await fireEvent.press(screen.getByLabelText("Play Finished Book"));
+    expect(startPlayback).toHaveBeenCalledWith("b1");
+  });
+
+  it("row tap opens the item detail", async () => {
+    const navigation = await renderCollection();
+    await screen.findByText("Finished Book");
+
+    await fireEvent.press(screen.getByText("Ebook Only"));
+    expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "b3" });
+  });
+
+  it("hideNonAudiobooksGlobal drops ebook-only rows", async () => {
+    useUserStore.setState({
+      settings: { ...useUserStore.getState().settings, hideNonAudiobooksGlobal: true },
+    } as any);
+    await renderCollection();
+    await screen.findByText("Finished Book");
+
+    expect(screen.queryByText("Ebook Only")).toBeNull();
+    expect(screen.getByText(/3 items/)).toBeTruthy();
+    // Audio rows survive the filter.
+    expect(screen.getByText("Unfinished Book")).toBeTruthy();
+    expect(screen.getByText("Missing Book")).toBeTruthy();
+  });
+
+  it("hides the header play button when nothing is playable", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        id: "col1",
+        name: "Ebooks Only",
+        books: [{ id: "e1", media: { metadata: { title: "Only Ebook" }, ebookFile: {} } }],
+      },
+    });
+    await renderCollection();
+    await screen.findByText("Only Ebook");
+
+    expect(screen.queryByText("Play all")).toBeNull();
+  });
+
+  it("renders the empty state for an empty collection", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: { id: "col1", name: "Empty", books: [] },
+    });
+    await renderCollection();
+
+    expect(await screen.findByText("This collection is empty.")).toBeTruthy();
+    expect(screen.getByText("Empty Collection")).toBeTruthy(); // collage placeholder
+  });
+
+  it("errors without a collection id and offers no retry", async () => {
+    await renderCollection({});
+
+    expect(await screen.findByText("No collection ID provided.")).toBeTruthy();
+    expect(screen.queryByLabelText("Retry loading collection")).toBeNull();
+    expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it("shows the fetch error state and retries successfully", async () => {
+    (api.get as jest.Mock).mockRejectedValueOnce({ response: { status: 500 } });
+    await renderCollection();
+
+    expect(await screen.findByText("Failed to load collection.")).toBeTruthy();
+
+    (api.get as jest.Mock).mockResolvedValue({ data: COLLECTION });
+    await fireEvent.press(screen.getByLabelText("Retry loading collection"));
+
+    expect(await screen.findByText("Finished Book")).toBeTruthy();
+  });
+});
