@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { api } from "../utils/api";
+import { queueBookmark, pendingBookmarksFor, removePendingBookmark } from "../utils/progressSync";
 
 interface Bookmark {
   libraryItemId?: string;
@@ -52,9 +53,29 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
     try {
       const res = await api.get("/api/me");
       const all: Bookmark[] = res.data?.bookmarks || [];
-      setBookmarks(all.filter((b) => b.libraryItemId === libraryItemId).sort((a, b) => a.time - b.time));
+      const server = all.filter((b) => b.libraryItemId === libraryItemId);
+      // Merge queued-offline bookmarks not yet flushed to the server.
+      const pending = pendingBookmarksFor(libraryItemId)
+        .filter((p) => !server.some((s) => Math.floor(s.time) === p.time))
+        .map((p) => ({ libraryItemId, title: p.title, time: p.time }));
+      setBookmarks([...server, ...pending].sort((a, b) => a.time - b.time));
     } catch (e) {
-      // Offline / local item: keep whatever local bookmarks we already have.
+      // Offline / local item: show the queued bookmarks so they aren't
+      // invisible until connectivity returns.
+      const pending = pendingBookmarksFor(libraryItemId).map((p) => ({
+        libraryItemId,
+        title: p.title,
+        time: p.time,
+      }));
+      if (pending.length) {
+        setBookmarks((prev) => {
+          const merged = [...prev];
+          for (const p of pending) {
+            if (!merged.some((b) => Math.floor(b.time) === p.time)) merged.push(p);
+          }
+          return merged.sort((a, b) => a.time - b.time);
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -77,13 +98,18 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
       await api.post(`/api/me/item/${libraryItemId}/bookmark`, { title, time });
       loadBookmarks();
     } catch (e) {
-      // Keep the optimistic local bookmark.
+      // Offline: queue it durably — the optimistic row alone died with the
+      // modal, silently losing the bookmark. Flushed with the sync queues.
+      queueBookmark(libraryItemId, time, title);
     }
   };
 
   const deleteBookmark = async (bm: Bookmark) => {
     setBookmarks((prev) => prev.filter((b) => b.time !== bm.time));
     if (!libraryItemId) return;
+    // If it was queued offline, unqueue it too (there's no server row yet —
+    // without this the flush would resurrect a deleted bookmark).
+    removePendingBookmark(libraryItemId, bm.time);
     try {
       await api.delete(`/api/me/item/${libraryItemId}/bookmark/${bm.time}`);
     } catch (e) {

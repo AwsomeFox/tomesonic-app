@@ -57,6 +57,9 @@ export default function CastController() {
           // While casting the progress loop rewrote the paused local item's
           // title to the receiver's chapter — put the true one back.
           await restoreLocalNowPlayingMeta();
+          // A sleep-timer fade may have lowered the local volume during the
+          // cast session — never resume local playback quiet.
+          TrackPlayer.setVolume(1).catch(() => {});
           if (wasPlaying) {
             await TrackPlayer.play();
             usePlaybackStore.setState({ isPlaying: true });
@@ -103,7 +106,14 @@ export default function CastController() {
 
   // Load the current book onto the receiver as a full queue.
   useEffect(() => {
-    if (!client || !currentSession) return;
+    // Session closed (playback dismissed) — drop the dedupe key so re-opening
+    // the SAME book while the cast session is still connected loads again
+    // (otherwise: isPlaying true, receiver empty, silence).
+    if (!currentSession) {
+      loadedKeyRef.current = null;
+      return;
+    }
+    if (!client) return;
     const itemId = currentSession.libraryItemId || currentSession.libraryItem?.id;
     const key = `${itemId}@${currentSession.episodeId || ""}`;
     if (loadedKeyRef.current === key) return;
@@ -219,6 +229,10 @@ export default function CastController() {
             const wasPlaying = usePlaybackStore.getState().isPlaying;
             baseOffsetRef.current = offs[idx];
             currentIdxRef.current = idx;
+            // Clear any per-item startTime left from the ORIGINAL connect —
+            // the receiver honors it whenever the queue naturally reaches
+            // that item, silently skipping everything before the old offset.
+            for (const it of qItems) delete (it as any).startTime;
             await client.loadMedia({
               queueData: { items: qItems, startIndex: idx } as any,
               startTime: within,

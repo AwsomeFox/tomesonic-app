@@ -697,9 +697,19 @@ export default function ReaderScreen({ route, navigation }: any) {
 
   let body: React.ReactNode;
   if (canRenderPdf) {
+    // Prefer the downloaded PDF file — the remote URL is dead exactly when
+    // downloads matter (offline), which previously dead-ended a downloaded
+    // PDF at the generic "can't be viewed" fallback.
+    const localPdf = useDownloadStore
+      .getState()
+      .completedDownloads[itemId]?.parts?.find((p: any) => p.id === "ebook")?.localFilePath;
     body = (
       <Pdf
-        source={{ uri: ebookUri, headers: { Authorization: `Bearer ${token}` } }}
+        source={
+          localPdf
+            ? { uri: localPdf }
+            : { uri: ebookUri, headers: { Authorization: `Bearer ${token}` } }
+        }
         style={{ flex: 1, backgroundColor: colors.surface }}
         page={initialPdfPageRef.current}
         onPageChanged={(page: number, numberOfPages: number) => {

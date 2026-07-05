@@ -198,6 +198,7 @@ export default function DownloadsScreen({ navigation }: any) {
           renderItem={({ item }) => (
             <Pressable
               onPress={() => handlePlayOffline(item)}
+              accessibilityRole="button"
               style={{
                 flexDirection: "row",
                 alignItems: "center",

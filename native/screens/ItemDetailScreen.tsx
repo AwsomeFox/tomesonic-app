@@ -78,7 +78,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const removeDownload = useDownloadStore((s) => s.removeDownload);
 
   const isDownloaded = !!(item?.id && completedDownloads[item.id]);
-  const isDownloading = !!(item?.id && activeDownloads[item.id]);
+  // A failed download stays in activeDownloads with status "failed" — it must
+  // NOT read as "downloading" (that rendered an infinite spinner here) but as
+  // a retryable error, matching BookCard's handling.
+  const downloadStatus = item?.id ? activeDownloads[item.id]?.status : undefined;
+  const isDownloading = downloadStatus === "downloading" || downloadStatus === "pending";
+  const isDownloadFailed = downloadStatus === "failed";
 
   // Progress source: the global map entry is live-updated every second while
   // playing/reading, whereas item.userMediaProgress is a snapshot from the
@@ -170,12 +175,19 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       );
     } else if (isDownloading) {
       cancelDownload(item.id);
+    } else if (isDownloadFailed) {
+      // Resume from the failed state — completed parts are skipped.
+      useDownloadStore.getState().retryDownload(item.id);
     } else {
       try {
         await downloader.downloadBook(item, serverAddress, token);
         refetchItem();
       } catch (err) {
         console.warn("[ItemDetail] Download failed:", err);
+        Alert.alert(
+          "Download failed",
+          "Couldn't start the download. Check your connection and free space, then try again."
+        );
       }
     }
   };
@@ -347,6 +359,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // Podcast episodes, most recent first. Shown capped so a 500-episode feed
   // doesn't render an unbounded list inside this ScrollView.
   const EPISODE_CAP = 100;
+  // Render cap only (the array is already in memory) — "Show more" pages in
+  // the next batch; a hard cap left episodes 101+ of large feeds unreachable.
+  const [episodeLimit, setEpisodeLimit] = useState(EPISODE_CAP);
   const episodes: any[] = React.useMemo(() => {
     if (!isPodcastItem) return [];
     const eps = [...(item?.media?.episodes || [])];
@@ -387,6 +402,20 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   const hasAudioMedia = selfHasAudio || !!audioCounterpartId;
   const onPlayPress = () => {
+    if (isPodcastItem) {
+      // A podcast ITEM has no playable tracks — /play without an episodeId
+      // returns an empty session and the tap silently did nothing. Play the
+      // most recently published unfinished episode (or the latest).
+      const nextEpisode =
+        episodes.find((ep: any) => {
+          const p = progressMap[`${itemId}-${ep.id}`];
+          return !p?.isFinished;
+        }) || episodes[0];
+      // playEpisode drives startingEpisodeId (its own guard reads `starting`,
+      // so don't set that here).
+      if (nextEpisode) playEpisode(nextEpisode);
+      return;
+    }
     if (selfHasAudio) {
       handlePlay();
     } else if (audioCounterpartId) {
@@ -426,7 +455,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   /** Green underlined link chip inside a metadata value. */
   const Link = ({ text, onPress }: { text: string; onPress?: () => void }) => (
-    <Pressable onPress={onPress}>
+    // hitSlop lifts the effective target toward 48dp — these chips are the
+    // page's main navigation but render as ~18dp-tall text.
+    <Pressable
+      onPress={onPress}
+      hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }}
+      accessibilityRole="link"
+      accessibilityLabel={text}
+    >
       <Text
         style={{
           color: colors.primary,
@@ -642,17 +678,22 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     ? "Delete download"
                     : isDownloading
                     ? `Cancel download, ${downloadPct} percent complete`
+                    : isDownloadFailed
+                    ? "Download failed, tap to retry"
                     : "Download"
                 }
                 style={{
                   width: 52,
                   height: 52,
                   borderRadius: 26,
-                  backgroundColor: isDownloaded ? "rgba(179, 38, 30, 0.1)" : colors.secondaryContainer,
+                  backgroundColor:
+                    isDownloaded || isDownloadFailed
+                      ? "rgba(179, 38, 30, 0.1)"
+                      : colors.secondaryContainer,
                   alignItems: "center",
                   justifyContent: "center",
-                  borderWidth: isDownloaded ? 1 : 0,
-                  borderColor: isDownloaded ? colors.error : "transparent",
+                  borderWidth: isDownloaded || isDownloadFailed ? 1 : 0,
+                  borderColor: isDownloaded || isDownloadFailed ? colors.error : "transparent",
                 }}
               >
                 {isDownloading ? (
@@ -662,6 +703,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                       {downloadPct}%
                     </Text>
                   </View>
+                ) : isDownloadFailed ? (
+                  <Icon name="refresh" size={22} color={colors.error} />
                 ) : (
                   <Icon
                     name={isDownloaded ? "trash" : "download"}
@@ -1024,7 +1067,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginBottom: 4 }}>
                 {episodes.length} {episodes.length === 1 ? "Episode" : "Episodes"}
               </Text>
-              {episodes.slice(0, EPISODE_CAP).map((episode) => {
+              {episodes.slice(0, episodeLimit).map((episode) => {
                 const epProgress = progressMap[`${itemId}-${episode.id}`];
                 const epFinished = !!epProgress?.isFinished;
                 const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
@@ -1109,10 +1152,25 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   </View>
                 );
               })}
-              {episodes.length > EPISODE_CAP ? (
-                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 10 }}>
-                  Showing the {EPISODE_CAP} most recent episodes.
-                </Text>
+              {episodes.length > episodeLimit ? (
+                <Pressable
+                  onPress={() => setEpisodeLimit((n) => n + EPISODE_CAP)}
+                  android_ripple={{ color: colors.surfaceContainerHighest }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Show more episodes, ${episodes.length - episodeLimit} remaining`}
+                  style={{
+                    marginTop: 10,
+                    paddingVertical: 12,
+                    borderRadius: 16,
+                    overflow: "hidden",
+                    backgroundColor: colors.surfaceContainer,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ color: colors.primary, fontSize: 14, fontWeight: "600" }}>
+                    Show more ({episodes.length - episodeLimit} remaining)
+                  </Text>
+                </Pressable>
               ) : null}
             </View>
           ) : null}

@@ -44,6 +44,11 @@ function queuePending(payload: SyncPayload) {
       currentTime: payload.currentTime,
       duration: payload.duration,
       timeListened: (existing?.timeListened || 0) + (payload.timeListened || 0),
+      // MUST survive the merge: the flush's 404 fallback (server restarted and
+      // dropped the session) converts to a direct progress PATCH keyed by
+      // these — dropping them here made that recovery path dead code.
+      libraryItemId: payload.libraryItemId ?? existing?.libraryItemId,
+      episodeId: payload.episodeId ?? existing?.episodeId,
     };
     storage.set(pendingKey(payload.sessionId), JSON.stringify(merged));
   } catch (e) {
@@ -120,6 +125,69 @@ export function queueFinishedPatch(libraryItemId: string, finished: boolean) {
   mergePendingPatch(libraryItemId, null, { isFinished: finished });
 }
 
+// --- Offline bookmarks ------------------------------------------------------
+// Bookmarks added while offline used to live only in the modal's component
+// state — gone on unmount. Queue them here and flush with everything else.
+const BOOKMARK_PREFIX = "pendingBookmark_";
+
+export function queueBookmark(libraryItemId: string, time: number, title: string) {
+  try {
+    if (!libraryItemId) return;
+    storage.set(
+      `${BOOKMARK_PREFIX}${libraryItemId}_${Math.floor(time)}`,
+      JSON.stringify({ libraryItemId, time: Math.floor(time), title })
+    );
+  } catch (e) {
+    appLogger.warn(`Failed to queue bookmark: ${e}`, "ProgressSync");
+  }
+}
+
+export function removePendingBookmark(libraryItemId: string, time: number) {
+  try {
+    storage.remove(`${BOOKMARK_PREFIX}${libraryItemId}_${Math.floor(time)}`);
+  } catch {}
+}
+
+/** Pending (queued-offline) bookmarks for an item — merged into the list UI. */
+export function pendingBookmarksFor(libraryItemId: string): { time: number; title: string }[] {
+  try {
+    return storage
+      .getAllKeys()
+      .filter((k) => k.startsWith(`${BOOKMARK_PREFIX}${libraryItemId}_`))
+      .map((k) => {
+        try {
+          return JSON.parse(storage.getString(k) || "");
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function flushPendingBookmarks(): Promise<void> {
+  const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_PREFIX));
+  for (const key of keys) {
+    try {
+      const raw = storage.getString(key);
+      if (!raw) {
+        storage.remove(key);
+        continue;
+      }
+      const b = JSON.parse(raw);
+      await api.post(`/api/me/item/${b.libraryItemId}/bookmark`, {
+        title: b.title,
+        time: b.time,
+      });
+      storage.remove(key);
+    } catch {
+      // Still offline — keep it queued.
+    }
+  }
+}
+
 // EBOOK progress queue — ebook fields ONLY (plus the one-way finish). Never
 // includes `progress`/`currentTime`: those are the AUDIO fields, and flushing
 // them from a reader save would clobber audio progress on both-format books.
@@ -182,6 +250,7 @@ export function flushPendingSyncs(): Promise<void> {
   _flushInFlight = (async () => {
     try {
       await flushPendingPatches();
+      await flushPendingBookmarks();
       const keys = storage.getAllKeys().filter((k) => k.startsWith(PENDING_PREFIX));
       for (const key of keys) {
         const sessionId = key.slice(PENDING_PREFIX.length);
@@ -230,7 +299,10 @@ export function clearAllPending() {
   try {
     storage
       .getAllKeys()
-      .filter((k) => k.startsWith(PENDING_PREFIX) || k.startsWith(PATCH_PREFIX))
+      .filter(
+        (k) =>
+          k.startsWith(PENDING_PREFIX) || k.startsWith(PATCH_PREFIX) || k.startsWith(BOOKMARK_PREFIX)
+      )
       .forEach((k) => storage.remove(k));
   } catch {}
 }

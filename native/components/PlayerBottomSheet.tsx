@@ -154,6 +154,10 @@ export default function PlayerBottomSheet() {
   // followed the setting via applyJumpOptions).
   const jumpFwdSecs = useUserStore((s) => s.settings?.jumpForwardTime ?? 10);
   const jumpBackSecs = useUserStore((s) => s.settings?.jumpBackwardTime ?? 10);
+  // Subscribed (not getState) so the LOCAL/STREAMING label reacts to a
+  // download completing/being deleted while the sheet is open and PAUSED —
+  // while playing, the 1s position tick masked the missing subscription.
+  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
 
   const isPlayerExpandedRef = useRef(isPlayerExpanded);
   useEffect(() => {
@@ -559,7 +563,6 @@ export default function PlayerBottomSheet() {
   const mediaTitle = currentSession.displayTitle || "Unknown Audiobook";
   const authorName = currentSession.displayAuthor || "Unknown Author";
   const coverUrl = currentSession.coverUrl || "";
-  const completedDownloads = useDownloadStore.getState().completedDownloads;
   const bookId =
     currentSession?.libraryItemId ||
     currentSession?.libraryItem?.id ||
@@ -848,7 +851,7 @@ export default function PlayerBottomSheet() {
 
               {/* Source label */}
               <View style={{ marginTop: 12 + extraTop, justifyContent: "center" }}>
-                <Text
+                <Text maxFontSizeMultiplier={1.3}
                   style={{
                     color: colors.onSurfaceVariant,
                     textAlign: "center",
@@ -867,11 +870,11 @@ export default function PlayerBottomSheet() {
               {/* Book progress bar */}
               <View style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}>
                 <View style={{ flexDirection: "row", marginBottom: 4 }}>
-                  <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
+                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     {secondsToTimestamp(position)}
                   </Text>
                   <View style={{ flexGrow: 1 }} />
-                  <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
+                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     -{secondsToTimestamp(bookRemaining)}
                   </Text>
                 </View>
@@ -899,11 +902,11 @@ export default function PlayerBottomSheet() {
                 }}
               >
                 <View style={{ flexDirection: "row", marginBottom: 4 }}>
-                  <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
+                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     {secondsToTimestamp(chapterElapsed)}
                   </Text>
                   <View style={{ flexGrow: 1 }} />
-                  <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
+                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     -{secondsToTimestamp(chapterRemaining)}
                   </Text>
                 </View>
@@ -1010,7 +1013,7 @@ export default function PlayerBottomSheet() {
                     color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer}
                   />
                   {sleepTimer ? (
-                    <Text
+                    <Text maxFontSizeMultiplier={1.3}
                       style={{
                         color: colors.onPrimaryContainer,
                         fontSize: 14,
@@ -1037,7 +1040,7 @@ export default function PlayerBottomSheet() {
                     elevation: 1,
                   }}
                 >
-                  <Text style={{ fontSize: 18, fontWeight: "500", color: colors.onSecondaryContainer }}>
+                  <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 18, fontWeight: "500", color: colors.onSecondaryContainer }}>
                     {speedLabel}
                   </Text>
                 </Pressable>
@@ -1126,7 +1129,7 @@ export default function PlayerBottomSheet() {
             animatedMiniTextStyle,
           ]}
         >
-          <Text
+          <Text maxFontSizeMultiplier={1.3}
             numberOfLines={1}
             style={{
               color: colors.onSurface,
@@ -1138,7 +1141,7 @@ export default function PlayerBottomSheet() {
           >
             {title}
           </Text>
-          <Text
+          <Text maxFontSizeMultiplier={1.3}
             numberOfLines={1}
             style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 1 }}
           >
@@ -1160,7 +1163,7 @@ export default function PlayerBottomSheet() {
             animatedFullTextStyle,
           ]}
         >
-          <Text
+          <Text maxFontSizeMultiplier={1.3}
             numberOfLines={1}
             style={{
               color: colors.onSurface,
@@ -1173,7 +1176,7 @@ export default function PlayerBottomSheet() {
           >
             {title}
           </Text>
-          <Text
+          <Text maxFontSizeMultiplier={1.3}
             numberOfLines={1}
             style={{
               color: colors.onSurfaceVariant,
@@ -1185,7 +1188,7 @@ export default function PlayerBottomSheet() {
             {authorName}
           </Text>
           {hasChapters && currentChapterIndex >= 0 ? (
-            <Text
+            <Text maxFontSizeMultiplier={1.3}
               numberOfLines={1}
               style={{
                 color: colors.onSurfaceVariant,
@@ -1326,8 +1329,8 @@ export default function PlayerBottomSheet() {
                 {coverUrl ? <Image source={coverSource(coverUrl)} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>{title}</Text>
-                <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{authorName}</Text>
+                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>{title}</Text>
+                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{authorName}</Text>
               </View>
             </Pressable>
             <Pressable onPress={() => { haptic(); seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
@@ -1401,27 +1404,27 @@ export default function PlayerBottomSheet() {
               </View>
 
               <View style={{ flex: 1, justifyContent: "center", paddingHorizontal: 8 }}>
-                <Text style={{ color: colors.onSurfaceVariant, textAlign: "center", fontSize: 12, fontWeight: "500", letterSpacing: 1.5, marginBottom: 6 }}>{sourceLabel}</Text>
-                <Text numberOfLines={1} style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 22, textAlign: "center" }}>{title}</Text>
-                <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", marginTop: 2 }}>{authorName}</Text>
+                <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, textAlign: "center", fontSize: 12, fontWeight: "500", letterSpacing: 1.5, marginBottom: 6 }}>{sourceLabel}</Text>
+                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 22, textAlign: "center" }}>{title}</Text>
+                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", marginTop: 2 }}>{authorName}</Text>
                 {hasChapters && currentChapterIndex >= 0 ? (
-                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {currentChapterIndex + 1} of {chapters.length}</Text>
+                  <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {currentChapterIndex + 1} of {chapters.length}</Text>
                 ) : null}
 
                 <View style={{ marginTop: 14 }}>
                   <View style={{ flexDirection: "row", marginBottom: 2 }}>
-                    <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(position)}</Text>
+                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(position)}</Text>
                     <View style={{ flexGrow: 1 }} />
-                    <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(bookRemaining)}</Text>
+                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(bookRemaining)}</Text>
                   </View>
                   <WavyProgress progress={bookFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.35)} height={12} strokeWidth={3} amplitude={2} wavelength={48} flattenWhenPaused />
                 </View>
 
                 <View style={{ marginTop: 8 }}>
                   <View style={{ flexDirection: "row", marginBottom: 2 }}>
-                    <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(chapterElapsed)}</Text>
+                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(chapterElapsed)}</Text>
                     <View style={{ flexGrow: 1 }} />
-                    <Text style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>
+                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>
                   </View>
                   <View {...chapterScrubPanResponder.panHandlers} {...scrubA11yProps} onLayout={onChapterBarLayoutFor(true)} style={{ height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
                     <WavyProgress progress={chapterFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.22)} height={22} strokeWidth={4} amplitude={3.5} wavelength={44} showStopDot={false} showHandle handleActive={dragFrac != null} flattenWhenPaused />
@@ -1441,10 +1444,10 @@ export default function PlayerBottomSheet() {
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 24, marginTop: 12 }}>
                   <Pressable onPress={() => { haptic(); setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                     <Icon name="moon" size={20} color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
-                    {sleepTimer ? <Text style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", fontFamily: "monospace", marginLeft: 6 }}>{secondsToTimestamp(sleepTimer.remaining)}</Text> : null}
+                    {sleepTimer ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", fontFamily: "monospace", marginLeft: 6 }}>{secondsToTimestamp(sleepTimer.remaining)}</Text> : null}
                   </Pressable>
                   <Pressable onPress={() => { haptic(); setShowSpeed(true); }} accessibilityRole="button" accessibilityLabel={`Playback speed, ${speedLabel}`} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                    <Text style={{ fontSize: 16, fontWeight: "500", color: colors.onSecondaryContainer }}>{speedLabel}</Text>
+                    <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 16, fontWeight: "500", color: colors.onSecondaryContainer }}>{speedLabel}</Text>
                   </Pressable>
                   <Pressable onPress={() => { haptic(); setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="bookmark" size={20} color={colors.onSecondaryContainer} />

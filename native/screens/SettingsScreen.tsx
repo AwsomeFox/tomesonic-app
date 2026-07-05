@@ -130,14 +130,6 @@ export default function SettingsScreen({ navigation }: any) {
         />
         <Divider colors={colors} />
 
-        <RowBase
-          icon="globe"
-          title="Language"
-          subtitle="English"
-          colors={colors}
-        />
-        <Divider colors={colors} />
-
         <SelectRow
           icon="palette"
           title="Theme"

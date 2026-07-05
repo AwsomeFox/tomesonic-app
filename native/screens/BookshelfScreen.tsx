@@ -604,7 +604,7 @@ export default function BookshelfScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
-      <TopAppBar navigation={navigation} />
+      <TopAppBar navigation={navigation} hideSearch={!isConnected} />
       {!isConnected ? (
         // Offline: the server is unreachable, so show the on-device library.
         // Covers come from the locally-downloaded cover file, playback falls

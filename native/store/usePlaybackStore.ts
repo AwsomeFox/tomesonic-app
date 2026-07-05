@@ -98,7 +98,6 @@ let _lastStartAt = 0;
 async function applyNowPlayingChapter(session: any, chapters: any[], chapterIndex: number) {
   if (!session) return;
   if (chapterIndex === _lastMetaChapter) return;
-  _lastMetaChapter = chapterIndex;
   try {
     const activeIndex = await TrackPlayer.getActiveTrackIndex();
     if (activeIndex == null) return;
@@ -110,9 +109,13 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     const meta: any = { title, artist: subtitle };
     if (session.coverUrl) meta.artwork = session.coverUrl;
     await TrackPlayer.updateMetadataForTrack(activeIndex, meta);
+    // Mark applied only AFTER the native call succeeds — marking up front
+    // meant a throw here (track not ready yet) was never retried, leaving the
+    // previous chapter's title stuck for the whole chapter.
+    _lastMetaChapter = chapterIndex;
     _metaAppliedIndex = activeIndex;
   } catch (e) {
-    // Track not ready yet — the progress loop will retry on the next tick.
+    // Track not ready yet — the progress loop retries on the next tick.
   }
 }
 
@@ -139,6 +142,17 @@ export async function restoreLocalNowPlayingMeta() {
     };
     if (s.coverUrl) meta.artwork = s.coverUrl;
     await TrackPlayer.updateMetadataForTrack(idx, meta);
+  } catch {}
+}
+
+// Surfaces a play failure to the user — every play button in the app funnels
+// through startPlayback, and a silent `return false` read as "tap did
+// nothing". Alert is the app's established feedback pattern; in headless
+// contexts (Android Auto) there's no activity, so it safely no-ops.
+function alertPlayFailure(message: string) {
+  try {
+    const { Alert } = require("react-native");
+    Alert.alert("Couldn't play", message);
   } catch {}
 }
 
@@ -262,8 +276,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
+          // Podcast progress is keyed per EPISODE server-side — the item-level
+          // GET returns nothing useful for an episode session.
+          const progressPath = session.episodeId
+            ? `/api/me/progress/${itemId}/${session.episodeId}`
+            : `/api/me/progress/${itemId}`;
           const res: any = await Promise.race([
-            api.get(`/api/me/progress/${itemId}`),
+            api.get(progressPath),
             new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
           ]);
           const p = res?.data;
@@ -280,6 +299,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             );
             session.currentTime = p.currentTime;
             session.updatedAt = serverUpdatedAt;
+            // Persist the adopted position — preparePlaybackSession re-reads
+            // the MMKV save for its own freshest-wins pass, and without this
+            // write it would see the STALE local save (mediaProgress may not
+            // be loaded yet at cold start → server side falls back to 0) and
+            // reverse the decision just made here.
+            try {
+              storageHelper.setLastPlaybackSession({ ...session });
+            } catch {}
           }
         }
       } catch {
@@ -405,9 +432,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             _lastTickAt = now;
 
             // Auto-save progress to local storage, throttled to ~5s to reduce
-            // flash wear (this loop ticks every 1s).
+            // flash wear (this loop ticks every 1s). ONLY WHILE PLAYING: a
+            // paused player's position isn't new information, and re-stamping
+            // `updatedAt` every tick made a device idling on the last-played
+            // book "fresher" than real listening happening on another device,
+            // poisoning every freshest-wins comparison (resume + shelf
+            // display could never adopt the other device's progress).
+            // User-initiated changes while paused (seeks) persist through
+            // saveSessionPositionNow, where a fresh stamp IS correct.
             const currentSession = get().currentSession;
-            if (currentSession) {
+            if (currentSession && isPlayerPlaying) {
               if (now - _lastLocalSaveAt >= LOCAL_SAVE_INTERVAL_MS) {
                 _lastLocalSaveAt = now;
                 const updatedSession = {
@@ -589,6 +623,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const trackCount = (session?.audioTracks || session?.tracks || []).length;
       if (!session || trackCount === 0) {
         console.error("[PlaybackStore] startPlayback: session has no audio tracks");
+        alertPlayFailure("This item has no playable audio.");
         return false;
       }
       await get().preparePlaybackSession(session, true);
@@ -628,6 +663,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       } catch (e) {
         console.error("[PlaybackStore] offline fallback failed:", e);
       }
+      alertPlayFailure(
+        "Couldn't reach the server, and this book isn't downloaded. Check your connection and try again."
+      );
       return false;
     }
   },
@@ -778,10 +816,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         if (
           saved &&
           savedItemId === libraryItemId &&
+          // Podcast: the save must be for the SAME EPISODE — matching on the
+          // item id alone resumed episode B at episode A's position (and could
+          // instantly auto-finish a shorter episode).
+          (saved.episodeId || null) === (session.episodeId || null) &&
           typeof saved.currentTime === "number" &&
           Math.abs(saved.currentTime - startAbs) > 2
         ) {
-          const serverProg = useUserStore.getState().getMediaProgress(libraryItemId);
+          const serverProg = useUserStore
+            .getState()
+            .getMediaProgress(libraryItemId, session.episodeId);
           // ABS progress rows carry server-side lastUpdate (ms). Fall back to 0
           // (unknown) so a local save always beats a server we know nothing about.
           const serverUpdatedAt = Number(serverProg?.lastUpdate) || 0;
@@ -1060,7 +1104,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       sleepTimerInterval = null;
     }
     // Make sure we start at full volume (a previous fade may have lowered it).
-    if (!get().isCasting) TrackPlayer.setVolume(1).catch(() => {});
+    // Unconditional: restoring the (paused) local player's volume while
+    // casting is harmless, but skipping it left local playback stuck quiet
+    // after a cast session that overlapped a fade.
+    TrackPlayer.setVolume(1).catch(() => {});
     // End-of-chapter timers compute their own remaining from live position —
     // callers pass 0, which used to display as "0:00" until the first 1s tick.
     let initialRemaining = Math.max(0, Math.round(seconds));
@@ -1127,8 +1174,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
         set({ sleepTimer: null });
         get().pause();
-        // Restore full volume so the next resume isn't silent.
-        if (!get().isCasting) TrackPlayer.setVolume(1).catch(() => {});
+        // Restore full volume so the next resume isn't silent — even while
+        // casting (the local player is paused; without this a fade that
+        // overlapped a cast session left local playback quiet forever).
+        TrackPlayer.setVolume(1).catch(() => {});
         return;
       }
       set({ sleepTimer: { endOfChapter: timer.endOfChapter, remaining, chapterIdx: armedIdx } });
@@ -1140,8 +1189,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       clearInterval(sleepTimerInterval);
       sleepTimerInterval = null;
     }
-    // Undo any in-progress fade.
-    if (!get().isCasting) TrackPlayer.setVolume(1).catch(() => {});
+    // Undo any in-progress fade (unconditional — see setSleepTimer).
+    TrackPlayer.setVolume(1).catch(() => {});
     set({ sleepTimer: null });
   },
 

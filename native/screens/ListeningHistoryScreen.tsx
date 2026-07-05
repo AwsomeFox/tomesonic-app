@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, FlatList, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, FlatList, ActivityIndicator, RefreshControl } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
 import { storageHelper } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 
 /** Formats seconds listened as "Xh Ym" / "Xm" / "Xs", mirroring the
@@ -40,11 +41,20 @@ export default function ListeningHistoryScreen({ navigation }: any) {
   const colors = useThemeColors();
   const [sessions, setSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   const serverConfig = storageHelper.getServerConfig();
   const serverAddress = serverConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConfig?.token || "";
+
+  const fetchSessions = async () => {
+    const res = await api.get("/api/me/listening-sessions", {
+      params: { itemsPerPage: 100, page: 0 },
+    });
+    return Array.isArray(res.data?.sessions) ? res.data.sessions : [];
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -52,12 +62,8 @@ export default function ListeningHistoryScreen({ navigation }: any) {
       try {
         setLoading(true);
         setError(null);
-        const res = await api.get("/api/me/listening-sessions", {
-          params: { itemsPerPage: 100, page: 0 },
-        });
-        if (!cancelled) {
-          setSessions(Array.isArray(res.data?.sessions) ? res.data.sessions : []);
-        }
+        const list = await fetchSessions();
+        if (!cancelled) setSessions(list);
       } catch (e) {
         if (!cancelled) setError("Failed to load listening history.");
       } finally {
@@ -67,7 +73,19 @@ export default function ListeningHistoryScreen({ navigation }: any) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryTick]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      setSessions(await fetchSessions());
+      setError(null);
+    } catch {
+      // keep the current list on a failed refresh
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const coverUri = (libraryItemId: string) =>
     libraryItemId && serverAddress && token
@@ -110,12 +128,36 @@ export default function ListeningHistoryScreen({ navigation }: any) {
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, marginTop: 12, textAlign: "center" }}>
             {error}
           </Text>
+          <Pressable
+            onPress={() => setRetryTick((t) => t + 1)}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading listening history"
+            style={{
+              marginTop: 20,
+              paddingHorizontal: 24,
+              paddingVertical: 10,
+              borderRadius: 24,
+              overflow: "hidden",
+              backgroundColor: colors.primary,
+            }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
         </View>
       ) : (
         <FlatList
           data={sessions}
           keyExtractor={(item, index) => item?.id ? String(item.id) : String(index)}
           contentContainerStyle={{ padding: 16 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surfaceContainerHigh}
+            />
+          }
           ListEmptyComponent={
             <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 80 }}>
               <View
@@ -147,6 +189,7 @@ export default function ListeningHistoryScreen({ navigation }: any) {
                   item?.libraryItemId &&
                   navigation.navigate("ItemDetail", { itemId: item.libraryItemId })
                 }
+                accessibilityRole="button"
                 style={{
                   flexDirection: "row",
                   alignItems: "center",

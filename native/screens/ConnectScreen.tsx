@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -26,12 +26,29 @@ export default function ConnectScreen() {
   const [password, setPassword] = useState("");
   const [showAuthFields, setShowAuthFields] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Which auth flow is in flight — a single flag put a spinner on BOTH
+  // buttons when a server offers local + OpenID.
+  const [authFlow, setAuthFlow] = useState<"local" | "oauth" | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [authMethods, setAuthMethods] = useState<string[]>([]);
   const [oauthButtonText, setOauthButtonText] = useState("Login with OpenID");
 
   const isLocalAuth = authMethods.includes("local") || authMethods.length === 0;
   const isOpenIDAuth = authMethods.includes("openid");
+
+  // If the app force-logged the user out (token refresh definitively
+  // rejected), say so — landing here silently read as "the app randomly
+  // logged me out".
+  useEffect(() => {
+    try {
+      const { storage } = require("../utils/storage");
+      if (storage.getString("logout_reason") === "session_expired") {
+        storage.remove("logout_reason");
+        setError("Your session expired — please sign in again.");
+      }
+    } catch {}
+  }, []);
 
   // Build the stored config from an ABS user payload and persist the session.
   const finishLogin = (user: any) => {
@@ -96,6 +113,7 @@ export default function ConnectScreen() {
     }
     setError("");
     setLoading(true);
+    setAuthFlow("local");
 
     try {
       const response = await axios.post(
@@ -118,12 +136,14 @@ export default function ConnectScreen() {
       }
     } finally {
       setLoading(false);
+      setAuthFlow(null);
     }
   };
 
   const handleOpenId = async () => {
     setError("");
     setLoading(true);
+    setAuthFlow("oauth");
     try {
       const user = await loginWithOpenId(address);
       if (user) finishLogin(user);
@@ -131,6 +151,7 @@ export default function ConnectScreen() {
       setError(err?.message || "OpenID login failed.");
     } finally {
       setLoading(false);
+      setAuthFlow(null);
     }
   };
 
@@ -254,20 +275,39 @@ export default function ConnectScreen() {
                     autoCorrect={false}
                     style={{ backgroundColor: colors.surface, padding: 16, borderRadius: 12, borderWidth: 1, borderColor: colors.outline, fontSize: 16, color: colors.onSurface, fontFamily: "sans-serif", marginBottom: 12 }}
                   />
-                  <TextInput
-                    value={password}
-                    onChangeText={setPassword}
-                    placeholder="Password"
-                    placeholderTextColor={colors.onSurfaceVariant + "80"}
-                    accessibilityLabel="Password input"
-                    testID="password-input"
-                    secureTextEntry
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    onSubmitEditing={handleLogin}
-                    returnKeyType="go"
-                    style={{ backgroundColor: colors.surface, padding: 16, borderRadius: 12, borderWidth: 1, borderColor: colors.outline, fontSize: 16, color: colors.onSurface, fontFamily: "sans-serif" }}
-                  />
+                  <View style={{ position: "relative" }}>
+                    <TextInput
+                      value={password}
+                      onChangeText={setPassword}
+                      placeholder="Password"
+                      placeholderTextColor={colors.onSurfaceVariant + "80"}
+                      accessibilityLabel="Password input"
+                      testID="password-input"
+                      secureTextEntry={!showPassword}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      onSubmitEditing={handleLogin}
+                      returnKeyType="go"
+                      style={{ backgroundColor: colors.surface, padding: 16, paddingRight: 52, borderRadius: 12, borderWidth: 1, borderColor: colors.outline, fontSize: 16, color: colors.onSurface, fontFamily: "sans-serif" }}
+                    />
+                    <Pressable
+                      onPress={() => setShowPassword((v) => !v)}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                      style={{
+                        position: "absolute",
+                        right: 6,
+                        top: 0,
+                        bottom: 0,
+                        width: 44,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Icon name={showPassword ? "eye-off" : "eye"} size={20} color={colors.onSurfaceVariant} />
+                    </Pressable>
+                  </View>
                   <Pressable
                     onPress={handleLogin}
                     disabled={loading}
@@ -283,7 +323,7 @@ export default function ConnectScreen() {
                       transform: [{ scale: pressed ? 0.98 : 1 }]
                     })}
                   >
-                    {loading ? (
+                    {loading && authFlow === "local" ? (
                       <ActivityIndicator color={colors.onPrimary} />
                     ) : (
                       <Text style={{ color: colors.onPrimary, fontSize: 16, fontFamily: "sans-serif", fontWeight: "bold" }}>
@@ -315,7 +355,7 @@ export default function ConnectScreen() {
                     transform: [{ scale: pressed ? 0.98 : 1 }]
                   })}
                 >
-                  {loading ? (
+                  {loading && authFlow === "oauth" ? (
                     <ActivityIndicator color={colors.primary} />
                   ) : (
                     <Text style={{ color: colors.primary, fontSize: 16, fontFamily: "sans-serif", fontWeight: "bold" }}>

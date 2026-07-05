@@ -123,7 +123,7 @@ export default function SearchScreen({ navigation }: any) {
 
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
   // "Hide non-audiobooks": drop ebook-only books from search results too.
-  const bookResults = (results?.book || []).filter(
+  const bookResults = [...(results?.book || []), ...(results?.podcast || [])].filter(
     (r: any) => !hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r)
   );
   const seriesResults = results?.series || [];

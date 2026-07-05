@@ -317,6 +317,10 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         .catch((e: any) => console.warn("[Downloads] abortBookParts failed", e))
         .then(async () => {
           if (!folder) return;
+          // A re-download may have started while the abort settled — the
+          // folder path is deterministic, so deleting now would destroy the
+          // NEW run's files mid-write.
+          if (useDownloadStore.getState().activeDownloads[id]) return;
           try { await FileSystem.deleteAsync(folder, { idempotent: true }); } catch (e) {
             console.warn("[Downloads] Failed to delete cancelled folder", folder, e);
           }

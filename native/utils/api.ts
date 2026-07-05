@@ -23,6 +23,12 @@ let failedQueue: Array<{
 // (useUserStore imports this module).
 const forceLogout = () => {
   try {
+    // Flag WHY the user is suddenly on the Connect screen — a silent bounce
+    // read as "the app randomly logged me out". ConnectScreen reads + clears.
+    try {
+      const { storage } = require("./storage");
+      storage.set("logout_reason", "session_expired");
+    } catch {}
     storageHelper.clearServerConfig();
     const { useUserStore } = require("../store/useUserStore");
     const prevConfig = useUserStore.getState().serverConnectionConfig;

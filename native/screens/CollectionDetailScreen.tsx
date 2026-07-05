@@ -124,9 +124,14 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
   const showPlayButton = playableItems.length > 0;
   const totalDuration = bookItems.reduce((t, b) => t + (b.media?.duration || 0), 0);
 
+  // The collection payload carries no user progress — consult the global map
+  // (fallback to the payload field) or "Play" always restarts the first book.
+  const progressMap = useUserStore((s) => s.mediaProgress);
   const playNextItem = async () => {
     const next =
-      playableItems.find((pb) => !pb.userMediaProgress?.isFinished) || playableItems[0];
+      playableItems.find(
+        (pb) => !(progressMap[pb.id] || pb.userMediaProgress)?.isFinished
+      ) || playableItems[0];
     if (!next || starting) return;
     setStarting(true);
     try {

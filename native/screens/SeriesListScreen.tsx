@@ -92,9 +92,16 @@ export default function SeriesListScreen({ navigation }: any) {
     return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
+  // Monotonic fetch id (mirrors LibraryScreen): a RESET (sort change, library
+  // switch) must never be skipped because a page fetch is in flight — that
+  // left the grid on a permanent empty state — and a stale page response from
+  // the OLD sort must not append into the new list (duplicate keys).
+  const fetchIdRef = useRef(0);
   const fetchSeries = useCallback(
     async (pageNum: number, reset = false, showSkeleton = true) => {
-      if (!currentLibraryId || isFetchingRef.current) return;
+      if (!currentLibraryId) return;
+      if (!reset && isFetchingRef.current) return; // pagination only skips
+      const fetchId = ++fetchIdRef.current;
       isFetchingRef.current = true;
       if (reset) {
         setLoadError(false);
@@ -110,6 +117,7 @@ export default function SeriesListScreen({ navigation }: any) {
             orderBy
           )}&desc=${descending ? 1 : 0}`
         );
+        if (fetchId !== fetchIdRef.current) return; // superseded — discard
         const data = response.data || {};
         const results: Series[] = data.results || [];
         const totalCount = data.total || 0;
@@ -118,12 +126,15 @@ export default function SeriesListScreen({ navigation }: any) {
         setSeriesList((prev) => (reset ? results : [...prev, ...results]));
         setPage(pageNum);
       } catch (err) {
+        if (fetchId !== fetchIdRef.current) return;
         console.error("[SeriesListScreen] Failed to fetch series:", err);
         if (pageNum === 0) setLoadError(true);
       } finally {
-        setLoading(false);
-        setInitialLoading(false);
-        isFetchingRef.current = false;
+        if (fetchId === fetchIdRef.current) {
+          setLoading(false);
+          setInitialLoading(false);
+          isFetchingRef.current = false;
+        }
       }
     },
     [currentLibraryId, orderBy, descending]

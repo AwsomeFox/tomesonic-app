@@ -209,7 +209,8 @@ export default function StatsScreen({ navigation }: any) {
               backgroundColor: colors.primary,
               paddingHorizontal: 24,
               paddingVertical: 10,
-              borderRadius: 8,
+              // Match the app-wide pill retry buttons (was an 8px outlier).
+              borderRadius: 24,
             }}
           >
             <Text style={{ color: colors.onPrimary, fontWeight: '600', fontSize: 14 }}>Retry</Text>

@@ -181,13 +181,19 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const books = (series?.books || []).filter((b: any) => !hideNonAudiobooks || !isEbookOnly(b));
   const bookCount = books.length;
   const totalDuration = books.reduce((t, b) => t + (b.media?.duration || 0), 0);
-  const finishedCount = books.filter((b) => b.userMediaProgress?.isFinished).length;
+  // Progress from the global map — the items payload carries no
+  // userMediaProgress (the server ignores include=progress on this endpoint),
+  // so relying on it alone made "Play all" always restart book 1 and the
+  // finished count always read 0. Keep the payload field as a fallback.
+  const progressMap = useUserStore((s) => s.mediaProgress);
+  const progressOf = (b: any) => progressMap[b.id] || b.userMediaProgress;
+  const finishedCount = books.filter((b) => progressOf(b)?.isFinished).length;
   const anyProgress = books.some(
-    (b) => b.userMediaProgress?.isFinished || (b.userMediaProgress?.progress || 0) > 0
+    (b) => progressOf(b)?.isFinished || (progressOf(b)?.progress || 0) > 0
   );
 
   // First unfinished book in sequence order — what the header button starts.
-  const nextUnfinished = books.find((b) => !b.userMediaProgress?.isFinished) || books[0];
+  const nextUnfinished = books.find((b) => !progressOf(b)?.isFinished) || books[0];
 
   const handlePlay = async (item?: SeriesBook) => {
     if (!item || startingId) return;
@@ -231,6 +237,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       <AnimatedPressable
         entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
+        accessibilityRole="button"
         android_ripple={{ color: colors.surfaceContainerHighest }}
         style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 }}
       >

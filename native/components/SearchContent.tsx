@@ -51,6 +51,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
   const query = useUiStore((s) => s.searchQuery);
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -84,6 +85,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
       const searchId = ++searchIdRef.current;
       try {
         setLoading(true);
+        setLoadError(false);
         const response = await api.get(
           `/api/libraries/${currentLibraryId}/search?q=${encodeURIComponent(
             searchQuery.trim()
@@ -95,8 +97,12 @@ export default function SearchContent({ navigation }: { navigation: any }) {
       } catch (err: any) {
         if (searchId !== searchIdRef.current) return;
         console.error("[Search] Search failed:", err);
+        // A network failure is NOT "no results" — masking it as the empty
+        // state told users on flaky connections the book wasn't in their
+        // library.
         setResults(null);
         setHasSearched(true);
+        setLoadError(true);
       } finally {
         if (searchId === searchIdRef.current) setLoading(false);
       }
@@ -130,7 +136,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
 
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
   // "Hide non-audiobooks": drop ebook-only books from search results too.
-  const bookResults = (results?.book || []).filter(
+  // Podcast libraries return matches under `podcast` with the same row shape
+  // ({libraryItem}) — ignoring them made search render "No results" for every
+  // query in a podcast library.
+  const bookResults = [...(results?.book || []), ...(results?.podcast || [])].filter(
     (r: any) => !hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r)
   );
   const seriesResults = results?.series || [];
@@ -425,6 +434,44 @@ export default function SearchContent({ navigation }: { navigation: any }) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.surface }}>
         <ListSkeleton rows={8} thumb={52} />
+      </View>
+    );
+  }
+
+  if (loadError && !hasResults) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 32,
+          backgroundColor: colors.surface,
+        }}
+      >
+        <Icon name="warning" size={48} color={colors.error} />
+        <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+          Search failed
+        </Text>
+        <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+          Check your connection to the server and try again.
+        </Text>
+        <Pressable
+          onPress={() => performSearch(query)}
+          android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+          accessibilityRole="button"
+          accessibilityLabel="Retry search"
+          style={{
+            marginTop: 20,
+            paddingHorizontal: 24,
+            paddingVertical: 10,
+            borderRadius: 24,
+            overflow: "hidden",
+            backgroundColor: colors.primary,
+          }}
+        >
+          <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+        </Pressable>
       </View>
     );
   }

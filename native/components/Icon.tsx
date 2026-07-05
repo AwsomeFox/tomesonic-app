@@ -80,7 +80,9 @@ export type IconName =
   | "replay"
   | "lock"
   | "add"
-  | "playlist-add";
+  | "playlist-add"
+  | "eye"
+  | "eye-off";
 
 type Family = "mi" | "mci";
 
@@ -160,6 +162,8 @@ const MAP: Record<IconName, [Family, string]> = {
   lock: ["mi", "lock-outline"],
   add: ["mi", "add"],
   "playlist-add": ["mi", "playlist-add"],
+  eye: ["mi", "visibility"],
+  "eye-off": ["mi", "visibility-off"],
 };
 
 interface IconProps {

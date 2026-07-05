@@ -56,6 +56,9 @@ export default function AddToListModal({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState<ListKind | null>(null);
   const [newName, setNewName] = useState("");
+  // Inline failure message — toggles/creates used to fail with only a
+  // console.warn (the checkmark silently reverted).
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const fetchLists = useCallback(async () => {
     if (!libraryId) return;
@@ -82,6 +85,7 @@ export default function AddToListModal({
     if (visible) {
       setCreating(null);
       setNewName("");
+      setActionError(null);
       fetchLists();
     }
   }, [visible, fetchLists]);
@@ -95,6 +99,7 @@ export default function AddToListModal({
 
   const toggleCollection = async (c: any) => {
     if (busyId) return;
+    setActionError(null);
     setBusyId(c.id);
     try {
       const res = collectionHasItem(c)
@@ -109,6 +114,7 @@ export default function AddToListModal({
       }
     } catch (e) {
       console.warn("[AddToList] collection toggle failed", e);
+      setActionError("Couldn't update the collection — check your connection.");
       // Resync — the server state may have diverged (e.g. deleted elsewhere).
       fetchLists();
     } finally {
@@ -118,6 +124,7 @@ export default function AddToListModal({
 
   const togglePlaylist = async (p: any) => {
     if (busyId) return;
+    setActionError(null);
     setBusyId(p.id);
     try {
       const res = playlistHasItem(p)
@@ -137,6 +144,7 @@ export default function AddToListModal({
       }
     } catch (e) {
       console.warn("[AddToList] playlist toggle failed", e);
+      setActionError("Couldn't update the playlist — check your connection.");
       // Resync — ABS deletes a playlist when its last item is removed, so the
       // local copy can go stale mid-session.
       fetchLists();
@@ -148,6 +156,7 @@ export default function AddToListModal({
   const createList = async (kind: ListKind) => {
     const name = newName.trim();
     if (!name || busyId) return;
+    setActionError(null);
     setBusyId(`create_${kind}`);
     try {
       if (kind === "collection") {
@@ -169,6 +178,7 @@ export default function AddToListModal({
       setNewName("");
     } catch (e) {
       console.warn(`[AddToList] create ${kind} failed`, e);
+      setActionError(`Couldn't create the ${kind} — check your connection.`);
     } finally {
       setBusyId(null);
     }
@@ -383,6 +393,11 @@ export default function AddToListModal({
                 Add to…
               </Text>
             </View>
+            {actionError ? (
+              <Text style={{ color: colors.error, fontSize: 13, paddingHorizontal: 20, paddingBottom: 4 }}>
+                {actionError}
+              </Text>
+            ) : null}
 
             {loading ? (
               <View style={{ paddingVertical: 40, alignItems: "center" }}>

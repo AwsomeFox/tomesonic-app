@@ -208,7 +208,9 @@ describe("SearchContent — states", () => {
     expect(screen.getByText("Try a different title, author, series, or narrator.")).toBeTruthy();
   });
 
-  it("shows the no-results state when the request fails", async () => {
+  it("shows the ERROR state (not no-results) when the request fails", async () => {
+    // A network failure must NOT masquerade as "No results" — that told users
+    // on flaky connections the book wasn't in their library.
     useUiStore.setState({ searchQuery: "boom" } as any);
     apiGet.mockRejectedValue(Object.assign(new Error("500"), { response: { status: 500 } }));
     const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
@@ -217,7 +219,26 @@ describe("SearchContent — states", () => {
     await act(async () => {
       jest.advanceTimersByTime(500);
     });
-    expect(screen.getByText(/No results for/)).toBeTruthy();
+    expect(screen.getByText("Search failed")).toBeTruthy();
+    expect(screen.queryByText(/No results for/)).toBeNull();
+
+    // Retry re-runs the search; success replaces the error with results.
+    apiGet.mockResolvedValue({
+      data: {
+        book: [
+          {
+            libraryItem: {
+              id: "b1",
+              mediaType: "book",
+              media: { numTracks: 1, metadata: { title: "Boom Book", authorName: "Author A" } },
+            },
+          },
+        ],
+      },
+    });
+    await fireEvent.press(screen.getByLabelText("Retry search"));
+    await act(async () => {});
+    expect(screen.getByText("Boom Book")).toBeTruthy();
     consoleSpy.mockRestore();
   });
 

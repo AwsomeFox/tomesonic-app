@@ -12,6 +12,9 @@ interface TopAppBarProps {
   showSort?: boolean;
   showDownload?: boolean;
   showBack?: boolean;
+  /** Hide the search action (e.g. offline Bookshelf — the overlay only
+   *  searches the server, so offering it there was a dead end). */
+  hideSearch?: boolean;
   title?: string;
   onFilter?: () => void;
   onSort?: () => void;
@@ -31,6 +34,7 @@ export default function TopAppBar({
   showSort,
   showDownload,
   showBack,
+  hideSearch,
   title,
   onFilter,
   onSort,
@@ -175,7 +179,7 @@ export default function TopAppBar({
       {showBack ? (
         /* Simple Title */
         title ? (
-          <Text
+          <Text maxFontSizeMultiplier={1.3}
             numberOfLines={1}
             style={{
               color: colors.onSurface,
@@ -210,7 +214,7 @@ export default function TopAppBar({
             }}
           >
             <Icon name="library" size={20} color={colors.onSecondaryContainer} />
-            <Text
+            <Text maxFontSizeMultiplier={1.3}
               numberOfLines={1}
               style={{
                 color: colors.onSecondaryContainer,
@@ -280,7 +284,7 @@ export default function TopAppBar({
       ) : null}
 
       {/* Search */}
-      {!showBack && (
+      {!showBack && !hideSearch && (
         <Pressable
           onPress={() => setSearchActive(true)}
           hitSlop={8}
@@ -350,7 +354,7 @@ export default function TopAppBar({
               }}
             >
               <Icon name="account" size={20} color={colors.onSurface} style={{ marginRight: 12 }} />
-              <Text style={{ color: colors.onSurface, fontSize: 16 }}>
+              <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurface, fontSize: 16 }}>
                 Account
               </Text>
             </Pressable>
@@ -369,7 +373,7 @@ export default function TopAppBar({
               }}
             >
               <Icon name="settings" size={20} color={colors.onSurface} style={{ marginRight: 12 }} />
-              <Text style={{ color: colors.onSurface, fontSize: 16 }}>
+              <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurface, fontSize: 16 }}>
                 Settings
               </Text>
             </Pressable>

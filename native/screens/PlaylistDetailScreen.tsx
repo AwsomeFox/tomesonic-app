@@ -96,8 +96,15 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
     return t + d;
   }, 0);
 
+  // The playlist payload carries no user progress — look it up in the global
+  // map (episodes use composite `${itemId}-${episodeId}` keys), or "Play all"
+  // always restarts the first item.
   const nextUnfinishedItem = (): any | undefined =>
-    items.find((i) => !i.userMediaProgress?.isFinished) || items[0];
+    items.find((i) => {
+      const libId = i.libraryItemId || i.libraryItem?.id;
+      const key = i.episodeId ? `${libId}-${i.episodeId}` : libId;
+      return !(mediaProgress[key] || i.userMediaProgress)?.isFinished;
+    }) || items[0];
 
   const startItem = async (item: any) => {
     const libraryItemId = item?.libraryItemId || item?.libraryItem?.id;

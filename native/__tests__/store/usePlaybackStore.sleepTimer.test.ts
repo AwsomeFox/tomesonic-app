@@ -216,10 +216,13 @@ describe("usePlaybackStore sleep timer", () => {
       expect(TrackPlayer.pause).not.toHaveBeenCalled();
     });
 
-    it("does not touch the local volume while casting", () => {
+    it("restores the local volume unconditionally (even while casting)", () => {
+      // The fade only ever lowers the LOCAL player's volume, so restoring it
+      // is always safe — skipping it while casting could leave the local
+      // player quiet after a cast-time cancel followed by a disconnect.
       setup({ isCasting: true, castClient: { pause: jest.fn() } });
       usePlaybackStore.getState().cancelSleepTimer();
-      expect(TrackPlayer.setVolume).not.toHaveBeenCalled();
+      expect(TrackPlayer.setVolume).toHaveBeenCalledWith(1);
     });
   });
 });
