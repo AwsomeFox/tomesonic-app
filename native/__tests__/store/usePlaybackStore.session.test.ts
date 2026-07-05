@@ -155,8 +155,11 @@ describe("usePlaybackStore sessions", () => {
       expect(tracks).toHaveLength(2);
       expect(tracks[0].clipStartMs).toBeUndefined();
       expect(usePlaybackStore.getState().chapterQueue).toBe(false);
-      // Absolute seek for the non-chapter queue.
-      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(250);
+      // RNTP positions are TRACK-relative: resume position 250 maps into
+      // file 2 (startOffset 150), 100s in — a raw absolute seekTo(250) would
+      // clamp at the end of file 1 (the multi-file bug the E2E flow caught).
+      expect(TrackPlayer.skip).toHaveBeenCalledWith(1);
+      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(100);
     });
 
     it("prefers downloaded local files over streaming URLs", async () => {

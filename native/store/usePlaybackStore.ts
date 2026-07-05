@@ -26,6 +26,17 @@ let _finishedSessionId: string | null = null;
 // In-flight initializePlayer() — shared so concurrent callers can't each
 // start their own progress interval.
 let _initPromise: Promise<void> | null = null;
+// Session generation: bumped by every preparePlaybackSession and closePlayback.
+// In-flight prepares check it after each await so a concurrent prepare of a
+// DIFFERENT book (or a close) can't interleave player mutations — previously
+// two rapid taps on different books merged both queues, and a close during a
+// slow prepare resurrected the closed session.
+let _sessionGen = 0;
+// Absolute start offset (s) per queue item for MULTI-FILE (non-chapter-queue)
+// books. RNTP's getProgress/seekTo are per-active-track; without these the
+// tick treated track-relative positions as book-absolute (duration collapsed
+// to the current file, auto-finish fired at the end of file 1).
+let _trackOffsets: number[] = [];
 // Handle for the 1s player→store sync loop, kept module-level so a double init
 // can't leak a second interval (which would double-count listened time).
 let progressInterval: ReturnType<typeof setInterval> | null = null;
@@ -206,7 +217,7 @@ interface PlaybackState {
   // Actions
   initializePlayer: () => Promise<void>;
   startPlayback: (itemId: string, episodeId?: string) => Promise<boolean>;
-  preparePlaybackSession: (session: any, playWhenReady?: boolean) => Promise<void>;
+  preparePlaybackSession: (session: any, playWhenReady?: boolean) => Promise<boolean>;
   playPause: () => Promise<void>;
   play: () => Promise<void>;
   pause: () => Promise<void>;
@@ -387,7 +398,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
             // Translate the player position to an ABSOLUTE book position. With a
             // chapter queue each item is clipped, so the raw position is
-            // chapter-relative and the active index IS the chapter.
+            // chapter-relative and the active index IS the chapter. With a
+            // multi-file queue the raw position is TRACK-relative — add the
+            // track's absolute start offset (treating it as book-absolute
+            // collapsed duration to the current file and auto-finished books
+            // at the end of file 1).
             absolutePosition = progress.position;
             bookDuration = progress.duration;
             if (chapterQueue && chapters.length) {
@@ -398,6 +413,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
               }
               bookDuration = get().duration || bookDuration; // keep whole-book duration
             } else {
+              if (_trackOffsets.length > 1) {
+                const activeIndex = await TrackPlayer.getActiveTrackIndex();
+                if (activeIndex != null && _trackOffsets[activeIndex] != null) {
+                  absolutePosition = _trackOffsets[activeIndex] + progress.position;
+                }
+                bookDuration = get().duration || bookDuration; // whole-book duration
+              }
               for (let i = 0; i < chapters.length; i++) {
                 if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
                   chapterIndex = i;
@@ -626,8 +648,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         alertPlayFailure("This item has no playable audio.");
         return false;
       }
-      await get().preparePlaybackSession(session, true);
-      return true;
+      return await get().preparePlaybackSession(session, true);
     } catch (err) {
       console.error("[PlaybackStore] startPlayback failed:", err);
       // Offline fallback: if this book is downloaded (with playback meta), build
@@ -657,8 +678,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             })),
           };
           console.log("[PlaybackStore] Falling back to offline local session for", itemId);
-          await get().preparePlaybackSession(localSession, true);
-          return true;
+          if (await get().preparePlaybackSession(localSession, true)) return true;
         }
       } catch (e) {
         console.error("[PlaybackStore] offline fallback failed:", e);
@@ -673,22 +693,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   preparePlaybackSession: async (session, playWhenReady = false) => {
     await get().initializePlayer();
 
+    // Claim the session generation. Any later prepare or closePlayback bumps
+    // it; this run bails at the next checkpoint instead of interleaving
+    // player mutations (queue merges / resurrecting a closed session).
+    const gen = ++_sessionGen;
+    const stale = () => gen !== _sessionGen;
+    // Whether we've already wiped the previous queue — failures BEFORE the
+    // reset must leave the old session fully intact.
+    let didReset = false;
+
     try {
       console.log("[PlaybackStore] Preparing playback session:", session.id);
-      
-      // Stop and reset current queue
-      await TrackPlayer.reset();
-      _lastMetaChapter = -2; // force a now-playing metadata refresh for the new book
-      // A sleep timer from the previous book must not run against the new one
-      // (end-of-chapter timers would pause the new book almost immediately).
-      get().cancelSleepTimer();
 
-      // Reset progress-sync bookkeeping for the new session.
-      _timeListenedAccum = 0;
-      _lastTickAt = null;
-      _lastSyncAt = 0;
-      _lastLocalSaveAt = 0;
-      _finishedSessionId = null;
+      // ---- Build everything FIRST (no player mutations yet) ----
 
       // Build absolute, authenticated URLs. ABS session contentUrls are
       // server-relative (e.g. /api/items/.../file/...) and need the server host
@@ -729,7 +746,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const localForTrack = (track: any, idx: number): string | null => {
         if (!download) return null;
         const key = `track_${track.index ?? idx}`;
-        const part = download.parts.find((p: any) => p.id === key);
+        // Legacy completed rows can lack `parts` entirely — an unguarded
+        // .find made such books unplayable even STREAMING (throw mid-prepare).
+        const part = (download.parts || []).find((p: any) => p.id === key);
         const path = part?.localFilePath || (localFolder && part ? `${localFolder}${part.filename}` : null);
         if (!path) return null;
         return path.startsWith("file://") ? path : `file://${path}`;
@@ -742,7 +761,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const subtitle = [bookTitle, bookAuthor].filter(Boolean).join(" • ");
 
       const audioTracks = session.audioTracks || session.tracks || [];
-      const chapters = session.chapters || [];
+      // Sanitize chapters: badly tagged files ship inverted (start > end) or
+      // non-numeric windows; a negative clip window makes native behavior
+      // undefined and corrupts absolute-position math.
+      const chapters = (Array.isArray(session.chapters) ? session.chapters : []).filter(
+        (c: any) =>
+          Number.isFinite(Number(c?.start)) &&
+          Number.isFinite(Number(c?.end)) &&
+          Number(c.end) > Number(c.start)
+      );
 
       // Chapter queue: when a single-file book has real chapters, build one
       // clipped RNTP item per chapter so Android Auto shows the chapters as the
@@ -751,9 +778,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const chapterQueue = chapters.length > 1 && audioTracks.length === 1;
 
       let tracksToLoad: any[];
+      const trackOffsets: number[] = [];
       if (chapterQueue) {
         const track = audioTracks[0];
         const fileUrl = localForTrack(track, track.index ?? 0) || absoluteUrl(track.contentUrl);
+        if (!fileUrl) throw new Error("Track has no playable URL");
         const startOffset = track.startOffset || 0;
         tracksToLoad = chapters.map((ch: any, i: number) => {
           const t: any = {
@@ -775,10 +804,20 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           return t;
         });
       } else {
+        // MULTI-FILE (or chapterless) queue: one item per file. Record each
+        // item's absolute start offset — RNTP progress/seeks are per-track,
+        // and treating them as book-absolute collapsed duration to the
+        // current file and auto-finished books at the end of file 1.
+        let acc = 0;
         tracksToLoad = audioTracks.map((track: any, idx: number) => {
+          const off = Number.isFinite(Number(track.startOffset)) ? Number(track.startOffset) : acc;
+          trackOffsets.push(off);
+          acc = off + (Number(track.duration) || 0);
+          const url = localForTrack(track, idx) || absoluteUrl(track.contentUrl);
+          if (!url) throw new Error("Track has no playable URL");
           const t: any = {
-            id: `${session.id}_${track.index}`,
-            url: localForTrack(track, idx) || absoluteUrl(track.contentUrl),
+            id: `${session.id}_${track.index ?? idx}`,
+            url,
             title: bookTitle,
             artist: bookAuthor,
             album: bookTitle,
@@ -793,14 +832,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         throw new Error("No playback tracks found in session");
       }
 
-      await TrackPlayer.add(tracksToLoad);
-
-      // Restore the last speed the user set (persisted globally), matching the
-      // original app's saved-playback-rate behaviour.
-      const playbackSpeed = session.playbackRate || storageHelper.getPlaybackRate();
-      await TrackPlayer.setRate(playbackSpeed);
-
-      // Seek to the saved absolute position, mapping into the right chapter clip.
+      // Resolve the resume position BEFORE touching the player.
       // FRESHEST-WINS: the server's session.currentTime is its last-known
       // progress, which is STALE if we listened offline (those syncs are still
       // queued locally). Losing an offline listening session's position is the
@@ -839,15 +871,67 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           }
         }
       } catch {}
+
+      // The chapter index for the resume position — set in the same state
+      // write below so an end-of-chapter sleep timer armed before the first
+      // 1s tick can't see a stale/-1 index (it fired instantly).
+      let startChapterIdx = -1;
+      for (let i = 0; i < chapters.length; i++) {
+        if (startAbs >= (chapters[i].start || 0) && startAbs < (chapters[i].end || 0)) {
+          startChapterIdx = i;
+          break;
+        }
+      }
+
+      // ---- Player mutations (checkpointed against newer prepares/closes) ----
+      if (stale()) return false;
+
+      await TrackPlayer.reset();
+      if (stale()) return false;
+      didReset = true;
+      _lastMetaChapter = -2; // force a now-playing metadata refresh for the new book
+      // A sleep timer from the previous book must not run against the new one
+      // (end-of-chapter timers would pause the new book almost immediately).
+      get().cancelSleepTimer();
+
+      // Reset progress-sync bookkeeping for the new session.
+      _timeListenedAccum = 0;
+      _lastTickAt = null;
+      _lastSyncAt = 0;
+      _lastLocalSaveAt = 0;
+      _finishedSessionId = null;
+      _trackOffsets = trackOffsets;
+
+      await TrackPlayer.add(tracksToLoad);
+      if (stale()) return false;
+
+      // Restore the last speed the user set (persisted globally), matching the
+      // original app's saved-playback-rate behaviour.
+      const playbackSpeed = session.playbackRate || storageHelper.getPlaybackRate();
+      await TrackPlayer.setRate(playbackSpeed);
+      if (stale()) return false;
+
       if (chapterQueue) {
-        let idx = chapters.findIndex((c: any) => startAbs >= (c.start || 0) && startAbs < (c.end || 0));
-        if (idx < 0) idx = 0;
+        let idx = startChapterIdx >= 0 ? startChapterIdx : 0;
         if (idx > 0) await TrackPlayer.skip(idx);
+        if (stale()) return false;
         const within = startAbs - (chapters[idx]?.start || 0);
         if (within > 0) await TrackPlayer.seekTo(within);
       } else if (startAbs > 0) {
-        await TrackPlayer.seekTo(startAbs);
+        // Map the absolute resume position into the owning FILE.
+        let tIdx = 0;
+        for (let i = trackOffsets.length - 1; i >= 0; i--) {
+          if (startAbs >= trackOffsets[i]) {
+            tIdx = i;
+            break;
+          }
+        }
+        if (tIdx > 0) await TrackPlayer.skip(tIdx);
+        if (stale()) return false;
+        const within = Math.max(0, startAbs - (trackOffsets[tIdx] || 0));
+        if (within > 0) await TrackPlayer.seekTo(within);
       }
+      if (stale()) return false;
 
       set({
         // Persist the resolved cover URL on the session so the Player and
@@ -859,6 +943,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         chapterQueue,
         duration: session.duration || 0,
         position: startAbs,
+        currentChapterIndex: startChapterIdx,
       });
 
       // Mirror the current book to the home-screen resume widget.
@@ -872,11 +957,30 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           set({ isPlaying: true, isPlayerExpanded: true });
         } else {
           await TrackPlayer.play();
+          if (stale()) return false;
           set({ isPlaying: true, isPlayerExpanded: true });
         }
       }
+      return true;
     } catch (err) {
       console.error("[PlaybackStore] Failed to prepare playback session:", err);
+      if (!stale() && didReset) {
+        // The old queue is already gone — leave a COHERENT empty state, not a
+        // ghost session whose transport controls silently no-op.
+        set({
+          currentSession: null,
+          isPlaying: false,
+          duration: 0,
+          position: 0,
+          chapters: [],
+          chapterQueue: false,
+          currentChapterIndex: -1,
+        });
+      }
+      if (!stale() && playWhenReady) {
+        alertPlayFailure("Playback couldn't start. Check your connection and try again.");
+      }
+      return false;
     }
   },
 
@@ -890,6 +994,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   },
 
   play: async () => {
+    // A remote-play racing closePlayback must not flip isPlaying on a dead
+    // store (it stuck true forever with no session to ever clear it).
+    if (!get().currentSession) return;
     const { isCasting, castClient } = get();
     // Auto rewind: on resume, nudge back a little (scaled by how long paused),
     // unless disabled in Settings.
@@ -917,6 +1024,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   },
 
   pause: async () => {
+    if (!get().currentSession) return;
     _lastPausedAt = Date.now();
     const { isCasting, castClient } = get();
     if (isCasting && castClient) {
@@ -953,6 +1061,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
   // `value` is always an ABSOLUTE book position (seconds).
   seek: async (value) => {
+    // No session (e.g. a remote event racing closePlayback) or a non-finite
+    // target: nothing sane to do.
+    if (!Number.isFinite(value) || !get().currentSession) return;
     const { isCasting, castClient, chapterQueue, chapters } = get();
     // Defensive clamp: scrubber overshoot / stale bookmarks can hand us a
     // position past the end (or negative) — clamp to the book bounds.
@@ -990,6 +1101,23 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (idx !== active) await TrackPlayer.skip(idx);
       await TrackPlayer.seekTo(Math.max(0, value - (chapters[idx].start || 0)));
       set({ position: value, currentChapterIndex: idx });
+      saveSessionPositionNow(value);
+      return;
+    }
+    if (_trackOffsets.length > 1) {
+      // Multi-file queue: map the absolute position into the owning FILE —
+      // a raw seekTo is track-relative and cannot cross file boundaries.
+      let idx = 0;
+      for (let i = _trackOffsets.length - 1; i >= 0; i--) {
+        if (value >= _trackOffsets[i]) {
+          idx = i;
+          break;
+        }
+      }
+      const active = await TrackPlayer.getActiveTrackIndex();
+      if (idx !== active) await TrackPlayer.skip(idx);
+      await TrackPlayer.seekTo(Math.max(0, value - (_trackOffsets[idx] || 0)));
+      set({ position: value });
       saveSessionPositionNow(value);
       return;
     }
@@ -1099,6 +1227,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   // countdown tracks the time until the current chapter ends; otherwise it
   // counts down a fixed number of seconds. Playback pauses at zero.
   setSleepTimer: (seconds, endOfChapter = false) => {
+    // No session → nothing to pause later; an orphan interval dragged the
+    // player volume down forever via the fade path.
+    if (!get().currentSession) return;
     if (sleepTimerInterval) {
       clearInterval(sleepTimerInterval);
       sleepTimerInterval = null;
@@ -1136,7 +1267,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // Recompute against live position so it follows seeks.
         const { chapters, currentChapterIndex, position } = get();
         const armed = armedIdx ?? currentChapterIndex;
-        if (currentChapterIndex !== -1 && currentChapterIndex > armed) {
+        if (currentChapterIndex !== -1 && armed >= 0 && currentChapterIndex > armed) {
           // Crossed the boundary between ticks (both loops run at 1s, so the
           // crossing itself can land between them) — fire now instead of
           // silently re-arming against the NEXT chapter's end.
@@ -1196,6 +1327,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
   closePlayback: async () => {
     if (!get().isInitialized) return;
+    // Invalidate any in-flight preparePlaybackSession — without this a slow
+    // prepare landing after close resurrected the session.
+    ++_sessionGen;
+    _trackOffsets = [];
 
     // Final flush + close the ABS session before tearing down the player.
     const session = get().currentSession;
