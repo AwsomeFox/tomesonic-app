@@ -53,11 +53,14 @@ jobs:
       - name: install dependencies
         run: npm ci --prefix native
 
-      - name: build debug APK
+      - name: build release APK
+        # RELEASE, not debug: debug APKs don't embed the JS bundle (they load
+        # from a Metro dev server, which doesn't exist on the CI emulator —
+        # the app would sit on the red "unable to load script" screen).
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleRelease --no-daemon -x lint -x test
 
       - name: seed media fixture (generated audiobook)
         run: |

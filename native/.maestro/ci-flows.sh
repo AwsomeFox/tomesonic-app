@@ -7,7 +7,7 @@ set -euo pipefail
 export PATH="$PATH:$HOME/.maestro/bin"
 cd "$(dirname "$0")/.." # native/
 
-adb install android/app/build/outputs/apk/debug/app-debug.apk
+adb install android/app/build/outputs/apk/release/app-release.apk
 
 # Fresh-install login against the job's throwaway ABS (host = 10.0.2.2 from
 # the emulator), then the whole logged-in suite.
