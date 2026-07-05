@@ -167,6 +167,28 @@ function alertPlayFailure(message: string) {
   } catch {}
 }
 
+// Called after a token refresh (see api.ts applyRefreshedConfig): the live
+// session's coverUrl — and the artwork Media3 is showing — may carry the
+// ROTATED-OUT token, so its next fetch 401s and the notification loses its
+// album art. Rebuild the URL with the fresh token and force the progress
+// loop to re-push the now-playing metadata (which includes the artwork).
+export function refreshNowPlayingArtwork() {
+  try {
+    const st = usePlaybackStore.getState();
+    const session = st.currentSession;
+    if (!session) return;
+    const coverUrl: string | undefined = session.coverUrl;
+    // Local file artwork can't go stale.
+    if (!coverUrl || !coverUrl.startsWith("http")) return;
+    const config = storageHelper.getServerConfig();
+    const token = config?.token;
+    if (!token || coverUrl.includes(`token=${token}`)) return;
+    const freshened = coverUrl.replace(/([?&])token=[^&]*/, `$1token=${token}`);
+    usePlaybackStore.setState({ currentSession: { ...session, coverUrl: freshened } });
+    _lastMetaChapter = -2; // next 1s tick re-applies metadata incl. artwork
+  } catch {}
+}
+
 // The store's `position` is written by a 1s JS interval that Android
 // throttles while the app is backgrounded/dozing — the native player keeps
 // advancing while the snapshot freezes, so a notification jump computed from
@@ -701,7 +723,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             duration: dl.meta.duration || 0,
             currentTime: lastLocal?.currentTime || 0,
             chapters: dl.meta.chapters || [],
-            coverUrl: dl.coverUrl,
+            // The downloaded cover FILE — dl.coverUrl is the remote server URL
+            // (dead offline, stale token baked in from download time).
+            coverUrl:
+              (dl.parts || []).find((p: any) => p.id === "cover")?.localFilePath ||
+              dl.coverUrl,
             audioTracks: dl.meta.tracks.map((t: any) => ({
               index: t.index,
               contentUrl: `${dl.localFolderPath}${t.filename}`,
@@ -762,11 +788,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       };
 
       const libraryItemId = session.libraryItemId || session.libraryItem?.id;
-      const artworkUrl =
-        session.coverUrl ||
-        (libraryItemId && serverAddress
-          ? `${serverAddress}/api/items/${libraryItemId}/cover?width=800&format=webp&token=${token}`
-          : undefined);
 
       // Prefer the locally-downloaded file when available so downloaded books
       // play the local copy (faster / offline) instead of streaming.
@@ -774,6 +795,27 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const download = libraryItemId
         ? useDownloadStore.getState().completedDownloads[libraryItemId]
         : null;
+
+      // Notification artwork. Media3 fetches this URL NATIVELY (no axios
+      // interceptor, no token refresh), so a cover URL with a stale baked-in
+      // token silently 401s → no album art. Priority:
+      //  1. the downloaded cover FILE (token-proof, offline-proof),
+      //  2. a URL built fresh with the CURRENT token,
+      //  3. the session's own coverUrl with its (possibly rotated-out) token
+      //     replaced by the current one — restored MMKV sessions carry the
+      //     token that was current when they were saved.
+      const localCover = (download?.parts || []).find((p: any) => p.id === "cover")
+        ?.localFilePath as string | undefined;
+      const freshenToken = (url?: string | null) =>
+        url && url.startsWith("http") && token
+          ? url.replace(/([?&])token=[^&]*/, `$1token=${token}`)
+          : url || undefined;
+      const artworkUrl =
+        localCover ||
+        (libraryItemId && serverAddress
+          ? `${serverAddress}/api/items/${libraryItemId}/cover?width=800&format=webp&token=${token}`
+          : undefined) ||
+        freshenToken(session.coverUrl);
       const localFolder = download?.localFolderPath;
       const localForTrack = (track: any, idx: number): string | null => {
         if (!download) return null;

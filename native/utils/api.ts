@@ -61,6 +61,14 @@ const applyRefreshedConfig = (config: any) => {
   } catch (e) {
     // no-op
   }
+  // The live notification's album-art URL may embed the rotated-out token —
+  // Media3 fetches it natively (no interceptor), so refresh it in place.
+  try {
+    const { refreshNowPlayingArtwork } = require("../store/usePlaybackStore");
+    refreshNowPlayingArtwork();
+  } catch (e) {
+    // no-op
+  }
   // trustTokens: this pair was JUST rotated by the server — it is the freshest.
   writeAutoCreds(config.address, config.token, undefined, config.refreshToken, true).catch(() => {});
 };
