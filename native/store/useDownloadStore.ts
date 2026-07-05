@@ -431,17 +431,41 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   },
 }));
 
-// Mirror the set of downloaded item ids to a file the native Android Auto browse
-// service reads, so downloaded books get a "⤋" badge in the car.
+// Mirror the downloaded books (metadata + local files + resume position) to a
+// file the native Android Auto browse service reads: downloaded books get the
+// native download badge, and with no network the car can browse AND play them
+// from local files.
 {
   const { writeAutoDownloads } = require("../utils/autoCreds");
   let _lastKeys = "";
-  const sync = (completed: Record<string, unknown>) => {
-    const ids = Object.keys(completed || {});
-    const key = ids.slice().sort().join(",");
+  const sync = (completed: Record<string, any>) => {
+    const items = Object.values(completed || {});
+    const key = items.map((d: any) => d.id).sort().join(",");
     if (key === _lastKeys) return;
     _lastKeys = key;
-    writeAutoDownloads(ids);
+    let progressMap: Record<string, any> = {};
+    try {
+      const { useUserStore } = require("./useUserStore");
+      progressMap = useUserStore.getState().mediaProgress || {};
+    } catch {}
+    const entries = items
+      // Audio downloads only — ebook-only downloads can't play in the car.
+      .filter((d: any) => d?.meta?.tracks?.length)
+      .map((d: any) => ({
+        id: d.libraryItemId || d.id,
+        title: d.title || "Audiobook",
+        author: d.author || undefined,
+        folder: d.localFolderPath || undefined,
+        coverPath: (d.parts || []).find((p: any) => p.id === "cover")?.localFilePath || undefined,
+        currentTime: Number(progressMap[d.libraryItemId || d.id]?.currentTime) || 0,
+        duration: Number(d.meta?.duration) || 0,
+        tracks: (d.meta?.tracks || []).map((t: any) => ({
+          filename: t.filename,
+          startOffset: Number(t.startOffset) || 0,
+          duration: Number(t.duration) || 0,
+        })),
+      }));
+    writeAutoDownloads(entries);
   };
   sync(useDownloadStore.getState().completedDownloads);
   useDownloadStore.subscribe((state) => sync(state.completedDownloads));

@@ -6,9 +6,25 @@ import * as FileSystem from "expo-file-system/legacy";
 // exactly where `documentDirectory` points.
 const CREDS_PATH = `${FileSystem.documentDirectory}auto_creds.json`;
 
-// Mirrors the set of downloaded library-item ids so the native Android Auto
-// browse service can mark downloaded books with a "⤋" badge.
+// Mirrors the downloaded books (metadata + local file layout + resume time)
+// so the native Android Auto browse service can (a) badge downloaded books
+// with the native download icon and (b) browse AND play them fully OFFLINE
+// from local files when there's no network.
 const DOWNLOADS_PATH = `${FileSystem.documentDirectory}auto_downloads.json`;
+
+export interface AutoDownloadEntry {
+  id: string;
+  title: string;
+  author?: string;
+  /** Absolute folder holding the downloaded files (file:// or plain path). */
+  folder?: string;
+  /** Local cover file path, if downloaded. */
+  coverPath?: string;
+  /** Last known absolute book position (seconds) for cold-start offline resume. */
+  currentTime?: number;
+  duration?: number;
+  tracks?: { filename: string; startOffset: number; duration: number }[];
+}
 
 // Mirrors the current/last book for the home-screen "Resume" widget. Native
 // `ResumeWidgetProvider` reads `filesDir/widget_state.json`.
@@ -26,9 +42,9 @@ export async function writeWidgetState(state: { title?: string; author?: string 
   }
 }
 
-export async function writeAutoDownloads(ids: string[]) {
+export async function writeAutoDownloads(entries: AutoDownloadEntry[]) {
   try {
-    await FileSystem.writeAsStringAsync(DOWNLOADS_PATH, JSON.stringify(ids || []));
+    await FileSystem.writeAsStringAsync(DOWNLOADS_PATH, JSON.stringify(entries || []));
   } catch (e) {
     console.warn("[AutoCreds] downloads write failed", e);
   }

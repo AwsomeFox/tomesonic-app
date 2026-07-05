@@ -120,9 +120,20 @@ describe("writeAutoCreds", () => {
 });
 
 describe("writeAutoDownloads", () => {
-  it("writes the id list as JSON", async () => {
-    await writeAutoDownloads(["a", "b"]);
-    expect(writeStr).toHaveBeenCalledWith(DOWNLOADS_PATH, JSON.stringify(["a", "b"]));
+  const entry = {
+    id: "a",
+    title: "The Test Book",
+    author: "Test Author",
+    folder: "file:///data/dl/a/",
+    coverPath: "file:///data/dl/a/cover.jpg",
+    currentTime: 42,
+    duration: 180,
+    tracks: [{ filename: "track_0.mp3", startOffset: 0, duration: 180 }],
+  };
+
+  it("writes the rich entries as JSON (native offline browse reads these)", async () => {
+    await writeAutoDownloads([entry]);
+    expect(writeStr).toHaveBeenCalledWith(DOWNLOADS_PATH, JSON.stringify([entry]));
   });
 
   it("writes an empty array for falsy input", async () => {
@@ -132,7 +143,7 @@ describe("writeAutoDownloads", () => {
 
   it("swallows failures with a warning", async () => {
     writeStr.mockRejectedValue(new Error("io"));
-    await expect(writeAutoDownloads(["a"])).resolves.toBeUndefined();
+    await expect(writeAutoDownloads([entry])).resolves.toBeUndefined();
     expect(console.warn).toHaveBeenCalledWith("[AutoCreds] downloads write failed", expect.any(Error));
   });
 });

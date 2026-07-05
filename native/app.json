@@ -50,6 +50,7 @@
       ],
       "./plugins/withCastSingleNotification",
       "./plugins/withUploadSigning",
+      "./plugins/withAutoBrowseIcons",
       [
         "react-native-google-cast",
         {
