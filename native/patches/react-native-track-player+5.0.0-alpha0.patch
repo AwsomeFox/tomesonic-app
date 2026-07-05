@@ -127,7 +127,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..e6369de 100644
+index b495b5a..b7b878a 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -138,7 +138,7 @@ index b495b5a..e6369de 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,21 +105,776 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,21 +105,917 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -231,7 +231,9 @@ index b495b5a..e6369de 100644
 +    }
 +
 +    // ===== Android Auto browse (ABS library) =====
-+    private val absBrowseExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
++    // Small pool: a single slow request must not queue every subsequent
++    // browse tap behind it (the car UI shows a spinner per folder).
++    private val absBrowseExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
 +
 +    // Holds a freshly-refreshed access token in memory so we don't keep hitting
 +    // the file (the JS side rewrites the file too, but not while backgrounded).
@@ -288,7 +290,9 @@ index b495b5a..e6369de 100644
 +            val conn = java.net.URL("${creds.server}$path").openConnection() as java.net.HttpURLConnection
 +            conn.requestMethod = method
 +            conn.setRequestProperty("Authorization", "Bearer ${creds.token}")
-+            conn.connectTimeout = 8000; conn.readTimeout = 12000
++            // Snappy failure matters in a car: the browse cache serves stale
++            // results when this times out, which beats a 20s spinner.
++            conn.connectTimeout = 5000; conn.readTimeout = 10000
 +            if (body != null) {
 +                conn.doOutput = true
 +                conn.setRequestProperty("Content-Type", "application/json")
@@ -312,7 +316,24 @@ index b495b5a..e6369de 100644
 +        return Uri.parse("${creds.server}$path?token=${creds.token}")
 +    }
 +
-+    private fun absBrowsableItem(id: String, title: String, subtitle: String? = null, artworkPath: String? = null, iconRes: String? = null): MediaItem {
++    // Android Auto content-style hints (legacy MediaBrowser extras, forwarded
++    // by Media3): set on a FOLDER to control how its CHILDREN render.
++    // 1 = list, 2 = grid (cover tiles), 3 = category list (tinted icons),
++    // 4 = category grid. Status badges (checkmark/progress/download) overlay
++    // grid tiles too, so grids keep all the indicators.
++    private val STYLE_LIST = 1
++    private val STYLE_GRID = 2
++    private val STYLE_CATEGORY_LIST = 3
++
++    private fun absBrowsableItem(
++        id: String,
++        title: String,
++        subtitle: String? = null,
++        artworkPath: String? = null,
++        iconRes: String? = null,
++        childPlayableStyle: Int? = null,
++        childBrowsableStyle: Int? = null
++    ): MediaItem {
 +        val md = androidx.media3.common.MediaMetadata.Builder()
 +            .setTitle(title).setIsBrowsable(true).setIsPlayable(false)
 +            .setMediaType(androidx.media3.common.MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -322,6 +343,12 @@ index b495b5a..e6369de 100644
 +        // the root/library category folders so browsing scans faster in the car.
 +        if (artworkPath == null && iconRes != null) {
 +            md.setArtworkUri(Uri.parse("android.resource://$packageName/drawable/$iconRes"))
++        }
++        if (childPlayableStyle != null || childBrowsableStyle != null) {
++            val extras = android.os.Bundle()
++            childPlayableStyle?.let { extras.putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", it) }
++            childBrowsableStyle?.let { extras.putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", it) }
++            md.setExtras(extras)
 +        }
 +        return MediaItem.Builder().setMediaId(id).setMediaMetadata(md.build()).build()
 +    }
@@ -473,6 +500,10 @@ index b495b5a..e6369de 100644
 +    private fun absNotifyBrowseChanged(reason: String) {
 +        try {
 +            Timber.i("AA browse: notifyChildrenChanged (%s)", reason)
++            // A connectivity flip invalidates everything cached: an online tree
++            // must never be served while offline, and vice versa.
++            absChildrenCache.clear()
++            absProgressCache = null
 +            mediaSession.notifyChildrenChanged("__ROOT__", Int.MAX_VALUE, null)
 +            mediaSession.notifyChildrenChanged("__DOWNLOADS__", Int.MAX_VALUE, null)
 +        } catch (e: Exception) { Timber.w(e, "notifyChildrenChanged failed") }
@@ -506,19 +537,42 @@ index b495b5a..e6369de 100644
 +        return MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(md.build()).build()
 +    }
 +
-+    // itemId -> mediaProgress (currentTime/duration/isFinished) from /api/me.
-+    private fun absProgressMap(): HashMap<String, org.json.JSONObject> {
-+        val progById = HashMap<String, org.json.JSONObject>()
++    // Progress maps from /api/me, cached ~15s — nearly every browse category
++    // needs them, and refetching per drill-in wastes time on flaky car links.
++    //   items:    itemId            -> mediaProgress (books)
++    //   episodes: "itemId-episodeId" -> mediaProgress (podcast episodes)
++    private data class AbsProgress(
++        val items: HashMap<String, org.json.JSONObject>,
++        val episodes: HashMap<String, org.json.JSONObject>
++    )
++
++    @Volatile private var absProgressCache: Pair<Long, AbsProgress>? = null
++
++    private fun absProgress(): AbsProgress {
++        val now = System.currentTimeMillis()
++        absProgressCache?.let { (at, p) -> if (now - at < 15_000) return p }
++        val items = HashMap<String, org.json.JSONObject>()
++        val episodes = HashMap<String, org.json.JSONObject>()
 +        absGet("/api/me")?.let { meBody ->
 +            org.json.JSONObject(meBody).optJSONArray("mediaProgress")?.let { mp ->
 +                for (i in 0 until mp.length()) {
 +                    val p = mp.getJSONObject(i)
-+                    p.optString("libraryItemId").ifEmpty { null }?.let { progById[it] = p }
++                    val itemId = p.optString("libraryItemId")
++                    if (itemId.isEmpty()) continue
++                    val epId = p.optString("episodeId")
++                    if (epId.isNotEmpty()) episodes["$itemId-$epId"] = p
++                    else items[itemId] = p
 +                }
 +            }
 +        }
-+        return progById
++        val result = AbsProgress(items, episodes)
++        // Only cache non-empty results — an offline fetch shouldn't poison the
++        // cache with emptiness for 15s after the network returns.
++        if (items.isNotEmpty() || episodes.isNotEmpty()) absProgressCache = Pair(now, result)
++        return result
 +    }
++
++    private fun absProgressMap(): HashMap<String, org.json.JSONObject> = absProgress().items
 +
 +    // Continue Listening: annotate each in-progress book with "author • Xh Ym left".
 +    // Ebook-only items and items whose progress is READING-only are filtered —
@@ -629,11 +683,12 @@ index b495b5a..e6369de 100644
 +                .sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
 +        }
 +        return listOf(
-+            absBrowsableItem("latest:$libId", "Recently Added", iconRes = "aa_recent"),
-+            absBrowsableItem("authors:$libId", "Authors", iconRes = "aa_author"),
-+            absBrowsableItem("serieslist:$libId", "Series", iconRes = "aa_series"),
-+            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections"),
-+            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books")
++            absBrowsableItem("latest:$libId", "Recently Added", iconRes = "aa_recent", childPlayableStyle = STYLE_GRID),
++            absBrowsableItem("authors:$libId", "Authors", iconRes = "aa_author", childBrowsableStyle = STYLE_CATEGORY_LIST),
++            absBrowsableItem("serieslist:$libId", "Series", iconRes = "aa_series", childBrowsableStyle = STYLE_CATEGORY_LIST),
++            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
++            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
++            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
 +        )
 +    }
 +
@@ -702,9 +757,30 @@ index b495b5a..e6369de 100644
 +            }
 +        }
 +
++        // Subtitle each series with "X of Y finished" — the bounded set here
++        // (only ACTIVE series) keeps the per-series item queries cheap, and
++        // it's the most glanceable series info possible while driving.
++        val prog = absProgressMap()
 +        return entries
 +            .sortedBy { it.name.lowercase() }
-+            .map { absBrowsableItem(it.id, it.name, "Series", "/api/items/${it.coverId}/cover") }
++            .map { e ->
++                var subtitle = "Series"
++                val libId = e.id.removePrefix("series:").substringBefore(":")
++                val sid = e.id.substringAfterLast(":")
++                absGet("/api/libraries/$libId/items?filter=series.${absB64(sid)}&limit=100&minified=1")?.let { body ->
++                    org.json.JSONObject(body).optJSONArray("results")?.let { arr ->
++                        var total = 0; var finished = 0
++                        for (i in 0 until arr.length()) {
++                            val o = arr.getJSONObject(i)
++                            if (!absHasAudio(o.optJSONObject("media"))) continue
++                            total++
++                            if (prog[o.optString("id")]?.optBoolean("isFinished", false) == true) finished++
++                        }
++                        if (total > 0) subtitle = "$finished of $total finished"
++                    }
++                }
++                absBrowsableItem(e.id, e.name, subtitle, "/api/items/${e.coverId}/cover", childPlayableStyle = STYLE_GRID)
++            }
 +    }
 +
 +    // Android Auto voice/text search across all libraries → playable books.
@@ -742,7 +818,8 @@ index b495b5a..e6369de 100644
 +        val md = o.optJSONObject("media")?.optJSONObject("metadata")
 +        val title = md?.optString("title") ?: "Podcast"
 +        val author = md?.optString("author")
-+        return absBrowsableItem("podcast:$id", title, author, "/api/items/$id/cover")
++        // Episode lists read best as text rows (titles are long, art repeats).
++        return absBrowsableItem("podcast:$id", title, author, "/api/items/$id/cover", childPlayableStyle = STYLE_LIST)
 +    }
 +
 +    private fun absPodcastEpisodes(itemId: String): List<MediaItem> {
@@ -750,15 +827,59 @@ index b495b5a..e6369de 100644
 +        val media = org.json.JSONObject(body).optJSONObject("media") ?: return emptyList()
 +        val podTitle = media.optJSONObject("metadata")?.optString("title")
 +        val episodes = media.optJSONArray("episodes") ?: return emptyList()
-+        return (0 until episodes.length()).mapNotNull {
-+            val ep = episodes.getJSONObject(it)
-+            val epId = ep.optString("id").ifEmpty { return@mapNotNull null }
-+            val title = ep.optString("title", "Episode")
-+            absPlayableItem("play:$itemId::$epId", itemId, title, podTitle, null)
-+        }
++        val epProg = absProgress().episodes
++        // Newest first — that's how podcasts are consumed — capped so a
++        // 500-episode feed doesn't drown the car UI.
++        return (0 until episodes.length())
++            .mapNotNull { i -> episodes.getJSONObject(i) }
++            .sortedByDescending { it.optLong("publishedAt", 0L) }
++            .take(50)
++            .mapNotNull { ep ->
++                val epId = ep.optString("id")
++                if (epId.isEmpty()) return@mapNotNull null
++                val title = ep.optString("title", "Episode")
++                val p = epProg["$itemId-$epId"]
++                val line = absProgressSubtitle(p, podTitle)
++                absPlayableItem("play:$itemId::$epId", itemId, title, line, line, p)
++            }
 +    }
 +
++    // Browse cache: fresh entries serve instantly; on a FAILED refresh (dead
++    // zone mid-drive) stale entries keep the tree browsable instead of showing
++    // an empty screen. Cleared whenever connectivity flips (an online tree
++    // must never render while offline, and vice versa).
++    private data class AbsCacheEntry(val at: Long, val items: List<MediaItem>)
++    private val absChildrenCache = java.util.concurrent.ConcurrentHashMap<String, AbsCacheEntry>()
++    private val ABS_CACHE_FRESH_MS = 45_000L
++    private val ABS_CACHE_STALE_MS = 10 * 60_000L
++
 +    private fun absLoadChildren(parentId: String): List<MediaItem> {
++        // Downloads render from local state — always live, never cached.
++        val cacheable = absOnline() && parentId != "__DOWNLOADS__"
++        val now = System.currentTimeMillis()
++        if (cacheable) {
++            absChildrenCache[parentId]?.let { c ->
++                if (now - c.at < ABS_CACHE_FRESH_MS) return c.items
++            }
++        }
++        val fresh = absLoadChildrenUncached(parentId)
++        if (cacheable) {
++            if (fresh.isNotEmpty()) {
++                absChildrenCache[parentId] = AbsCacheEntry(now, fresh)
++            } else {
++                // Likely a network failure — serve the stale copy if recent.
++                absChildrenCache[parentId]?.let { c ->
++                    if (now - c.at < ABS_CACHE_STALE_MS) {
++                        Timber.i("AA browse: serving stale children for %s", parentId)
++                        return c.items
++                    }
++                }
++            }
++        }
++        return fresh
++    }
++
++    private fun absLoadChildrenUncached(parentId: String): List<MediaItem> {
 +        absRefreshDownloaded()
 +        Timber.i("AA browse: onGetChildren parentId=%s online=%s", parentId, absOnline())
 +        // OFFLINE: the whole tree collapses to the downloaded books, playable
@@ -775,10 +896,10 @@ index b495b5a..e6369de 100644
 +        }
 +        when {
 +            parentId == "__ROOT__" -> return listOf(
-+                absBrowsableItem("__CONTINUE__", "Continue Listening", iconRes = "aa_continue"),
-+                absBrowsableItem("__CONTINUE_SERIES__", "Continue Series", iconRes = "aa_series"),
-+                absBrowsableItem("__DOWNLOADS__", "Downloads", iconRes = "aa_downloads"),
-+                absBrowsableItem("__LIBRARIES__", "Libraries", iconRes = "aa_library")
++                absBrowsableItem("__CONTINUE__", "Continue Listening", iconRes = "aa_continue", childPlayableStyle = STYLE_GRID),
++                absBrowsableItem("__CONTINUE_SERIES__", "Continue Series", iconRes = "aa_series", childBrowsableStyle = STYLE_GRID),
++                absBrowsableItem("__DOWNLOADS__", "Downloads", iconRes = "aa_downloads", childPlayableStyle = STYLE_GRID),
++                absBrowsableItem("__LIBRARIES__", "Libraries", iconRes = "aa_library", childBrowsableStyle = STYLE_CATEGORY_LIST)
              )
 -            .build()
 -        super.onCreate()
@@ -793,7 +914,14 @@ index b495b5a..e6369de 100644
 +                return (0 until arr.length()).map { i ->
 +                    val lib = arr.getJSONObject(i)
 +                    val mediaType = lib.optString("mediaType", "book")
-+                    absBrowsableItem("lib:${lib.optString("id")}:$mediaType", lib.optString("name", "Library"), iconRes = "aa_library")
++                    // Book libraries open into icon categories; podcast
++                    // libraries open straight into a cover grid of shows.
++                    absBrowsableItem(
++                        "lib:${lib.optString("id")}:$mediaType",
++                        lib.optString("name", "Library"),
++                        iconRes = "aa_library",
++                        childBrowsableStyle = if (mediaType == "podcast") STYLE_GRID else STYLE_CATEGORY_LIST
++                    )
 +                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
 +            }
 +            parentId.startsWith("lib:") -> return absLibraryCategories(parentId)
@@ -809,8 +937,19 @@ index b495b5a..e6369de 100644
 +                val arr = org.json.JSONObject(body).optJSONArray("authors") ?: org.json.JSONArray()
 +                return (0 until arr.length()).map { i ->
 +                    val a = arr.getJSONObject(i)
-+                    absBrowsableItem("author:$libId:${a.optString("id")}", a.optString("name", "Author"), iconRes = "aa_author")
++                    val n = a.optInt("numBooks", 0)
++                    val sub = if (n > 0) (if (n == 1) "1 book" else "$n books") else null
++                    absBrowsableItem("author:$libId:${a.optString("id")}", a.optString("name", "Author"), sub, iconRes = "aa_author", childPlayableStyle = STYLE_GRID)
 +                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
++            }
++            parentId.startsWith("listenagain:") -> {
++                // Finished books, alphabetical — quick re-listens without
++                // hunting through the full library.
++                val libId = parentId.removePrefix("listenagain:")
++                return absItemsFromResults(
++                    "/api/libraries/$libId/items?filter=progress.${absB64("finished")}&limit=200&minified=1",
++                    withProgress = true, sortByTitle = true
++                )
 +            }
 +            parentId.startsWith("author:") -> {
 +                val rest = parentId.removePrefix("author:")
@@ -823,7 +962,9 @@ index b495b5a..e6369de 100644
 +                val arr = org.json.JSONObject(body).optJSONArray("results") ?: org.json.JSONArray()
 +                return (0 until arr.length()).map { i ->
 +                    val s = arr.getJSONObject(i)
-+                    absBrowsableItem("series:$libId:${s.optString("id")}", s.optString("name", "Series"), iconRes = "aa_series")
++                    val n = s.optInt("numBooks", s.optJSONArray("books")?.length() ?: 0)
++                    val sub = if (n > 0) (if (n == 1) "1 book" else "$n books") else null
++                    absBrowsableItem("series:$libId:${s.optString("id")}", s.optString("name", "Series"), sub, iconRes = "aa_series", childPlayableStyle = STYLE_GRID)
 +                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
 +            }
 +            // Inside a series: SEQUENCE order (book 1, 2, 3…) with per-book
@@ -927,7 +1068,7 @@ index b495b5a..e6369de 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -293,9 +1049,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1190,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -939,7 +1080,7 @@ index b495b5a..e6369de 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1062,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1203,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1001,7 +1142,7 @@ index b495b5a..e6369de 100644
          }
      }
  
-@@ -449,6 +1239,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1380,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1012,7 +1153,7 @@ index b495b5a..e6369de 100644
      }
  
      @MainThread
-@@ -792,12 +1586,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,12 +1727,21 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1036,7 +1177,7 @@ index b495b5a..e6369de 100644
          progressUpdateJob?.cancel()
          super.onDestroy()
      }
-@@ -925,6 +1728,144 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +1869,154 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1046,8 +1187,18 @@ index b495b5a..e6369de 100644
 +            session: MediaLibrarySession,
 +            browser: MediaSession.ControllerInfo,
 +            params: MediaLibraryService.LibraryParams?
-+        ): ListenableFuture<LibraryResult<MediaItem>> =
-+            Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), params))
++        ): ListenableFuture<LibraryResult<MediaItem>> {
++            // Global content-style defaults: playable children render as COVER
++            // GRIDS (fast visual scanning), browsable children as category
++            // lists with tinted icons. Folders override per-level.
++            val rootExtras = android.os.Bundle().apply {
++                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
++                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
++                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
++            }
++            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
++            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
++        }
 +
 +        override fun onGetItem(
 +            session: MediaLibrarySession,
@@ -1181,7 +1332,7 @@ index b495b5a..e6369de 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +1876,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2027,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
