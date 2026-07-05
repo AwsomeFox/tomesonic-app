@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..8bd113c 100644
+index b495b5a..f4c6e4f 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -192,7 +192,7 @@ index b495b5a..8bd113c 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,21 +105,980 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,21 +105,1023 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -611,11 +611,17 @@ index b495b5a..8bd113c 100644
 +    ): MediaItem {
 +        val creds = absCreds()
 +        val downloaded = absDownloads.containsKey(coverItemId)
-+        // Percent goes at the FRONT of the title ("42% • Critical Mass") — car
-+        // screens truncate subtitles so early that trailing progress text never
-+        // showed, and the cover art already identifies the book.
++        // Progress state goes at the FRONT of the title ("42% • Critical Mass",
++        // "✓ Critical Mass") — car screens truncate subtitles so early that
++        // trailing progress text never showed, the native badges are
++        // unreliable across head units, and the cover already identifies the
++        // book.
 +        val pct = absProgressPct(prog)
-+        val displayTitle = if (pct != null) "$pct% • $title" else title
++        val displayTitle = when {
++            prog?.optBoolean("isFinished", false) == true -> "✓ $title"
++            pct != null -> "$pct% • $title"
++            else -> title
++        }
 +        val md = androidx.media3.common.MediaMetadata.Builder()
 +            .setTitle(displayTitle).setArtist(author ?: "")
 +            .setIsBrowsable(false).setIsPlayable(true)
@@ -758,7 +764,14 @@ index b495b5a..8bd113c 100644
 +            "UTF-8"
 +        )
 +
-+    private fun absItemsFromResults(path: String, withProgress: Boolean = false, sortByTitle: Boolean = false): List<MediaItem> {
++    private fun absItemsFromResults(
++        path: String,
++        withProgress: Boolean = false,
++        sortByTitle: Boolean = false,
++        // Series drill-in: lead the subtitle with "Book N" (the sequence) —
++        // the author repeats on every tile there and says nothing useful.
++        sequenceSubtitle: Boolean = false
++    ): List<MediaItem> {
 +        val body = absGet(path) ?: return emptyList()
 +        val arr = org.json.JSONObject(body).optJSONArray("results") ?: org.json.JSONArray()
 +        val items: List<MediaItem> = if (!withProgress) {
@@ -772,20 +785,37 @@ index b495b5a..8bd113c 100644
 +                val md = o.optJSONObject("media")?.optJSONObject("metadata")
 +                val title = absStr(md, "title") ?: "Audiobook"
 +                val author = absStr(md, "authorName")
++                val lead = if (sequenceSubtitle) absSequenceLabel(md) ?: author else author
 +                val p = prog[id]
 +                // Progress/"Finished" in the artist line (Android Auto shows it
 +                // under the title); native checkmark/progress-bar via extras.
-+                val line = absProgressSubtitle(p, author)
++                val line = absProgressSubtitle(p, lead)
 +                absPlayableItem("play:$id", id, title, line, line, p)
 +            }
 +        }
 +        return if (sortByTitle) items.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() } else items
 +    }
 +
-+    private fun absItemsFiltered(libId: String, type: String, id: String, sort: String? = null, withProgress: Boolean = false): List<MediaItem> {
++    // "Book 3" from the item's series sequence. Series-filtered results carry
++    // it in metadata.series.sequence; minified rows fall back to the
++    // "Name #3" suffix on seriesName.
++    private fun absSequenceLabel(md: org.json.JSONObject?): String? {
++        val seq = md?.optJSONObject("series")?.let { absStr(it, "sequence") }
++            ?: absStr(md, "seriesName")?.substringAfterLast('#', "")?.trim()?.ifEmpty { null }
++        return seq?.let { "Book $it" }
++    }
++
++    private fun absItemsFiltered(
++        libId: String,
++        type: String,
++        id: String,
++        sort: String? = null,
++        withProgress: Boolean = false,
++        sequenceSubtitle: Boolean = false
++    ): List<MediaItem> {
 +        var path = "/api/libraries/$libId/items?filter=$type.${absB64(id)}&limit=200&minified=1"
 +        if (sort != null) path += "&sort=$sort"
-+        return absItemsFromResults(path, withProgress)
++        return absItemsFromResults(path, withProgress, sequenceSubtitle = sequenceSubtitle)
 +    }
 +
 +    private fun absLibraryCategories(parentId: String): List<MediaItem> {
@@ -1079,16 +1109,29 @@ index b495b5a..8bd113c 100644
 +                val arr = org.json.JSONObject(body).optJSONArray("results") ?: org.json.JSONArray()
 +                return (0 until arr.length()).map { i ->
 +                    val s = arr.getJSONObject(i)
-+                    val n = s.optInt("numBooks", s.optJSONArray("books")?.length() ?: 0)
++                    val books = s.optJSONArray("books")
++                    val n = s.optInt("numBooks", books?.length() ?: 0)
 +                    val sub = if (n > 0) (if (n == 1) "1 book" else "$n books") else null
-+                    absBrowsableItem("series:$libId:${s.optString("id")}", s.optString("name", "Series"), sub, iconRes = "aa_series", childPlayableStyle = STYLE_GRID)
++                    // "Series • Author" — the author of a series matters when
++                    // scanning the list and isn't visible anywhere else here.
++                    val author = books?.optJSONObject(0)
++                        ?.optJSONObject("media")?.optJSONObject("metadata")
++                        ?.let { absStr(it, "authorName") }
++                    val name = s.optString("name", "Series")
++                    val label = if (author.isNullOrEmpty()) name else "$name • $author"
++                    absBrowsableItem("series:$libId:${s.optString("id")}", label, sub, iconRes = "aa_series", childPlayableStyle = STYLE_GRID)
 +                }.sortedBy { (it.mediaMetadata.title ?: "").toString().lowercase() }
 +            }
-+            // Inside a series: SEQUENCE order (book 1, 2, 3…) with per-book
-+            // finished checkmarks / time-left, which is what you want in a car.
++            // Inside a series: SEQUENCE order (book 1, 2, 3…) with "Book N"
++            // subtitles and per-book finished/time-left, which is what you
++            // want in a car.
 +            parentId.startsWith("series:") -> {
 +                val rest = parentId.removePrefix("series:")
-+                return absItemsFiltered(rest.substringBefore(":"), "series", rest.substringAfter(":"), "media.metadata.series.sequence", withProgress = true)
++                return absItemsFiltered(
++                    rest.substringBefore(":"), "series", rest.substringAfter(":"),
++                    "media.metadata.series.sequence",
++                    withProgress = true, sequenceSubtitle = true
++                )
 +            }
 +            parentId.startsWith("collections:") -> {
 +                val libId = parentId.removePrefix("collections:")
@@ -1185,7 +1228,7 @@ index b495b5a..8bd113c 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -293,9 +1253,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1296,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1197,7 +1240,7 @@ index b495b5a..8bd113c 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1266,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1309,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1259,7 +1302,7 @@ index b495b5a..8bd113c 100644
          }
      }
  
-@@ -449,6 +1443,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1486,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1270,7 +1313,7 @@ index b495b5a..8bd113c 100644
      }
  
      @MainThread
-@@ -792,12 +1790,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,12 +1833,21 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1294,7 +1337,7 @@ index b495b5a..8bd113c 100644
          progressUpdateJob?.cancel()
          super.onDestroy()
      }
-@@ -925,6 +1932,168 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +1975,168 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1463,7 +1506,7 @@ index b495b5a..8bd113c 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +2104,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2147,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1484,7 +1527,7 @@ index b495b5a..8bd113c 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2134,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2177,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1496,7 +1539,7 @@ index b495b5a..8bd113c 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2146,34 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2189,34 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
