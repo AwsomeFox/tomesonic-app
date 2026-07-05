@@ -27,10 +27,14 @@ export interface AutoDownloadEntry {
 }
 
 // Mirrors the current/last book for the home-screen "Resume" widget. Native
-// `ResumeWidgetProvider` reads `filesDir/widget_state.json`.
+// `ResumeWidgetProvider` reads `filesDir/widget_state.json`, and the Media3
+// service's onPlaybackResumption uses `itemId` to natively restart the last
+// book from Android Auto's resume card with JS asleep.
 const WIDGET_STATE_PATH = `${FileSystem.documentDirectory}widget_state.json`;
 
-export async function writeWidgetState(state: { title?: string; author?: string } | null) {
+export async function writeWidgetState(
+  state: { title?: string; author?: string; itemId?: string } | null
+) {
   try {
     if (state && state.title) {
       await FileSystem.writeAsStringAsync(WIDGET_STATE_PATH, JSON.stringify(state));

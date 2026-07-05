@@ -1106,8 +1106,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         currentChapterIndex: startChapterIdx,
       });
 
-      // Mirror the current book to the home-screen resume widget.
-      writeWidgetState({ title: bookTitle, author: bookAuthor });
+      // Mirror the current book to the home-screen resume widget and to the
+      // native Media3 service (itemId powers Android Auto's resume card).
+      writeWidgetState({ title: bookTitle, author: bookAuthor, itemId: libraryItemId || undefined });
 
       if (playWhenReady) {
         if (get().isCasting) {

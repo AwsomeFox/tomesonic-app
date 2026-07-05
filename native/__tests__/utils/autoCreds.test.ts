@@ -157,6 +157,11 @@ describe("writeWidgetState", () => {
     );
   });
 
+  it("includes itemId when provided (Android Auto resumption reads it)", async () => {
+    await writeWidgetState({ title: "Dune", author: "Frank Herbert", itemId: "li_123" });
+    expect(lastWrittenJson()).toEqual({ title: "Dune", author: "Frank Herbert", itemId: "li_123" });
+  });
+
   it("deletes the state file for null or title-less state", async () => {
     await writeWidgetState(null);
     expect(del).toHaveBeenCalledWith(WIDGET_PATH, { idempotent: true });

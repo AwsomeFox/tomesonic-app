@@ -96,8 +96,12 @@ describe("usePlaybackStore sessions", () => {
       // Not asked to play.
       expect(TrackPlayer.play).not.toHaveBeenCalled();
       expect(s.isPlaying).toBe(false);
-      // Home-screen widget mirrors the book.
-      expect(writeWidgetState).toHaveBeenCalledWith({ title: "The Hobbit", author: "Tolkien" });
+      // Home-screen widget + native AA resumption mirror the book.
+      expect(writeWidgetState).toHaveBeenCalledWith({
+        title: "The Hobbit",
+        author: "Tolkien",
+        itemId: "item1",
+      });
     });
 
     it("plays when asked and expands the player", async () => {
