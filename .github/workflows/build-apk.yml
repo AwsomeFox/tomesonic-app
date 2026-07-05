@@ -74,10 +74,13 @@ jobs:
         # Run from native/android (not the repo root): the Sentry gradle
         # snippet resolves its script path via `node --print require.resolve`,
         # which needs native/node_modules reachable from the working directory.
+        # arm64-v8a covers every phone from ~2015 on; x86_64 covers emulators.
+        # The New Architecture CMake-compiles all native libs per ABI, so
+        # dropping the dead 32-bit ABIs halves the native compile time.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a,x86_64
 
       - name: rename apk
         working-directory: native/android/app/build/outputs/apk/debug/

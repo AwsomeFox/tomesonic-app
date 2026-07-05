@@ -50,10 +50,31 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
+      # Flow-only iterations (the common trigger: .maestro/** changed) reuse
+      # the previously built APK — no npm ci, no gradle, straight to the
+      # emulator. Any change to app sources produces a new key and rebuilds.
+      - name: cache built APK
+        id: apk-cache
+        uses: actions/cache@v4
+        with:
+          path: native/android/app/build/outputs/apk/release/app-release.apk
+          key: e2e-apk-x86_64-${{ hashFiles('native/**', '!native/.maestro/**') }}
+
+      # Compiler cache for the NDK/C++ compile — when sources do change, most
+      # translation units are identical and hit the cache (~8-10 min → ~3-4).
+      - name: ccache
+        if: steps.apk-cache.outputs.cache-hit != 'true'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: e2e-ndk-x86_64
+          max-size: 1G
+
       - name: install dependencies
+        if: steps.apk-cache.outputs.cache-hit != 'true'
         run: npm ci --prefix native
 
       - name: build release APK (x86_64 only)
+        if: steps.apk-cache.outputs.cache-hit != 'true'
         # RELEASE, not debug: debug APKs don't embed the JS bundle (they load
         # from a Metro dev server, which doesn't exist on the CI emulator —
         # the app would sit on the red "unable to load script" screen).
@@ -63,6 +84,9 @@ jobs:
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
+          # CMake honors these env vars — routes clang through ccache.
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
         run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
 
       - name: seed media fixture (generated audiobook)
