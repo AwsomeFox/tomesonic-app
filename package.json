@@ -7,11 +7,6 @@
     "android": "npm run --prefix native android",
     "ios": "npm run --prefix native ios",
     "web": "npm run --prefix native web",
-    "sync-version": "node -e \"const pkg = require('./native/package.json'); const fs = require('fs'); const gradlePath = './native/android/app/build.gradle'; let gradle = fs.readFileSync(gradlePath, 'utf8'); const version = pkg.version.replace(/-beta.*|-alpha.*|-rc.*/, ''); const parts = version.split('.').map(Number); const versionCode = parts[0] * 10000 + parts[1] * 100 + parts[2]; gradle = gradle.replace(/versionCode \\d+/, 'versionCode ' + versionCode); gradle = gradle.replace(/versionName \\\"[^\\\"]*\\\"/, 'versionName \\\"' + pkg.version + '\\\"'); fs.writeFileSync(gradlePath, gradle); console.log('✓ Synced version', pkg.version, 'and versionCode', versionCode, 'to native/android/app/build.gradle');\""
-  },
-  "dependencies": {
-    "expo": "^57.0.2",
-    "react": "19.2.3",
-    "react-native": "0.86.0"
+    "sync-version": "node -e \"const pkg = require('./native/package.json'); const fs = require('fs'); const gradlePath = './native/android/app/build.gradle'; let gradle = fs.readFileSync(gradlePath, 'utf8'); const version = pkg.version.replace(/-beta.*|-alpha.*|-rc.*/, ''); const parts = version.split('.').map(Number); const versionCode = parts[0] * 10000 + parts[1] * 100 + parts[2]; gradle = gradle.replace(/versionCode \\d+/, 'versionCode ' + versionCode); gradle = gradle.replace(/versionName \\\"[^\\\"]*\\\"/, 'versionName \\\"' + pkg.version + '\\\"'); fs.writeFileSync(gradlePath, gradle); console.log('\u2713 Synced version', pkg.version, 'and versionCode', versionCode, 'to native/android/app/build.gradle');\""
   }
 }

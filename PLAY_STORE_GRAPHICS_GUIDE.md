@@ -72,7 +72,7 @@ Create screenshots showing:
 ### **Method 1: Android Studio Emulator**
 ```bash
 # Start emulator and take screenshots
-npx cap run android
+cd native && npx expo run:android
 # Use emulator's screenshot tool
 ```
 
