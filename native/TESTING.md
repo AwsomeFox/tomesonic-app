@@ -94,8 +94,6 @@ network around it via adb).
 Reader flow: `80-reader` opens the seeded EPUB (generated in CI by
 `.maestro/make-epub.py`), waits for foliate's page indicator, exercises the
 TOC/settings sheets, and asserts the Continue Reading shelf appears after
-closing — the whole reader→PATCH→shelf progress pipeline. NOTE: the reader
-loads foliate-js from the jsdelivr CDN (H2 tracks vendoring it offline), so
-80-reader is tagged `manual` and runs NON-FATALLY in CI — the 10 other flows
-are the green gate. Audio flows take a `BOOK` env (CI pins "The Test Book by
+closing — the whole reader→PATCH→shelf progress pipeline. foliate-js is vendored (utils/foliateBundle.ts), so the reader renders
+offline and this flow is a normal blocking part of the CI gate. Audio flows take a `BOOK` env (CI pins "The Test Book by
 .*" so the ebook card isn't grabbed).
