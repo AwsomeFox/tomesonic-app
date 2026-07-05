@@ -29,26 +29,32 @@ env:
 - extendedWaitUntil:
     visible: "Collapse player"
     timeout: 30000
-# Chapter transport.
-- assertVisible: "Chapter 1 of 2"
+# Pause FIRST so the position stops drifting — a prior flow may have left the
+# session mid-book and still playing, so we can't assume which chapter we
+# resume in. Everything below is then deterministic.
+- tapOn: "Pause"
+- assertVisible: "Chapter . of 2"
+# Jump to a KNOWN chapter via the modal (absolute), not by assuming resume.
+# Modal rows carry a "Chapter N, starts at …" label — distinct from the
+# now-playing "Chapter N of 2" caption, so the tap is unambiguous.
+- tapOn: "Chapters"
+- extendedWaitUntil:
+    visible: "Chapter 1, starts at .*"
+    timeout: 5000
+- tapOn: "Chapter 1, starts at .*"
+- extendedWaitUntil:
+    visible: "Chapter 1 of 2"
+    timeout: 10000
+# Next-chapter button.
 - tapOn: "Next chapter"
 - extendedWaitUntil:
     visible: "Chapter 2 of 2"
     timeout: 10000
-# Within 3s of a chapter start, previous goes to the PREVIOUS chapter
-# (after 3s it restarts the current one).
+# Previous-chapter button: paused at chapter 2's start (within < 3s), so it
+# goes to the PREVIOUS chapter rather than restarting the current one.
 - tapOn: "Previous chapter"
 - extendedWaitUntil:
     visible: "Chapter 1 of 2"
-    timeout: 10000
-# Jump via the chapters modal.
-- tapOn: "Chapters"
-- extendedWaitUntil:
-    visible: "Chapter 2"
-    timeout: 5000
-- tapOn: "Chapter 2"
-- extendedWaitUntil:
-    visible: "Chapter 2 of 2"
     timeout: 10000
 # Sleep timer: set the smallest preset, chip shows remaining, cancel.
 - tapOn: "Sleep timer"
@@ -64,6 +70,5 @@ env:
 - extendedWaitUntil:
     visible: "Sleep timer"
     timeout: 5000
-# Leave things quiet for the next flow.
-- tapOn: "Pause"
+# Already paused above — just collapse for the next flow.
 - tapOn: "Collapse player"
