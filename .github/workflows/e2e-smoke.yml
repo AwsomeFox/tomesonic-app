@@ -35,6 +35,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # Free disk before the build: this job stacks the docker ABS image, the
+      # emulator system image, gradle caches, ccache, and the New-Arch NDK
+      # object files onto the runner's ~14 GB — packageRelease failed with an
+      # IncrementalSplitter (ENOSPC) once the ccache-cold build (~5 GB of .o)
+      # landed. Dropping the unused preinstalled toolchains reclaims ~25 GB.
+      - name: free disk space
+        run: |
+          # Keep the Android SDK/NDK — the New-Arch build compiles against it.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            "$AGENT_TOOLSDIRECTORY"/Ruby "$AGENT_TOOLSDIRECTORY"/PyPy || true
+          df -h /
+
       - name: checkout sources
         uses: actions/checkout@v3
 
