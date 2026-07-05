@@ -1,21 +1,56 @@
 name: Deploy to Play Store
 
+# Two ways to release:
+#
+#  1. MANUAL (recommended): Actions → "Deploy to Play Store" → Run workflow.
+#     Give it the version (e.g. 1.0.1) and the track. The workflow bumps every
+#     version file (build.gradle versionName+versionCode, app.json,
+#     package.json) via native/scripts/set-version.mjs, commits that bump back
+#     to the branch you dispatched on, tags it v<version>, builds the signed
+#     AAB, and uploads. versionCode defaults to current+1 — pass it explicitly
+#     the FIRST time (it must exceed the highest code ever uploaded to Play,
+#     including the old Vue app's).
+#
+#  2. TAG PUSH: `git tag v1.0.1 && git push origin v1.0.1` releases that
+#     version to the alpha track. The version files are set in-workspace from
+#     the tag name before building; the bump commit is pushed back to the
+#     default branch best-effort (skipped with a warning if the tag isn't on
+#     its head).
+#
+# NOTE: the tag the manual path creates is pushed with GITHUB_TOKEN, which by
+# design does NOT re-trigger this workflow — no double releases.
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
-      track:
-        description: 'Release track (internal, closed, alpha, beta, production)'
+      version:
+        description: 'Version to release, e.g. 1.0.1 (bumps version files, commits + tags)'
         required: true
-        default: 'alpha'
+        type: string
+      versionCode:
+        description: 'Android versionCode (optional; defaults to current+1). Must exceed the highest code ever uploaded to Play.'
+        required: false
+        type: string
+      track:
+        description: 'Release track'
+        required: true
+        default: 'internal'
         type: choice
         options:
           - internal
           - alpha
           - beta
           - production
+
+# Never run two releases at once, and never cancel one mid-upload.
+concurrency:
+  group: play-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the version-bump commit + tag
 
 jobs:
   deploy:
@@ -24,12 +59,16 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
+        with:
+          # Full history so the bump commit can be pushed and tagged.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
+          cache-dependency-path: native/package-lock.json
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -39,6 +78,53 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Tag push: v1.0.1 → 1.0.1
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a valid version (expected e.g. 1.0.1)"; exit 1
+          fi
+          # Manual runs create the tag themselves — refuse a version that's
+          # already released instead of clobbering it.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && git rev-parse -q --verify "refs/tags/v$VERSION" > /dev/null; then
+            echo "::error::tag v$VERSION already exists — bump the version"; exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version files
+        id: bump
+        run: node native/scripts/set-version.mjs "${{ steps.resolve.outputs.version }}" ${{ github.event.inputs.versionCode }}
+
+      - name: Commit and tag version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add native/android/app/build.gradle native/app.json native/package.json
+          if git diff --cached --quiet; then
+            echo "version files already at ${{ steps.resolve.outputs.version }} — nothing to commit"
+          else
+            git commit -m "chore(release): v${{ steps.resolve.outputs.version }} (versionCode ${{ steps.bump.outputs.versionCode }})"
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git tag -a "v${{ steps.resolve.outputs.version }}" -m "Release v${{ steps.resolve.outputs.version }}"
+            git push origin "v${{ steps.resolve.outputs.version }}"
+          else
+            # Tag run: land the bump on the default branch when the tag sits on
+            # its head; otherwise build still uses the bumped workspace.
+            git push origin "HEAD:${{ github.event.repository.default_branch }}" \
+              || echo "::warning::could not push version bump to ${{ github.event.repository.default_branch }} (tag not on its head?) — release continues with the in-workspace bump"
+          fi
 
       - name: Install dependencies
         run: npm ci --prefix native

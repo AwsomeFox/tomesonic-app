@@ -49,6 +49,7 @@
         }
       ],
       "./plugins/withCastSingleNotification",
+      "./plugins/withUploadSigning",
       [
         "react-native-google-cast",
         {
