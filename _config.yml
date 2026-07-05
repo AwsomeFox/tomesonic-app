@@ -1,0 +1,14 @@
+# GitHub Pages (legacy Jekyll build from the master root). The site only
+# exists to serve the root-level docs — above all PRIVACY_POLICY.md, which the
+# Play Store listing links to. Everything app-source is excluded: Jekyll runs
+# Liquid over every markdown file it sees, and code snippets containing `{{`
+# (e.g. native/TESTING.md) kill the whole Pages build with a Liquid syntax
+# error.
+exclude:
+  - native/
+  - scripts/
+  - screenshots/
+  - .github/
+  - .vscode/
+  - justfile
+  - package.json
