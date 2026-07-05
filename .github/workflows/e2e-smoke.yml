@@ -1,20 +1,19 @@
 name: E2E (Maestro)
 
-# Opt-in (manual trigger): full end-to-end run on an Android emulator against
-# a THROWAWAY Audiobookshelf server spun up inside the job — no real server or
-# secrets involved. The job:
-#   1. builds the debug APK
-#   2. starts the official ABS docker image, creates a root user via /init,
-#      and seeds a generated audiobook (ffmpeg sine tones) into a library
-#   3. boots an emulator, installs the APK, logs in through the real Connect
-#      screen (10-login against http://10.0.2.2:13378), then runs every flow
+# Full end-to-end run on an Android emulator against a THROWAWAY Audiobookshelf
+# server spun up inside the job — no real server or secrets. Split into two
+# jobs so neither runs out of the runner's ~14 GB disk (packageRelease hit
+# ENOSPC when the gradle build, docker ABS image, emulator system image, and
+# NDK objects all stacked in one job):
+#   build:  compile the x86_64 release APK, upload it as an artifact
+#   e2e:    download the APK, spin up ABS + a seeded library, boot the
+#           emulator, and run every flow (login → playback → chapters/sleep →
+#           search → series → settings → resume → reader → download → offline)
 # Catches what jest can't: native boot crashes, real Media3 playback, real
-# navigation, and the actual ABS login/session handshake. ~30 min of runner.
-# workflow_dispatch works once this file lands on the default branch (post
-# merge). Until then, a paths-scoped PUSH trigger runs it — push-event paths
-# are evaluated per push, unlike pull_request paths which match against the
-# WHOLE PR diff (that fired an E2E run on every push to the branch once the
-# PR contained .maestro files, each cancelling the previous mid-flight).
+# navigation, the ABS login/session handshake, and the offline ebook reader.
+# workflow_dispatch registers once this file lands on the default branch; until
+# then a paths-scoped PUSH trigger runs it (push paths are per-push, unlike
+# pull_request paths which match the whole PR diff).
 on:
   workflow_dispatch:
   push:
@@ -25,24 +24,20 @@ on:
       - 'native/.maestro/**'
       - '.github/workflows/e2e-smoke.yml'
 
-# A newer E2E push cancels the in-flight run (each costs ~30 runner-minutes).
+# A newer E2E push cancels the in-flight run (each costs runner-minutes).
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  e2e:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
-      # Free disk before the build: this job stacks the docker ABS image, the
-      # emulator system image, gradle caches, ccache, and the New-Arch NDK
-      # object files onto the runner's ~14 GB — packageRelease failed with an
-      # IncrementalSplitter (ENOSPC) once the ccache-cold build (~5 GB of .o)
-      # landed. Dropping the unused preinstalled toolchains reclaims ~25 GB.
+      # Reclaim ~20 GB of unused preinstalled toolchains so the NDK compile +
+      # APK packaging have headroom (keep the Android SDK/NDK the build needs).
       - name: free disk space
         run: |
-          # Keep the Android SDK/NDK — the New-Arch build compiles against it.
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
             /opt/hostedtoolcache/CodeQL /usr/share/swift \
             "$AGENT_TOOLSDIRECTORY"/Ruby "$AGENT_TOOLSDIRECTORY"/PyPy || true
@@ -68,8 +63,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       # Flow-only iterations (the common trigger: .maestro/** changed) reuse
-      # the previously built APK — no npm ci, no gradle, straight to the
-      # emulator. Any change to app sources produces a new key and rebuilds.
+      # the previously built APK — no npm ci, no gradle. Any change to app
+      # sources produces a new key and rebuilds.
       - name: cache built APK
         id: apk-cache
         uses: actions/cache@v4
@@ -77,8 +72,8 @@ jobs:
           path: native/android/app/build/outputs/apk/release/app-release.apk
           key: e2e-apk-x86_64-${{ hashFiles('native/**', '!native/.maestro/**') }}
 
-      # Compiler cache for the NDK/C++ compile — when sources do change, most
-      # translation units are identical and hit the cache (~8-10 min → ~3-4).
+      # Compiler cache for the NDK/C++ compile — source-change rebuilds hit
+      # warm object caches (~8-10 min → ~3-4).
       - name: ccache
         if: steps.apk-cache.outputs.cache-hit != 'true'
         uses: hendrikmuhs/ccache-action@v1.2
@@ -92,19 +87,47 @@ jobs:
 
       - name: build release APK (x86_64 only)
         if: steps.apk-cache.outputs.cache-hit != 'true'
-        # RELEASE, not debug: debug APKs don't embed the JS bundle (they load
-        # from a Metro dev server, which doesn't exist on the CI emulator —
-        # the app would sit on the red "unable to load script" screen).
-        # x86_64 ONLY: the New Architecture CMake-compiles every native lib
-        # per ABI; all four ABIs took ~29 min on the runner and the emulator
-        # only runs x86_64 — one ABI cuts the native compile ~4x.
+        # RELEASE, not debug: debug APKs load JS from a Metro dev server that
+        # doesn't exist on the CI emulator. x86_64 ONLY: the New Architecture
+        # CMake-compiles every native lib per ABI and the emulator only runs
+        # x86_64, so one ABI cuts the native compile ~4x.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
-          # CMake honors these env vars — routes clang through ccache.
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
         run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
+
+      - name: upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-release-apk
+          path: native/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # This job runs the docker ABS image + emulator system image; free the
+      # same headroom so packaging/booting has room (no gradle/NDK here).
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            "$AGENT_TOOLSDIRECTORY"/Ruby "$AGENT_TOOLSDIRECTORY"/PyPy || true
+          df -h /
+
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      # Land the built APK where ci-flows.sh installs it from.
+      - name: download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-release-apk
+          path: native/android/app/build/outputs/apk/release/
 
       - name: seed media fixture (generated audiobook + ebook)
         run: |
