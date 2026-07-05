@@ -127,7 +127,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..02376ed 100644
+index b495b5a..8bd113c 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -138,7 +138,7 @@ index b495b5a..02376ed 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,21 +105,976 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,21 +105,980 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -388,12 +388,16 @@ index b495b5a..02376ed 100644
 +            val finished = prog.optBoolean("isFinished", false)
 +            val duration = prog.optDouble("duration", 0.0)
 +            val current = prog.optDouble("currentTime", 0.0)
++            // Key strings verified against media3 1.8 MediaConstants — the
++            // "obvious" android.media.description.extra.* names are wrong and
++            // render nothing (DESCRIPTION_EXTRAS_KEY_COMPLETION_STATUS is
++            // literally "android.media.extra.PLAYBACK_STATUS").
 +            when {
-+                finished -> b.putInt("android.media.description.extra.COMPLETION_STATUS", 2) // checkmark
++                finished -> b.putInt("android.media.extra.PLAYBACK_STATUS", 2) // checkmark
 +                current > 0 && duration > 0 -> {
-+                    b.putInt("android.media.description.extra.COMPLETION_STATUS", 1) // partially played
++                    b.putInt("android.media.extra.PLAYBACK_STATUS", 1) // partially played
 +                    b.putDouble(
-+                        "android.media.description.extra.COMPLETION_PERCENTAGE",
++                        "androidx.media.MediaItem.Extras.COMPLETION_PERCENTAGE",
 +                        (current / duration).coerceIn(0.0, 1.0)
 +                    )
 +                }
@@ -1127,7 +1131,7 @@ index b495b5a..02376ed 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -293,9 +1249,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1253,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1139,7 +1143,7 @@ index b495b5a..02376ed 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1262,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1266,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1201,7 +1205,7 @@ index b495b5a..02376ed 100644
          }
      }
  
-@@ -449,6 +1439,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1443,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1212,7 +1216,7 @@ index b495b5a..02376ed 100644
      }
  
      @MainThread
-@@ -792,12 +1786,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,12 +1790,21 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1236,7 +1240,7 @@ index b495b5a..02376ed 100644
          progressUpdateJob?.cancel()
          super.onDestroy()
      }
-@@ -925,6 +1928,168 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +1932,168 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1405,7 +1409,7 @@ index b495b5a..02376ed 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +2100,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2104,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1426,7 +1430,7 @@ index b495b5a..02376ed 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2130,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2134,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1438,7 +1442,7 @@ index b495b5a..02376ed 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2142,34 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2146,34 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
