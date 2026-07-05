@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-index 5a1b2bf..216fa48 100644
+index 5a1b2bf..9f41d74 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 @@ -14,7 +14,11 @@ open class AudioItem(
@@ -15,11 +15,27 @@ index 5a1b2bf..216fa48 100644
  ) {
      fun toMediaItem(): MediaItem {
          val extras = Bundle().apply {
-@@ -36,12 +40,18 @@ open class AudioItem(
+@@ -30,24 +34,70 @@ open class AudioItem(
+             putString("type", type.toString())
+             putString("uri", audioUrl)
+         }
+-        val mediaMetadata = MediaMetadata.Builder()
++        val mdBuilder = MediaMetadata.Builder()
+             .setTitle(title)
+             .setArtist(artist)
              .setArtworkUri(Uri.parse(artwork))
              .setExtras(extras)
-             .build()
+-            .build()
 -        return MediaItem.Builder()
++        // Android Auto's QUEUE view builds row icons ONLY from inline
++        // artworkData (media3's legacy stub never loads artworkUri for queue
++        // items, and the car process can't read app-private file:// paths
++        // anyway). Local covers get inlined as scaled bytes; http artwork
++        // keeps the URI, which the queue's iconUri path can fetch.
++        localArtworkBytes(artwork)?.let {
++            mdBuilder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
++        }
++        val mediaMetadata = mdBuilder.build()
 +        val builder = MediaItem.Builder()
              .setMediaId(mediaId ?: audioUrl)
              .setUri(audioUrl)
@@ -36,6 +52,44 @@ index 5a1b2bf..216fa48 100644
      }
  
      companion object {
+         fun fromMediaItem(item: MediaItem): AudioItem {
+             return item.localConfiguration!!.tag as AudioItem
+         }
++
++        // One book cover backs every chapter queue item, so cache the encoded
++        // bytes by path — a whole queue costs a single decode.
++        private val artByteCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
++
++        private fun localArtworkBytes(artwork: String?): ByteArray? {
++            if (artwork.isNullOrEmpty()) return null
++            val path = when {
++                artwork.startsWith("file://") -> Uri.parse(artwork).path ?: return null
++                artwork.startsWith("/") -> artwork
++                else -> return null // http(s)/content: leave as artworkUri
++            }
++            artByteCache[path]?.let { return it }
++            return try {
++                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
++                android.graphics.BitmapFactory.decodeFile(path, bounds)
++                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
++                var sample = 1
++                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 512) sample *= 2
++                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
++                val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return null
++                val out = java.io.ByteArrayOutputStream()
++                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out)
++                bmp.recycle()
++                val bytes = out.toByteArray()
++                if (artByteCache.size >= 4) artByteCache.clear()
++                artByteCache[path] = bytes
++                bytes
++            } catch (e: Exception) {
++                null
++            }
++        }
+     }
+ }
+ 
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt
 index f8b9ca1..30df26d 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt
