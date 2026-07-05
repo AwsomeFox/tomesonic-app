@@ -62,6 +62,13 @@ jobs:
         with:
           # Full history so the bump commit can be pushed and tagged.
           fetch-depth: 0
+          # Branch protection on master requires status checks, and the
+          # default GITHUB_TOKEN cannot bypass them — pushing the version-bump
+          # commit gets rejected (GH006). An admin PAT stored as
+          # RELEASE_PUSH_TOKEN bypasses (enforce_admins is off). Falls back to
+          # the default token, in which case the bump push degrades to a
+          # warning below.
+          token: ${{ secrets.RELEASE_PUSH_TOKEN || github.token }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -118,9 +125,18 @@ jobs:
             git commit -m "chore(release): v${{ steps.resolve.outputs.version }} (versionCode ${{ steps.bump.outputs.versionCode }})"
           fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            # Protected branches reject the default token (required checks).
+            # The tag still pins the exact released tree (bump included), and
+            # the build uses the bumped workspace — so continue with a loud
+            # warning instead of failing the release.
+            git push origin "HEAD:${GITHUB_REF_NAME}" \
+              || echo "::warning::could not push the version bump to ${GITHUB_REF_NAME} (branch protection?) — set a RELEASE_PUSH_TOKEN secret (admin PAT) to fix; releasing from the in-workspace bump"
             git tag -a "v${{ steps.resolve.outputs.version }}" -m "Release v${{ steps.resolve.outputs.version }}"
-            git push origin "v${{ steps.resolve.outputs.version }}"
+            # Push the tag with the DEFAULT token even when a PAT is
+            # configured: GITHUB_TOKEN pushes don't re-trigger workflows, a
+            # PAT-pushed v* tag would fire this workflow again (double
+            # release).
+            git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" "v${{ steps.resolve.outputs.version }}"
           else
             # Tag run: land the bump on the default branch when the tag sits on
             # its head; otherwise build still uses the bumped workspace.
