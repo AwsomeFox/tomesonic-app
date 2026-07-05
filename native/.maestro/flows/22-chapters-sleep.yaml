@@ -3,13 +3,17 @@
 # button). Assumes a logged-in library whose first book has ≥2 chapters (the
 # CI-seeded book has exactly 2).
 appId: com.tomesonic.app
+env:
+  # Which shelf card to open — CI pins the seeded audiobook so the seeded
+  # EBOOK (also "<title> by <author>") can't be picked up instead.
+  BOOK: ".* by .*"
 ---
 - launchApp
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
 - tapOn:
-    text: ".* by .*"
+    text: ${BOOK}
     index: 0
 - extendedWaitUntil:
     visible: ".*(Play|Continue).*"

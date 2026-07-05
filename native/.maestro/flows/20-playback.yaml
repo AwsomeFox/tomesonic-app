@@ -2,6 +2,10 @@
 # player surfaces, drive transport (pause/play, jump), and collapse back.
 # Assumes: logged in, current library has at least one audiobook shelf row.
 appId: com.tomesonic.app
+env:
+  # Which shelf card to open — CI pins the seeded audiobook so the seeded
+  # EBOOK (also "<title> by <author>") can't be picked up instead.
+  BOOK: ".* by .*"
 ---
 - launchApp
 - extendedWaitUntil:
@@ -9,7 +13,7 @@ appId: com.tomesonic.app
     timeout: 20000
 # Open the first book card on the shelves (BookCard a11y label is "<title> by <author>").
 - tapOn:
-    text: ".* by .*"
+    text: ${BOOK}
     index: 0
 # Item detail: start (or continue) playback.
 - extendedWaitUntil:

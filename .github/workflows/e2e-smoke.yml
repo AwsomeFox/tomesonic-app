@@ -93,7 +93,7 @@ jobs:
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
         run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
 
-      - name: seed media fixture (generated audiobook)
+      - name: seed media fixture (generated audiobook + ebook)
         run: |
           # ubuntu-latest no longer preinstalls ffmpeg.
           sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
@@ -107,6 +107,11 @@ jobs:
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=550:duration=90" \
             -metadata title="Chapter 2" -metadata artist="Test Author" \
             -metadata album="The Test Book" track2.mp3
+          # Ebook-only item for the reader flow: a minimal valid EPUB 3
+          # (mimetype stored first, container.xml, OPF, nav, two chapters).
+          mkdir -p "$GITHUB_WORKSPACE/e2e-media/Test Author/The Test Ebook"
+          python3 "$GITHUB_WORKSPACE/native/.maestro/make-epub.py" \
+            "$GITHUB_WORKSPACE/e2e-media/Test Author/The Test Ebook/the-test-ebook.epub"
 
       - name: start + provision Audiobookshelf
         run: |

@@ -90,3 +90,9 @@ kill — session restores on relaunch, item offers Continue), `70-download` +
 `71-offline` (download, then play the on-device copy with networking
 disabled — 71 is tagged manual because ci-flows.sh toggles the emulator's
 network around it via adb).
+
+Reader flow: `80-reader` opens the seeded EPUB (generated in CI by
+`.maestro/make-epub.py`), waits for foliate's page indicator, exercises the
+TOC/settings sheets, and asserts the Continue Reading shelf appears after
+closing — the whole reader→PATCH→shelf progress pipeline. Audio flows take a
+`BOOK` env (CI pins "The Test Book by .*" so the ebook card isn't grabbed).
