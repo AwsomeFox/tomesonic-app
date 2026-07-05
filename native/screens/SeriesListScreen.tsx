@@ -262,6 +262,17 @@ export default function SeriesListScreen({ navigation }: any) {
         ? Number(item.numBooks)
         : embeddedBooks.length || fetchedBooks.length;
     const seriesName = item.name || "";
+    // Top-right badge = UNFINISHED count — the bottom meta line already shows
+    // the total, so both showing the same number read as a duplicate. Only
+    // computable from the FULL embedded list (fetchedBooks is a 4-cover
+    // subset); hide the badge rather than undercount.
+    let unread: number | null = null;
+    if (embeddedBooks.length && (!booksInSeries || embeddedBooks.length >= booksInSeries)) {
+      const pm = useUserStore.getState().mediaProgress;
+      unread = embeddedBooks.filter(
+        (b: any) => !(pm[b.id] || b.userMediaProgress)?.isFinished
+      ).length;
+    }
 
     return (
       // material-3-card series-card-shell rounded-2xl bg-surface-container shadow-elevation-1 overflow-hidden
@@ -304,15 +315,22 @@ export default function SeriesListScreen({ navigation }: any) {
           )}
         </View>
 
-        {/* Books-left / count badge — absolute top-2 right-2, secondary-container mint pill */}
-        <View
-          style={{ position: "absolute", zIndex: 30, flexDirection: "row", alignItems: "center", backgroundColor: colors.secondaryContainer, borderRadius: 20, top: 8, right: 8, paddingHorizontal: 8, paddingVertical: 3 }}
-        >
-          <Icon name="book" size={13} color={colors.onSecondaryContainer} />
-          <Text style={{ color: colors.onSecondaryContainer, fontWeight: "bold", fontSize: 11, marginLeft: 3 }}>
-            {booksInSeries}
-          </Text>
-        </View>
+        {/* Unread badge — "N left" while in progress, check when the whole
+            series is finished. Totals live in the bottom meta line. */}
+        {unread != null ? (
+          <View
+            style={{ position: "absolute", zIndex: 30, flexDirection: "row", alignItems: "center", backgroundColor: unread > 0 ? colors.secondaryContainer : colors.tertiaryContainer, borderRadius: 20, top: 8, right: 8, paddingHorizontal: 8, paddingVertical: 3 }}
+            accessibilityLabel={unread > 0 ? `${unread} books left` : "Series finished"}
+          >
+            {unread > 0 ? (
+              <Text style={{ color: colors.onSecondaryContainer, fontWeight: "bold", fontSize: 11 }}>
+                {unread} left
+              </Text>
+            ) : (
+              <Icon name="check" size={13} color={colors.onTertiaryContainer} />
+            )}
+          </View>
+        ) : null}
 
         {/* series-meta overlay — absolute bottom, gradient scrim + name + book count */}
         <LinearGradient

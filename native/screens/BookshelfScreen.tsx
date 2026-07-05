@@ -426,8 +426,15 @@ export default function BookshelfScreen({ navigation }: any) {
       ? series.covers
       : books.slice(0, 4).map((b: any) => getCoverUrl(b.id)).filter(Boolean);
     const bookCount = series.booksCount || books.length || 0;
-    // Badge shows books-left-to-start when known, else the total book count.
-    const badgeCount = series.progressCount ?? bookCount;
+    // Top-right badge = UNFINISHED count ("N left") — the bottom line already
+    // shows the total, so repeating it here displayed the same number twice.
+    // Only computable when the FULL book list is present; a partial list would
+    // undercount, so hide the badge instead of guessing.
+    let unread: number | null = null;
+    if (books.length && (!bookCount || books.length >= bookCount)) {
+      const pm = useUserStore.getState().mediaProgress;
+      unread = books.filter((b: any) => !(pm[b.id] || b.userMediaProgress)?.isFinished).length;
+    }
 
     return (
       <AnimatedPressable
@@ -477,8 +484,10 @@ export default function BookshelfScreen({ navigation }: any) {
           </View>
         )}
 
-        {/* Book-count badge (top right) — mint secondary-container pill w/ book icon */}
-        {badgeCount ? (
+        {/* Unread badge (top right): "N left" while the series is in progress,
+            a check once every book is finished. The bottom panel shows the
+            TOTAL, so this pill only carries remaining-progress info. */}
+        {unread != null ? (
           <View
             style={{
               position: "absolute",
@@ -489,14 +498,18 @@ export default function BookshelfScreen({ navigation }: any) {
               zIndex: 10,
               flexDirection: "row",
               alignItems: "center",
-              backgroundColor: colors.secondaryContainer,
+              backgroundColor: unread > 0 ? colors.secondaryContainer : colors.tertiaryContainer,
               borderRadius: 20,
             }}
+            accessibilityLabel={unread > 0 ? `${unread} books left` : "Series finished"}
           >
-            <Icon name="book" size={12} color={colors.onSecondaryContainer} />
-            <Text style={{ color: colors.onSecondaryContainer, fontSize: 11, fontWeight: "bold", marginLeft: 4 }}>
-              {badgeCount}
-            </Text>
+            {unread > 0 ? (
+              <Text style={{ color: colors.onSecondaryContainer, fontSize: 11, fontWeight: "bold" }}>
+                {unread} left
+              </Text>
+            ) : (
+              <Icon name="check" size={13} color={colors.onTertiaryContainer} />
+            )}
           </View>
         ) : null}
 
