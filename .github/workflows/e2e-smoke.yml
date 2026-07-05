@@ -11,26 +11,33 @@ name: E2E (Maestro)
 #           search → series → settings → resume → reader → download → offline)
 # Catches what jest can't: native boot crashes, real Media3 playback, real
 # navigation, the ABS login/session handshake, and the offline ebook reader.
-# workflow_dispatch registers once this file lands on the default branch; until
-# then a paths-scoped PUSH trigger runs it (push paths are per-push, unlike
-# pull_request paths which match the whole PR diff).
+#
+# Runs on EVERY pull request and is a REQUIRED check on master (branch
+# protection requires the e2e-build + e2e contexts — both, because if only
+# e2e were required, a build failure would leave e2e "skipped", which GitHub
+# counts as passing). Deliberately NOT paths-filtered: a required check that
+# path-skips never reports and blocks the merge forever. PRs that don't touch
+# app sources reuse the cached APK, so their runs are mostly emulator time.
 on:
   workflow_dispatch:
+  pull_request:
   push:
     branches:
       - master
-      - feature/playstore-rn-migration
     paths:
       - 'native/.maestro/**'
       - '.github/workflows/e2e-smoke.yml'
 
-# A newer E2E push cancels the in-flight run (each costs runner-minutes).
+# A newer push to the same PR/branch supersedes the in-flight run — the
+# required check only needs to be green for the latest commit.
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
+    # Stable check-run name for branch protection.
+    name: e2e-build
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -106,6 +113,8 @@ jobs:
           if-no-files-found: error
 
   e2e:
+    # Stable check-run name for branch protection.
+    name: e2e
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 45
