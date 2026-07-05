@@ -332,7 +332,19 @@ describe("CastController — disconnect", () => {
 
     (TrackPlayer.play as jest.Mock).mockClear();
     useClientMock.mockReturnValue(null);
-    await rerender(<CastController />);
+    // Client loss now sits out a SUSPEND grace window (wifi blips must not
+    // blast local audio over a still-playing TV) — advance past it so the
+    // deferred handback actually runs.
+    jest.useFakeTimers();
+    try {
+      await rerender(<CastController />);
+      await act(async () => {
+        jest.advanceTimersByTime(5100);
+        await Promise.resolve();
+      });
+    } finally {
+      jest.useRealTimers();
+    }
     await act(async () => {});
     return { seek };
   }

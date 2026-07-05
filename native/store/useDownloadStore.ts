@@ -105,6 +105,21 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         // of re-downloading completed parts from scratch.
         active[item.id] = { ...item, status: "failed", error: "Interrupted — tap retry to resume" };
         db.saveDownloadItem(active[item.id]);
+      } else if (
+        item.status !== "pending" &&
+        item.status !== "downloading" &&
+        item.status !== "failed" &&
+        item.status !== "cancelled"
+      ) {
+        // Unknown status (corrupt row / future app version): surface it as a
+        // retryable failure instead of an inert ghost row with no affordance.
+        active[item.id] = {
+          ...item,
+          parts: item.parts || [],
+          status: "failed",
+          error: "Interrupted — tap retry to resume",
+        };
+        db.saveDownloadItem(active[item.id]);
       } else if (item.status === "cancelled") {
         // Legacy rows: cancels used to persist a "cancelled" record with the
         // partial files left on disk and no retry path — clean both up now.
@@ -139,12 +154,20 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
 
     delete _lastDbSaveAt[item.id];
     db.saveDownloadItem(newItem);
-    set(state => ({
-      activeDownloads: {
-        ...state.activeDownloads,
-        [item.id]: newItem,
-      },
-    }));
+    set(state => {
+      // Invariant: an id is never in BOTH maps. Every current caller guards
+      // against re-downloading a completed item, but the store must not rest
+      // on caller discipline — a re-start supersedes the completed entry.
+      const nextCompleted = { ...state.completedDownloads };
+      delete nextCompleted[item.id];
+      return {
+        completedDownloads: nextCompleted,
+        activeDownloads: {
+          ...state.activeDownloads,
+          [item.id]: newItem,
+        },
+      };
+    });
   },
 
   setDownloadFolder: (id, localFolderPath) => {
@@ -162,7 +185,10 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     const item = active[id];
     if (!item) return;
 
-    const updatedParts = item.parts.map(p =>
+    // Native progress callbacks are numbers in practice, but a NaN here
+    // poisons the progress math and gets persisted — guard the inputs.
+    if (!Number.isFinite(bytesDownloaded)) return;
+    const updatedParts = (item.parts || []).map(p =>
       p.id === partId
         ? {
             ...p,
@@ -212,7 +238,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     const item = active[id];
     if (!item) return;
 
-    const updatedParts = item.parts.map(p =>
+    const updatedParts = (item.parts || []).map(p =>
       p.id === partId
         ? {
             ...p,

@@ -14,7 +14,9 @@ function readShelvesCache(libraryId: string | null): any[] {
   try {
     const raw = storage.getString(shelvesCacheKey(libraryId));
     const parsed = raw ? JSON.parse(raw) : null;
-    return Array.isArray(parsed) ? parsed : [];
+    // A truncated/corrupt cache blob must not crash Home — null shelves threw
+    // in the shelf assembly and the continue-series builder.
+    return Array.isArray(parsed) ? parsed.filter((sh) => sh && typeof sh === "object") : [];
   } catch {
     return [];
   }
@@ -87,7 +89,15 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // Bail if the user switched libraries while this fetch was in flight —
       // otherwise we'd overwrite the new library's shelves with the old one's.
       if (get().currentLibraryId !== libraryId) return;
-      const shelves = response.data?.shelves || response.data || [];
+      const raw = response.data?.shelves || response.data || [];
+      // Reverse proxies / captive portals return HTML error pages with HTTP
+      // 200 — axios hands those over as a STRING, and installing a non-array
+      // crashed the home screen (`.find` on a string). Keep previous shelves.
+      if (!Array.isArray(raw)) {
+        console.warn("[LibraryStore] personalized response is not an array — keeping previous shelves");
+        return;
+      }
+      const shelves = raw.filter((sh: any) => sh && typeof sh === "object");
       set({ personalizedShelves: shelves });
       writeShelvesCache(libraryId, shelves);
     } catch (err) {
@@ -128,7 +138,16 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     try {
       console.log("[LibraryStore] Loading libraries...");
       const response = await api.get("/api/libraries");
-      const libraries = response.data?.libraries || response.data || [];
+      const rawLibraries = response.data?.libraries || response.data || [];
+      // A non-array body (proxy error page served as 200) is a FAILED load,
+      // not "the server has zero libraries" — keep current state.
+      if (!Array.isArray(rawLibraries)) {
+        console.warn("[LibraryStore] libraries response is not an array — keeping current state");
+        return false;
+      }
+      // One null/id-less entry in the list used to throw mid-`.some` and
+      // silently discard the WHOLE payload — keep the valid libraries.
+      const libraries = rawLibraries.filter((l: any) => l && typeof l === "object" && l.id);
       
       let currentLibraryId = get().currentLibraryId;
       
@@ -170,10 +189,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const response = await api.get(`/api/libraries/${libraryId}?include=filterdata`);
       const data = response.data || {};
 
-      const library = data.library || {};
+      // Newer ABS wraps the library in {library}; older servers return it at
+      // the top level. Either way it must be a real object with an id —
+      // installing `[{}]` as the libraries list broke the selector.
+      const library = data.library || (data.id ? data : null);
       const filterData = data.filterdata || null;
       const issues = data.issues || 0;
       const numUserPlaylists = data.numUserPlaylists || 0;
+
+      if (!library || !library.id) {
+        set({ filterData, issues, numUserPlaylists });
+        return data;
+      }
 
       // Update libraries list with fresh detail
       const updatedLibraries = get().libraries.map((lib) =>

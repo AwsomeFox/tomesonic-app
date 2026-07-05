@@ -61,10 +61,15 @@ export function normalizeTitle(raw: string): string {
   s = s.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " ");
   // Strip diacritics.
   s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  // Non-alphanumerics → space.
-  s = s.replace(/[^a-z0-9]+/g, " ");
-  const tokens = s.split(/\s+/).filter((t) => t && !STOPWORDS.has(t));
-  return tokens.join(" ").trim();
+  // Non-letters/digits → space. MUST keep all Unicode letters — the old
+  // [^a-z0-9] class stripped every CJK/Cyrillic/Arabic character, so
+  // identical non-Latin titles normalized to "" and never matched themselves.
+  s = s.replace(/[^\p{L}\p{N}]+/gu, " ");
+  const allTokens = s.split(/\s+/).filter(Boolean);
+  const tokens = allTokens.filter((t) => !STOPWORDS.has(t));
+  // A title made entirely of stopwords ("The Book") must not normalize to ""
+  // (empty-vs-empty would never match) — fall back to the raw tokens.
+  return (tokens.length > 0 ? tokens : allTokens).join(" ").trim();
 }
 
 function titleTokens(raw: string): Set<string> {
@@ -90,7 +95,10 @@ function normalizeAuthor(raw: string): string {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9 ]+/g, " ")
+    // Keep Unicode letters \u2014 stripping them normalized every non-Latin
+    // author to "", which authorsMatch treats as "no author info" and waves
+    // through (any two CJK authors "matched").
+    .replace(/[^\p{L}\p{N} ]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

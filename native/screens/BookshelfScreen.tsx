@@ -356,6 +356,11 @@ export default function BookshelfScreen({ navigation }: any) {
     // Added / Discover etc. regardless of progress).
     const filterEbooks = (entities: any[]) =>
       hideNonAudiobooks ? (entities || []).filter((e: any) => !isEbookOnly(e)) : entities || [];
+    // Normalize entities at the boundary: null entries / non-array shapes in
+    // a shelf (corrupt cache blob, misbehaving server) crashed the card
+    // renderers (`item.id` on null, `.map` on a string).
+    const cleanEntities = (ents: any) =>
+      Array.isArray(ents) ? ents.filter((e: any) => e && typeof e === "object") : [];
     // "Continue Listening" must reflect AUDIO progress only. The server's
     // shelf includes any in-progress item — including books whose only
     // progress is READING (ebookProgress from the reader) — and those belong
@@ -368,8 +373,9 @@ export default function BookshelfScreen({ navigation }: any) {
       const hasEbookProgress = Number(p.ebookProgress || 0) > 0 || !!p.ebookLocation;
       return !hasAudioProgress && hasEbookProgress;
     };
-    for (const shelf of activeShelves) {
-      if (!shelf?.id || seenShelfIds.has(shelf.id)) continue;
+    for (const rawShelf of activeShelves) {
+      if (!rawShelf?.id || seenShelfIds.has(rawShelf.id)) continue;
+      const shelf = { ...rawShelf, entities: cleanEntities(rawShelf.entities) };
       seenShelfIds.add(shelf.id);
       if (shelf.id === "continue-reading" && hideNonAudiobooks) continue;
       if (shelf.id === "continue-series") {

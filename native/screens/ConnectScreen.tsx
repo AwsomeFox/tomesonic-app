@@ -14,9 +14,14 @@ import axios from "axios";
 import { useUserStore } from "../store/useUserStore";
 import { loginWithOpenId } from "../utils/oauth";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 
 const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
+
+// M3 Expressive control metrics for this screen: hero-size touch targets.
+const FIELD_HEIGHT = 56;
+const BUTTON_HEIGHT = 56;
 
 export default function ConnectScreen() {
   const colors = useThemeColors();
@@ -30,6 +35,8 @@ export default function ConnectScreen() {
   // buttons when a server offers local + OpenID.
   const [authFlow, setAuthFlow] = useState<"local" | "oauth" | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  // Focused-field key drives the M3 filled-field focus ring.
+  const [focusedField, setFocusedField] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [authMethods, setAuthMethods] = useState<string[]>([]);
   const [oauthButtonText, setOauthButtonText] = useState("Login with OpenID");
@@ -53,13 +60,20 @@ export default function ConnectScreen() {
   // Build the stored config from an ABS user payload and persist the session.
   const finishLogin = (user: any) => {
     const token = user.accessToken || user.token;
+    // A 200 login whose user carries NO token (misconfigured proxy stripping
+    // fields) must not "log in" — the app entered the main stack with
+    // token:undefined and silently bounced back to Connect on next cold start.
+    if (!token) {
+      setError("Authentication failed. Please check your credentials.");
+      return;
+    }
     const refreshToken = user.refreshToken || null;
     // Don't keep the password in component state any longer than needed — the
     // session tokens are what get persisted, never the password itself.
     setPassword("");
     login(
       {
-        address: address.replace(/\/$/, ""),
+        address: address.replace(/\/+$/, ""),
         userId: user.id,
         username: user.username,
         token,
@@ -80,7 +94,7 @@ export default function ConnectScreen() {
 
     try {
       // Clean and validate URL formatting
-      let cleanUrl = address.trim().replace(/\/$/, "");
+      let cleanUrl = address.trim().replace(/\/+$/, "");
       if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
         cleanUrl = "http://" + cleanUrl;
       }
@@ -117,7 +131,7 @@ export default function ConnectScreen() {
 
     try {
       const response = await axios.post(
-        `${address.replace(/\/$/, "")}/login`,
+        `${address.replace(/\/+$/, "")}/login`,
         { username: username.trim(), password },
         { headers: { "Content-Type": "application/json" }, timeout: 15000 }
       );
@@ -160,102 +174,189 @@ export default function ConnectScreen() {
     setShowAuthFields(false);
   };
 
+  // --- M3 Expressive building blocks -------------------------------------
+
+  /** Filled text field: tonal fill, rounded corners, primary focus ring. */
+  const fieldStyle = (key: string, extra?: object) => ({
+    backgroundColor: colors.surfaceContainerHighest,
+    minHeight: FIELD_HEIGHT,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: focusedField === key ? colors.primary : "transparent",
+    fontSize: 16,
+    color: colors.onSurface,
+    fontFamily: "sans-serif",
+    ...(extra || {}),
+  });
+
+  /** Hero button: full-width 56dp pill. variant "filled" | "tonal". */
+  const BigButton = ({
+    label,
+    onPress,
+    busy,
+    variant = "filled",
+  }: {
+    label: string;
+    onPress: () => void;
+    busy?: boolean;
+    variant?: "filled" | "tonal";
+  }) => {
+    const bg = variant === "filled" ? colors.primary : colors.secondaryContainer;
+    const fg = variant === "filled" ? colors.onPrimary : colors.onSecondaryContainer;
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={loading}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ disabled: loading, busy: !!busy }}
+        android_ripple={{ color: withAlpha(fg, 0.12) }}
+        style={({ pressed }) => ({
+          backgroundColor: bg,
+          minHeight: BUTTON_HEIGHT,
+          alignItems: "center" as const,
+          justifyContent: "center" as const,
+          borderRadius: BUTTON_HEIGHT / 2,
+          overflow: "hidden" as const,
+          elevation: variant === "filled" ? 1 : 0,
+          opacity: loading && !busy ? 0.6 : 1,
+          transform: [{ scale: pressed ? 0.97 : 1 }],
+        })}
+      >
+        {busy ? (
+          <ActivityIndicator color={fg} />
+        ) : (
+          <Text
+            style={{
+              color: fg,
+              fontSize: 17,
+              fontFamily: "sans-serif",
+              fontWeight: "700",
+              letterSpacing: 0.2,
+            }}
+          >
+            {label}
+          </Text>
+        )}
+      </Pressable>
+    );
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }}>
       <ScrollView
         contentContainerStyle={{ flexGrow: 1, justifyContent: "center", paddingHorizontal: 24 }}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Brand header: real TomeSonic logo + title, centered like the original */}
-        <View style={{ alignItems: "center", marginBottom: 32 }}>
+        {/* Brand header: logo + expressive display title */}
+        <View style={{ alignItems: "center", marginBottom: 28 }}>
           <Image
             source={require("../assets/icon.png")}
-            style={{ width: 96, height: 96, marginBottom: 8 }}
+            style={{ width: 104, height: 104, marginBottom: 10 }}
             resizeMode="contain"
           />
-          <Text style={{ color: colors.onSurface, fontSize: 28, fontFamily: "sans-serif", fontWeight: "800" }}>
+          <Text style={{ color: colors.onSurface, fontSize: 32, fontFamily: "serif", fontWeight: "800", letterSpacing: -0.5 }}>
             TomeSonic
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, fontFamily: "sans-serif", marginTop: 4 }}>
+            Your audiobooks, your server
           </Text>
         </View>
 
-        {/* Surface card holding the current step's fields */}
-        <View style={{ width: "100%", maxWidth: 400, alignSelf: "center", backgroundColor: colors.surfaceContainer, borderWidth: 1, borderColor: colors.outlineVariant, padding: 24, borderRadius: 24, elevation: 1 }}>
+        {/* Tonal card holding the current step */}
+        <View
+          style={{
+            width: "100%",
+            maxWidth: 420,
+            alignSelf: "center",
+            backgroundColor: colors.surfaceContainer,
+            padding: 24,
+            borderRadius: 28,
+          }}
+        >
           {!showAuthFields ? (
             /* Step 1 — Server address */
             <View>
-              <Text style={{ color: colors.onSurface, fontSize: 22, fontFamily: "sans-serif", fontWeight: "bold", marginBottom: 12 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 26, fontFamily: "sans-serif", fontWeight: "800", letterSpacing: -0.3 }}>
                 Server address
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontFamily: "sans-serif", marginTop: 4, marginBottom: 20 }}>
+                Point TomeSonic at your Audiobookshelf server to get started.
               </Text>
               <TextInput
                 value={address}
                 onChangeText={setAddress}
                 placeholder="http://55.55.55.55:13378"
-                placeholderTextColor={colors.onSurfaceVariant + "80"}
+                placeholderTextColor={withAlpha(colors.onSurfaceVariant, 0.55)}
                 accessibilityLabel="Server address input"
                 testID="server-address-input"
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
+                onFocus={() => setFocusedField("address")}
+                onBlur={() => setFocusedField(null)}
                 onSubmitEditing={handleConnectAddress}
                 returnKeyType="go"
-                style={{ backgroundColor: colors.surface, padding: 16, borderRadius: 12, borderWidth: 1, borderColor: colors.outline, fontSize: 16, color: colors.onSurface, fontFamily: "sans-serif" }}
+                style={fieldStyle("address")}
               />
-              <Pressable
-                onPress={handleConnectAddress}
-                disabled={loading}
-                style={({ pressed }) => ({
-                  backgroundColor: colors.primary,
-                  marginTop: 24,
-                  paddingVertical: 14,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderRadius: 28,
-                  elevation: 1,
-                  opacity: pressed ? 0.95 : 1,
-                  transform: [{ scale: pressed ? 0.98 : 1 }]
-                })}
-              >
-                {loading ? (
-                  <ActivityIndicator color={colors.onPrimary} />
-                ) : (
-                  <Text style={{ color: colors.onPrimary, fontSize: 16, fontFamily: "sans-serif", fontWeight: "bold" }}>
-                    Submit
-                  </Text>
-                )}
-              </Pressable>
+              <View style={{ marginTop: 24 }}>
+                <BigButton label="Submit" onPress={handleConnectAddress} busy={loading} />
+              </View>
             </View>
           ) : (
             /* Step 2 — Credentials */
             <View>
-              {/* Selected server address with edit affordance */}
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={{ color: colors.onSurface, fontSize: 26, fontFamily: "sans-serif", fontWeight: "800", letterSpacing: -0.3, marginBottom: 16 }}>
+                Sign in
+              </Text>
+
+              {/* Connected server chip — tap to change the address */}
+              <Pressable
+                onPress={handleEditAddress}
+                accessibilityRole="button"
+                accessibilityLabel="Change server address"
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.12) }}
+                style={({ pressed }) => ({
+                  flexDirection: "row" as const,
+                  alignItems: "center" as const,
+                  backgroundColor: colors.secondaryContainer,
+                  borderRadius: 16,
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  marginBottom: 16,
+                  overflow: "hidden" as const,
+                  transform: [{ scale: pressed ? 0.98 : 1 }],
+                })}
+              >
+                <Icon name="globe" size={20} color={colors.onSecondaryContainer} />
                 <Text
-                  style={{ color: colors.onSurfaceVariant, fontSize: 14, fontFamily: "sans-serif", flex: 1, marginRight: 8 }}
+                  style={{ color: colors.onSecondaryContainer, fontSize: 14, fontFamily: "sans-serif", fontWeight: "600", flex: 1, marginHorizontal: 10 }}
                   numberOfLines={1}
                 >
                   {address}
                 </Text>
-                <Pressable
-                  onPress={handleEditAddress}
-                  hitSlop={8}
-                  accessibilityRole="button"
-                  accessibilityLabel="Change server address"
-                  style={({ pressed }) => ({
-                    opacity: pressed ? 0.6 : 1
-                  })}
-                >
-                  <Icon name="edit" size={18} color={colors.onSurfaceVariant} />
-                </Pressable>
-              </View>
-              <View style={{ height: 1, backgroundColor: colors.outlineVariant, marginVertical: 16 }} />
+                <Icon name="edit" size={18} color={colors.onSecondaryContainer} />
+              </Pressable>
 
               {/* Cleartext warning — plain-http LAN servers are supported on
                   purpose (usesCleartextTraffic), but the user should know the
                   password and tokens travel unencrypted on this connection. */}
               {address.startsWith("http://") ? (
-                <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 16 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: colors.surfaceContainerHigh,
+                    borderRadius: 14,
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                    marginBottom: 16,
+                  }}
+                >
                   <Icon name="warning" size={16} color={colors.onSurfaceVariant} />
-                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontFamily: "sans-serif", flex: 1, marginLeft: 8 }}>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontFamily: "sans-serif", flex: 1, marginLeft: 10, lineHeight: 17 }}>
                     This connection uses unencrypted HTTP. Only sign in over a network you trust (e.g. your home LAN or a VPN).
                   </Text>
                 </View>
@@ -268,27 +369,31 @@ export default function ConnectScreen() {
                     value={username}
                     onChangeText={setUsername}
                     placeholder="Username"
-                    placeholderTextColor={colors.onSurfaceVariant + "80"}
+                    placeholderTextColor={withAlpha(colors.onSurfaceVariant, 0.55)}
                     accessibilityLabel="Username input"
                     testID="username-input"
                     autoCapitalize="none"
                     autoCorrect={false}
-                    style={{ backgroundColor: colors.surface, padding: 16, borderRadius: 12, borderWidth: 1, borderColor: colors.outline, fontSize: 16, color: colors.onSurface, fontFamily: "sans-serif", marginBottom: 12 }}
+                    onFocus={() => setFocusedField("username")}
+                    onBlur={() => setFocusedField(null)}
+                    style={fieldStyle("username", { marginBottom: 12 })}
                   />
                   <View style={{ position: "relative" }}>
                     <TextInput
                       value={password}
                       onChangeText={setPassword}
                       placeholder="Password"
-                      placeholderTextColor={colors.onSurfaceVariant + "80"}
+                      placeholderTextColor={withAlpha(colors.onSurfaceVariant, 0.55)}
                       accessibilityLabel="Password input"
                       testID="password-input"
                       secureTextEntry={!showPassword}
                       autoCapitalize="none"
                       autoCorrect={false}
+                      onFocus={() => setFocusedField("password")}
+                      onBlur={() => setFocusedField(null)}
                       onSubmitEditing={handleLogin}
                       returnKeyType="go"
-                      style={{ backgroundColor: colors.surface, padding: 16, paddingRight: 52, borderRadius: 12, borderWidth: 1, borderColor: colors.outline, fontSize: 16, color: colors.onSurface, fontFamily: "sans-serif" }}
+                      style={fieldStyle("password", { paddingRight: 56 })}
                     />
                     <Pressable
                       onPress={() => setShowPassword((v) => !v)}
@@ -300,86 +405,78 @@ export default function ConnectScreen() {
                         right: 6,
                         top: 0,
                         bottom: 0,
-                        width: 44,
+                        width: 48,
                         alignItems: "center",
                         justifyContent: "center",
                       }}
                     >
-                      <Icon name={showPassword ? "eye-off" : "eye"} size={20} color={colors.onSurfaceVariant} />
+                      <Icon name={showPassword ? "eye-off" : "eye"} size={22} color={colors.onSurfaceVariant} />
                     </Pressable>
                   </View>
-                  <Pressable
-                    onPress={handleLogin}
-                    disabled={loading}
-                    style={({ pressed }) => ({
-                      backgroundColor: colors.primary,
-                      marginTop: 24,
-                      paddingVertical: 14,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      borderRadius: 28,
-                      elevation: 1,
-                      opacity: pressed ? 0.95 : 1,
-                      transform: [{ scale: pressed ? 0.98 : 1 }]
-                    })}
-                  >
-                    {loading && authFlow === "local" ? (
-                      <ActivityIndicator color={colors.onPrimary} />
-                    ) : (
-                      <Text style={{ color: colors.onPrimary, fontSize: 16, fontFamily: "sans-serif", fontWeight: "bold" }}>
-                        Submit
-                      </Text>
-                    )}
-                  </Pressable>
+                  <View style={{ marginTop: 24 }}>
+                    <BigButton label="Submit" onPress={handleLogin} busy={loading && authFlow === "local"} />
+                  </View>
                 </View>
               ) : null}
 
-              {/* Divider between local + OpenID when both are available */}
+              {/* "or" divider between local + OpenID when both are available */}
               {isLocalAuth && isOpenIDAuth ? (
-                <View style={{ height: 1, backgroundColor: colors.outlineVariant, marginVertical: 16 }} />
+                <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 18 }}>
+                  <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontFamily: "sans-serif", marginHorizontal: 12 }}>
+                    or
+                  </Text>
+                  <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
+                </View>
               ) : null}
 
-              {/* OpenID / SSO auth */}
+              {/* OpenID / SSO auth — tonal hero button */}
               {isOpenIDAuth ? (
-                <Pressable
+                <BigButton
+                  label={oauthButtonText}
                   onPress={handleOpenId}
-                  disabled={loading}
-                  style={({ pressed }) => ({
-                    borderWidth: 1,
-                    borderColor: colors.primary,
-                    paddingVertical: 14,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 28,
-                    opacity: pressed ? 0.95 : 1,
-                    transform: [{ scale: pressed ? 0.98 : 1 }]
-                  })}
-                >
-                  {loading && authFlow === "oauth" ? (
-                    <ActivityIndicator color={colors.primary} />
-                  ) : (
-                    <Text style={{ color: colors.primary, fontSize: 16, fontFamily: "sans-serif", fontWeight: "bold" }}>
-                      {oauthButtonText}
-                    </Text>
-                  )}
-                </Pressable>
+                  busy={loading && authFlow === "oauth"}
+                  variant="tonal"
+                />
               ) : null}
             </View>
           )}
 
-          {/* Inline error banner */}
+          {/* Inline error banner — M3 error container */}
           {error ? (
-            <View style={{ marginTop: 16, padding: 12, backgroundColor: "rgba(179, 38, 30, 0.1)", borderWidth: 1, borderColor: "rgba(179, 38, 30, 0.5)", borderRadius: 12, flexDirection: "row", alignItems: "center" }}>
-              <Icon name="warning" size={18} color={colors.error || "#B3261E"} />
-              <Text style={{ color: colors.error || "#B3261E", fontSize: 14, fontFamily: "sans-serif", flex: 1, marginLeft: 8 }}>
+            <View
+              style={{
+                marginTop: 20,
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                backgroundColor: colors.errorContainer,
+                borderRadius: 16,
+                flexDirection: "row",
+                alignItems: "center",
+              }}
+            >
+              <Icon name="warning" size={20} color={colors.onErrorContainer} />
+              <Text style={{ color: colors.onErrorContainer, fontSize: 14, fontFamily: "sans-serif", flex: 1, marginLeft: 10, lineHeight: 19 }}>
                 {error}
               </Text>
             </View>
           ) : null}
         </View>
 
-        {/* Red disclaimer below the card */}
-        <Text style={{ color: colors.error || "#B3261E", fontSize: 14, fontFamily: "sans-serif", textAlign: "center", maxWidth: 400, alignSelf: "center", marginTop: 16, paddingHorizontal: 8 }}>
+        {/* Disclaimer below the card */}
+        <Text
+          style={{
+            color: colors.onSurfaceVariant,
+            fontSize: 13,
+            fontFamily: "sans-serif",
+            textAlign: "center",
+            maxWidth: 400,
+            alignSelf: "center",
+            marginTop: 20,
+            paddingHorizontal: 8,
+            lineHeight: 18,
+          }}
+        >
           Important! This app is designed to work with an Audiobookshelf server that
           you or someone you know is hosting. This app does not provide any content.
         </Text>
@@ -389,11 +486,11 @@ export default function ConnectScreen() {
       <Pressable
         onPress={() => Linking.openURL(GITHUB_URL)}
         style={({ pressed }) => ({
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "center",
+          flexDirection: "row" as const,
+          alignItems: "center" as const,
+          justifyContent: "center" as const,
           paddingVertical: 16,
-          opacity: pressed ? 0.6 : 1
+          opacity: pressed ? 0.6 : 1,
         })}
       >
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontFamily: "sans-serif", marginRight: 8 }}>

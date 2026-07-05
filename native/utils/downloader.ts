@@ -272,13 +272,20 @@ export const downloader = {
     // Add tracks. ABS expanded library items expose media.tracks each with a
     // server-relative contentUrl (the same direct-play URL used for streaming);
     // download that with the auth token appended.
+    // Malformed metadata can repeat track.index — colliding part ids would
+    // silently overwrite one file with another and resolve BOTH logical
+    // tracks to the same audio at playback. Uniquify on collision.
+    const usedTrackIds = new Set<string>();
     tracks.forEach((track: any, idx: number) => {
       const rel: string = track.contentUrl || `/api/items/${id}/file/${track.ino || ""}`;
       const trackUrl = absoluteUrl(rel, serverAddress, token);
       const ext = String(track.metadata?.ext || track.ext || "mp3").replace(/^\./, "");
+      let base = `track_${track.index ?? idx}`;
+      if (usedTrackIds.has(base)) base = `track_${track.index ?? idx}_${idx}`;
+      usedTrackIds.add(base);
       partsToDownload.push({
-        id: `track_${track.index ?? idx}`,
-        filename: `track_${track.index ?? idx}.${ext}`,
+        id: base,
+        filename: `${base}.${ext}`,
         url: trackUrl,
         fileSize: track.metadata?.size || track.fileSize || 0,
       });
@@ -294,12 +301,18 @@ export const downloader = {
     const meta = {
       duration: Number(media.duration) || tracks.reduce((a: number, t: any) => a + (t.duration || 0), 0),
       chapters: media.chapters || [],
-      tracks: tracks.map((track: any, idx: number) => ({
-        index: track.index ?? idx,
-        filename: `track_${track.index ?? idx}.${String(track.metadata?.ext || track.ext || "mp3").replace(/^\./, "")}`,
-        duration: track.duration || 0,
-        startOffset: track.startOffset || 0,
-      })),
+      tracks: tracks.map((track: any, idx: number) => {
+        // Mirror the collision-uniquified part filenames above.
+        const trackPart = partsToDownload.filter((p) => p.id.startsWith("track_"))[idx];
+        return {
+          index: track.index ?? idx,
+          filename:
+            trackPart?.filename ||
+            `track_${track.index ?? idx}.${String(track.metadata?.ext || track.ext || "mp3").replace(/^\./, "")}`,
+          duration: track.duration || 0,
+          startOffset: track.startOffset || 0,
+        };
+      }),
     };
 
     // Target directory — recorded on the store item from the start so cancel/

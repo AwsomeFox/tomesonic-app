@@ -77,7 +77,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const cancelDownload = useDownloadStore((s) => s.cancelDownload);
   const removeDownload = useDownloadStore((s) => s.removeDownload);
 
-  const isDownloaded = !!(item?.id && completedDownloads[item.id]);
+  // NOT downloaded while an active row exists for the same id — a poisoned
+  // dual-state made the a11y label say "Delete download" over a progress
+  // spinner (and press ran the delete flow mid-download).
+  const isDownloaded = !!(item?.id && completedDownloads[item.id] && !activeDownloads[item.id]);
   // A failed download stays in activeDownloads with status "failed" — it must
   // NOT read as "downloading" (that rendered an infinite spinner here) but as
   // a retryable error, matching BookCard's handling.
@@ -104,10 +107,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   }, [liveProgress, itemProgress]);
   const isFinished = !!progress?.isFinished;
   const activeDownload = item?.id ? activeDownloads[item.id] : null;
-  const downloadPct = activeDownload ? Math.round(activeDownload.progress * 100) : 0;
+  const downloadPct =
+    activeDownload && Number.isFinite(activeDownload.progress)
+      ? Math.round(activeDownload.progress * 100)
+      : 0;
 
+  const finishBusyRef = React.useRef(false);
   const handleToggleFinished = async () => {
-    if (!item?.id) return;
+    if (!item?.id || finishBusyRef.current) return;
+    finishBusyRef.current = true;
     const next = !isFinished;
     // Merge into the global progress map immediately so badges/cards on
     // already-rendered screens update without waiting for the next /api/me —
@@ -156,6 +164,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       queueFinishedPatch(item.id, next);
       if (counterpart?.id) queueFinishedPatch(counterpart.id, next);
       applyLocally();
+    } finally {
+      finishBusyRef.current = false;
     }
   };
 
@@ -364,8 +374,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [episodeLimit, setEpisodeLimit] = useState(EPISODE_CAP);
   const episodes: any[] = React.useMemo(() => {
     if (!isPodcastItem) return [];
-    const eps = [...(item?.media?.episodes || [])];
-    eps.sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0));
+    // filter(Boolean): a null entry in the feed-derived episodes array threw
+    // in this sort and took the whole screen down.
+    const eps = (Array.isArray(item?.media?.episodes) ? item.media.episodes : []).filter(Boolean);
+    eps.sort((a: any, b: any) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0));
     return eps;
   }, [isPodcastItem, item]);
 
@@ -1071,8 +1083,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 const epProgress = progressMap[`${itemId}-${episode.id}`];
                 const epFinished = !!epProgress?.isFinished;
                 const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
-                const pubDate = episode.publishedAt
-                  ? new Date(episode.publishedAt).toLocaleDateString(undefined, {
+                // RSS-derived dates aren't normalized — a garbage value
+                // rendered a literal "Invalid Date" subtitle.
+                const pubMs = episode.publishedAt ? new Date(episode.publishedAt).getTime() : NaN;
+                const pubDate = Number.isFinite(pubMs)
+                  ? new Date(pubMs).toLocaleDateString(undefined, {
                       month: "short",
                       day: "numeric",
                       year: "numeric",

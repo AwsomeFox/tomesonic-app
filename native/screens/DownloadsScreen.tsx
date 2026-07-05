@@ -293,7 +293,7 @@ export default function DownloadsScreen({ navigation }: any) {
                       marginTop: 2,
                     }}
                   >
-                    {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+                    {String(item.status || "failed").charAt(0).toUpperCase() + String(item.status || "failed").slice(1)}
                   </Text>
                   {item.status === "failed" && item.error ? (
                     // Why it failed (storage full, auth expired, network…) so
@@ -343,12 +343,12 @@ export default function DownloadsScreen({ navigation }: any) {
                     height: "100%",
                     backgroundColor: colors.primary,
                     borderRadius: 3,
-                    width: `${Math.round(item.progress * 100)}%`,
+                    width: `${Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%`,
                   }}
                 />
               </View>
               <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "right", marginTop: 4 }}>
-                {Math.round(item.progress * 100)}%
+                {Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%
               </Text>
             </View>
           )}

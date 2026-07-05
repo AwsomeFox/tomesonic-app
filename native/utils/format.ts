@@ -26,7 +26,8 @@ export function formatBytes(bytes: number): string {
 
 /** "H hr M min remaining" / "M min remaining" / "S sec remaining" / "" when <=0. */
 export function remainingPretty(seconds: number): string {
-  if (!seconds || seconds <= 0) return "";
+  // < 1s rounds to "0 sec remaining" — treat sub-second remainders as done.
+  if (!seconds || seconds < 1) return "";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   if (h > 0) return `${h} hr ${m} min remaining`;

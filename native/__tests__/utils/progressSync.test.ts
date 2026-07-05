@@ -201,11 +201,16 @@ describe("queueProgressPatch / queueFinishedPatch / queueEbookProgressPatch", ()
     expect(readJson("pendingPatch_li1").body.progress).toBe(1);
   });
 
-  it("uses 0 progress when duration is 0 or negative", () => {
+  it("omits duration/progress when duration is 0 or negative (keeps position)", () => {
+    // Writing progress:0 for an unknown duration could REGRESS real server
+    // progress — the sanitized queue keeps only the trustworthy field.
     queueProgressPatch("li1", 50, 0);
-    expect(readJson("pendingPatch_li1").body.progress).toBe(0);
+    expect(readJson("pendingPatch_li1").body.currentTime).toBe(50);
+    expect(readJson("pendingPatch_li1").body.progress).toBeUndefined();
+    expect(readJson("pendingPatch_li1").body.duration).toBeUndefined();
     queueProgressPatch("li2", 50, -10);
-    expect(readJson("pendingPatch_li2").body.progress).toBe(0);
+    expect(readJson("pendingPatch_li2").body.currentTime).toBe(50);
+    expect(readJson("pendingPatch_li2").body.progress).toBeUndefined();
   });
 
   it("is a no-op with an empty libraryItemId", () => {
@@ -304,6 +309,35 @@ describe("flushPendingSyncs", () => {
       duration: 100,
     });
     expect(pendingKeys()).toHaveLength(0);
+  });
+
+  it("TOCTOU: seconds merged into an entry DURING the flush POST survive the clear", async () => {
+    // Regression for the listening-time-loss race: flush snapshots an entry,
+    // POSTs it, and used to blind-clear the key on success — eating any new
+    // timeListened a concurrent failed sync merged in while the POST was in
+    // flight. The fix subtracts only what was actually delivered.
+    storage.set(
+      "pendingSync_s1",
+      JSON.stringify({ sessionId: "s1", currentTime: 10, timeListened: 7, duration: 100 })
+    );
+    let releasePost!: () => void;
+    const gate = new Promise<void>((resolve) => (releasePost = resolve));
+    mockedPost.mockImplementationOnce(() => gate);
+    const flushP = flushPendingSyncs();
+    // Drain microtasks until the flush has read its snapshot and started the POST.
+    for (let i = 0; i < 50 && mockedPost.mock.calls.length === 0; i++) {
+      await Promise.resolve();
+    }
+    expect(mockedPost).toHaveBeenCalledTimes(1);
+    // Concurrent failed sync merges 5 new seconds while the POST is in flight.
+    storage.set(
+      "pendingSync_s1",
+      JSON.stringify({ sessionId: "s1", currentTime: 20, timeListened: 12, duration: 100 })
+    );
+    releasePost();
+    await flushP;
+    // 7 delivered, 5 must remain queued (with the newer position).
+    expect(readJson("pendingSync_s1")).toMatchObject({ timeListened: 5, currentTime: 20 });
   });
 
   it("keeps queued syncs on non-404 failure", async () => {

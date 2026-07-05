@@ -49,6 +49,9 @@ interface LibraryItem {
 function formatAdded(ms?: number): string {
   if (!ms) return "";
   const d = new Date(ms);
+  // Non-numeric addedAt from a non-conforming server rendered a literal
+  // "Added NaN/NaN/NaN NaN:NaN" line.
+  if (!Number.isFinite(d.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `Added ${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${d.getFullYear()} ${pad(
     d.getHours()
@@ -143,7 +146,9 @@ export default function LibraryScreen({ route, navigation }: any) {
         if (currentFetchId !== fetchIdRef.current) return;
 
         const data = response.data || {};
-        const rawResults: LibraryItem[] = data.results || [];
+        const rawResults: LibraryItem[] = (Array.isArray(data.results) ? data.results : []).filter(
+          Boolean
+        );
         if (rawResults.length === 0 && !reset) noMorePagesRef.current = true;
         let results: LibraryItem[] = rawResults;
         // "Hide non-audiobooks globally": drop items that have no audio (e.g.

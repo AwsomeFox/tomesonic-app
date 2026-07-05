@@ -16,6 +16,7 @@ export function absoluteUrl(url: string, serverAddress: string, token: string): 
 
 /** Builds a cover-art URL for a library item, or null if inputs are missing. */
 export function coverUrl(itemId: string, serverAddress: string, token: string): string | null {
+  if (!token) return null; // a literal "token=undefined" URL just 401s
   if (!itemId || !serverAddress) return null;
   const host = serverAddress.replace(/\/$/, "");
   return `${host}/api/items/${itemId}/cover?token=${token}`;

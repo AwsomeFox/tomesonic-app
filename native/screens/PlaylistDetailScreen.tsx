@@ -90,7 +90,9 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
     return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
-  const items: any[] = playlist?.items || [];
+  // filter(Boolean): a single null entry crashed the duration reduce and
+  // blanked the app to the root error boundary.
+  const items: any[] = (Array.isArray(playlist?.items) ? playlist.items : []).filter(Boolean);
   const totalDuration = items.reduce((t, i) => {
     const d = i.episode?.duration || i.libraryItem?.media?.duration || 0;
     return t + d;

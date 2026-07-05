@@ -537,8 +537,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
               ) {
                 _finishedSessionId = currentSession.id;
                 const patchPath = sessionEpisodeId
-                  ? `/api/me/progress/${libraryItemId}/${sessionEpisodeId}`
-                  : `/api/me/progress/${libraryItemId}`;
+                  ? `/api/me/progress/${encodeURIComponent(libraryItemId)}/${encodeURIComponent(sessionEpisodeId)}`
+                  : `/api/me/progress/${encodeURIComponent(libraryItemId)}`;
                 api
                   .patch(patchPath, {
                     currentTime: bookDuration,
@@ -618,8 +618,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _lastStartAt = now;
     try {
       const path = episodeId
-        ? `/api/items/${itemId}/play/${episodeId}`
-        : `/api/items/${itemId}/play`;
+        ? `/api/items/${encodeURIComponent(itemId)}/play/${encodeURIComponent(episodeId)}`
+        : `/api/items/${encodeURIComponent(itemId)}/play`;
       const res = await api.post(path, {
         deviceInfo: { clientName: "audiobookshelf-app-native", clientVersion: "1.0.0" },
         // Tell the server what the client can direct-play so it returns tracks
@@ -1203,6 +1203,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   },
 
   setPlaybackSpeed: async (speed) => {
+    // Guard the input at the boundary — a non-finite rate would persist
+    // globally and reach TrackPlayer.setRate/cast setPlaybackRate.
+    if (!Number.isFinite(speed) || speed <= 0 || speed > 5) return;
     const { isCasting, castClient } = get();
     if (isCasting && castClient) {
       try { await castClient.setPlaybackRate(speed); } catch (e) { console.warn("[Cast] rate", e); }

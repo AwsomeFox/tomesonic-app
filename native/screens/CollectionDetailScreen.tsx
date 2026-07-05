@@ -110,9 +110,11 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
 
   // "Hide non-audiobooks": ebook-only rows are dropped when the setting is on.
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
-  const bookItems: CollectionBook[] = (collection?.books || []).filter(
-    (b: any) => !hideNonAudiobooks || !isEbookOnly(b)
-  );
+  // filter(Boolean) first: a single null entry in the payload threw during
+  // render and blanked the whole app to the root error boundary.
+  const bookItems: CollectionBook[] = (Array.isArray(collection?.books) ? collection.books : [])
+    .filter(Boolean)
+    .filter((b: any) => !hideNonAudiobooks || !isEbookOnly(b));
   const collectionName = collection?.name || "";
   const description = collection?.description || "";
 

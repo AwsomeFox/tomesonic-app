@@ -76,7 +76,11 @@ const PATCH_PREFIX = "pendingPatch_";
 function mergePendingPatch(
   libraryItemId: string,
   episodeId: string | null | undefined,
-  fields: Record<string, any>
+  fields: Record<string, any>,
+  // weak: only fill fields the queued body doesn't already have — used when
+  // converting a STALE dead-session sync, whose position must not clobber a
+  // newer position already queued for the same item.
+  weak = false
 ) {
   try {
     if (!libraryItemId) return;
@@ -100,7 +104,7 @@ function mergePendingPatch(
       JSON.stringify({
         libraryItemId,
         episodeId: episodeId || undefined,
-        body: { ...prevBody, ...fields },
+        body: weak ? { ...fields, ...prevBody } : { ...prevBody, ...fields },
       })
     );
   } catch (e) {
@@ -113,10 +117,25 @@ export function queueProgressPatch(
   currentTime: number,
   duration: number,
   episodeId?: string | null,
-  extra?: Record<string, any>
+  extra?: Record<string, any>,
+  weak = false
 ) {
-  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
-  mergePendingPatch(libraryItemId, episodeId, { currentTime, duration, progress, ...(extra || {}) });
+  // TrackPlayer positions can transiently be NaN/negative during track
+  // teardown — never persist those into a future server PATCH (a null
+  // currentTime would clobber real server progress). Non-finite position
+  // drops the audio fields but still delivers extras like isFinished.
+  const ct = Number.isFinite(currentTime) && currentTime >= 0 ? currentTime : null;
+  const dur = Number.isFinite(duration) && duration > 0 ? duration : null;
+  const audioFields: Record<string, any> =
+    ct == null
+      ? {}
+      : {
+          currentTime: ct,
+          ...(dur != null ? { duration: dur, progress: Math.min(1, ct / dur) } : {}),
+        };
+  const fields = { ...audioFields, ...(extra || {}) };
+  if (Object.keys(fields).length === 0) return;
+  mergePendingPatch(libraryItemId, episodeId, fields, weak);
 }
 
 // Queue a bare finished/unfinished toggle (explicit user action, so unlike the
@@ -132,7 +151,7 @@ const BOOKMARK_PREFIX = "pendingBookmark_";
 
 export function queueBookmark(libraryItemId: string, time: number, title: string) {
   try {
-    if (!libraryItemId) return;
+    if (!libraryItemId || !Number.isFinite(time) || time < 0) return;
     storage.set(
       `${BOOKMARK_PREFIX}${libraryItemId}_${Math.floor(time)}`,
       JSON.stringify({ libraryItemId, time: Math.floor(time), title })
@@ -170,20 +189,28 @@ export function pendingBookmarksFor(libraryItemId: string): { time: number; titl
 async function flushPendingBookmarks(): Promise<void> {
   const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_PREFIX));
   for (const key of keys) {
+    // Corrupt entries can never send — drop instead of retrying forever.
+    let b: any = null;
     try {
       const raw = storage.getString(key);
-      if (!raw) {
+      b = raw ? JSON.parse(raw) : null;
+    } catch {}
+    if (!b?.libraryItemId || !Number.isFinite(b?.time)) {
+      try {
         storage.remove(key);
-        continue;
-      }
-      const b = JSON.parse(raw);
+      } catch {}
+      continue;
+    }
+    try {
       await api.post(`/api/me/item/${b.libraryItemId}/bookmark`, {
         title: b.title,
         time: b.time,
       });
       storage.remove(key);
-    } catch {
-      // Still offline — keep it queued.
+    } catch (e: any) {
+      // Item deleted server-side — the bookmark can never land.
+      if (e?.response?.status === 404) storage.remove(key);
+      // Otherwise still offline — keep it queued.
     }
   }
 }
@@ -207,16 +234,23 @@ export function queueEbookProgressPatch(
 async function flushPendingPatches(): Promise<void> {
   const keys = storage.getAllKeys().filter((k) => k.startsWith(PATCH_PREFIX));
   for (const key of keys) {
+    // Corrupt entries (bad JSON, no item id) can never send — drop them
+    // instead of retrying for the lifetime of the install.
+    let p: any = null;
     try {
       const raw = storage.getString(key);
-      if (!raw) {
+      p = raw ? JSON.parse(raw) : null;
+    } catch {}
+    if (!p || typeof p !== "object" || !p.libraryItemId) {
+      try {
         storage.remove(key);
-        continue;
-      }
-      const p = JSON.parse(raw);
+      } catch {}
+      continue;
+    }
+    try {
       const path = p.episodeId
-        ? `/api/me/progress/${p.libraryItemId}/${p.episodeId}`
-        : `/api/me/progress/${p.libraryItemId}`;
+        ? `/api/me/progress/${encodeURIComponent(p.libraryItemId)}/${encodeURIComponent(p.episodeId)}`
+        : `/api/me/progress/${encodeURIComponent(p.libraryItemId)}`;
       // New entries carry a ready-to-send body; legacy ones the old top-level
       // audio fields.
       const body =
@@ -229,8 +263,11 @@ async function flushPendingPatches(): Promise<void> {
         };
       await api.patch(path, body);
       storage.remove(key);
-    } catch (e) {
-      // Still offline — keep it queued.
+    } catch (e: any) {
+      // 404 = the item no longer exists server-side — a retry can never
+      // succeed (mirrors the pending-sync loop's give-up rule).
+      if (e?.response?.status === 404) storage.remove(key);
+      // Otherwise still offline — keep it queued.
     }
   }
 }
@@ -255,7 +292,9 @@ export function flushPendingSyncs(): Promise<void> {
       for (const key of keys) {
         const sessionId = key.slice(PENDING_PREFIX.length);
         const pending = readPending(sessionId);
-        if (!pending) {
+        // Truthy garbage (a stored `42`) passed the null check and POSTed a
+        // body of undefineds — require a real object with numbers.
+        if (!pending || typeof pending !== "object" || !Number.isFinite(Number(pending.currentTime))) {
           clearPending(sessionId);
           continue;
         }
@@ -265,18 +304,38 @@ export function flushPendingSyncs(): Promise<void> {
             timeListened: pending.timeListened,
             duration: pending.duration,
           });
-          clearPending(sessionId);
+          // TOCTOU guard: while our POST was in flight, a concurrent failed
+          // sync may have merged NEW seconds into this entry. Blind-clearing
+          // would eat them (verified listening-time loss under flaky
+          // networks) — clear only what we actually delivered, keep the rest.
+          const now = readPending(sessionId);
+          if (now && (now.timeListened || 0) > (pending.timeListened || 0)) {
+            storage.set(
+              pendingKey(sessionId),
+              JSON.stringify({
+                ...now,
+                timeListened: (now.timeListened || 0) - (pending.timeListened || 0),
+              })
+            );
+          } else {
+            clearPending(sessionId);
+          }
         } catch (e: any) {
           // 404 = the server no longer knows this session (restart drops open
           // sessions) — it will NEVER succeed. Convert to a direct progress
           // PATCH when we know the item; either way stop retrying forever.
           if (e?.response?.status === 404) {
             if (pending.libraryItemId) {
+              // WEAK merge: this pending entry is by definition stale (it
+              // queued before the session died) — it must not clobber a newer
+              // position already queued for the same item.
               queueProgressPatch(
                 pending.libraryItemId,
                 pending.currentTime,
                 pending.duration,
-                pending.episodeId
+                pending.episodeId,
+                undefined,
+                true
               );
             }
             clearPending(sessionId);

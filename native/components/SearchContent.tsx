@@ -139,13 +139,17 @@ export default function SearchContent({ navigation }: { navigation: any }) {
   // Podcast libraries return matches under `podcast` with the same row shape
   // ({libraryItem}) — ignoring them made search render "No results" for every
   // query in a podcast library.
-  const bookResults = [...(results?.book || []), ...(results?.podcast || [])].filter(
-    (r: any) => !hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r)
+  // Coerce every section: a corrupt response with e.g. series as a STRING
+  // passed the `|| []` truthy check and `.map` crashed the whole app (the
+  // only ErrorBoundary is at the App root).
+  const asArray = (x: any) => (Array.isArray(x) ? x : []);
+  const bookResults = [...asArray(results?.book), ...asArray(results?.podcast)].filter(
+    (r: any) => r && (!hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r))
   );
-  const seriesResults = results?.series || [];
-  const authorResults = results?.authors || [];
-  const narratorResults = results?.narrators || [];
-  const tagResults = results?.tags || [];
+  const seriesResults = asArray(results?.series).filter(Boolean);
+  const authorResults = asArray(results?.authors).filter(Boolean);
+  const narratorResults = asArray(results?.narrators).filter(Boolean);
+  const tagResults = asArray(results?.tags).filter(Boolean);
   const hasResults =
     bookResults.length > 0 ||
     seriesResults.length > 0 ||

@@ -39,11 +39,21 @@ export const secureStorage = createMMKV({
   encryptionKey: getOrCreateEncryptionKey(),
 });
 
+// Corrupt stored values (truncated writes, bad backup restores) must never
+// crash the startup/auth path — parse defensively, like progressSync does.
+function safeParse(data: string | undefined): any | null {
+  if (!data) return null;
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
 export const storageHelper = {
   // Settings
   getUserSettings: () => {
-    const data = storage.getString("userSettings");
-    return data ? JSON.parse(data) : null;
+    return safeParse(storage.getString("userSettings"));
   },
   setUserSettings: (settings: any) => {
     storage.set("userSettings", JSON.stringify(settings));
@@ -51,8 +61,7 @@ export const storageHelper = {
 
   // Auth / Server Configuration
   getServerConfig: () => {
-    const data = secureStorage.getString("serverConfig");
-    return data ? JSON.parse(data) : null;
+    return safeParse(secureStorage.getString("serverConfig"));
   },
   setServerConfig: (config: any) => {
     secureStorage.set("serverConfig", JSON.stringify(config));
@@ -111,8 +120,7 @@ export const storageHelper = {
 
   // Last Playback Session
   getLastPlaybackSession: () => {
-    const data = storage.getString("lastPlaybackSession");
-    return data ? JSON.parse(data) : null;
+    return safeParse(storage.getString("lastPlaybackSession"));
   },
   setLastPlaybackSession: (session: any) => {
     storage.set("lastPlaybackSession", JSON.stringify(session));

@@ -119,7 +119,12 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         const itemsResponse = await api.get(
           `/api/libraries/${currentLibraryId}/items?filter=series.${encodeURIComponent(base64Encode(seriesId))}&include=progress`
         );
-        const results = itemsResponse.data?.results || [];
+        const rawResults = itemsResponse.data?.results;
+        // One corrupt/null row used to throw here and hide the ENTIRE series
+        // behind a misleading "Failed to load series." error.
+        const results = (Array.isArray(rawResults) ? rawResults : []).filter(
+          (it: any) => it && it.id
+        );
 
         const books: SeriesBook[] = results.map((item: any) => {
           const rawSeries = item.media?.metadata?.series;
