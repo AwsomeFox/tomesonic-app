@@ -127,7 +127,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..b66c5e9 100644
+index b495b5a..02376ed 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -138,7 +138,7 @@ index b495b5a..b66c5e9 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,21 +105,962 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,21 +105,976 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -553,8 +553,13 @@ index b495b5a..b66c5e9 100644
 +    ): MediaItem {
 +        val creds = absCreds()
 +        val downloaded = absDownloads.containsKey(coverItemId)
++        // Percent goes at the FRONT of the title ("42% • Critical Mass") — car
++        // screens truncate subtitles so early that trailing progress text never
++        // showed, and the cover art already identifies the book.
++        val pct = absProgressPct(prog)
++        val displayTitle = if (pct != null) "$pct% • $title" else title
 +        val md = androidx.media3.common.MediaMetadata.Builder()
-+            .setTitle(title).setArtist(author ?: "")
++            .setTitle(displayTitle).setArtist(author ?: "")
 +            .setIsBrowsable(false).setIsPlayable(true)
 +            .setMediaType(androidx.media3.common.MediaMetadata.MEDIA_TYPE_AUDIO_BOOK)
 +            // Native badges: download icon, finished checkmark, progress bar.
@@ -653,6 +658,16 @@ index b495b5a..b66c5e9 100644
 +            }
 +    }
 +
++    // In-progress percent (1-99), or null when there's nothing meaningful to
++    // show. absPlayableItem prefixes it onto the TITLE.
++    private fun absProgressPct(prog: org.json.JSONObject?): Int? {
++        if (prog == null || prog.optBoolean("isFinished", false)) return null
++        val duration = prog.optDouble("duration", 0.0)
++        val current = prog.optDouble("currentTime", 0.0)
++        if (duration <= 0 || current <= 0) return null
++        return ((current / duration) * 100).toInt().coerceIn(1, 99)
++    }
++
 +    private fun absProgressSubtitle(prog: org.json.JSONObject?, author: String?): String {
 +        if (prog == null) return author ?: ""
 +        if (prog.optBoolean("isFinished", false)) return if (author.isNullOrEmpty()) "Finished" else "$author • Finished"
@@ -660,13 +675,12 @@ index b495b5a..b66c5e9 100644
 +        val current = prog.optDouble("currentTime", 0.0)
 +        val remaining = duration - current
 +        if (remaining <= 0 || current <= 0) return author ?: ""
-+        val pct = ((current / duration) * 100).toInt().coerceIn(1, 99)
 +        val h = (remaining / 3600).toInt()
 +        val m = ((remaining % 3600) / 60).toInt()
 +        val left = if (h > 0) "${h}h ${m}m left" else "${m}m left"
-+        // Explicit percent for at-a-glance progress (the native bar can be
-+        // subtle on grid tiles): "Author • 42% • 3h 10m left".
-+        return if (author.isNullOrEmpty()) "$pct% • $left" else "$author • $pct% • $left"
++        // Percent lives in the title prefix (absPlayableItem); keep the
++        // subtitle short so "…left" survives car-screen truncation.
++        return if (author.isNullOrEmpty()) left else "$author • $left"
 +    }
 +
 +    private fun absItemToMedia(o: org.json.JSONObject, prog: org.json.JSONObject? = null): MediaItem? {
@@ -1113,7 +1127,7 @@ index b495b5a..b66c5e9 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -293,9 +1235,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1249,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1125,7 +1139,7 @@ index b495b5a..b66c5e9 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1248,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1262,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1187,7 +1201,7 @@ index b495b5a..b66c5e9 100644
          }
      }
  
-@@ -449,6 +1425,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1439,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1198,7 +1212,7 @@ index b495b5a..b66c5e9 100644
      }
  
      @MainThread
-@@ -792,12 +1772,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,12 +1786,21 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1222,7 +1236,7 @@ index b495b5a..b66c5e9 100644
          progressUpdateJob?.cancel()
          super.onDestroy()
      }
-@@ -925,6 +1914,168 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +1928,168 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1391,7 +1405,7 @@ index b495b5a..b66c5e9 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +2086,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2100,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1412,7 +1426,7 @@ index b495b5a..b66c5e9 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2116,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2130,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1424,7 +1438,7 @@ index b495b5a..b66c5e9 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2128,34 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2142,34 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
