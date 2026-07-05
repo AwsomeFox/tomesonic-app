@@ -585,6 +585,12 @@ export default function PlayerBottomSheet() {
   const currentChapterTitle = currentChapter?.title || "";
 
   const title = currentChapterTitle || mediaTitle;
+  // When the headline is a CHAPTER title, the line under it carries the book
+  // too ("Book • Author") — matching the notification. With no chapters the
+  // headline IS the book, so the subtitle stays just the author.
+  const subtitleText = currentChapterTitle
+    ? [mediaTitle, authorName].filter(Boolean).join(" • ")
+    : authorName;
 
   const bookFrac = duration > 0 ? Math.min(position / duration, 1) : 0;
   const bookRemaining = Math.max(0, duration - position);
@@ -1145,7 +1151,7 @@ export default function PlayerBottomSheet() {
             numberOfLines={1}
             style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 1 }}
           >
-            {authorName}
+            {subtitleText}
           </Text>
         </Animated.View>
 
@@ -1185,7 +1191,7 @@ export default function PlayerBottomSheet() {
               textAlign: "center",
             }}
           >
-            {authorName}
+            {subtitleText}
           </Text>
           {hasChapters && currentChapterIndex >= 0 ? (
             <Text maxFontSizeMultiplier={1.3}
@@ -1330,7 +1336,7 @@ export default function PlayerBottomSheet() {
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>{title}</Text>
-                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{authorName}</Text>
+                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{subtitleText}</Text>
               </View>
             </Pressable>
             <Pressable onPress={() => { haptic(); seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
@@ -1406,7 +1412,7 @@ export default function PlayerBottomSheet() {
               <View style={{ flex: 1, justifyContent: "center", paddingHorizontal: 8 }}>
                 <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, textAlign: "center", fontSize: 12, fontWeight: "500", letterSpacing: 1.5, marginBottom: 6 }}>{sourceLabel}</Text>
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 22, textAlign: "center" }}>{title}</Text>
-                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", marginTop: 2 }}>{authorName}</Text>
+                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", marginTop: 2 }}>{subtitleText}</Text>
                 {hasChapters && currentChapterIndex >= 0 ? (
                   <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {currentChapterIndex + 1} of {chapters.length}</Text>
                 ) : null}

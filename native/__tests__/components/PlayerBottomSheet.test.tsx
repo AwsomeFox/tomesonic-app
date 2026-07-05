@@ -195,12 +195,13 @@ describe("PlayerBottomSheet — render basics", () => {
     expect(screen.toJSON()).toBeNull();
   });
 
-  it("collapsed miniplayer shows chapter title, author and expand affordance", async () => {
+  it("collapsed miniplayer shows chapter title, book • author and expand affordance", async () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
-    // Miniplayer title prefers the current CHAPTER title.
+    // Miniplayer title prefers the current CHAPTER title; the subtitle then
+    // carries the BOOK too, matching the notification's format.
     expect(screen.getAllByText("Ch 2").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("J.R.R. Tolkien").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("The Hobbit • J.R.R. Tolkien").length).toBeGreaterThan(0);
     expect(
       screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien").length
     ).toBeGreaterThan(0);
