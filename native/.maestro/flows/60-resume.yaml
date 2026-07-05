@@ -19,8 +19,11 @@ env:
     visible: ".*(Play|Continue).*"
     timeout: 15000
 - tapOn: "^(Play|Continue)$"
+# Expand-agnostic: a fresh play auto-expands, but a resumed prior session
+# stays in the miniplayer — both expose the Pause control, and this flow only
+# needs the book playing (the real assertion is the kill/restore below).
 - extendedWaitUntil:
-    visible: "Collapse player"
+    visible: "Pause"
     timeout: 30000
 # Let it actually play a bit (the wave animates while playing, so this waits
 # out its full timeout — an intentional ~6s of real listening).

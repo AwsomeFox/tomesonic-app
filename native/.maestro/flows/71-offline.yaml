@@ -16,9 +16,14 @@ tags:
 - tapOn:
     text: "Play .* offline"
     index: 0
+# Expand-agnostic: a fresh offline play auto-expands, but a resumed session
+# for the same downloaded book stays in the miniplayer — both expose Pause.
+# What matters here is that a downloaded book plays with no server reachable.
 - extendedWaitUntil:
-    visible: "Collapse player"
+    visible: "Pause"
     timeout: 30000
-- assertVisible: "Pause"
 - tapOn: "Pause"
-- tapOn: "Collapse player"
+- assertVisible: "Play"
+- tapOn:
+    text: "Collapse player"
+    optional: true
