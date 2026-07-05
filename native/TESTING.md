@@ -83,3 +83,10 @@ SeriesDetail mapping regression), settings toggle persistence across restart.
 
 Selectors are accessibility labels / visible text — when adding UI, give
 interactive elements stable `accessibilityLabel`s so flows stay robust.
+
+Additional core flows: `22-chapters-sleep` (chapter transport + chapters
+modal + sleep timer set/cancel), `60-resume` (progress survives an app
+kill — session restores on relaunch, item offers Continue), `70-download` +
+`71-offline` (download, then play the on-device copy with networking
+disabled — 71 is tagged manual because ci-flows.sh toggles the emulator's
+network around it via adb).

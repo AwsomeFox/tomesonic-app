@@ -1,0 +1,22 @@
+# Download the first book to the device and wait for completion (button
+# flips from "Download" to "Delete download"). Runs ONLINE; 71-offline then
+# verifies the downloaded copy plays with networking disabled.
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: ".* by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: "Download"
+    timeout: 15000
+- tapOn: "Download"
+# Seeded book is ~2MB from a local server — completion is quick, but allow
+# for a real library when run locally.
+- extendedWaitUntil:
+    visible: "Delete download"
+    timeout: 120000
+- back

@@ -1,0 +1,58 @@
+# Chapter navigation (next/prev buttons + the chapters modal) and the sleep
+# timer (set a preset, countdown chip appears, cancel restores the plain
+# button). Assumes a logged-in library whose first book has ≥2 chapters (the
+# CI-seeded book has exactly 2).
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: ".* by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+# Chapter transport.
+- assertVisible: "Chapter 1 of 2"
+- tapOn: "Next chapter"
+- extendedWaitUntil:
+    visible: "Chapter 2 of 2"
+    timeout: 10000
+# Within 3s of a chapter start, previous goes to the PREVIOUS chapter
+# (after 3s it restarts the current one).
+- tapOn: "Previous chapter"
+- extendedWaitUntil:
+    visible: "Chapter 1 of 2"
+    timeout: 10000
+# Jump via the chapters modal.
+- tapOn: "Chapters"
+- extendedWaitUntil:
+    visible: "Chapter 2"
+    timeout: 5000
+- tapOn: "Chapter 2"
+- extendedWaitUntil:
+    visible: "Chapter 2 of 2"
+    timeout: 10000
+# Sleep timer: set the smallest preset, chip shows remaining, cancel.
+- tapOn: "Sleep timer"
+- extendedWaitUntil:
+    visible: "5 min"
+    timeout: 5000
+- tapOn: "5 min"
+- extendedWaitUntil:
+    visible: "Sleep timer, .* remaining"
+    timeout: 5000
+- tapOn: "Sleep timer, .* remaining"
+- tapOn: "Cancel Timer"
+- extendedWaitUntil:
+    visible: "Sleep timer"
+    timeout: 5000
+# Leave things quiet for the next flow.
+- tapOn: "Pause"
+- tapOn: "Collapse player"

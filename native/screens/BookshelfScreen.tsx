@@ -663,6 +663,8 @@ export default function BookshelfScreen({ navigation }: any) {
                   key={dl.id}
                   onPress={openOffline}
                   android_ripple={{ color: colors.surfaceContainerHighest }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${isEbookOnly ? "Read" : "Play"} ${dl.title} offline`}
                   style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10 }}
                 >
                   <View style={{ width: 64, height: 64, borderRadius: 10, overflow: "hidden", backgroundColor: colors.surfaceContainerHighest }}>

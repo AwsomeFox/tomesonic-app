@@ -1,0 +1,43 @@
+# THE core audiobook promise: progress survives an app kill. Play for a few
+# seconds, pause, force-stop the app, relaunch — the session must restore
+# (miniplayer present without touching anything) and the book must offer
+# Continue instead of Play.
+appId: com.tomesonic.app
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- tapOn:
+    text: ".* by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: ".*(Play|Continue).*"
+    timeout: 15000
+- tapOn: "^(Play|Continue)$"
+- extendedWaitUntil:
+    visible: "Collapse player"
+    timeout: 30000
+# Let it actually play a bit (the wave animates while playing, so this waits
+# out its full timeout — an intentional ~6s of real listening).
+- waitForAnimationToEnd:
+    timeout: 6000
+- tapOn: "Pause"
+- assertVisible: "Play"
+# Kill and relaunch: loadLastSession must restore the session on boot.
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible: "Home"
+    timeout: 20000
+- extendedWaitUntil:
+    visible: "Expand player.*"
+    timeout: 15000
+# And the item now carries progress: detail offers Continue, not Play.
+- tapOn:
+    text: ".* by .*"
+    index: 0
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 15000
+- back
