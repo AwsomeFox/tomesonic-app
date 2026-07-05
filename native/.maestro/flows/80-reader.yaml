@@ -6,6 +6,11 @@
 # Requires network (foliate + the epub stream). CI passes EBOOK_ROW pinned to
 # the seeded ebook; locally it defaults to the first ebook-only row.
 appId: com.tomesonic.app
+# manual: the reader loads foliate-js from the jsdelivr CDN at read time, so
+# it needs external network (H2 tracks vendoring it offline). CI runs it
+# non-fatally by path; plain `npm run e2e` skips it.
+tags:
+  - manual
 env:
   EBOOK_ROW: "Read .*"
 ---
