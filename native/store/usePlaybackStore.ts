@@ -418,6 +418,16 @@ async function getLiveAbsolutePosition(get: () => PlaybackState): Promise<number
       // position would be wildly wrong as an absolute, so fall back.
       return get().position;
     }
+    // Multi-file queue: RNTP's position is FILE-relative — map it through the
+    // active track's offset (same as the 1s loop), or chapter navigation and
+    // seekForward/Backward in file 2+ act on a near-book-start position.
+    if (_trackOffsets.length > 1) {
+      const activeIndex = await TrackPlayer.getActiveTrackIndex();
+      if (activeIndex != null && _trackOffsets[activeIndex] != null) {
+        return _trackOffsets[activeIndex] + progress.position;
+      }
+      return get().position;
+    }
     return progress.position;
   } catch {
     return get().position; // player not ready — the snapshot is the best we have

@@ -345,4 +345,70 @@ describe("usePlaybackStore seek + chapter navigation", () => {
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(0);
     });
   });
+
+  // REGRESSION (CI flow 22): two-file book, chapter per file. RNTP positions
+  // are FILE-relative, and getLiveAbsolutePosition didn't map them through
+  // _trackOffsets — at the start of file 2 it reported book position 0, so
+  // previousChapter resolved "chapter 1, prev = chapters[-1]" and no-oped.
+  describe("multi-file live-position offset mapping", () => {
+    const MULTI = {
+      id: "sess1",
+      libraryItemId: "item1",
+      displayTitle: "The Test Book",
+      displayAuthor: "Test Author",
+      duration: 180,
+      currentTime: 0,
+      chapters: [
+        { id: 0, title: "Chapter 1", start: 0, end: 90 },
+        { id: 1, title: "Chapter 2", start: 90, end: 180 },
+      ],
+      audioTracks: [
+        { index: 0, contentUrl: "/api/items/item1/file/0", duration: 90, startOffset: 0 },
+        { index: 1, contentUrl: "/api/items/item1/file/1", duration: 90, startOffset: 90 },
+      ],
+    };
+
+    beforeEach(async () => {
+      const { storageHelper } = require("../../utils/storage");
+      storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+      await usePlaybackStore.getState().preparePlaybackSession(MULTI as any, false);
+      jest.mocked(TrackPlayer.skip).mockClear();
+      jest.mocked(TrackPlayer.seekTo).mockClear();
+    });
+
+    it("previousChapter at the start of file 2 goes back to chapter 1", async () => {
+      jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+      // File-relative 0s = book-absolute 90s (chapter 2's start).
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 0, duration: 90, buffered: 0 } as any);
+
+      await usePlaybackStore.getState().previousChapter();
+
+      expect(TrackPlayer.skip).toHaveBeenCalledWith(0);
+      expect(usePlaybackStore.getState().position).toBe(0);
+      expect(usePlaybackStore.getState().currentChapterIndex).toBe(0);
+    });
+
+    it("previousChapter >3s into file 2 restarts chapter 2", async () => {
+      jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 50, duration: 90, buffered: 0 } as any);
+
+      await usePlaybackStore.getState().previousChapter();
+
+      // Chapter 2 starts at file 2's 0s — no track change needed.
+      expect(TrackPlayer.skip).not.toHaveBeenCalled();
+      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(0);
+      expect(usePlaybackStore.getState().position).toBe(90);
+    });
+
+    it("seekBackward in file 2 stays near the live position instead of jumping to the book start", async () => {
+      jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 30, duration: 90, buffered: 0 } as any);
+
+      await usePlaybackStore.getState().seekBackward(10);
+
+      // Book-absolute 120 - 10 = 110 → file 2 relative 20.
+      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(20);
+      expect(usePlaybackStore.getState().position).toBe(110);
+    });
+  });
 });
