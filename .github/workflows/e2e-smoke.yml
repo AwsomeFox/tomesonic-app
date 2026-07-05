@@ -53,14 +53,17 @@ jobs:
       - name: install dependencies
         run: npm ci --prefix native
 
-      - name: build release APK
+      - name: build release APK (x86_64 only)
         # RELEASE, not debug: debug APKs don't embed the JS bundle (they load
         # from a Metro dev server, which doesn't exist on the CI emulator —
         # the app would sit on the red "unable to load script" screen).
+        # x86_64 ONLY: the New Architecture CMake-compiles every native lib
+        # per ABI; all four ABIs took ~29 min on the runner and the emulator
+        # only runs x86_64 — one ABI cuts the native compile ~4x.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
-        run: ./gradlew assembleRelease --no-daemon -x lint -x test
+        run: ./gradlew assembleRelease --no-daemon -x lint -x test -PreactNativeArchitectures=x86_64
 
       - name: seed media fixture (generated audiobook)
         run: |
