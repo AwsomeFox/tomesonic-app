@@ -3,17 +3,13 @@ name: Build APK
 # One build per change: pushes only build the default branch; feature branches
 # build through their pull_request runs (previously push+pull_request BOTH
 # fired on every PR-branch push, doubling every build).
+# No paths-ignore: unit-tests and build-apk are REQUIRED merge checks, and a
+# path-skipped required check never reports — blocking the merge forever.
 on:
   push:
     branches:
       - master
-    paths-ignore:
-      - 'ios/**'
-      - 'readme.md'
   pull_request:
-    paths-ignore:
-      - 'ios/**'
-      - 'readme.md'
 
 # A new push to the same branch/PR cancels the still-running previous build.
 concurrency:
@@ -22,6 +18,8 @@ concurrency:
 
 jobs:
   test:
+    # Stable check-run name for branch protection.
+    name: unit-tests
     runs-on: ubuntu-latest
     steps:
       - name: checkout sources
@@ -44,6 +42,8 @@ jobs:
         run: npm test --prefix native -- --ci --maxWorkers=2
 
   main:
+    # Stable check-run name for branch protection.
+    name: build-apk
     runs-on: ubuntu-latest
     steps:
       - name: checkout sources
