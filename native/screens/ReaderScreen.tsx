@@ -265,6 +265,9 @@ export default function ReaderScreen({ route, navigation }: any) {
   // --- Ebook settings & state (EPUB / MOBI / AZW3) ---
   const [ebookFileUri, setEbookFileUri] = useState<string | null>(null);
   const [ebookStatus, setEbookStatus] = useState<"idle" | "loading" | "ready" | "error" | "toobig">("idle");
+  // Why the ebook failed (download vs foliate parse) — shown small on the
+  // error screen so a failure is actionable instead of a generic "try again".
+  const [ebookError, setEbookError] = useState<string>("");
   const webRef = useRef<any>(null);
   const progressKey = `ebookCfi_${itemId}`;
   const syncTimeoutRef = useRef<any>(null);
@@ -454,9 +457,12 @@ export default function ReaderScreen({ route, navigation }: any) {
         if (cancelled) return;
         setEbookFileUri(htmlPath);
         setEbookStatus("ready");
-      } catch (e) {
+      } catch (e: any) {
         console.warn("[Reader] ebook load failed", e);
-        if (!cancelled) setEbookStatus("error");
+        if (!cancelled) {
+          setEbookError(`load: ${e?.message || String(e)}`);
+          setEbookStatus("error");
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -533,6 +539,7 @@ export default function ReaderScreen({ route, navigation }: any) {
       } else if (data.type === "toc") {
         setToc(data.toc || []);
       } else if (data.type === "error") {
+        setEbookError(`render: ${data.message || "unknown"}`);
         setEbookStatus("error");
       }
     } catch {}
@@ -787,8 +794,8 @@ export default function ReaderScreen({ route, navigation }: any) {
     } else {
       body = (
         <Fallback
-          message={`Couldn't open this ${formatLabel} in-app. Check your connection and try again, or open it in another app.`}
-          onRetry={() => setReloadKey((k) => k + 1)}
+          message={`Couldn't open this ${formatLabel} in-app. Check your connection and try again, or open it in another app.${ebookError ? `\n\n${ebookError}` : ""}`}
+          onRetry={() => { setEbookError(""); setReloadKey((k) => k + 1); }}
         />
       );
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI entrypoint for the Maestro suite (rev 2) — invoked as a SINGLE line from
+# CI entrypoint for the Maestro suite (rev 3) — invoked as a SINGLE line from
 # reactivecircus/android-emulator-runner (which runs each script line in its
 # own shell, so exports/cd don't survive across lines).
 set -euo pipefail
