@@ -7,19 +7,23 @@ tags:
 ---
 - launchApp:
     clearState: true
-# Server discovery step.
-- tapOn:
-    text: "http://55.55.55.55:13378" # address field (matched by placeholder)
+# Server discovery step (inputs matched by accessibility label — TextInput
+# placeholders surface as hints on Android, which text matching can miss).
+- extendedWaitUntil:
+    visible: "Server address"
+    timeout: 20000
+- tapOn: "Server address input"
 - inputText: ${SERVER_URL}
 - hideKeyboard
 - tapOn: "Submit"
 # Credential step.
 - extendedWaitUntil:
-    visible: "Username"
+    visible: "Username input"
     timeout: 15000
-- tapOn: "Username"
+- tapOn: "Username input"
 - inputText: ${ABS_USER}
-- tapOn: "Password"
+- hideKeyboard
+- tapOn: "Password input"
 - inputText: ${ABS_PASS}
 - hideKeyboard
 - tapOn: "Submit"

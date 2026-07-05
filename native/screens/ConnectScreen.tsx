@@ -170,6 +170,8 @@ export default function ConnectScreen() {
                 onChangeText={setAddress}
                 placeholder="http://55.55.55.55:13378"
                 placeholderTextColor={colors.onSurfaceVariant + "80"}
+                accessibilityLabel="Server address input"
+                testID="server-address-input"
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="url"
@@ -246,6 +248,8 @@ export default function ConnectScreen() {
                     onChangeText={setUsername}
                     placeholder="Username"
                     placeholderTextColor={colors.onSurfaceVariant + "80"}
+                    accessibilityLabel="Username input"
+                    testID="username-input"
                     autoCapitalize="none"
                     autoCorrect={false}
                     style={{ backgroundColor: colors.surface, padding: 16, borderRadius: 12, borderWidth: 1, borderColor: colors.outline, fontSize: 16, color: colors.onSurface, fontFamily: "sans-serif", marginBottom: 12 }}
@@ -255,6 +259,8 @@ export default function ConnectScreen() {
                     onChangeText={setPassword}
                     placeholder="Password"
                     placeholderTextColor={colors.onSurfaceVariant + "80"}
+                    accessibilityLabel="Password input"
+                    testID="password-input"
                     secureTextEntry
                     autoCapitalize="none"
                     autoCorrect={false}
