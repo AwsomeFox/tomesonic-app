@@ -150,6 +150,8 @@ const audioBook = {
 const ebookOnlyBook = {
   id: "e1",
   mediaType: "book",
+  // Continue Reading is scoped to the SELECTED library.
+  libraryId: "lib1",
   media: {
     ebookFile: { ebookFormat: "epub" },
     metadata: { title: "Ebook Only Book", authorName: "Eve Writer" },

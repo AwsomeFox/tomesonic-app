@@ -118,11 +118,13 @@ export default function BookshelfScreen({ navigation }: any) {
         fetchedItems = (await Promise.all(itemRequests)).filter(Boolean);
       }
       
-      // Keep any item with an ebook — in-progress ebooks are shown GLOBALLY
-      // (ids come from the user's whole mediaProgress map), not just from the
-      // current library: ebook and audio versions often live in separate
-      // libraries, and the reading shelf must surface both.
-      const filtered = fetchedItems.filter((item: any) => hasEbook(item));
+      // Scope to the CURRENT library (the shelf lives under this library's
+      // header — cross-library rows read as leaks) and require an ebook.
+      // The candidate ids come from the global mediaProgress map, so the
+      // libraryId check is what keeps other libraries' books out.
+      const filtered = fetchedItems.filter(
+        (item: any) => item.libraryId === libId && hasEbook(item)
+      );
 
       try { storage.set(`continueReadingCache_${libId}`, JSON.stringify(filtered)); } catch {}
       if (libStillCurrent()) setContinueReadingItems(filtered);

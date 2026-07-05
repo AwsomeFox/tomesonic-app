@@ -226,7 +226,7 @@ describe("ItemDetailScreen", () => {
     expect(screen.getByText("Continue")).toBeTruthy();
   });
 
-  it("navigates to the filtered Library when tapping the author link", async () => {
+  it("opens the dedicated AuthorDetail screen from the author link", async () => {
     routeApi(bothFormatItem);
     const navigation = makeNavigation();
     await render(
@@ -235,10 +235,9 @@ describe("ItemDetailScreen", () => {
     await screen.findByText("Listening");
 
     await fireEvent.press(screen.getByText("J.R.R. Tolkien"));
-    expect(navigation.navigate).toHaveBeenCalledWith("Library", {
-      filter: `authors.${encodeFilterValue("auth1")}`,
-      showBack: true,
-      title: "J.R.R. Tolkien",
+    expect(navigation.navigate).toHaveBeenCalledWith("AuthorDetail", {
+      authorId: "auth1",
+      authorName: "J.R.R. Tolkien",
     });
   });
 

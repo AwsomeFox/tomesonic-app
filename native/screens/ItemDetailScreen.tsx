@@ -920,11 +920,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   items={authors.map((a) => ({
                     key: a.id,
                     text: a.name,
+                    // Dedicated author page (photo, bio, books) — not the
+                    // generic filtered library list.
                     onPress: () =>
-                      navigation.navigate("Library", {
-                        filter: `authors.${encodeFilterValue(a.id)}`,
-                        showBack: true,
-                        title: a.name,
+                      navigation.navigate("AuthorDetail", {
+                        authorId: a.id,
+                        authorName: a.name,
                       }),
                   }))}
                 />
@@ -937,11 +938,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   items={seriesList.map((s) => ({
                     key: s.id,
                     text: s.text,
+                    // Dedicated series page (collage, description, continue).
                     onPress: () =>
-                      navigation.navigate("Library", {
-                        filter: `series.${encodeFilterValue(s.id)}`,
-                        showBack: true,
-                        title: s.text,
+                      navigation.navigate("SeriesDetail", {
+                        seriesId: s.id,
+                        seriesName: s.name,
                       }),
                   }))}
                 />
