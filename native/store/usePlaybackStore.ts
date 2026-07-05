@@ -71,6 +71,10 @@ function buildPlayerOptions() {
     // plugins/withMedia3NotificationIcon.js).
     forwardJumpInterval: s.jumpForwardTime ?? 10,
     backwardJumpInterval: s.jumpBackwardTime ?? 10,
+    // Native progress events every second — the background-proof persistence
+    // driver (see onNativeProgressSample). Emitted by the Media3 service's
+    // own timer, so they keep flowing while Android throttles JS timers.
+    progressUpdateEventInterval: 1,
     capabilities: [
       Capability.Play,
       Capability.Pause,
@@ -186,6 +190,211 @@ export function refreshNowPlayingArtwork() {
     const freshened = coverUrl.replace(/([?&])token=[^&]*/, `$1token=${token}`);
     usePlaybackStore.setState({ currentSession: { ...session, coverUrl: freshened } });
     _lastMetaChapter = -2; // next 1s tick re-applies metadata incl. artwork
+  } catch {}
+}
+
+// Persists one playback progress sample: listening-time accounting, the
+// crash-safe MMKV save (throttled), the global mediaProgress mirror, the
+// periodic server sync, and the near-end auto-finish. Shared by BOTH drivers:
+// the JS 1s interval (foreground) and the NATIVE PlaybackProgressUpdated
+// event (see onNativeProgressSample) — Android throttles JS timers in the
+// background, so with only the interval a backgrounded session could go
+// MINUTES without a save/sync and a process kill lost all of it.
+function persistProgressSample(
+  currentSession: any,
+  absolutePosition: number,
+  bookDuration: number,
+  isPlayerPlaying: boolean
+) {
+  // Accumulate real elapsed listening time (only while actually playing),
+  // capped per tick so backgrounding/suspension doesn't inflate it into a
+  // huge jump once ticks resume.
+  const now = Date.now();
+  if (isPlayerPlaying && _lastTickAt != null) {
+    const deltaS = Math.min(MAX_TICK_DELTA_S, Math.max(0, (now - _lastTickAt) / 1000));
+    _timeListenedAccum += deltaS;
+  }
+  _lastTickAt = now;
+
+  // Auto-save progress to local storage, throttled to ~5s to reduce
+  // flash wear (this loop ticks every 1s). ONLY WHILE PLAYING: a
+  // paused player's position isn't new information, and re-stamping
+  // `updatedAt` every tick made a device idling on the last-played
+  // book "fresher" than real listening happening on another device,
+  // poisoning every freshest-wins comparison (resume + shelf
+  // display could never adopt the other device's progress).
+  // User-initiated changes while paused (seeks) persist through
+  // saveSessionPositionNow, where a fresh stamp IS correct.
+  if (currentSession && isPlayerPlaying) {
+    if (now - _lastLocalSaveAt >= LOCAL_SAVE_INTERVAL_MS) {
+      _lastLocalSaveAt = now;
+      const updatedSession = {
+        ...currentSession,
+        currentTime: absolutePosition,
+        updatedAt: now,
+      };
+      storageHelper.setLastPlaybackSession(updatedSession);
+    }
+
+    // Update global mediaProgress map in useUserStore for UI binding.
+    // Preserve the finished flag once this session has been marked
+    // finished, otherwise this per-tick write would clobber it back
+    // to false on the next tick. NOTE: merged over the existing entry
+    // below — replacing it wholesale would drop the EBOOK fields
+    // (ebookProgress/ebookLocation) while listening to a both-format
+    // book.
+    const alreadyFinished = _finishedSessionId === currentSession.id;
+    // Podcast EPISODES key the map by `${itemId}-${episodeId}` (the
+    // same convention as /api/me) — a plain-itemId write for an
+    // episode would pollute the map with a bogus item-level entry.
+    const sessionEpisodeId = currentSession.episodeId || null;
+    const progressMapKey = sessionEpisodeId
+      ? `${currentSession.libraryItemId}-${sessionEpisodeId}`
+      : currentSession.libraryItemId;
+    const progressObj = {
+      libraryItemId: currentSession.libraryItemId,
+      ...(sessionEpisodeId ? { episodeId: sessionEpisodeId } : {}),
+      currentTime: absolutePosition,
+      duration: bookDuration,
+      progress: bookDuration > 0 ? Math.min(1, absolutePosition / bookDuration) : 0,
+      isFinished: alreadyFinished,
+      updatedAt: now,
+    };
+    useUserStore.setState({
+      mediaProgress: {
+        ...useUserStore.getState().mediaProgress,
+        [progressMapKey]: {
+          ...useUserStore.getState().mediaProgress[progressMapKey],
+          ...progressObj,
+        },
+      },
+    });
+
+    // Periodic server sync — every ~15s of accumulated listening.
+    if (currentSession.id && now - _lastSyncAt >= SYNC_INTERVAL_MS && _timeListenedAccum > 0) {
+      const toSync = _timeListenedAccum;
+      _timeListenedAccum = 0;
+      _lastSyncAt = now;
+      syncProgress({
+        sessionId: currentSession.id,
+        currentTime: absolutePosition,
+        timeListened: toSync,
+        duration: bookDuration,
+        libraryItemId: currentSession.libraryItemId,
+        episodeId: sessionEpisodeId || undefined,
+      }).catch(() => {});
+    }
+
+    // Auto mark-finished: within 5s of the end of the book/episode,
+    // once per session. Fires the isFinished PATCH and updates local
+    // state. Podcast episodes PATCH the episode-scoped endpoint and
+    // key the map by the composite id — an item-level PATCH would
+    // create bogus whole-podcast progress on the server.
+    const libraryItemId = currentSession.libraryItemId;
+    if (
+      bookDuration > 0 &&
+      absolutePosition >= bookDuration - 5 &&
+      libraryItemId &&
+      _finishedSessionId !== currentSession.id
+    ) {
+      _finishedSessionId = currentSession.id;
+      const patchPath = sessionEpisodeId
+        ? `/api/me/progress/${encodeURIComponent(libraryItemId)}/${encodeURIComponent(sessionEpisodeId)}`
+        : `/api/me/progress/${encodeURIComponent(libraryItemId)}`;
+      api
+        .patch(patchPath, {
+          currentTime: bookDuration,
+          duration: bookDuration,
+          progress: 1,
+          isFinished: true,
+        })
+        .catch(() => {
+          // Offline finish must still land once connectivity returns —
+          // otherwise a book finished on a plane never gets marked.
+          queueProgressPatch(libraryItemId, bookDuration, bookDuration, sessionEpisodeId, {
+            isFinished: true,
+          });
+        });
+      useUserStore.setState({
+        mediaProgress: {
+          ...useUserStore.getState().mediaProgress,
+          [progressMapKey]: {
+            ...useUserStore.getState().mediaProgress[progressMapKey],
+            libraryItemId,
+            ...(sessionEpisodeId ? { episodeId: sessionEpisodeId } : {}),
+            currentTime: bookDuration,
+            duration: bookDuration,
+            progress: 1,
+            isFinished: true,
+            updatedAt: now,
+          },
+        },
+      });
+    }
+  }
+}
+
+// NATIVE-driven progress persistence. RNTP emits PlaybackProgressUpdated
+// from the Media3 service's own timer, which keeps firing while Android
+// throttles JS timers in the background — the same delivery path that keeps
+// notification buttons working. Feeding those samples through the SAME
+// persistence pipeline as the JS interval means a backgrounded session keeps
+// saving locally and syncing to the server, so a process kill (app update,
+// LMK) can no longer lose minutes of listening. Both drivers share the
+// throttling bookkeeping (_lastLocalSaveAt/_lastSyncAt/_lastTickAt), so
+// running together in the foreground double-drives nothing.
+export function onNativeProgressSample(e: {
+  position: number;
+  duration: number;
+  track?: number;
+}) {
+  try {
+    const st = usePlaybackStore.getState();
+    const currentSession = st.currentSession;
+    // While casting the receiver is the source of truth — the local player's
+    // progress events (paused handoff item) must not clobber the mirror.
+    if (!currentSession || st.isCasting) return;
+    if (!Number.isFinite(e?.position) || e.position < 0) return;
+
+    const chapters = st.chapters;
+    let absolutePosition = e.position;
+    let bookDuration = e.duration || st.duration;
+    let chapterIndex = -1;
+
+    if (st.chapterQueue && chapters.length) {
+      // Chapter-clipped queue: the event position is chapter-relative and the
+      // track index IS the chapter.
+      if (typeof e.track === "number" && chapters[e.track]) {
+        chapterIndex = e.track;
+        absolutePosition = (chapters[e.track].start || 0) + e.position;
+      } else {
+        return; // can't map reliably mid-transition — skip this sample
+      }
+      bookDuration = st.duration || bookDuration;
+    } else {
+      if (
+        _trackOffsets.length > 1 &&
+        typeof e.track === "number" &&
+        _trackOffsets[e.track] != null
+      ) {
+        absolutePosition = _trackOffsets[e.track] + e.position;
+        bookDuration = st.duration || bookDuration;
+      }
+      for (let i = 0; i < chapters.length; i++) {
+        if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
+          chapterIndex = i;
+          break;
+        }
+      }
+    }
+
+    usePlaybackStore.setState({
+      position: absolutePosition,
+      duration: bookDuration,
+      isPlaying: true, // the event only fires while playing
+      currentChapterIndex: chapterIndex,
+    });
+    persistProgressSample(currentSession, absolutePosition, bookDuration, true);
   } catch {}
 }
 
@@ -496,135 +705,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             }
           }
 
-          {
-            // Accumulate real elapsed listening time (only while actually
-            // playing), capped per tick so backgrounding/suspension doesn't
-            // inflate it into a huge jump once ticks resume.
-            const now = Date.now();
-            if (isPlayerPlaying && _lastTickAt != null) {
-              const deltaS = Math.min(MAX_TICK_DELTA_S, Math.max(0, (now - _lastTickAt) / 1000));
-              _timeListenedAccum += deltaS;
-            }
-            _lastTickAt = now;
-
-            // Auto-save progress to local storage, throttled to ~5s to reduce
-            // flash wear (this loop ticks every 1s). ONLY WHILE PLAYING: a
-            // paused player's position isn't new information, and re-stamping
-            // `updatedAt` every tick made a device idling on the last-played
-            // book "fresher" than real listening happening on another device,
-            // poisoning every freshest-wins comparison (resume + shelf
-            // display could never adopt the other device's progress).
-            // User-initiated changes while paused (seeks) persist through
-            // saveSessionPositionNow, where a fresh stamp IS correct.
-            const currentSession = get().currentSession;
-            if (currentSession && isPlayerPlaying) {
-              if (now - _lastLocalSaveAt >= LOCAL_SAVE_INTERVAL_MS) {
-                _lastLocalSaveAt = now;
-                const updatedSession = {
-                  ...currentSession,
-                  currentTime: absolutePosition,
-                  updatedAt: now,
-                };
-                storageHelper.setLastPlaybackSession(updatedSession);
-              }
-
-              // Update global mediaProgress map in useUserStore for UI binding.
-              // Preserve the finished flag once this session has been marked
-              // finished, otherwise this per-tick write would clobber it back
-              // to false on the next tick. NOTE: merged over the existing entry
-              // below — replacing it wholesale would drop the EBOOK fields
-              // (ebookProgress/ebookLocation) while listening to a both-format
-              // book.
-              const alreadyFinished = _finishedSessionId === currentSession.id;
-              // Podcast EPISODES key the map by `${itemId}-${episodeId}` (the
-              // same convention as /api/me) — a plain-itemId write for an
-              // episode would pollute the map with a bogus item-level entry.
-              const sessionEpisodeId = currentSession.episodeId || null;
-              const progressMapKey = sessionEpisodeId
-                ? `${currentSession.libraryItemId}-${sessionEpisodeId}`
-                : currentSession.libraryItemId;
-              const progressObj = {
-                libraryItemId: currentSession.libraryItemId,
-                ...(sessionEpisodeId ? { episodeId: sessionEpisodeId } : {}),
-                currentTime: absolutePosition,
-                duration: bookDuration,
-                progress: bookDuration > 0 ? Math.min(1, absolutePosition / bookDuration) : 0,
-                isFinished: alreadyFinished,
-                updatedAt: now,
-              };
-              useUserStore.setState({
-                mediaProgress: {
-                  ...useUserStore.getState().mediaProgress,
-                  [progressMapKey]: {
-                    ...useUserStore.getState().mediaProgress[progressMapKey],
-                    ...progressObj,
-                  },
-                },
-              });
-
-              // Periodic server sync — every ~15s of accumulated listening.
-              if (currentSession.id && now - _lastSyncAt >= SYNC_INTERVAL_MS && _timeListenedAccum > 0) {
-                const toSync = _timeListenedAccum;
-                _timeListenedAccum = 0;
-                _lastSyncAt = now;
-                syncProgress({
-                  sessionId: currentSession.id,
-                  currentTime: absolutePosition,
-                  timeListened: toSync,
-                  duration: bookDuration,
-                  libraryItemId: currentSession.libraryItemId,
-                  episodeId: sessionEpisodeId || undefined,
-                }).catch(() => {});
-              }
-
-              // Auto mark-finished: within 5s of the end of the book/episode,
-              // once per session. Fires the isFinished PATCH and updates local
-              // state. Podcast episodes PATCH the episode-scoped endpoint and
-              // key the map by the composite id — an item-level PATCH would
-              // create bogus whole-podcast progress on the server.
-              const libraryItemId = currentSession.libraryItemId;
-              if (
-                bookDuration > 0 &&
-                absolutePosition >= bookDuration - 5 &&
-                libraryItemId &&
-                _finishedSessionId !== currentSession.id
-              ) {
-                _finishedSessionId = currentSession.id;
-                const patchPath = sessionEpisodeId
-                  ? `/api/me/progress/${encodeURIComponent(libraryItemId)}/${encodeURIComponent(sessionEpisodeId)}`
-                  : `/api/me/progress/${encodeURIComponent(libraryItemId)}`;
-                api
-                  .patch(patchPath, {
-                    currentTime: bookDuration,
-                    duration: bookDuration,
-                    progress: 1,
-                    isFinished: true,
-                  })
-                  .catch(() => {
-                    // Offline finish must still land once connectivity returns —
-                    // otherwise a book finished on a plane never gets marked.
-                    queueProgressPatch(libraryItemId, bookDuration, bookDuration, sessionEpisodeId, {
-                      isFinished: true,
-                    });
-                  });
-                useUserStore.setState({
-                  mediaProgress: {
-                    ...useUserStore.getState().mediaProgress,
-                    [progressMapKey]: {
-                      ...useUserStore.getState().mediaProgress[progressMapKey],
-                      libraryItemId,
-                      ...(sessionEpisodeId ? { episodeId: sessionEpisodeId } : {}),
-                      currentTime: bookDuration,
-                      duration: bookDuration,
-                      progress: 1,
-                      isFinished: true,
-                      updatedAt: now,
-                    },
-                  },
-                });
-              }
-            }
-          }
+          persistProgressSample(
+            get().currentSession,
+            absolutePosition,
+            bookDuration,
+            isPlayerPlaying
+          );
         } catch (e) {
           // Player might not be active/loaded
         }

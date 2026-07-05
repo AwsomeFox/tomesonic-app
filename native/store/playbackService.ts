@@ -1,6 +1,6 @@
 import { DeviceEventEmitter } from "react-native";
 import TrackPlayer, { Event } from "react-native-track-player";
-import { usePlaybackStore } from "./usePlaybackStore";
+import { usePlaybackStore, onNativeProgressSample } from "./usePlaybackStore";
 
 // Cycles through the same set the in-app speed control offers.
 const SPEEDS = [0.8, 1.0, 1.2, 1.5, 1.75, 2.0, 3.0];
@@ -25,6 +25,14 @@ export async function playbackService() {
     const next = SPEEDS[(idx + 1) % SPEEDS.length];
     console.log(`[PlaybackService] RemotePlaybackSpeed ${current} -> ${next}`);
     st.setPlaybackSpeed(next);
+  });
+
+  // NATIVE progress samples — emitted by the Media3 service's own timer, so
+  // they keep arriving while Android throttles JS timers in the background.
+  // This is what keeps local saves + server syncs flowing with the screen
+  // off; the JS 1s interval only reliably covers the foreground.
+  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, (event) => {
+    onNativeProgressSample(event as any);
   });
 
   // Route remote (notification / Android Auto / bluetooth) transport through the
