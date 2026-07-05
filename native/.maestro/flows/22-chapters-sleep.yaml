@@ -19,6 +19,13 @@ env:
     visible: ".*(Play|Continue).*"
     timeout: 15000
 - tapOn: "^(Play|Continue)$"
+# A fresh play auto-expands the full player; but if a prior flow left a
+# session for this same book, tapping Continue resumes it in the (collapsed)
+# miniplayer instead — open it explicitly in that case. optional:true keeps
+# the auto-expanded path from failing on a missing miniplayer handle.
+- tapOn:
+    text: "Expand player.*"
+    optional: true
 - extendedWaitUntil:
     visible: "Collapse player"
     timeout: 30000
