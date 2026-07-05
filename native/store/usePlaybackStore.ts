@@ -167,6 +167,32 @@ function alertPlayFailure(message: string) {
   } catch {}
 }
 
+// The store's `position` is written by a 1s JS interval that Android
+// throttles while the app is backgrounded/dozing — the native player keeps
+// advancing while the snapshot freezes, so a notification jump computed from
+// it can leap MINUTES instead of one interval. Relative seeks must read the
+// LIVE player position (mapped to absolute book seconds for chapter queues).
+// While casting, the receiver mirror in the store is the only truth we have.
+async function getLiveAbsolutePosition(get: () => PlaybackState): Promise<number> {
+  const { isCasting, chapterQueue, chapters } = get();
+  if (isCasting) return get().position;
+  try {
+    const progress = await TrackPlayer.getProgress();
+    if (chapterQueue && chapters.length) {
+      const activeIndex = await TrackPlayer.getActiveTrackIndex();
+      if (activeIndex != null && chapters[activeIndex]) {
+        return (chapters[activeIndex].start || 0) + progress.position;
+      }
+      // Mid track-transition the index can be unknown — a chapter-relative
+      // position would be wildly wrong as an absolute, so fall back.
+      return get().position;
+    }
+    return progress.position;
+  } catch {
+    return get().position; // player not ready — the snapshot is the best we have
+  }
+}
+
 // Immediately persist the current session position to MMKV, bypassing the 5s
 // throttle — called on seek/pause so an app kill right after either can lose
 // at most a moment of progress (the 1s loop alone leaves a 5s window).
@@ -1128,13 +1154,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
   // seekForward/Backward funnel through seek() so they inherit cast routing.
   seekForward: async (value) => {
-    const target = Math.min(get().position + value, get().duration || Infinity);
+    // LIVE position, not the store snapshot — see getLiveAbsolutePosition.
+    const pos = await getLiveAbsolutePosition(get);
+    const target = Math.min(pos + value, get().duration || Infinity);
     await get().seek(target);
   },
 
   seekBackward: async (value) => {
-    const target = Math.max(0, get().position - value);
-    await get().seek(target);
+    const pos = await getLiveAbsolutePosition(get);
+    await get().seek(Math.max(0, pos - value));
   },
 
   // Chapter-aware navigation. ABS chapters carry absolute { start, end } times
@@ -1172,12 +1200,26 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await get().seekToChapter(nextIndex);
       return;
     }
-    const nextIndex = currentChapterIndex + 1;
+    // Derive the chapter from the LIVE position — the snapshot index can be
+    // minutes stale in the background (throttled interval).
+    let idx = currentChapterIndex;
+    if (!isCasting && chapters?.length) {
+      const position = await getLiveAbsolutePosition(get);
+      const liveIdx = chapters.findIndex(
+        (c: any) => position >= (c.start || 0) && position < (c.end || 0)
+      );
+      if (liveIdx >= 0) idx = liveIdx;
+    }
+    const nextIndex = idx + 1;
     if (chapters?.[nextIndex]) await get().seekToChapter(nextIndex);
   },
 
   previousChapter: async () => {
-    const { chapters, currentChapterIndex, position, chapterQueue, isCasting } = get();
+    const { chapters, currentChapterIndex, chapterQueue, isCasting } = get();
+    // LIVE position: the store snapshot can be minutes stale in the background
+    // (see getLiveAbsolutePosition), which flipped the restart-vs-previous
+    // decision for notification presses.
+    const position = await getLiveAbsolutePosition(get);
     if (chapterQueue && !isCasting) {
       const active = (await TrackPlayer.getActiveTrackIndex()) ?? currentChapterIndex;
       const current = chapters?.[active];
@@ -1192,13 +1234,22 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       return;
     }
-    const current = chapters?.[currentChapterIndex];
+    // Derive the chapter from the LIVE position too — currentChapterIndex is
+    // written by the same throttled interval as the position snapshot.
+    let idx = currentChapterIndex;
+    if (!isCasting && chapters?.length) {
+      const liveIdx = chapters.findIndex(
+        (c: any) => position >= (c.start || 0) && position < (c.end || 0)
+      );
+      if (liveIdx >= 0) idx = liveIdx;
+    }
+    const current = chapters?.[idx];
     const restart = current && position - (current.start || 0) > 3;
     if (restart) {
-      await get().seekToChapter(currentChapterIndex);
+      await get().seekToChapter(idx);
       return;
     }
-    const prevIndex = currentChapterIndex - 1;
+    const prevIndex = idx - 1;
     if (chapters?.[prevIndex]) await get().seekToChapter(prevIndex);
   },
 

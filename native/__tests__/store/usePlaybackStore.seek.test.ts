@@ -199,14 +199,18 @@ describe("usePlaybackStore seek + chapter navigation", () => {
   });
 
   describe("seekForward / seekBackward", () => {
-    it("seekForward adds to the position, clamped to duration", async () => {
-      setupLocal({ position: 280 });
+    it("seekForward adds to the LIVE position, clamped to duration", async () => {
+      // The store snapshot is deliberately stale — jumps must use the live
+      // player position (the snapshot freezes while backgrounded).
+      setupLocal({ position: 10 });
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 280, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().seekForward(30);
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(300);
     });
 
-    it("seekBackward subtracts, clamped to zero", async () => {
-      setupLocal({ position: 5 });
+    it("seekBackward subtracts from the LIVE position, clamped to zero", async () => {
+      setupLocal({ position: 250 });
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 5, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().seekBackward(30);
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(0);
     });
@@ -278,14 +282,16 @@ describe("usePlaybackStore seek + chapter navigation", () => {
       expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
     });
 
-    it("single item: advances from the store's chapter index", async () => {
-      setupLocal({ currentChapterIndex: 1 });
+    it("single item: advances from the LIVE chapter (snapshot index can be stale)", async () => {
+      setupLocal({ currentChapterIndex: 0 }); // stale snapshot
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 150, duration: 300, buffered: 0 } as any); // live: chapter 1
       await usePlaybackStore.getState().nextChapter();
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(200);
     });
 
     it("single item: no-op past the last chapter", async () => {
       setupLocal({ currentChapterIndex: 2 });
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 250, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().nextChapter();
       expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
     });
@@ -295,6 +301,8 @@ describe("usePlaybackStore seek + chapter navigation", () => {
     it("chapter queue: >3s into the chapter restarts it", async () => {
       setupLocal({ chapterQueue: true, position: 150 });
       jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+      // Live position: 50s into the chapter clip.
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 50, duration: 100, buffered: 0 } as any);
 
       await usePlaybackStore.getState().previousChapter();
       // Restart chapter 1, not skip to chapter 0.
@@ -306,6 +314,7 @@ describe("usePlaybackStore seek + chapter navigation", () => {
     it("chapter queue: within 3s goes to the previous chapter", async () => {
       setupLocal({ chapterQueue: true, position: 102 });
       jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 2, duration: 100, buffered: 0 } as any);
 
       await usePlaybackStore.getState().previousChapter();
       expect(TrackPlayer.skip).toHaveBeenCalledWith(0);
@@ -315,6 +324,7 @@ describe("usePlaybackStore seek + chapter navigation", () => {
     it("chapter queue: within 3s of the first chapter restarts it", async () => {
       setupLocal({ chapterQueue: true, position: 2 });
       jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 2, duration: 100, buffered: 0 } as any);
 
       await usePlaybackStore.getState().previousChapter();
       expect(TrackPlayer.skip).toHaveBeenCalledWith(0);
@@ -323,12 +333,14 @@ describe("usePlaybackStore seek + chapter navigation", () => {
 
     it("single item: >3s restarts the current chapter", async () => {
       setupLocal({ currentChapterIndex: 1, position: 150 });
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 150, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().previousChapter();
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(100);
     });
 
     it("single item: within 3s jumps to the previous chapter's start", async () => {
       setupLocal({ currentChapterIndex: 1, position: 101 });
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 101, duration: 300, buffered: 0 } as any);
       await usePlaybackStore.getState().previousChapter();
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(0);
     });
