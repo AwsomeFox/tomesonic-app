@@ -65,25 +65,49 @@ export async function writeAutoCreds(
   token?: string | null,
   libraryId?: string | null,
   refreshToken?: string | null,
+  // TRUE only when the caller's token pair is known-fresh (just logged in /
+  // just refreshed). Mirror-only writes (e.g. a library switch) must NOT
+  // trust their pair: ABS ROTATES refresh tokens, and the NATIVE Android Auto
+  // service may have rotated while JS slept — this file can hold the ONLY
+  // valid pair, and clobbering it with the secure store's stale copy killed
+  // the exact recovery path this file exists for (dead refresh → forced
+  // logout after a long drive).
+  trustTokens = false,
 ) {
   try {
     if (address && token) {
-      const creds: any = { server: address.replace(/\/$/, ""), token };
-      if (refreshToken) {
+      const server = address.replace(/\/$/, "");
+      const existing = await readAutoCreds();
+      const sameServer = existing?.server === server;
+
+      const creds: any = { server, token };
+      if (
+        !trustTokens &&
+        sameServer &&
+        existing?.refreshToken &&
+        existing.refreshToken !== refreshToken
+      ) {
+        // The file holds a (possibly natively-rotated) pair this caller
+        // doesn't know about — keep the whole pair, only update metadata.
+        creds.token = existing!.token;
+        creds.refreshToken = existing!.refreshToken;
+      } else if (refreshToken) {
         // Lets the native Android Auto service refresh the access token itself
         // when it 401s (e.g. app backgrounded for hours while driving).
         creds.refreshToken = refreshToken;
+      } else if (sameServer && existing?.refreshToken) {
+        // Never DROP an existing refresh token just because a caller didn't
+        // pass one.
+        creds.refreshToken = existing.refreshToken;
       }
+
       if (libraryId) {
         creds.libraryId = libraryId;
-      } else {
+      } else if (sameServer && existing?.libraryId) {
         // No library specified (e.g. a token-refresh rewrite from api.ts):
         // keep whatever library the file already has for this server so the
         // native browse service doesn't lose its selection on every refresh.
-        const existing = await readAutoCreds();
-        if (existing?.libraryId && existing.server === creds.server) {
-          creds.libraryId = existing.libraryId;
-        }
+        creds.libraryId = existing.libraryId;
       }
       await FileSystem.writeAsStringAsync(
         CREDS_PATH,

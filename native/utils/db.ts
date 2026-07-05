@@ -13,11 +13,27 @@ const PREFIX_LOCAL_MEDIA_PROGRESS = "localMediaProgress_";
 const PREFIX_DOWNLOADS = "downloads_";
 const PREFIX_LOGS = "logs_";
 
+// One corrupt MMKV record must never crash an iteration (several of these run
+// during app/service boot) — parse defensively and DROP bad records.
+function safeParse(key: string): any | null {
+  const val = dbStorage.getString(key);
+  if (!val) return null;
+  try {
+    return JSON.parse(val);
+  } catch (e) {
+    console.warn("[db] Dropping corrupt record", key, e);
+    try {
+      dbStorage.remove(key);
+    } catch {}
+    return null;
+  }
+}
+
 export const db = {
   // --- Device Data ---
   getDeviceData: () => {
-    const data = dbStorage.getString(`${PREFIX_DEVICE}data`);
-    return data ? JSON.parse(data) : {
+    const data = safeParse(`${PREFIX_DEVICE}data`);
+    return data ?? {
       serverConnectionConfigs: [],
       lastServerConnectionConfigId: null,
       currentLocalPlaybackSession: null,
@@ -34,20 +50,16 @@ export const db = {
     const keys = dbStorage.getAllKeys().filter(k => k.startsWith(PREFIX_LOCAL_LIBRARY_ITEMS));
     const items: any[] = [];
     keys.forEach(key => {
-      const val = dbStorage.getString(key);
-      if (val) {
-        const parsed = JSON.parse(val);
-        if (!mediaType || parsed.mediaType === mediaType) {
-          items.push(parsed);
-        }
+      const parsed = safeParse(key);
+      if (parsed && (!mediaType || parsed.mediaType === mediaType)) {
+        items.push(parsed);
       }
     });
     return items;
   },
 
   getLocalLibraryItem: (id: string) => {
-    const data = dbStorage.getString(`${PREFIX_LOCAL_LIBRARY_ITEMS}${id}`);
-    return data ? JSON.parse(data) : null;
+    return safeParse(`${PREFIX_LOCAL_LIBRARY_ITEMS}${id}`);
   },
 
   getLocalLibraryItemByLId: (libraryItemId: string) => {
@@ -69,17 +81,14 @@ export const db = {
     const keys = dbStorage.getAllKeys().filter(k => k.startsWith(PREFIX_LOCAL_FOLDERS));
     const folders: any[] = [];
     keys.forEach(key => {
-      const val = dbStorage.getString(key);
-      if (val) {
-        folders.push(JSON.parse(val));
-      }
+      const parsed = safeParse(key);
+      if (parsed) folders.push(parsed);
     });
     return folders;
   },
 
   getLocalFolder: (id: string) => {
-    const data = dbStorage.getString(`${PREFIX_LOCAL_FOLDERS}${id}`);
-    return data ? JSON.parse(data) : null;
+    return safeParse(`${PREFIX_LOCAL_FOLDERS}${id}`);
   },
 
   saveLocalFolder: (folder: any) => {
@@ -96,17 +105,14 @@ export const db = {
     const keys = dbStorage.getAllKeys().filter(k => k.startsWith(PREFIX_LOCAL_MEDIA_PROGRESS));
     const progressList: any[] = [];
     keys.forEach(key => {
-      const val = dbStorage.getString(key);
-      if (val) {
-        progressList.push(JSON.parse(val));
-      }
+      const parsed = safeParse(key);
+      if (parsed) progressList.push(parsed);
     });
     return progressList;
   },
 
   getLocalMediaProgress: (id: string) => {
-    const data = dbStorage.getString(`${PREFIX_LOCAL_MEDIA_PROGRESS}${id}`);
-    return data ? JSON.parse(data) : null;
+    return safeParse(`${PREFIX_LOCAL_MEDIA_PROGRESS}${id}`);
   },
 
   saveLocalMediaProgress: (progress: any) => {
@@ -151,10 +157,8 @@ export const db = {
     const keys = dbStorage.getAllKeys().filter(k => k.startsWith(PREFIX_LOGS));
     const logs: any[] = [];
     keys.forEach(key => {
-      const val = dbStorage.getString(key);
-      if (val) {
-        logs.push(JSON.parse(val));
-      }
+      const parsed = safeParse(key);
+      if (parsed) logs.push(parsed);
     });
     return logs.sort((a, b) => a.timestamp - b.timestamp);
   },
@@ -169,12 +173,9 @@ export const db = {
     const limit = Date.now() - hoursToKeep * 60 * 60 * 1000;
     
     keys.forEach(key => {
-      const val = dbStorage.getString(key);
-      if (val) {
-        const parsed = JSON.parse(val);
-        if (parsed.timestamp && parsed.timestamp < limit) {
-          dbStorage.remove(key);
-        }
+      const parsed = safeParse(key);
+      if (parsed?.timestamp && parsed.timestamp < limit) {
+        dbStorage.remove(key);
       }
     });
   }

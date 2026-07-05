@@ -52,9 +52,11 @@ interface UserState {
 function indexMediaProgress(list: any[]): Record<string, any> {
   const map: Record<string, any> = {};
   (list || []).forEach((p) => {
-    if (!p) return;
+    // Entries must be objects WITH a library item id — an episode row missing
+    // libraryItemId minted a bogus "undefined-ep1" key.
+    if (!p || typeof p !== "object" || !p.libraryItemId) return;
     const key = p.episodeId ? `${p.libraryItemId}-${p.episodeId}` : p.libraryItemId;
-    if (key) map[key] = p;
+    map[key] = p;
   });
   return map;
 }
@@ -127,7 +129,10 @@ export const useUserStore = create<UserState>((set, get) => ({
       isInitialized: true,
     });
     // Mirror creds for the native Android Auto browse service.
-    if (hasSession) writeAutoCreds(config.address, config.token, useLibraryStore.getState().currentLibraryId, config.refreshToken);
+    // trustTokens: the adoption above already made `config` at least as fresh
+    // as the file.
+    if (hasSession)
+      writeAutoCreds(config.address, config.token, useLibraryStore.getState().currentLibraryId, config.refreshToken, true);
   },
 
   setUser: (user) => set({ user }),
@@ -148,7 +153,10 @@ export const useUserStore = create<UserState>((set, get) => ({
   loadMediaProgress: async () => {
     try {
       const res = await api.get("/api/me");
-      const list = res.data?.mediaProgress || [];
+      const list = res.data?.mediaProgress;
+      // A degenerate 200 (proxy error page / null field) must not wipe the
+      // in-memory progress map — bail and keep what we have.
+      if (!Array.isArray(list)) return;
       const next = indexMediaProgress(list);
       const prev = get().mediaProgress;
       // FRESHEST-WINS per entry: local writers (player tick, reader, finish
@@ -221,7 +229,8 @@ export const useUserStore = create<UserState>((set, get) => ({
     storageHelper.setLastSessionKey(newKey);
 
     storageHelper.setServerConfig(config);
-    writeAutoCreds(config?.address, config?.token, useLibraryStore.getState().currentLibraryId, config?.refreshToken);
+    // trustTokens: a fresh login — this pair came straight from the server.
+    writeAutoCreds(config?.address, config?.token, useLibraryStore.getState().currentLibraryId, config?.refreshToken, true);
     set({
       serverConnectionConfig: config,
       user: user,

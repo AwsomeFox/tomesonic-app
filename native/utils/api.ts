@@ -61,7 +61,8 @@ const applyRefreshedConfig = (config: any) => {
   } catch (e) {
     // no-op
   }
-  writeAutoCreds(config.address, config.token, undefined, config.refreshToken).catch(() => {});
+  // trustTokens: this pair was JUST rotated by the server — it is the freshest.
+  writeAutoCreds(config.address, config.token, undefined, config.refreshToken, true).catch(() => {});
 };
 
 const processQueue = (error: any, token: string | null = null) => {
