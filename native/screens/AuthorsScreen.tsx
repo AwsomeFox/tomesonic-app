@@ -8,6 +8,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
@@ -194,7 +195,7 @@ export default function AuthorsScreen({ navigation }: any) {
         {/* Image / collage / placeholder fills the whole card */}
         {imageUri ? (
           <Image
-            source={{ uri: imageUri }}
+            source={coverSource(imageUri)}
             style={{ width: "100%", height: "100%" }}
             contentFit="cover"
           />
@@ -215,7 +216,7 @@ export default function AuthorsScreen({ navigation }: any) {
                 <View key={book.id || idx} style={{ width: cw, height: ch }}>
                   {cUri ? (
                     <Image
-                      source={{ uri: cUri }}
+                      source={coverSource(cUri)}
                       style={{ width: "100%", height: "100%" }}
                       contentFit="cover"
                     />

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
@@ -269,7 +270,7 @@ export default function LibraryScreen({ route, navigation }: any) {
           >
             {coverUri ? (
               <Image
-                source={{ uri: coverUri }}
+                source={coverSource(coverUri)}
                 style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
                 contentFit="cover"
               />

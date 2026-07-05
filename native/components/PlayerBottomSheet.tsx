@@ -11,6 +11,7 @@ import {
   StyleSheet,
 } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, {
@@ -1086,7 +1087,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           {coverUrl ? (
-            <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" />
+            <Image source={coverSource(coverUrl)} style={{ width: "100%", height: "100%" }} contentFit="cover" />
           ) : (
             // Sized relative to the (expanded) box so the scale transform
             // keeps it proportional in the mini thumb too.
@@ -1322,7 +1323,7 @@ export default function PlayerBottomSheet() {
           >
             <Pressable onPress={() => setPlayerExpanded(true)} accessibilityRole="button" accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}`} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
               <View style={{ width: 50, height: 50, borderRadius: 8, overflow: "hidden", backgroundColor: colors.surfaceContainerHigh, alignItems: "center", justifyContent: "center" }}>
-                {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
+                {coverUrl ? <Image source={coverSource(coverUrl)} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>{title}</Text>
@@ -1392,7 +1393,7 @@ export default function PlayerBottomSheet() {
             <View style={{ flex: 1, flexDirection: "row", alignItems: "center" }}>
               <View style={{ width: LS_COVER + 16, alignItems: "center", justifyContent: "center" }}>
                 <View style={{ width: LS_COVER, height: LS_COVER, borderRadius: 16, overflow: "hidden", backgroundColor: colors.surfaceContainerHigh, alignItems: "center", justifyContent: "center", elevation: 4 }}>
-                  {coverUrl ? <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={48} color={withAlpha(colors.onSurface, 0.4)} />}
+                  {coverUrl ? <Image source={coverSource(coverUrl)} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={48} color={withAlpha(colors.onSurface, 0.4)} />}
                   {coverUrl ? (
                     <LinearGradient colors={["rgba(0,0,0,0.35)", "rgba(0,0,0,0.12)", "rgba(255,255,255,0.10)", "rgba(0,0,0,0)"]} locations={[0, 0.35, 0.6, 1]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 18 }} />
                   ) : null}

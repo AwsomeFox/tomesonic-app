@@ -6,6 +6,7 @@ import {
   Pressable,
 } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -197,7 +198,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         >
           {cUri ? (
             <Image
-              source={{ uri: cUri }}
+              source={coverSource(cUri)}
               style={{ width: "100%", height: "100%" }}
               contentFit="cover"
             />
@@ -278,7 +279,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
                 <View key={book.id || idx} style={{ width: cw, height: ch }}>
                   {cUri ? (
                     <Image
-                      source={{ uri: cUri }}
+                      source={coverSource(cUri)}
                       style={{ width: "100%", height: "100%" }}
                       contentFit="cover"
                     />
@@ -347,7 +348,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
       >
         {imageUri ? (
           <Image
-            source={{ uri: imageUri }}
+            source={coverSource(imageUri)}
             style={{ width: 40, height: 40 }}
             contentFit="cover"
           />

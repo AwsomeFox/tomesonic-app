@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
 import { queueFinishedPatch } from "../utils/progressSync";
@@ -504,7 +505,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               }}
             >
               {coverUrl ? (
-                <Image source={{ uri: coverUrl }} style={{ width: coverWidth, height: coverWidth }} contentFit="cover" />
+                <Image source={coverSource(coverUrl)} style={{ width: coverWidth, height: coverWidth }} contentFit="cover" />
               ) : (
                 <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
                   <Icon name="book" size={64} color={colors.onSurfaceVariant} />

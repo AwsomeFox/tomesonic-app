@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
@@ -151,7 +152,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           }}
         >
           {coverUrl ? (
-            <Image source={{ uri: coverUrl }} style={{ width: 56, height: 80 }} contentFit="cover" />
+            <Image source={coverSource(coverUrl)} style={{ width: 56, height: 80 }} contentFit="cover" />
           ) : (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <Icon name={isEpisode ? "podcast" : "book"} size={22} color={colors.onSurfaceVariant} />
@@ -344,7 +345,7 @@ function PlaylistCollage({ covers, size, colors }: { covers: string[]; size: num
           <Icon name="list" size={28} color={colors.onPrimary} />
         </View>
       ) : covers.length === 1 ? (
-        <Image source={{ uri: covers[0] }} style={{ width: size, height: size }} contentFit="cover" />
+        <Image source={coverSource(covers[0])} style={{ width: size, height: size }} contentFit="cover" />
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", width: size, height: size }}>
           {covers.slice(0, 4).map((uri, idx) => (

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
@@ -172,7 +173,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           }}
         >
           {coverUrl ? (
-            <Image source={{ uri: coverUrl }} style={{ width: 56, height: 80 }} contentFit="cover" />
+            <Image source={coverSource(coverUrl)} style={{ width: 56, height: 80 }} contentFit="cover" />
           ) : (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <Icon name="book" size={22} color={colors.onSurfaceVariant} />

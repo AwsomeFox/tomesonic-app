@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, Pressable } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -149,7 +150,7 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       {hasCover && coverUrl ? (
         <>
           <Image
-            source={{ uri: coverUrl }}
+            source={coverSource(coverUrl)}
             style={{ width: "100%", height: "100%", position: "absolute" }}
             contentFit="cover"
             cachePolicy="disk"

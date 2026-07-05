@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl, useWindowDimensions } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
@@ -185,7 +186,7 @@ export default function SeriesListScreen({ navigation }: any) {
     if (count === 1) {
       const uri = getCoverUrl(coverBooks[0].id);
       return (
-        <Image source={{ uri: uri || undefined }} style={{ width: "100%", height: "100%" }} contentFit="cover" />
+        <Image source={coverSource(uri || undefined)} style={{ width: "100%", height: "100%" }} contentFit="cover" />
       );
     }
 
@@ -196,7 +197,7 @@ export default function SeriesListScreen({ navigation }: any) {
           {coverBooks.map((b, idx) => (
             <Image
               key={b.id || idx}
-              source={{ uri: getCoverUrl(b.id) || undefined }}
+              source={coverSource(getCoverUrl(b.id) || undefined)}
               style={{ width: "50%", height: "100%" }}
               contentFit="cover"
             />
@@ -210,10 +211,10 @@ export default function SeriesListScreen({ navigation }: any) {
       return (
         <View style={{ width: "100%", height: "100%" }}>
           <View style={{ flexDirection: "row", height: "50%" }}>
-            <Image source={{ uri: getCoverUrl(coverBooks[0].id) || undefined }} style={{ width: "50%", height: "100%" }} contentFit="cover" />
-            <Image source={{ uri: getCoverUrl(coverBooks[1].id) || undefined }} style={{ width: "50%", height: "100%" }} contentFit="cover" />
+            <Image source={coverSource(getCoverUrl(coverBooks[0].id) || undefined)} style={{ width: "50%", height: "100%" }} contentFit="cover" />
+            <Image source={coverSource(getCoverUrl(coverBooks[1].id) || undefined)} style={{ width: "50%", height: "100%" }} contentFit="cover" />
           </View>
-          <Image source={{ uri: getCoverUrl(coverBooks[2].id) || undefined }} style={{ width: "100%", height: "50%" }} contentFit="cover" />
+          <Image source={coverSource(getCoverUrl(coverBooks[2].id) || undefined)} style={{ width: "100%", height: "50%" }} contentFit="cover" />
         </View>
       );
     }
@@ -224,7 +225,7 @@ export default function SeriesListScreen({ navigation }: any) {
         {coverBooks.map((b, idx) => (
           <Image
             key={b.id || idx}
-            source={{ uri: getCoverUrl(b.id) || undefined }}
+            source={coverSource(getCoverUrl(b.id) || undefined)}
             style={{ width: "50%", height: "50%" }}
             contentFit="cover"
           />

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "../components/Icon";
@@ -121,7 +122,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
         >
           {coverUrl ? (
             <Image
-              source={{ uri: coverUrl }}
+              source={coverSource(coverUrl)}
               style={{ width: 60, height: 60 }}
               contentFit="cover"
             />

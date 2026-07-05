@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
@@ -245,7 +246,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         >
           {coverUri ? (
             <Image
-              source={{ uri: coverUri }}
+              source={coverSource(coverUri)}
               style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
               contentFit="cover"
             />
@@ -466,7 +467,7 @@ function SeriesCollage({ covers, size, colors }: { covers: string[]; size: numbe
           <Icon name="series" size={28} color={colors.onPrimary} />
         </View>
       ) : covers.length === 1 ? (
-        <Image source={{ uri: covers[0] }} style={{ width: size, height: size }} contentFit="cover" />
+        <Image source={coverSource(covers[0])} style={{ width: size, height: size }} contentFit="cover" />
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", width: size, height: size }}>
           {covers.slice(0, 4).map((uri, idx) => (

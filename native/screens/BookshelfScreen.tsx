@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, Pressable, ScrollView, RefreshControl } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, { FadeIn, LinearTransition } from "react-native-reanimated";
@@ -355,12 +356,29 @@ export default function BookshelfScreen({ navigation }: any) {
     // Added / Discover etc. regardless of progress).
     const filterEbooks = (entities: any[]) =>
       hideNonAudiobooks ? (entities || []).filter((e: any) => !isEbookOnly(e)) : entities || [];
+    // "Continue Listening" must reflect AUDIO progress only. The server's
+    // shelf includes any in-progress item — including books whose only
+    // progress is READING (ebookProgress from the reader) — and those belong
+    // exclusively in Continue Reading. Ebook-only items can't be listened to
+    // at all.
+    const ebookOnlyProgress = (e: any) => {
+      const p = useUserStore.getState().mediaProgress[e?.id] || e?.userMediaProgress;
+      if (!p) return false;
+      const hasAudioProgress = Number(p.currentTime || 0) > 0 || Number(p.progress || 0) > 0;
+      const hasEbookProgress = Number(p.ebookProgress || 0) > 0 || !!p.ebookLocation;
+      return !hasAudioProgress && hasEbookProgress;
+    };
     for (const shelf of activeShelves) {
       if (!shelf?.id || seenShelfIds.has(shelf.id)) continue;
       seenShelfIds.add(shelf.id);
       if (shelf.id === "continue-reading" && hideNonAudiobooks) continue;
       if (shelf.id === "continue-series") {
         displayShelves.push({ ...shelf, type: "series", entities: continueSeries });
+      } else if (shelf.id === "continue-listening") {
+        const entities = (shelf.entities || []).filter(
+          (e: any) => !isEbookOnly(e) && !ebookOnlyProgress(e)
+        );
+        displayShelves.push({ ...shelf, entities });
       } else if (shelf.id === "continue-reading") {
         // Prefer the locally-built list (ebook-progress aware); fall back to
         // the server's entities so the shelf shows instantly while ours loads.
@@ -435,7 +453,7 @@ export default function BookshelfScreen({ navigation }: any) {
         {/* Cover: single books show full-bleed; multiple form a 2x2 collage. */}
         {covers.length === 1 ? (
           <Image
-            source={{ uri: covers[0] }}
+            source={coverSource(covers[0])}
             style={{ width: "100%", height: "100%" }}
             contentFit="cover"
           />
@@ -444,7 +462,7 @@ export default function BookshelfScreen({ navigation }: any) {
             {covers.slice(0, 4).map((coverUri: string, idx: number) => (
               <Image
                 key={idx}
-                source={{ uri: coverUri }}
+                source={coverSource(coverUri)}
                 // 2 covers: full-height halves (no empty bottom row) — matches
                 // the playlist/series-detail collage treatment.
                 style={{ width: cardSize / 2, height: covers.length <= 2 ? cardSize : cardSize / 2 }}
@@ -544,7 +562,7 @@ export default function BookshelfScreen({ navigation }: any) {
         {/* Author Image or Placeholder */}
         {imageUri ? (
           <Image
-            source={{ uri: imageUri }}
+            source={coverSource(imageUri)}
             style={{ width: "100%", height: "100%" }}
             contentFit="cover"
           />
@@ -636,7 +654,7 @@ export default function BookshelfScreen({ navigation }: any) {
                 >
                   <View style={{ width: 64, height: 64, borderRadius: 10, overflow: "hidden", backgroundColor: colors.surfaceContainerHighest }}>
                     {localCover ? (
-                      <Image source={{ uri: localCover }} style={{ width: 64, height: 64 }} contentFit="cover" />
+                      <Image source={coverSource(localCover)} style={{ width: 64, height: 64 }} contentFit="cover" />
                     ) : (
                       <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
                         <Icon name="book" size={26} color={colors.onSurfaceVariant} />

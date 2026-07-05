@@ -7,6 +7,7 @@ import {
   ScrollView,
 } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -189,7 +190,7 @@ export default function SearchScreen({ navigation }: any) {
         >
           {coverUrl ? (
             <Image
-              source={{ uri: coverUrl }}
+              source={coverSource(coverUrl)}
               style={{ width: COVER_W, height: COVER_H }}
               contentFit="cover"
             />
@@ -270,7 +271,7 @@ export default function SearchScreen({ navigation }: any) {
                 <View key={book.id || idx} style={{ width: cw, height: ch }}>
                   {cUri ? (
                     <Image
-                      source={{ uri: cUri }}
+                      source={coverSource(cUri)}
                       style={{ width: "100%", height: "100%" }}
                       contentFit="cover"
                     />
@@ -339,7 +340,7 @@ export default function SearchScreen({ navigation }: any) {
       >
         {imageUri ? (
           <Image
-            source={{ uri: imageUri }}
+            source={coverSource(imageUri)}
             style={{ width: 40, height: 40 }}
             contentFit="cover"
           />

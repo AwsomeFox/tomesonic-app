@@ -6,6 +6,7 @@ import {
   Pressable,
 } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
@@ -133,7 +134,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
         >
           {coverUri ? (
             <Image
-              source={{ uri: coverUri }}
+              source={coverSource(coverUri)}
               style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
               contentFit="cover"
             />
@@ -212,7 +213,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
         >
           {imageUri ? (
             <Image
-              source={{ uri: imageUri }}
+              source={coverSource(imageUri)}
               style={{ width: 120, height: 120 }}
               contentFit="cover"
             />

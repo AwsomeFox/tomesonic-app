@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Image } from "expo-image";
+import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
@@ -477,7 +478,7 @@ function CollageCover({
           <Icon name="book" size={26} color={colors.onPrimary} />
         </View>
       ) : valid.length === 1 ? (
-        <Image source={{ uri: valid[0] }} style={{ width: size, height: size }} contentFit="cover" />
+        <Image source={coverSource(valid[0])} style={{ width: size, height: size }} contentFit="cover" />
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", width: size, height: size }}>
           {valid.slice(0, 4).map((uri, idx) => (
