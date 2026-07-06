@@ -33,6 +33,9 @@ interface UserState {
   serverConnectionConfig: any | null;
   settings: UserSettings;
   isInitialized: boolean;
+  // Server-configured e-reader devices (from /api/authorize) — powers the
+  // "Send to device" (Kindle etc.) action on ebook items.
+  ereaderDevices: any[];
   // Map of libraryItemId (or `${libraryItemId}-${episodeId}`) -> media progress.
   // Mirrors the original app's global user progress store so any card/screen
   // can look up progress by id (the shelf/list payloads don't include it).
@@ -44,6 +47,7 @@ interface UserState {
   setServerConnectionConfig: (config: any) => void;
   updateUserSettings: (updates: Partial<UserSettings>) => Promise<void>;
   loadMediaProgress: () => Promise<void>;
+  loadEReaderDevices: () => Promise<void>;
   getMediaProgress: (libraryItemId: string, episodeId?: string) => any | null;
   login: (config: any, user: any) => void;
   logout: () => Promise<void>;
@@ -81,6 +85,7 @@ export const useUserStore = create<UserState>((set, get) => ({
   serverConnectionConfig: null,
   settings: DEFAULT_SETTINGS,
   isInitialized: false,
+  ereaderDevices: [],
   mediaProgress: {},
 
   initialize: async () => {
@@ -131,8 +136,11 @@ export const useUserStore = create<UserState>((set, get) => ({
     // Mirror creds for the native Android Auto browse service.
     // trustTokens: the adoption above already made `config` at least as fresh
     // as the file.
-    if (hasSession)
+    if (hasSession) {
       writeAutoCreds(config.address, config.token, useLibraryStore.getState().currentLibraryId, config.refreshToken, true);
+      // Fire-and-forget: e-reader devices only gate a secondary action.
+      get().loadEReaderDevices();
+    }
   },
 
   setUser: (user) => set({ user }),
@@ -181,6 +189,18 @@ export const useUserStore = create<UserState>((set, get) => ({
       set({ mediaProgress: merged });
     } catch (err) {
       console.error("[UserStore] Failed to load media progress:", err);
+    }
+  },
+
+  loadEReaderDevices: async () => {
+    try {
+      // Same source as the original app: /api/authorize returns the server's
+      // configured e-reader devices for this user.
+      const res = await api.post("/api/authorize");
+      const devices = res.data?.ereaderDevices;
+      if (Array.isArray(devices)) set({ ereaderDevices: devices });
+    } catch {
+      // No devices is the common case; failures just leave the action hidden.
     }
   },
 
@@ -299,6 +319,7 @@ export const useUserStore = create<UserState>((set, get) => ({
       user: null,
       serverConnectionConfig: null,
       mediaProgress: {},
+      ereaderDevices: [],
       settings: DEFAULT_SETTINGS,
     });
   },

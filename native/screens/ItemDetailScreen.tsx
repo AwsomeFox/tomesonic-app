@@ -16,6 +16,7 @@ import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
 import AddToListModal from "../components/AddToListModal";
+import BottomSheet from "../components/BottomSheet";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
 import { formatBytes } from "../utils/format";
 
@@ -61,6 +62,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [startingEpisodeId, setStartingEpisodeId] = useState<string | null>(null);
   const [chaptersVisible, setChaptersVisible] = useState(false);
   const [addToVisible, setAddToVisible] = useState(false);
+  const [sendToVisible, setSendToVisible] = useState(false);
+  const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const ereaderDevices = useUserStore((s) => s.ereaderDevices);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const currentSession = usePlaybackStore((state) => state.currentSession);
@@ -466,6 +470,25 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   );
 
   /** Green underlined link chip inside a metadata value. */
+  const sendEbookToDevice = async (deviceName: string) => {
+    setSendingTo(deviceName);
+    try {
+      // Same endpoint the original app used; the server emails the ebook file
+      // to the configured device (Kindle etc.).
+      await api.post("/api/emails/send-ebook-to-device", {
+        libraryItemId: itemId,
+        deviceName,
+      });
+      setSendToVisible(false);
+      Alert.alert("Ebook sent", `Sent to ${deviceName}.`);
+    } catch (e) {
+      console.error("[ItemDetail] send ebook failed", e);
+      Alert.alert("Send failed", "Could not send the ebook. Check the server's email settings.");
+    } finally {
+      setSendingTo(null);
+    }
+  };
+
   const Link = ({ text, onPress }: { text: string; onPress?: () => void }) => (
     // hitSlop lifts the effective target toward 48dp — these chips are the
     // page's main navigation but render as ~18dp-tall text.
@@ -745,6 +768,26 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 }}
               >
                 <Icon name="list" size={22} color={colors.onSecondaryContainer} />
+              </Pressable>
+            ) : null}
+
+            {/* Send ebook to a configured e-reader device (Kindle etc.).
+                Only when the server has devices AND this item has an ebook. */}
+            {selfHasEbook && !isPodcastItem && ereaderDevices.length > 0 ? (
+              <Pressable
+                onPress={() => setSendToVisible(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Send ebook to device"
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  backgroundColor: colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="send" size={22} color={colors.onSecondaryContainer} />
               </Pressable>
             ) : null}
 
@@ -1210,6 +1253,36 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           isPodcast={isPodcastItem}
         />
       ) : null}
+
+      {/* Device picker for "Send ebook to device". */}
+      <BottomSheet visible={sendToVisible} onClose={() => setSendToVisible(false)}>
+        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
+          <Icon name="send" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
+          <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>
+            Send ebook to device
+          </Text>
+        </View>
+        {ereaderDevices.map((d: any) => (
+          <Pressable
+            key={d.name}
+            disabled={!!sendingTo}
+            onPress={() => sendEbookToDevice(d.name)}
+            accessibilityRole="button"
+            accessibilityLabel={`Send to ${d.name}`}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingHorizontal: 24,
+              paddingVertical: 16,
+              opacity: sendingTo && sendingTo !== d.name ? 0.5 : 1,
+            }}
+          >
+            <Icon name="book" size={22} color={colors.onSurfaceVariant} style={{ marginRight: 16 }} />
+            <Text style={{ flex: 1, fontSize: 16, color: colors.onSurface }}>{d.name}</Text>
+            {sendingTo === d.name ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+          </Pressable>
+        ))}
+      </BottomSheet>
     </SafeAreaView>
   );
 }

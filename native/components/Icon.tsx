@@ -66,6 +66,7 @@ export type IconName =
   | "podcast"
   | "headphones"
   | "share"
+  | "send"
   | "copy"
   | "trash"
   | "refresh"
@@ -147,6 +148,7 @@ const MAP: Record<IconName, [Family, string]> = {
   podcast: ["mci", "podcast"],
   headphones: ["mi", "headphones"],
   share: ["mi", "share"],
+  send: ["mi", "send"],
   copy: ["mi", "content-copy"],
   trash: ["mi", "delete-outline"],
   refresh: ["mi", "refresh"],
