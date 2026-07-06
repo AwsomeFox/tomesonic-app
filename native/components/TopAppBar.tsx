@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, Pressable, Modal, TextInput, BackHandler } from "react-native";
+import { View, Text, Modal, TextInput, BackHandler } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUiStore } from "../store/useUiStore";
 import Icon from "./Icon";
+import Pressable from "./HintPressable";
 
 interface TopAppBarProps {
   navigation: any;

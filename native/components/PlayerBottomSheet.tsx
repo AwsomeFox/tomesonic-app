@@ -2,7 +2,6 @@ import React, { useRef, useState, useEffect } from "react";
 import {
   View,
   Text,
-  Pressable,
   ScrollView,
   LayoutChangeEvent,
   PanResponder,
@@ -37,6 +36,7 @@ import { useDownloadStore } from "../store/useDownloadStore";
 import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
 import { haptic } from "../utils/haptics";
+import Pressable from "./HintPressable";
 
 const MINIPLAYER_HEIGHT = 68;
 
@@ -85,7 +85,6 @@ function CircleButton({
         backgroundColor: colors.secondaryContainer,
         alignItems: "center",
         justifyContent: "center",
-        elevation: 1,
       }}
     >
       <Icon
@@ -767,7 +766,6 @@ export default function PlayerBottomSheet() {
                     backgroundColor: colors.secondaryContainer,
                     alignItems: "center",
                     justifyContent: "center",
-                    elevation: 1,
                   }}
                 >
                   <Icon name="chevron-down" size={28} color={colors.onSecondaryContainer} />
@@ -790,8 +788,7 @@ export default function PlayerBottomSheet() {
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
-                      elevation: 1,
-                    }}
+                      }}
                   >
                     <View pointerEvents="none">
                       <CastButton style={{ width: 30, height: 30, tintColor: colors.onSecondaryContainer }} />
@@ -810,8 +807,7 @@ export default function PlayerBottomSheet() {
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
-                      elevation: 1,
-                    }}
+                      }}
                   >
                     <Icon
                       name="list"
@@ -847,8 +843,7 @@ export default function PlayerBottomSheet() {
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
-                      elevation: 1,
-                    }}
+                      }}
                   >
                     <Icon name="book" size={22} color={colors.onSecondaryContainer} />
                   </Pressable>
@@ -1010,7 +1005,6 @@ export default function PlayerBottomSheet() {
                     flexDirection: "row",
                     alignItems: "center",
                     justifyContent: "center",
-                    elevation: 1,
                   }}
                 >
                   <Icon
@@ -1043,7 +1037,6 @@ export default function PlayerBottomSheet() {
                     backgroundColor: colors.secondaryContainer,
                     alignItems: "center",
                     justifyContent: "center",
-                    elevation: 1,
                   }}
                 >
                   <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 18, fontWeight: "500", color: colors.onSecondaryContainer }}>
@@ -1061,7 +1054,6 @@ export default function PlayerBottomSheet() {
                     backgroundColor: colors.secondaryContainer,
                     alignItems: "center",
                     justifyContent: "center",
-                    elevation: 1,
                   }}
                 >
                   <Icon name="bookmark" size={22} color={colors.onSecondaryContainer} />

@@ -1,8 +1,9 @@
 import React, { useRef } from "react";
-import { View, Text, Pressable, ScrollView, useWindowDimensions } from "react-native";
+import { View, Text, ScrollView, useWindowDimensions } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import BottomSheet from "./BottomSheet";
+import Pressable from "./HintPressable";
 
 // Fixed row metrics (52 height + 2+2 vertical margin) so we can jump the list
 // to the active chapter without measuring.

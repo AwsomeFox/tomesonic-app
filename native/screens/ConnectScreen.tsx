@@ -3,7 +3,6 @@ import {
   View,
   Text,
   TextInput,
-  Pressable,
   ScrollView,
   ActivityIndicator,
   Linking,
@@ -16,6 +15,7 @@ import { loginWithOpenId } from "../utils/oauth";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import Pressable from "../components/HintPressable";
 
 const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
 

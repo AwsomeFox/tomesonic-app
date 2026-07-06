@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react-nativ
 
 jest.mock("../../utils/rmab", () => ({
   listMyRequests: jest.fn(),
+  listAllRequests: jest.fn(),
   deleteRequest: jest.fn(),
   approveRequest: jest.fn(),
   exchangeLoginToken: jest.fn(),
@@ -15,7 +16,7 @@ jest.mock("../../utils/rmab", () => ({
 
 import RmabRequestsScreen from "../../screens/RmabRequestsScreen";
 import { useRmabStore } from "../../store/useRmabStore";
-import { listMyRequests, deleteRequest, approveRequest } from "../../utils/rmab";
+import { listMyRequests, listAllRequests, deleteRequest, approveRequest } from "../../utils/rmab";
 
 const initial = useRmabStore.getState();
 const mockedList = listMyRequests as jest.Mock;
@@ -31,6 +32,7 @@ beforeEach(() => {
   useRmabStore.setState(initial, true);
   jest.clearAllMocks();
   mockedList.mockResolvedValue(REQUESTS);
+  (listAllRequests as jest.Mock).mockResolvedValue(REQUESTS);
 });
 
 describe("RmabRequestsScreen", () => {
@@ -54,11 +56,13 @@ describe("RmabRequestsScreen", () => {
     await waitFor(() => expect(screen.queryByLabelText("Approve Book A")).toBeNull());
   });
 
-  it("admin JWT sessions can approve awaiting requests", async () => {
+  it("admin JWT sessions manage ALL requests (admin endpoint) and can approve", async () => {
     useRmabStore.setState({ isAdmin: true, authMode: "jwt" } as any);
     (approveRequest as jest.Mock).mockResolvedValue(undefined);
     await render(<RmabRequestsScreen navigation={navigation} />);
     await screen.findByText("Book A");
+    expect(listAllRequests).toHaveBeenCalled();
+    expect(listMyRequests).not.toHaveBeenCalled();
 
     // Approve/deny only on the awaiting row.
     expect(screen.queryByLabelText("Approve Book B")).toBeNull();

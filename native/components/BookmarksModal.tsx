@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { api } from "../utils/api";
 import { queueBookmark, pendingBookmarksFor, removePendingBookmark } from "../utils/progressSync";
 import BottomSheet from "./BottomSheet";
+import Pressable from "./HintPressable";
 
 interface Bookmark {
   libraryItemId?: string;

@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, FlatList, TouchableOpacity, Pressable, ActivityIndicator, RefreshControl } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
-import { listMyRequests, deleteRequest, approveRequest } from "../utils/rmab";
+import { listMyRequests, listAllRequests, deleteRequest, approveRequest } from "../utils/rmab";
 import { useRmabStore } from "../store/useRmabStore";
+import Pressable from "../components/HintPressable";
 
 /** Friendly label + color role per RMAB request status. */
 function statusMeta(status: string, colors: any): { label: string; bg: string; fg: string } {
@@ -76,14 +77,16 @@ export default function RmabRequestsScreen({ navigation }: any) {
   const load = useCallback(async () => {
     try {
       setError(false);
-      const list = await listMyRequests();
+      // Admins on a JWT session manage EVERYONE's requests; everyone else
+      // sees their own.
+      const list = canManage ? await listAllRequests() : await listMyRequests();
       setRequests(Array.isArray(list) ? list : []);
     } catch (e) {
       console.warn("[RMAB] requests load failed", e);
       setError(true);
       setRequests((prev) => prev ?? []);
     }
-  }, []);
+  }, [canManage]);
 
   useEffect(() => {
     load();
@@ -106,7 +109,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </TouchableOpacity>
-        <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "600" }}>My Requests</Text>
+        <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "600" }}>{canManage ? "Requests" : "My Requests"}</Text>
       </View>
 
       {requests === null ? (
@@ -158,7 +161,15 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     {item?.title || item?.audiobook?.title || "Unknown"}
                   </Text>
                   <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
-                    {item?.author || item?.audiobook?.author || ""}
+                    {[
+                      item?.author || item?.audiobook?.author,
+                      // Admin view: whose request this is.
+                      canManage
+                        ? item?.user?.plexUsername || item?.username || item?.user?.username
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" • ")}
                   </Text>
                 </View>
                 <View

@@ -1,8 +1,9 @@
 import React from "react";
-import { View, Text, Pressable } from "react-native";
+import { View, Text } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import BottomSheet from "./BottomSheet";
+import Pressable from "./HintPressable";
 
 const MIN_SPEED = 0.5;
 const MAX_SPEED = 3.0;

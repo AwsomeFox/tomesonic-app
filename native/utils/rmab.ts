@@ -193,6 +193,13 @@ export async function listMyRequests(): Promise<any[]> {
   return data?.results || data?.requests || [];
 }
 
+/** Admin-only: EVERYONE's requests (paginated server-side; page 1 covers
+ *  the management view). */
+export async function listAllRequests(): Promise<any[]> {
+  const data = await rmabRequest<any>("get", "/api/admin/requests?pageSize=100");
+  return data?.requests || data?.results || [];
+}
+
 /** Admin-only (server-enforced): remove a request entirely. */
 export async function deleteRequest(id: string): Promise<void> {
   await rmabRequest("delete", `/api/requests/${id}`);

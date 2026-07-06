@@ -4,7 +4,6 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  Pressable,
   Linking,
   TextInput,
   ActivityIndicator,
@@ -22,6 +21,7 @@ import { useRmabStore } from '../store/useRmabStore';
 import { haptic } from '../utils/haptics';
 
 import * as Application from 'expo-application';
+import Pressable from "../components/HintPressable";
 
 // The INSTALLED package's version — app.json drifts from the built APK (the
 // release flow bumps versions on master, not on feature branches).
@@ -75,6 +75,7 @@ export default function SettingsScreen({ navigation }: any) {
   const rmabServerUrl = useRmabStore((s) => s.serverUrl);
   const rmabUsername = useRmabStore((s) => s.username);
   const rmabAuthMode = useRmabStore((s) => s.authMode);
+  const rmabIsAdmin = useRmabStore((s) => s.isAdmin);
   const rmabConnecting = useRmabStore((s) => s.connecting);
   const rmabError = useRmabStore((s) => s.connectError);
   const rmabConnect = useRmabStore((s) => s.connect);
@@ -278,8 +279,12 @@ export default function SettingsScreen({ navigation }: any) {
             <Divider colors={colors} />
             <NavRow
               icon="send"
-              title="My Requests"
-              subtitle="Track your book requests"
+              title={rmabIsAdmin && rmabAuthMode === 'jwt' ? 'Requests' : 'My Requests'}
+              subtitle={
+                rmabIsAdmin && rmabAuthMode === 'jwt'
+                  ? 'Approve, deny, and manage all requests'
+                  : 'Track your book requests'
+              }
               onPress={() => navigation.navigate('RmabRequests')}
               colors={colors}
             />

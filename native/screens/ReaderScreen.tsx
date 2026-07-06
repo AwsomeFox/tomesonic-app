@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Pressable, Linking, ActivityIndicator, Modal, FlatList, Animated, Alert } from "react-native";
+import { View, Text, Linking, ActivityIndicator, Modal, FlatList, Animated, Alert } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { useKeepAwake } from "expo-keep-awake";
@@ -13,6 +13,7 @@ import { useUserStore } from "../store/useUserStore";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { FOLIATE_BUNDLE } from "../utils/foliateBundle";
 import BottomSheet from "../components/BottomSheet";
+import Pressable from "../components/HintPressable";
 
 // Height of the collapsed mini player (mirrors PlayerBottomSheet MINIPLAYER_HEIGHT)
 // so reader content can reserve space and not sit underneath it.

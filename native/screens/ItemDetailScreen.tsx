@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -20,6 +20,7 @@ import BottomSheet from "../components/BottomSheet";
 import ResultBurst from "../components/ResultBurst";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
 import { formatBytes } from "../utils/format";
+import Pressable from "../components/HintPressable";
 
 /** Strip HTML tags/entities from ABS descriptions (which contain markup). */
 function stripHtml(html: string): string {
