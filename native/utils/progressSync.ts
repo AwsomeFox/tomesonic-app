@@ -459,11 +459,11 @@ async function flushPendingLocalSessions(): Promise<void> {
       const status = e?.response?.status;
       // The server REJECTED it (validation, endpoint missing on an old ABS) —
       // a retry can never succeed; drop it rather than poison every flush.
-      // ONLY genuinely permanent codes drop (matching the other flushers'
-      // 404-only policy): 401/403 can be a token mid-rotation, and 408/425/429
-      // are transient proxy/rate-limit responses — re-sending is idempotent,
-      // so keeping those queued costs nothing while a drop loses the minutes
-      // forever.
+      // ONLY genuinely permanent codes drop (400/404/422 — the other flushers
+      // drop on 404 alone): 401/403 can be a token mid-rotation, and
+      // 408/425/429 are transient proxy/rate-limit responses — re-sending is
+      // idempotent, so keeping those queued costs nothing while a drop loses
+      // the minutes forever.
       if (status === 400 || status === 404 || status === 422) {
         appLogger.warn(`local session ${rec.id} rejected (${status}) — dropping`, "ProgressSync");
         try {
