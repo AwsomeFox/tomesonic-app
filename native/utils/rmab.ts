@@ -244,6 +244,13 @@ export async function listMyRequests(): Promise<any[]> {
   return data?.results || data?.requests || [];
 }
 
+/** Request the EBOOK edition for a book (by Audible ASIN). Server-enforced:
+ *  needs an ebook source configured (400 otherwise) and a JWT session (the
+ *  endpoint isn't on the API-token allowlist). */
+export async function requestEbookForAsin(asin: string): Promise<any> {
+  return rmabRequest("post", `/api/audiobooks/${asin}/fetch-ebook`);
+}
+
 // --- RMAB home-page shelves (popular / new releases / categories) --------
 // All db-backed on the server (fast) and enriched with isAvailable +
 // requestStatus; cached like the other discovery calls.

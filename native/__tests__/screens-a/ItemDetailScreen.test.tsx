@@ -516,3 +516,68 @@ describe("send ebook to device (Kindle etc.)", () => {
     expect(screen.queryByLabelText("Send ebook to device")).toBeNull();
   });
 });
+
+describe("request the other format via ReadMeABook", () => {
+  const rmab = require("../../utils/rmab");
+  const { useRmabStore } = require("../../store/useRmabStore");
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("audio-only book on a JWT session offers Request ebook (fetch-ebook pipeline)", async () => {
+    useRmabStore.setState({ configured: true, authMode: "jwt" } as any);
+    const spy = jest.spyOn(rmab, "requestEbookForAsin").mockResolvedValue({});
+    const withAsin = {
+      ...audioOnlyItem,
+      media: { ...audioOnlyItem.media, metadata: { ...audioOnlyItem.media.metadata, asin: "B0AUDIO01" } },
+    };
+    routeApi(withAsin);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    await fireEvent.press(screen.getByLabelText("Request ebook edition"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("B0AUDIO01"));
+    await screen.findByText("Ebook requested");
+  });
+
+  it("ebook-only book offers Request audiobook as an ordinary RMAB request", async () => {
+    useRmabStore.setState({ configured: true, authMode: "apiToken" } as any);
+    const spy = jest.spyOn(rmab, "createRequest").mockResolvedValue({});
+    const withAsin = {
+      ...ebookOnlyItem,
+      media: { ...ebookOnlyItem.media, metadata: { ...ebookOnlyItem.media.metadata, asin: "B0EBOOK01" } },
+    };
+    routeApi(withAsin);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+
+    await fireEvent.press(screen.getByLabelText("Request audiobook edition"));
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ asin: "B0EBOOK01", title: "Silmarillion Reader" })
+      )
+    );
+    await screen.findByText("Audiobook requested");
+  });
+
+  it("Request ebook stays hidden on API-token sessions (endpoint rejects them) and when RMAB is off", async () => {
+    useRmabStore.setState({ configured: true, authMode: "apiToken" } as any);
+    routeApi(audioOnlyItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByLabelText("Request ebook edition")).toBeNull();
+
+    useRmabStore.setState({ configured: false, authMode: null } as any);
+    routeApi(ebookOnlyItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+    expect(screen.queryByLabelText("Request audiobook edition")).toBeNull();
+  });
+});

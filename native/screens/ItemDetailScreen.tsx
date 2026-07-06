@@ -18,6 +18,7 @@ import ChaptersModal from "../components/ChaptersModal";
 import AddToListModal from "../components/AddToListModal";
 import BottomSheet from "../components/BottomSheet";
 import ResultBurst from "../components/ResultBurst";
+import { useRmabStore } from "../store/useRmabStore";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
 import { formatBytes } from "../utils/format";
 import Pressable from "../components/HintPressable";
@@ -67,6 +68,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [sendToVisible, setSendToVisible] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
   const [sendResult, setSendResult] = useState<null | { ok: boolean; device: string }>(null);
+  // Request-the-other-format via ReadMeABook (null = sheet closed).
+  const [formatReq, setFormatReq] = useState<null | {
+    kind: "ebook" | "audiobook";
+    state: "working" | "ok" | "fail";
+    msg?: string;
+  }>(null);
+  const rmabConfigured = useRmabStore((s) => s.configured);
+  const rmabAuthMode = useRmabStore((s) => s.authMode);
   const ereaderDevices = useUserStore((s) => s.ereaderDevices);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
@@ -502,6 +511,44 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     setSendResult(null);
   };
 
+  // The book exists in one format; ask ReadMeABook for the other. Ebook
+  // requests ride RMAB's fetch-ebook pipeline (JWT-only, needs an ebook
+  // source configured); audiobook requests are ordinary RMAB requests.
+  const requestOtherFormat = async (kind: "ebook" | "audiobook") => {
+    setFormatReq({ kind, state: "working" });
+    try {
+      const md = item?.media?.metadata || {};
+      const title = md.title;
+      const author = md.authorName;
+      if (!title) throw new Error("Missing book metadata");
+      let asin: string | null = md.asin || null;
+      if (!asin) {
+        const { audibleFindBookAsin } = require("../utils/audible");
+        asin = await audibleFindBookAsin(title, author);
+      }
+      if (!asin) throw new Error("Couldn't match this book on Audible");
+      const rmab = require("../utils/rmab");
+      if (kind === "ebook") {
+        await rmab.requestEbookForAsin(asin);
+      } else {
+        await rmab.createRequest({ asin, title, author, narrator: (md.narrators || [])[0] });
+      }
+      setFormatReq({ kind, state: "ok" });
+      setTimeout(() => setFormatReq(null), 1800);
+    } catch (e: any) {
+      const serverMsg = e?.response?.data?.error;
+      const already = ["AlreadyAvailable", "DuplicateRequest", "BeingProcessed"].includes(serverMsg);
+      setFormatReq({
+        kind,
+        state: already ? "ok" : "fail",
+        msg: already
+          ? "Already requested"
+          : serverMsg || e?.message || "Request failed",
+      });
+      if (already) setTimeout(() => setFormatReq(null), 1800);
+    }
+  };
+
   const Link = ({ text, onPress }: { text: string; onPress?: () => void }) => (
     // hitSlop lifts the effective target toward 48dp — these chips are the
     // page's main navigation but render as ~18dp-tall text.
@@ -801,6 +848,36 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 }}
               >
                 <Icon name="send" size={22} color={colors.onSecondaryContainer} />
+              </Pressable>
+            ) : null}
+
+            {/* Request the OTHER format via ReadMeABook: ebook for an
+                audio-only book (JWT sessions — the endpoint rejects API
+                tokens), audiobook for an ebook-only book (works on both). */}
+            {rmabConfigured &&
+            !isPodcastItem &&
+            ((selfHasAudio && !canRead && rmabAuthMode === "jwt") ||
+              (selfHasEbook && !hasAudioMedia)) ? (
+              <Pressable
+                onPress={() => requestOtherFormat(selfHasAudio && !canRead ? "ebook" : "audiobook")}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  selfHasAudio && !canRead ? "Request ebook edition" : "Request audiobook edition"
+                }
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  backgroundColor: colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon
+                  name={selfHasAudio && !canRead ? "book" : "headphones"}
+                  size={22}
+                  color={colors.onSecondaryContainer}
+                />
               </Pressable>
             ) : null}
 
@@ -1266,6 +1343,32 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           isPodcast={isPodcastItem}
         />
       ) : null}
+
+      {/* Request-other-format progress/result. */}
+      <BottomSheet visible={!!formatReq} onClose={() => setFormatReq(null)}>
+        {formatReq?.state === "working" ? (
+          <View style={{ alignItems: "center", paddingVertical: 36 }}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={{ color: colors.onSurfaceVariant, marginTop: 14 }}>
+              Requesting the {formatReq.kind} edition…
+            </Text>
+          </View>
+        ) : formatReq ? (
+          <ResultBurst
+            ok={formatReq.state === "ok"}
+            title={
+              formatReq.state === "ok"
+                ? formatReq.msg || `${formatReq.kind === "ebook" ? "Ebook" : "Audiobook"} requested`
+                : "Couldn't request"
+            }
+            subtitle={
+              formatReq.state === "ok"
+                ? "ReadMeABook is on it — track it under Requests."
+                : formatReq.msg
+            }
+          />
+        ) : null}
+      </BottomSheet>
 
       {/* Device picker for "Send ebook to device". */}
       <BottomSheet visible={sendToVisible} onClose={closeSendSheet}>

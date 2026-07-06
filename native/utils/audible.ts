@@ -73,6 +73,21 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
     .filter(Boolean) as AudibleBook[]).filter(inAppLanguage);
 }
 
+/** Best-match ASIN for a title/author — for ABS items without one. */
+export async function audibleFindBookAsin(title: string, author?: string): Promise<string | null> {
+  const res = await axios.get(`${BASE}/catalog/products`, {
+    params: {
+      keywords: [title, author].filter(Boolean).join(" "),
+      num_results: 10,
+      response_groups: "product_attrs",
+    },
+    timeout: TIMEOUT,
+  });
+  const want = titleKey(title);
+  const hit = (res.data?.products || []).find((p: any) => titleKey(p.title) === want);
+  return hit?.asin || null;
+}
+
 /** The series a book belongs to, via the book's catalog relationships. */
 export async function audibleSeriesAsinFromBook(bookAsin: string): Promise<string | null> {
   const res = await axios.get(`${BASE}/catalog/products/${bookAsin}`, {
