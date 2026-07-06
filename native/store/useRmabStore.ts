@@ -90,7 +90,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         });
         return false;
       }
-      const cfg = await exchangeLoginToken(effUrl, effToken);
+      // Token from the explicit API-token field (no token= URL): try the
+      // static interpretation first; login URLs go JWT-first.
+      const cfg = await exchangeLoginToken(effUrl, effToken, { preferApiToken: !urlish });
       writeRmabConfig(cfg);
       // Round-trip an authed call so a pasted token that exchanged but can't
       // authenticate (clock skew, revoked session) fails HERE, not later.

@@ -70,28 +70,54 @@ export function writeRmabConfig(cfg: RmabConfig | null) {
 
 const normalize = (url: string) => url.trim().replace(/\/+$/, "");
 
-/** Exchange a pasted login token for a JWT pair. Throws on bad URL/token. */
-export async function exchangeLoginToken(url: string, loginToken: string): Promise<RmabConfig> {
+/**
+ * Turn a pasted token into a working config. BOTH RMAB token kinds share the
+ * rmab_ prefix (login tokens come from the same generator as API tokens), so
+ * the prefix can't disambiguate — instead try the login-token exchange (full
+ * JWT access) and fall back to static API-token validation, or the reverse
+ * when the caller knows it came from the API-token field.
+ */
+export async function exchangeLoginToken(
+  url: string,
+  loginToken: string,
+  opts?: { preferApiToken?: boolean }
+): Promise<RmabConfig> {
   const base = normalize(url);
   const token = loginToken.trim();
-  // rmab_-prefixed tokens are STATIC API tokens, not login tokens — they
-  // never exchange. Validate against /api/auth/me (allowlisted) instead.
-  if (token.startsWith("rmab_")) {
+
+  const asLoginToken = async (): Promise<RmabConfig> => {
+    const res = await axios.post(`${base}/api/auth/token/login`, { token }, { timeout: 15000 });
+    const { accessToken, refreshToken, user } = res.data || {};
+    if (!accessToken || !refreshToken) throw new Error("Unexpected response from server");
+    return { url: base, accessToken, refreshToken, user: user || null };
+  };
+
+  const asApiToken = async (): Promise<RmabConfig> => {
     const me = await axios.get(`${base}/api/auth/me`, {
       timeout: 15000,
       headers: { Authorization: `Bearer ${token}` },
     });
     const user = me.data?.user || me.data || null;
     return { url: base, apiToken: token, user };
+  };
+
+  const order = opts?.preferApiToken ? [asApiToken, asLoginToken] : [asLoginToken, asApiToken];
+  let lastAuthError: any = null;
+  for (const attempt of order) {
+    try {
+      return await attempt();
+    } catch (e: any) {
+      const status = e?.response?.status;
+      // Auth-shaped rejections mean "wrong token KIND, maybe" — try the other
+      // interpretation. Anything else (network, 404, 5xx) is terminal.
+      if (status === 400 || status === 401 || status === 403) {
+        lastAuthError = e;
+        continue;
+      }
+      throw e;
+    }
   }
-  const res = await axios.post(
-    `${base}/api/auth/token/login`,
-    { token },
-    { timeout: 15000 }
-  );
-  const { accessToken, refreshToken, user } = res.data || {};
-  if (!accessToken || !refreshToken) throw new Error("Unexpected response from server");
-  return { url: base, accessToken, refreshToken, user: user || null };
+  throw lastAuthError || new Error("Authentication failed");
 }
 
 async function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {

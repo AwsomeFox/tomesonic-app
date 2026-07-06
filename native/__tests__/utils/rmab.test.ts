@@ -72,9 +72,10 @@ describe("exchangeLoginToken", () => {
     });
   });
 
-  it("throws when the response lacks tokens", async () => {
+  it("throws when the response lacks tokens (and the static fallback also fails)", async () => {
     mockedPost.mockResolvedValue({ data: { error: "Invalid token" } });
-    await expect(exchangeLoginToken("https://rmab.test", "bad")).rejects.toThrow();
+    mockedGet.mockRejectedValue({ response: { status: 401 } });
+    await expect(exchangeLoginToken("https://rmab.test", "bad")).rejects.toBeTruthy();
   });
 });
 
@@ -222,10 +223,10 @@ describe("endpoint wrappers", () => {
   });
 });
 
-describe("static rmab_ API tokens", () => {
-  it("exchangeLoginToken validates rmab_ tokens against /api/auth/me instead of exchanging", async () => {
+describe("token-kind resolution (both kinds share the rmab_ prefix)", () => {
+  it("preferApiToken: validates via /api/auth/me first, no exchange attempt on success", async () => {
     mockedGet.mockResolvedValue({ data: { user: { id: "u1", username: "tony" } } });
-    const cfg = await exchangeLoginToken("https://rmab.test/", " rmab_abc123 ");
+    const cfg = await exchangeLoginToken("https://rmab.test/", " rmab_abc123 ", { preferApiToken: true });
     expect(mockedGet).toHaveBeenCalledWith(
       "https://rmab.test/api/auth/me",
       expect.objectContaining({ headers: { Authorization: "Bearer rmab_abc123" } })
@@ -236,6 +237,42 @@ describe("static rmab_ API tokens", () => {
       apiToken: "rmab_abc123",
       user: { id: "u1", username: "tony" },
     });
+  });
+
+  it("an rmab_ LOGIN token (from a login URL) exchanges to a JWT despite the prefix", async () => {
+    mockedPost.mockResolvedValue({
+      data: { accessToken: "a", refreshToken: "r", user: { id: "u1" } },
+    });
+    const cfg = await exchangeLoginToken("https://rmab.test", "rmab_logintoken", {});
+    expect(mockedPost).toHaveBeenCalledWith(
+      "https://rmab.test/api/auth/token/login",
+      { token: "rmab_logintoken" },
+      expect.any(Object)
+    );
+    expect(cfg.accessToken).toBe("a");
+    expect(cfg.apiToken).toBeUndefined();
+  });
+
+  it("falls back to the other interpretation when the first is auth-rejected", async () => {
+    // Exchange 401s (it's actually an API token) -> static validation succeeds.
+    mockedPost.mockRejectedValue({ response: { status: 401 } });
+    mockedGet.mockResolvedValue({ data: { user: { id: "u1" } } });
+    const cfg = await exchangeLoginToken("https://rmab.test", "rmab_static");
+    expect(cfg.apiToken).toBe("rmab_static");
+
+    // And the reverse: static 401s (it's a login token) -> exchange succeeds.
+    mockedGet.mockRejectedValue({ response: { status: 401 } });
+    mockedPost.mockResolvedValue({
+      data: { accessToken: "a", refreshToken: "r", user: null },
+    });
+    const cfg2 = await exchangeLoginToken("https://rmab.test", "rmab_login", { preferApiToken: true });
+    expect(cfg2.accessToken).toBe("a");
+  });
+
+  it("non-auth failures (network/5xx) do NOT trigger the fallback", async () => {
+    mockedPost.mockRejectedValue({ response: { status: 500 } });
+    await expect(exchangeLoginToken("https://rmab.test", "tok")).rejects.toBeTruthy();
+    expect(mockedGet).not.toHaveBeenCalled();
   });
 
   it("requests use the static token as bearer and a 401 does NOT try to refresh", async () => {

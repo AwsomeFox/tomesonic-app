@@ -74,7 +74,7 @@ describe("connect", () => {
       .getState()
       .connect("", "https://rmab.test/auth/token/login?token=SECRET123");
     expect(ok).toBe(true);
-    expect(mockedExchange).toHaveBeenCalledWith("https://rmab.test", "SECRET123");
+    expect(mockedExchange).toHaveBeenCalledWith("https://rmab.test", "SECRET123", { preferApiToken: false });
   });
 
   it("login URL in the SERVER field with an empty token field connects too", async () => {
@@ -84,7 +84,7 @@ describe("connect", () => {
       .getState()
       .connect("https://rmab.test/auth/token/login?token=SECRET123", "");
     expect(ok).toBe(true);
-    expect(mockedExchange).toHaveBeenCalledWith("https://rmab.test", "SECRET123");
+    expect(mockedExchange).toHaveBeenCalledWith("https://rmab.test", "SECRET123", { preferApiToken: false });
   });
 
   it("plain server URL with no token of any kind fails with guidance, no network call", async () => {
