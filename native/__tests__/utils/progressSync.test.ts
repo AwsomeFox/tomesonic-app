@@ -666,6 +666,16 @@ describe("bookmark deletion queue", () => {
     expect(pendingBookmarkDeletionsFor("other")).toEqual([]);
   });
 
+  it("replays a fractional-time deletion with the RAW time (server keys bookmarks exactly)", async () => {
+    queueBookmarkDeletion("li1", 90.7);
+    // UI filter compares floored values...
+    expect(pendingBookmarkDeletionsFor("li1")).toEqual([90]);
+    // ...but the replayed DELETE must hit the server's exact time.
+    await flushPendingSyncs();
+    expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/90.7");
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+  });
+
   it("ignores invalid deletions (empty id, negative or non-finite time)", () => {
     queueBookmarkDeletion("", 5);
     queueBookmarkDeletion("li1", -1);
@@ -679,7 +689,8 @@ describe("bookmark deletion queue", () => {
     queueBookmarkDeletion("li1", 30);
     await flushPendingSyncs();
     expect(mockedDelete).toHaveBeenCalledTimes(2);
-    expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/12");
+    // Raw time in the replay — the server keys bookmarks by exact time.
+    expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/12.9");
     expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/30");
     expect(bookmarkDeleteKeys()).toHaveLength(0);
     expect(pendingBookmarkDeletionsFor("li1")).toEqual([]);
@@ -917,16 +928,15 @@ describe("offline local-session listening bank", () => {
     expect(localSessionKeys()).toHaveLength(0);
   });
 
-  it("a 401/403 keeps the record queued (token mid-rotation succeeds on a later flush)", async () => {
+  it("transient statuses keep the record queued (401/403 token rotation, 429/408 proxies, 5xx)", async () => {
     await withFixedNow(() => {
       recordLocalListening("li1", undefined, 100, 3600, 30);
     });
-    mockedPost.mockRejectedValue({ response: { status: 401 } });
-    await flushPendingSyncs();
-    expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 30, syncedTimeListening: 0 });
-    mockedPost.mockRejectedValue({ response: { status: 403 } });
-    await flushPendingSyncs();
-    expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 30, syncedTimeListening: 0 });
+    for (const status of [401, 403, 408, 429, 500, 503]) {
+      mockedPost.mockRejectedValue({ response: { status } });
+      await flushPendingSyncs();
+      expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 30, syncedTimeListening: 0 });
+    }
     expect(hasAnyPendingSyncs()).toBe(true);
   });
 

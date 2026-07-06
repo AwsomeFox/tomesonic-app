@@ -575,8 +575,21 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   useDownloadStore.subscribe((state) => sync(state.completedDownloads));
   // Positions advance through useUserStore (playback ticks), not this store —
   // watch it too so listening progress actually propagates to the car file.
+  // Playback updates mediaProgress every ~1s; the mirror only resolves 15s
+  // buckets, so rate-limit the key rebuild to that granularity. Leading-only
+  // (no trailing timer): while playing, ticks keep arriving every second, so
+  // the next one past the window lands — worst case the car file trails the
+  // final position by <15s, which the freshest-wins resume paths absorb.
   try {
     const { useUserStore } = require("./useUserStore");
-    useUserStore.subscribe(() => sync(useDownloadStore.getState().completedDownloads));
+    const USER_SYNC_WINDOW_MS = 15000;
+    let lastUserSyncAt = 0;
+    useUserStore.subscribe((state: any, prev: any) => {
+      if (prev && state.mediaProgress === prev.mediaProgress) return;
+      const now = Date.now();
+      if (now - lastUserSyncAt < USER_SYNC_WINDOW_MS) return;
+      lastUserSyncAt = now;
+      sync(useDownloadStore.getState().completedDownloads);
+    });
   } catch {}
 }

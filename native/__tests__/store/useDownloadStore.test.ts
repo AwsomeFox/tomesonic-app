@@ -491,35 +491,90 @@ describe("useDownloadStore", () => {
       };
     }
 
+    // The userStore subscription is ALSO rate-limited to the 15s bucket
+    // granularity (leading-only) — control the clock so each setState below
+    // lands outside the window and the assertions exercise the bucket key,
+    // not the rate limit.
+    function mockClock(startMs = 1_000_000) {
+      let nowMs = startMs;
+      const spy = jest.spyOn(Date, "now").mockImplementation(() => nowMs);
+      return {
+        advance: (ms: number) => {
+          nowMs += ms;
+        },
+        restore: () => spy.mockRestore(),
+      };
+    }
+
     it("re-writes the car file when a resume position crosses a 15s bucket", () => {
       const m = loadFresh();
-      m.userStore.setState({ mediaProgress: { book1: { currentTime: 10 } } });
+      const clock = mockClock();
+      try {
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 10 } } });
 
-      m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
-      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
-      expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
-        expect.objectContaining({ id: "book1", currentTime: 10 }),
-      ]);
+        m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+        expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
+          expect.objectContaining({ id: "book1", currentTime: 10 }),
+        ]);
 
-      // 10 → 40 crosses the 15s bucket boundary (bucket 0 → 2): re-emit with
-      // the advanced position (this is the fix — the old ids-only key meant
-      // listening progress never reached the car's cold-start file).
-      m.userStore.setState({ mediaProgress: { book1: { currentTime: 40 } } });
-      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(2);
-      expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
-        expect.objectContaining({ id: "book1", currentTime: 40 }),
-      ]);
+        // 10 → 40 crosses the 15s bucket boundary (bucket 0 → 2): re-emit with
+        // the advanced position (this is the fix — the old ids-only key meant
+        // listening progress never reached the car's cold-start file).
+        clock.advance(20_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 40 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(2);
+        expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
+          expect.objectContaining({ id: "book1", currentTime: 40 }),
+        ]);
+      } finally {
+        clock.restore();
+      }
     });
 
     it("does NOT re-write for movements inside the same 15s bucket", () => {
       const m = loadFresh();
-      m.userStore.setState({ mediaProgress: { book1: { currentTime: 3 } } });
-      m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
-      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      const clock = mockClock();
+      try {
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 3 } } });
+        m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
 
-      // 3 → 14 stays in bucket 0 — file writes must stay rare while playing.
-      m.userStore.setState({ mediaProgress: { book1: { currentTime: 14 } } });
-      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+        // 3 → 14 stays in bucket 0 — file writes must stay rare while playing.
+        // (Clock advanced past the rate-limit window so it's the BUCKET key
+        // suppressing the write here.)
+        clock.advance(20_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 14 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("rate-limits per-tick progress updates to the 15s window", () => {
+      const m = loadFresh();
+      const clock = mockClock();
+      try {
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 10 } } });
+        m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+
+        // A bucket-crossing move INSIDE the rate-limit window is deferred —
+        // per-second playback ticks must not rebuild the key every tick.
+        clock.advance(5_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 40 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+
+        // The next tick past the window picks it up.
+        clock.advance(15_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 41 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(2);
+        expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
+          expect.objectContaining({ id: "book1", currentTime: 41 }),
+        ]);
+      } finally {
+        clock.restore();
+      }
     });
 
     it("falls back to the disk progress cache when the in-memory map is cold", () => {

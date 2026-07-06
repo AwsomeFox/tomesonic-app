@@ -242,9 +242,13 @@ const BOOKMARK_DELETE_PREFIX = "pendingBookmarkDelete_";
 export function queueBookmarkDeletion(libraryItemId: string, time: number) {
   try {
     if (!libraryItemId || !Number.isFinite(time) || time < 0) return;
+    // Key floored (dedupe per second, matching creation keying) but store the
+    // RAW time: the server keys bookmarks by exact time, so replaying a
+    // fractional-time bookmark's deletion with a floored value would miss it
+    // and the bookmark would reappear.
     storage.set(
       `${BOOKMARK_DELETE_PREFIX}${libraryItemId}_${Math.floor(time)}`,
-      JSON.stringify({ libraryItemId, time: Math.floor(time) })
+      JSON.stringify({ libraryItemId, time: Number(time) })
     );
   } catch (e) {
     appLogger.warn(`Failed to queue bookmark deletion: ${e}`, "ProgressSync");
@@ -253,7 +257,9 @@ export function queueBookmarkDeletion(libraryItemId: string, time: number) {
 
 /** Times (floored seconds) with a queued offline deletion for this item —
  *  the bookmark list filters these out so a deleted bookmark can't reappear
- *  from the server copy before the deletion flushes. */
+ *  from the server copy before the deletion flushes. Floored so callers can
+ *  compare against Math.floor(serverBookmark.time) regardless of how the
+ *  deletion was stored. */
 export function pendingBookmarkDeletionsFor(libraryItemId: string): number[] {
   try {
     return storage
@@ -266,7 +272,8 @@ export function pendingBookmarkDeletionsFor(libraryItemId: string): number[] {
           return NaN;
         }
       })
-      .filter((t) => Number.isFinite(t));
+      .filter((t) => Number.isFinite(t))
+      .map((t) => Math.floor(t));
   } catch {
     return [];
   }
@@ -452,9 +459,12 @@ async function flushPendingLocalSessions(): Promise<void> {
       const status = e?.response?.status;
       // The server REJECTED it (validation, endpoint missing on an old ABS) —
       // a retry can never succeed; drop it rather than poison every flush.
-      // 401/403 excluded: those can be a token mid-rotation (the interceptor's
-      // skip-logout path surfaces them) and DO succeed on a later flush.
-      if (status && status >= 400 && status < 500 && status !== 401 && status !== 403) {
+      // ONLY genuinely permanent codes drop (matching the other flushers'
+      // 404-only policy): 401/403 can be a token mid-rotation, and 408/425/429
+      // are transient proxy/rate-limit responses — re-sending is idempotent,
+      // so keeping those queued costs nothing while a drop loses the minutes
+      // forever.
+      if (status === 400 || status === 404 || status === 422) {
         appLogger.warn(`local session ${rec.id} rejected (${status}) — dropping`, "ProgressSync");
         try {
           storage.remove(key);
