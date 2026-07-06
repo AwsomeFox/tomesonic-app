@@ -311,6 +311,13 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const chapters = item?.media?.chapters || [];
   const hasChapters = chapters.length > 0;
   const isCurrentlyPlaying = currentSession?.libraryItemId === itemId;
+  // While this item is the loaded session, the chapter list must be the
+  // STORE's normalized array (sorted/filtered/coverage-extended) — the raw
+  // item list can differ on badly-tagged books, and indexing the store's
+  // seekToChapter with a raw-list index seeked/highlighted the wrong chapter.
+  const playerChapters = usePlaybackStore((s) => s.chapters);
+  const displayChapters =
+    isCurrentlyPlaying && playerChapters.length ? playerChapters : chapters;
 
   // What media this exact item has, and what a matched sibling item supplies.
   // Podcasts carry episodes (not tracks), so hasAudio() would be false — treat
@@ -363,15 +370,19 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   const handleSeekToChapter = async (index: number) => {
     if (isCurrentlyPlaying) {
+      // displayChapters IS the store array here — the index aligns.
       await seekToChapter(index);
     } else {
+      // Not loaded yet: the modal showed the RAW item list, whose indices may
+      // not survive normalization — seek by the tapped chapter's TIME.
+      const target = Number(displayChapters[index]?.start) || 0;
       setStarting(true);
       const ok = await startPlayback(itemId);
       setStarting(false);
       if (ok) {
         // Wait a brief moment for track player setup before seeking
         setTimeout(async () => {
-          await seekToChapter(index);
+          await usePlaybackStore.getState().seek(target);
         }, 300);
       }
     }
@@ -429,6 +440,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   const startAudio = async (id: string) => {
     if (!item || starting) return;
+    // Already the loaded session: don't churn a fresh /play + full queue
+    // reset (audible hiccup, server session churn, and a possible ~15s
+    // backward jump to the last-synced position) — just resume and expand.
+    const st = usePlaybackStore.getState();
+    if (st.currentSession?.libraryItemId === id) {
+      if (!st.isPlaying) st.play().catch(() => {});
+      st.setPlayerExpanded(true);
+      return;
+    }
     setStarting(true);
     storage.set(`last_interaction_${itemId}`, "listen");
     setLastInteractionState("listen");
@@ -1386,7 +1406,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       <ChaptersModal
         visible={chaptersVisible}
         onClose={() => setChaptersVisible(false)}
-        chapters={chapters}
+        chapters={displayChapters}
         currentChapterIndex={isCurrentlyPlaying ? currentChapterIndex : -1}
         onSeekToChapter={handleSeekToChapter}
         hideBackdrop

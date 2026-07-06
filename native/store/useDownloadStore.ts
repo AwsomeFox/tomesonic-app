@@ -396,6 +396,27 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       delete nextActive[id];
       return { completedDownloads: nextCompleted, activeDownloads: nextActive };
     });
+
+    // If this item is the LOADED playback session, its queue points at the
+    // file:// URLs just deleted — playback would die at the next uncached
+    // open (chapter boundary, resume) with no self-recovery. Swap an actively
+    // playing session to streaming at the current position; close a paused
+    // one (its position is safe in MMKV + the progress map). Lazy require:
+    // the playback store requires this store the same way.
+    try {
+      const { usePlaybackStore } = require("./usePlaybackStore");
+      const st = usePlaybackStore.getState();
+      if (st.currentSession?.libraryItemId === id) {
+        if (st.isPlaying) {
+          const ok = await st
+            .startPlayback(id, st.currentSession.episodeId || undefined)
+            .catch(() => false);
+          if (!ok) await st.closePlayback().catch(() => {});
+        } else {
+          await st.closePlayback().catch(() => {});
+        }
+      }
+    } catch {}
   },
 
   retryDownload: async (id) => {

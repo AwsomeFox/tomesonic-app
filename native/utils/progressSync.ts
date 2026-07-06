@@ -17,6 +17,11 @@ interface SyncPayload {
   // direct media-progress PATCH instead of retrying forever.
   libraryItemId?: string;
   episodeId?: string;
+  // When the position was READ (request build time). The queue merge keys on
+  // this — failures are observed out of order (a slow older sync can reject
+  // AFTER a fast-failing close), and last-caller-wins let the older position
+  // overwrite the close's newer one.
+  at?: number;
 }
 
 const PENDING_PREFIX = "pendingSync_";
@@ -34,15 +39,22 @@ function readPending(sessionId: string): SyncPayload | null {
   }
 }
 
-// Latest currentTime/duration win; timeListened accumulates so no listened
-// seconds are dropped across repeated offline ticks.
+// The FRESHEST position wins (request-build `at` stamp, not caller order —
+// an older in-flight sync can fail AFTER a newer close and used to overwrite
+// its final position); timeListened accumulates so no listened seconds are
+// dropped across repeated offline ticks.
 function queuePending(payload: SyncPayload) {
   try {
     const existing = readPending(payload.sessionId);
+    // Entries without a stamp (legacy) are treated as oldest.
+    const takeExisting =
+      existing && (Number(existing.at) || 0) > (Number(payload.at) || 0);
+    const fresh = takeExisting ? (existing as SyncPayload) : payload;
     const merged: SyncPayload = {
       sessionId: payload.sessionId,
-      currentTime: payload.currentTime,
-      duration: payload.duration,
+      currentTime: fresh.currentTime,
+      duration: fresh.duration,
+      at: Number(fresh.at) || 0,
       timeListened: (existing?.timeListened || 0) + (payload.timeListened || 0),
       // MUST survive the merge: the flush's 404 fallback (server restarted and
       // dropped the session) converts to a direct progress PATCH keyed by
@@ -397,6 +409,9 @@ export function clearAllPending() {
 // Local/offline sessions (id "local_*") queue a direct progress PATCH instead —
 // their session id doesn't exist server-side.
 export async function syncProgress(payload: SyncPayload): Promise<void> {
+  // Stamp when this position was read — the queue merge (queuePending) keys
+  // freshness on it, since failures are observed out of request order.
+  if (!payload.at) payload = { ...payload, at: Date.now() };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
@@ -425,6 +440,9 @@ export async function syncProgress(payload: SyncPayload): Promise<void> {
 // Closes the ABS session. On failure, falls back to queuing a pending sync
 // so the final progress still lands once connectivity returns.
 export async function closeSession(payload: SyncPayload): Promise<void> {
+  // Same freshness stamp as syncProgress — a close always carries the newest
+  // position and must win the queue merge even if an older sync fails later.
+  if (!payload.at) payload = { ...payload, at: Date.now() };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
