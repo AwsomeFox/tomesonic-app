@@ -269,6 +269,70 @@ describe("useDownloadStore", () => {
     });
   });
 
+  describe("removeAllDownloads", () => {
+    it("aborts, deletes files, clears db rows, and empties both maps (completed AND active)", async () => {
+      const done = baseItem({
+        id: "done1",
+        libraryItemId: "done1",
+        status: "completed",
+        localFolderPath: "file:///downloads/done1/",
+      });
+      const act = baseItem({
+        id: "act1",
+        libraryItemId: "act1",
+        status: "downloading",
+        localFolderPath: "file:///downloads/act1/",
+      });
+      db.saveDownloadItem(done);
+      db.saveDownloadItem(act);
+      db.saveLocalLibraryItem({ id: "done1", libraryItemId: "done1" });
+      useDownloadStore.setState({
+        completedDownloads: { done1: done },
+        activeDownloads: { act1: act },
+      });
+
+      await useDownloadStore.getState().removeAllDownloads();
+
+      // In-flight parts stopped for BOTH ids before their files are touched.
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("done1");
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("act1");
+      // Both on-device folders deleted.
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/done1/", {
+        idempotent: true,
+      });
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/act1/", {
+        idempotent: true,
+      });
+      // No db rows survive: download records nor the offline-library mapping.
+      expect(db.getAllDownloads()).toHaveLength(0);
+      expect(db.getLocalLibraryItem("done1")).toBeNull();
+      // Orphan folders swept as a final pass.
+      expect(downloader.sweepOrphanFolders).toHaveBeenCalled();
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads).toEqual({});
+      expect(s.activeDownloads).toEqual({});
+    });
+
+    it("resolves safely with nothing downloaded", async () => {
+      await useDownloadStore.getState().removeAllDownloads();
+      expect(downloader.abortBookParts).not.toHaveBeenCalled();
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      expect(useDownloadStore.getState().completedDownloads).toEqual({});
+      expect(useDownloadStore.getState().activeDownloads).toEqual({});
+    });
+  });
+
+  describe("downloadsLoaded", () => {
+    it("is false until loadDownloadsFromDb hydrates, then true even with zero downloads", () => {
+      expect(useDownloadStore.getState().downloadsLoaded).toBe(false);
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      expect(db.getAllDownloads()).toHaveLength(0); // nothing in the db
+      expect(useDownloadStore.getState().downloadsLoaded).toBe(true);
+    });
+  });
+
   describe("loadDownloadsFromDb", () => {
     it("splits completed and active rows", () => {
       db.saveDownloadItem(baseItem({ id: "done1", status: "completed" }));

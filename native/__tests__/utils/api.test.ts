@@ -289,6 +289,120 @@ describe("response interceptor", () => {
     expect(err2.config.headers.Authorization).toBe("Bearer fresh");
   });
 
+  it("flags queued replays _retry so a replay that 401s again cannot start a second refresh", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "r1",
+    });
+    // Replays 401 again (per-resource authz / post-rotation rejection) — this
+    // goes through the REAL axios pipeline, so an un-flagged replay would
+    // re-enter the interceptor and kick off a second full refresh.
+    const reject401Adapter = (cfg: any) =>
+      Promise.reject({ config: cfg, response: { status: 401 }, message: "replay 401" });
+
+    let releaseRefresh!: (v: any) => void;
+    postSpy
+      .mockImplementationOnce(() => new Promise((res) => (releaseRefresh = res)))
+      // If a second refresh DID happen (regression), let it resolve so the
+      // test fails on call count instead of timing out.
+      .mockResolvedValue({ status: 200, data: { user: { accessToken: "fresh2" } } });
+
+    const err1 = make401("/api/one", { adapter: reject401Adapter });
+    const err2 = make401("/api/two", { adapter: reject401Adapter });
+
+    const p1 = responseHandler.rejected(err1); // starts the refresh
+    const p2 = responseHandler.rejected(err2); // queued behind it
+    p1.catch(() => {});
+    p2.catch(() => {});
+
+    for (let i = 0; i < 50 && !releaseRefresh; i++) await Promise.resolve();
+    releaseRefresh({ status: 200, data: { user: { accessToken: "fresh" } } });
+
+    // Both replays 401ed again and must reject straight through.
+    await expect(p1).rejects.toMatchObject({ response: { status: 401 } });
+    await expect(p2).rejects.toMatchObject({ response: { status: 401 } });
+
+    // The queued replay was flagged one-shot and no second refresh ran.
+    expect(err2.config._retry).toBe(true);
+    expect(postSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT log out on refresh 401 when auto_creds rotated to an untried token meanwhile", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "dead",
+    });
+    useUserStore.setState({ user: { id: "u1" } } as any);
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    (FileSystem.readAsStringAsync as jest.Mock)
+      // Candidate snapshot: file holds the same (dead) token as the store.
+      .mockResolvedValueOnce(
+        JSON.stringify({ server: "http://abs.local", token: "t", refreshToken: "dead" })
+      )
+      // Re-read after the refresh 401: the native Android Auto service
+      // rotated the pair in the meantime — this token was never tried.
+      .mockResolvedValueOnce(
+        JSON.stringify({ server: "http://abs.local", token: "t2", refreshToken: "rotated-by-auto" })
+      );
+    const refreshErr = { response: { status: 401 }, message: "dead token" };
+    postSpy.mockRejectedValue(refreshErr);
+
+    await expect(responseHandler.rejected(make401())).rejects.toBe(refreshErr);
+
+    // Session left intact — the next 401 retries with the fresh file pair.
+    expect(useUserStore.getState().user).toEqual({ id: "u1" });
+    expect(storageHelper.getServerConfig()).toMatchObject({ refreshToken: "dead" });
+  });
+
+  it("still logs out on refresh 401 when the re-read auto_creds token was already tried", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "dead",
+    });
+    useUserStore.setState({ user: { id: "u1" } } as any);
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    // Same file content on snapshot and re-read: nothing new to try.
+    (FileSystem.readAsStringAsync as jest.Mock).mockResolvedValue(
+      JSON.stringify({ server: "http://abs.local", token: "t", refreshToken: "dead" })
+    );
+    const refreshErr = { response: { status: 401 }, message: "dead token" };
+    postSpy.mockRejectedValue(refreshErr);
+
+    await expect(responseHandler.rejected(make401())).rejects.toBe(refreshErr);
+
+    expect(useUserStore.getState().user).toBeNull();
+    expect(storageHelper.getServerConfig()).toBeNull();
+  });
+
+  it("still logs out on refresh 401 when the re-read auto_creds is for a different server", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "dead",
+    });
+    useUserStore.setState({ user: { id: "u1" } } as any);
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    (FileSystem.readAsStringAsync as jest.Mock)
+      .mockResolvedValueOnce(
+        JSON.stringify({ server: "http://abs.local", token: "t", refreshToken: "dead" })
+      )
+      // Untried token, but it belongs to ANOTHER host — no reason to keep
+      // this session alive.
+      .mockResolvedValueOnce(
+        JSON.stringify({ server: "http://other.local", token: "t2", refreshToken: "untried" })
+      );
+    const refreshErr = { response: { status: 403 }, message: "forbidden" };
+    postSpy.mockRejectedValue(refreshErr);
+
+    await expect(responseHandler.rejected(make401())).rejects.toBe(refreshErr);
+
+    expect(useUserStore.getState().user).toBeNull();
+    expect(storageHelper.getServerConfig()).toBeNull();
+  });
+
   it("rejects queued requests when the shared refresh fails", async () => {
     storageHelper.setServerConfig({
       address: "http://abs.local",

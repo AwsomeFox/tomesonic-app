@@ -1,7 +1,8 @@
 /**
  * StatsScreen — /api/me/listening-stats totals, DST-safe last-7-days chart
  * math, days-in-a-row streak, itemsFinished derived from the store's progress
- * map (not the login payload), recent sessions list, error/retry.
+ * map (not the login payload), recent sessions list, error/retry, and the
+ * offline / pending-sync freshness captions under the chart.
  */
 jest.mock("react-native-safe-area-context", () =>
   require("react-native-safe-area-context/jest/mock").default
@@ -58,13 +59,33 @@ jest.mock("react-native-reanimated", () => {
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
+jest.mock("../../utils/progressSync", () => ({
+  queueFinishedPatch: jest.fn(),
+  queueProgressPatch: jest.fn(),
+  queueEbookProgressPatch: jest.fn(),
+  flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
+  clearAllPending: jest.fn(),
+  syncProgress: jest.fn().mockResolvedValue(undefined),
+  closeSession: jest.fn().mockResolvedValue(undefined),
+  hasAnyPendingSyncs: jest.fn(() => false),
+}));
+// Controllable connectivity per test.
+jest.mock("../../hooks/useNetworkStatus", () => {
+  const useNetworkStatus = jest.fn(() => ({ isConnected: true, isInternetReachable: true }));
+  return { useNetworkStatus, default: useNetworkStatus };
+});
 
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react-native";
 import StatsScreen from "../../screens/StatsScreen";
 import { api } from "../../utils/api";
+import { hasAnyPendingSyncs } from "../../utils/progressSync";
+import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+
+const mockedNet = useNetworkStatus as jest.Mock;
+const mockedPending = hasAnyPendingSyncs as jest.Mock;
 
 const initialUser = useUserStore.getState();
 const initialPlayback = usePlaybackStore.getState();
@@ -114,6 +135,8 @@ beforeEach(() => {
   useUserStore.setState(initialUser, true);
   usePlaybackStore.setState(initialPlayback, true);
   usePlaybackStore.setState({ currentSession: null } as any);
+  mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true });
+  mockedPending.mockReturnValue(false);
   useUserStore.setState({
     loadMediaProgress: jest.fn().mockResolvedValue(undefined),
     mediaProgress: {
@@ -235,6 +258,51 @@ describe("StatsScreen", () => {
 
     await fireEvent.press(screen.getByText("Retry"));
     expect(await screen.findByText("Recent Sessions")).toBeTruthy();
+  });
+
+  it("shows the offline caption under the chart when disconnected", async () => {
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    await renderStats();
+    await screen.findByText("Minutes Listening (last 7 days)");
+
+    expect(
+      screen.getByText(
+        "You're offline — recent listening will be added to these stats once you reconnect."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Some recent listening is still syncing and may not be reflected yet.")
+    ).toBeNull();
+  });
+
+  it("shows the pending-sync caption when online with unflushed listening", async () => {
+    mockedPending.mockReturnValue(true);
+    await renderStats();
+    await screen.findByText("Minutes Listening (last 7 days)");
+
+    expect(
+      screen.getByText("Some recent listening is still syncing and may not be reflected yet.")
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "You're offline — recent listening will be added to these stats once you reconnect."
+      )
+    ).toBeNull();
+  });
+
+  it("shows no sync caption when online and fully synced", async () => {
+    await renderStats();
+    await screen.findByText("Minutes Listening (last 7 days)");
+
+    expect(hasAnyPendingSyncs).toHaveBeenCalled(); // checked on focus
+    expect(
+      screen.queryByText(
+        "You're offline — recent listening will be added to these stats once you reconnect."
+      )
+    ).toBeNull();
+    expect(
+      screen.queryByText("Some recent listening is still syncing and may not be reflected yet.")
+    ).toBeNull();
   });
 
   it("back button goes back", async () => {

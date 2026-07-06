@@ -185,6 +185,75 @@ describe("usePlaybackStore sessions", () => {
       expect(addedTracks()[0].url).toBe("file:///downloads/item1/a.m4b");
     });
 
+    it("maps duplicate-index tracks to their uniquified local parts positionally", async () => {
+      // Bad metadata: both files claim track.index 1, so the downloader
+      // collision-uniquified the second part id to track_1_1. An id-only
+      // lookup resolved BOTH logical tracks to the first file.
+      useDownloadStore.setState({
+        completedDownloads: {
+          item1: {
+            id: "item1",
+            libraryItemId: "item1",
+            status: "completed",
+            localFolderPath: "file:///downloads/item1/",
+            parts: [
+              // Non-track part first: the positional lookup must skip it.
+              { id: "cover", filename: "cover.jpg", localFilePath: "/downloads/item1/cover.jpg" },
+              { id: "track_1", filename: "a.mp3", localFilePath: "/downloads/item1/a.mp3" },
+              { id: "track_1_1", filename: "b.mp3", localFilePath: "/downloads/item1/b.mp3" },
+            ],
+          } as any,
+        },
+      });
+
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          audioTracks: [
+            { index: 1, contentUrl: "/f0.mp3", duration: 150, startOffset: 0 },
+            { index: 1, contentUrl: "/f1.mp3", duration: 150, startOffset: 150 },
+          ],
+        })
+      );
+
+      const tracks = addedTracks();
+      expect(tracks).toHaveLength(2);
+      expect(tracks[0].url).toBe("file:///downloads/item1/a.mp3");
+      // The second logical track plays the SECOND file, not track_1 again.
+      expect(tracks[1].url).toBe("file:///downloads/item1/b.mp3");
+    });
+
+    it("falls back to exact-id lookup when parts are stored out of track order", async () => {
+      useDownloadStore.setState({
+        completedDownloads: {
+          item1: {
+            id: "item1",
+            libraryItemId: "item1",
+            status: "completed",
+            localFolderPath: "file:///downloads/item1/",
+            parts: [
+              { id: "track_1", filename: "b.mp3", localFilePath: "/downloads/item1/b.mp3" },
+              { id: "track_0", filename: "a.mp3", localFilePath: "/downloads/item1/a.mp3" },
+            ],
+          } as any,
+        },
+      });
+
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          audioTracks: [
+            { index: 0, contentUrl: "/f0.mp3", duration: 150, startOffset: 0 },
+            { index: 1, contentUrl: "/f1.mp3", duration: 150, startOffset: 150 },
+          ],
+        })
+      );
+
+      const tracks = addedTracks();
+      // Positional candidates mismatch (track_1 at position 0), so each track
+      // resolves through the exact-id find instead.
+      expect(tracks[0].url).toBe("file:///downloads/item1/a.mp3");
+      expect(tracks[1].url).toBe("file:///downloads/item1/b.mp3");
+    });
+
     it("restores the persisted global playback rate", async () => {
       storageHelper.setPlaybackRate(1.75);
       await usePlaybackStore.getState().preparePlaybackSession(serverSession());

@@ -7,6 +7,13 @@ jest.mock("../../utils/autoCreds", () => ({
   writeAutoDownloads: jest.fn().mockResolvedValue(undefined),
   writeWidgetState: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock("../../utils/downloader", () => ({
+  downloader: {
+    abortBookParts: jest.fn().mockResolvedValue(undefined),
+    resumeDownload: jest.fn().mockResolvedValue(undefined),
+    sweepOrphanFolders: jest.fn().mockResolvedValue(undefined),
+  },
+}));
 jest.mock("../../utils/progressSync", () => ({
   syncProgress: jest.fn().mockResolvedValue(undefined),
   closeSession: jest.fn().mockResolvedValue(undefined),
@@ -20,13 +27,16 @@ jest.mock("../../utils/progressSync", () => ({
 
 import { api } from "../../utils/api";
 import { readAutoCreds, writeAutoCreds } from "../../utils/autoCreds";
+import { downloader } from "../../utils/downloader";
 import { clearAllPending } from "../../utils/progressSync";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
+import { useDownloadStore } from "../../store/useDownloadStore";
 
 const initialUser = useUserStore.getState();
 const initialLibrary = useLibraryStore.getState();
+const initialDownloads = useDownloadStore.getState();
 const mockGet = jest.mocked(api.get);
 
 function clearStorage() {
@@ -39,6 +49,8 @@ describe("useUserStore", () => {
     clearStorage();
     useUserStore.setState(initialUser, true);
     useLibraryStore.setState(initialLibrary, true);
+    useDownloadStore.setState(initialDownloads, true);
+    useDownloadStore.setState({ activeDownloads: {}, completedDownloads: {} });
     jest.mocked(readAutoCreds).mockResolvedValue(null);
   });
 
@@ -265,12 +277,12 @@ describe("useUserStore", () => {
       storageHelper.setLastPlaybackSession({ id: "sess1", libraryItemId: "item1" });
     }
 
-    it("wipes caches, pending syncs, and library selection when switching accounts", () => {
+    it("wipes caches, pending syncs, and library selection when switching accounts", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       seedPreviousSessionLeftovers();
       useLibraryStore.setState({ currentLibraryId: "lib1", libraries: [{ id: "lib1" }] } as any);
 
-      useUserStore.getState().login(CONFIG_B, { id: "userB", mediaProgress: [] });
+      await useUserStore.getState().login(CONFIG_B, { id: "userB", mediaProgress: [] });
 
       expect(clearAllPending).toHaveBeenCalled();
       expect(storage.getString("shelvesCache_lib1")).toBeUndefined();
@@ -283,11 +295,11 @@ describe("useUserStore", () => {
       expect(useUserStore.getState().user).toEqual({ id: "userB", mediaProgress: [] });
     });
 
-    it("keeps caches and pending syncs when the same account re-logs in", () => {
+    it("keeps caches and pending syncs when the same account re-logs in", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       seedPreviousSessionLeftovers();
 
-      useUserStore.getState().login(CONFIG_A, { id: "userA" });
+      await useUserStore.getState().login(CONFIG_A, { id: "userA" });
 
       expect(clearAllPending).not.toHaveBeenCalled();
       expect(storage.getString("shelvesCache_lib1")).toBeDefined();
@@ -295,15 +307,15 @@ describe("useUserStore", () => {
       expect(storageHelper.getLastPlaybackSession()).toEqual({ id: "sess1", libraryItemId: "item1" });
     });
 
-    it("first-ever login (no previous key) does not wipe anything", () => {
+    it("first-ever login (no previous key) does not wipe anything", async () => {
       seedPreviousSessionLeftovers();
-      useUserStore.getState().login(CONFIG_A, { id: "userA" });
+      await useUserStore.getState().login(CONFIG_A, { id: "userA" });
       expect(clearAllPending).not.toHaveBeenCalled();
       expect(storage.getString("shelvesCache_lib1")).toBeDefined();
     });
 
-    it("seeds mediaProgress from the login payload", () => {
-      useUserStore.getState().login(CONFIG_A, {
+    it("seeds mediaProgress from the login payload", async () => {
+      await useUserStore.getState().login(CONFIG_A, {
         id: "userA",
         mediaProgress: [
           { libraryItemId: "item1", progress: 0.3 },
@@ -313,6 +325,65 @@ describe("useUserStore", () => {
       const map = useUserStore.getState().mediaProgress;
       expect(map["item1"].progress).toBe(0.3);
       expect(map["pod1-ep2"].progress).toBe(0.7);
+    });
+
+    it("wipes downloads, the progress disk cache, and reader keys when switching accounts", async () => {
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      storageHelper.setMediaProgressCache({ item1: { libraryItemId: "item1", currentTime: 10 } });
+      storage.set("ebookCfi_item1", "epubcfi(/6/4!/4/2)");
+      storage.set("pdfPage_item1", "12");
+      storage.set("last_interaction_item1", "listen");
+      useDownloadStore.setState({
+        completedDownloads: {
+          item1: {
+            id: "item1",
+            libraryItemId: "item1",
+            status: "completed",
+            localFolderPath: "file:///downloads/item1/",
+            parts: [],
+          } as any,
+        },
+      });
+
+      await useUserStore.getState().login(CONFIG_B, { id: "userB" });
+
+      // The previous account's downloads are gone (files aborted + store emptied).
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("item1");
+      expect(useDownloadStore.getState().completedDownloads).toEqual({});
+      expect(useDownloadStore.getState().activeDownloads).toEqual({});
+      // Disk progress cache does not carry over to the new account.
+      expect(storageHelper.getMediaProgressCache()).toEqual({});
+      // Per-item reader/interaction keys are wiped.
+      expect(storage.getString("ebookCfi_item1")).toBeUndefined();
+      expect(storage.getString("pdfPage_item1")).toBeUndefined();
+      expect(storage.getString("last_interaction_item1")).toBeUndefined();
+    });
+
+    it("keeps downloads, the progress cache, and reader keys on same-account re-login", async () => {
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      storageHelper.setMediaProgressCache({ item1: { libraryItemId: "item1", currentTime: 10 } });
+      storage.set("ebookCfi_item1", "epubcfi(/6/4!/4/2)");
+      storage.set("pdfPage_item1", "12");
+      storage.set("last_interaction_item1", "listen");
+      const dl = {
+        id: "item1",
+        libraryItemId: "item1",
+        status: "completed",
+        localFolderPath: "file:///downloads/item1/",
+        parts: [],
+      } as any;
+      useDownloadStore.setState({ completedDownloads: { item1: dl } });
+
+      await useUserStore.getState().login(CONFIG_A, { id: "userA" });
+
+      expect(downloader.abortBookParts).not.toHaveBeenCalled();
+      expect(useDownloadStore.getState().completedDownloads["item1"]).toBe(dl);
+      expect(storageHelper.getMediaProgressCache()).toEqual({
+        item1: { libraryItemId: "item1", currentTime: 10 },
+      });
+      expect(storage.getString("ebookCfi_item1")).toBe("epubcfi(/6/4!/4/2)");
+      expect(storage.getString("pdfPage_item1")).toBe("12");
+      expect(storage.getString("last_interaction_item1")).toBe("listen");
     });
   });
 
@@ -341,6 +412,49 @@ describe("useUserStore", () => {
       expect(s.user).toBeNull();
       expect(s.serverConnectionConfig).toBeNull();
       expect(s.mediaProgress).toEqual({});
+    });
+
+    it("removes all downloads and wipes reader keys", async () => {
+      useUserStore.setState({
+        user: { id: "userA" },
+        serverConnectionConfig: { address: "https://a.example.com", token: "tokA" },
+      } as any);
+      jest.mocked(api.post).mockResolvedValue({} as any);
+      useDownloadStore.setState({
+        completedDownloads: {
+          item1: {
+            id: "item1",
+            libraryItemId: "item1",
+            status: "completed",
+            localFolderPath: "file:///downloads/item1/",
+            parts: [],
+          } as any,
+        },
+        activeDownloads: {
+          item2: {
+            id: "item2",
+            libraryItemId: "item2",
+            status: "downloading",
+            localFolderPath: "file:///downloads/item2/",
+            parts: [],
+          } as any,
+        },
+      });
+      storage.set("ebookCfi_item1", "epubcfi(/6/4!/4/2)");
+      storage.set("pdfPage_item1", "12");
+      storage.set("last_interaction_item1", "listen");
+
+      await useUserStore.getState().logout();
+
+      // Both completed AND in-flight downloads are gone.
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("item1");
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("item2");
+      expect(useDownloadStore.getState().completedDownloads).toEqual({});
+      expect(useDownloadStore.getState().activeDownloads).toEqual({});
+      // Per-item reader/interaction keys wiped.
+      expect(storage.getString("ebookCfi_item1")).toBeUndefined();
+      expect(storage.getString("pdfPage_item1")).toBeUndefined();
+      expect(storage.getString("last_interaction_item1")).toBeUndefined();
     });
 
     it("still clears local state when the server logout call fails", async () => {

@@ -1,8 +1,9 @@
 /**
  * SearchScreen — debounced query → library search fetch, sectioned results
  * (books/series/authors/narrators/tags), navigation with base64-encoded
- * filter values for tags/narrators, clear/no-result/idle states, and the
- * hide-non-audiobooks filter on book results.
+ * filter values for tags/narrators, clear/no-result/idle states, the
+ * failed-request error state with retry, and the hide-non-audiobooks filter
+ * on book results.
  */
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 
@@ -272,6 +273,35 @@ describe("SearchScreen", () => {
 
     expect(screen.queryByText("Ebook Only")).toBeNull();
     expect(screen.getByText("No results for “ebook”")).toBeTruthy();
+  });
+
+  it("shows the failure state (not no-results) when the search request rejects", async () => {
+    mockedGet.mockRejectedValueOnce(new Error("network down"));
+    const navigation = makeNavigation();
+    await render(<SearchScreen navigation={navigation} />);
+    await search("dune");
+
+    expect(screen.getByText("Search failed")).toBeTruthy();
+    expect(screen.getByText("Check your connection and try again.")).toBeTruthy();
+    // A failed request must not read as "your library doesn't have this".
+    expect(screen.queryByText("No results for “dune”")).toBeNull();
+  });
+
+  it("Retry re-runs the search and clears the error once it succeeds", async () => {
+    mockedGet.mockRejectedValueOnce(new Error("network down"));
+    const navigation = makeNavigation();
+    await render(<SearchScreen navigation={navigation} />);
+    await search("dune");
+    expect(screen.getByText("Search failed")).toBeTruthy();
+
+    // beforeEach's default mock resolves with fullResults on the next call.
+    await fireEvent.press(screen.getByLabelText("Retry search"));
+    await act(async () => {});
+
+    expect(mockedGet).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Search failed")).toBeNull();
+    expect(screen.getByText("Dune")).toBeTruthy();
+    expect(screen.getByText("Books")).toBeTruthy();
   });
 
   it("back button pops the screen", async () => {

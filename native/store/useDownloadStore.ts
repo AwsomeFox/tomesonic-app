@@ -460,12 +460,15 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       } catch {}
       delete _lastDbSaveAt[id];
     }
+    // Clear state BEFORE the sweep — sweepOrphanFolders skips folders owned
+    // by in-store ids, so sweeping first would protect exactly the leftovers
+    // this is meant to remove (items whose folderForItem came back null).
+    set({ completedDownloads: {}, activeDownloads: {} });
     // Sweep anything the id list missed (orphan folders from older installs).
     try {
       const { downloader } = require("../utils/downloader");
-      await downloader.sweepOrphanFolders?.(new Set());
+      await downloader.sweepOrphanFolders?.();
     } catch {}
-    set({ completedDownloads: {}, activeDownloads: {} });
   },
 
   retryDownload: async (id) => {

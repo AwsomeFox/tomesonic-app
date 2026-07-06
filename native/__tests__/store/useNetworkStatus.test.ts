@@ -1,8 +1,14 @@
 import { renderHook, act } from "@testing-library/react-native";
 import NetInfo from "@react-native-community/netinfo";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
+import { storage } from "../../utils/storage";
 
 describe("useNetworkStatus", () => {
+  beforeEach(() => {
+    // The MMKV mock is a real in-memory store — persisted status from one
+    // test must not leak into the next.
+    storage.remove("lastNetworkStatus");
+  });
   it("defaults to online and subscribes to NetInfo", async () => {
     const unsubscribe = jest.fn();
     jest.mocked(NetInfo.addEventListener).mockReturnValue(unsubscribe);
@@ -49,6 +55,78 @@ describe("useNetworkStatus", () => {
       listener({ isConnected: null, isInternetReachable: undefined });
     });
     expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+  });
+
+  it("initializes offline from the persisted lastNetworkStatus BEFORE any NetInfo event", async () => {
+    storage.set("lastNetworkStatus", '{"isConnected":false,"isInternetReachable":false}');
+    // Subscribe but never fire — the initial render alone must be offline.
+    jest.mocked(NetInfo.addEventListener).mockReturnValue(jest.fn());
+
+    const { result } = await renderHook(() => useNetworkStatus());
+
+    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+  });
+
+  it("falls back to isConnected when the persisted entry lacks isInternetReachable", async () => {
+    storage.set("lastNetworkStatus", '{"isConnected":false}');
+    jest.mocked(NetInfo.addEventListener).mockReturnValue(jest.fn());
+
+    const { result } = await renderHook(() => useNetworkStatus());
+
+    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+  });
+
+  it("defaults to online when nothing is persisted", async () => {
+    jest.mocked(NetInfo.addEventListener).mockReturnValue(jest.fn());
+
+    const { result } = await renderHook(() => useNetworkStatus());
+
+    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+  });
+
+  it("ignores a corrupt persisted entry and defaults to online", async () => {
+    storage.set("lastNetworkStatus", "{not-json");
+    jest.mocked(NetInfo.addEventListener).mockReturnValue(jest.fn());
+
+    const { result } = await renderHook(() => useNetworkStatus());
+
+    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+  });
+
+  it("ignores a persisted entry with a non-boolean isConnected and defaults to online", async () => {
+    storage.set("lastNetworkStatus", '{"isConnected":"nope"}');
+    jest.mocked(NetInfo.addEventListener).mockReturnValue(jest.fn());
+
+    const { result } = await renderHook(() => useNetworkStatus());
+
+    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+  });
+
+  it("persists each NetInfo event to storage as well as updating state", async () => {
+    let listener: (state: any) => void = () => {};
+    jest.mocked(NetInfo.addEventListener).mockImplementation((cb: any) => {
+      listener = cb;
+      return jest.fn();
+    });
+
+    const { result } = await renderHook(() => useNetworkStatus());
+
+    await act(async () => {
+      listener({ isConnected: false, isInternetReachable: false });
+    });
+    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+    expect(JSON.parse(storage.getString("lastNetworkStatus")!)).toEqual({
+      isConnected: false,
+      isInternetReachable: false,
+    });
+
+    await act(async () => {
+      listener({ isConnected: true, isInternetReachable: true });
+    });
+    expect(JSON.parse(storage.getString("lastNetworkStatus")!)).toEqual({
+      isConnected: true,
+      isInternetReachable: true,
+    });
   });
 
   it("falls back to online defaults when NetInfo subscription throws", async () => {
