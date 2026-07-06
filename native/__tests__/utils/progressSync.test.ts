@@ -778,9 +778,9 @@ describe("hasAnyPendingSyncs", () => {
     expect(hasAnyPendingSyncs()).toBe(true);
   });
 
-  it("is true when a pending progress PATCH is queued", () => {
+  it("ignores pending progress PATCHes (position/finished only — no listening seconds)", () => {
     queueProgressPatch("li1", 1, 10);
-    expect(hasAnyPendingSyncs()).toBe(true);
+    expect(hasAnyPendingSyncs()).toBe(false);
   });
 
   it("ignores bookmark queues (bookmarks are not listening progress)", () => {

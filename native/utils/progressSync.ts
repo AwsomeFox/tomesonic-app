@@ -649,12 +649,16 @@ export function flushPendingSyncs(): Promise<void> {
   return _flushInFlight;
 }
 
-// True when any offline listening/progress is still queued locally — i.e.
-// the server's stats/streak don't yet reflect everything on this device.
+// True when queued LISTENING TIME hasn't reached the server yet — i.e. the
+// server's stats/streak don't reflect everything on this device. Progress
+// PATCHes (pendingPatch_*: position, isFinished, ebook fields) are excluded:
+// they never carry session seconds, so they can't move
+// /api/me/listening-stats, and counting them made the Stats caption claim
+// listening was "still syncing" over a mere reader-position update.
 export function hasAnyPendingSyncs(): boolean {
   try {
     return storage.getAllKeys().some((k) => {
-      if (k.startsWith(PENDING_PREFIX) || k.startsWith(PATCH_PREFIX)) return true;
+      if (k.startsWith(PENDING_PREFIX)) return true;
       if (k.startsWith(LOCAL_SESSION_PREFIX)) {
         // Local-session day records persist after delivery (they accumulate);
         // only an undelivered remainder counts as pending.
