@@ -103,6 +103,21 @@ describe("DiscoverScreen (BookDate)", () => {
     await screen.findByLabelText("Request Popular Pick");
   });
 
+  it("a truncated rec blurb is upgraded to the full Audnexus summary", async () => {
+    const { audibleBookDetails } = require("../../utils/audible");
+    const full = "The full summary. ".repeat(40);
+    (audibleBookDetails as jest.Mock).mockResolvedValue({ description: full });
+    (getBookdateRecommendations as jest.Mock).mockResolvedValue([
+      { id: "rec8", title: "Truncated Pick", audnexusAsin: "B0TRUNC01", description: "Short blurb…" },
+    ]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Truncated Pick");
+    await fireEvent.press(screen.getByLabelText("Details for Truncated Pick"));
+    await waitFor(() => expect(audibleBookDetails).toHaveBeenCalledWith("B0TRUNC01"));
+    // Longer fetched summary wins, and it's expandable.
+    await screen.findByLabelText("Show more");
+  });
+
   it("deck detail sheet lazily fetches the description via audnexusAsin", async () => {
     const { audibleBookDetails } = require("../../utils/audible");
     (audibleBookDetails as jest.Mock).mockResolvedValue({ description: "Full lazy summary" });

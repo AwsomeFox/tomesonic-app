@@ -6,6 +6,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
 import { listMyRequests, deleteRequest, approveRequest, resolveRmabUrl } from "../utils/rmab";
 import BottomSheet from "../components/BottomSheet";
+import BookDescription from "../components/BookDescription";
 import { useRmabStore } from "../store/useRmabStore";
 import Pressable from "../components/HintPressable";
 
@@ -372,11 +373,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
               </Text>
             ) : null}
 
-            {detail.audiobook?.description ? (
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }} numberOfLines={8}>
-                {String(detail.audiobook.description).replace(/<[^>]+>/g, "").trim()}
-              </Text>
-            ) : null}
+            <BookDescription
+              text={detail.audiobook?.description}
+              asin={detail.audiobook?.audibleAsin || detail.asin}
+            />
 
             {canManage ? (
               <View style={{ flexDirection: "row", justifyContent: "flex-end", columnGap: 10, marginTop: 18 }}>

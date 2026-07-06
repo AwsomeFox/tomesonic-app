@@ -6,6 +6,7 @@ import BottomSheet from "./BottomSheet";
 import Icon from "./Icon";
 import Pressable from "./HintPressable";
 import { RmabBook, resolveRmabUrl } from "../utils/rmab";
+import BookDescription from "./BookDescription";
 
 /**
  * Catalog-book details sheet shared by every discovery surface (missing-from
@@ -31,34 +32,13 @@ export default function RmabBookDetailSheet({
   const cover = resolveRmabUrl(book?.coverArtUrl || book?.coverUrl);
   const year = book?.releaseDate ? String(book.releaseDate).slice(0, 4) : null;
 
-  // RMAB's shelf/category cache often omits descriptions — fill them lazily
-  // from Audible's catalog by ASIN. Reset expansion + fetched data per book.
-  const [fetched, setFetched] = useState<{ description?: string; narrator?: string } | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const aliveRef = useRef(true);
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => {
-      aliveRef.current = false;
-    };
-  }, []);
+  // Description (incl. the lazy Audnexus fill) lives in BookDescription; the
+  // sheet only backfills the narrator line from the same fetch.
+  const [fetchedNarrator, setFetchedNarrator] = useState<string | null>(null);
+  useEffect(() => setFetchedNarrator(null), [book?.asin, (book as any)?.audnexusAsin]);
   // BookDate recs carry audnexusAsin instead of asin — accept either.
   const lookupAsin = book?.asin || (book as any)?.audnexusAsin;
-  useEffect(() => {
-    setFetched(null);
-    setExpanded(false);
-    if (!lookupAsin || book?.description) return;
-    const { audibleBookDetails } = require("../utils/audible");
-    audibleBookDetails(lookupAsin)
-      .then((d: any) => {
-        if (aliveRef.current && d) setFetched({ description: d.description, narrator: d.narrator });
-      })
-      .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lookupAsin]);
-
-  const description = book?.description || fetched?.description;
-  const narrator = book?.narrator || fetched?.narrator;
+  const narrator = book?.narrator || fetchedNarrator;
 
   return (
     <BottomSheet visible={!!book} onClose={onClose}>
@@ -104,31 +84,13 @@ export default function RmabBookDetailSheet({
             </View>
           ) : null}
 
-          {description ? (
-            <>
-              <Text
-                // key forces a remount on toggle — Fabric doesn't reliably
-                // re-layout when numberOfLines changes on a live Text node.
-                key={expanded ? "desc-full" : "desc-clamped"}
-                style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }}
-                numberOfLines={expanded ? undefined : 6}
-              >
-                {String(description).replace(/<[^>]+>/g, "").trim()}
-              </Text>
-              {String(description).length > 240 ? (
-                <Pressable
-                  onPress={() => setExpanded((e) => !e)}
-                  accessibilityRole="button"
-                  accessibilityLabel={expanded ? "Show less" : "Show more"}
-                  style={{ alignSelf: "flex-start", paddingVertical: 6 }}
-                >
-                  <Text style={{ color: colors.primary, fontSize: 13, fontWeight: "600" }}>
-                    {expanded ? "Show less" : "Show more"}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </>
-          ) : null}
+          <BookDescription
+            text={book.description}
+            asin={lookupAsin}
+            onFetched={(d) => {
+              if (d?.narrator) setFetchedNarrator(d.narrator);
+            }}
+          />
 
           {onRequest ? (
             <View style={{ alignItems: "flex-end", marginTop: 18 }}>
