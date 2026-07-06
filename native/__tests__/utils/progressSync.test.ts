@@ -1010,3 +1010,41 @@ describe("offline local-session listening bank", () => {
     expect(localSessionKeys()).toHaveLength(0);
   });
 });
+
+describe("monotonic stamp cross-restart seeding", () => {
+  // monotonicNow is only monotonic within one JS lifetime; on first use it
+  // seeds from the freshest `at` persisted in the queue so a backward clock
+  // adjustment across a RESTART can't let an old on-disk entry outrank every
+  // new stamp. Needs a fresh module copy (the seed is once-per-boot).
+  it("a new stamp beats a persisted entry stamped before a backward clock jump", async () => {
+    jest.resetModules();
+    const freshStorage = require("../../utils/storage").storage;
+    const freshApi = require("../../utils/api").api;
+    const ps = require("../../utils/progressSync");
+    freshStorage.getAllKeys().forEach((k: string) => freshStorage.remove(k));
+    // Persisted by a previous boot, stamped BEFORE the wall clock was set back.
+    freshStorage.set(
+      "pendingSync_sess1",
+      JSON.stringify({
+        sessionId: "sess1",
+        currentTime: 100,
+        timeListened: 5,
+        duration: 3600,
+        at: 5_000_000,
+      })
+    );
+    (freshApi.post as jest.Mock).mockRejectedValue(new Error("Network Error"));
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(1_000_000); // clock now BEHIND the stamp
+    try {
+      await ps.syncProgress({ sessionId: "sess1", currentTime: 200, timeListened: 1, duration: 3600 });
+      const rec = JSON.parse(freshStorage.getString("pendingSync_sess1")!);
+      // The NEW position won the freshest-wins merge despite the backward clock...
+      expect(rec.currentTime).toBe(200);
+      expect(rec.at).toBeGreaterThan(5_000_000);
+      // ...and listened seconds still accumulated.
+      expect(rec.timeListened).toBe(6);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});

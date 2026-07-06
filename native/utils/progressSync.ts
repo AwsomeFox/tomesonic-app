@@ -27,9 +27,25 @@ interface SyncPayload {
 // Monotonic freshness stamp: Date.now() can jump BACKWARD (NTP sync, manual
 // clock change), which inverted the queue's freshest-wins comparison and kept
 // a stale position over a newer close. Never yields a smaller stamp than the
-// previous one within this JS lifetime.
+// previous one within this JS lifetime — and on first use, seeds from the
+// freshest stamp already persisted in the queue, so a backward clock
+// adjustment across a RESTART can't let an old on-disk entry outrank every
+// new stamp either.
 let _lastAtStamp = 0;
+let _atStampSeeded = false;
 function monotonicNow(): number {
+  if (!_atStampSeeded) {
+    _atStampSeeded = true;
+    try {
+      for (const k of storage.getAllKeys()) {
+        if (!k.startsWith(PENDING_PREFIX)) continue;
+        try {
+          const at = Number(JSON.parse(storage.getString(k) || "null")?.at) || 0;
+          if (at > _lastAtStamp) _lastAtStamp = at;
+        } catch {}
+      }
+    } catch {}
+  }
   _lastAtStamp = Math.max(Date.now(), _lastAtStamp + 1);
   return _lastAtStamp;
 }
