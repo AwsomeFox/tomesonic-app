@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -31,6 +31,33 @@ export default function RmabBookDetailSheet({
   const cover = resolveRmabUrl(book?.coverArtUrl || book?.coverUrl);
   const year = book?.releaseDate ? String(book.releaseDate).slice(0, 4) : null;
 
+  // RMAB's shelf/category cache often omits descriptions — fill them lazily
+  // from Audible's catalog by ASIN. Reset expansion + fetched data per book.
+  const [fetched, setFetched] = useState<{ description?: string; narrator?: string } | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    setFetched(null);
+    setExpanded(false);
+    if (!book?.asin || book.description) return;
+    const { audibleBookDetails } = require("../utils/audible");
+    audibleBookDetails(book.asin)
+      .then((d: any) => {
+        if (aliveRef.current && d) setFetched({ description: d.description, narrator: d.narrator });
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book?.asin]);
+
+  const description = book?.description || fetched?.description;
+  const narrator = book?.narrator || fetched?.narrator;
+
   return (
     <BottomSheet visible={!!book} onClose={onClose}>
       {book ? (
@@ -50,9 +77,9 @@ export default function RmabBookDetailSheet({
                   {book.author}
                 </Text>
               ) : null}
-              {book.narrator ? (
+              {narrator ? (
                 <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }} numberOfLines={1}>
-                  Read by {book.narrator}
+                  Read by {narrator}
                 </Text>
               ) : null}
             </View>
@@ -75,10 +102,27 @@ export default function RmabBookDetailSheet({
             </View>
           ) : null}
 
-          {book.description ? (
-            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }} numberOfLines={10}>
-              {String(book.description).replace(/<[^>]+>/g, "").trim()}
-            </Text>
+          {description ? (
+            <>
+              <Text
+                style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }}
+                numberOfLines={expanded ? undefined : 6}
+              >
+                {String(description).replace(/<[^>]+>/g, "").trim()}
+              </Text>
+              {String(description).length > 240 ? (
+                <Pressable
+                  onPress={() => setExpanded((e) => !e)}
+                  accessibilityRole="button"
+                  accessibilityLabel={expanded ? "Show less" : "Show more"}
+                  style={{ alignSelf: "flex-start", paddingVertical: 6 }}
+                >
+                  <Text style={{ color: colors.primary, fontSize: 13, fontWeight: "600" }}>
+                    {expanded ? "Show less" : "Show more"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </>
           ) : null}
 
           {onRequest ? (

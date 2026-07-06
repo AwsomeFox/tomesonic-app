@@ -1,3 +1,6 @@
+jest.mock("../../utils/audible", () => ({
+  audibleBookDetails: jest.fn().mockResolvedValue(null),
+}));
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 import RmabMissingSection from "../../components/RmabMissingSection";
@@ -112,6 +115,27 @@ describe("RmabMissingSection", () => {
     const buttons = screen.getAllByLabelText("Request Book One");
     await fireEvent.press(buttons[buttons.length - 1]);
     await waitFor(() => expect(createRequest).toHaveBeenCalled());
+  });
+
+  it("detail sheet lazily fills a missing description from Audible and can expand it", async () => {
+    const { audibleBookDetails } = require("../../utils/audible");
+    (audibleBookDetails as jest.Mock).mockResolvedValue({
+      description: "Lazy description. ".repeat(30),
+      narrator: "Lazy Narrator",
+    });
+    useRmabStore.setState({ configured: true } as any);
+    await render(
+      <RmabMissingSection fetchMissing={jest.fn().mockResolvedValue([BOOKS[0]])} />
+    );
+    await screen.findByText("Book One");
+    await fireEvent.press(screen.getByLabelText("Details for Book One"));
+
+    await waitFor(() => expect(audibleBookDetails).toHaveBeenCalledWith("B01"));
+    await screen.findByText("Read by Lazy Narrator");
+    // Long description gets the expand affordance.
+    const more = await screen.findByLabelText("Show more");
+    await fireEvent.press(more);
+    await screen.findByLabelText("Show less");
   });
 
   it("requiresFullAuth surfaces stay hidden in apiToken mode (series/author endpoints reject static tokens)", async () => {

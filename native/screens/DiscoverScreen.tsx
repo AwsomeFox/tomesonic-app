@@ -361,7 +361,13 @@ export default function DiscoverScreen({ navigation }: any) {
                         source={
                           resolveRmabUrl(current.coverUrl) ? { uri: resolveRmabUrl(current.coverUrl) } : undefined
                         }
-                        style={{ width: "100%", aspectRatio: 1, backgroundColor: colors.surfaceContainerHigh }}
+                        // Fixed height (~half the hero): a full-width square
+                        // cover ate the entire card and pushed the text out.
+                        style={{
+                          width: "100%",
+                          height: Math.round(heroHeight * 0.52),
+                          backgroundColor: colors.surfaceContainerHigh,
+                        }}
                         contentFit="cover"
                       />
                       <View style={{ padding: 18 }}>
@@ -447,16 +453,16 @@ export default function DiscoverScreen({ navigation }: any) {
                   accessibilityLabel="Undo last swipe"
                   android_ripple={{ color: colors.onSurfaceVariant + "22" }}
                   style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 22,
+                    width: 60,
+                    height: 60,
+                    borderRadius: 30,
                     backgroundColor: colors.surfaceContainer,
                     alignItems: "center",
                     justifyContent: "center",
                     opacity: busy ? 0.5 : 1,
                   }}
                 >
-                  <Icon name="undo" size={20} color={colors.onSurfaceVariant} />
+                  <Icon name="undo" size={26} color={colors.onSurfaceVariant} />
                 </Pressable>
                 <Pressable
                   onPress={() => onSwipe("right")}

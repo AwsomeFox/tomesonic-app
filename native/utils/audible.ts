@@ -73,6 +73,16 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
     .filter(Boolean) as AudibleBook[]).filter(inAppLanguage);
 }
 
+/** Full catalog details for one book — used to lazily fill descriptions the
+ *  RMAB category cache doesn't carry. */
+export async function audibleBookDetails(asin: string): Promise<AudibleBook | null> {
+  const res = await axios.get(`${BASE}/catalog/products/${asin}`, {
+    params: { response_groups: GROUPS },
+    timeout: TIMEOUT,
+  });
+  return mapProduct(res.data?.product);
+}
+
 /** Best-match ASIN for a title/author — for ABS items without one. */
 export async function audibleFindBookAsin(title: string, author?: string): Promise<string | null> {
   const res = await axios.get(`${BASE}/catalog/products`, {
