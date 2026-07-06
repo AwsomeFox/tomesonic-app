@@ -364,7 +364,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           keyExtractor={(item) => item.id}
           ListHeaderComponent={renderHeader}
           ListFooterComponent={
-            <RmabMissingSection title="Missing from your library" fetchMissing={fetchMissingByAuthor} />
+            <RmabMissingSection title="Missing from your library" fetchMissing={fetchMissingByAuthor} requiresFullAuth />
           }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}

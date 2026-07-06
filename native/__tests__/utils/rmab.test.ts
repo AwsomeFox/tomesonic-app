@@ -1,4 +1,5 @@
 jest.mock("axios", () => ({
+  get: jest.fn(),
   post: jest.fn(),
   request: jest.fn(),
 }));
@@ -20,6 +21,7 @@ import {
 import { secureStorage } from "../../utils/storage";
 
 const mockedPost = axios.post as jest.Mock;
+const mockedGet = axios.get as jest.Mock;
 const mockedRequest = axios.request as jest.Mock;
 
 const CONFIG = {
@@ -32,6 +34,7 @@ const CONFIG = {
 beforeEach(() => {
   secureStorage.getAllKeys().forEach((k: string) => secureStorage.remove(k));
   mockedPost.mockReset();
+  mockedGet.mockReset();
   mockedRequest.mockReset();
 });
 
@@ -190,5 +193,41 @@ describe("endpoint wrappers", () => {
   it("listMyRequests unwraps either results or requests arrays", async () => {
     mockedRequest.mockResolvedValue({ data: { requests: [{ id: 1 }] } });
     expect(await listMyRequests()).toEqual([{ id: 1 }]);
+  });
+});
+
+describe("static rmab_ API tokens", () => {
+  it("exchangeLoginToken validates rmab_ tokens against /api/auth/me instead of exchanging", async () => {
+    mockedGet.mockResolvedValue({ data: { user: { id: "u1", username: "tony" } } });
+    const cfg = await exchangeLoginToken("https://rmab.test/", " rmab_abc123 ");
+    expect(mockedGet).toHaveBeenCalledWith(
+      "https://rmab.test/api/auth/me",
+      expect.objectContaining({ headers: { Authorization: "Bearer rmab_abc123" } })
+    );
+    expect(mockedPost).not.toHaveBeenCalled();
+    expect(cfg).toEqual({
+      url: "https://rmab.test",
+      apiToken: "rmab_abc123",
+      user: { id: "u1", username: "tony" },
+    });
+  });
+
+  it("requests use the static token as bearer and a 401 does NOT try to refresh", async () => {
+    writeRmabConfig({ url: "https://rmab.test", apiToken: "rmab_abc123" } as any);
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    await expect(searchBooks("dune")).rejects.toBeTruthy();
+    expect(mockedPost).not.toHaveBeenCalled(); // no /api/auth/refresh attempt
+
+    mockedRequest.mockReset();
+    mockedRequest.mockResolvedValue({ data: { results: [] } });
+    await searchBooks("dune");
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { Authorization: "Bearer rmab_abc123" } })
+    );
+  });
+
+  it("an apiToken-only config counts as configured", () => {
+    writeRmabConfig({ url: "https://rmab.test", apiToken: "rmab_abc123" } as any);
+    expect(readRmabConfig()).toEqual({ url: "https://rmab.test", apiToken: "rmab_abc123" });
   });
 });

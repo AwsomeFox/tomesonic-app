@@ -74,6 +74,7 @@ export default function SettingsScreen({ navigation }: any) {
   const rmabConfigured = useRmabStore((s) => s.configured);
   const rmabServerUrl = useRmabStore((s) => s.serverUrl);
   const rmabUsername = useRmabStore((s) => s.username);
+  const rmabAuthMode = useRmabStore((s) => s.authMode);
   const rmabConnecting = useRmabStore((s) => s.connecting);
   const rmabError = useRmabStore((s) => s.connectError);
   const rmabConnect = useRmabStore((s) => s.connect);
@@ -268,7 +269,12 @@ export default function SettingsScreen({ navigation }: any) {
           <>
             <RowBase icon="globe" title="Server" subtitle={rmabServerUrl || ''} colors={colors} />
             <Divider colors={colors} />
-            <RowBase icon="person" title="Account" subtitle={rmabUsername || 'Connected'} colors={colors} />
+            <RowBase
+              icon="person"
+              title="Account"
+              subtitle={(rmabUsername || 'Connected') + (rmabAuthMode === 'apiToken' ? ' • API token (search & requests only)' : '')}
+              colors={colors}
+            />
             <Divider colors={colors} />
             <NavRow
               icon="send"
@@ -316,7 +322,8 @@ export default function SettingsScreen({ navigation }: any) {
             Connect ReadMeABook
           </Text>
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginBottom: 16 }}>
-            Paste your login token from your ReadMeABook profile page.
+            Paste a login token (an admin generates it: Users → Generate login token) for full
+            features, or an rmab_ API token (Profile → API Tokens) for search and requests only.
           </Text>
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
             Server URL

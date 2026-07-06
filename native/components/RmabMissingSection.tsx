@@ -20,13 +20,19 @@ export default function RmabMissingSection({
   title = "Missing from your library",
   fetchMissing,
   maxItems = 10,
+  requiresFullAuth = false,
 }: {
   title?: string;
   fetchMissing: () => Promise<RmabBook[]>;
   maxItems?: number;
+  /** Series/author endpoints reject static rmab_ API tokens (allowlist) —
+   *  set for surfaces that need the JWT (login-token) mode. */
+  requiresFullAuth?: boolean;
 }) {
   const colors = useThemeColors();
-  const configured = useRmabStore((s) => s.configured);
+  const configuredAny = useRmabStore((s) => s.configured);
+  const authMode = useRmabStore((s) => s.authMode);
+  const configured = configuredAny && (!requiresFullAuth || authMode === "jwt");
   const requestedAsins = useRmabStore((s) => s.requestedAsins);
   const requestBook = useRmabStore((s) => s.requestBook);
 

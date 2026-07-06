@@ -3,6 +3,7 @@ import {
   exchangeLoginToken,
   readRmabConfig,
   writeRmabConfig,
+  rmabAuthMode,
   getMe,
   createRequest,
   RmabBook,
@@ -17,6 +18,9 @@ interface RmabState {
   configured: boolean;
   serverUrl: string | null;
   username: string | null;
+  // "jwt" (login token — full API) or "apiToken" (static rmab_ token —
+  // search + requests only; series/author discovery needs jwt).
+  authMode: "jwt" | "apiToken" | null;
   connecting: boolean;
   connectError: string | null;
   // asin -> local request status ("pending" right after a request here, or
@@ -35,6 +39,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   configured: false,
   serverUrl: null,
   username: null,
+  authMode: null,
   connecting: false,
   connectError: null,
   requestedAsins: {},
@@ -46,6 +51,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         configured: true,
         serverUrl: cfg.url,
         username: cfg.user?.username || null,
+        authMode: rmabAuthMode(cfg),
       });
     }
   },
@@ -62,6 +68,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         configured: true,
         serverUrl: cfg.url,
         username: cfg.user?.username || null,
+        authMode: rmabAuthMode(cfg),
         connecting: false,
       });
       return true;
@@ -72,8 +79,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         connecting: false,
         configured: false,
         connectError:
-          status === 401 || status === 400
-            ? "Invalid login token"
+          status === 401 || status === 400 || status === 403
+            ? "Token rejected. Paste a login token (admin: Users → Generate login token) or an rmab_ API token."
+            : status === 404
+            ? "No ReadMeABook API at that URL — check the address"
             : "Could not reach the server",
       });
       return false;
@@ -86,6 +95,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       configured: false,
       serverUrl: null,
       username: null,
+      authMode: null,
       connectError: null,
       requestedAsins: {},
     });

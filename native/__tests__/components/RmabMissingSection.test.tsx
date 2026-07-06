@@ -7,6 +7,7 @@ jest.mock("../../utils/rmab", () => ({
   exchangeLoginToken: jest.fn(),
   readRmabConfig: jest.fn(() => null),
   writeRmabConfig: jest.fn(),
+  rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
   getMe: jest.fn(),
   createRequest: jest.fn(),
 }));
@@ -86,6 +87,22 @@ describe("RmabMissingSection", () => {
       />
     );
     await waitFor(() => expect(screen.queryByText("Missing from this series")).toBeNull());
+  });
+
+  it("requiresFullAuth surfaces stay hidden in apiToken mode (series/author endpoints reject static tokens)", async () => {
+    useRmabStore.setState({ configured: true, authMode: "apiToken" } as any);
+    const fetchMissing = jest.fn().mockResolvedValue(BOOKS);
+    await render(<RmabMissingSection fetchMissing={fetchMissing} requiresFullAuth />);
+    expect(fetchMissing).not.toHaveBeenCalled();
+    expect(screen.queryByText("Missing from your library")).toBeNull();
+  });
+
+  it("requiresFullAuth surfaces render normally in jwt mode", async () => {
+    useRmabStore.setState({ configured: true, authMode: "jwt" } as any);
+    await render(
+      <RmabMissingSection fetchMissing={jest.fn().mockResolvedValue([BOOKS[0]])} requiresFullAuth />
+    );
+    await screen.findByText("Book One");
   });
 
   it("a failed lookup logs and renders nothing (never blocks the host screen)", async () => {

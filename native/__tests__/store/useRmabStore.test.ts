@@ -2,6 +2,8 @@ jest.mock("../../utils/rmab", () => ({
   exchangeLoginToken: jest.fn(),
   readRmabConfig: jest.fn(),
   writeRmabConfig: jest.fn(),
+  // Real implementation: apiToken presence decides the mode.
+  rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
   getMe: jest.fn(),
   createRequest: jest.fn(),
 }));
@@ -61,7 +63,16 @@ describe("connect", () => {
     const s = useRmabStore.getState();
     expect(s.configured).toBe(true);
     expect(s.username).toBe("tony");
+    expect(s.authMode).toBe("jwt");
     expect(s.connectError).toBeNull();
+  });
+
+  it("an rmab_ API token connects in limited apiToken mode", async () => {
+    mockedExchange.mockResolvedValue({ url: "https://rmab.test", apiToken: "rmab_x", user: { id: "u1" } });
+    mockedMe.mockResolvedValue({});
+    const ok = await useRmabStore.getState().connect("https://rmab.test", "rmab_x");
+    expect(ok).toBe(true);
+    expect(useRmabStore.getState().authMode).toBe("apiToken");
   });
 
   it("bad token → friendly error, config wiped", async () => {
@@ -69,7 +80,7 @@ describe("connect", () => {
     const ok = await useRmabStore.getState().connect("https://rmab.test", "bad");
     expect(ok).toBe(false);
     expect(mockedWrite).toHaveBeenCalledWith(null);
-    expect(useRmabStore.getState().connectError).toBe("Invalid login token");
+    expect(useRmabStore.getState().connectError).toContain("Token rejected");
     expect(useRmabStore.getState().configured).toBe(false);
   });
 

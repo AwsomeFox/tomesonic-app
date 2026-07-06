@@ -20,9 +20,20 @@ const CONFIG_KEY = "rmab_config";
 
 export interface RmabConfig {
   url: string;
-  accessToken: string;
-  refreshToken: string;
+  /** JWT mode (login token exchanged) — full API access. */
+  accessToken?: string;
+  refreshToken?: string;
+  /** Static rmab_ API token mode — allowlisted endpoints only
+   *  (auth/me, audiobooks/search, requests). */
+  apiToken?: string;
   user?: { id: string; username?: string; role?: string } | null;
+}
+
+/** Static API tokens can only hit search + requests; series/author lookups
+ *  need the JWT (login-token) mode. */
+export function rmabAuthMode(cfg: RmabConfig | null): "jwt" | "apiToken" | null {
+  if (!cfg) return null;
+  return cfg.apiToken ? "apiToken" : "jwt";
 }
 
 export interface RmabBook {
@@ -43,7 +54,7 @@ export function readRmabConfig(): RmabConfig | null {
     const raw = secureStorage.getString(CONFIG_KEY);
     if (!raw) return null;
     const cfg = JSON.parse(raw);
-    if (!cfg?.url || !cfg?.accessToken) return null;
+    if (!cfg?.url || (!cfg?.accessToken && !cfg?.apiToken)) return null;
     return cfg as RmabConfig;
   } catch {
     return null;
@@ -62,9 +73,20 @@ const normalize = (url: string) => url.trim().replace(/\/+$/, "");
 /** Exchange a pasted login token for a JWT pair. Throws on bad URL/token. */
 export async function exchangeLoginToken(url: string, loginToken: string): Promise<RmabConfig> {
   const base = normalize(url);
+  const token = loginToken.trim();
+  // rmab_-prefixed tokens are STATIC API tokens, not login tokens — they
+  // never exchange. Validate against /api/auth/me (allowlisted) instead.
+  if (token.startsWith("rmab_")) {
+    const me = await axios.get(`${base}/api/auth/me`, {
+      timeout: 15000,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const user = me.data?.user || me.data || null;
+    return { url: base, apiToken: token, user };
+  }
   const res = await axios.post(
     `${base}/api/auth/token/login`,
-    { token: loginToken.trim() },
+    { token },
     { timeout: 15000 }
   );
   const { accessToken, refreshToken, user } = res.data || {};
@@ -73,6 +95,7 @@ export async function exchangeLoginToken(url: string, loginToken: string): Promi
 }
 
 async function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
+  if (!cfg.refreshToken) throw new Error("No refresh token");
   const res = await axios.post(
     `${cfg.url}/api/auth/refresh`,
     { refreshToken: cfg.refreshToken },
@@ -99,12 +122,13 @@ async function rmabRequest<T = any>(
       url: `${c.url}${path}`,
       data,
       timeout: 20000,
-      headers: { Authorization: `Bearer ${c.accessToken}` },
+      headers: { Authorization: `Bearer ${c.apiToken || c.accessToken}` },
     });
   try {
     return (await doCall(cfg)).data;
   } catch (e: any) {
-    if (e?.response?.status !== 401) throw e;
+    // Static API tokens don't refresh — a 401 there is terminal.
+    if (e?.response?.status !== 401 || cfg.apiToken) throw e;
     cfg = await refreshAccessToken(cfg);
     return (await doCall(cfg)).data;
   }

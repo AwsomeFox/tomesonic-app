@@ -478,7 +478,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           keyExtractor={(item) => item.id}
           ListHeaderComponent={ListHeader}
           ListFooterComponent={
-            <RmabMissingSection title="Missing from this series" fetchMissing={fetchMissingInSeries} />
+            <RmabMissingSection title="Missing from this series" fetchMissing={fetchMissingInSeries} requiresFullAuth />
           }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
