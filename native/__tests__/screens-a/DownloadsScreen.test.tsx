@@ -235,7 +235,9 @@ describe("DownloadsScreen", () => {
     await fireEvent.press(screen.getByLabelText("Delete all downloads"));
     expect(alertSpy).toHaveBeenCalledWith(
       "Delete all downloads",
-      expect.stringContaining("2 downloaded items"),
+      // Copy must disclose the FULL scope: completed items AND the in-flight/
+      // failed downloads the wipe aborts (seed has 2 of each).
+      expect.stringContaining("2 downloaded items and cancel 2 in-progress/failed downloads"),
       expect.any(Array)
     );
     expect(removeAllDownloads).not.toHaveBeenCalled(); // not before confirming

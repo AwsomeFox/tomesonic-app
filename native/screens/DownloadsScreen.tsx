@@ -204,8 +204,17 @@ export default function DownloadsScreen({ navigation }: any) {
                   onPress={() =>
                     Alert.alert(
                       "Delete all downloads",
+                      // Honest scope: the wipe also aborts anything still
+                      // downloading (and clears failed retries), not just the
+                      // completed items counted in the header.
                       `Remove all ${completedList.length} downloaded ${
                         completedList.length === 1 ? "item" : "items"
+                      }${
+                        activeList.length > 0
+                          ? ` and cancel ${activeList.length} in-progress/failed ${
+                              activeList.length === 1 ? "download" : "downloads"
+                            }`
+                          : ""
                       } from this device? Your listening/reading progress is kept.`,
                       [
                         { text: "Cancel", style: "cancel" },
