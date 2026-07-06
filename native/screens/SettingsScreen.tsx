@@ -6,6 +6,9 @@ import {
   TouchableOpacity,
   Pressable,
   Linking,
+  TextInput,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeStore, ThemeMode } from '../store/useThemeStore';
@@ -14,6 +17,8 @@ import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useThemeColors } from '../theme/useThemeColors';
 import Icon, { IconName } from '../components/Icon';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
+import BottomSheet from '../components/BottomSheet';
+import { useRmabStore } from '../store/useRmabStore';
 import { haptic } from '../utils/haptics';
 
 // Single source of truth for the displayed version — the Expo app config.
@@ -60,6 +65,35 @@ export default function SettingsScreen({ navigation }: any) {
   const [openPicker, setOpenPicker] = React.useState<
     null | 'theme' | 'haptic' | 'jumpFwd' | 'jumpBack'
   >(null);
+
+  // ReadMeABook connection state + connect sheet fields.
+  const rmabConfigured = useRmabStore((s) => s.configured);
+  const rmabServerUrl = useRmabStore((s) => s.serverUrl);
+  const rmabUsername = useRmabStore((s) => s.username);
+  const rmabConnecting = useRmabStore((s) => s.connecting);
+  const rmabError = useRmabStore((s) => s.connectError);
+  const rmabConnect = useRmabStore((s) => s.connect);
+  const rmabDisconnect = useRmabStore((s) => s.disconnect);
+  const [rmabSheetOpen, setRmabSheetOpen] = React.useState(false);
+  const [rmabUrl, setRmabUrl] = React.useState('');
+  const [rmabToken, setRmabToken] = React.useState('');
+
+  const onRmabConnect = async () => {
+    if (!rmabUrl.trim() || !rmabToken.trim()) return;
+    const ok = await rmabConnect(rmabUrl, rmabToken);
+    if (ok) {
+      setRmabSheetOpen(false);
+      setRmabUrl('');
+      setRmabToken('');
+    }
+  };
+
+  const onRmabDisconnect = () => {
+    Alert.alert('Disconnect ReadMeABook?', 'Request features will be hidden until you reconnect.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Disconnect', style: 'destructive', onPress: () => rmabDisconnect() },
+    ]);
+  };
 
   const set = (updates: any) => {
     haptic();
@@ -224,6 +258,39 @@ export default function SettingsScreen({ navigation }: any) {
           colors={colors}
         />
 
+        {/* ── READMEABOOK (book requests) ── */}
+        <SectionHeader label="ReadMeABook" colors={colors} />
+        {rmabConfigured ? (
+          <>
+            <RowBase icon="globe" title="Server" subtitle={rmabServerUrl || ''} colors={colors} />
+            <Divider colors={colors} />
+            <RowBase icon="person" title="Account" subtitle={rmabUsername || 'Connected'} colors={colors} />
+            <Divider colors={colors} />
+            <NavRow
+              icon="send"
+              title="My Requests"
+              subtitle="Track your book requests"
+              onPress={() => navigation.navigate('RmabRequests')}
+              colors={colors}
+            />
+            <Divider colors={colors} />
+            <NavRow
+              icon="close"
+              title="Disconnect"
+              onPress={onRmabDisconnect}
+              colors={colors}
+            />
+          </>
+        ) : (
+          <NavRow
+            icon="send"
+            title="Connect ReadMeABook"
+            subtitle="Request books missing from your library"
+            onPress={() => setRmabSheetOpen(true)}
+            colors={colors}
+          />
+        )}
+
         {/* ── ABOUT ── */}
         <SectionHeader label="About" colors={colors} />
         <RowBase icon="info" title="Version" subtitle={APP_VERSION} colors={colors} />
@@ -238,6 +305,84 @@ export default function SettingsScreen({ navigation }: any) {
       </ScrollView>
 
       {/* Dropdown pickers */}
+      {/* ReadMeABook connect sheet */}
+      <BottomSheet visible={rmabSheetOpen} onClose={() => setRmabSheetOpen(false)}>
+        <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
+          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: '500', marginBottom: 4 }}>
+            Connect ReadMeABook
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginBottom: 16 }}>
+            Paste your login token from your ReadMeABook profile page.
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
+            Server URL
+          </Text>
+          <TextInput
+            value={rmabUrl}
+            onChangeText={setRmabUrl}
+            placeholder="https://rmab.example.com"
+            placeholderTextColor={colors.onSurfaceVariant}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            accessibilityLabel="ReadMeABook server URL"
+            style={{
+              backgroundColor: colors.surfaceContainer,
+              color: colors.onSurface,
+              borderRadius: 12,
+              paddingHorizontal: 14,
+              paddingVertical: 10,
+              marginBottom: 12,
+            }}
+          />
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
+            Login Token
+          </Text>
+          <TextInput
+            value={rmabToken}
+            onChangeText={setRmabToken}
+            placeholder="Login token"
+            placeholderTextColor={colors.onSurfaceVariant}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            accessibilityLabel="ReadMeABook login token"
+            style={{
+              backgroundColor: colors.surfaceContainer,
+              color: colors.onSurface,
+              borderRadius: 12,
+              paddingHorizontal: 14,
+              paddingVertical: 10,
+              marginBottom: 8,
+            }}
+          />
+          {rmabError ? (
+            <Text style={{ color: colors.error, fontSize: 13, marginBottom: 4 }}>{rmabError}</Text>
+          ) : null}
+          <Pressable
+            onPress={onRmabConnect}
+            disabled={rmabConnecting || !rmabUrl.trim() || !rmabToken.trim()}
+            accessibilityRole="button"
+            accessibilityLabel="Connect"
+            style={{
+              backgroundColor: colors.primary,
+              height: 48,
+              borderRadius: 24,
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginTop: 8,
+              opacity: rmabConnecting || !rmabUrl.trim() || !rmabToken.trim() ? 0.5 : 1,
+            }}
+          >
+            {rmabConnecting ? (
+              <ActivityIndicator size="small" color={colors.onPrimary} />
+            ) : (
+              <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: '600' }}>Connect</Text>
+            )}
+          </Pressable>
+        </View>
+      </BottomSheet>
+
       <SettingSelectModal
         visible={openPicker === 'theme'}
         title="Theme"

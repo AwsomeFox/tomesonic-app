@@ -19,6 +19,7 @@ import { isEbookOnly } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
 import Skeleton, { ListSkeleton } from "../components/Skeleton";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import RmabMissingSection from "../components/RmabMissingSection";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -50,6 +51,18 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   const { serverConnectionConfig } = useUserStore();
 
   const [author, setAuthor] = useState<AuthorData | null>(null);
+
+  // ReadMeABook: this author's Audible books that aren't in the library.
+  const rmabName = author?.name || authorName;
+  const fetchMissingByAuthor = React.useCallback(async () => {
+    const { searchAuthors, getAuthorBooks } = require("../utils/rmab");
+    if (!rmabName) return [];
+    const matches = await searchAuthors(rmabName);
+    const norm = (v: string) => (v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const best = matches.find((m: any) => norm(m.name) === norm(rmabName)) || matches[0];
+    if (!best?.asin) return [];
+    return getAuthorBooks(best.asin);
+  }, [rmabName]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
@@ -350,6 +363,9 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           renderItem={renderBookCard}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={renderHeader}
+          ListFooterComponent={
+            <RmabMissingSection title="Missing from your library" fetchMissing={fetchMissingByAuthor} />
+          }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
         />

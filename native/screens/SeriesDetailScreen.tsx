@@ -15,6 +15,7 @@ import Icon from "../components/Icon";
 import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
+import RmabMissingSection from "../components/RmabMissingSection";
 
 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
 const base64Encode = (input: string = '') => {
@@ -92,6 +93,21 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
 
   const [series, setSeries] = useState<SeriesData | null>(null);
+
+  // ReadMeABook: books in this series that exist on Audible but not in the
+  // library. Stable callback so the section doesn't refetch every render.
+  const displayName = series?.name || seriesName;
+  const fetchMissingInSeries = React.useCallback(async () => {
+    const { searchSeries, getSeries } = require("../utils/rmab");
+    if (!displayName) return [];
+    const matches = await searchSeries(displayName);
+    const norm = (v: string) => (v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const best =
+      matches.find((m: any) => norm(m.name || m.title) === norm(displayName)) || matches[0];
+    if (!best?.asin) return [];
+    const detail = await getSeries(best.asin);
+    return detail.books || [];
+  }, [displayName]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
@@ -461,6 +477,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           renderItem={renderBookRow}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={ListHeader}
+          ListFooterComponent={
+            <RmabMissingSection title="Missing from this series" fetchMissing={fetchMissingInSeries} />
+          }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
         />

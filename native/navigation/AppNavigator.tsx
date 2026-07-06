@@ -30,6 +30,7 @@ import StatsScreen from "../screens/StatsScreen";
 import LogsScreen from "../screens/LogsScreen";
 import LatestEpisodesScreen from "../screens/LatestEpisodesScreen";
 import ListeningHistoryScreen from "../screens/ListeningHistoryScreen";
+import RmabRequestsScreen from "../screens/RmabRequestsScreen";
 import ReaderScreen from "../screens/ReaderScreen";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
@@ -167,6 +168,7 @@ export default function AppNavigator() {
             <Stack.Screen name="Stats" component={StatsScreen} />
             <Stack.Screen name="Logs" component={LogsScreen} />
             <Stack.Screen name="ListeningHistory" component={ListeningHistoryScreen} />
+            <Stack.Screen name="RmabRequests" component={RmabRequestsScreen} />
             <Stack.Screen name="Reader" component={ReaderScreen} />
           </>
         )}
