@@ -7,6 +7,8 @@ jest.mock("axios", () => ({
 import axios from "axios";
 import {
   exchangeLoginToken,
+  deleteRequest,
+  approveRequest,
   readRmabConfig,
   writeRmabConfig,
   searchBooks,
@@ -193,6 +195,30 @@ describe("endpoint wrappers", () => {
   it("listMyRequests unwraps either results or requests arrays", async () => {
     mockedRequest.mockResolvedValue({ data: { requests: [{ id: 1 }] } });
     expect(await listMyRequests()).toEqual([{ id: 1 }]);
+  });
+
+  it("deleteRequest issues DELETE on the request", async () => {
+    mockedRequest.mockResolvedValue({ data: { success: true } });
+    await deleteRequest("req9");
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "delete", url: "https://rmab.test/api/requests/req9" })
+    );
+  });
+
+  it("approveRequest posts the action to the admin endpoint", async () => {
+    mockedRequest.mockResolvedValue({ data: { success: true } });
+    await approveRequest("req9", "approve");
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "post",
+        url: "https://rmab.test/api/admin/requests/req9/approve",
+        data: { action: "approve" },
+      })
+    );
+    await approveRequest("req9", "deny");
+    expect(mockedRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: { action: "deny" } })
+    );
   });
 });
 

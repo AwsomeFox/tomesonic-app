@@ -473,7 +473,9 @@ describe("send ebook to device (Kindle etc.)", () => {
         deviceName: "My Kindle",
       })
     );
-    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Ebook sent", "Sent to My Kindle."));
+    // In-sheet M3 result burst, not a system alert.
+    await screen.findByText("Sent to My Kindle");
+    expect(alertSpy).not.toHaveBeenCalled();
     alertSpy.mockRestore();
   });
 
@@ -492,12 +494,14 @@ describe("send ebook to device (Kindle etc.)", () => {
     await screen.findByText("My Kindle");
     await fireEvent.press(screen.getByLabelText("Send to My Kindle"));
 
-    await waitFor(() =>
-      expect(alertSpy).toHaveBeenCalledWith(
-        "Send failed",
-        "Could not send the ebook. Check the server's email settings."
-      )
-    );
+    // Failure burst with a retry affordance, still inside the sheet.
+    await screen.findByText("Couldn't send");
+    await screen.findByLabelText("Try again");
+    expect(alertSpy).not.toHaveBeenCalled();
+
+    // Retry returns to the device list.
+    await fireEvent.press(screen.getByLabelText("Try again"));
+    await screen.findByText("My Kindle");
     alertSpy.mockRestore();
     errSpy.mockRestore();
   });

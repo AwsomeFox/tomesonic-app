@@ -110,7 +110,7 @@ async function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
 
 /** Authenticated request with a single 401 → refresh → retry. */
 async function rmabRequest<T = any>(
-  method: "get" | "post",
+  method: "get" | "post" | "delete",
   path: string,
   data?: any
 ): Promise<T> {
@@ -191,4 +191,14 @@ export async function createRequest(book: RmabBook): Promise<any> {
 export async function listMyRequests(): Promise<any[]> {
   const data = await rmabRequest<any>("get", "/api/requests");
   return data?.results || data?.requests || [];
+}
+
+/** Admin-only (server-enforced): remove a request entirely. */
+export async function deleteRequest(id: string): Promise<void> {
+  await rmabRequest("delete", `/api/requests/${id}`);
+}
+
+/** Admin-only: act on an awaiting-approval request. */
+export async function approveRequest(id: string, action: "approve" | "deny"): Promise<void> {
+  await rmabRequest("post", `/api/admin/requests/${id}/approve`, { action });
 }

@@ -21,6 +21,9 @@ interface RmabState {
   // "jwt" (login token — full API) or "apiToken" (static rmab_ token —
   // search + requests only; series/author discovery needs jwt).
   authMode: "jwt" | "apiToken" | null;
+  // RMAB role of the connected account. Manage actions (approve/delete) are
+  // server-enforced to admin JWT sessions.
+  isAdmin: boolean;
   connecting: boolean;
   connectError: string | null;
   // asin -> local request status ("pending" right after a request here, or
@@ -40,6 +43,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   serverUrl: null,
   username: null,
   authMode: null,
+  isAdmin: false,
   connecting: false,
   connectError: null,
   requestedAsins: {},
@@ -52,6 +56,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         serverUrl: cfg.url,
         username: cfg.user?.username || null,
         authMode: rmabAuthMode(cfg),
+        isAdmin: cfg.user?.role === "admin",
       });
     }
   },
@@ -69,6 +74,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         serverUrl: cfg.url,
         username: cfg.user?.username || null,
         authMode: rmabAuthMode(cfg),
+        isAdmin: cfg.user?.role === "admin",
         connecting: false,
       });
       return true;
@@ -96,6 +102,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       serverUrl: null,
       username: null,
       authMode: null,
+      isAdmin: false,
       connectError: null,
       requestedAsins: {},
     });

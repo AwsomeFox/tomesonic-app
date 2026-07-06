@@ -17,6 +17,7 @@ import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
 import AddToListModal from "../components/AddToListModal";
 import BottomSheet from "../components/BottomSheet";
+import ResultBurst from "../components/ResultBurst";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
 import { formatBytes } from "../utils/format";
 
@@ -64,6 +65,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [addToVisible, setAddToVisible] = useState(false);
   const [sendToVisible, setSendToVisible] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const [sendResult, setSendResult] = useState<null | { ok: boolean; device: string }>(null);
   const ereaderDevices = useUserStore((s) => s.ereaderDevices);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
@@ -479,14 +481,24 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         libraryItemId: itemId,
         deviceName,
       });
-      setSendToVisible(false);
-      Alert.alert("Ebook sent", `Sent to ${deviceName}.`);
+      // In-sheet M3 result moment instead of a system alert; the sheet
+      // dismisses itself after the success burst plays.
+      setSendResult({ ok: true, device: deviceName });
+      setTimeout(() => {
+        setSendToVisible(false);
+        setTimeout(() => setSendResult(null), 400); // after exit animation
+      }, 1600);
     } catch (e) {
       console.error("[ItemDetail] send ebook failed", e);
-      Alert.alert("Send failed", "Could not send the ebook. Check the server's email settings.");
+      setSendResult({ ok: false, device: deviceName });
     } finally {
       setSendingTo(null);
     }
+  };
+
+  const closeSendSheet = () => {
+    setSendToVisible(false);
+    setSendResult(null);
   };
 
   const Link = ({ text, onPress }: { text: string; onPress?: () => void }) => (
@@ -1255,33 +1267,73 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       ) : null}
 
       {/* Device picker for "Send ebook to device". */}
-      <BottomSheet visible={sendToVisible} onClose={() => setSendToVisible(false)}>
-        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
-          <Icon name="send" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-          <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>
-            Send ebook to device
-          </Text>
-        </View>
-        {ereaderDevices.map((d: any) => (
-          <Pressable
-            key={d.name}
-            disabled={!!sendingTo}
-            onPress={() => sendEbookToDevice(d.name)}
-            accessibilityRole="button"
-            accessibilityLabel={`Send to ${d.name}`}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              paddingHorizontal: 24,
-              paddingVertical: 16,
-              opacity: sendingTo && sendingTo !== d.name ? 0.5 : 1,
-            }}
-          >
-            <Icon name="book" size={22} color={colors.onSurfaceVariant} style={{ marginRight: 16 }} />
-            <Text style={{ flex: 1, fontSize: 16, color: colors.onSurface }}>{d.name}</Text>
-            {sendingTo === d.name ? <ActivityIndicator size="small" color={colors.primary} /> : null}
-          </Pressable>
-        ))}
+      <BottomSheet visible={sendToVisible} onClose={closeSendSheet}>
+        {sendResult ? (
+          <>
+            <ResultBurst
+              ok={sendResult.ok}
+              title={sendResult.ok ? `Sent to ${sendResult.device}` : "Couldn't send"}
+              subtitle={
+                sendResult.ok
+                  ? "The server is emailing your ebook."
+                  : "Check the server's email settings and try again."
+              }
+            />
+            {!sendResult.ok ? (
+              <Pressable
+                onPress={() => setSendResult(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Try again"
+                android_ripple={{ color: colors.onSecondaryContainer + "22" }}
+                style={{
+                  alignSelf: "center",
+                  backgroundColor: colors.secondaryContainer,
+                  borderRadius: 20,
+                  paddingHorizontal: 24,
+                  height: 40,
+                  justifyContent: "center",
+                  marginBottom: 20,
+                }}
+              >
+                <Text style={{ color: colors.onSecondaryContainer, fontSize: 14, fontWeight: "600" }}>
+                  Try again
+                </Text>
+              </Pressable>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
+              <Icon name="send" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
+              <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>
+                Send ebook to device
+              </Text>
+            </View>
+            {ereaderDevices.map((d: any) => (
+              <Pressable
+                key={d.name}
+                disabled={!!sendingTo}
+                onPress={() => sendEbookToDevice(d.name)}
+                accessibilityRole="button"
+                accessibilityLabel={`Send to ${d.name}`}
+                android_ripple={{ color: colors.primary + "22" }}
+                style={({ pressed }) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingHorizontal: 24,
+                  paddingVertical: 16,
+                  opacity: sendingTo && sendingTo !== d.name ? 0.5 : 1,
+                  backgroundColor: pressed ? colors.surfaceContainerHighest || colors.surfaceContainer : "transparent",
+                  transform: [{ scale: pressed ? 0.98 : 1 }],
+                })}
+              >
+                <Icon name="book" size={22} color={colors.onSurfaceVariant} style={{ marginRight: 16 }} />
+                <Text style={{ flex: 1, fontSize: 16, color: colors.onSurface }}>{d.name}</Text>
+                {sendingTo === d.name ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+              </Pressable>
+            ))}
+          </>
+        )}
       </BottomSheet>
     </SafeAreaView>
   );
