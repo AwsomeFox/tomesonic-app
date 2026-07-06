@@ -103,6 +103,19 @@ describe("DiscoverScreen (BookDate)", () => {
     await screen.findByLabelText("Request Popular Pick");
   });
 
+  it("deck detail sheet lazily fetches the description via audnexusAsin", async () => {
+    const { audibleBookDetails } = require("../../utils/audible");
+    (audibleBookDetails as jest.Mock).mockResolvedValue({ description: "Full lazy summary" });
+    (getBookdateRecommendations as jest.Mock).mockResolvedValue([
+      { id: "rec9", title: "No Desc Pick", audnexusAsin: "B0LAZY01" },
+    ]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("No Desc Pick");
+    await fireEvent.press(screen.getByLabelText("Details for No Desc Pick"));
+    await waitFor(() => expect(audibleBookDetails).toHaveBeenCalledWith("B0LAZY01"));
+    await screen.findByText("Full lazy summary");
+  });
+
   it("tapping the card opens the shared detail sheet (info only)", async () => {
     await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
     await screen.findByText("First Pick");

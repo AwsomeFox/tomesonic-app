@@ -42,18 +42,20 @@ export default function RmabBookDetailSheet({
       aliveRef.current = false;
     };
   }, []);
+  // BookDate recs carry audnexusAsin instead of asin — accept either.
+  const lookupAsin = book?.asin || (book as any)?.audnexusAsin;
   useEffect(() => {
     setFetched(null);
     setExpanded(false);
-    if (!book?.asin || book.description) return;
+    if (!lookupAsin || book?.description) return;
     const { audibleBookDetails } = require("../utils/audible");
-    audibleBookDetails(book.asin)
+    audibleBookDetails(lookupAsin)
       .then((d: any) => {
         if (aliveRef.current && d) setFetched({ description: d.description, narrator: d.narrator });
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [book?.asin]);
+  }, [lookupAsin]);
 
   const description = book?.description || fetched?.description;
   const narrator = book?.narrator || fetched?.narrator;
