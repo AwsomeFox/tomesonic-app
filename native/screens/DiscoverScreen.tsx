@@ -297,10 +297,6 @@ export default function DiscoverScreen({ navigation }: any) {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       <TopAppBar navigation={navigation} />
       <ScrollView contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
-        <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
-          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "700" }}>Discover</Text>
-        </View>
-
         {/* ── BookDate deck (hidden entirely when the server has it off) ── */}
         {!bdDisabled ? (
           <View style={{ paddingHorizontal: 20 }}>
