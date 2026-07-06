@@ -13,7 +13,7 @@ import { haptic } from "../utils/haptics";
  * A button that defines its own onLongPress keeps that behavior (no toast).
  */
 const HintPressable = forwardRef<View, PressableProps & { hint?: string }>(
-  ({ hint, onPressIn, onLongPress, ...props }, ref) => {
+  ({ hint, onPress, onLongPress, ...props }, ref) => {
     const isButton = props.accessibilityRole === "button";
     const label =
       hint || (typeof props.accessibilityLabel === "string" ? props.accessibilityLabel : undefined);
@@ -21,10 +21,16 @@ const HintPressable = forwardRef<View, PressableProps & { hint?: string }>(
     return (
       <Pressable
         ref={ref}
+        // Touch-down during a scroll gesture must not flash the ripple — delay
+        // press-in feedback long enough for the scroll responder to claim the
+        // gesture first.
+        unstable_pressDelay={isButton ? 90 : undefined}
         {...props}
-        onPressIn={(e) => {
+        onPress={(e) => {
+          // Haptic on the COMPLETED press, not press-in: pressIn fires on
+          // every touch-down, so scrolling across buttons buzzed constantly.
           if (isButton && !props.disabled) haptic();
-          onPressIn?.(e);
+          onPress?.(e);
         }}
         onLongPress={
           onLongPress ||

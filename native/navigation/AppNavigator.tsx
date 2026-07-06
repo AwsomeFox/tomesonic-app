@@ -31,6 +31,8 @@ import LogsScreen from "../screens/LogsScreen";
 import LatestEpisodesScreen from "../screens/LatestEpisodesScreen";
 import ListeningHistoryScreen from "../screens/ListeningHistoryScreen";
 import RmabRequestsScreen from "../screens/RmabRequestsScreen";
+import DiscoverScreen from "../screens/DiscoverScreen";
+import { useRmabStore } from "../store/useRmabStore";
 import ReaderScreen from "../screens/ReaderScreen";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
@@ -44,11 +46,15 @@ const TAB_ICONS: Record<string, IconName> = {
   Series: "series",
   Collections: "collections",
   Authors: "authors",
+  Discover: "explore",
 };
 
 function TabNavigator() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
+  // BookDate needs a JWT (login-token) RMAB session — API tokens can't hit
+  // its endpoints, so the tab only exists for full-access connections.
+  const showDiscover = useRmabStore((s) => s.configured && s.authMode === "jwt");
 
   return (
     <Tab.Navigator
@@ -105,6 +111,7 @@ function TabNavigator() {
       })}
     >
       <Tab.Screen name="Home" component={BookshelfScreen} />
+      {showDiscover ? <Tab.Screen name="Discover" component={DiscoverScreen} /> : null}
       <Tab.Screen name="Library" component={LibraryScreen} />
       <Tab.Screen name="Series" component={SeriesListScreen} />
       <Tab.Screen name="Collections" component={CollectionsPlaylistsScreen} />

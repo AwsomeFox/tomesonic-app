@@ -244,6 +244,40 @@ export async function listMyRequests(): Promise<any[]> {
   return data?.results || data?.requests || [];
 }
 
+// --- BookDate (AI recommendations) ---------------------------------------
+
+export interface BookdateRec {
+  id: string;
+  title: string;
+  author?: string;
+  narrator?: string;
+  description?: string;
+  coverUrl?: string;
+  audnexusAsin?: string;
+  [key: string]: any;
+}
+
+/** Cached unswiped recs, or a fresh AI generation (SLOW — up to a minute).
+ *  503 = BookDate disabled server-side. */
+export async function getBookdateRecommendations(): Promise<BookdateRec[]> {
+  const data = await rmabRequest<any>("get", "/api/bookdate/recommendations", undefined, 90000);
+  return data?.recommendations || [];
+}
+
+/** action "right" = like (the server creates a request), "left" = pass. */
+export async function swipeBookdate(
+  recommendationId: string,
+  action: "right" | "left",
+  markedAsKnown = false
+): Promise<any> {
+  return rmabRequest("post", "/api/bookdate/swipe", { recommendationId, action, markedAsKnown });
+}
+
+/** Reverts the most recent swipe and returns its recommendation. */
+export async function undoBookdateSwipe(): Promise<any> {
+  return rmabRequest("post", "/api/bookdate/undo");
+}
+
 /** Admin-only: number of requests awaiting approval. */
 export async function getPendingApprovalCount(): Promise<number> {
   const data = await rmabRequest<any>("get", "/api/admin/requests/pending-approval");
