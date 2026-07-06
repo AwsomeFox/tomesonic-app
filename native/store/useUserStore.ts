@@ -131,6 +131,10 @@ export const useUserStore = create<UserState>((set, get) => ({
         : null,
       serverConnectionConfig: config || null,
       settings: savedSettings ? { ...DEFAULT_SETTINGS, ...savedSettings } : DEFAULT_SETTINGS,
+      // Seed progress from the DISK cache so an offline cold start still
+      // resumes every book at its real position (and keeps offline-finished
+      // flags) instead of starting from an empty map until /api/me answers.
+      ...(hasSession ? { mediaProgress: storageHelper.getMediaProgressCache() } : {}),
       isInitialized: true,
     });
     // Mirror creds for the native Android Auto browse service.
@@ -302,6 +306,8 @@ export const useUserStore = create<UserState>((set, get) => ({
     writeAutoCreds(null, null, null);
     storageHelper.removeLastLibraryId();
     storageHelper.removeLastPlaybackSession();
+    // The next account must not inherit this one's progress positions.
+    storageHelper.removeMediaProgressCache();
     // Explicit logout fully ends the session — clear its identity key too so
     // the next login starts from a clean slate (everything is wiped here).
     storageHelper.removeLastSessionKey();
@@ -334,3 +340,27 @@ export const useUserStore = create<UserState>((set, get) => ({
     });
   },
 }));
+
+// Write-through disk mirror for the progress map (see getMediaProgressCache).
+// Every writer funnels through useUserStore.setState — the playback tick, the
+// reader, finish toggles, /api/me merges — so a single subscriber catches
+// them all. Leading-edge throttle (3s): the first change in a window writes
+// immediately (finish flags and big merges land at once, and no timer handle
+// can be stranded), per-second playback ticks cost at most one MMKV write per
+// window, and the ≤3s of map staleness a kill can lose is covered by the
+// separately-flushed lastPlaybackSession save (the actual resume source for
+// the active book).
+{
+  let lastPersisted: any = null;
+  let lastWriteAt = 0;
+  useUserStore.subscribe((state) => {
+    if (state.mediaProgress === lastPersisted) return;
+    lastPersisted = state.mediaProgress;
+    const now = Date.now();
+    if (now - lastWriteAt < 3000) return;
+    lastWriteAt = now;
+    try {
+      storageHelper.setMediaProgressCache(state.mediaProgress);
+    } catch {}
+  });
+}

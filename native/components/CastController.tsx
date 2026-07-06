@@ -281,7 +281,9 @@ export default function CastController() {
 
         const pos = usePlaybackStore.getState().position || currentSession.currentTime || 0;
         let startIndex = offsets.findIndex((s, i) => pos < s + (tracks[i].duration || 0));
-        if (startIndex < 0) startIndex = 0;
+        // A position at/past the end (finished book) belongs in the LAST
+        // track — collapsing to 0 restarted the cast from the very beginning.
+        if (startIndex < 0) startIndex = pos > 0 ? offsets.length - 1 : 0;
         const startTime = Math.max(0, pos - offsets[startIndex]);
         baseOffsetRef.current = offsets[startIndex];
         currentIdxRef.current = startIndex;
