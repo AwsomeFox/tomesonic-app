@@ -246,9 +246,20 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       setError(null);
       const response = await api.get(`/api/items/${itemId}?expanded=1&include=progress`);
       setItem(response.data);
-    } catch (err) {
+    } catch (err: any) {
       console.error("[ItemDetail] Failed to fetch item:", err);
-      setError("Failed to load item details.");
+      // No HTTP response means the request never reached the server (offline
+      // or unreachable) — say so instead of a generic failure.
+      if (err?.response) {
+        setError("Failed to load item details.");
+      } else {
+        const downloaded = !!useDownloadStore.getState().completedDownloads[itemId];
+        setError(
+          downloaded
+            ? "You're offline. This book is downloaded — you can keep listening from the Downloads tab."
+            : "You're offline. Reconnect to load this item, or download books ahead of time to use them offline."
+        );
+      }
     } finally {
       setLoading(false);
     }

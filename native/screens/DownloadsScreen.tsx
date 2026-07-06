@@ -10,7 +10,7 @@ import { formatBytes } from "../utils/format";
 
 export default function DownloadsScreen({ navigation }: any) {
   const colors = useThemeColors();
-  const { activeDownloads, completedDownloads, loadDownloadsFromDb, cancelDownload, retryDownload, removeDownload } = useDownloadStore();
+  const { activeDownloads, completedDownloads, loadDownloadsFromDb, cancelDownload, retryDownload, removeDownload, removeAllDownloads } = useDownloadStore();
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const [activeTab, setActiveTab] = useState<"completed" | "active">("completed");
 
@@ -21,6 +21,8 @@ export default function DownloadsScreen({ navigation }: any) {
   // Alphabetical so the list doesn't reorder by whatever the DB load order was.
   const byTitle = (a: any, b: any) => String(a.title || "").localeCompare(String(b.title || ""));
   const activeList = Object.values(activeDownloads);
+  const downloadingCount = activeList.filter((d: any) => d.status !== "failed").length;
+  const failedCount = activeList.length - downloadingCount;
   const completedList = Object.values(completedDownloads).sort(byTitle);
 
   // fileSize can be 0 for parts whose size the server never reported (e.g. the
@@ -156,7 +158,14 @@ export default function DownloadsScreen({ navigation }: any) {
         }}
       >
         <Tab tab="completed" label={`Downloaded (${completedList.length})`} />
-        <Tab tab="active" label={`Downloading (${activeList.length})`} />
+        <Tab
+          tab="active"
+          label={
+            failedCount > 0
+              ? `Downloading (${downloadingCount}) · Failed (${failedCount})`
+              : `Downloading (${downloadingCount})`
+          }
+        />
       </View>
 
       {/* Content */}
@@ -191,6 +200,30 @@ export default function DownloadsScreen({ navigation }: any) {
                     {formatBytes(completedList.reduce((acc, it) => acc + itemBytes(it), 0))} used
                   </Text>
                 </View>
+                <Pressable
+                  onPress={() =>
+                    Alert.alert(
+                      "Delete all downloads",
+                      `Remove all ${completedList.length} downloaded ${
+                        completedList.length === 1 ? "item" : "items"
+                      } from this device? Your listening/reading progress is kept.`,
+                      [
+                        { text: "Cancel", style: "cancel" },
+                        {
+                          text: "Delete all",
+                          style: "destructive",
+                          onPress: () => removeAllDownloads(),
+                        },
+                      ]
+                    )
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete all downloads"
+                  hitSlop={8}
+                  style={{ padding: 8 }}
+                >
+                  <Icon name="trash" size={20} color={colors.error} />
+                </Pressable>
               </View>
             ) : null
           }

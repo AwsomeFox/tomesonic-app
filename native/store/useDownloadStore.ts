@@ -76,11 +76,17 @@ interface DownloadState {
   removeDownload: (id: string) => Promise<void>;
   // Re-drive a failed download from its saved parts (resumes, doesn't restart from scratch).
   retryDownload: (id: string) => Promise<void>;
+  removeAllDownloads: () => Promise<void>;
+  // True once loadDownloadsFromDb has hydrated — offline UI gates its
+  // "No downloaded books" empty state on this to avoid a scary flash before
+  // the DB read lands on cold start.
+  downloadsLoaded: boolean;
 }
 
 export const useDownloadStore = create<DownloadState>((set, get) => ({
   activeDownloads: {},
   completedDownloads: {},
+  downloadsLoaded: false,
 
   loadDownloadsFromDb: () => {
     const list = db.getAllDownloads();
@@ -133,7 +139,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       }
     });
 
-    set({ activeDownloads: active, completedDownloads: completed });
+    set({ activeDownloads: active, completedDownloads: completed, downloadsLoaded: true });
 
     // Best-effort, after hydration: reclaim download folders on disk that no
     // record owns (partial files orphaned by old cancel/fail paths).
@@ -417,6 +423,49 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         }
       }
     } catch {}
+  },
+
+  // Account-switch / logout hygiene: downloads are keyed by bare
+  // libraryItemId with NO server/account scoping, so without this wipe the
+  // next account inherited the previous user's downloaded books — visible on
+  // the Downloads screen and the offline shelf, fully playable from disk, and
+  // mirrored into the Android Auto file. Aborts anything in flight, deletes
+  // every file, clears all db rows, and empties the store + AA mirror.
+  removeAllDownloads: async () => {
+    const ids = Array.from(
+      new Set([
+        ...Object.keys(get().completedDownloads),
+        ...Object.keys(get().activeDownloads),
+      ])
+    );
+    try {
+      const { downloader } = require("../utils/downloader");
+      for (const id of ids) {
+        try {
+          await downloader.abortBookParts(id);
+        } catch {}
+      }
+    } catch {}
+    for (const id of ids) {
+      const item = get().completedDownloads[id] || get().activeDownloads[id];
+      const folder = folderForItem(item);
+      if (folder) {
+        try {
+          await FileSystem.deleteAsync(folder, { idempotent: true });
+        } catch {}
+      }
+      try {
+        db.removeDownloadItem(id);
+        db.removeLocalLibraryItem(id);
+      } catch {}
+      delete _lastDbSaveAt[id];
+    }
+    // Sweep anything the id list missed (orphan folders from older installs).
+    try {
+      const { downloader } = require("../utils/downloader");
+      await downloader.sweepOrphanFolders?.(new Set());
+    } catch {}
+    set({ completedDownloads: {}, activeDownloads: {} });
   },
 
   retryDownload: async (id) => {

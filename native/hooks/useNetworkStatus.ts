@@ -6,6 +6,39 @@ interface NetworkStatus {
 }
 
 const DEFAULT_STATUS: NetworkStatus = { isConnected: true, isInternetReachable: true };
+const LAST_STATUS_KEY = "lastNetworkStatus";
+
+// Reads the last connectivity state persisted by the NetInfo listener so a
+// cold start while offline renders the offline UI immediately instead of
+// flashing "online" until the first NetInfo event arrives.
+function initialStatus(): NetworkStatus {
+  try {
+    const { storage } = require("../utils/storage");
+    const raw = storage.getString(LAST_STATUS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.isConnected === "boolean") {
+        return {
+          isConnected: parsed.isConnected,
+          isInternetReachable:
+            typeof parsed.isInternetReachable === "boolean" ? parsed.isInternetReachable : parsed.isConnected,
+        };
+      }
+    }
+  } catch (e) {
+    // Storage unavailable or corrupt entry — fall back to online defaults.
+  }
+  return DEFAULT_STATUS;
+}
+
+function persistStatus(status: NetworkStatus) {
+  try {
+    const { storage } = require("../utils/storage");
+    storage.set(LAST_STATUS_KEY, JSON.stringify(status));
+  } catch (e) {
+    // no-op — persistence is a best-effort optimization
+  }
+}
 
 /**
  * Subscribes to @react-native-community/netinfo for live connectivity status.
@@ -14,7 +47,7 @@ const DEFAULT_STATUS: NetworkStatus = { isConnected: true, isInternetReachable: 
  * "online" defaults instead of crashing the app.
  */
 export function useNetworkStatus(): NetworkStatus {
-  const [status, setStatus] = useState<NetworkStatus>(DEFAULT_STATUS);
+  const [status, setStatus] = useState<NetworkStatus>(initialStatus);
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -22,10 +55,12 @@ export function useNetworkStatus(): NetworkStatus {
       // Lazy require so a missing/broken native module can't crash import time.
       const NetInfo = require("@react-native-community/netinfo").default;
       unsubscribe = NetInfo.addEventListener((state: any) => {
-        setStatus({
+        const next = {
           isConnected: state?.isConnected ?? true,
           isInternetReachable: state?.isInternetReachable ?? true,
-        });
+        };
+        persistStatus(next);
+        setStatus(next);
       });
     } catch (e) {
       // NetInfo unavailable — keep default "online" status so the rest of the

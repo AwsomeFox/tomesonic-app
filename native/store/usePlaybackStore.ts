@@ -1138,7 +1138,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         const key = `track_${track.index ?? idx}`;
         // Legacy completed rows can lack `parts` entirely — an unguarded
         // .find made such books unplayable even STREAMING (throw mid-prepare).
-        const part = (download.parts || []).find((p: any) => p.id === key);
+        // POSITIONAL match first: the downloader collision-uniquifies part
+        // ids when metadata repeats track.index (track_1, track_1_1) — an
+        // id-only lookup resolved BOTH logical tracks to the FIRST file, so
+        // track 2 played track 1's audio. Track parts preserve the server
+        // track order, so the idx-th track part is the right one whenever
+        // its id is the expected key or its uniquified variant.
+        const trackParts = (download.parts || []).filter((p: any) =>
+          String(p?.id || "").startsWith("track_")
+        );
+        const positional = trackParts[idx];
+        const part =
+          positional &&
+          (positional.id === key || String(positional.id).startsWith(`${key}_`))
+            ? positional
+            : (download.parts || []).find((p: any) => p.id === key);
         const path = part?.localFilePath || (localFolder && part ? `${localFolder}${part.filename}` : null);
         if (!path) return null;
         return path.startsWith("file://") ? path : `file://${path}`;

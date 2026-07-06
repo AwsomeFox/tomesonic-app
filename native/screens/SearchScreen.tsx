@@ -46,6 +46,9 @@ export default function SearchScreen({ navigation }: any) {
   const [results, setResults] = useState<SearchResults | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  // A FAILED request must not read as "your library doesn't have this" —
+  // flaky-network searches used to render the No-results screen.
+  const [searchError, setSearchError] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
@@ -85,11 +88,13 @@ export default function SearchScreen({ navigation }: any) {
         if (searchId !== searchIdRef.current) return; // stale response
         setResults(response.data || null);
         setHasSearched(true);
+        setSearchError(false);
       } catch (err: any) {
         if (searchId !== searchIdRef.current) return;
         console.error("[Search] Search failed:", err);
         setResults(null);
         setHasSearched(true);
+        setSearchError(true);
       } finally {
         if (searchId === searchIdRef.current) setLoading(false);
       }
@@ -497,6 +502,37 @@ export default function SearchScreen({ navigation }: any) {
           (no flash to a bare loading state). */}
       {loading && !hasResults ? (
         <ListSkeleton rows={8} thumb={52} />
+      ) : hasSearched && !hasResults && searchError ? (
+        <View
+          style={{
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 32,
+          }}
+        >
+          <Icon name="cloud-off" size={48} color={colors.onSurfaceVariant} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+            Search failed
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+            Check your connection and try again.
+          </Text>
+          <Pressable
+            onPress={() => performSearch(query)}
+            accessibilityRole="button"
+            accessibilityLabel="Retry search"
+            style={{
+              marginTop: 16,
+              backgroundColor: colors.primaryContainer,
+              borderRadius: 20,
+              paddingHorizontal: 20,
+              paddingVertical: 10,
+            }}
+          >
+            <Text style={{ color: colors.onPrimaryContainer, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
       ) : hasSearched && !hasResults ? (
         <View
           style={{

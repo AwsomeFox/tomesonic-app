@@ -12,6 +12,8 @@ import { useThemeColors } from '../theme/useThemeColors';
 import Icon from '../components/Icon';
 import { useUserStore } from '../store/useUserStore';
 import { usePlaybackStore } from '../store/usePlaybackStore';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import { hasAnyPendingSyncs } from '../utils/progressSync';
 
 // Gold accent for the data-viz line, matching the original app's `yellow-400`.
 // This is a chart accent, not a theme role, so it is intentionally fixed.
@@ -116,6 +118,8 @@ export default function StatsScreen({ navigation }: any) {
   const [stats, setStats] = useState<ListeningStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pendingSync, setPendingSync] = useState(false);
+  const { isConnected } = useNetworkStatus();
 
   // 'focus' fires on the initial mount too, so this both loads the screen and
   // refreshes it when the user comes back — a listening session that ended
@@ -125,6 +129,9 @@ export default function StatsScreen({ navigation }: any) {
       loadStats();
       // Ensure the progress map is fresh (Items Finished counts from it).
       loadMediaProgress().catch(() => {});
+      try {
+        setPendingSync(hasAnyPendingSyncs());
+      } catch {}
     });
     return unsub;
   }, [navigation]);
@@ -246,6 +253,21 @@ export default function StatsScreen({ navigation }: any) {
           </Text>
 
           <ListeningChart data={last7} colors={colors} />
+
+          {(!isConnected || pendingSync) && (
+            <Text
+              style={{
+                color: colors.onSurfaceVariant,
+                fontSize: 12,
+                paddingHorizontal: 24,
+                marginTop: 8,
+              }}
+            >
+              {!isConnected
+                ? "You're offline — recent listening will be added to these stats once you reconnect."
+                : 'Some recent listening is still syncing and may not be reflected yet.'}
+            </Text>
+          )}
 
           {/* 4-up mini stats */}
           <View

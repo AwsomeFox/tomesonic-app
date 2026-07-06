@@ -24,6 +24,16 @@ interface SyncPayload {
   at?: number;
 }
 
+// Monotonic freshness stamp: Date.now() can jump BACKWARD (NTP sync, manual
+// clock change), which inverted the queue's freshest-wins comparison and kept
+// a stale position over a newer close. Never yields a smaller stamp than the
+// previous one within this JS lifetime.
+let _lastAtStamp = 0;
+function monotonicNow(): number {
+  _lastAtStamp = Math.max(Date.now(), _lastAtStamp + 1);
+  return _lastAtStamp;
+}
+
 const PENDING_PREFIX = "pendingSync_";
 
 function pendingKey(sessionId: string) {
@@ -224,6 +234,69 @@ export function pendingBookmarksFor(libraryItemId: string): { time: number; titl
   }
 }
 
+// Offline DELETION of a server-synced bookmark. Creations already queue; a
+// delete that failed offline was swallowed, and the bookmark silently
+// reappeared from the server on the next load.
+const BOOKMARK_DELETE_PREFIX = "pendingBookmarkDelete_";
+
+export function queueBookmarkDeletion(libraryItemId: string, time: number) {
+  try {
+    if (!libraryItemId || !Number.isFinite(time) || time < 0) return;
+    storage.set(
+      `${BOOKMARK_DELETE_PREFIX}${libraryItemId}_${Math.floor(time)}`,
+      JSON.stringify({ libraryItemId, time: Math.floor(time) })
+    );
+  } catch (e) {
+    appLogger.warn(`Failed to queue bookmark deletion: ${e}`, "ProgressSync");
+  }
+}
+
+/** Times (floored seconds) with a queued offline deletion for this item —
+ *  the bookmark list filters these out so a deleted bookmark can't reappear
+ *  from the server copy before the deletion flushes. */
+export function pendingBookmarkDeletionsFor(libraryItemId: string): number[] {
+  try {
+    return storage
+      .getAllKeys()
+      .filter((k) => k.startsWith(`${BOOKMARK_DELETE_PREFIX}${libraryItemId}_`))
+      .map((k) => {
+        try {
+          return Number(JSON.parse(storage.getString(k) || "")?.time);
+        } catch {
+          return NaN;
+        }
+      })
+      .filter((t) => Number.isFinite(t));
+  } catch {
+    return [];
+  }
+}
+
+async function flushPendingBookmarkDeletions(): Promise<void> {
+  const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_DELETE_PREFIX));
+  for (const key of keys) {
+    let b: any = null;
+    try {
+      const raw = storage.getString(key);
+      b = raw ? JSON.parse(raw) : null;
+    } catch {}
+    if (!b?.libraryItemId || !Number.isFinite(b?.time)) {
+      try {
+        storage.remove(key);
+      } catch {}
+      continue;
+    }
+    try {
+      await api.delete(`/api/me/item/${b.libraryItemId}/bookmark/${b.time}`);
+      storage.remove(key);
+    } catch (e: any) {
+      // Already gone server-side (or item deleted) — done either way.
+      if (e?.response?.status === 404) storage.remove(key);
+      // Otherwise still offline — keep it queued.
+    }
+  }
+}
+
 async function flushPendingBookmarks(): Promise<void> {
   const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_PREFIX));
   for (const key of keys) {
@@ -275,9 +348,10 @@ async function flushPendingPatches(): Promise<void> {
     // Corrupt entries (bad JSON, no item id) can never send — drop them
     // instead of retrying for the lifetime of the install.
     let p: any = null;
+    let sentRaw: string | undefined;
     try {
-      const raw = storage.getString(key);
-      p = raw ? JSON.parse(raw) : null;
+      sentRaw = storage.getString(key);
+      p = sentRaw ? JSON.parse(sentRaw) : null;
     } catch {}
     if (!p || typeof p !== "object" || !p.libraryItemId) {
       try {
@@ -300,7 +374,14 @@ async function flushPendingPatches(): Promise<void> {
           ...(p.extra || {}),
         };
       await api.patch(path, body);
-      storage.remove(key);
+      // TOCTOU guard (mirrors the pending-sync loop): a write merged into
+      // this SAME key during the await — the finish toggle at the end of a
+      // book is a one-shot that never re-queues — must not be deleted with
+      // the entry. Remove only if the entry is byte-identical to what we
+      // sent; otherwise leave the merged entry for the next flush pass
+      // (re-sending already-delivered fields is harmless — the PATCH is
+      // per-field latest-wins).
+      if (storage.getString(key) === sentRaw) storage.remove(key);
     } catch (e: any) {
       // 404 = the item no longer exists server-side — a retry can never
       // succeed (mirrors the pending-sync loop's give-up rule).
@@ -326,6 +407,7 @@ export function flushPendingSyncs(): Promise<void> {
     try {
       await flushPendingPatches();
       await flushPendingBookmarks();
+      await flushPendingBookmarkDeletions();
       const keys = storage.getAllKeys().filter((k) => k.startsWith(PENDING_PREFIX));
       for (const key of keys) {
         const sessionId = key.slice(PENDING_PREFIX.length);
@@ -390,6 +472,18 @@ export function flushPendingSyncs(): Promise<void> {
   return _flushInFlight;
 }
 
+// True when any offline listening/progress is still queued locally — i.e.
+// the server's stats/streak don't yet reflect everything on this device.
+export function hasAnyPendingSyncs(): boolean {
+  try {
+    return storage
+      .getAllKeys()
+      .some((k) => k.startsWith(PENDING_PREFIX) || k.startsWith(PATCH_PREFIX));
+  } catch {
+    return false;
+  }
+}
+
 // Wipes all queued syncs/patches. Called on logout so a previous account's
 // listening time can never be flushed under the next account's credentials.
 export function clearAllPending() {
@@ -398,7 +492,10 @@ export function clearAllPending() {
       .getAllKeys()
       .filter(
         (k) =>
-          k.startsWith(PENDING_PREFIX) || k.startsWith(PATCH_PREFIX) || k.startsWith(BOOKMARK_PREFIX)
+          k.startsWith(PENDING_PREFIX) ||
+          k.startsWith(PATCH_PREFIX) ||
+          k.startsWith(BOOKMARK_PREFIX) ||
+          k.startsWith(BOOKMARK_DELETE_PREFIX)
       )
       .forEach((k) => storage.remove(k));
   } catch {}
@@ -411,7 +508,7 @@ export function clearAllPending() {
 export async function syncProgress(payload: SyncPayload): Promise<void> {
   // Stamp when this position was read — the queue merge (queuePending) keys
   // freshness on it, since failures are observed out of request order.
-  if (!payload.at) payload = { ...payload, at: Date.now() };
+  if (!payload.at) payload = { ...payload, at: monotonicNow() };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
@@ -442,7 +539,7 @@ export async function syncProgress(payload: SyncPayload): Promise<void> {
 export async function closeSession(payload: SyncPayload): Promise<void> {
   // Same freshness stamp as syncProgress — a close always carries the newest
   // position and must win the queue merge even if an older sync fails later.
-  if (!payload.at) payload = { ...payload, at: Date.now() };
+  if (!payload.at) payload = { ...payload, at: monotonicNow() };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {

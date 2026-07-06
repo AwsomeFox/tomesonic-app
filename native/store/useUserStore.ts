@@ -49,7 +49,7 @@ interface UserState {
   loadMediaProgress: () => Promise<void>;
   loadEReaderDevices: () => Promise<void>;
   getMediaProgress: (libraryItemId: string, episodeId?: string) => any | null;
-  login: (config: any, user: any) => void;
+  login: (config: any, user: any) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -248,7 +248,7 @@ export const useUserStore = create<UserState>((set, get) => ({
     return map[key] || null;
   },
 
-  login: (config, user) => {
+  login: async (config, user) => {
     // A login targeting a DIFFERENT server or account than the previous
     // session must wipe that session's leftovers — queued offline progress
     // syncs, cached shelves, library selection, last playback session — so
@@ -266,6 +266,16 @@ export const useUserStore = create<UserState>((set, get) => ({
       } catch {}
       storageHelper.removeLastLibraryId();
       storageHelper.removeLastPlaybackSession();
+      // A forced 401 logout leaves the disk progress cache in place (same
+      // account re-login must keep it) — but a DIFFERENT account/server must
+      // not inherit it, nor the previous user's downloads or reader keys.
+      storageHelper.removeMediaProgressCache();
+      try {
+        const { useDownloadStore } = require("./useDownloadStore");
+        await useDownloadStore.getState().removeAllDownloads();
+      } catch (e) {
+        console.warn("[UserStore] downloads wipe on account switch failed", e);
+      }
       try {
         const { storage } = require("../utils/storage");
         storage
@@ -274,7 +284,10 @@ export const useUserStore = create<UserState>((set, get) => ({
             (k: string) =>
               k.startsWith("shelvesCache_") ||
               k.startsWith("seriesListCache_") ||
-              k.startsWith("continueReadingCache_")
+              k.startsWith("continueReadingCache_") ||
+              k.startsWith("ebookCfi_") ||
+              k.startsWith("pdfPage_") ||
+              k.startsWith("last_interaction_")
           )
           .forEach((k: string) => storage.remove(k));
       } catch {}
@@ -315,6 +328,16 @@ export const useUserStore = create<UserState>((set, get) => ({
       const { clearAllPending } = require("../utils/progressSync");
       clearAllPending();
     } catch {}
+    // Downloads are keyed by bare libraryItemId with no account scoping —
+    // without this wipe the next account inherits (and can play) the previous
+    // user's downloaded books, and in-flight downloads keep running into 401s
+    // after the credentials below are gone.
+    try {
+      const { useDownloadStore } = require("./useDownloadStore");
+      await useDownloadStore.getState().removeAllDownloads();
+    } catch (e) {
+      console.warn("[UserStore] downloads wipe on logout failed", e);
+    }
     try {
       const { writeWidgetState } = require("../utils/autoCreds");
       writeWidgetState(null);
@@ -341,7 +364,10 @@ export const useUserStore = create<UserState>((set, get) => ({
     storageHelper.removeLastSessionKey();
 
     // Wipe cached shelves/series lists so the next account never sees the
-    // previous account's home content (stale-while-revalidate caches).
+    // previous account's home content (stale-while-revalidate caches), plus
+    // the per-item reader/interaction keys — on a shared server, item ids
+    // collide across accounts, so account B used to resume an ebook at
+    // account A's page (and the keys grew unbounded regardless).
     try {
       const { storage } = require("../utils/storage");
       storage
@@ -350,7 +376,10 @@ export const useUserStore = create<UserState>((set, get) => ({
           (k: string) =>
             k.startsWith("shelvesCache_") ||
             k.startsWith("seriesListCache_") ||
-            k.startsWith("continueReadingCache_")
+            k.startsWith("continueReadingCache_") ||
+            k.startsWith("ebookCfi_") ||
+            k.startsWith("pdfPage_") ||
+            k.startsWith("last_interaction_")
         )
         .forEach((k: string) => storage.remove(k));
     } catch {}

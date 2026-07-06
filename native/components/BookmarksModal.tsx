@@ -3,7 +3,13 @@ import { View, Text, ScrollView, ActivityIndicator } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { api } from "../utils/api";
-import { queueBookmark, pendingBookmarksFor, removePendingBookmark } from "../utils/progressSync";
+import {
+  queueBookmark,
+  pendingBookmarksFor,
+  removePendingBookmark,
+  queueBookmarkDeletion,
+  pendingBookmarkDeletionsFor,
+} from "../utils/progressSync";
 import BottomSheet from "./BottomSheet";
 import Pressable from "./HintPressable";
 
@@ -54,7 +60,13 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
     try {
       const res = await api.get("/api/me");
       const all: Bookmark[] = res.data?.bookmarks || [];
-      const server = all.filter((b) => b.libraryItemId === libraryItemId);
+      // Hide server bookmarks whose offline DELETION hasn't flushed yet —
+      // they'd otherwise reappear here until the queued delete lands.
+      const deletions = pendingBookmarkDeletionsFor(libraryItemId);
+      const server = all.filter(
+        (b) =>
+          b.libraryItemId === libraryItemId && !deletions.includes(Math.floor(b.time))
+      );
       // Merge queued-offline bookmarks not yet flushed to the server.
       const pending = pendingBookmarksFor(libraryItemId)
         .filter((p) => !server.some((s) => Math.floor(s.time) === p.time))
@@ -114,7 +126,9 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
     try {
       await api.delete(`/api/me/item/${libraryItemId}/bookmark/${bm.time}`);
     } catch (e) {
-      // Already removed locally.
+      // Offline: queue the deletion so it replays on reconnect — a synced
+      // bookmark deleted offline used to silently reappear from the server.
+      queueBookmarkDeletion(libraryItemId, bm.time);
     }
   };
 

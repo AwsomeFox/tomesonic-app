@@ -57,6 +57,7 @@ export default function BookshelfScreen({ navigation }: any) {
   const { isConnected } = useNetworkStatus();
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
+  const downloadsLoaded = useDownloadStore((s) => s.downloadsLoaded);
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
 
   const loadContinueReading = async () => {
@@ -637,7 +638,12 @@ export default function BookshelfScreen({ navigation }: any) {
               Available Offline
             </Text>
           </View>
-          {Object.values(completedDownloads).length === 0 ? (
+          {!downloadsLoaded ? (
+            // DB hydration hasn't landed yet (cold offline start) — a blank
+            // beat beats flashing "No downloaded books" at someone whose
+            // library is sitting right there on disk.
+            <View style={{ paddingTop: 80 }} />
+          ) : Object.values(completedDownloads).length === 0 ? (
             <View style={{ alignItems: "center", paddingTop: 80, paddingHorizontal: 32 }}>
               <Icon name="cloud-off" size={48} color={colors.onSurfaceVariant} />
               <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>

@@ -185,8 +185,10 @@ ${FOLIATE_BUNDLE}
       // Apply styles after opening
       view.renderer.setStyles?.(readerCSS);
 
-      // Restore saved position
-      var startCfi = ${startCfi ? `"${startCfi}"` : "null"};
+      // Restore saved position. JSON.stringify escapes the CFI — a stored or
+      // server value containing a quote/backslash/newline would otherwise
+      // break (or inject into) this generated script.
+      var startCfi = ${startCfi ? JSON.stringify(String(startCfi)) : "null"};
       if (startCfi) {
         try { await view.goTo(startCfi); } catch(e) {}
       } else {
