@@ -3,16 +3,15 @@ import {
   View,
   Text,
   Pressable,
-  Modal,
   ScrollView,
   TextInput,
   ActivityIndicator,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
 
 /**
  * "Add to…" bottom sheet for a library item: lists the library's collections
@@ -354,32 +353,7 @@ export default function AddToListModal({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" }}
-      >
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-            maxHeight: "80%",
-          }}
-        >
-          <SafeAreaView edges={["bottom"]}>
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-                marginBottom: 8,
-              }}
-            />
+    <BottomSheet visible={visible} onClose={onClose}>
             <View
               style={{
                 flexDirection: "row",
@@ -443,9 +417,6 @@ export default function AddToListModal({
                 {renderCreateRow("playlist")}
               </ScrollView>
             )}
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }

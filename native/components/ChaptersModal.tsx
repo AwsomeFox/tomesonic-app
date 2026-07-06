@@ -1,8 +1,8 @@
 import React, { useRef } from "react";
-import { View, Text, Pressable, Modal, ScrollView, useWindowDimensions } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, Text, Pressable, ScrollView, useWindowDimensions } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
 
 // Fixed row metrics (52 height + 2+2 vertical margin) so we can jump the list
 // to the active chapter without measuring.
@@ -55,36 +55,7 @@ export default function ChaptersModal({
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable
-        style={{
-          flex: 1,
-          justifyContent: "flex-end",
-          backgroundColor: hideBackdrop ? "transparent" : "rgba(0, 0, 0, 0.45)",
-        }}
-        onPress={onClose}
-      >
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-            maxHeight: screenHeight * 0.7, // Take at most 70% of screen height
-          }}
-        >
-          <SafeAreaView edges={["bottom"]} style={{ paddingBottom: 16 }}>
-            {/* Drag handle (affordance parity with the other bottom sheets) */}
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-              }}
-            />
+    <BottomSheet visible={visible} onClose={onClose} maxHeight="70%" hideBackdrop={hideBackdrop}>
             {/* Modal Header */}
             <View
               style={{
@@ -192,9 +163,6 @@ export default function ChaptersModal({
                 </View>
               )}
             </ScrollView>
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }

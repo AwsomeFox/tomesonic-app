@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, Modal } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, Text, Pressable } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
 
 const TIMEOUTS = [5, 10, 15, 30, 45, 60];
 
@@ -158,31 +158,12 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0, 0, 0, 0.4)" }} onPress={onClose}>
-        <Pressable
-          onPress={() => {}}
-          style={{ backgroundColor: colors.surfaceContainerHigh, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 12 }}
-        >
-          <SafeAreaView edges={["bottom"]}>
-            {/* Drag handle (affordance parity with the other bottom sheets) */}
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-              }}
-            />
+    <BottomSheet visible={visible} onClose={onClose}>
             <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="moon" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
               <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Sleep Timer</Text>
             </View>
             {renderBody()}
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }

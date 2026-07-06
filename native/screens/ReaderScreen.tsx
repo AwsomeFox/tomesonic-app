@@ -12,6 +12,7 @@ import { queueEbookProgressPatch } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { FOLIATE_BUNDLE } from "../utils/foliateBundle";
+import BottomSheet from "../components/BottomSheet";
 
 // Height of the collapsed mini player (mirrors PlayerBottomSheet MINIPLAYER_HEIGHT)
 // so reader content can reserve space and not sit underneath it.
@@ -894,22 +895,8 @@ export default function ReaderScreen({ route, navigation }: any) {
       <View style={{ height: bottomReserve, backgroundColor: colors.surface }} />
 
       {/* Table of Contents Slide-up Modal */}
-      <Modal
-        visible={showToc}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowToc(false)}
-      >
-        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
-          <View
-            style={{
-              backgroundColor: colors.surfaceContainer,
-              borderTopLeftRadius: 20,
-              borderTopRightRadius: 20,
-              maxHeight: "80%",
-              paddingBottom: insets.bottom + 16,
-            }}
-          >
+      <BottomSheet visible={showToc} onClose={() => setShowToc(false)} showHandle={false}>
+        <View style={{ paddingBottom: 16 }}>
             {/* Modal Header */}
             <View
               style={{
@@ -945,27 +932,12 @@ export default function ReaderScreen({ route, navigation }: any) {
                 <Text style={{ color: colors.onSurfaceVariant, fontSize: 15 }}>No table of contents available.</Text>
               </View>
             )}
-          </View>
         </View>
-      </Modal>
+      </BottomSheet>
 
       {/* Text Settings Slide-up Modal */}
-      <Modal
-        visible={showSettings}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowSettings(false)}
-      >
-        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" }}>
-          <View
-            style={{
-              backgroundColor: colors.surfaceContainer,
-              borderTopLeftRadius: 20,
-              borderTopRightRadius: 20,
-              padding: 20,
-              paddingBottom: insets.bottom + 20,
-            }}
-          >
+      <BottomSheet visible={showSettings} onClose={() => setShowSettings(false)} showHandle={false}>
+        <View style={{ padding: 20, paddingBottom: 20 }}>
             {/* Modal Header */}
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
               <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Reading Settings</Text>
@@ -1070,9 +1042,8 @@ export default function ReaderScreen({ route, navigation }: any) {
                 ))}
               </View>
             </View>
-          </View>
         </View>
-      </Modal>
+      </BottomSheet>
     </SafeAreaView>
   );
 }

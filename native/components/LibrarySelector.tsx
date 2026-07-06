@@ -1,10 +1,10 @@
 import React from "react";
-import { View, Text, Pressable, Modal } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, Text, Pressable } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { useUiStore } from "../store/useUiStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
 
 /**
  * Bottom-sheet library switcher, opened from the TopAppBar "Books" pill.
@@ -23,34 +23,7 @@ export default function LibrarySelector() {
   };
 
   return (
-    <Modal visible={open} transparent animationType="slide" onRequestClose={close}>
-      {/* Scrim */}
-      <Pressable
-        onPress={close}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" }}
-      >
-        {/* Sheet (stop propagation by capturing press) */}
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-          }}
-        >
-          <SafeAreaView edges={["bottom"]}>
-            {/* Drag handle */}
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-                marginBottom: 12,
-              }}
-            />
+    <BottomSheet visible={open} onClose={close}>
             <Text
               style={{
                 color: colors.onSurface,
@@ -112,9 +85,6 @@ export default function LibrarySelector() {
                 );
               })
             )}
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }

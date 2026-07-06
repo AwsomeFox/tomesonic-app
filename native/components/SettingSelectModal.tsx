@@ -1,7 +1,8 @@
 import React from "react";
-import { View, Text, Modal, Pressable, ScrollView } from "react-native";
+import { View, Text, Pressable, ScrollView } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
 
 export interface SelectOption {
   label: string;
@@ -26,25 +27,7 @@ export default function SettingSelectModal({
 }) {
   const colors = useThemeColors();
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}
-      >
-        <Pressable
-          onPress={(e) => e.stopPropagation()}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-            paddingBottom: 32,
-            maxHeight: "70%",
-          }}
-        >
-          <View style={{ alignItems: "center", paddingBottom: 8 }}>
-            <View style={{ width: 32, height: 4, borderRadius: 2, backgroundColor: colors.outlineVariant }} />
-          </View>
+    <BottomSheet visible={visible} onClose={onClose} maxHeight="70%">
           <Text
             style={{
               color: colors.onSurface,
@@ -83,8 +66,6 @@ export default function SettingSelectModal({
               );
             })}
           </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }

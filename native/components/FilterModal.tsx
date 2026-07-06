@@ -3,14 +3,13 @@ import {
   View,
   Text,
   Pressable,
-  Modal,
   ScrollView,
   ActivityIndicator,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { useLibraryStore } from "../store/useLibraryStore";
 import Icon, { IconName } from "./Icon";
+import BottomSheet from "./BottomSheet";
 
 /**
  * Filter bottom-sheet, mirroring the original tomesonic FilterModal.vue and
@@ -233,42 +232,7 @@ export default function FilterModal({
   );
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <Pressable
-        onPress={onClose}
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(0,0,0,0.45)",
-          justifyContent: "flex-end",
-        }}
-      >
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-            maxHeight: "80%",
-          }}
-        >
-          <SafeAreaView edges={["bottom"]}>
-            {/* Drag handle */}
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-                marginBottom: 8,
-              }}
-            />
+    <BottomSheet visible={visible} onClose={onClose}>
 
             {/* Header: filter icon + title + clear */}
             <View
@@ -362,9 +326,6 @@ export default function FilterModal({
                     ),
                   ]}
             </ScrollView>
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }
