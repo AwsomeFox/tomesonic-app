@@ -128,6 +128,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
     setRefreshing(false);
   }, [load]);
 
+  const detailCover = detail
+    ? resolveRmabUrl(detail.coverArtUrl || detail.audiobook?.coverArtUrl)
+    : undefined;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 8 }}>
@@ -311,11 +315,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
           <View style={{ paddingHorizontal: 24, paddingBottom: 16 }}>
             <View style={{ flexDirection: "row" }}>
               <Image
-                source={
-                  resolveRmabUrl(detail.coverArtUrl || detail.audiobook?.coverArtUrl)
-                    ? { uri: resolveRmabUrl(detail.coverArtUrl || detail.audiobook?.coverArtUrl) }
-                    : undefined
-                }
+                source={detailCover ? { uri: detailCover } : undefined}
                 style={{ width: 96, height: 96, borderRadius: 10, backgroundColor: colors.surfaceContainerHigh }}
                 contentFit="cover"
               />

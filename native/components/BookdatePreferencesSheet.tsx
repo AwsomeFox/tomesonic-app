@@ -250,6 +250,7 @@ export default function BookdatePreferencesSheet({
                   ) : (
                     pickerRows.map((b) => {
                       const selected = favorites.includes(b.id);
+                      const cover = resolveRmabUrl(b.coverUrl || undefined);
                       return (
                         <Pressable
                           key={b.id}
@@ -260,7 +261,7 @@ export default function BookdatePreferencesSheet({
                           style={{ flexDirection: "row", alignItems: "center", paddingVertical: 7 }}
                         >
                           <Image
-                            source={resolveRmabUrl(b.coverUrl || undefined) ? { uri: resolveRmabUrl(b.coverUrl || undefined) } : undefined}
+                            source={cover ? { uri: cover } : undefined}
                             style={{ width: 36, height: 36, borderRadius: 6, backgroundColor: colors.surfaceContainerHigh }}
                             contentFit="cover"
                           />

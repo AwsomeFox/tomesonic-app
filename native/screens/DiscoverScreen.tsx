@@ -183,6 +183,7 @@ export default function DiscoverScreen({ navigation }: any) {
   }, [loadDeck, loadShelves]);
 
   const current = deck && deck.length > 0 ? deck[0] : null;
+  const currentCover = current ? resolveRmabUrl(current.coverUrl) : undefined;
 
   const flyOut = useCallback(
     (dir: 1 | -1, after: () => void) => {
@@ -493,9 +494,7 @@ export default function DiscoverScreen({ navigation }: any) {
                       accessibilityLabel={`Details for ${current.title}`}
                     >
                       <Image
-                        source={
-                          resolveRmabUrl(current.coverUrl) ? { uri: resolveRmabUrl(current.coverUrl) } : undefined
-                        }
+                        source={currentCover ? { uri: currentCover } : undefined}
                         // Fixed height (~half the hero): a full-width square
                         // cover ate the entire card and pushed the text out.
                         style={{
@@ -703,7 +702,9 @@ function Shelf({
           keyExtractor={(b) => b.asin}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 20, columnGap: 12 }}
-          renderItem={({ item }) => (
+          renderItem={({ item }) => {
+            const cover = resolveRmabUrl(item.coverArtUrl);
+            return (
             <Pressable
               onPress={() => onPressBook(item)}
               accessibilityRole="button"
@@ -712,7 +713,7 @@ function Shelf({
             >
               <View>
                 <Image
-                  source={resolveRmabUrl(item.coverArtUrl) ? { uri: resolveRmabUrl(item.coverArtUrl) } : undefined}
+                  source={cover ? { uri: cover } : undefined}
                   style={{ width: 110, height: 110, borderRadius: 10, backgroundColor: colors.surfaceContainerHigh }}
                   contentFit="cover"
                 />
@@ -743,7 +744,8 @@ function Shelf({
                 </Text>
               ) : null}
             </Pressable>
-          )}
+            );
+          }}
         />
       )}
     </View>
