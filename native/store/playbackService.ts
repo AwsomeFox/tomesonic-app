@@ -1,6 +1,6 @@
 import { DeviceEventEmitter } from "react-native";
 import TrackPlayer, { Event } from "react-native-track-player";
-import { usePlaybackStore, onNativeProgressSample } from "./usePlaybackStore";
+import { usePlaybackStore, onNativeProgressSample, onPlaybackError } from "./usePlaybackStore";
 
 // Cycles through the same set the in-app speed control offers.
 const SPEEDS = [0.8, 1.0, 1.2, 1.5, 1.75, 2.0, 3.0];
@@ -33,6 +33,14 @@ export async function playbackService() {
   // off; the JS 1s interval only reliably covers the foreground.
   TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, (event) => {
     onNativeProgressSample(event as any);
+  });
+
+  // Mid-stream player errors (network drop with the screen off is the classic
+  // case) leave ExoPlayer IDLE — it never resumes on its own, and the store
+  // would keep claiming isPlaying forever. Persist the position, fix the
+  // state, and arm the bounded auto-retry (see usePlaybackStore).
+  TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
+    onPlaybackError(event as any);
   });
 
   // Route remote (notification / Android Auto / bluetooth) transport through the

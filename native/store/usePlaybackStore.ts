@@ -447,6 +447,95 @@ function saveSessionPositionNow(position: number) {
   } catch {}
 }
 
+// --- Playback-error recovery -------------------------------------------------
+// A mid-stream ExoPlayer error (network drop during doze, server blip) leaves
+// the player IDLE: it will NOT resume by itself, and a plain play() on an
+// errored player is a no-op — historically playback just died silently with
+// the screen off. On PlaybackError we persist the position, correct the
+// store's isPlaying, and arm a bounded retry (TrackPlayer.retry() re-prepares
+// the current item at its current position). App foreground / connectivity
+// regained also funnel into recoverPlaybackIfNeeded, since background JS
+// timers are throttled and may fire late.
+const ERROR_RETRY_DELAYS_MS = [2000, 10000, 30000];
+let _errorRecovery: {
+  resume: boolean; // was playback active when the error hit?
+  attempts: number;
+  timer: ReturnType<typeof setTimeout> | null;
+} | null = null;
+
+function clearErrorRecovery() {
+  if (_errorRecovery?.timer) clearTimeout(_errorRecovery.timer);
+  _errorRecovery = null;
+}
+
+function scheduleErrorRetry() {
+  if (!_errorRecovery) return;
+  // Out of automatic attempts — a manual play (see play()) or a
+  // foreground/connectivity recover call can still finish the job.
+  if (_errorRecovery.attempts >= ERROR_RETRY_DELAYS_MS.length) return;
+  const delay = ERROR_RETRY_DELAYS_MS[_errorRecovery.attempts++];
+  _errorRecovery.timer = setTimeout(() => {
+    recoverPlaybackIfNeeded().catch(() => {});
+  }, delay);
+}
+
+// Called by playbackService on Event.PlaybackError.
+export function onPlaybackError(e?: { code?: string; message?: string }) {
+  const st = usePlaybackStore.getState();
+  // No session to recover, or the receiver owns playback (a local player
+  // error while casting is irrelevant — it sits paused on the handoff item).
+  if (!st.currentSession || st.isCasting) return;
+  console.warn("[PlaybackStore] PlaybackError", e?.code, e?.message);
+  const wasPlaying = st.isPlaying;
+  // The store position stays ~1s fresh even backgrounded (native progress
+  // events) — persist it now so a process kill during the outage can't lose
+  // it, and so a cold-start restore resumes where the stream died.
+  saveSessionPositionNow(st.position);
+  usePlaybackStore.setState({ isPlaying: false });
+  clearErrorRecovery();
+  // Auto-retry only when the error interrupted ACTIVE listening — an errored
+  // player that was already paused stays down until the user's next play()
+  // (which re-prepares an errored player itself).
+  if (wasPlaying) {
+    _errorRecovery = { resume: true, attempts: 0, timer: null };
+    scheduleErrorRetry();
+  }
+}
+
+// Re-prepares an errored player and resumes if the error interrupted active
+// playback. Safe to call any time — it no-ops unless an unrecovered error is
+// pending. Returns true when a recovery actually ran.
+export async function recoverPlaybackIfNeeded(): Promise<boolean> {
+  const rec = _errorRecovery;
+  const st = usePlaybackStore.getState();
+  if (!rec || !st.currentSession || st.isCasting) return false;
+  if (rec.timer) {
+    clearTimeout(rec.timer);
+    rec.timer = null;
+  }
+  try {
+    // Only intervene if the player is actually dead — it can recover on its
+    // own (Media3 retries some load errors internally) between the error and
+    // this call.
+    const ps: any = await TrackPlayer.getPlaybackState().catch(() => null);
+    if (ps && ps.state !== State.Error && ps.state !== State.None) {
+      _errorRecovery = null;
+      return false;
+    }
+    await TrackPlayer.retry();
+    if (rec.resume) {
+      await TrackPlayer.play();
+      usePlaybackStore.setState({ isPlaying: true });
+    }
+    _errorRecovery = null;
+    return true;
+  } catch (err) {
+    // Still down (e.g. network not back yet) — keep backing off.
+    scheduleErrorRetry();
+    return false;
+  }
+}
+
 interface PlaybackState {
   currentSession: any | null;
   isPlaying: boolean;
@@ -612,7 +701,26 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _initPromise = (async () => {
 
     try {
-      await TrackPlayer.setupPlayer({});
+      await TrackPlayer.setupPlayer({
+        // ExoPlayer wake mode 2 = WAKE_MODE_NETWORK: hold a partial wake lock
+        // AND a WiFi lock while playback is active. Without it the default is
+        // WAKE_MODE_NONE, so once the screen turns off and the device dozes,
+        // the CPU/WiFi are allowed to suspend mid-stream — playback stalls,
+        // eventually stops, and unlocking the phone finds a dead player that
+        // has to rebuffer. Locks are only held while playing, so there's no
+        // idle battery cost. (Not in RNTP's TS PlayerOptions type, but the
+        // module passes the whole object through to the native service, which
+        // reads `androidWakeMode` — made Double-safe in our RNTP patch.)
+        androidWakeMode: 2,
+        // Buffer headroom for streaming: ExoPlayer's 50s default means any
+        // network wobble longer than ~a minute of buffered audio stalls
+        // playback. Five minutes of buffer rides out doze-window network
+        // flaps; 30s of back-buffer keeps the auto-rewind nudge (up to 30s)
+        // instantly seekable without refetching.
+        minBuffer: 60,
+        maxBuffer: 300,
+        backBuffer: 30,
+      } as any);
       await TrackPlayer.updateOptions(buildPlayerOptions());
       
       set({ isInitialized: true });
@@ -1059,6 +1167,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await TrackPlayer.reset();
       if (stale()) return false;
       didReset = true;
+      // A pending error-retry belongs to the PREVIOUS queue — recovering it
+      // now would fight the session being prepared.
+      clearErrorRecovery();
       _lastMetaChapter = -2; // force a now-playing metadata refresh for the new book
       // A sleep timer from the previous book must not run against the new one
       // (end-of-chapter timers would pause the new book almost immediately).
@@ -1193,6 +1304,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     if (!get().isInitialized) {
       await get().initializePlayer();
     }
+    // An errored player (mid-stream network drop) sits IDLE and ignores
+    // play() — re-prepare it first so the user's tap actually resumes.
+    // Manual resume supersedes any pending automatic retry.
+    try {
+      const ps: any = await TrackPlayer.getPlaybackState().catch(() => null);
+      if (ps && (ps.state === State.Error || ps.state === State.None)) {
+        clearErrorRecovery();
+        await TrackPlayer.retry();
+      }
+    } catch {}
     await TrackPlayer.play();
     set({ isPlaying: true });
   },
@@ -1595,6 +1716,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     await TrackPlayer.reset();
     storageHelper.removeLastPlaybackSession();
+
+    // Nothing left to recover — a retry firing after close would resurrect
+    // the dismissed session's player state.
+    clearErrorRecovery();
 
     if (sleepTimerInterval) {
       clearInterval(sleepTimerInterval);
