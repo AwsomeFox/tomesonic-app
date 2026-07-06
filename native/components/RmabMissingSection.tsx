@@ -152,6 +152,10 @@ export default function RmabMissingSection({
             ) : (
               <Pressable
                 onPress={() => onRequest(book)}
+                // Requests are deliberately SERIALIZED: everything disables
+                // while one is in flight (the notice line reports per-request
+                // outcomes), the active row keeps full opacity to show its
+                // spinner, and the rest dim.
                 disabled={!!requesting}
                 accessibilityRole="button"
                 accessibilityLabel={`Request ${book.title}`}
