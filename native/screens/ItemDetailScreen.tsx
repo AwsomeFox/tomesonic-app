@@ -76,6 +76,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   }>(null);
   const rmabConfigured = useRmabStore((s) => s.configured);
   const rmabAuthMode = useRmabStore((s) => s.authMode);
+  // Async send/request flows resolve after navigation away — guard their
+  // deferred setState (same pattern as DiscoverScreen).
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
   const ereaderDevices = useUserStore((s) => s.ereaderDevices);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
@@ -508,6 +517,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         libraryItemId: itemId,
         deviceName,
       });
+      if (!aliveRef.current) return;
       // In-sheet M3 result moment instead of a system alert; the sheet
       // dismisses itself after the success burst plays.
       setSendResult({ ok: true, device: deviceName });
@@ -522,9 +532,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       );
     } catch (e) {
       console.error("[ItemDetail] send ebook failed", e);
-      setSendResult({ ok: false, device: deviceName });
+      if (aliveRef.current) setSendResult({ ok: false, device: deviceName });
     } finally {
-      setSendingTo(null);
+      if (aliveRef.current) setSendingTo(null);
     }
   };
 
@@ -568,9 +578,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           narrator: (md.narrators || [])[0],
         });
       }
+      // Keep the shared requested-state in sync so discovery surfaces flip
+      // their chips for this ASIN too.
+      useRmabStore.getState().noteRequestStatus(asin, "pending");
+      if (!aliveRef.current) return;
       setFormatReq({ kind, state: "ok" });
       formatTimerRef.current = setTimeout(() => setFormatReq(null), 1800);
     } catch (e: any) {
+      if (!aliveRef.current) return;
       const serverMsg = e?.response?.data?.error;
       const already = ["AlreadyAvailable", "DuplicateRequest", "BeingProcessed"].includes(serverMsg);
       setFormatReq({

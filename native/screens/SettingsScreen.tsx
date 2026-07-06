@@ -346,6 +346,9 @@ export default function SettingsScreen({ navigation }: any) {
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
+            // A pasted login URL embeds the one-time token — mask it like the
+            // token field does.
+            secureTextEntry={rmabUrl.includes('token=')}
             accessibilityLabel="ReadMeABook server URL or login URL"
             style={{
               backgroundColor: colors.surfaceContainer,

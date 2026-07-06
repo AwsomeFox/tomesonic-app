@@ -84,6 +84,12 @@ export default function RmabRequestsScreen({ navigation }: any) {
       confirmTimerRef.current = setTimeout(() => setConfirmingDelete((c) => (c === id ? null : c)), 3000);
       return;
     }
+    // Confirmed: the disarm timer is now moot — clear it so it can't fire a
+    // redundant setState later.
+    if (confirmTimerRef.current) {
+      clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = null;
+    }
     setConfirmingDelete(null);
     setActing(id);
     try {
@@ -109,7 +115,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
       setError(true);
       setRequests((prev) => prev ?? []);
     }
-  }, [canManage]);
+  }, []);
 
   useEffect(() => {
     load();
