@@ -45,6 +45,15 @@ export default function RmabRequestsScreen({ navigation }: any) {
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [detail, setDetail] = useState<any | null>(null);
+  // Disarm timer for the two-tap delete confirm. Kept in a ref so re-arming
+  // replaces (not stacks) it, and so unmount can cancel it — the 3s callback
+  // would otherwise setState after navigating away.
+  const confirmTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+    };
+  }, []);
 
   const onApprove = async (id: string, action: "approve" | "deny") => {
     setActing(id);
@@ -63,7 +72,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
     // Two-tap confirm: first tap arms, second within 3s deletes.
     if (confirmingDelete !== id) {
       setConfirmingDelete(id);
-      setTimeout(() => setConfirmingDelete((c) => (c === id ? null : c)), 3000);
+      // Arming a new row replaces the previous disarm timer instead of
+      // letting a stale one linger.
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = setTimeout(() => setConfirmingDelete((c) => (c === id ? null : c)), 3000);
       return;
     }
     setConfirmingDelete(null);

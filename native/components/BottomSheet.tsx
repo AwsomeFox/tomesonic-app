@@ -51,6 +51,10 @@ export default function BottomSheet({
   useEffect(() => {
     if (visible) {
       setMounted(true);
+      // translateY is created once from the mount-time window height; after a
+      // rotation/split-screen resize that offset is stale, so re-anchor to the
+      // CURRENT height so every open starts fully off-screen.
+      translateY.setValue(windowHeight);
       Animated.parallel([
         Animated.timing(backdrop, {
           toValue: 1,
@@ -111,6 +115,7 @@ export default function BottomSheet({
         ]}
       >
         <Pressable
+          accessibilityRole="button"
           accessibilityLabel="Dismiss"
           onPress={onClose}
           style={StyleSheet.absoluteFill}

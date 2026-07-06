@@ -12,6 +12,18 @@
 #
 # Usage: scripts/install-local.sh [adb-device-serial]
 set -euo pipefail
+
+# macOS-only: the label edit relies on BSD `sed -i ''` and the icon rotation
+# on `sips` — on Linux both fail with confusing errors, so bail out up front.
+if [ "$(uname)" != "Darwin" ]; then
+  echo "install-local.sh uses macOS-only tooling (BSD sed -i '', sips); run it on macOS or port those steps." >&2
+  exit 1
+fi
+if ! command -v sips >/dev/null 2>&1; then
+  echo "sips not found — it's the macOS built-in used to rotate the launcher icons." >&2
+  exit 1
+fi
+
 cd "$(dirname "$0")/.."
 
 DEVICE="${1:-}"

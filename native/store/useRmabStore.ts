@@ -118,9 +118,16 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     } catch (e: any) {
       writeRmabConfig(null);
       const status = e?.response?.status;
+      // The persisted config is gone — a previous connection's identity
+      // (server, user, admin role, badge count) must not survive in memory.
       set({
         connecting: false,
         configured: false,
+        serverUrl: null,
+        username: null,
+        authMode: null,
+        isAdmin: false,
+        pendingApprovalCount: 0,
         connectError:
           status === 401 || status === 400 || status === 403
             ? "Token rejected. Paste a login token (admin: Users → Generate login token) or an rmab_ API token."
@@ -176,6 +183,8 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     }
   },
 
+  // Functional set: concurrent requestBook calls each merge into the latest
+  // map instead of overwriting each other's status.
   noteRequestStatus: (asin, status) =>
-    set({ requestedAsins: { ...get().requestedAsins, [asin]: status } }),
+    set((state) => ({ requestedAsins: { ...state.requestedAsins, [asin]: status } })),
 }));

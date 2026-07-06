@@ -481,6 +481,23 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     </View>
   );
 
+  // Auto-dismiss timers for the send-result sheet and the format-request
+  // burst. Kept in refs so unmount, a manual sheet close, or a retry can
+  // cancel them — an orphaned timer would setState on an unmounted screen or
+  // yank a fresh attempt's sheet shut with stale state.
+  const sendTimersRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
+  const formatTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearSendTimers = () => {
+    sendTimersRef.current.forEach(clearTimeout);
+    sendTimersRef.current = [];
+  };
+  useEffect(() => {
+    return () => {
+      clearSendTimers();
+      if (formatTimerRef.current) clearTimeout(formatTimerRef.current);
+    };
+  }, []);
+
   /** Green underlined link chip inside a metadata value. */
   const sendEbookToDevice = async (deviceName: string) => {
     setSendingTo(deviceName);
@@ -494,10 +511,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       // In-sheet M3 result moment instead of a system alert; the sheet
       // dismisses itself after the success burst plays.
       setSendResult({ ok: true, device: deviceName });
-      setTimeout(() => {
-        setSendToVisible(false);
-        setTimeout(() => setSendResult(null), 400); // after exit animation
-      }, 1600);
+      // A previous attempt's pending dismissal must not close this fresh
+      // result early — drop it before re-arming.
+      clearSendTimers();
+      sendTimersRef.current.push(
+        setTimeout(() => {
+          setSendToVisible(false);
+          sendTimersRef.current.push(setTimeout(() => setSendResult(null), 400)); // after exit animation
+        }, 1600)
+      );
     } catch (e) {
       console.error("[ItemDetail] send ebook failed", e);
       setSendResult({ ok: false, device: deviceName });
@@ -507,6 +529,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   };
 
   const closeSendSheet = () => {
+    // Manual close cancels the pending auto-dismiss, which would otherwise
+    // fire into the sheet's next open.
+    clearSendTimers();
     setSendToVisible(false);
     setSendResult(null);
   };
@@ -515,6 +540,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // requests ride RMAB's fetch-ebook pipeline (JWT-only, needs an ebook
   // source configured); audiobook requests are ordinary RMAB requests.
   const requestOtherFormat = async (kind: "ebook" | "audiobook") => {
+    // A pending burst-dismiss from a previous request would null this fresh
+    // "working" state mid-flight — cancel it before re-arming.
+    if (formatTimerRef.current) clearTimeout(formatTimerRef.current);
     setFormatReq({ kind, state: "working" });
     try {
       const md = item?.media?.metadata || {};
@@ -541,7 +569,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         });
       }
       setFormatReq({ kind, state: "ok" });
-      setTimeout(() => setFormatReq(null), 1800);
+      formatTimerRef.current = setTimeout(() => setFormatReq(null), 1800);
     } catch (e: any) {
       const serverMsg = e?.response?.data?.error;
       const already = ["AlreadyAvailable", "DuplicateRequest", "BeingProcessed"].includes(serverMsg);
@@ -552,7 +580,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           ? "Already requested"
           : serverMsg || e?.message || "Request failed",
       });
-      if (already) setTimeout(() => setFormatReq(null), 1800);
+      if (already) formatTimerRef.current = setTimeout(() => setFormatReq(null), 1800);
     }
   };
 

@@ -100,7 +100,6 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   // diffed locally against the library books this screen already loaded.
   // RMAB is only involved when the user taps Request.
   const displayName = series?.name || seriesName;
-  const libraryBooks = series?.books || [];
   const seriesLoading = loading;
   const fetchMissingInSeries = React.useCallback(async () => {
     const {
@@ -110,6 +109,10 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       titleKey,
     } = require("../utils/audible");
     if (!displayName || seriesLoading) return [];
+    // Derive the book list from `series` (a dep — new identity per load)
+    // inside the callback: closing over a derived array keyed on .length
+    // would go stale on a same-length content change.
+    const libraryBooks = series?.books || [];
     const haveAsins = new Set(
       libraryBooks.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
     );
@@ -130,8 +133,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     return all.filter(
       (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayName, seriesLoading, libraryBooks.length]);
+  }, [displayName, seriesLoading, series]);
 
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);

@@ -193,12 +193,18 @@ export const useUserStore = create<UserState>((set, get) => ({
   },
 
   loadEReaderDevices: async () => {
+    // Fired-and-forgotten from initialize()/login() — snapshot the session so
+    // a slow response can't repopulate devices into a logged-out (or
+    // switched-account) store.
+    const sessionToken = get().serverConnectionConfig?.token;
     try {
       // Same source as the original app: /api/authorize returns the server's
       // configured e-reader devices for this user.
       const res = await api.post("/api/authorize");
       const devices = res.data?.ereaderDevices;
-      if (Array.isArray(devices)) set({ ereaderDevices: devices });
+      if (!Array.isArray(devices)) return;
+      if (get().serverConnectionConfig?.token !== sessionToken) return;
+      set({ ereaderDevices: devices });
     } catch {
       // No devices is the common case; failures just leave the action hidden.
     }

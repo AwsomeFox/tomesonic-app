@@ -20,6 +20,7 @@ import {
   createRequest,
   listMyRequests,
   getMe,
+  clearRmabCaches,
 } from "../../utils/rmab";
 import { secureStorage } from "../../utils/storage";
 
@@ -51,6 +52,17 @@ describe("config persistence", () => {
     // Missing accessToken -> treated as unconfigured.
     secureStorage.set("rmab_config", JSON.stringify({ url: "https://x" }));
     expect(readRmabConfig()).toBeNull();
+  });
+
+  it("rejects a JWT config without a refreshToken (401 recovery would be impossible)", () => {
+    secureStorage.set("rmab_config", JSON.stringify({ url: "https://x", accessToken: "acc" }));
+    expect(readRmabConfig()).toBeNull();
+    // An apiToken alongside makes it valid again — that mode never refreshes.
+    secureStorage.set(
+      "rmab_config",
+      JSON.stringify({ url: "https://x", accessToken: "acc", apiToken: "rmab_t" })
+    );
+    expect(readRmabConfig()).not.toBeNull();
   });
 });
 
@@ -306,5 +318,45 @@ describe("token-kind resolution (both kinds share the rmab_ prefix)", () => {
   it("an apiToken-only config counts as configured", () => {
     writeRmabConfig({ url: "https://rmab.test", apiToken: "rmab_abc123" } as any);
     expect(readRmabConfig()).toEqual({ url: "https://rmab.test", apiToken: "rmab_abc123" });
+  });
+});
+
+describe("discovery cache", () => {
+  beforeEach(() => {
+    writeRmabConfig(CONFIG);
+    clearRmabCaches();
+    mockedRequest.mockResolvedValue({ data: { results: [] } });
+  });
+
+  it("serves repeat lookups from cache within the TTL", async () => {
+    await searchSeries("lost fleet");
+    await searchSeries("lost fleet");
+    expect(mockedRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches once an entry passes the 15-minute TTL", async () => {
+    const nowSpy = jest.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000_000);
+      await searchSeries("dune");
+      nowSpy.mockReturnValue(1_000_000 + 15 * 60 * 1000 + 1);
+      await searchSeries("dune");
+      expect(mockedRequest).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("caps at 100 entries, evicting the oldest first", async () => {
+    for (let i = 0; i < 100; i++) await searchSeries(`q${i}`);
+    expect(mockedRequest).toHaveBeenCalledTimes(100);
+    // The 101st insert evicts q0 (the oldest)...
+    await searchSeries("q100");
+    // ...but q1 survives and still serves from cache.
+    await searchSeries("q1");
+    expect(mockedRequest).toHaveBeenCalledTimes(101);
+    // q0 was evicted, so it refetches.
+    await searchSeries("q0");
+    expect(mockedRequest).toHaveBeenCalledTimes(102);
   });
 });

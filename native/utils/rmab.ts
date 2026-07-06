@@ -54,7 +54,11 @@ export function readRmabConfig(): RmabConfig | null {
     const raw = secureStorage.getString(CONFIG_KEY);
     if (!raw) return null;
     const cfg = JSON.parse(raw);
-    if (!cfg?.url || (!cfg?.accessToken && !cfg?.apiToken)) return null;
+    if (!cfg?.url) return null;
+    // JWT mode needs BOTH tokens: access tokens are short-lived and the only
+    // recovery from a 401 is the refresh flow, which throws without a
+    // refreshToken. Static apiTokens never refresh, so they stand alone.
+    if (!cfg?.apiToken && !(cfg?.accessToken && cfg?.refreshToken)) return null;
     return cfg as RmabConfig;
   } catch {
     return null;
@@ -166,6 +170,10 @@ async function rmabRequest<T = any>(
 // session-lifetime cache so revisits render instantly.
 const DISCOVERY_TIMEOUT = 45000;
 const DISCOVERY_TTL = 15 * 60 * 1000;
+// Cache keys embed full query strings, so left unbounded the map grows for
+// the whole session — cap it, evicting oldest-first (Maps iterate in
+// insertion order, so the first key is the oldest entry).
+const DISCOVERY_CACHE_MAX = 100;
 const discoveryCache = new Map<string, { at: number; data: any }>();
 
 /** Wipe cached discovery responses — must run on connect/disconnect or a
@@ -178,7 +186,18 @@ async function discoveryGet<T = any>(path: string): Promise<T> {
   const hit = discoveryCache.get(path);
   if (hit && Date.now() - hit.at < DISCOVERY_TTL) return hit.data as T;
   const data = await rmabRequest<T>("get", path, undefined, DISCOVERY_TIMEOUT);
-  discoveryCache.set(path, { at: Date.now(), data });
+  // Expired entries can never serve again — drop them so they don't count
+  // toward the cap, then make room for the insert.
+  const now = Date.now();
+  for (const [key, entry] of discoveryCache) {
+    if (now - entry.at >= DISCOVERY_TTL) discoveryCache.delete(key);
+  }
+  while (discoveryCache.size >= DISCOVERY_CACHE_MAX) {
+    const oldest = discoveryCache.keys().next().value;
+    if (oldest === undefined) break;
+    discoveryCache.delete(oldest);
+  }
+  discoveryCache.set(path, { at: now, data });
   return data;
 }
 

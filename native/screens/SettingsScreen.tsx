@@ -84,8 +84,16 @@ export default function SettingsScreen({ navigation }: any) {
   const [rmabUrl, setRmabUrl] = React.useState('');
   const [rmabToken, setRmabToken] = React.useState('');
 
+  // connect() accepts a one-time login URL (contains token=) pasted into
+  // EITHER field, or a plain server URL plus a separate token — allow any
+  // combination that gives it both a server address and a token.
+  const rmabTokenIsLoginUrl = rmabToken.includes('token=');
+  const rmabCanSubmit = rmabUrl.trim()
+    ? rmabUrl.includes('token=') || !!rmabToken.trim()
+    : rmabTokenIsLoginUrl;
+
   const onRmabConnect = async () => {
-    if (!rmabUrl.trim()) return;
+    if (!rmabCanSubmit) return;
     const ok = await rmabConnect(rmabUrl, rmabToken);
     if (ok) {
       setRmabSheetOpen(false);
@@ -93,7 +101,6 @@ export default function SettingsScreen({ navigation }: any) {
       setRmabToken('');
     }
   };
-  const rmabCanSubmit = !!rmabUrl.trim() && (rmabUrl.includes('token=') || !!rmabToken.trim());
 
   const onRmabDisconnect = () => {
     Alert.alert('Disconnect ReadMeABook?', 'Request features will be hidden until you reconnect.', [

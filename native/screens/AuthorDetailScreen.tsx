@@ -58,11 +58,14 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   // diffed locally against the author's library items. RMAB only handles the
   // Request tap.
   const rmabName = author?.name || authorName;
-  const authorItems = author?.libraryItems || [];
   const authorLoading = loading;
   const fetchMissingByAuthor = React.useCallback(async () => {
     const { audibleAuthorBooks, titleKey } = require("../utils/audible");
     if (!rmabName || authorLoading) return [];
+    // Derive the item list from `author` (a dep — new identity per load)
+    // inside the callback: closing over a derived array keyed on .length
+    // would go stale on a same-length content change.
+    const authorItems = author?.libraryItems || [];
     const all = await audibleAuthorBooks(rmabName);
     const haveAsins = new Set(
       authorItems.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
@@ -73,8 +76,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     return all.filter(
       (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rmabName, authorLoading, authorItems.length]);
+  }, [rmabName, authorLoading, author]);
 
   const [loadError, setLoadError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);

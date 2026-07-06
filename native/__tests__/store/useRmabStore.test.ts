@@ -127,6 +127,29 @@ describe("connect", () => {
     expect(ok).toBe(false);
     expect(mockedWrite).toHaveBeenLastCalledWith(null);
   });
+
+  it("failure clears identity left over from a previous connection", async () => {
+    // Connected as an admin, then a reconnect attempt fails: the persisted
+    // config is wiped, so none of the old session may survive in memory.
+    useRmabStore.setState({
+      configured: true,
+      serverUrl: "https://old.test",
+      username: "olduser",
+      authMode: "jwt",
+      isAdmin: true,
+      pendingApprovalCount: 4,
+    } as any);
+    mockedExchange.mockRejectedValue({ response: { status: 401 } });
+    const ok = await useRmabStore.getState().connect("https://new.test", "bad");
+    expect(ok).toBe(false);
+    const s = useRmabStore.getState();
+    expect(s.configured).toBe(false);
+    expect(s.serverUrl).toBeNull();
+    expect(s.username).toBeNull();
+    expect(s.authMode).toBeNull();
+    expect(s.isAdmin).toBe(false);
+    expect(s.pendingApprovalCount).toBe(0);
+  });
 });
 
 describe("disconnect", () => {
@@ -198,5 +221,30 @@ describe("requestBook", () => {
     mockedCreate.mockRejectedValue(new Error("boom"));
     const res = await useRmabStore.getState().requestBook(BOOK);
     expect(res).toEqual({ ok: false, message: "Request failed" });
+  });
+
+  it("concurrent requests each land their status (functional set — no lost updates)", async () => {
+    mockedCreate.mockResolvedValue({ id: "req" });
+    await Promise.all([
+      useRmabStore.getState().requestBook({ asin: "B01", title: "A" } as any),
+      useRmabStore.getState().requestBook({ asin: "B02", title: "B" } as any),
+      useRmabStore.getState().requestBook({ asin: "B03", title: "C" } as any),
+    ]);
+    expect(useRmabStore.getState().requestedAsins).toEqual({
+      B01: "pending",
+      B02: "pending",
+      B03: "pending",
+    });
+  });
+
+  it("noteRequestStatus merges into the current map rather than replacing it", () => {
+    useRmabStore.getState().noteRequestStatus("B01", "pending");
+    useRmabStore.getState().noteRequestStatus("B02", "approved");
+    // Updating an existing asin keeps the others.
+    useRmabStore.getState().noteRequestStatus("B01", "downloading");
+    expect(useRmabStore.getState().requestedAsins).toEqual({
+      B01: "downloading",
+      B02: "approved",
+    });
   });
 });

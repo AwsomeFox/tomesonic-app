@@ -4,7 +4,9 @@ import { haptic } from "../utils/haptics";
 
 /**
  * Drop-in Pressable that gives every BUTTON (accessibilityRole="button"):
- *   - a haptic tap on press-in (respects the Settings intensity, incl. off)
+ *   - a haptic tap on the COMPLETED press, not press-in — press-in fires on
+ *     every touch-down, so scroll gestures over buttons buzzed constantly
+ *     (respects the Settings intensity, incl. off)
  *   - a long-press hint toast with the button's accessibility label —
  *     the standard Android affordance for icon-only buttons
  *

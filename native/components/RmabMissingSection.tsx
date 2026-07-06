@@ -4,9 +4,8 @@ import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { useRmabStore } from "../store/useRmabStore";
-import { RmabBook } from "../utils/rmab";
+import { RmabBook, resolveRmabUrl } from "../utils/rmab";
 import RmabBookDetailSheet from "./RmabBookDetailSheet";
-import Pressable2 from "./HintPressable";
 import Pressable from "./HintPressable";
 
 /**
@@ -102,8 +101,12 @@ export default function RmabMissingSection({
       ) : null}
       {shown.map((book) => {
         const status = requestedAsins[book.asin] || book.requestStatus;
+        // RMAB-sourced rows (search) carry server-relative /api/cache/ cover
+        // paths; resolve against the RMAB base URL. Absolute Audible URLs
+        // (series/author rows) pass through untouched.
+        const coverUri = resolveRmabUrl(book.coverArtUrl);
         return (
-          <Pressable2
+          <Pressable
             key={book.asin}
             onPress={() => setDetail(book)}
             accessibilityRole="button"
@@ -112,7 +115,7 @@ export default function RmabMissingSection({
             style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 8 }}
           >
             <Image
-              source={book.coverArtUrl ? { uri: book.coverArtUrl } : undefined}
+              source={coverUri ? { uri: coverUri } : undefined}
               style={{ width: 46, height: 46, borderRadius: 6, backgroundColor: colors.surfaceContainerHigh }}
               contentFit="cover"
             />
@@ -174,7 +177,7 @@ export default function RmabMissingSection({
                 )}
               </Pressable>
             )}
-          </Pressable2>
+          </Pressable>
         );
       })}
 
