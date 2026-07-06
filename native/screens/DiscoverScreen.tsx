@@ -22,7 +22,6 @@ import BookdatePreferencesSheet from "../components/BookdatePreferencesSheet";
 import { useRmabStore } from "../store/useRmabStore";
 import {
   getBookdateRecommendations,
-  generateBookdateRecommendations,
   clearRmabCaches,
   swipeBookdate,
   undoBookdateSwipe,
