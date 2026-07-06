@@ -140,7 +140,7 @@ async function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
 
 /** Authenticated request with a single 401 → refresh → retry. */
 async function rmabRequest<T = any>(
-  method: "get" | "post" | "delete",
+  method: "get" | "post" | "put" | "delete",
   path: string,
   data?: any,
   timeout = 20000
@@ -348,6 +348,31 @@ export async function swipeBookdate(
 /** Reverts the most recent swipe and returns its recommendation. */
 export async function undoBookdateSwipe(): Promise<any> {
   return rmabRequest("post", "/api/bookdate/undo");
+}
+
+export interface BookdatePreferences {
+  libraryScope: "full" | "rated" | "favorites";
+  favoriteBookIds: string[];
+  customPrompt: string;
+  onboardingComplete?: boolean;
+  backendCapabilities?: { supportsRatings?: boolean };
+}
+
+export async function getBookdatePreferences(): Promise<BookdatePreferences> {
+  return rmabRequest("get", "/api/bookdate/preferences");
+}
+
+export async function updateBookdatePreferences(
+  prefs: Partial<Pick<BookdatePreferences, "libraryScope" | "favoriteBookIds" | "customPrompt">>
+): Promise<any> {
+  return rmabRequest("put", "/api/bookdate/preferences", prefs);
+}
+
+/** The user's whole library (id/title/author/coverUrl) for the favorites
+ *  picker — the server returns everything; filtering is client-side. */
+export async function getBookdateLibrary(): Promise<{ id: string; title: string; author?: string; coverUrl?: string | null }[]> {
+  const data = await rmabRequest<any>("get", "/api/bookdate/library", undefined, 45000);
+  return data?.books || [];
 }
 
 /** Admin-only: number of requests awaiting approval. */

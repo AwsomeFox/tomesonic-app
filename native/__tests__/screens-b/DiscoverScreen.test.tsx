@@ -9,6 +9,9 @@ jest.mock("../../utils/rmab", () => ({
   swipeBookdate: jest.fn(),
   undoBookdateSwipe: jest.fn(),
   getHomeSections: jest.fn().mockResolvedValue([]),
+  getBookdatePreferences: jest.fn().mockResolvedValue({ libraryScope: "full", favoriteBookIds: [], customPrompt: "" }),
+  updateBookdatePreferences: jest.fn().mockResolvedValue({}),
+  getBookdateLibrary: jest.fn().mockResolvedValue([]),
   getPopularBooks: jest.fn().mockResolvedValue([]),
   getNewReleases: jest.fn().mockResolvedValue([]),
   getAudibleCategories: jest.fn().mockResolvedValue([]),
@@ -158,6 +161,32 @@ describe("DiscoverScreen (BookDate)", () => {
     expect(screen.getByText("Popular")).toBeTruthy();
     // No default category shelves beyond the configured plan.
     expect(screen.queryByText("New Releases")).toBeNull();
+  });
+
+  it("the gear opens BookDate preferences with current values loaded", async () => {
+    const { getBookdatePreferences, updateBookdatePreferences } = require("../../utils/rmab");
+    (getBookdatePreferences as jest.Mock).mockResolvedValue({
+      libraryScope: "full",
+      favoriteBookIds: [],
+      customPrompt: "fun narrators",
+      backendCapabilities: { supportsRatings: false },
+    });
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+    await fireEvent.press(screen.getByLabelText("BookDate preferences"));
+    await screen.findByText("BookDate Preferences");
+    await screen.findByDisplayValue("fun narrators");
+    // No ratings support -> no Rated card.
+    expect(screen.queryByText("Rated books")).toBeNull();
+
+    await fireEvent.press(screen.getByLabelText("Save preferences"));
+    await waitFor(() =>
+      expect(updateBookdatePreferences).toHaveBeenCalledWith({
+        libraryScope: "full",
+        favoriteBookIds: [],
+        customPrompt: "fun narrators",
+      })
+    );
   });
 
   it("an empty deck offers to generate more picks", async () => {

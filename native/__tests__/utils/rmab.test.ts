@@ -10,6 +10,9 @@ import {
   deleteRequest,
   approveRequest,
   resolveRmabUrl,
+  getBookdatePreferences,
+  updateBookdatePreferences,
+  getBookdateLibrary,
   readRmabConfig,
   writeRmabConfig,
   searchBooks,
@@ -222,6 +225,28 @@ describe("endpoint wrappers", () => {
     expect(mockedRequest).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://rmab.test/api/requests?take=100" })
     );
+  });
+
+  it("bookdate preferences round-trip PUT with the expected payload", async () => {
+    mockedRequest.mockResolvedValue({ data: { libraryScope: "full", favoriteBookIds: [], customPrompt: "" } });
+    await getBookdatePreferences();
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "get", url: "https://rmab.test/api/bookdate/preferences" })
+    );
+    mockedRequest.mockResolvedValue({ data: { success: true } });
+    await updateBookdatePreferences({ libraryScope: "favorites", favoriteBookIds: ["b1"], customPrompt: "fun narrators" });
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "put",
+        url: "https://rmab.test/api/bookdate/preferences",
+        data: { libraryScope: "favorites", favoriteBookIds: ["b1"], customPrompt: "fun narrators" },
+      })
+    );
+  });
+
+  it("getBookdateLibrary unwraps the books array", async () => {
+    mockedRequest.mockResolvedValue({ data: { books: [{ id: "b1", title: "T" }] } });
+    expect(await getBookdateLibrary()).toEqual([{ id: "b1", title: "T" }]);
   });
 
   it("deleteRequest issues DELETE on the request", async () => {

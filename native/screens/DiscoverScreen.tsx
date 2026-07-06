@@ -17,6 +17,7 @@ import Icon from "../components/Icon";
 import Pressable from "../components/HintPressable";
 import TopAppBar from "../components/TopAppBar";
 import RmabBookDetailSheet from "../components/RmabBookDetailSheet";
+import BookdatePreferencesSheet from "../components/BookdatePreferencesSheet";
 import { useRmabStore } from "../store/useRmabStore";
 import {
   getBookdateRecommendations,
@@ -58,6 +59,7 @@ export default function DiscoverScreen({ navigation }: any) {
 
   // ── Detail sheet ─────────────────────────────────────────────────────────
   const [detail, setDetail] = useState<RmabBook | null>(null);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const [requesting, setRequesting] = useState(false);
 
   const translateX = useRef(new Animated.Value(0)).current;
@@ -300,9 +302,20 @@ export default function DiscoverScreen({ navigation }: any) {
         {/* ── BookDate deck (hidden entirely when the server has it off) ── */}
         {!bdDisabled ? (
           <View style={{ paddingHorizontal: 20 }}>
-            <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 8, marginBottom: 8 }}>
-              BookDate picks
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8, marginBottom: 8 }}>
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: 18, fontWeight: "600" }}>
+                BookDate picks
+              </Text>
+              <Pressable
+                onPress={() => setPrefsOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="BookDate preferences"
+                android_ripple={{ color: colors.onSurfaceVariant + "22", borderless: true, radius: 20 }}
+                style={{ padding: 6 }}
+              >
+                <Icon name="settings" size={20} color={colors.onSurfaceVariant} />
+              </Pressable>
+            </View>
             {deck === null ? (
               <View
                 style={{
@@ -593,6 +606,12 @@ export default function DiscoverScreen({ navigation }: any) {
           <Shelf key={s.id} title={s.name} books={s.books} onPressBook={setDetail} colors={colors} />
         ))}
       </ScrollView>
+
+      <BookdatePreferencesSheet
+        visible={prefsOpen}
+        onClose={() => setPrefsOpen(false)}
+        onSaved={() => loadDeck()}
+      />
 
       <RmabBookDetailSheet
         book={detail}
