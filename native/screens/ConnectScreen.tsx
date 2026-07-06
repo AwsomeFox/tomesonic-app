@@ -489,7 +489,7 @@ export default function ConnectScreen() {
         </Text>
       </ScrollView>
 
-      {/* Footer — Follow the project on Github */}
+      {/* Footer — Follow the project on GitHub */}
       <Pressable
         onPress={() => Linking.openURL(GITHUB_URL)}
         android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
@@ -501,7 +501,7 @@ export default function ConnectScreen() {
         }}
       >
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontFamily: "sans-serif", marginRight: 8 }}>
-          Follow the project on Github
+          Follow the project on GitHub
         </Text>
         <Icon name="globe" size={22} color={colors.onSurfaceVariant} />
       </Pressable>

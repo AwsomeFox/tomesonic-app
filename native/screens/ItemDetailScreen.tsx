@@ -870,7 +870,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 Only when the server has devices AND this item has an ebook. */}
             {selfHasEbook && !isPodcastItem && ereaderDevices.length > 0 ? (
               <Pressable
-                onPress={() => setSendToVisible(true)}
+                onPress={() => {
+                  // A pending auto-dismiss from the LAST send could fire
+                  // mid-open and flip the fresh sheet closed — cancel it and
+                  // start from the device list.
+                  clearSendTimers();
+                  setSendResult(null);
+                  setSendToVisible(true);
+                }}
                 accessibilityRole="button"
                 accessibilityLabel="Send ebook to device"
                 style={{
