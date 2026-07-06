@@ -5,6 +5,7 @@ import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
 import Pressable from "../components/HintPressable";
+import TopAppBar from "../components/TopAppBar";
 import {
   getBookdateRecommendations,
   swipeBookdate,
@@ -19,12 +20,13 @@ import {
  * it never comes back. The deck refills from the server (cached unswiped recs
  * first, then a fresh AI generation — which can take a minute cold).
  */
-export default function DiscoverScreen() {
+export default function DiscoverScreen({ navigation }: any) {
   const colors = useThemeColors();
   const { width: screenWidth } = useWindowDimensions();
   const [deck, setDeck] = useState<BookdateRec[] | null>(null);
   const [disabled, setDisabled] = useState(false);
   const [error, setError] = useState(false);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [lastLiked, setLastLiked] = useState<string | null>(null);
@@ -48,8 +50,16 @@ export default function DiscoverScreen() {
       setDeck(recs);
       playEnter();
     } catch (e: any) {
-      if (e?.response?.status === 503) setDisabled(true);
-      else setError(true);
+      const status = e?.response?.status;
+      const serverMsg = e?.response?.data?.error;
+      // The server answers 400 (older builds 503) when BookDate isn't
+      // configured/enabled.
+      if (status === 400 || status === 503) setDisabled(true);
+      else {
+        console.warn("[BookDate] load failed", status, serverMsg || e?.message);
+        setErrorDetail(serverMsg || (status ? `Server error (HTTP ${status})` : "Network error"));
+        setError(true);
+      }
       setDeck([]);
     } finally {
       setGenerating(false);
@@ -122,8 +132,9 @@ export default function DiscoverScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
-      <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 }}>
-        <Text style={{ color: colors.onSurface, fontSize: 26, fontWeight: "700" }}>Discover</Text>
+      <TopAppBar navigation={navigation} />
+      <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
+        <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "700" }}>Discover</Text>
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
           BookDate picks based on your library — like to request
         </Text>
@@ -147,7 +158,7 @@ export default function DiscoverScreen() {
         <Empty
           icon="warning"
           title="Couldn't load recommendations"
-          body="Check your connection and try again."
+          body={errorDetail || "Check your connection and try again."}
           colors={colors}
           action={{ label: "Retry", onPress: load }}
         />

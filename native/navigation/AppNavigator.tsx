@@ -144,7 +144,7 @@ export default function AppNavigator() {
         if (navigationRef.isReady()) {
           const route: any = navigationRef.getCurrentRoute();
           if (route) {
-            const TAB_ROUTES = ["Home", "Library", "Series", "Collections", "Authors"];
+            const TAB_ROUTES = ["Home", "Library", "Series", "Collections", "Authors", "Discover"];
             const isTab = TAB_ROUTES.includes(route.name) && !route.params?.showBack;
             usePlaybackStore.getState().setOnTabScreen(isTab);
           }
