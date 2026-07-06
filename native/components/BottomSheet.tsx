@@ -50,6 +50,13 @@ export default function BottomSheet({
   const insets = useSafeAreaInsets();
   // Keep the Modal mounted through the exit animation.
   const [mounted, setMounted] = useState(visible);
+  // A reopen interrupts the close animation (finished=false), but a close
+  // that COMPLETES in the same instant can deliver finished=true after the
+  // reopen effect already ran — unmounting a sheet that should be open, with
+  // no later effect to remount it. The completion handler re-checks the
+  // current `visible` through this ref.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const backdrop = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(windowHeight)).current;
 
@@ -91,7 +98,7 @@ export default function BottomSheet({
           useNativeDriver: true,
         }),
       ]).start(({ finished }) => {
-        if (finished) setMounted(false);
+        if (finished && !visibleRef.current) setMounted(false);
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

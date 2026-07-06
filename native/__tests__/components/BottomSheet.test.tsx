@@ -5,8 +5,8 @@
  * unanimated and splits the layers: scrim fades, only the sheet translates.
  */
 import React from "react";
-import { Text } from "react-native";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { Animated, Text } from "react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import BottomSheet from "../../components/BottomSheet";
 
 describe("BottomSheet", () => {
@@ -70,6 +70,45 @@ describe("BottomSheet", () => {
     );
     await fireEvent.press(screen.getByLabelText("Dismiss"));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("a close animation completing during a fast reopen does not tear down the sheet", async () => {
+    // Capture animation completion callbacks so the close animation's
+    // finished=true can be delivered LATE — after the reopen effect has run.
+    // Interruption (finished=false) was already handled; this is the race
+    // where the close genuinely completes as `visible` flips back true.
+    const startCallbacks: Array<(r: { finished: boolean }) => void> = [];
+    const spy = jest.spyOn(Animated, "parallel").mockImplementation(
+      (() => ({
+        start: (cb?: (r: { finished: boolean }) => void) => {
+          if (cb) startCallbacks.push(cb);
+        },
+        stop: () => {},
+        reset: () => {},
+      })) as any
+    );
+    try {
+      const view = await render(
+        <BottomSheet visible onClose={() => {}}>
+          <Text>Sheet content</Text>
+        </BottomSheet>
+      );
+      await view.rerender(
+        <BottomSheet visible={false} onClose={() => {}}>
+          <Text>Sheet content</Text>
+        </BottomSheet>
+      );
+      const closeCompleted = startCallbacks[startCallbacks.length - 1];
+      await view.rerender(
+        <BottomSheet visible onClose={() => {}}>
+          <Text>Sheet content</Text>
+        </BottomSheet>
+      );
+      await act(async () => closeCompleted({ finished: true }));
+      expect(screen.getByText("Sheet content")).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("hides the drag handle when showHandle is false", async () => {
