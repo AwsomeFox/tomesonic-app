@@ -7,7 +7,9 @@ import axios from "axios";
  */
 
 const BASE = "https://api.audible.com/1.0";
-// product_desc supplies publisher_summary — the detail sheet's description.
+// product_desc is requested for completeness, but unauthenticated catalog
+// calls never actually return publisher_summary — descriptions come from
+// Audnexus (see audibleBookDetails). Don't rely on it appearing here.
 const GROUPS = "media,contributors,product_attrs,product_desc,series";
 const TIMEOUT = 15000;
 
