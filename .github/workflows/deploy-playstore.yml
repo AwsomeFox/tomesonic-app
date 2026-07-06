@@ -125,12 +125,26 @@ jobs:
             git commit -m "chore(release): v${{ steps.resolve.outputs.version }} (versionCode ${{ steps.bump.outputs.versionCode }})"
           fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Protected branches reject the default token (required checks).
-            # The tag still pins the exact released tree (bump included), and
-            # the build uses the bumped workspace — so continue with a loud
-            # warning instead of failing the release.
-            git push origin "HEAD:${GITHUB_REF_NAME}" \
-              || echo "::warning::could not push the version bump to ${GITHUB_REF_NAME} (branch protection?) — set a RELEASE_PUSH_TOKEN secret (admin PAT) to fix; releasing from the in-workspace bump"
+            # Push the bump commit. The master ruleset's required checks
+            # reject the default GITHUB_TOKEN, and user-owned repos can't put
+            # the Actions app on a ruleset bypass list — but DEPLOY KEYS can
+            # be bypass actors, so prefer the RELEASE_DEPLOY_KEY secret (SSH).
+            # Falls back to checkout creds (RELEASE_PUSH_TOKEN admin PAT if
+            # set), then degrades to a warning: the tag still pins the exact
+            # released tree and the build uses the in-workspace bump.
+            if [ -n "${{ secrets.RELEASE_DEPLOY_KEY }}" ]; then
+              mkdir -p ~/.ssh
+              printf '%s\n' "${{ secrets.RELEASE_DEPLOY_KEY }}" > ~/.ssh/release_key
+              chmod 600 ~/.ssh/release_key
+              ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+              GIT_SSH_COMMAND="ssh -i ~/.ssh/release_key -o IdentitiesOnly=yes" \
+                git push "git@github.com:${{ github.repository }}.git" "HEAD:${GITHUB_REF_NAME}" \
+                || git push origin "HEAD:${GITHUB_REF_NAME}" \
+                || echo "::warning::could not push the version bump (deploy key and checkout creds both failed) — releasing from the in-workspace bump"
+            else
+              git push origin "HEAD:${GITHUB_REF_NAME}" \
+                || echo "::warning::could not push the version bump to ${GITHUB_REF_NAME} (branch protection?) — add the RELEASE_DEPLOY_KEY secret to fix; releasing from the in-workspace bump"
+            fi
             git tag -a "v${{ steps.resolve.outputs.version }}" -m "Release v${{ steps.resolve.outputs.version }}"
             # Push the tag with the DEFAULT token even when a PAT is
             # configured: GITHUB_TOKEN pushes don't re-trigger workflows, a
