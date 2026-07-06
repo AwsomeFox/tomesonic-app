@@ -77,6 +77,23 @@ describe("connect", () => {
     expect(mockedExchange).toHaveBeenCalledWith("https://rmab.test", "SECRET123");
   });
 
+  it("login URL in the SERVER field with an empty token field connects too", async () => {
+    mockedExchange.mockResolvedValue(CFG);
+    mockedMe.mockResolvedValue({});
+    const ok = await useRmabStore
+      .getState()
+      .connect("https://rmab.test/auth/token/login?token=SECRET123", "");
+    expect(ok).toBe(true);
+    expect(mockedExchange).toHaveBeenCalledWith("https://rmab.test", "SECRET123");
+  });
+
+  it("plain server URL with no token of any kind fails with guidance, no network call", async () => {
+    const ok = await useRmabStore.getState().connect("https://rmab.test", "");
+    expect(ok).toBe(false);
+    expect(mockedExchange).not.toHaveBeenCalled();
+    expect(useRmabStore.getState().connectError).toBe("Paste a login URL, or add an API token");
+  });
+
   it("an rmab_ API token connects in limited apiToken mode", async () => {
     mockedExchange.mockResolvedValue({ url: "https://rmab.test", apiToken: "rmab_x", user: { id: "u1" } });
     mockedMe.mockResolvedValue({});

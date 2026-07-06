@@ -80,6 +80,16 @@ export const useRmabStore = create<RmabState>((set, get) => ({
           }
         } catch {}
       }
+      if (!effUrl || !effToken) {
+        set({
+          connecting: false,
+          configured: false,
+          connectError: !effUrl
+            ? "Enter your server's address"
+            : "Paste a login URL, or add an API token",
+        });
+        return false;
+      }
       const cfg = await exchangeLoginToken(effUrl, effToken);
       writeRmabConfig(cfg);
       // Round-trip an authed call so a pasted token that exchanged but can't

@@ -85,7 +85,7 @@ export default function SettingsScreen({ navigation }: any) {
   const [rmabToken, setRmabToken] = React.useState('');
 
   const onRmabConnect = async () => {
-    if (!rmabUrl.trim() || !rmabToken.trim()) return;
+    if (!rmabUrl.trim()) return;
     const ok = await rmabConnect(rmabUrl, rmabToken);
     if (ok) {
       setRmabSheetOpen(false);
@@ -93,6 +93,7 @@ export default function SettingsScreen({ navigation }: any) {
       setRmabToken('');
     }
   };
+  const rmabCanSubmit = !!rmabUrl.trim() && (rmabUrl.includes('token=') || !!rmabToken.trim());
 
   const onRmabDisconnect = () => {
     Alert.alert('Disconnect ReadMeABook?', 'Request features will be hidden until you reconnect.', [
@@ -323,81 +324,89 @@ export default function SettingsScreen({ navigation }: any) {
       {/* ReadMeABook connect sheet */}
       <BottomSheet visible={rmabSheetOpen} onClose={() => setRmabSheetOpen(false)}>
         <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
-          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: '500', marginBottom: 4 }}>
+          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: '500', marginBottom: 16 }}>
             Connect ReadMeABook
           </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginBottom: 16 }}>
-            For full features (series & author discovery, request management), an admin enables
-            "Login Token" on your user (Admin → Users → Edit permissions) — paste the login URL it
-            shows straight into the token field. An rmab_ API token works too, but only for search
-            and requests.
-          </Text>
+
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
-            Server URL
+            Server URL or login URL
           </Text>
           <TextInput
             value={rmabUrl}
             onChangeText={setRmabUrl}
-            placeholder="https://rmab.example.com"
+            placeholder="https://rmab.example.com/auth/token/login?token=…"
             placeholderTextColor={colors.onSurfaceVariant}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
-            accessibilityLabel="ReadMeABook server URL"
+            accessibilityLabel="ReadMeABook server URL or login URL"
             style={{
               backgroundColor: colors.surfaceContainer,
               color: colors.onSurface,
               borderRadius: 12,
               paddingHorizontal: 14,
               paddingVertical: 10,
-              marginBottom: 12,
             }}
           />
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 14 }}>
+            Full access: paste the one-time login URL an admin generates under
+            Admin → Users → Edit permissions → Login Token. Everything below stays empty.
+          </Text>
+
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
-            Login Token
+            API token (optional)
           </Text>
           <TextInput
             value={rmabToken}
             onChangeText={setRmabToken}
-            placeholder="Login token"
+            placeholder="rmab_…"
             placeholderTextColor={colors.onSurfaceVariant}
             autoCapitalize="none"
             autoCorrect={false}
             secureTextEntry
-            accessibilityLabel="ReadMeABook login token"
+            accessibilityLabel="ReadMeABook API token (optional)"
             style={{
               backgroundColor: colors.surfaceContainer,
               color: colors.onSurface,
               borderRadius: 12,
               paddingHorizontal: 14,
               paddingVertical: 10,
-              marginBottom: 8,
             }}
           />
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 8 }}>
+            Instead of a login URL: a plain server URL above plus an rmab_ token from Profile →
+            API Tokens. Limited to search and requests.
+          </Text>
+
           {rmabError ? (
             <Text style={{ color: colors.error, fontSize: 13, marginBottom: 4 }}>{rmabError}</Text>
           ) : null}
-          <Pressable
-            onPress={onRmabConnect}
-            disabled={rmabConnecting || !rmabUrl.trim() || !rmabToken.trim()}
-            accessibilityRole="button"
-            accessibilityLabel="Connect"
-            style={{
-              backgroundColor: colors.primary,
-              height: 48,
-              borderRadius: 24,
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginTop: 8,
-              opacity: rmabConnecting || !rmabUrl.trim() || !rmabToken.trim() ? 0.5 : 1,
-            }}
-          >
-            {rmabConnecting ? (
-              <ActivityIndicator size="small" color={colors.onPrimary} />
-            ) : (
-              <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: '600' }}>Connect</Text>
-            )}
-          </Pressable>
+          <View style={{ alignItems: 'flex-end', marginTop: 8 }}>
+            <Pressable
+              onPress={onRmabConnect}
+              disabled={rmabConnecting || !rmabCanSubmit}
+              accessibilityRole="button"
+              accessibilityLabel="Connect"
+              android_ripple={{ color: colors.onPrimary + '22' }}
+              style={{
+                backgroundColor: colors.primary,
+                height: 48,
+                minWidth: 140,
+                paddingHorizontal: 32,
+                borderRadius: 24,
+                alignItems: 'center',
+                justifyContent: 'center',
+                elevation: 2,
+                opacity: rmabConnecting || !rmabCanSubmit ? 0.5 : 1,
+              }}
+            >
+              {rmabConnecting ? (
+                <ActivityIndicator size="small" color={colors.onPrimary} />
+              ) : (
+                <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: '600' }}>Connect</Text>
+              )}
+            </Pressable>
+          </View>
         </View>
       </BottomSheet>
 
