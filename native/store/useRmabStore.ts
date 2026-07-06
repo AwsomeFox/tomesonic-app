@@ -6,6 +6,7 @@ import {
   rmabAuthMode,
   getMe,
   createRequest,
+  getPendingApprovalCount,
   RmabBook,
 } from "../utils/rmab";
 
@@ -24,6 +25,8 @@ interface RmabState {
   // RMAB role of the connected account. Manage actions (approve/delete) are
   // server-enforced to admin JWT sessions.
   isAdmin: boolean;
+  // Requests awaiting admin approval — drives the account-menu badge.
+  pendingApprovalCount: number;
   connecting: boolean;
   connectError: string | null;
   // asin -> local request status ("pending" right after a request here, or
@@ -36,6 +39,7 @@ interface RmabState {
   disconnect: () => void;
   requestBook: (book: RmabBook) => Promise<{ ok: boolean; message?: string }>;
   noteRequestStatus: (asin: string, status: string) => void;
+  refreshPendingCount: () => Promise<void>;
 }
 
 export const useRmabStore = create<RmabState>((set, get) => ({
@@ -44,6 +48,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   username: null,
   authMode: null,
   isAdmin: false,
+  pendingApprovalCount: 0,
   connecting: false,
   connectError: null,
   requestedAsins: {},
@@ -58,6 +63,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         authMode: rmabAuthMode(cfg),
         isAdmin: cfg.user?.role === "admin",
       });
+      get().refreshPendingCount();
     }
   },
 
@@ -105,6 +111,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         isAdmin: cfg.user?.role === "admin",
         connecting: false,
       });
+      get().refreshPendingCount();
       return true;
     } catch (e: any) {
       writeRmabConfig(null);
@@ -131,9 +138,22 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       username: null,
       authMode: null,
       isAdmin: false,
+      pendingApprovalCount: 0,
       connectError: null,
       requestedAsins: {},
     });
+  },
+
+  refreshPendingCount: async () => {
+    const { configured, isAdmin, authMode } = get();
+    // Admin JWT sessions only — the endpoint 403s everyone else.
+    if (!configured || !isAdmin || authMode !== "jwt") return;
+    try {
+      const count = await getPendingApprovalCount();
+      set({ pendingApprovalCount: count });
+    } catch {
+      // Badge is best-effort; keep the last known count.
+    }
   },
 
   requestBook: async (book) => {

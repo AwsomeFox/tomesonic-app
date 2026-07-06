@@ -238,6 +238,12 @@ export async function listAllRequests(): Promise<any[]> {
   return data?.requests || data?.results || [];
 }
 
+/** Admin-only: number of requests awaiting approval. */
+export async function getPendingApprovalCount(): Promise<number> {
+  const data = await rmabRequest<any>("get", "/api/admin/requests/pending-approval");
+  return Number(data?.count ?? data?.requests?.length ?? 0) || 0;
+}
+
 /** Admin-only (server-enforced): remove a request entirely. */
 export async function deleteRequest(id: string): Promise<void> {
   await rmabRequest("delete", `/api/requests/${id}`);

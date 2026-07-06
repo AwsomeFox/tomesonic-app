@@ -6,6 +6,7 @@ jest.mock("../../utils/rmab", () => ({
   rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
   getMe: jest.fn(),
   createRequest: jest.fn(),
+  getPendingApprovalCount: jest.fn().mockResolvedValue(0),
 }));
 
 import { useRmabStore } from "../../store/useRmabStore";
@@ -138,6 +139,33 @@ describe("disconnect", () => {
     expect(s.configured).toBe(false);
     expect(s.serverUrl).toBeNull();
     expect(s.requestedAsins).toEqual({});
+  });
+});
+
+describe("refreshPendingCount", () => {
+  const { getPendingApprovalCount } = require("../../utils/rmab");
+
+  it("loads the count for admin JWT sessions", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: true, authMode: "jwt" } as any);
+    (getPendingApprovalCount as jest.Mock).mockResolvedValue(3);
+    await useRmabStore.getState().refreshPendingCount();
+    expect(useRmabStore.getState().pendingApprovalCount).toBe(3);
+  });
+
+  it("no-ops for non-admins and API-token sessions (endpoint would 403)", async () => {
+    (getPendingApprovalCount as jest.Mock).mockClear();
+    useRmabStore.setState({ configured: true, isAdmin: false, authMode: "jwt" } as any);
+    await useRmabStore.getState().refreshPendingCount();
+    useRmabStore.setState({ configured: true, isAdmin: true, authMode: "apiToken" } as any);
+    await useRmabStore.getState().refreshPendingCount();
+    expect(getPendingApprovalCount).not.toHaveBeenCalled();
+  });
+
+  it("keeps the last count when the fetch fails", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: true, authMode: "jwt", pendingApprovalCount: 2 } as any);
+    (getPendingApprovalCount as jest.Mock).mockRejectedValue(new Error("down"));
+    await useRmabStore.getState().refreshPendingCount();
+    expect(useRmabStore.getState().pendingApprovalCount).toBe(2);
   });
 });
 

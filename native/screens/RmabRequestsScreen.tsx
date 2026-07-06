@@ -40,6 +40,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
   // API tokens can't hit delete/approve regardless of the token owner's role.
   const isAdmin = useRmabStore((s) => s.isAdmin);
   const authMode = useRmabStore((s) => s.authMode);
+  const refreshPendingCount = useRmabStore((s) => s.refreshPendingCount);
   const canManage = isAdmin && authMode === "jwt";
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
@@ -50,6 +51,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
     try {
       await approveRequest(id, action);
       await load();
+      refreshPendingCount();
     } catch (e) {
       console.warn("[RMAB] approve failed", e);
     } finally {
@@ -69,6 +71,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
     try {
       await deleteRequest(id);
       setRequests((prev) => (prev || []).filter((r: any) => String(r?.id) !== id));
+      refreshPendingCount();
     } catch (e) {
       console.warn("[RMAB] delete failed", e);
     } finally {
