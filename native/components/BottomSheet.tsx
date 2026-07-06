@@ -39,6 +39,11 @@ export default function BottomSheet({
 }) {
   const colors = useThemeColors();
   const { height: windowHeight } = useWindowDimensions();
+  // The open/close effect keys on `visible` only (re-running on height
+  // changes would replay the enter animation mid-display), so it reads the
+  // height through an always-current ref instead of a stale closure.
+  const windowHeightRef = useRef(windowHeight);
+  windowHeightRef.current = windowHeight;
   // Root-provider insets via the hook: the native SafeAreaView computes its
   // OWN window inside a Modal and comes back 0 on Android edge-to-edge,
   // clipping sheet content under the gesture bar.
@@ -54,7 +59,7 @@ export default function BottomSheet({
       // translateY is created once from the mount-time window height; after a
       // rotation/split-screen resize that offset is stale, so re-anchor to the
       // CURRENT height so every open starts fully off-screen.
-      translateY.setValue(windowHeight);
+      translateY.setValue(windowHeightRef.current);
       Animated.parallel([
         Animated.timing(backdrop, {
           toValue: 1,
@@ -79,7 +84,7 @@ export default function BottomSheet({
           useNativeDriver: true,
         }),
         Animated.timing(translateY, {
-          toValue: windowHeight,
+          toValue: windowHeightRef.current,
           duration: 200,
           // M3 emphasized-accelerate.
           easing: Easing.bezier(0.3, 0, 0.8, 0.15),
