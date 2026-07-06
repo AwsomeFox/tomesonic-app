@@ -531,7 +531,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       if (kind === "ebook") {
         await rmab.requestEbookForAsin(asin);
       } else {
-        await rmab.createRequest({ asin, title, author, narrator: (md.narrators || [])[0] });
+        // RMAB's schema requires author — degrade to a placeholder rather
+        // than a guaranteed 400 for items missing authorName.
+        await rmab.createRequest({
+          asin,
+          title,
+          author: author || "Unknown",
+          narrator: (md.narrators || [])[0],
+        });
       }
       setFormatReq({ kind, state: "ok" });
       setTimeout(() => setFormatReq(null), 1800);
@@ -1423,15 +1430,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 accessibilityRole="button"
                 accessibilityLabel={`Send to ${d.name}`}
                 android_ripple={{ color: colors.primary + "22" }}
-                style={({ pressed }) => ({
+                // Plain object style: Fabric drops function-styles on this
+                // pressable path on-device (row rendered unstyled — no
+                // padding/row direction). Ripple covers pressed feedback.
+                style={{
                   flexDirection: "row",
                   alignItems: "center",
                   minHeight: 64,
                   paddingHorizontal: 24,
                   paddingVertical: 10,
                   opacity: sendingTo && sendingTo !== d.name ? 0.5 : 1,
-                  backgroundColor: pressed ? colors.surfaceContainerHighest || colors.surfaceContainer : "transparent",
-                })}
+                }}
               >
                 <View
                   style={{

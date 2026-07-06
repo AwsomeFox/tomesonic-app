@@ -168,6 +168,12 @@ const DISCOVERY_TIMEOUT = 45000;
 const DISCOVERY_TTL = 15 * 60 * 1000;
 const discoveryCache = new Map<string, { at: number; data: any }>();
 
+/** Wipe cached discovery responses — must run on connect/disconnect or a
+ *  server switch keeps serving the previous account's shelves. */
+export function clearRmabCaches() {
+  discoveryCache.clear();
+}
+
 async function discoveryGet<T = any>(path: string): Promise<T> {
   const hit = discoveryCache.get(path);
   if (hit && Date.now() - hit.at < DISCOVERY_TTL) return hit.data as T;

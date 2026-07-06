@@ -216,7 +216,9 @@ export default function ConnectScreen() {
         accessibilityLabel={label}
         accessibilityState={{ disabled: loading, busy: !!busy }}
         android_ripple={{ color: withAlpha(fg, 0.12) }}
-        style={({ pressed }) => ({
+        // Plain object style — Fabric drops function-styles on this
+        // pressable path on-device; the ripple supplies pressed feedback.
+        style={{
           backgroundColor: bg,
           minHeight: BUTTON_HEIGHT,
           alignItems: "center" as const,
@@ -226,8 +228,7 @@ export default function ConnectScreen() {
           ...(compact ? { paddingHorizontal: 32, minWidth: 140 } : null),
           elevation: variant === "filled" ? 2 : 0,
           opacity: loading && !busy ? 0.6 : 1,
-          transform: [{ scale: pressed ? 0.97 : 1 }],
-        })}
+        }}
       >
         {busy ? (
           <ActivityIndicator color={fg} />
@@ -322,7 +323,7 @@ export default function ConnectScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Change server address"
                 android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.12) }}
-                style={({ pressed }) => ({
+                style={{
                   flexDirection: "row" as const,
                   alignItems: "center" as const,
                   backgroundColor: colors.secondaryContainer,
@@ -331,8 +332,7 @@ export default function ConnectScreen() {
                   paddingVertical: 12,
                   marginBottom: 16,
                   overflow: "hidden" as const,
-                  transform: [{ scale: pressed ? 0.98 : 1 }],
-                })}
+                }}
               >
                 <Icon name="globe" size={20} color={colors.onSecondaryContainer} />
                 <Text
@@ -492,13 +492,13 @@ export default function ConnectScreen() {
       {/* Footer — Follow the project on Github */}
       <Pressable
         onPress={() => Linking.openURL(GITHUB_URL)}
-        style={({ pressed }) => ({
+        android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+        style={{
           flexDirection: "row" as const,
           alignItems: "center" as const,
           justifyContent: "center" as const,
           paddingVertical: 16,
-          opacity: pressed ? 0.6 : 1,
-        })}
+        }}
       >
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontFamily: "sans-serif", marginRight: 8 }}>
           Follow the project on Github

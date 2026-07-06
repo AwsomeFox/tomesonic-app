@@ -7,6 +7,7 @@ jest.mock("../../utils/rmab", () => ({
   getMe: jest.fn(),
   createRequest: jest.fn(),
   getPendingApprovalCount: jest.fn().mockResolvedValue(0),
+  clearRmabCaches: jest.fn(),
 }));
 
 import { useRmabStore } from "../../store/useRmabStore";

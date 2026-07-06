@@ -144,13 +144,19 @@ export default function SearchContent({ navigation }: { navigation: any }) {
   // passed the `|| []` truthy check and `.map` crashed the whole app (the
   // only ErrorBoundary is at the App root).
   const asArray = (x: any) => (Array.isArray(x) ? x : []);
-  // ReadMeABook catalog lookup for the same query (component renders null
-  // when RMAB isn't configured, and the fetch only fires when it is).
+  // ReadMeABook catalog lookup for the query — DEBOUNCED: `query` updates on
+  // every keystroke and the section refetches whenever this callback's
+  // identity changes, which would have hit RMAB per keypress.
+  const [rmabQuery, setRmabQuery] = React.useState("");
+  React.useEffect(() => {
+    const t = setTimeout(() => setRmabQuery(query.trim()), 600);
+    return () => clearTimeout(t);
+  }, [query]);
   const fetchRmabForQuery = React.useCallback(async () => {
     const { searchBooks } = require("../utils/rmab");
-    if (!query.trim()) return [];
-    return searchBooks(query.trim());
-  }, [query]);
+    if (!rmabQuery) return [];
+    return searchBooks(rmabQuery);
+  }, [rmabQuery]);
   const bookResults = [...asArray(results?.book), ...asArray(results?.podcast)].filter(
     (r: any) => r && (!hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r))
   );

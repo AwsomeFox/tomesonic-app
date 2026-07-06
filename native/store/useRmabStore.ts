@@ -7,6 +7,7 @@ import {
   getMe,
   createRequest,
   getPendingApprovalCount,
+  clearRmabCaches,
   RmabBook,
 } from "../utils/rmab";
 
@@ -99,6 +100,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       // Token from the explicit API-token field (no token= URL): try the
       // static interpretation first; login URLs go JWT-first.
       const cfg = await exchangeLoginToken(effUrl, effToken, { preferApiToken: !urlish });
+      clearRmabCaches();
       writeRmabConfig(cfg);
       // Round-trip an authed call so a pasted token that exchanged but can't
       // authenticate (clock skew, revoked session) fails HERE, not later.
@@ -131,6 +133,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   },
 
   disconnect: () => {
+    clearRmabCaches();
     writeRmabConfig(null);
     set({
       configured: false,

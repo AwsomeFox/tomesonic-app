@@ -115,7 +115,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     );
     // Resolve the series ASIN — exact via a library book's ASIN, else by name.
     let seriesAsin: string | null = null;
-    for (const asin of haveAsins) {
+    // Cap the exact-resolution attempts: each miss costs a network round
+    // trip, and one or two library ASINs are enough to find the parent.
+    for (const asin of Array.from(haveAsins).slice(0, 2)) {
       seriesAsin = await audibleSeriesAsinFromBook(asin).catch(() => null);
       if (seriesAsin) break;
     }
