@@ -1,9 +1,30 @@
 import { DeviceEventEmitter } from "react-native";
 import TrackPlayer, { Event } from "react-native-track-player";
-import { usePlaybackStore, onNativeProgressSample, onPlaybackError } from "./usePlaybackStore";
+import {
+  usePlaybackStore,
+  onNativeProgressSample,
+  onPlaybackError,
+  recoverPlaybackIfNeeded,
+} from "./usePlaybackStore";
 
 // Cycles through the same set the in-app speed control offers.
 const SPEEDS = [0.8, 1.0, 1.2, 1.5, 1.75, 2.0, 3.0];
+
+// One NetInfo subscription per JS context (the service function can re-run).
+let _netInfoSubscribed = false;
+
+// Connectivity-regained handler, exported for tests. Runs HEADLESS too
+// (Android Auto cold start) — App.tsx, where the foreground recovery hooks
+// live, never mounts there, so this subscription is the car's only
+// reconnect-triggered recovery.
+export function onConnectivityChanged(state: { isConnected?: boolean | null } | null | undefined) {
+  if (!state?.isConnected) return;
+  recoverPlaybackIfNeeded().catch(() => {});
+  try {
+    const { flushPendingSyncs } = require("../utils/progressSync");
+    flushPendingSyncs().catch(() => {});
+  } catch {}
+}
 
 export async function playbackService() {
   // HEADLESS BOOT (Android Auto cold start): this service can be the first —
@@ -42,6 +63,31 @@ export async function playbackService() {
   TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
     onPlaybackError(event as any);
   });
+
+  // End of the book with the screen off: native playback stops, native
+  // progress events stop, and nothing else corrects the store until the
+  // throttled JS interval runs in the foreground — isPlaying was stuck true
+  // (stale mini-player/notification state). While casting the local player's
+  // queue isn't the source of truth, so leave the mirror alone.
+  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => {
+    const st = usePlaybackStore.getState();
+    if (!st.currentSession || st.isCasting) return;
+    usePlaybackStore.setState({ isPlaying: false });
+  });
+
+  // Connectivity-regained recovery — see onConnectivityChanged. Without it,
+  // a doze network flap that outlives the bounded error retries leaves
+  // playback dead in the car until a manual play.
+  if (!_netInfoSubscribed) {
+    try {
+      // Lazy require so a missing native module can't crash the service boot.
+      const NetInfo = require("@react-native-community/netinfo").default;
+      NetInfo.addEventListener(onConnectivityChanged);
+      _netInfoSubscribed = true;
+    } catch (e) {
+      console.warn("[PlaybackService] NetInfo unavailable — no headless reconnect recovery", e);
+    }
+  }
 
   // Route remote (notification / Android Auto / bluetooth) transport through the
   // store, not TrackPlayer directly, so play() applies auto-rewind and pause()

@@ -1,7 +1,11 @@
 import { useEffect, useRef } from "react";
 import TrackPlayer from "react-native-track-player";
 import { useRemoteMediaClient } from "react-native-google-cast";
-import { usePlaybackStore, restoreLocalNowPlayingMeta } from "../store/usePlaybackStore";
+import {
+  usePlaybackStore,
+  restoreLocalNowPlayingMeta,
+  persistCastProgressSample,
+} from "../store/usePlaybackStore";
 import { storageHelper } from "../utils/storage";
 
 /**
@@ -178,6 +182,11 @@ export default function CastController() {
           settleRef.current = null;
         }
         usePlaybackStore.setState({ position: abs });
+        // Event-driven persistence: with the screen off, the JS 1s interval
+        // (previously the ONLY cast-persistence driver) is throttled — these
+        // receiver callbacks arrive as native events regardless, so feed the
+        // sample through the same throttled save/sync pipeline.
+        persistCastProgressSample(abs);
       }, 1)
     );
     subs.push(

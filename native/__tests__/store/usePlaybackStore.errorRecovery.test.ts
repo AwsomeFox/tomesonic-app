@@ -93,6 +93,10 @@ describe("usePlaybackStore playback-error recovery", () => {
       // Disk cache: chapter-boundary loads re-open the same file URL — served
       // from cache they can't die on a doze-flaky network.
       expect(opts.maxCacheSize).toBe(256 * 1024);
+      // Native audio-focus handling (pause for calls/nav, duck, auto-resume).
+      // The native read has NO default for a present-but-keyless bundle, so
+      // omitting this silently disabled focus handling entirely.
+      expect(opts.autoHandleInterruptions).toBe(true);
     });
   });
 

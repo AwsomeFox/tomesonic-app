@@ -398,6 +398,20 @@ export function onNativeProgressSample(e: {
   } catch {}
 }
 
+// Event-driven persistence for CAST sessions. While casting, the local
+// player is paused, so the native PlaybackProgressUpdated events that keep
+// persistence alive in the background never fire — the only driver was the
+// JS 1s interval, which Android throttles with the screen off (a long cast
+// session with the phone asleep stopped saving/syncing entirely). The cast
+// SDK's receiver-progress callbacks are native→JS EVENTS (delivered even
+// while timers are throttled, same as RNTP's), so CastController feeds each
+// mirrored sample through the same throttled persistence pipeline here.
+export function persistCastProgressSample(absolutePosition: number) {
+  const st = usePlaybackStore.getState();
+  if (!st.currentSession || !st.isCasting) return;
+  persistProgressSample(st.currentSession, absolutePosition, st.duration, st.isPlaying);
+}
+
 // The store's `position` is written by a 1s JS interval that Android
 // throttles while the app is backgrounded/dozing — the native player keeps
 // advancing while the snapshot freezes, so a notification jump computed from
@@ -728,6 +742,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // boundary loads (and auto-rewind/chapter jumps into recent audio)
         // hit disk instead.
         maxCacheSize: 256 * 1024,
+        // Hand audio focus to ExoPlayer (pause on call/assistant/other media,
+        // duck for nav prompts, auto-resume after transient loss — all
+        // native, so it works dozed and in Android Auto). The native read is
+        // Bundle.getBoolean(key) with NO default, so a non-null options
+        // bundle that omits the key silently DISABLED focus handling — the
+        // book used to play straight over navigation prompts and calls
+        // (kotlinaudio's fallback FocusManager only emits an event nothing
+        // listens to; it never pauses).
+        autoHandleInterruptions: true,
       } as any);
       await TrackPlayer.updateOptions(buildPlayerOptions());
       
