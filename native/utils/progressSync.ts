@@ -446,7 +446,9 @@ async function flushPendingLocalSessions(): Promise<void> {
         id: rec.id,
         libraryItemId: rec.libraryItemId,
         episodeId: rec.episodeId || null,
-        mediaType: "book",
+        // An episode session is by definition a podcast's; everything else in
+        // the offline-download path is a book.
+        mediaType: rec.episodeId ? "podcast" : "book",
         displayTitle: rec.displayTitle || "",
         displayAuthor: rec.displayAuthor || "",
         duration: Number(rec.duration) || 0,

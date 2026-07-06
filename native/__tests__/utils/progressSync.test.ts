@@ -891,6 +891,26 @@ describe("offline local-session listening bank", () => {
       timeListening: 60,
       syncedTimeListening: 60,
     });
+    // A book session (no episodeId) is labeled as such.
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({ mediaType: "book" })
+    );
+  });
+
+  it("labels episode sessions as podcasts", async () => {
+    await withFixedNow(async () => {
+      recordLocalListening("li1", "ep1", 100, 3600, 30);
+      await flushPendingSyncs();
+    });
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({
+        id: "local_li1-ep1_2026-01-15",
+        episodeId: "ep1",
+        mediaType: "podcast",
+      })
+    );
   });
 
   it("fully-synced local record is NOT pending; more listening makes it pending again and re-POSTs the GROWN total", async () => {
