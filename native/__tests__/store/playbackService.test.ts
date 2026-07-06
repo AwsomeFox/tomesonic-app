@@ -21,6 +21,8 @@ import { DeviceEventEmitter } from "react-native";
 import TrackPlayer from "react-native-track-player";
 import { playbackService } from "../../store/playbackService";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useUserStore } from "../../store/useUserStore";
+import { storageHelper } from "../../utils/storage";
 
 const initial = usePlaybackStore.getState();
 const emit = (event: string, payload?: any) => (TrackPlayer as any).__emit(event, payload);
@@ -291,6 +293,61 @@ describe("playbackService remote events", () => {
       await flush();
       expect(a.startPlayback).toHaveBeenCalledWith("item1", undefined);
       expect(a.seek).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("headless progress seed (Android Auto cold start)", () => {
+    // The seed block runs on EVERY playbackService() call, before the
+    // _serviceWired guard — so re-invoking the (already wired) service here
+    // exercises exactly the headless-boot path without stacking listeners.
+    const cached = {
+      book1: { currentTime: 123.4, isFinished: false },
+      book2: { currentTime: 45, isFinished: true },
+    };
+
+    afterEach(() => {
+      // Restore the pristine never-initialized user store and wipe the disk
+      // cache so these tests can't leak into each other (the useUserStore
+      // write-through mirror persists mediaProgress on every setState).
+      useUserStore.setState({ isInitialized: false, mediaProgress: {} });
+      storageHelper.removeMediaProgressCache();
+    });
+
+    it("seeds mediaProgress from the disk cache when the store never initialized", async () => {
+      useUserStore.setState({ isInitialized: false, mediaProgress: {} });
+      storageHelper.setMediaProgressCache(cached);
+
+      await playbackService();
+
+      expect(useUserStore.getState().mediaProgress).toEqual(cached);
+    });
+
+    it("does NOT overwrite an already-initialized store", async () => {
+      useUserStore.setState({ isInitialized: true, mediaProgress: {} });
+      storageHelper.setMediaProgressCache(cached);
+
+      await playbackService();
+
+      expect(useUserStore.getState().mediaProgress).toEqual({});
+    });
+
+    it("does NOT clobber an in-memory map that already has entries", async () => {
+      const live = { book9: { currentTime: 999 } };
+      useUserStore.setState({ isInitialized: false, mediaProgress: live });
+      storageHelper.setMediaProgressCache(cached);
+
+      await playbackService();
+
+      expect(useUserStore.getState().mediaProgress).toEqual(live);
+    });
+
+    it("leaves the map empty when the disk cache is empty too", async () => {
+      useUserStore.setState({ isInitialized: false, mediaProgress: {} });
+      storageHelper.removeMediaProgressCache();
+
+      await playbackService();
+
+      expect(useUserStore.getState().mediaProgress).toEqual({});
     });
   });
 

@@ -85,11 +85,14 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
         title: p.title,
         time: p.time,
       }));
+      // Keep previously-loaded rows only if they belong to THIS item —
+      // otherwise a book switched to while offline showed (and let the user
+      // "delete") the previous book's bookmarks against the wrong id.
+      // Captured BEFORE setBookmarks: React defers the functional updater, so
+      // reading the ref inside it would see the reassignment below.
+      const sameItem = loadedForRef.current === libraryItemId;
       setBookmarks((prev) => {
-        // Keep previously-loaded rows only if they belong to THIS item —
-        // otherwise a book switched to while offline showed (and let the user
-        // "delete") the previous book's bookmarks against the wrong id.
-        const merged = loadedForRef.current === libraryItemId ? [...prev] : [];
+        const merged = sameItem ? [...prev] : [];
         for (const p of pending) {
           if (!merged.some((b) => Math.floor(b.time) === p.time)) merged.push(p);
         }

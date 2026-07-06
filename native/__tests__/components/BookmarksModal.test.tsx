@@ -98,3 +98,55 @@ describe("BookmarksModal offline deletion", () => {
     expect(screen.queryByText("Great quote")).toBeNull();
   });
 });
+
+describe("BookmarksModal per-item reset on offline loads", () => {
+  // The item-match guard must be captured BEFORE setBookmarks — React defers
+  // the functional updater, so reading loadedForRef inside it would see the
+  // reassignment that follows and the previous item's rows would never drop.
+  it(
+    "switching items while offline drops the previous item's rows and shows only the new queue",
+    async () => {
+      // Item A loads its server bookmarks online...
+      const { rerender } = await render(
+        <BookmarksModal visible onClose={noop} libraryItemId="item1" currentTime={200} onSeek={noop} />
+      );
+      await screen.findByText("Great quote");
+
+      // ...then the user switches books while OFFLINE. Item A's rows must not
+      // survive (they'd render — and delete — against item B's id).
+      apiGet.mockRejectedValue(new Error("Network Error"));
+      (pendingBookmarksFor as jest.Mock).mockImplementation((id: string) =>
+        id === "item2" ? [{ time: 10, title: "B queued" }] : []
+      );
+      await rerender(
+        <BookmarksModal visible onClose={noop} libraryItemId="item2" currentTime={200} onSeek={noop} />
+      );
+
+      await screen.findByText("B queued");
+      expect(screen.queryByText("Great quote")).toBeNull();
+      expect(screen.queryByText("Chapter start")).toBeNull();
+    }
+  );
+
+  it("a same-item offline reload KEEPS the previously loaded rows and merges the queue", async () => {
+    const { rerender } = await render(
+      <BookmarksModal visible onClose={noop} libraryItemId="item1" currentTime={200} onSeek={noop} />
+    );
+    await screen.findByText("Great quote");
+
+    // Connectivity drops, the sheet is closed and reopened on the SAME book:
+    // the offline reload must merge, not wipe, what was already on screen.
+    apiGet.mockRejectedValue(new Error("Network Error"));
+    (pendingBookmarksFor as jest.Mock).mockReturnValue([{ time: 500, title: "Queued offline" }]);
+    await rerender(
+      <BookmarksModal visible={false} onClose={noop} libraryItemId="item1" currentTime={200} onSeek={noop} />
+    );
+    await rerender(
+      <BookmarksModal visible onClose={noop} libraryItemId="item1" currentTime={200} onSeek={noop} />
+    );
+
+    await screen.findByText("Queued offline");
+    expect(screen.getByText("Chapter start")).toBeTruthy();
+    expect(screen.getByText("Great quote")).toBeTruthy();
+  });
+});
