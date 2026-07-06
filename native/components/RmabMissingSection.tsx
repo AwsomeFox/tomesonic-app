@@ -124,36 +124,44 @@ export default function RmabMissingSection({
         // (series/author rows) pass through untouched.
         const coverUri = resolveRmabUrl(book.coverArtUrl);
         return (
-          <Pressable
+          // Plain View row: were this a Pressable (accessible=true), TalkBack/
+          // VoiceOver would collapse the row into one node and the nested
+          // Request button would be unreachable. The details target is the
+          // cover/title area; the Request button is a sibling.
+          <View
             key={book.asin}
-            onPress={() => setDetail(book)}
-            accessibilityRole="button"
-            accessibilityLabel={`Details for ${book.title}`}
-            android_ripple={{ color: colors.primary + "14" }}
             style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 8 }}
           >
-            <Image
-              source={coverUri ? { uri: coverUri } : undefined}
-              style={{ width: 46, height: 46, borderRadius: 6, backgroundColor: colors.surfaceContainerHigh }}
-              contentFit="cover"
-            />
-            <View style={{ flex: 1, marginLeft: 12, marginRight: 8 }}>
-              <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "500" }}>
-                {book.title}
-              </Text>
-              {/* Series position leads (this list is usually a series gap),
-                  then year, author, narrator. */}
-              <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
-                {[
-                  book.sequence ? `Book ${book.sequence}` : null,
-                  book.releaseDate ? String(book.releaseDate).slice(0, 4) : null,
-                  book.author,
-                  book.narrator ? `read by ${book.narrator}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" • ")}
-              </Text>
-            </View>
+            <Pressable
+              onPress={() => setDetail(book)}
+              accessibilityRole="button"
+              accessibilityLabel={`Details for ${book.title}`}
+              android_ripple={{ color: colors.primary + "14" }}
+              style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
+            >
+              <Image
+                source={coverUri ? { uri: coverUri } : undefined}
+                style={{ width: 46, height: 46, borderRadius: 6, backgroundColor: colors.surfaceContainerHigh }}
+                contentFit="cover"
+              />
+              <View style={{ flex: 1, marginLeft: 12, marginRight: 8 }}>
+                <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "500" }}>
+                  {book.title}
+                </Text>
+                {/* Series position leads (this list is usually a series gap),
+                    then year, author, narrator. */}
+                <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+                  {[
+                    book.sequence ? `Book ${book.sequence}` : null,
+                    book.releaseDate ? String(book.releaseDate).slice(0, 4) : null,
+                    book.author,
+                    book.narrator ? `read by ${book.narrator}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" • ")}
+                </Text>
+              </View>
+            </Pressable>
             {status ? (
               <View
                 style={{
@@ -199,7 +207,7 @@ export default function RmabMissingSection({
                 )}
               </Pressable>
             )}
-          </Pressable>
+          </View>
         );
       })}
 

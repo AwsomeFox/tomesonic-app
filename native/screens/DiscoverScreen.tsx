@@ -72,6 +72,11 @@ export default function DiscoverScreen({ navigation }: any) {
   // guard every deferred setState and clear the timer on unmount.
   const aliveRef = useRef(true);
   const likedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic id per loadShelves() run: shelf ids repeat across runs
+  // ("popular-0"…), so a load kicked off before a refresh could resolve after
+  // it and clobber the fresh books with stale ones. Only the latest run may
+  // write shelf state.
+  const shelfLoadIdRef = useRef(0);
   useEffect(() => {
     aliveRef.current = true;
     return () => {
@@ -108,6 +113,7 @@ export default function DiscoverScreen({ navigation }: any) {
   }, [playEnter]);
 
   const loadShelves = useCallback(async () => {
+    const loadId = ++shelfLoadIdRef.current;
     // Shelf plan: the USER'S configured home sections (same as RMAB's web
     // home). Fallback for older servers: Popular + New Releases + the first
     // few Audible categories.
@@ -151,17 +157,17 @@ export default function DiscoverScreen({ navigation }: any) {
         );
       } catch {}
     }
-    if (!aliveRef.current) return;
+    if (!aliveRef.current || loadId !== shelfLoadIdRef.current) return;
     setShelves(plan.map((p) => ({ id: p.id, name: p.name, books: null })));
     plan.forEach((p) =>
       p
         .load()
         .then((books) => {
-          if (!aliveRef.current) return;
+          if (!aliveRef.current || loadId !== shelfLoadIdRef.current) return;
           setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books } : s)));
         })
         .catch(() => {
-          if (!aliveRef.current) return;
+          if (!aliveRef.current || loadId !== shelfLoadIdRef.current) return;
           setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books: [] } : s)));
         })
     );

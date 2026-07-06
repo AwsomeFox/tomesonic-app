@@ -178,11 +178,11 @@ export default function RmabRequestsScreen({ navigation }: any) {
             );
             const coverUri = resolveRmabUrl(cover);
             return (
-              <Pressable
-                onPress={() => setDetail(item)}
-                accessibilityRole="button"
-                accessibilityLabel={`Details for ${item?.title || item?.audiobook?.title || "request"}`}
-                android_ripple={{ color: colors.primary + "14" }}
+              // Plain View row: were this a Pressable (accessible=true), TalkBack/
+              // VoiceOver would collapse the row into one node and the nested
+              // Approve/Deny/Delete buttons would be unreachable. The details
+              // target is the cover/title/status area; actions are siblings.
+              <View
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
@@ -190,38 +190,46 @@ export default function RmabRequestsScreen({ navigation }: any) {
                   paddingVertical: 10,
                 }}
               >
-                <Image
-                  source={coverUri ? { uri: coverUri } : undefined}
-                  style={{ width: 48, height: 48, borderRadius: 6, backgroundColor: colors.surfaceContainerHigh }}
-                  contentFit="cover"
-                />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 16, fontWeight: "500" }}>
-                    {item?.title || item?.audiobook?.title || "Unknown"}
-                  </Text>
-                  <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
-                    {[
-                      item?.author || item?.audiobook?.author,
-                      // Admin view: whose request this is.
-                      canManage
-                        ? item?.user?.plexUsername || item?.username || item?.user?.username
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" • ")}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    backgroundColor: meta.bg,
-                    borderRadius: 12,
-                    paddingHorizontal: 10,
-                    paddingVertical: 4,
-                    marginLeft: 8,
-                  }}
+                <Pressable
+                  onPress={() => setDetail(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Details for ${item?.title || item?.audiobook?.title || "request"}`}
+                  android_ripple={{ color: colors.primary + "14" }}
+                  style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
                 >
-                  <Text style={{ color: meta.fg, fontSize: 12, fontWeight: "600" }}>{meta.label}</Text>
-                </View>
+                  <Image
+                    source={coverUri ? { uri: coverUri } : undefined}
+                    style={{ width: 48, height: 48, borderRadius: 6, backgroundColor: colors.surfaceContainerHigh }}
+                    contentFit="cover"
+                  />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 16, fontWeight: "500" }}>
+                      {item?.title || item?.audiobook?.title || "Unknown"}
+                    </Text>
+                    <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+                      {[
+                        item?.author || item?.audiobook?.author,
+                        // Admin view: whose request this is.
+                        canManage
+                          ? item?.user?.plexUsername || item?.username || item?.user?.username
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" • ")}
+                    </Text>
+                  </View>
+                  <View
+                    style={{
+                      backgroundColor: meta.bg,
+                      borderRadius: 12,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      marginLeft: 8,
+                    }}
+                  >
+                    <Text style={{ color: meta.fg, fontSize: 12, fontWeight: "600" }}>{meta.label}</Text>
+                  </View>
+                </Pressable>
 
                 {canManage && awaiting ? (
                   <>
@@ -303,7 +311,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     ) : null}
                   </Pressable>
                 ) : null}
-              </Pressable>
+              </View>
             );
           }}
         />

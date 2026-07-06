@@ -2,7 +2,7 @@ jest.mock("../../utils/audible", () => ({
   audibleBookDetails: jest.fn().mockResolvedValue(null),
 }));
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 
 jest.mock("../../utils/rmab", () => ({
   getBookdateRecommendations: jest.fn(),
@@ -165,6 +165,35 @@ describe("DiscoverScreen (BookDate)", () => {
     expect(screen.getByText("Popular")).toBeTruthy();
     // No default category shelves beyond the configured plan.
     expect(screen.queryByText("New Releases")).toBeNull();
+  });
+
+  it("a shelf load started before a refresh can't overwrite the fresh books", async () => {
+    // Shelf ids repeat across loadShelves() runs, so a slow pre-refresh load
+    // resolving late must be dropped, not applied over the refreshed shelf.
+    let resolveStale: (books: any[]) => void = () => {};
+    (getPopularBooks as jest.Mock)
+      .mockImplementationOnce(() => new Promise((res) => (resolveStale = res)))
+      .mockResolvedValueOnce([{ asin: "F1", title: "Fresh Pick" }]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+
+    // Pull-to-refresh starts a second shelf load while the first Popular
+    // request is still in flight. RN's jest RefreshControl mock renders a
+    // bare host element (no props), so drive onRefresh via the mock's
+    // latestRef instance instead of a testID query.
+    const RefreshControlMock =
+      require("react-native/Libraries/Components/RefreshControl/RefreshControl").default;
+    await act(async () => {
+      RefreshControlMock.latestRef.props.onRefresh();
+    });
+    await screen.findByText("Fresh Pick");
+
+    // The superseded run's response lands late — it must be ignored.
+    await act(async () => {
+      resolveStale([{ asin: "S1", title: "Stale Pick" }]);
+    });
+    expect(screen.queryByText("Stale Pick")).toBeNull();
+    expect(screen.getByText("Fresh Pick")).toBeTruthy();
   });
 
   it("the gear opens BookDate preferences with current values loaded", async () => {
