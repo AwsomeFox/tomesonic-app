@@ -59,6 +59,7 @@ describe("syncProgress", () => {
       currentTime: 50,
       duration: 3600,
       timeListened: 5,
+      at: expect.any(Number),
     });
   });
 
@@ -72,7 +73,32 @@ describe("syncProgress", () => {
       currentTime: 80, // latest wins
       duration: 3602, // latest wins
       timeListened: 35, // 5 + 15 + 15 accumulates
+      at: expect.any(Number),
     });
+  });
+
+  it("an OLDER sync failing AFTER a newer close cannot regress the queued position", async () => {
+    // Failures are observed out of request order: the close (position 105)
+    // fails fast and queues first; the earlier tick's sync (position 100)
+    // times out later. Last-caller-wins used to let 100 overwrite 105.
+    mockedPost.mockRejectedValue(errNetwork());
+    await closeSession({
+      sessionId: "s1",
+      currentTime: 105,
+      timeListened: 5,
+      duration: 3600,
+      at: 2000,
+    } as any);
+    await syncProgress({
+      sessionId: "s1",
+      currentTime: 100,
+      timeListened: 1,
+      duration: 3600,
+      at: 1000,
+    } as any);
+    const queued = readJson("pendingSync_s1");
+    expect(queued.currentTime).toBe(105); // freshest position wins
+    expect(queued.timeListened).toBe(6); // both contributions kept
   });
 
   it("converts a 404 (session dropped server-side) to a queued progress PATCH", async () => {

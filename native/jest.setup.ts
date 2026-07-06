@@ -71,6 +71,7 @@ jest.mock("react-native-track-player", () => {
     __listeners: listeners,
     add: jest.fn().mockResolvedValue(undefined),
     reset: jest.fn().mockResolvedValue(undefined),
+    retry: jest.fn().mockResolvedValue(undefined),
     play: jest.fn().mockResolvedValue(undefined),
     pause: jest.fn().mockResolvedValue(undefined),
     stop: jest.fn().mockResolvedValue(undefined),

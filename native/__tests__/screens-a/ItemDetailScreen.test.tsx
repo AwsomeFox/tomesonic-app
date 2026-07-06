@@ -255,6 +255,32 @@ describe("ItemDetailScreen", () => {
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("item1"));
   });
 
+  it("play on the ALREADY-LOADED book resumes instead of churning a new session", async () => {
+    routeApi(bothFormatItem);
+    const startPlayback = jest.fn().mockResolvedValue(true);
+    const play = jest.fn().mockResolvedValue(undefined);
+    const setPlayerExpanded = jest.fn();
+    usePlaybackStore.setState({
+      startPlayback,
+      play,
+      setPlayerExpanded,
+      currentSession: { id: "sess1", libraryItemId: "item1" },
+      isPlaying: false,
+    } as any);
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+    await screen.findByText("Listening");
+
+    await fireEvent.press(screen.getByLabelText("Continue listening"));
+    // A fresh /play would reset the queue (audible hiccup) and could jump
+    // back to the last-synced position — resume + expand instead.
+    expect(startPlayback).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalled();
+    expect(setPlayerExpanded).toHaveBeenCalledWith(true);
+  });
+
   it("marks finished online: PATCHes the item AND its fuzzy-matched counterpart, updates the local map", async () => {
     routeApi(audioOnlyItem, [ebookSibling]);
     const navigation = makeNavigation();

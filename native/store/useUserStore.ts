@@ -131,6 +131,10 @@ export const useUserStore = create<UserState>((set, get) => ({
         : null,
       serverConnectionConfig: config || null,
       settings: savedSettings ? { ...DEFAULT_SETTINGS, ...savedSettings } : DEFAULT_SETTINGS,
+      // Seed progress from the DISK cache so an offline cold start still
+      // resumes every book at its real position (and keeps offline-finished
+      // flags) instead of starting from an empty map until /api/me answers.
+      ...(hasSession ? { mediaProgress: storageHelper.getMediaProgressCache() } : {}),
       isInitialized: true,
     });
     // Mirror creds for the native Android Auto browse service.
@@ -175,11 +179,39 @@ export const useUserStore = create<UserState>((set, get) => ({
       // the fresher local entry instead; once the queued write lands, the
       // server's lastUpdate moves past it and the server copy wins again.
       const merged: Record<string, any> = { ...next };
+      // Resolve the pending-writes helper ONCE per merge and memoize per
+      // key — it scans MMKV keys and JSON-parses queued syncs, and this
+      // merge runs on every Bookshelf focus.
+      let hasPendingFn: ((i: string, e?: string | null) => boolean) | null = null;
+      try {
+        const ps = require("../utils/progressSync");
+        if (typeof ps.hasPendingWritesFor === "function") hasPendingFn = ps.hasPendingWritesFor;
+      } catch {}
+      const pendingMemo = new Map<string, boolean>();
       for (const [key, p] of Object.entries(prev)) {
         const localAt = Number((p as any)?.updatedAt) || 0;
         const srv = merged[key];
         const srvAt = srv ? Number(srv.lastUpdate) || 0 : 0;
-        if (localAt > srvAt + 10000) merged[key] = { ...(srv || {}), ...(p as any) };
+        if (localAt > srvAt + 10000) {
+          // Server knows the entry (our fresher local write is racing its own
+          // sync) → keep local. A LOCAL-ONLY entry is kept only while an
+          // offline write is still queued for it — with nothing queued, the
+          // server DELETED the progress (web UI / another device), and now
+          // that the map is disk-cached, resurrecting it here would re-upload
+          // the deletion away.
+          const itemId = (p as any)?.libraryItemId;
+          let pendingWrite = true; // helper unavailable → keep (old behavior)
+          if (!srv && itemId && hasPendingFn) {
+            const memoKey = `${itemId}|${(p as any)?.episodeId || ""}`;
+            if (!pendingMemo.has(memoKey)) {
+              pendingMemo.set(memoKey, hasPendingFn(itemId, (p as any)?.episodeId));
+            }
+            pendingWrite = pendingMemo.get(memoKey)!;
+          }
+          if (srv || pendingWrite) {
+            merged[key] = { ...(srv || {}), ...(p as any) };
+          }
+        }
       }
       // Skip the setState when nothing changed: this runs on every Home focus,
       // and installing a fresh map object re-renders every card subscribed to
@@ -302,6 +334,8 @@ export const useUserStore = create<UserState>((set, get) => ({
     writeAutoCreds(null, null, null);
     storageHelper.removeLastLibraryId();
     storageHelper.removeLastPlaybackSession();
+    // The next account must not inherit this one's progress positions.
+    storageHelper.removeMediaProgressCache();
     // Explicit logout fully ends the session — clear its identity key too so
     // the next login starts from a clean slate (everything is wiped here).
     storageHelper.removeLastSessionKey();
@@ -334,3 +368,45 @@ export const useUserStore = create<UserState>((set, get) => ({
     });
   },
 }));
+
+// Write-through disk mirror for the progress map (see getMediaProgressCache).
+// Every writer funnels through useUserStore.setState — the playback tick, the
+// reader, finish toggles, /api/me merges — so a single subscriber catches
+// them all. Leading-edge throttle (3s) so per-second playback ticks cost at
+// most one MMKV write per window, PLUS a trailing flush so the FINAL state of
+// a burst always lands: without it, a one-off write inside the window (a
+// finish toggle right at the end of a book, a merge while paused) could stay
+// unpersisted forever if nothing changed afterwards.
+{
+  const WRITE_WINDOW_MS = 3000;
+  let lastPersisted: any = null;
+  let lastWriteAt = 0;
+  let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+  const write = (map: any) => {
+    lastWriteAt = Date.now();
+    try {
+      storageHelper.setMediaProgressCache(map);
+    } catch {}
+  };
+  useUserStore.subscribe((state) => {
+    if (state.mediaProgress === lastPersisted) return;
+    lastPersisted = state.mediaProgress;
+    const now = Date.now();
+    if (now - lastWriteAt >= WRITE_WINDOW_MS) {
+      if (trailingTimer) {
+        clearTimeout(trailingTimer);
+        trailingTimer = null;
+      }
+      write(state.mediaProgress);
+      return;
+    }
+    // Inside the window: (re)schedule the trailing flush. Always replace the
+    // pending timer — a handle invalidated externally (test fake-timer
+    // resets) self-heals on the next change instead of blocking forever.
+    if (trailingTimer) clearTimeout(trailingTimer);
+    trailingTimer = setTimeout(() => {
+      trailingTimer = null;
+      write(useUserStore.getState().mediaProgress);
+    }, Math.max(0, WRITE_WINDOW_MS - (now - lastWriteAt)));
+  });
+}

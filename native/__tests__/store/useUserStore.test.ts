@@ -15,6 +15,7 @@ jest.mock("../../utils/progressSync", () => ({
   queueEbookProgressPatch: jest.fn(),
   flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
   clearAllPending: jest.fn(),
+  hasPendingWritesFor: jest.fn().mockReturnValue(false),
 }));
 
 import { api } from "../../utils/api";
@@ -200,7 +201,9 @@ describe("useUserStore", () => {
       expect(useUserStore.getState().mediaProgress["item1"].currentTime).toBe(900);
     });
 
-    it("keeps a local-only entry the server does not know about yet", async () => {
+    it("keeps a local-only entry while its offline write is still queued", async () => {
+      const { hasPendingWritesFor } = require("../../utils/progressSync");
+      jest.mocked(hasPendingWritesFor).mockReturnValue(true);
       const now = Date.now();
       useUserStore.setState({
         mediaProgress: {
@@ -211,6 +214,23 @@ describe("useUserStore", () => {
 
       await useUserStore.getState().loadMediaProgress();
       expect(useUserStore.getState().mediaProgress["local-item"].currentTime).toBe(42);
+    });
+
+    it("drops a local-only entry with nothing queued (server deleted the progress)", async () => {
+      // The map is disk-cached now: without this, a progress deletion made on
+      // the web UI resurrected from the cache and re-uploaded forever.
+      const { hasPendingWritesFor } = require("../../utils/progressSync");
+      jest.mocked(hasPendingWritesFor).mockReturnValue(false);
+      const now = Date.now();
+      useUserStore.setState({
+        mediaProgress: {
+          "deleted-item": { libraryItemId: "deleted-item", currentTime: 42, updatedAt: now },
+        },
+      } as any);
+      mockGet.mockResolvedValue({ data: { mediaProgress: [] } } as any);
+
+      await useUserStore.getState().loadMediaProgress();
+      expect(useUserStore.getState().mediaProgress["deleted-item"]).toBeUndefined();
     });
 
     it("skips setState when the merged result is identical (no re-render churn)", async () => {

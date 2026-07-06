@@ -9,6 +9,9 @@ import { writeWidgetState } from "../utils/autoCreds";
 // Records when playback was paused so play() can apply the "auto rewind" nudge
 // (rewind a little on resume, scaled by how long you were away).
 let _lastPausedAt: number | null = null;
+// Token the current queue's stream URLs were built with (see prepare) — lets
+// error recovery detect a rotation and rebuild URLs instead of retrying 401s.
+let _preparedToken: string | null = null;
 
 // --- Server progress sync bookkeeping (module-level, one active session at a time) ---
 // Seconds of actual listening accumulated since the last successful/queued sync.
@@ -243,7 +246,6 @@ function persistProgressSample(
     // below — replacing it wholesale would drop the EBOOK fields
     // (ebookProgress/ebookLocation) while listening to a both-format
     // book.
-    const alreadyFinished = _finishedSessionId === currentSession.id;
     // Podcast EPISODES key the map by `${itemId}-${episodeId}` (the
     // same convention as /api/me) — a plain-itemId write for an
     // episode would pollute the map with a bogus item-level entry.
@@ -251,6 +253,13 @@ function persistProgressSample(
     const progressMapKey = sessionEpisodeId
       ? `${currentSession.libraryItemId}-${sessionEpisodeId}`
       : currentSession.libraryItemId;
+    const existingEntry = useUserStore.getState().mediaProgress[progressMapKey];
+    // A book finished EARLIER (previous session, the ebook side, or another
+    // device) must stay finished — re-sampling a finished book used to flip
+    // its local badge to unfinished on the first playing tick while the
+    // server still said finished.
+    const alreadyFinished =
+      _finishedSessionId === currentSession.id || existingEntry?.isFinished === true;
     const progressObj = {
       libraryItemId: currentSession.libraryItemId,
       ...(sessionEpisodeId ? { episodeId: sessionEpisodeId } : {}),
@@ -398,6 +407,20 @@ export function onNativeProgressSample(e: {
   } catch {}
 }
 
+// Event-driven persistence for CAST sessions. While casting, the local
+// player is paused, so the native PlaybackProgressUpdated events that keep
+// persistence alive in the background never fire — the only driver was the
+// JS 1s interval, which Android throttles with the screen off (a long cast
+// session with the phone asleep stopped saving/syncing entirely). The cast
+// SDK's receiver-progress callbacks are native→JS EVENTS (delivered even
+// while timers are throttled, same as RNTP's), so CastController feeds each
+// mirrored sample through the same throttled persistence pipeline here.
+export function persistCastProgressSample(absolutePosition: number) {
+  const st = usePlaybackStore.getState();
+  if (!st.currentSession || !st.isCasting) return;
+  persistProgressSample(st.currentSession, absolutePosition, st.duration, st.isPlaying);
+}
+
 // The store's `position` is written by a 1s JS interval that Android
 // throttles while the app is backgrounded/dozing — the native player keeps
 // advancing while the snapshot freezes, so a notification jump computed from
@@ -445,6 +468,113 @@ function saveSessionPositionNow(position: number) {
     _lastLocalSaveAt = now;
     storageHelper.setLastPlaybackSession({ ...s, currentTime: position, updatedAt: now });
   } catch {}
+}
+
+// --- Playback-error recovery -------------------------------------------------
+// A mid-stream ExoPlayer error (network drop during doze, server blip) leaves
+// the player IDLE: it will NOT resume by itself, and a plain play() on an
+// errored player is a no-op — historically playback just died silently with
+// the screen off. On PlaybackError we persist the position, correct the
+// store's isPlaying, and arm a bounded retry (TrackPlayer.retry() re-prepares
+// the current item at its current position). App foreground / connectivity
+// regained also funnel into recoverPlaybackIfNeeded, since background JS
+// timers are throttled and may fire late.
+const ERROR_RETRY_DELAYS_MS = [2000, 10000, 30000];
+let _errorRecovery: {
+  resume: boolean; // was playback active when the error hit?
+  attempts: number;
+  timer: ReturnType<typeof setTimeout> | null;
+} | null = null;
+
+function clearErrorRecovery() {
+  if (_errorRecovery?.timer) clearTimeout(_errorRecovery.timer);
+  _errorRecovery = null;
+}
+
+function scheduleErrorRetry() {
+  if (!_errorRecovery) return;
+  // Out of automatic attempts — a manual play (see play()) or a
+  // foreground/connectivity recover call can still finish the job.
+  if (_errorRecovery.attempts >= ERROR_RETRY_DELAYS_MS.length) return;
+  const delay = ERROR_RETRY_DELAYS_MS[_errorRecovery.attempts++];
+  _errorRecovery.timer = setTimeout(() => {
+    recoverPlaybackIfNeeded().catch(() => {});
+  }, delay);
+}
+
+// Called by playbackService on Event.PlaybackError.
+export function onPlaybackError(e?: { code?: string; message?: string }) {
+  const st = usePlaybackStore.getState();
+  // No session to recover, or the receiver owns playback (a local player
+  // error while casting is irrelevant — it sits paused on the handoff item).
+  if (!st.currentSession || st.isCasting) return;
+  console.warn("[PlaybackStore] PlaybackError", e?.code, e?.message);
+  const wasPlaying = st.isPlaying;
+  // The store position stays ~1s fresh even backgrounded (native progress
+  // events) — persist it now so a process kill during the outage can't lose
+  // it, and so a cold-start restore resumes where the stream died.
+  saveSessionPositionNow(st.position);
+  usePlaybackStore.setState({ isPlaying: false });
+  clearErrorRecovery();
+  // Auto-retry only when the error interrupted ACTIVE listening — an errored
+  // player that was already paused stays down until the user's next play()
+  // (which re-prepares an errored player itself).
+  if (wasPlaying) {
+    _errorRecovery = { resume: true, attempts: 0, timer: null };
+    scheduleErrorRetry();
+  }
+}
+
+// Re-prepares an errored player and resumes if the error interrupted active
+// playback. Safe to call any time — it no-ops unless an unrecovered error is
+// pending. Returns true when a recovery actually ran.
+export async function recoverPlaybackIfNeeded(): Promise<boolean> {
+  const rec = _errorRecovery;
+  const st = usePlaybackStore.getState();
+  if (!rec || !st.currentSession || st.isCasting) return false;
+  if (rec.timer) {
+    clearTimeout(rec.timer);
+    rec.timer = null;
+  }
+  try {
+    // Only intervene if the player is actually dead — it can recover on its
+    // own (Media3 retries some load errors internally) between the error and
+    // this call.
+    const ps: any = await TrackPlayer.getPlaybackState().catch(() => null);
+    if (ps && ps.state !== State.Error && ps.state !== State.None) {
+      _errorRecovery = null;
+      return false;
+    }
+    // Token rotated since the queue was built? retry() re-prepares the SAME
+    // URLs, so an auth-expired stream would 401 forever — rebuild the queue
+    // with fresh-token URLs at the current position instead. (Local-file
+    // sessions never carry tokens; their URLs can't go stale.)
+    const cfgToken = storageHelper.getServerConfig()?.token || "";
+    if (
+      _preparedToken != null &&
+      cfgToken &&
+      cfgToken !== _preparedToken &&
+      !String(st.currentSession.id || "").startsWith("local_")
+    ) {
+      const resume = rec.resume;
+      _errorRecovery = null;
+      console.log("[PlaybackStore] Token rotated mid-session — rebuilding stream URLs.");
+      return usePlaybackStore
+        .getState()
+        .preparePlaybackSession({ ...st.currentSession, currentTime: st.position }, resume);
+    }
+    await TrackPlayer.retry();
+    if (rec.resume) {
+      await TrackPlayer.play();
+      usePlaybackStore.setState({ isPlaying: true });
+    }
+    _errorRecovery = null;
+    return true;
+  } catch (err) {
+    // Still down (e.g. network not back yet) — keep backing off.
+    scheduleErrorRetry();
+    return false;
+  }
 }
 
 interface PlaybackState {
@@ -563,8 +693,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           // Podcast progress is keyed per EPISODE server-side — the item-level
           // GET returns nothing useful for an episode session.
           const progressPath = session.episodeId
-            ? `/api/me/progress/${itemId}/${session.episodeId}`
-            : `/api/me/progress/${itemId}`;
+            ? `/api/me/progress/${encodeURIComponent(itemId)}/${encodeURIComponent(session.episodeId)}`
+            : `/api/me/progress/${encodeURIComponent(itemId)}`;
           const res: any = await Promise.race([
             api.get(progressPath),
             new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
@@ -597,7 +727,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // Offline / timeout — the local save stands.
       }
       try {
-        await get().preparePlaybackSession(session, false);
+        const ok = await get().preparePlaybackSession(session, false);
+        // Seed the auto-rewind anchor from the save's timestamp AFTER the
+        // prepare (which clears it): the paused-at stamp is module state, so
+        // a process kill between pause and this restore silently disabled
+        // the rewind nudge — resume dropped the user cold mid-sentence some
+        // mornings and reoriented them on others.
+        if (ok && Number(session.updatedAt) > 0) {
+          _lastPausedAt = Number(session.updatedAt);
+        }
       } catch (err) {
         console.error("[PlaybackStore] loadLastSession failed:", err);
       }
@@ -612,7 +750,45 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _initPromise = (async () => {
 
     try {
-      await TrackPlayer.setupPlayer({});
+      await TrackPlayer.setupPlayer({
+        // ExoPlayer wake mode 2 = WAKE_MODE_NETWORK: hold a partial wake lock
+        // AND a WiFi lock while playback is active. Without it the default is
+        // WAKE_MODE_NONE, so once the screen turns off and the device dozes,
+        // the CPU/WiFi are allowed to suspend mid-stream — playback stalls,
+        // eventually stops, and unlocking the phone finds a dead player that
+        // has to rebuffer. Locks are only held while playing, so there's no
+        // idle battery cost. (Not in RNTP's TS PlayerOptions type, but the
+        // module passes the whole object through to the native service, which
+        // reads `androidWakeMode` — made Double-safe in our RNTP patch.)
+        androidWakeMode: 2,
+        // Buffer headroom for streaming: ExoPlayer's 50s default means any
+        // network wobble longer than ~a minute of buffered audio stalls
+        // playback. Five minutes of buffer rides out doze-window network
+        // flaps; 30s of back-buffer keeps the auto-rewind nudge (up to 30s)
+        // instantly seekable without refetching.
+        minBuffer: 60,
+        maxBuffer: 300,
+        backBuffer: 30,
+        // 256MB LRU disk cache (app cacheDir) over streamed audio — the RNTP
+        // option is in KILOBYTES (native: cacheSizeKb * 1000 bytes), so
+        // 256 * 1024 KB ≈ 262 MB. Chapter
+        // queues clip MANY items out of ONE file URL, and every chapter
+        // boundary re-opens that URL — a fresh network fetch at exactly the
+        // moment the doze-throttled network is least reliable (the classic
+        // "book stopped at the end of a chapter overnight"). With the cache,
+        // boundary loads (and auto-rewind/chapter jumps into recent audio)
+        // hit disk instead.
+        maxCacheSize: 256 * 1024,
+        // Hand audio focus to ExoPlayer (pause on call/assistant/other media,
+        // duck for nav prompts, auto-resume after transient loss — all
+        // native, so it works dozed and in Android Auto). The native read is
+        // Bundle.getBoolean(key) with NO default, so a non-null options
+        // bundle that omits the key silently DISABLED focus handling — the
+        // book used to play straight over navigation prompts and calls
+        // (kotlinaudio's fallback FocusManager only emits an event nothing
+        // listens to; it never pauses).
+        autoHandleInterruptions: true,
+      } as any);
       await TrackPlayer.updateOptions(buildPlayerOptions());
       
       set({ isInitialized: true });
@@ -625,6 +801,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (progressInterval) clearInterval(progressInterval);
       progressInterval = setInterval(async () => {
         if (!get().isInitialized || !get().currentSession) return;
+        // PAUSED: nothing below changes (persistence is playing-gated), so
+        // skip the 3 native round-trips this tick used to burn — a session
+        // paused for hours cost ~11k bridge calls/hour. External resumes
+        // flip isPlaying back via native progress samples / PlaybackState
+        // events / play(), all event-driven.
+        if (!get().isPlaying && !get().isCasting) return;
+        // The session this tick is reporting on — a prepare/close completing
+        // during the awaits below must not have its fresh state overwritten
+        // with this tick's stale readings.
+        const tickSession = get().currentSession;
         try {
           const chapters = get().chapters;
           const chapterQueue = get().chapterQueue;
@@ -701,6 +887,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
               }
             }
 
+            // A prepare/close finished during the awaits above — these
+            // readings describe the OLD queue; writing them would corrupt
+            // the new session's state (or resurrect a closed one).
+            if (get().currentSession !== tickSession) return;
+
             set({
               position: absolutePosition,
               duration: bookDuration,
@@ -715,6 +906,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             }
           }
 
+          if (get().currentSession !== tickSession) return;
           persistProgressSample(
             get().currentSession,
             absolutePosition,
@@ -856,6 +1048,30 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // reset must leave the old session fully intact.
     let didReset = false;
 
+    // Switching books/episodes is an implicit stop of the outgoing session:
+    // close it on the server (final position + the listening time still
+    // accumulating toward the next 15s sync). Without this, every book
+    // switch leaked an open ABS session and silently dropped up to 15s of
+    // listening stats. Fire-and-forget — closeSession self-queues offline.
+    const prevSession = get().currentSession;
+    if (prevSession?.id && prevSession.id !== session.id) {
+      const prevPos = await getLiveAbsolutePosition(get);
+      // A newer prepare claimed the session during the await — IT owns
+      // closing the outgoing session; firing ours too double-closed it.
+      if (stale()) return false;
+      const prevAccum = _timeListenedAccum;
+      _timeListenedAccum = 0;
+      closeSession({
+        sessionId: prevSession.id,
+        currentTime: prevPos,
+        timeListened: prevAccum,
+        duration: get().duration,
+        libraryItemId: prevSession.libraryItemId,
+        episodeId: prevSession.episodeId || undefined,
+      }).catch(() => {});
+      if (stale()) return false;
+    }
+
     try {
       console.log("[PlaybackStore] Preparing playback session:", session.id);
 
@@ -868,6 +1084,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const serverConfig = storageHelper.getServerConfig();
       const serverAddress = (serverConfig?.address || "").replace(/\/$/, "");
       const token = serverConfig?.token || "";
+      // Remember which token the queue URLs were built with — token rotation
+      // recovery (recoverPlaybackIfNeeded) compares against it to decide
+      // between retry() (same URLs) and a full URL rebuild.
+      _preparedToken = token;
 
       const withToken = (url: string) => {
         if (!token || url.includes("token=")) return url;
@@ -931,15 +1151,67 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const subtitle = [bookTitle, bookAuthor].filter(Boolean).join(" • ");
 
       const audioTracks = session.audioTracks || session.tracks || [];
-      // Sanitize chapters: badly tagged files ship inverted (start > end) or
-      // non-numeric windows; a negative clip window makes native behavior
-      // undefined and corrupts absolute-position math.
-      const chapters = (Array.isArray(session.chapters) ? session.chapters : []).filter(
-        (c: any) =>
-          Number.isFinite(Number(c?.start)) &&
-          Number.isFinite(Number(c?.end)) &&
-          Number(c.end) > Number(c.start)
+      // Whole-book duration. NEVER trust session.duration alone: when a
+      // server payload omits it, the progress drivers' `get().duration ||
+      // sampleDuration` fallback collapsed to the CURRENT clip/file duration
+      // and self-perpetuated — auto-finish then fired at the end of file 1
+      // (or early in chapter 2), PATCHing isFinished:true for a half-read
+      // book. Derive from the chapter span or the summed track durations.
+      // Sanitize + SORT chapters first: badly tagged files ship inverted
+      // (start > end) or non-numeric windows; a negative clip window makes
+      // native behavior undefined and corrupts absolute-position math. Every
+      // consumer (queue build, skip-by-index, RemoteSeek mapping, titles)
+      // assumes ordered chapters.
+      const sanitizedChapters = (Array.isArray(session.chapters) ? session.chapters : [])
+        .filter(
+          (c: any) =>
+            Number.isFinite(Number(c?.start)) &&
+            Number.isFinite(Number(c?.end)) &&
+            Number(c.end) > Number(c.start)
+        )
+        .sort((a: any, b: any) => Number(a.start) - Number(b.start));
+
+      // Chapter-span fallback comes from the FILTERED list — a garbage
+      // chapter (non-finite start, huge end) is excluded from playback, so
+      // letting it inflate the book duration would make the auto-finish
+      // window unreachable and pin progress near 0 forever.
+      const chapterSpanEnd = sanitizedChapters.reduce(
+        (m: number, c: any) => Math.max(m, Number(c.end)),
+        0
       );
+      const tracksTotal = audioTracks.reduce(
+        (acc: number, t: any) => acc + (Number(t?.duration) || 0),
+        0
+      );
+      // Positive-only guard: a negative duration is garbage, not "known".
+      const sessionDuration = Number(session.duration) > 0 ? Number(session.duration) : 0;
+      const bookDurationS = sessionDuration || tracksTotal || chapterSpanEnd || 0;
+
+      // NORMALIZE coverage: numeric coordinates (string starts would turn the
+      // `chapters[i].start + relative` absolute-position math into string
+      // concatenation), overlaps clamped to the next chapter's start, gaps
+      // attributed to the preceding chapter, and the last chapter extended to
+      // the end of the book — otherwise gap/tail audio is unreachable in
+      // chapter-queue mode (each queue item is a hard clip) and a book whose
+      // last chapter ends early can never hit the auto-finish window. Empty
+      // windows produced by overlap-clamping (duplicate starts) are dropped.
+      const chapters = sanitizedChapters
+        .map((c: any, i: number, arr: any[]) => {
+          const start = Number(c.start);
+          let end = Number(c.end);
+          if (i < arr.length - 1) {
+            // Sorted by start, so nextStart >= start always. Gap → extend to
+            // the next chapter; overlap → clamp to it. A DUPLICATE start
+            // clamps end to start, producing an empty window that the filter
+            // below drops — leaving it would create fully-overlapping clips.
+            const nextStart = Number(arr[i + 1].start);
+            if (nextStart !== end) end = nextStart;
+          } else if (bookDurationS > end) {
+            end = bookDurationS; // tail → last chapter
+          }
+          return { ...c, start, end };
+        })
+        .filter((c: any) => c.end > c.start);
 
       // Chapter queue: when a single-file book has real chapters, build one
       // clipped RNTP item per chapter so Android Auto shows the chapters as the
@@ -1011,7 +1283,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // timestamp, resume from the local position instead. (Cross-device safety:
       // if another device listened further, the server timestamp is newer and
       // the server position wins.)
-      let startAbs = session.currentTime || 0;
+      // Number() coercion: a non-numeric string currentTime ("abc") would
+      // otherwise survive to the clamp and turn the position into NaN.
+      let startAbs = Number(session.currentTime) || 0;
       try {
         const saved = storageHelper.getLastPlaybackSession();
         const savedItemId = saved?.libraryItemId || saved?.libraryItem?.id;
@@ -1040,7 +1314,49 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             startAbs = saved.currentTime;
           }
         }
+
+        // SERVER-side adoption — the mirror image of the local rescue above.
+        // MMKV-restored sessions carry the position from THIS device's last
+        // save; when another device listened further since (server lastUpdate
+        // meaningfully newer than every local stamp), resume from the server
+        // position. loadLastSession attempts this with a live GET, but its 3s
+        // timeout silently dropped the cross-device position on a slow
+        // launch — the (disk-cached) mediaProgress map makes it reliable.
+        // RESTORED sessions only (updatedAt stamp present): a fresh /play
+        // response IS current server truth, and adopting a possibly-stale
+        // cached row over it would invert the feature. The saved-session
+        // stamp counts only when it belongs to THIS item/episode — an
+        // unrelated book's save must not suppress a legitimate adoption.
+        const isRestoredSession = Number(session.updatedAt) > 0;
+        if (isRestoredSession) {
+          const serverProg2 = useUserStore
+            .getState()
+            .getMediaProgress(libraryItemId, session.episodeId);
+          const serverAt2 = Number(serverProg2?.lastUpdate) || 0;
+          const savedMatches =
+            saved &&
+            (saved.libraryItemId || saved.libraryItem?.id) === libraryItemId &&
+            (saved.episodeId || null) === (session.episodeId || null);
+          const localAt2 = Math.max(
+            Number(session.updatedAt) || 0,
+            savedMatches ? Number(saved.updatedAt) || 0 : 0
+          );
+          if (
+            typeof serverProg2?.currentTime === "number" &&
+            serverAt2 > localAt2 + 10000 &&
+            Math.abs(serverProg2.currentTime - startAbs) > 2
+          ) {
+            console.log(
+              `[PlaybackStore] Server position is fresher (${serverProg2.currentTime}s vs ${startAbs}s) — resuming from server.`
+            );
+            startAbs = serverProg2.currentTime;
+          }
+        }
       } catch {}
+
+      // Defensive clamp: a garbage server currentTime (past the end, or
+      // negative) went straight into skip/seekTo and the position state.
+      startAbs = Math.max(0, bookDurationS > 0 ? Math.min(startAbs, bookDurationS) : startAbs);
 
       // The chapter index for the resume position — set in the same state
       // write below so an end-of-chapter sleep timer armed before the first
@@ -1059,6 +1375,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await TrackPlayer.reset();
       if (stale()) return false;
       didReset = true;
+      // A pending error-retry belongs to the PREVIOUS queue — recovering it
+      // now would fight the session being prepared.
+      clearErrorRecovery();
       _lastMetaChapter = -2; // force a now-playing metadata refresh for the new book
       // A sleep timer from the previous book must not run against the new one
       // (end-of-chapter timers would pause the new book almost immediately).
@@ -1071,6 +1390,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       _lastLocalSaveAt = 0;
       _finishedSessionId = null;
       _trackOffsets = trackOffsets;
+      // The previous book's pause stamp must not apply its auto-rewind to
+      // this book's first play. (loadLastSession re-seeds it AFTER preparing
+      // the restored session — same book, correct anchor.)
+      _lastPausedAt = null;
 
       await TrackPlayer.add(tracksToLoad);
       if (stale()) return false;
@@ -1082,10 +1405,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (stale()) return false;
 
       if (chapterQueue) {
-        let idx = startChapterIdx >= 0 ? startChapterIdx : 0;
+        // No matching chapter window: a position at/past the end (finished
+        // book) belongs in the LAST chapter — the old `-1 → 0` collapse
+        // seeked ~the whole book into chapter 0's clip, snapping a finished
+        // book back to the start of the book on the first tick.
+        let idx = startChapterIdx;
+        if (idx < 0) {
+          idx = startAbs >= (chapters[chapters.length - 1]?.start || 0) ? chapters.length - 1 : 0;
+          startChapterIdx = idx;
+        }
         if (idx > 0) await TrackPlayer.skip(idx);
         if (stale()) return false;
-        const within = startAbs - (chapters[idx]?.start || 0);
+        const chLen = Math.max(0, (chapters[idx]?.end || 0) - (chapters[idx]?.start || 0));
+        const within = Math.min(chLen, Math.max(0, startAbs - (chapters[idx]?.start || 0)));
         if (within > 0) await TrackPlayer.seekTo(within);
       } else if (startAbs > 0) {
         // Map the absolute resume position into the owning FILE.
@@ -1111,7 +1443,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         playbackSpeed,
         chapters,
         chapterQueue,
-        duration: session.duration || 0,
+        duration: bookDurationS,
         position: startAbs,
         currentChapterIndex: startChapterIdx,
       });
@@ -1169,29 +1501,53 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // store (it stuck true forever with no session to ever clear it).
     if (!get().currentSession) return;
     const { isCasting, castClient } = get();
-    // Auto rewind: on resume, nudge back a little (scaled by how long paused),
-    // unless disabled in Settings.
-    if (_lastPausedAt != null) {
-      const disabled = useUserStore.getState().settings?.disableAutoRewind;
-      if (!disabled) {
-        const rewind = autoRewindSeconds(Date.now() - _lastPausedAt);
-        if (rewind > 0) {
-          // LIVE position: the snapshot can be stale after backgrounding
-          // (throttled 1s interval) — see getLiveAbsolutePosition.
-          const pos = await getLiveAbsolutePosition(get);
-          const target = Math.max(0, pos - rewind);
-          await get().seek(target);
-        }
+    // An errored player (mid-stream network drop) sits IDLE and ignores
+    // play() — re-prepare it BEFORE the auto-rewind below: seeks reject on a
+    // dead player, and a throwing rewind used to abort the entire resume
+    // (skipping retry AND play). Manual resume supersedes any pending
+    // automatic retry.
+    if (!isCasting) {
+      if (!get().isInitialized) {
+        await get().initializePlayer();
       }
-      _lastPausedAt = null;
+      try {
+        const ps: any = await TrackPlayer.getPlaybackState().catch(() => null);
+        if (ps && (ps.state === State.Error || ps.state === State.None)) {
+          clearErrorRecovery();
+          await TrackPlayer.retry();
+        }
+      } catch {}
     }
+    // Auto rewind: on resume, nudge back a little (scaled by how long paused),
+    // unless disabled in Settings. Never let a failing seek strand
+    // _lastPausedAt (a stale stamp turned into a bogus 30s rewind LATER) or
+    // abort the play itself.
+    if (_lastPausedAt != null) {
+      try {
+        const disabled = useUserStore.getState().settings?.disableAutoRewind;
+        if (!disabled) {
+          const rewind = autoRewindSeconds(Date.now() - _lastPausedAt);
+          if (rewind > 0) {
+            // LIVE position: the snapshot can be stale after backgrounding
+            // (throttled 1s interval) — see getLiveAbsolutePosition.
+            const pos = await getLiveAbsolutePosition(get);
+            const target = Math.max(0, pos - rewind);
+            await get().seek(target);
+          }
+        }
+      } catch (e) {
+        console.warn("[PlaybackStore] auto-rewind skipped", e);
+      } finally {
+        _lastPausedAt = null;
+      }
+    }
+    // Re-anchor the sleep timer's wall-clock so a paused-in-background gap
+    // (frozen throttled ticks) isn't charged against the countdown on resume.
+    if (get().sleepTimer) _sleepLastTickAt = Date.now();
     if (isCasting && castClient) {
       try { await castClient.play(); } catch (e) { console.warn("[Cast] play", e); }
       set({ isPlaying: true });
       return;
-    }
-    if (!get().isInitialized) {
-      await get().initializePlayer();
     }
     await TrackPlayer.play();
     set({ isPlaying: true });
@@ -1250,6 +1606,22 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // position past the end (or negative) — clamp to the book bounds.
     const dur = get().duration;
     value = Math.max(0, dur > 0 ? Math.min(value, dur) : value);
+    // A deliberate seek re-arms an end-of-chapter sleep timer to the
+    // DESTINATION chapter — jumping forward past the armed chapter's end
+    // used to read as a "boundary crossing" and pause instantly mid-chapter.
+    const eocTimer = get().sleepTimer;
+    if (eocTimer?.endOfChapter && chapters?.length) {
+      const li = chapters.findIndex((c: any) => value >= (c.start || 0) && value < (c.end || 0));
+      if (li >= 0 && li !== eocTimer.chapterIdx) {
+        set({
+          sleepTimer: {
+            ...eocTimer,
+            chapterIdx: li,
+            remaining: Math.max(0, Math.round((chapters[li].end || 0) - value)),
+          },
+        });
+      }
+    }
     if (isCasting && castClient) {
       const castSeekAbs = get().castSeekAbs;
       // Optimistic: move the scrubber immediately — a cross-track cast seek
@@ -1334,6 +1706,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // Same immediate persist as seek() — a kill right after a chapter jump
       // must not resume at the pre-jump position.
       saveSessionPositionNow(ch.start || 0);
+      // Chapter jumps re-arm an end-of-chapter timer too (see seek()).
+      const t = get().sleepTimer;
+      if (t?.endOfChapter && t.chapterIdx !== index) {
+        set({
+          sleepTimer: {
+            ...t,
+            chapterIdx: index,
+            remaining: Math.max(0, Math.round((ch.end || 0) - (ch.start || 0))),
+          },
+        });
+      }
       return;
     }
     if (isCasting && castClient) {
@@ -1471,6 +1854,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         return;
       }
 
+      // PAUSED: the position is frozen (end-of-chapter remaining can't
+      // change) and the fixed countdown deliberately holds — skip the native
+      // position read and per-tick setVolume entirely, mirroring the progress
+      // interval's paused-skip. Keep the wall-clock anchor fresh so the
+      // paused gap is never charged on resume.
+      if (!get().isPlaying && !get().isCasting) {
+        _sleepLastTickAt = Date.now();
+        return;
+      }
+
       // Real elapsed time since the previous tick — background throttling can
       // stretch the nominal 1s far longer, and the countdown must not stretch
       // with it.
@@ -1527,7 +1920,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           sleepTimerInterval = null;
         }
         set({ sleepTimer: null });
-        get().pause();
+        // pause() can reject on a dead player; this async interval callback's
+        // promise is unobserved, so a bare call became an unhandled rejection.
+        get().pause().catch(() => {});
         // Restore full volume so the next resume isn't silent — even while
         // casting (the local player is paused; without this a fade that
         // overlapped a cast session left local playback quiet forever).
@@ -1562,28 +1957,39 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     ++_sessionGen;
     _trackOffsets = [];
 
+    // Capture the session, then DISARM every persistence driver immediately:
+    // the 1s interval, native progress samples, and the cast mirror all gate
+    // on currentSession/isPlaying, and a straggler firing during the awaits
+    // below used to RE-SAVE the crash-restore blob after we removed it —
+    // resurrecting the dismissed session if the process died soon after.
+    // (chapters/_trackOffsets stay until the final set() so the live-position
+    // read below still maps correctly.)
+    const session = get().currentSession;
+    set({ currentSession: null, isPlaying: false });
+
     // Final flush + close the ABS session before tearing down the player.
     // LIVE position (read BEFORE reset clears the player): dismissing playback
     // from the notification after backgrounded listening is exactly when the
     // snapshot is minutes stale — closing the session with it regressed the
     // server-side position.
     const closeAt = await getLiveAbsolutePosition(get);
-    const session = get().currentSession;
+    // Remove the crash-restore save BEFORE the network close: a process kill
+    // during the (potentially slow) POST used to resurrect the dismissed
+    // session on the next launch.
+    storageHelper.removeLastPlaybackSession();
     if (session?.id) {
       const toSync = _timeListenedAccum;
       _timeListenedAccum = 0;
-      try {
-        await closeSession({
-          sessionId: session.id,
-          currentTime: closeAt,
-          timeListened: toSync,
-          duration: get().duration,
-          libraryItemId: session.libraryItemId,
-          episodeId: session.episodeId || undefined,
-        });
-      } catch {
-        // closeSession already queues on failure; never block teardown.
-      }
+      // Fire-and-forget: closeSession self-queues on failure, and dismissing
+      // playback must never block on a slow network.
+      closeSession({
+        sessionId: session.id,
+        currentTime: closeAt,
+        timeListened: toSync,
+        duration: get().duration,
+        libraryItemId: session.libraryItemId,
+        episodeId: session.episodeId || undefined,
+      }).catch(() => {});
     }
 
     // If casting, stop the receiver's playback too — otherwise dismissing
@@ -1594,7 +2000,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
 
     await TrackPlayer.reset();
-    storageHelper.removeLastPlaybackSession();
+
+    // Nothing left to recover — a retry firing after close would resurrect
+    // the dismissed session's player state.
+    clearErrorRecovery();
 
     if (sleepTimerInterval) {
       clearInterval(sleepTimerInterval);
@@ -1605,6 +2014,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _lastSyncAt = 0;
     _lastLocalSaveAt = 0;
     _finishedSessionId = null;
+    _lastPausedAt = null;
+    _preparedToken = null;
 
     set({
       currentSession: null,

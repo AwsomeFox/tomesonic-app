@@ -46,8 +46,11 @@ function spyActions() {
     nextChapter: jest.fn().mockResolvedValue(undefined),
     previousChapter: jest.fn().mockResolvedValue(undefined),
     setPlaybackSpeed: jest.fn().mockResolvedValue(undefined),
+    loadLastSession: jest.fn().mockResolvedValue(undefined),
   };
-  usePlaybackStore.setState(actions as any);
+  // RemotePlay's headless-restore branch only runs when NO session is loaded;
+  // these routing tests exercise the normal loaded-session path.
+  usePlaybackStore.setState({ ...actions, currentSession: { id: "sess-loaded" } } as any);
   return actions;
 }
 
@@ -70,25 +73,52 @@ beforeEach(() => {
 
 describe("playbackService remote events", () => {
   describe("RemotePlay", () => {
-    it("routes to store.play() (auto-rewind path) when not casting", () => {
+    it("routes to store.play() (auto-rewind path) when not casting", async () => {
       const a = spyActions();
       emit("remote-play");
+      await flush();
       expect(a.play).toHaveBeenCalledTimes(1);
       expect(a.pause).not.toHaveBeenCalled();
     });
 
-    it("acts as a toggle while casting: playing → pause", () => {
+    it("HEADLESS cold start: restores the last session, then plays", async () => {
+      // Steering-wheel/BT play before App.tsx ever mounted: no session in the
+      // store — the handler must loadLastSession() first (this used to be a
+      // silent no-op in the car).
+      const a = spyActions();
+      usePlaybackStore.setState({ currentSession: null } as any);
+      a.loadLastSession.mockImplementation(async () => {
+        usePlaybackStore.setState({ currentSession: { id: "restored" } } as any);
+      });
+      emit("remote-play");
+      await flush();
+      expect(a.loadLastSession).toHaveBeenCalledTimes(1);
+      expect(a.play).toHaveBeenCalledTimes(1);
+    });
+
+    it("HEADLESS cold start with nothing to restore stays a safe no-op", async () => {
+      const a = spyActions();
+      usePlaybackStore.setState({ currentSession: null } as any);
+      emit("remote-play");
+      await flush();
+      expect(a.loadLastSession).toHaveBeenCalledTimes(1);
+      expect(a.play).not.toHaveBeenCalled();
+    });
+
+    it("acts as a toggle while casting: playing → pause", async () => {
       const a = spyActions();
       usePlaybackStore.setState({ isCasting: true, isPlaying: true } as any);
       emit("remote-play");
+      await flush();
       expect(a.pause).toHaveBeenCalledTimes(1);
       expect(a.play).not.toHaveBeenCalled();
     });
 
-    it("acts as a toggle while casting: paused → play", () => {
+    it("acts as a toggle while casting: paused → play", async () => {
       const a = spyActions();
       usePlaybackStore.setState({ isCasting: true, isPlaying: false } as any);
       emit("remote-play");
+      await flush();
       expect(a.play).toHaveBeenCalledTimes(1);
     });
   });

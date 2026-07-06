@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..f4c6e4f 100644
+index b495b5a..c60cbc4 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -1228,7 +1228,20 @@ index b495b5a..f4c6e4f 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -293,9 +1296,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,7 +1209,11 @@ class MusicService : HeadlessJsMediaService() {
+             handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
+             interceptPlayerActionsTriggeredExternally = true,
+             skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
+-            wakeMode = playerOptions?.getInt(WAKE_MODE, 0) ?: 0
++            // Number-safe read: React's Arguments.toBundle stores JS numbers as
++            // Double, so Bundle.getInt() always returned the 0 default and the
++            // requested wake mode was silently dropped (playback then ran with
++            // WAKE_MODE_NONE and stalled when the device dozed mid-stream).
++            wakeMode = playerOptions?.let { BundleUtils.getIntOrNull(it, WAKE_MODE) } ?: 0
+         )
+         player = QueuedAudioPlayer(this@MusicService, options)
+         fakePlayer.release()
+@@ -293,9 +1300,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1240,7 +1253,7 @@ index b495b5a..f4c6e4f 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1309,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1313,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1302,7 +1315,7 @@ index b495b5a..f4c6e4f 100644
          }
      }
  
-@@ -449,6 +1486,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1490,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1313,7 +1326,7 @@ index b495b5a..f4c6e4f 100644
      }
  
      @MainThread
-@@ -792,12 +1833,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,12 +1837,21 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1337,7 +1350,7 @@ index b495b5a..f4c6e4f 100644
          progressUpdateJob?.cancel()
          super.onDestroy()
      }
-@@ -925,6 +1975,168 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +1979,168 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1506,7 +1519,7 @@ index b495b5a..f4c6e4f 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +2147,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2151,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1527,7 +1540,7 @@ index b495b5a..f4c6e4f 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2177,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2181,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1539,7 +1552,7 @@ index b495b5a..f4c6e4f 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2189,34 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2193,34 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })

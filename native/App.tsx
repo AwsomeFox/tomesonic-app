@@ -16,7 +16,7 @@ import { useThemeStore } from "./store/useThemeStore";
 import { useThemeColors } from "./theme/useThemeColors";
 import { DynamicThemeProvider } from "./theme/DynamicThemeContext";
 import { useDownloadStore } from "./store/useDownloadStore";
-import { usePlaybackStore } from "./store/usePlaybackStore";
+import { usePlaybackStore, recoverPlaybackIfNeeded } from "./store/usePlaybackStore";
 import { flushPendingSyncs } from "./utils/progressSync";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 
@@ -45,9 +45,14 @@ export default function App() {
   const lockOrientation = useUserStore((state) => state.settings.lockOrientation);
   const { isConnected } = useNetworkStatus();
 
-  // Regaining connectivity: push any progress that queued while offline.
+  // Regaining connectivity: push any progress that queued while offline, and
+  // give an error-stalled player its stream back (the auto-retry timers are
+  // throttled in the background — connectivity return is the reliable signal).
   useEffect(() => {
-    if (isConnected) flushPendingSyncs().catch(() => {});
+    if (isConnected) {
+      flushPendingSyncs().catch(() => {});
+      recoverPlaybackIfNeeded().catch(() => {});
+    }
   }, [isConnected]);
 
   useEffect(() => {
@@ -66,10 +71,14 @@ export default function App() {
   }, [initializeUser, initializeTheme]);
 
   // When the app returns to the foreground, flush any playback-progress syncs
-  // that were queued while offline so the server catches up.
+  // that were queued while offline, and recover a player that errored while
+  // the device slept (background retry timers may never have fired).
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") flushPendingSyncs().catch(() => {});
+      if (state === "active") {
+        flushPendingSyncs().catch(() => {});
+        recoverPlaybackIfNeeded().catch(() => {});
+      }
     });
     return () => sub.remove();
   }, []);

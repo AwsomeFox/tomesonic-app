@@ -129,6 +129,24 @@ export const storageHelper = {
     storage.remove("lastPlaybackSession");
   },
 
+  // Media-progress cache — the per-item progress map mirrored to disk so an
+  // OFFLINE cold start still knows every book's position/finished state.
+  // Without it the in-memory map started empty, and playing any downloaded
+  // book that wasn't the single last-played session resumed at 0 — then
+  // queued that 0 to the server, regressing every other device.
+  getMediaProgressCache: (): Record<string, any> => {
+    // Shape-validate: corrupted-but-valid JSON (array, number) must not be
+    // handed to callers that assume a plain keyed object.
+    const parsed = safeParse(storage.getString("mediaProgressCache"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  },
+  setMediaProgressCache: (map: Record<string, any>) => {
+    storage.set("mediaProgressCache", JSON.stringify(map || {}));
+  },
+  removeMediaProgressCache: () => {
+    storage.remove("mediaProgressCache");
+  },
+
   // Global playback speed — persisted so resuming any book (in-app or via
   // Android Auto) restores the last speed the user set.
   getPlaybackRate: (): number => {

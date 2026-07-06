@@ -48,8 +48,17 @@ function persistedSession() {
 }
 
 // Prepares a real session (which resets the module-level sync bookkeeping and
-// arms the 1s loop created by initializePlayer).
+// arms the 1s loop created by initializePlayer). The loop skips its native
+// polls entirely while the store says paused (energy: a paused session must
+// not burn bridge calls) — production flips isPlaying via play(), native
+// progress samples, or the PlaybackState event; these tests mirror that by
+// stamping isPlaying after prepare.
 async function startLoop(sessionOver: Record<string, any> = {}) {
+  await doPrepare(sessionOver);
+  usePlaybackStore.setState({ isPlaying: true });
+}
+
+async function doPrepare(sessionOver: Record<string, any> = {}) {
   await usePlaybackStore.getState().preparePlaybackSession(
     {
       id: "sess1",
