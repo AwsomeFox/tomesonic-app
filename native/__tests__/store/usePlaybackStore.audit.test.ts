@@ -24,6 +24,7 @@ import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import {
   usePlaybackStore,
   onPlaybackError,
+  onNativeProgressSample,
   recoverPlaybackIfNeeded,
 } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -94,6 +95,32 @@ describe("usePlaybackStore audit fixes", () => {
       expect(usePlaybackStore.getState().duration).toBe(600);
     });
 
+    it("ignores filtered-out garbage chapters when deriving duration", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          duration: undefined,
+          chapters: [
+            { id: 0, title: "c1", start: 0, end: 100 },
+            // Non-finite start → excluded from playback; its huge end must
+            // not inflate the book duration (auto-finish would become
+            // unreachable and progress would pin near 0).
+            { id: 1, title: "junk", start: "x", end: 999999 },
+          ],
+          audioTracks: [{ index: 0, contentUrl: "/f0.mp3", duration: undefined, startOffset: 0 }],
+        }),
+        true
+      );
+      expect(usePlaybackStore.getState().duration).toBe(100);
+    });
+
+    it("treats a negative session.duration as unknown", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({ duration: -5 }),
+        true
+      );
+      expect(usePlaybackStore.getState().duration).toBe(300); // summed tracks
+    });
+
     it("falls back to the chapter span for a single-file book", async () => {
       await usePlaybackStore.getState().preparePlaybackSession(
         serverSession({
@@ -154,12 +181,59 @@ describe("usePlaybackStore audit fixes", () => {
       expect(usePlaybackStore.getState().currentChapterIndex).toBe(2);
     });
 
+    it("a mid-book resume maps to the owning chapter", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          currentTime: 150,
+          chapters: [
+            { id: 0, title: "c1", start: 0, end: 100 },
+            { id: 1, title: "c2", start: 100, end: 200 },
+            { id: 2, title: "c3", start: 200, end: 300 },
+          ],
+        }),
+        false
+      );
+      expect(jest.mocked(TrackPlayer.skip)).toHaveBeenCalledWith(1);
+      expect(usePlaybackStore.getState().currentChapterIndex).toBe(1);
+    });
+
+    it("resuming into what was a chapter GAP lands in the preceding chapter", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          currentTime: 110, // inside the original 100→120 gap
+          duration: 250,
+          chapters: [
+            { id: 0, title: "c1", start: 0, end: 100 },
+            { id: 1, title: "c2", start: 120, end: 250 },
+          ],
+        }),
+        false
+      );
+      // Normalization attributed the gap to chapter 1 (end 100→120).
+      expect(usePlaybackStore.getState().currentChapterIndex).toBe(0);
+    });
+
     it("clamps a garbage past-the-end resume position", async () => {
       await usePlaybackStore.getState().preparePlaybackSession(
         serverSession({ currentTime: 99999 }),
         false
       );
       expect(usePlaybackStore.getState().position).toBe(300);
+    });
+
+    it("clamps negative and non-numeric resume positions to 0", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({ currentTime: -50 }),
+        false
+      );
+      expect(usePlaybackStore.getState().position).toBe(0);
+
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({ id: "sess-nan", currentTime: "abc" }),
+        false
+      );
+      // A non-numeric string used to survive to the clamp and become NaN.
+      expect(usePlaybackStore.getState().position).toBe(0);
     });
 
     it("adopts a meaningfully fresher SERVER position for restored sessions", async () => {
@@ -181,6 +255,17 @@ describe("usePlaybackStore audit fixes", () => {
   describe("session lifecycle", () => {
     it("switching books closes the previous server session with its unsynced time", async () => {
       await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      // Accrue ~2s of UNSYNCED listening time via native samples: the first
+      // sample fires the baseline 15s sync (fresh session), so accrue after
+      // it. Put the live player at 42s so the close carries the real position.
+      onNativeProgressSample({ position: 39, duration: 300 });
+      jest.setSystemTime(BASE + 1000);
+      onNativeProgressSample({ position: 40, duration: 300 }); // baseline sync consumes 1s
+      jest.setSystemTime(BASE + 3000);
+      onNativeProgressSample({ position: 42, duration: 300 }); // +2s, stays accumulated
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockResolvedValue({ position: 42, duration: 300, buffered: 0 } as any);
       jest.mocked(closeSession).mockClear();
 
       await usePlaybackStore
@@ -190,10 +275,10 @@ describe("usePlaybackStore audit fixes", () => {
       // Book switches used to leak the old ABS /play session forever and drop
       // up to 15s of accumulated listening stats.
       expect(closeSession).toHaveBeenCalledTimes(1);
-      expect(jest.mocked(closeSession).mock.calls[0][0]).toMatchObject({
-        sessionId: "sess1",
-        libraryItemId: "item1",
-      });
+      const payload = jest.mocked(closeSession).mock.calls[0][0] as any;
+      expect(payload).toMatchObject({ sessionId: "sess1", libraryItemId: "item1" });
+      expect(payload.currentTime).toBe(42);
+      expect(payload.timeListened).toBeCloseTo(2, 1);
     });
 
     it("re-preparing the SAME session does not self-close it", async () => {
@@ -220,6 +305,26 @@ describe("usePlaybackStore audit fixes", () => {
       expect(storageHelper.getLastPlaybackSession()).toBeNull();
       resolveClose();
       await closing;
+    });
+
+    it("a straggler native sample during a PLAYING dismiss cannot re-save the session", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), true);
+      usePlaybackStore.setState({ position: 42, isPlaying: true });
+
+      let resolveClose: () => void = () => {};
+      jest.mocked(closeSession).mockImplementation(
+        () => new Promise((res) => (resolveClose = () => res(undefined as any)))
+      );
+      const closing = usePlaybackStore.getState().closePlayback();
+      // Mid-close (during the pending network POST) a buffered native
+      // progress sample lands — the drivers were disarmed synchronously, so
+      // it must NOT re-write the crash-restore save that close just removed.
+      onNativeProgressSample({ position: 43, duration: 300 });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(storageHelper.getLastPlaybackSession()).toBeNull();
+      resolveClose();
+      await closing;
+      expect(storageHelper.getLastPlaybackSession()).toBeNull();
     });
   });
 
@@ -268,6 +373,11 @@ describe("usePlaybackStore audit fixes", () => {
       expect(TrackPlayer.retry).not.toHaveBeenCalled();
       const tracks = addedTracks();
       expect(tracks[0].url).toContain("token=tok2");
+      // The rebuild must RESUME: position preserved and playback restarted —
+      // a rebuild that restarted at 0 (or stayed paused) would still pass a
+      // URL-only assertion.
+      expect(usePlaybackStore.getState().position).toBe(123);
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
     });
   });
 
@@ -317,6 +427,27 @@ describe("usePlaybackStore audit fixes", () => {
         mediaProgress: { itemX: { libraryItemId: "itemX", currentTime: 77, updatedAt: BASE } },
       });
       expect(storageHelper.getMediaProgressCache().itemX?.currentTime).toBe(77);
+    });
+
+    it("a burst's FINAL state lands via the trailing flush", async () => {
+      jest.setSystemTime(BASE + 2 * 60 * 60 * 1000);
+      // Leading write...
+      useUserStore.setState({
+        mediaProgress: { itemY: { libraryItemId: "itemY", currentTime: 10, updatedAt: BASE } },
+      });
+      expect(storageHelper.getMediaProgressCache().itemY?.currentTime).toBe(10);
+      // ...then a change INSIDE the window (a finish toggle at the end of a
+      // book is exactly this shape) with nothing after it — the leading-only
+      // throttle dropped it forever.
+      jest.setSystemTime(BASE + 2 * 60 * 60 * 1000 + 1000);
+      useUserStore.setState({
+        mediaProgress: {
+          itemY: { libraryItemId: "itemY", currentTime: 300, isFinished: true, updatedAt: BASE },
+        },
+      });
+      await jest.advanceTimersByTimeAsync(3000);
+      expect(storageHelper.getMediaProgressCache().itemY?.isFinished).toBe(true);
+      expect(storageHelper.getMediaProgressCache().itemY?.currentTime).toBe(300);
     });
   });
 

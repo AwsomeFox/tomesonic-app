@@ -183,7 +183,27 @@ export const useUserStore = create<UserState>((set, get) => ({
         const localAt = Number((p as any)?.updatedAt) || 0;
         const srv = merged[key];
         const srvAt = srv ? Number(srv.lastUpdate) || 0 : 0;
-        if (localAt > srvAt + 10000) merged[key] = { ...(srv || {}), ...(p as any) };
+        if (localAt > srvAt + 10000) {
+          // Server knows the entry (our fresher local write is racing its own
+          // sync) → keep local. A LOCAL-ONLY entry is kept only while an
+          // offline write is still queued for it — with nothing queued, the
+          // server DELETED the progress (web UI / another device), and now
+          // that the map is disk-cached, resurrecting it here would re-upload
+          // the deletion away.
+          const itemId = (p as any)?.libraryItemId;
+          let pendingWrite = true; // helper unavailable → keep (old behavior)
+          if (!srv && itemId) {
+            try {
+              const ps = require("../utils/progressSync");
+              if (typeof ps.hasPendingWritesFor === "function") {
+                pendingWrite = ps.hasPendingWritesFor(itemId, (p as any)?.episodeId);
+              }
+            } catch {}
+          }
+          if (srv || pendingWrite) {
+            merged[key] = { ...(srv || {}), ...(p as any) };
+          }
+        }
       }
       // Skip the setState when nothing changed: this runs on every Home focus,
       // and installing a fresh map object re-renders every card subscribed to
@@ -344,23 +364,41 @@ export const useUserStore = create<UserState>((set, get) => ({
 // Write-through disk mirror for the progress map (see getMediaProgressCache).
 // Every writer funnels through useUserStore.setState — the playback tick, the
 // reader, finish toggles, /api/me merges — so a single subscriber catches
-// them all. Leading-edge throttle (3s): the first change in a window writes
-// immediately (finish flags and big merges land at once, and no timer handle
-// can be stranded), per-second playback ticks cost at most one MMKV write per
-// window, and the ≤3s of map staleness a kill can lose is covered by the
-// separately-flushed lastPlaybackSession save (the actual resume source for
-// the active book).
+// them all. Leading-edge throttle (3s) so per-second playback ticks cost at
+// most one MMKV write per window, PLUS a trailing flush so the FINAL state of
+// a burst always lands: without it, a one-off write inside the window (a
+// finish toggle right at the end of a book, a merge while paused) could stay
+// unpersisted forever if nothing changed afterwards.
 {
+  const WRITE_WINDOW_MS = 3000;
   let lastPersisted: any = null;
   let lastWriteAt = 0;
+  let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+  const write = (map: any) => {
+    lastWriteAt = Date.now();
+    try {
+      storageHelper.setMediaProgressCache(map);
+    } catch {}
+  };
   useUserStore.subscribe((state) => {
     if (state.mediaProgress === lastPersisted) return;
     lastPersisted = state.mediaProgress;
     const now = Date.now();
-    if (now - lastWriteAt < 3000) return;
-    lastWriteAt = now;
-    try {
-      storageHelper.setMediaProgressCache(state.mediaProgress);
-    } catch {}
+    if (now - lastWriteAt >= WRITE_WINDOW_MS) {
+      if (trailingTimer) {
+        clearTimeout(trailingTimer);
+        trailingTimer = null;
+      }
+      write(state.mediaProgress);
+      return;
+    }
+    // Inside the window: (re)schedule the trailing flush. Always replace the
+    // pending timer — a handle invalidated externally (test fake-timer
+    // resets) self-heals on the next change instead of blocking forever.
+    if (trailingTimer) clearTimeout(trailingTimer);
+    trailingTimer = setTimeout(() => {
+      trailingTimer = null;
+      write(useUserStore.getState().mediaProgress);
+    }, Math.max(0, WRITE_WINDOW_MS - (now - lastWriteAt)));
   });
 }

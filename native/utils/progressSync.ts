@@ -144,6 +144,32 @@ export function queueFinishedPatch(libraryItemId: string, finished: boolean) {
   mergePendingPatch(libraryItemId, null, { isFinished: finished });
 }
 
+// True when an un-flushed offline write exists for this item/episode — the
+// signal that a local-only mediaProgress entry is "written here, not yet
+// synced up" rather than "deleted server-side" (see useUserStore merge).
+export function hasPendingWritesFor(
+  libraryItemId: string,
+  episodeId?: string | null
+): boolean {
+  try {
+    const composite = `${libraryItemId}${episodeId ? `-${episodeId}` : ""}`;
+    if (storage.getString(`${PATCH_PREFIX}${composite}`)) return true;
+    for (const k of storage.getAllKeys()) {
+      if (!k.startsWith(PENDING_PREFIX)) continue;
+      try {
+        const p = JSON.parse(storage.getString(k) || "null");
+        if (
+          p?.libraryItemId === libraryItemId &&
+          (p?.episodeId || null) === (episodeId || null)
+        ) {
+          return true;
+        }
+      } catch {}
+    }
+  } catch {}
+  return false;
+}
+
 // --- Offline bookmarks ------------------------------------------------------
 // Bookmarks added while offline used to live only in the modal's component
 // state — gone on unmount. Queue them here and flush with everything else.
