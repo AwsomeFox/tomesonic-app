@@ -112,6 +112,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         authMode: rmabAuthMode(cfg),
         isAdmin: cfg.user?.role === "admin",
         connecting: false,
+        // Fresh session — optimistic "Requested" chips from a previous
+        // server/user don't apply here.
+        requestedAsins: {},
       });
       get().refreshPendingCount();
       return true;
@@ -128,6 +131,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         authMode: null,
         isAdmin: false,
         pendingApprovalCount: 0,
+        requestedAsins: {},
         connectError:
           status === 401 || status === 400 || status === 403
             ? "Token rejected. Paste a login token (admin: Users → Generate login token) or an rmab_ API token."

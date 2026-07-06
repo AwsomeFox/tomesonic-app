@@ -138,6 +138,7 @@ describe("connect", () => {
       authMode: "jwt",
       isAdmin: true,
       pendingApprovalCount: 4,
+      requestedAsins: { B01: "pending" },
     } as any);
     mockedExchange.mockRejectedValue({ response: { status: 401 } });
     const ok = await useRmabStore.getState().connect("https://new.test", "bad");
@@ -149,6 +150,18 @@ describe("connect", () => {
     expect(s.authMode).toBeNull();
     expect(s.isAdmin).toBe(false);
     expect(s.pendingApprovalCount).toBe(0);
+    expect(s.requestedAsins).toEqual({});
+  });
+
+  it("success clears optimistic Requested chips from a previous session", async () => {
+    // Reconnecting (possibly to a DIFFERENT server/user) — the old session's
+    // local request overlay doesn't describe the new one.
+    useRmabStore.setState({ requestedAsins: { B01: "pending" } } as any);
+    mockedExchange.mockResolvedValue(CFG);
+    mockedMe.mockResolvedValue({ user: {} });
+    const ok = await useRmabStore.getState().connect("https://rmab.test", "tok");
+    expect(ok).toBe(true);
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
   });
 });
 
