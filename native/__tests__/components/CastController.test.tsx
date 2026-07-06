@@ -124,6 +124,22 @@ describe("CastController — connect + queue load", () => {
     expect(items[0].mediaInfo.metadata.subtitle).toBe("J.R.R. Tolkien");
   });
 
+  it("a FINISHED book connects into the last track, not track 0", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 3000, // at the very end of the 3x1000s book
+      isPlaying: false,
+      playbackSpeed: 1,
+    } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+
+    const arg = fake.client.loadMedia.mock.calls[0][0];
+    // startIndex used to collapse -1 → 0, restarting the cast from the start.
+    expect(arg.queueData.startIndex).toBe(2);
+    expect(arg.startTime).toBe(1000); // end of the last track
+  });
+
   it("pauses the local player BEFORE loading the receiver (no double audio)", async () => {
     usePlaybackStore.setState({ currentSession: session, position: 0, isPlaying: true } as any);
     const fake = makeFakeClient();

@@ -184,6 +184,24 @@ describe("usePlaybackStore audit fixes", () => {
       expect(st.chapters[1].end).toBe(300); // tail-extended
     });
 
+    it("coerces valid string chapter coordinates to numbers", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          currentTime: 150,
+          chapters: [
+            { id: 0, title: "c1", start: "0", end: "100" },
+            { id: 1, title: "c2", start: "100", end: "300" },
+          ],
+        }),
+        false
+      );
+      const st = usePlaybackStore.getState();
+      // String coordinates would turn `start + relative` into concatenation.
+      expect(st.chapters[1].start).toBe(100);
+      expect(typeof st.chapters[1].start).toBe("number");
+      expect(st.currentChapterIndex).toBe(1);
+    });
+
     it("returns an empty-object cache for corrupted non-object JSON", () => {
       storage.set("mediaProgressCache", JSON.stringify([1, 2, 3]));
       expect(storageHelper.getMediaProgressCache()).toEqual({});
@@ -265,6 +283,22 @@ describe("usePlaybackStore audit fixes", () => {
       expect(usePlaybackStore.getState().position).toBe(0);
     });
 
+    it("does NOT adopt a cached row over a fresh /play session (no updatedAt)", async () => {
+      // A /play response IS current server truth. A disk-cached mediaProgress
+      // row — however fresh its lastUpdate stamp — must not override it, or a
+      // stale cache would drag a fresh session backward and re-upload it.
+      useUserStore.setState({
+        mediaProgress: {
+          item1: { libraryItemId: "item1", currentTime: 200, lastUpdate: BASE - 1000 },
+        },
+      });
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({ currentTime: 50 }), // no updatedAt → fresh /play session
+        false
+      );
+      expect(usePlaybackStore.getState().position).toBe(50);
+    });
+
     it("adopts a meaningfully fresher SERVER position for restored sessions", async () => {
       // Another device listened further overnight; this session restore
       // carries yesterday evening's local position.
@@ -278,6 +312,31 @@ describe("usePlaybackStore audit fixes", () => {
         false
       );
       expect(usePlaybackStore.getState().position).toBe(200);
+    });
+  });
+
+  describe("cold-start auto-rewind", () => {
+    it("loadLastSession re-seeds the rewind anchor: first play() nudges back", async () => {
+      // Saved an hour ago; a process death wiped the in-memory pause stamp —
+      // without the reseed the first resume dropped the user cold mid-sentence.
+      storageHelper.setLastPlaybackSession({
+        ...serverSession(),
+        currentTime: 100,
+        updatedAt: BASE - 60 * 60 * 1000,
+      });
+      jest.mocked(api.get).mockRejectedValue(new Error("offline")); // freshness GET fails → local stands
+      await usePlaybackStore.getState().loadLastSession();
+      expect(usePlaybackStore.getState().currentSession).toBeTruthy();
+
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({
+        position: 100,
+        duration: 300,
+        buffered: 0,
+      } as any);
+      jest.mocked(TrackPlayer.seekTo).mockClear();
+      await usePlaybackStore.getState().play();
+      // 1h away → 20s auto-rewind from the live position.
+      expect(jest.mocked(TrackPlayer.seekTo).mock.calls.at(-1)![0]).toBe(80);
     });
   });
 
@@ -480,7 +539,39 @@ describe("usePlaybackStore audit fixes", () => {
     });
   });
 
+  describe("account lifecycle", () => {
+    it("logout clears the disk progress cache", async () => {
+      storageHelper.setMediaProgressCache({
+        item1: { libraryItemId: "item1", currentTime: 42 },
+      });
+      await useUserStore.getState().logout();
+      expect(storageHelper.getMediaProgressCache()).toEqual({});
+    });
+  });
+
   describe("sleep-timer seek interaction", () => {
+    it("chapter-skip nav (nextChapter) re-arms an end-of-chapter timer too", async () => {
+      // nextChapter does NOT funnel through seek() in chapter-queue mode —
+      // its own re-arm block is the only guard against an instant fire.
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          currentTime: 10,
+          chapters: [
+            { id: 0, title: "c1", start: 0, end: 100 },
+            { id: 1, title: "c2", start: 100, end: 200 },
+            { id: 2, title: "c3", start: 200, end: 300 },
+          ],
+        }),
+        true
+      );
+      usePlaybackStore.getState().setSleepTimer(0, true); // end of chapter 0
+      jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
+      await usePlaybackStore.getState().nextChapter();
+      expect(usePlaybackStore.getState().sleepTimer?.chapterIdx).toBe(1);
+      expect(usePlaybackStore.getState().sleepTimer).not.toBeNull();
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+    });
+
     it("seeking forward past the armed chapter re-arms instead of firing mid-chapter", async () => {
       await usePlaybackStore.getState().preparePlaybackSession(
         serverSession({
