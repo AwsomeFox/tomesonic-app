@@ -676,6 +676,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   setCastSeekHandler: (fn) => set({ castSeekAbs: fn }),
 
   loadLastSession: async () => {
+    // A session is already loaded — restoring over it would TrackPlayer.reset()
+    // the LIVE queue and re-prepare it paused. This is not theoretical: Android
+    // reclaims the Activity while the foreground service keeps playing, and
+    // reopening the app remounts App.tsx on the living JS context, re-running
+    // its init → loadLastSession — which paused active background playback the
+    // moment the user opened the app. The in-memory session (playing OR
+    // paused) is always fresher than the disk save; restore is only for cold
+    // starts with an empty store.
+    if (get().currentSession) {
+      console.log("[PlaybackStore] Live session active — skipping saved-session restore.");
+      return;
+    }
     const serverConfig = storageHelper.getServerConfig();
     if (!serverConfig || !serverConfig.token || !serverConfig.address) {
       console.log("[PlaybackStore] No active authenticated session, skipping session load.");

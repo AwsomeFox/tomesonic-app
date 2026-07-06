@@ -917,6 +917,19 @@ describe("offline local-session listening bank", () => {
     expect(localSessionKeys()).toHaveLength(0);
   });
 
+  it("a 401/403 keeps the record queued (token mid-rotation succeeds on a later flush)", async () => {
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+    });
+    mockedPost.mockRejectedValue({ response: { status: 401 } });
+    await flushPendingSyncs();
+    expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 30, syncedTimeListening: 0 });
+    mockedPost.mockRejectedValue({ response: { status: 403 } });
+    await flushPendingSyncs();
+    expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 30, syncedTimeListening: 0 });
+    expect(hasAnyPendingSyncs()).toBe(true);
+  });
+
   it("a network error (no response) keeps the record queued for the next flush", async () => {
     await withFixedNow(() => {
       recordLocalListening("li1", undefined, 100, 3600, 30);

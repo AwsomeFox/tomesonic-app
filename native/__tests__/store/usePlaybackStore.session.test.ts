@@ -462,6 +462,32 @@ describe("usePlaybackStore sessions", () => {
       expect(usePlaybackStore.getState().currentSession).toBeNull();
     });
 
+    it("never restores over a LIVE session — reopening the app paused background playback", async () => {
+      // Android reclaims the Activity while the foreground service keeps
+      // playing; reopening remounts App.tsx on the living JS context and its
+      // init re-runs loadLastSession. Restoring here reset the live queue and
+      // re-prepared it paused — playback stopped the moment the app opened.
+      storageHelper.setLastPlaybackSession({
+        ...serverSession(),
+        currentTime: 100,
+        updatedAt: BASE,
+      });
+      usePlaybackStore.setState({
+        currentSession: { id: "sess-live", libraryItemId: "item1" },
+        isPlaying: true,
+        position: 555,
+      } as any);
+
+      await usePlaybackStore.getState().loadLastSession();
+
+      const s = usePlaybackStore.getState();
+      expect(s.currentSession.id).toBe("sess-live");
+      expect(s.isPlaying).toBe(true);
+      expect(s.position).toBe(555);
+      expect(TrackPlayer.reset).not.toHaveBeenCalled();
+      expect(mockGet).not.toHaveBeenCalled();
+    });
+
     it("restores the saved session paused", async () => {
       storageHelper.setLastPlaybackSession({
         ...serverSession(),

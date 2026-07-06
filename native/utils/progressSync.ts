@@ -452,7 +452,9 @@ async function flushPendingLocalSessions(): Promise<void> {
       const status = e?.response?.status;
       // The server REJECTED it (validation, endpoint missing on an old ABS) —
       // a retry can never succeed; drop it rather than poison every flush.
-      if (status && status >= 400 && status < 500) {
+      // 401/403 excluded: those can be a token mid-rotation (the interceptor's
+      // skip-logout path surfaces them) and DO succeed on a later flush.
+      if (status && status >= 400 && status < 500 && status !== 401 && status !== 403) {
         appLogger.warn(`local session ${rec.id} rejected (${status}) — dropping`, "ProgressSync");
         try {
           storage.remove(key);
