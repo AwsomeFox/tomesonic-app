@@ -9,7 +9,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 
 /**
@@ -39,6 +39,10 @@ export default function BottomSheet({
 }) {
   const colors = useThemeColors();
   const { height: windowHeight } = useWindowDimensions();
+  // Root-provider insets via the hook: the native SafeAreaView computes its
+  // OWN window inside a Modal and comes back 0 on Android edge-to-edge,
+  // clipping sheet content under the gesture bar.
+  const insets = useSafeAreaInsets();
   // Keep the Modal mounted through the exit animation.
   const [mounted, setMounted] = useState(visible);
   const backdrop = useRef(new Animated.Value(0)).current;
@@ -132,7 +136,7 @@ export default function BottomSheet({
             maxHeight,
           }}
         >
-          <SafeAreaView edges={["bottom"]}>
+          <View style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
             {showHandle ? (
               <View
                 style={{
@@ -146,7 +150,7 @@ export default function BottomSheet({
               />
             ) : null}
             {children}
-          </SafeAreaView>
+          </View>
         </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
