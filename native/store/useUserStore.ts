@@ -179,6 +179,15 @@ export const useUserStore = create<UserState>((set, get) => ({
       // the fresher local entry instead; once the queued write lands, the
       // server's lastUpdate moves past it and the server copy wins again.
       const merged: Record<string, any> = { ...next };
+      // Resolve the pending-writes helper ONCE per merge and memoize per
+      // key — it scans MMKV keys and JSON-parses queued syncs, and this
+      // merge runs on every Bookshelf focus.
+      let hasPendingFn: ((i: string, e?: string | null) => boolean) | null = null;
+      try {
+        const ps = require("../utils/progressSync");
+        if (typeof ps.hasPendingWritesFor === "function") hasPendingFn = ps.hasPendingWritesFor;
+      } catch {}
+      const pendingMemo = new Map<string, boolean>();
       for (const [key, p] of Object.entries(prev)) {
         const localAt = Number((p as any)?.updatedAt) || 0;
         const srv = merged[key];
@@ -192,13 +201,12 @@ export const useUserStore = create<UserState>((set, get) => ({
           // the deletion away.
           const itemId = (p as any)?.libraryItemId;
           let pendingWrite = true; // helper unavailable → keep (old behavior)
-          if (!srv && itemId) {
-            try {
-              const ps = require("../utils/progressSync");
-              if (typeof ps.hasPendingWritesFor === "function") {
-                pendingWrite = ps.hasPendingWritesFor(itemId, (p as any)?.episodeId);
-              }
-            } catch {}
+          if (!srv && itemId && hasPendingFn) {
+            const memoKey = `${itemId}|${(p as any)?.episodeId || ""}`;
+            if (!pendingMemo.has(memoKey)) {
+              pendingMemo.set(memoKey, hasPendingFn(itemId, (p as any)?.episodeId));
+            }
+            pendingWrite = pendingMemo.get(memoKey)!;
           }
           if (srv || pendingWrite) {
             merged[key] = { ...(srv || {}), ...(p as any) };
