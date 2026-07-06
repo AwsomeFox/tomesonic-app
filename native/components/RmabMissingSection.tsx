@@ -120,13 +120,18 @@ export default function RmabMissingSection({
               <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 15, fontWeight: "500" }}>
                 {book.title}
               </Text>
-              {book.author || book.narrator ? (
-                <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
-                  {[book.author, book.narrator ? `read by ${book.narrator}` : null]
-                    .filter(Boolean)
-                    .join(" • ")}
-                </Text>
-              ) : null}
+              {/* Series position leads (this list is usually a series gap),
+                  then year, author, narrator. */}
+              <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+                {[
+                  book.sequence ? `Book ${book.sequence}` : null,
+                  book.releaseDate ? String(book.releaseDate).slice(0, 4) : null,
+                  book.author,
+                  book.narrator ? `read by ${book.narrator}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" • ")}
+              </Text>
             </View>
             {status ? (
               <View

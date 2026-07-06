@@ -17,7 +17,14 @@ import { createRequest } from "../../utils/rmab";
 const initial = useRmabStore.getState();
 
 const BOOKS = [
-  { asin: "B01", title: "Book One", author: "A. Author", isAvailable: false },
+  {
+    asin: "B01",
+    title: "Book One",
+    author: "A. Author",
+    isAvailable: false,
+    sequence: "3",
+    releaseDate: "2024-05-01",
+  },
   { asin: "B02", title: "Book Two", author: "A. Author", isAvailable: true }, // in library — filtered
   { asin: "B03", title: "Book Three", narrator: "N. Narrator", isAvailable: false, requestStatus: "pending" },
 ];
@@ -40,6 +47,8 @@ describe("RmabMissingSection", () => {
     await render(<RmabMissingSection fetchMissing={jest.fn().mockResolvedValue(BOOKS)} />);
 
     await screen.findByText("Book One");
+    // Series position + year lead the detail line.
+    expect(screen.getByText("Book 3 • 2024 • A. Author")).toBeTruthy();
     // isAvailable book is filtered out entirely.
     expect(screen.queryByText("Book Two")).toBeNull();
     // Server-known request renders as the status chip, not a Request button.
