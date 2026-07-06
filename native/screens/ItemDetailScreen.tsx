@@ -1407,10 +1407,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           </>
         ) : (
           <>
-            <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
-              <Icon name="send" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-              <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>
+            <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 6 }}>
+              <Text style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}>
                 Send ebook to device
+              </Text>
+              <Text style={{ fontSize: 13, color: colors.onSurfaceVariant, marginTop: 2 }}>
+                The server emails the file to the device you pick.
               </Text>
             </View>
             {ereaderDevices.map((d: any) => (
@@ -1424,15 +1426,32 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 style={({ pressed }) => ({
                   flexDirection: "row",
                   alignItems: "center",
+                  minHeight: 64,
                   paddingHorizontal: 24,
-                  paddingVertical: 16,
+                  paddingVertical: 10,
                   opacity: sendingTo && sendingTo !== d.name ? 0.5 : 1,
                   backgroundColor: pressed ? colors.surfaceContainerHighest || colors.surfaceContainer : "transparent",
-                  transform: [{ scale: pressed ? 0.98 : 1 }],
                 })}
               >
-                <Icon name="book" size={22} color={colors.onSurfaceVariant} style={{ marginRight: 16 }} />
-                <Text style={{ flex: 1, fontSize: 16, color: colors.onSurface }}>{d.name}</Text>
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 20,
+                    backgroundColor: colors.secondaryContainer,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginRight: 16,
+                  }}
+                >
+                  <Icon name="book" size={20} color={colors.onSecondaryContainer} />
+                </View>
+                <Text
+                  numberOfLines={1}
+                  style={{ flex: 1, fontSize: 16, fontWeight: "500", color: colors.onSurface }}
+                >
+                  {d.name}
+                </Text>
                 {sendingTo === d.name ? <ActivityIndicator size="small" color={colors.primary} /> : null}
               </Pressable>
             ))}
