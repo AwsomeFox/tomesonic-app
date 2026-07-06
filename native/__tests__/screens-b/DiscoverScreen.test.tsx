@@ -12,6 +12,8 @@ jest.mock("../../utils/rmab", () => ({
   getBookdatePreferences: jest.fn().mockResolvedValue({ libraryScope: "full", favoriteBookIds: [], customPrompt: "" }),
   updateBookdatePreferences: jest.fn().mockResolvedValue({}),
   getBookdateLibrary: jest.fn().mockResolvedValue([]),
+  generateBookdateRecommendations: jest.fn().mockResolvedValue([]),
+  clearRmabCaches: jest.fn(),
   getPopularBooks: jest.fn().mockResolvedValue([]),
   getNewReleases: jest.fn().mockResolvedValue([]),
   getAudibleCategories: jest.fn().mockResolvedValue([]),
@@ -189,6 +191,19 @@ describe("DiscoverScreen (BookDate)", () => {
         customPrompt: "fun narrators",
       })
     );
+  });
+
+  it("Regenerate picks runs a fresh generation and refreshes the deck", async () => {
+    const { generateBookdateRecommendations } = require("../../utils/rmab");
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+    (getBookdateRecommendations as jest.Mock).mockClear();
+    await fireEvent.press(screen.getByLabelText("BookDate preferences"));
+    await screen.findByText("BookDate Preferences");
+    await fireEvent.press(screen.getByLabelText("Regenerate picks now"));
+    await waitFor(() => expect(generateBookdateRecommendations).toHaveBeenCalled());
+    // onSaved -> deck reload.
+    await waitFor(() => expect(getBookdateRecommendations).toHaveBeenCalled());
   });
 
   it("an empty deck offers to generate more picks", async () => {

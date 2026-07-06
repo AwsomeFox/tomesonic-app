@@ -345,6 +345,13 @@ export async function swipeBookdate(
   return rmabRequest("post", "/api/bookdate/swipe", { recommendationId, action, markedAsKnown });
 }
 
+/** Force a FRESH AI generation (slow — up to a minute); returns the new
+ *  deck including any cached unswiped recs. */
+export async function generateBookdateRecommendations(): Promise<BookdateRec[]> {
+  const data = await rmabRequest<any>("post", "/api/bookdate/generate", undefined, 120000);
+  return data?.recommendations || [];
+}
+
 /** Reverts the most recent swipe and returns its recommendation. */
 export async function undoBookdateSwipe(): Promise<any> {
   return rmabRequest("post", "/api/bookdate/undo");

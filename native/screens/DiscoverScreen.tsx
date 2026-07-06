@@ -6,6 +6,7 @@ import {
   Animated,
   Easing,
   PanResponder,
+  RefreshControl,
   useWindowDimensions,
   ScrollView,
   FlatList,
@@ -21,6 +22,8 @@ import BookdatePreferencesSheet from "../components/BookdatePreferencesSheet";
 import { useRmabStore } from "../store/useRmabStore";
 import {
   getBookdateRecommendations,
+  generateBookdateRecommendations,
+  clearRmabCaches,
   swipeBookdate,
   undoBookdateSwipe,
   getPopularBooks,
@@ -60,6 +63,7 @@ export default function DiscoverScreen({ navigation }: any) {
   // ── Detail sheet ─────────────────────────────────────────────────────────
   const [detail, setDetail] = useState<RmabBook | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [requesting, setRequesting] = useState(false);
 
   const translateX = useRef(new Animated.Value(0)).current;
@@ -167,6 +171,15 @@ export default function DiscoverScreen({ navigation }: any) {
   useEffect(() => {
     loadDeck();
     loadShelves();
+  }, [loadDeck, loadShelves]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    // Bypass the 15-minute discovery cache — a pull means "give me fresh".
+    clearRmabCaches();
+    setDeck(null);
+    await Promise.all([loadDeck(), Promise.resolve(loadShelves())]);
+    if (aliveRef.current) setRefreshing(false);
   }, [loadDeck, loadShelves]);
 
   const current = deck && deck.length > 0 ? deck[0] : null;
@@ -298,7 +311,13 @@ export default function DiscoverScreen({ navigation }: any) {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       <TopAppBar navigation={navigation} />
-      <ScrollView contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 110 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+        }
+      >
         {/* ── BookDate deck (hidden entirely when the server has it off) ── */}
         {!bdDisabled ? (
           <View style={{ paddingHorizontal: 20 }}>

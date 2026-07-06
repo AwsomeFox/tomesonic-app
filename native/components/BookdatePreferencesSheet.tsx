@@ -9,6 +9,7 @@ import {
   getBookdatePreferences,
   updateBookdatePreferences,
   getBookdateLibrary,
+  generateBookdateRecommendations,
   resolveRmabUrl,
   BookdatePreferences,
 } from "../utils/rmab";
@@ -35,6 +36,7 @@ export default function BookdatePreferencesSheet({
   const colors = useThemeColors();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scope, setScope] = useState<BookdatePreferences["libraryScope"]>("full");
   const [supportsRatings, setSupportsRatings] = useState(false);
@@ -126,6 +128,22 @@ export default function BookdatePreferencesSheet({
       if (aliveRef.current) setError(e?.response?.data?.error || "Couldn't save preferences");
     } finally {
       if (aliveRef.current) setSaving(false);
+    }
+  };
+
+  const onRegenerate = async () => {
+    if (regenerating) return;
+    setRegenerating(true);
+    setError(null);
+    try {
+      await generateBookdateRecommendations();
+      if (!aliveRef.current) return;
+      onSaved?.();
+      onClose();
+    } catch (e: any) {
+      if (aliveRef.current) setError(e?.response?.data?.error || "Couldn't regenerate picks");
+    } finally {
+      if (aliveRef.current) setRegenerating(false);
     }
   };
 
@@ -295,6 +313,39 @@ export default function BookdatePreferencesSheet({
               {error ? (
                 <Text style={{ color: colors.error, fontSize: 13, marginTop: 6 }}>{error}</Text>
               ) : null}
+
+              {/* Rerun the AI with current preferences — separate from Save. */}
+              <Pressable
+                onPress={onRegenerate}
+                disabled={regenerating || saving}
+                accessibilityRole="button"
+                accessibilityLabel="Regenerate picks now"
+                android_ripple={{ color: colors.onSecondaryContainer + "22" }}
+                style={{
+                  marginTop: 16,
+                  height: 44,
+                  borderRadius: 22,
+                  backgroundColor: colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  opacity: regenerating || saving ? 0.6 : 1,
+                }}
+              >
+                {regenerating ? (
+                  <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
+                ) : (
+                  <>
+                    <Icon name="refresh" size={18} color={colors.onSecondaryContainer} />
+                    <Text style={{ color: colors.onSecondaryContainer, fontSize: 14, fontWeight: "600", marginLeft: 8 }}>
+                      Regenerate picks now
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 11, marginTop: 4, textAlign: "center" }}>
+                Runs a fresh AI generation with the preferences above — can take a minute.
+              </Text>
 
               <View style={{ flexDirection: "row", justifyContent: "flex-end", columnGap: 10, marginTop: 14 }}>
                 <Pressable
