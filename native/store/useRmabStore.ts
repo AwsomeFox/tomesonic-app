@@ -64,7 +64,23 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   connect: async (url, loginToken) => {
     set({ connecting: true, connectError: null });
     try {
-      const cfg = await exchangeLoginToken(url, loginToken);
+      // RMAB's admin UI hands out a one-time LOGIN URL
+      // (https://host/auth/token/login?token=...). Accept it pasted whole —
+      // in either field — and pull the server + token out of it.
+      let effUrl = (url || "").trim();
+      let effToken = (loginToken || "").trim();
+      const urlish = [effToken, effUrl].find((v) => v.includes("token="));
+      if (urlish) {
+        try {
+          const parsed = new URL(urlish);
+          const qToken = parsed.searchParams.get("token");
+          if (qToken) {
+            effToken = qToken;
+            effUrl = parsed.origin;
+          }
+        } catch {}
+      }
+      const cfg = await exchangeLoginToken(effUrl, effToken);
       writeRmabConfig(cfg);
       // Round-trip an authed call so a pasted token that exchanged but can't
       // authenticate (clock skew, revoked session) fails HERE, not later.

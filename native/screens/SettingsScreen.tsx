@@ -327,8 +327,10 @@ export default function SettingsScreen({ navigation }: any) {
             Connect ReadMeABook
           </Text>
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginBottom: 16 }}>
-            Paste a login token (an admin generates it: Users → Generate login token) for full
-            features, or an rmab_ API token (Profile → API Tokens) for search and requests only.
+            For full features (series & author discovery, request management), an admin enables
+            "Login Token" on your user (Admin → Users → Edit permissions) — paste the login URL it
+            shows straight into the token field. An rmab_ API token works too, but only for search
+            and requests.
           </Text>
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
             Server URL

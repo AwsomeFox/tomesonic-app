@@ -67,6 +67,16 @@ describe("connect", () => {
     expect(s.connectError).toBeNull();
   });
 
+  it("accepts RMAB's one-time login URL pasted whole, extracting server + token", async () => {
+    mockedExchange.mockResolvedValue(CFG);
+    mockedMe.mockResolvedValue({});
+    const ok = await useRmabStore
+      .getState()
+      .connect("", "https://rmab.test/auth/token/login?token=SECRET123");
+    expect(ok).toBe(true);
+    expect(mockedExchange).toHaveBeenCalledWith("https://rmab.test", "SECRET123");
+  });
+
   it("an rmab_ API token connects in limited apiToken mode", async () => {
     mockedExchange.mockResolvedValue({ url: "https://rmab.test", apiToken: "rmab_x", user: { id: "u1" } });
     mockedMe.mockResolvedValue({});
