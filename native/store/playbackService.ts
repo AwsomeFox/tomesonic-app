@@ -32,9 +32,30 @@ export function onConnectivityChanged(state: { isConnected?: boolean | null } | 
 
 export async function playbackService() {
   // HEADLESS BOOT (Android Auto cold start): this service can be the first —
-  // and only — JS to run, with App.tsx never mounted. Load the downloads DB
-  // here so preparePlaybackSession can prefer local files in the car (poor
-  // signal is exactly when this matters). Idempotent and cheap (MMKV read).
+  // and only — JS to run, with App.tsx never mounted, so useUserStore's
+  // initialize() never seeds mediaProgress from disk. Left empty, the FIRST
+  // progress tick would run the write-through mirror and overwrite the
+  // durable mediaProgressCache with a single-entry map — wiping every other
+  // downloaded book's offline resume position. Seed it here first. Must run
+  // BEFORE loadDownloadsFromDb below, whose subscriber snapshots resume
+  // positions for the Android Auto downloads mirror.
+  try {
+    const { useUserStore } = require("./useUserStore");
+    const st = useUserStore.getState();
+    if (!st.isInitialized && Object.keys(st.mediaProgress || {}).length === 0) {
+      const { storageHelper } = require("../utils/storage");
+      const cached = storageHelper.getMediaProgressCache();
+      if (cached && Object.keys(cached).length) {
+        useUserStore.setState({ mediaProgress: cached });
+      }
+    }
+  } catch (e) {
+    console.warn("[PlaybackService] headless progress seed failed", e);
+  }
+
+  // Load the downloads DB so preparePlaybackSession can prefer local files in
+  // the car (poor signal is exactly when this matters). Idempotent and cheap
+  // (MMKV read).
   try {
     const { useDownloadStore } = require("./useDownloadStore");
     useDownloadStore.getState().loadDownloadsFromDb();

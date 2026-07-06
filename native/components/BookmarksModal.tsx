@@ -48,6 +48,10 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
   const colors = useThemeColors();
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(false);
+  // Which item the current `bookmarks` state belongs to — the modal stays
+  // mounted across book switches, so an offline load must not merge the new
+  // item's queued bookmarks into (or silently keep) the PREVIOUS item's list.
+  const loadedForRef = React.useRef<string | null>(null);
 
   const loadBookmarks = useCallback(async () => {
     if (!libraryItemId) {
@@ -72,6 +76,7 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
         .filter((p) => !server.some((s) => Math.floor(s.time) === p.time))
         .map((p) => ({ libraryItemId, title: p.title, time: p.time }));
       setBookmarks([...server, ...pending].sort((a, b) => a.time - b.time));
+      loadedForRef.current = libraryItemId;
     } catch (e) {
       // Offline / local item: show the queued bookmarks so they aren't
       // invisible until connectivity returns.
@@ -80,15 +85,17 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
         title: p.title,
         time: p.time,
       }));
-      if (pending.length) {
-        setBookmarks((prev) => {
-          const merged = [...prev];
-          for (const p of pending) {
-            if (!merged.some((b) => Math.floor(b.time) === p.time)) merged.push(p);
-          }
-          return merged.sort((a, b) => a.time - b.time);
-        });
-      }
+      setBookmarks((prev) => {
+        // Keep previously-loaded rows only if they belong to THIS item —
+        // otherwise a book switched to while offline showed (and let the user
+        // "delete") the previous book's bookmarks against the wrong id.
+        const merged = loadedForRef.current === libraryItemId ? [...prev] : [];
+        for (const p of pending) {
+          if (!merged.some((b) => Math.floor(b.time) === p.time)) merged.push(p);
+        }
+        return merged.sort((a, b) => a.time - b.time);
+      });
+      loadedForRef.current = libraryItemId;
     } finally {
       setLoading(false);
     }

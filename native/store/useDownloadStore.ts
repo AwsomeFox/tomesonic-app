@@ -432,12 +432,19 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   // mirrored into the Android Auto file. Aborts anything in flight, deletes
   // every file, clears all db rows, and empties the store + AA mirror.
   removeAllDownloads: async () => {
-    const ids = Array.from(
-      new Set([
-        ...Object.keys(get().completedDownloads),
-        ...Object.keys(get().activeDownloads),
-      ])
-    );
+    const byId: Record<string, DownloadItem> = {
+      ...get().completedDownloads,
+      ...get().activeDownloads,
+    };
+    const ids = Object.keys(byId);
+    // Empty the store FIRST (synchronously): an in-flight download loop checks
+    // its store entry after every part — with the entry gone it winds down
+    // quietly instead of throwing into failDownload, which would re-save a
+    // ghost "failed" row to the db AFTER our removeDownloadItem below and
+    // leak the previous account's book into the next account's Downloads.
+    // This also lets sweepOrphanFolders treat every leftover folder as
+    // orphaned (it skips folders owned by in-store ids).
+    set({ completedDownloads: {}, activeDownloads: {} });
     try {
       const { downloader } = require("../utils/downloader");
       for (const id of ids) {
@@ -447,7 +454,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       }
     } catch {}
     for (const id of ids) {
-      const item = get().completedDownloads[id] || get().activeDownloads[id];
+      const item = byId[id];
       const folder = folderForItem(item);
       if (folder) {
         try {
@@ -460,11 +467,8 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       } catch {}
       delete _lastDbSaveAt[id];
     }
-    // Clear state BEFORE the sweep — sweepOrphanFolders skips folders owned
-    // by in-store ids, so sweeping first would protect exactly the leftovers
-    // this is meant to remove (items whose folderForItem came back null).
-    set({ completedDownloads: {}, activeDownloads: {} });
-    // Sweep anything the id list missed (orphan folders from older installs).
+    // Sweep anything the id list missed (orphan folders from older installs);
+    // the store was emptied above, so every leftover folder reads as orphaned.
     try {
       const { downloader } = require("../utils/downloader");
       await downloader.sweepOrphanFolders?.();
@@ -513,14 +517,41 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   let _lastKeys = "";
   const sync = (completed: Record<string, any>) => {
     const items = Object.values(completed || {});
-    const key = items.map((d: any) => d.id).sort().join(",");
-    if (key === _lastKeys) return;
-    _lastKeys = key;
     let progressMap: Record<string, any> = {};
     try {
       const { useUserStore } = require("./useUserStore");
       progressMap = useUserStore.getState().mediaProgress || {};
     } catch {}
+    // Fall back to the durable disk cache for ids the in-memory map doesn't
+    // hold (e.g. a boot path that hasn't hydrated yet) — never regress a
+    // book's file-mirrored resume position to 0 just because the map is cold.
+    let diskMap: Record<string, any> | null = null;
+    const timeFor = (id: string): number => {
+      const mem = progressMap[id];
+      if (mem && Number.isFinite(Number(mem.currentTime))) return Number(mem.currentTime);
+      if (diskMap === null) {
+        try {
+          const { storageHelper } = require("../utils/storage");
+          diskMap = storageHelper.getMediaProgressCache() || {};
+        } catch {
+          diskMap = {};
+        }
+      }
+      return Number(diskMap?.[id]?.currentTime) || 0;
+    };
+    // Re-emit when the download SET changes or any resume position moves a
+    // 15s bucket — the old ids-only key meant an hour of listening never
+    // reached the car's cold-start resume file. 15s granularity keeps the
+    // file writes rare while playing.
+    const key = items
+      .map((d: any) => {
+        const id = d.libraryItemId || d.id;
+        return `${d.id}:${Math.floor(timeFor(id) / 15)}`;
+      })
+      .sort()
+      .join(",");
+    if (key === _lastKeys) return;
+    _lastKeys = key;
     const entries = items
       // Audio downloads only — ebook-only downloads can't play in the car.
       .filter((d: any) => d?.meta?.tracks?.length)
@@ -530,7 +561,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         author: d.author || undefined,
         folder: d.localFolderPath || undefined,
         coverPath: (d.parts || []).find((p: any) => p.id === "cover")?.localFilePath || undefined,
-        currentTime: Number(progressMap[d.libraryItemId || d.id]?.currentTime) || 0,
+        currentTime: timeFor(d.libraryItemId || d.id),
         duration: Number(d.meta?.duration) || 0,
         tracks: (d.meta?.tracks || []).map((t: any) => ({
           filename: t.filename,
@@ -542,4 +573,10 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   };
   sync(useDownloadStore.getState().completedDownloads);
   useDownloadStore.subscribe((state) => sync(state.completedDownloads));
+  // Positions advance through useUserStore (playback ticks), not this store —
+  // watch it too so listening progress actually propagates to the car file.
+  try {
+    const { useUserStore } = require("./useUserStore");
+    useUserStore.subscribe(() => sync(useDownloadStore.getState().completedDownloads));
+  } catch {}
 }
