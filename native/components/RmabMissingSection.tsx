@@ -14,9 +14,13 @@ import Pressable from "./HintPressable";
  * button. Renders NOTHING unless RMAB is configured; the screens embedding it
  * (series/author/search) stay RMAB-free otherwise.
  *
- * `fetchMissing` is screen-specific (series lookup, author books, catalog
- * search) and must already return catalog-enriched books; this component
- * applies the `!isAvailable` filter and owns request-button state.
+ * `fetchMissing` is screen-specific and returns MISSING candidates: sources
+ * that know library membership pre-diff themselves (series/author screens
+ * diff Audible catalog books against the library locally and return books
+ * with no `isAvailable` field). This component additionally drops any row
+ * explicitly flagged `isAvailable: true` (RMAB search enrichment) — rows
+ * without the flag are trusted as missing, so don't rely on the filter to
+ * do the diffing. Request-button state lives here.
  */
 export default function RmabMissingSection({
   title = "Missing from your library",
