@@ -7,7 +7,8 @@ import axios from "axios";
  */
 
 const BASE = "https://api.audible.com/1.0";
-const GROUPS = "media,contributors,product_attrs,series";
+// product_desc supplies publisher_summary — the detail sheet's description.
+const GROUPS = "media,contributors,product_attrs,product_desc,series";
 const TIMEOUT = 15000;
 
 export interface AudibleBook {

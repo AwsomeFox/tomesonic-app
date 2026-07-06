@@ -244,6 +244,32 @@ export async function listMyRequests(): Promise<any[]> {
   return data?.results || data?.requests || [];
 }
 
+// --- RMAB home-page shelves (popular / new releases / categories) --------
+// All db-backed on the server (fast) and enriched with isAvailable +
+// requestStatus; cached like the other discovery calls.
+
+export async function getPopularBooks(limit = 12): Promise<RmabBook[]> {
+  const data = await discoveryGet<any>(`/api/audiobooks/popular?limit=${limit}`);
+  return data?.audiobooks || data?.results || [];
+}
+
+export async function getNewReleases(limit = 12): Promise<RmabBook[]> {
+  const data = await discoveryGet<any>(`/api/audiobooks/new-releases?limit=${limit}`);
+  return data?.audiobooks || data?.results || [];
+}
+
+export async function getAudibleCategories(): Promise<{ id: string; name: string }[]> {
+  const data = await discoveryGet<any>("/api/audible/categories");
+  return data?.categories || [];
+}
+
+export async function getCategoryBooks(categoryId: string, limit = 12): Promise<RmabBook[]> {
+  const data = await discoveryGet<any>(
+    `/api/audiobooks/category/${encodeURIComponent(categoryId)}?limit=${limit}`
+  );
+  return data?.audiobooks || data?.results || [];
+}
+
 // --- BookDate (AI recommendations) ---------------------------------------
 
 export interface BookdateRec {

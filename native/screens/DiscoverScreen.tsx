@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { View, Text, ActivityIndicator, Animated, Easing, useWindowDimensions, ScrollView } from "react-native";
+import {
+  View,
+  Text,
+  ActivityIndicator,
+  Animated,
+  Easing,
+  useWindowDimensions,
+  ScrollView,
+  FlatList,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -7,33 +16,50 @@ import Icon from "../components/Icon";
 import Pressable from "../components/HintPressable";
 import TopAppBar from "../components/TopAppBar";
 import RmabBookDetailSheet from "../components/RmabBookDetailSheet";
+import { useRmabStore } from "../store/useRmabStore";
 import {
   getBookdateRecommendations,
   swipeBookdate,
   undoBookdateSwipe,
+  getPopularBooks,
+  getNewReleases,
+  getAudibleCategories,
+  getCategoryBooks,
   resolveRmabUrl,
+  RmabBook,
   BookdateRec,
 } from "../utils/rmab";
 
+const MAX_CATEGORY_SHELVES = 6;
+
 /**
- * BookDate — ReadMeABook's AI recommendations as a swipe deck. Like (right)
- * asks the server to REQUEST the book; Pass (left) just records the swipe so
- * it never comes back. The deck refills from the server (cached unswiped recs
- * first, then a fresh AI generation — which can take a minute cold).
+ * Discover — RMAB's home page in the app: the BookDate swipe deck up top
+ * (when the server has it enabled), then Popular / New Releases / Audible
+ * category shelves. Shelf books open the shared detail sheet with a Request
+ * action; the deck requests via Like.
  */
 export default function DiscoverScreen({ navigation }: any) {
   const colors = useThemeColors();
-  const { width: screenWidth } = useWindowDimensions();
-  const [deck, setDeck] = useState<BookdateRec[] | null>(null);
-  const [disabled, setDisabled] = useState(false);
-  const [error, setError] = useState(false);
-  const [errorDetail, setErrorDetail] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [lastLiked, setLastLiked] = useState<string | null>(null);
-  const [detail, setDetail] = useState<any | null>(null);
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const requestedAsins = useRmabStore((s) => s.requestedAsins);
+  const requestBook = useRmabStore((s) => s.requestBook);
 
-  // Card motion: enters with a springy pop, exits flying left/right.
+  // ── BookDate deck ────────────────────────────────────────────────────────
+  const [deck, setDeck] = useState<BookdateRec[] | null>(null);
+  const [bdDisabled, setBdDisabled] = useState(false);
+  const [bdError, setBdError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [lastLiked, setLastLiked] = useState<string | null>(null);
+
+  // ── Shelves ──────────────────────────────────────────────────────────────
+  const [popular, setPopular] = useState<RmabBook[] | null>(null);
+  const [fresh, setFresh] = useState<RmabBook[] | null>(null);
+  const [shelves, setShelves] = useState<{ id: string; name: string; books: RmabBook[] | null }[]>([]);
+
+  // ── Detail sheet ─────────────────────────────────────────────────────────
+  const [detail, setDetail] = useState<RmabBook | null>(null);
+  const [requesting, setRequesting] = useState(false);
+
   const translateX = useRef(new Animated.Value(0)).current;
   const enter = useRef(new Animated.Value(0)).current;
 
@@ -43,34 +69,53 @@ export default function DiscoverScreen({ navigation }: any) {
     Animated.spring(enter, { toValue: 1, tension: 90, friction: 8, useNativeDriver: true }).start();
   }, [enter, translateX]);
 
-  const load = useCallback(async () => {
+  const loadDeck = useCallback(async () => {
     try {
-      setError(false);
-      setDisabled(false);
-      setGenerating(true);
+      setBdError(null);
+      setBdDisabled(false);
       const recs = await getBookdateRecommendations();
       setDeck(recs);
       playEnter();
     } catch (e: any) {
       const status = e?.response?.status;
-      const serverMsg = e?.response?.data?.error;
-      // The server answers 400 (older builds 503) when BookDate isn't
-      // configured/enabled.
-      if (status === 400 || status === 503) setDisabled(true);
+      // 400 (older builds 503) = BookDate isn't configured/enabled.
+      if (status === 400 || status === 503) setBdDisabled(true);
       else {
-        console.warn("[BookDate] load failed", status, serverMsg || e?.message);
-        setErrorDetail(serverMsg || (status ? `Server error (HTTP ${status})` : "Network error"));
-        setError(true);
+        console.warn("[BookDate] load failed", status, e?.message);
+        setBdError(e?.response?.data?.error || (status ? `Server error (HTTP ${status})` : "Network error"));
       }
       setDeck([]);
-    } finally {
-      setGenerating(false);
     }
   }, [playEnter]);
 
+  const loadShelves = useCallback(() => {
+    getPopularBooks()
+      .then(setPopular)
+      .catch(() => setPopular([]));
+    getNewReleases()
+      .then(setFresh)
+      .catch(() => setFresh([]));
+    getAudibleCategories()
+      .then((cats) => {
+        const chosen = (cats || []).slice(0, MAX_CATEGORY_SHELVES);
+        setShelves(chosen.map((c) => ({ id: String(c.id), name: c.name, books: null })));
+        chosen.forEach((c) =>
+          getCategoryBooks(String(c.id))
+            .then((books) =>
+              setShelves((prev) => prev.map((s) => (s.id === String(c.id) ? { ...s, books } : s)))
+            )
+            .catch(() =>
+              setShelves((prev) => prev.map((s) => (s.id === String(c.id) ? { ...s, books: [] } : s)))
+            )
+        );
+      })
+      .catch(() => setShelves([]));
+  }, []);
+
   useEffect(() => {
-    load();
-  }, [load]);
+    loadDeck();
+    loadShelves();
+  }, [loadDeck, loadShelves]);
 
   const current = deck && deck.length > 0 ? deck[0] : null;
 
@@ -129,235 +174,355 @@ export default function DiscoverScreen({ navigation }: any) {
     }
   }, [busy, playEnter]);
 
-  // Deck ran dry: offer a manual refresh (a fresh AI generation).
-  const empty = deck !== null && deck.length === 0;
+  const onRequestFromSheet = useCallback(
+    async (book: RmabBook) => {
+      setRequesting(true);
+      await requestBook(book);
+      setRequesting(false);
+    },
+    [requestBook]
+  );
+
+  const heroHeight = Math.min(560, Math.round(screenHeight * 0.6));
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       <TopAppBar navigation={navigation} />
-      <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
-        <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "700" }}>Discover</Text>
-        <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
-          BookDate picks based on your library — like to request
-        </Text>
-      </View>
-
-      {deck === null ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={{ color: colors.onSurfaceVariant, marginTop: 16, textAlign: "center" }}>
-            {generating ? "Asking BookDate for recommendations…\nA fresh batch can take a minute." : "Loading…"}
-          </Text>
+      <ScrollView contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
+        <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
+          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "700" }}>Discover</Text>
         </View>
-      ) : disabled ? (
-        <Empty
-          icon="explore"
-          title="BookDate isn't enabled"
-          body="Ask your ReadMeABook admin to configure BookDate (AI recommendations) on the server."
-          colors={colors}
-        />
-      ) : error ? (
-        <Empty
-          icon="warning"
-          title="Couldn't load recommendations"
-          body={errorDetail || "Check your connection and try again."}
-          colors={colors}
-          action={{ label: "Retry", onPress: load }}
-        />
-      ) : empty ? (
-        <Empty
-          icon="check"
-          title="All caught up"
-          body="You've been through this batch. Generate a fresh set of picks?"
-          colors={colors}
-          action={{ label: "Get more picks", onPress: load }}
-        />
-      ) : current ? (
-        <View style={{ flex: 1, paddingHorizontal: 20, paddingTop: 8 }}>
-          <Animated.View
-            style={{
-              flex: 1,
-              transform: [
-                { translateX },
-                {
-                  rotate: translateX.interpolate({
-                    inputRange: [-screenWidth, 0, screenWidth],
-                    outputRange: ["-8deg", "0deg", "8deg"],
-                  }),
-                },
-                { scale: enter.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) },
-              ],
-              opacity: enter,
-              backgroundColor: colors.surfaceContainer,
-              borderRadius: 24,
-              overflow: "hidden",
-            }}
-          >
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Pressable
-                onPress={() => setDetail(current)}
-                accessibilityRole="button"
-                accessibilityLabel={`Details for ${current.title}`}
+
+        {/* ── BookDate deck (hidden entirely when the server has it off) ── */}
+        {!bdDisabled ? (
+          <View style={{ paddingHorizontal: 20 }}>
+            <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 8, marginBottom: 8 }}>
+              BookDate picks
+            </Text>
+            {deck === null ? (
+              <View
+                style={{
+                  height: 180,
+                  borderRadius: 24,
+                  backgroundColor: colors.surfaceContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 24,
+                }}
               >
-              <Image
-                source={resolveRmabUrl(current.coverUrl) ? { uri: resolveRmabUrl(current.coverUrl) } : undefined}
-                style={{ width: "100%", aspectRatio: 1, backgroundColor: colors.surfaceContainerHigh }}
-                contentFit="cover"
-              />
-              <View style={{ padding: 18 }}>
-                <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "700" }}>
-                  {current.title}
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={{ color: colors.onSurfaceVariant, marginTop: 12, textAlign: "center", fontSize: 13 }}>
+                  Asking BookDate for picks — a fresh batch can take a minute.
                 </Text>
-                {current.author ? (
-                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, marginTop: 4 }}>
-                    {current.author}
-                    {current.narrator ? ` • read by ${current.narrator}` : ""}
-                  </Text>
-                ) : null}
-                {current.description ? (
-                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 21, marginTop: 12 }}>
-                    {String(current.description).replace(/<[^>]+>/g, "").trim()}
-                  </Text>
+              </View>
+            ) : bdError ? (
+              <View
+                style={{
+                  borderRadius: 24,
+                  backgroundColor: colors.surfaceContainer,
+                  alignItems: "center",
+                  padding: 24,
+                }}
+              >
+                <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600" }}>Couldn't load picks</Text>
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 4, textAlign: "center" }}>
+                  {bdError}
+                </Text>
+                <Pressable
+                  onPress={loadDeck}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry"
+                  android_ripple={{ color: colors.onSecondaryContainer + "22" }}
+                  style={{
+                    marginTop: 12,
+                    backgroundColor: colors.secondaryContainer,
+                    borderRadius: 20,
+                    height: 40,
+                    paddingHorizontal: 22,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: colors.onSecondaryContainer, fontSize: 14, fontWeight: "600" }}>Retry</Text>
+                </Pressable>
+              </View>
+            ) : deck.length === 0 ? (
+              <View
+                style={{
+                  borderRadius: 24,
+                  backgroundColor: colors.surfaceContainer,
+                  alignItems: "center",
+                  padding: 24,
+                }}
+              >
+                <Icon name="check" size={32} color={colors.onSurfaceVariant} />
+                <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginTop: 8 }}>
+                  All caught up
+                </Text>
+                <Pressable
+                  onPress={loadDeck}
+                  accessibilityRole="button"
+                  accessibilityLabel="Get more picks"
+                  android_ripple={{ color: colors.onPrimary + "22" }}
+                  style={{
+                    marginTop: 12,
+                    backgroundColor: colors.primary,
+                    borderRadius: 20,
+                    height: 40,
+                    paddingHorizontal: 22,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: colors.onPrimary, fontSize: 14, fontWeight: "600" }}>Get more picks</Text>
+                </Pressable>
+              </View>
+            ) : current ? (
+              <View style={{ height: heroHeight }}>
+                <Animated.View
+                  style={{
+                    flex: 1,
+                    transform: [
+                      { translateX },
+                      {
+                        rotate: translateX.interpolate({
+                          inputRange: [-screenWidth, 0, screenWidth],
+                          outputRange: ["-8deg", "0deg", "8deg"],
+                        }),
+                      },
+                      { scale: enter.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) },
+                    ],
+                    opacity: enter,
+                    backgroundColor: colors.surfaceContainer,
+                    borderRadius: 24,
+                    overflow: "hidden",
+                  }}
+                >
+                  <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
+                    <Pressable
+                      onPress={() => setDetail(current as any)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Details for ${current.title}`}
+                    >
+                      <Image
+                        source={
+                          resolveRmabUrl(current.coverUrl) ? { uri: resolveRmabUrl(current.coverUrl) } : undefined
+                        }
+                        style={{ width: "100%", aspectRatio: 1, backgroundColor: colors.surfaceContainerHigh }}
+                        contentFit="cover"
+                      />
+                      <View style={{ padding: 18 }}>
+                        <Text style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
+                          {current.title}
+                        </Text>
+                        {current.author ? (
+                          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 4 }}>
+                            {current.author}
+                            {current.narrator ? ` • read by ${current.narrator}` : ""}
+                          </Text>
+                        ) : null}
+                        {current.description ? (
+                          <Text
+                            style={{ color: colors.onSurfaceVariant, fontSize: 13, lineHeight: 19, marginTop: 10 }}
+                            numberOfLines={4}
+                          >
+                            {String(current.description).replace(/<[^>]+>/g, "").trim()}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </Pressable>
+                  </ScrollView>
+                </Animated.View>
+
+                {lastLiked ? (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 12,
+                      alignSelf: "center",
+                      backgroundColor: colors.primaryContainer,
+                      borderRadius: 16,
+                      paddingHorizontal: 14,
+                      paddingVertical: 6,
+                      flexDirection: "row",
+                      alignItems: "center",
+                    }}
+                  >
+                    <Icon name="check" size={16} color={colors.onPrimaryContainer} />
+                    <Text
+                      style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}
+                    >
+                      Requested
+                    </Text>
+                  </View>
                 ) : null}
               </View>
-              </Pressable>
-            </ScrollView>
-          </Animated.View>
+            ) : null}
 
-          {lastLiked ? (
-            <View
-              style={{
-                position: "absolute",
-                top: 16,
-                alignSelf: "center",
-                backgroundColor: colors.primaryContainer,
-                borderRadius: 16,
-                paddingHorizontal: 14,
-                paddingVertical: 6,
-                flexDirection: "row",
-                alignItems: "center",
-              }}
-            >
-              <Icon name="check" size={16} color={colors.onPrimaryContainer} />
-              <Text style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}>
-                Requested
-              </Text>
-            </View>
-          ) : null}
-
-          {/* Pass / Undo / Like */}
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              columnGap: 20,
-              paddingVertical: 16,
-            }}
-          >
-            <Pressable
-              onPress={() => onSwipe("left")}
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel="Pass"
-              android_ripple={{ color: colors.onSurfaceVariant + "22" }}
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: 32,
-                backgroundColor: colors.surfaceContainerHigh,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: busy ? 0.5 : 1,
-              }}
-            >
-              <Icon name="close" size={30} color={colors.onSurfaceVariant} />
-            </Pressable>
-            <Pressable
-              onPress={onUndo}
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel="Undo last swipe"
-              android_ripple={{ color: colors.onSurfaceVariant + "22" }}
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: colors.surfaceContainer,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: busy ? 0.5 : 1,
-              }}
-            >
-              <Icon name="undo" size={22} color={colors.onSurfaceVariant} />
-            </Pressable>
-            <Pressable
-              onPress={() => onSwipe("right")}
-              disabled={busy}
-              accessibilityRole="button"
-              accessibilityLabel="Like and request"
-              android_ripple={{ color: colors.onPrimaryContainer + "22" }}
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: 32,
-                backgroundColor: colors.primaryContainer,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: busy ? 0.5 : 1,
-              }}
-            >
-              <Icon name="heart" size={30} color={colors.onPrimaryContainer} />
-            </Pressable>
+            {current && !bdError ? (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  columnGap: 20,
+                  paddingVertical: 12,
+                }}
+              >
+                <Pressable
+                  onPress={() => onSwipe("left")}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Pass"
+                  android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                  style={{
+                    width: 60,
+                    height: 60,
+                    borderRadius: 30,
+                    backgroundColor: colors.surfaceContainerHigh,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: busy ? 0.5 : 1,
+                  }}
+                >
+                  <Icon name="close" size={28} color={colors.onSurfaceVariant} />
+                </Pressable>
+                <Pressable
+                  onPress={onUndo}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Undo last swipe"
+                  android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: colors.surfaceContainer,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: busy ? 0.5 : 1,
+                  }}
+                >
+                  <Icon name="undo" size={20} color={colors.onSurfaceVariant} />
+                </Pressable>
+                <Pressable
+                  onPress={() => onSwipe("right")}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Like and request"
+                  android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                  style={{
+                    width: 60,
+                    height: 60,
+                    borderRadius: 30,
+                    backgroundColor: colors.primaryContainer,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: busy ? 0.5 : 1,
+                  }}
+                >
+                  <Icon name="heart" size={28} color={colors.onPrimaryContainer} />
+                </Pressable>
+              </View>
+            ) : null}
           </View>
-        </View>
-      ) : null}
-      <RmabBookDetailSheet book={detail} onClose={() => setDetail(null)} />
+        ) : null}
+
+        {/* ── RMAB home shelves ── */}
+        <Shelf title="Popular" books={popular} onPressBook={setDetail} colors={colors} />
+        <Shelf title="New Releases" books={fresh} onPressBook={setDetail} colors={colors} />
+        {shelves.map((s) => (
+          <Shelf key={s.id} title={s.name} books={s.books} onPressBook={setDetail} colors={colors} />
+        ))}
+      </ScrollView>
+
+      <RmabBookDetailSheet
+        book={detail}
+        onClose={() => setDetail(null)}
+        // BookDate recs carry audnexusAsin, not asin — RMAB's request payload
+        // needs the real asin, so deck details stay info-only (Like requests).
+        onRequest={detail && detail.asin && !detail.isAvailable ? onRequestFromSheet : undefined}
+        requested={!!(detail && (requestedAsins[detail.asin] || detail.requestStatus))}
+        requesting={requesting}
+      />
     </SafeAreaView>
   );
 }
 
-function Empty({
-  icon,
+/** Horizontal cover shelf. null books = loading row; empty = hidden. */
+function Shelf({
   title,
-  body,
+  books,
+  onPressBook,
   colors,
-  action,
 }: {
-  icon: any;
   title: string;
-  body: string;
+  books: RmabBook[] | null;
+  onPressBook: (b: RmabBook) => void;
   colors: any;
-  action?: { label: string; onPress: () => void };
 }) {
+  if (books !== null && books.length === 0) return null;
   return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-      <Icon name={icon} size={48} color={colors.onSurfaceVariant} />
-      <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+    <View style={{ marginTop: 20 }}>
+      <Text
+        style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", paddingHorizontal: 20, marginBottom: 10 }}
+      >
         {title}
       </Text>
-      <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 8, textAlign: "center" }}>
-        {body}
-      </Text>
-      {action ? (
-        <Pressable
-          onPress={action.onPress}
-          accessibilityRole="button"
-          accessibilityLabel={action.label}
-          android_ripple={{ color: colors.onPrimary + "22" }}
-          style={{
-            marginTop: 20,
-            backgroundColor: colors.primary,
-            borderRadius: 24,
-            height: 48,
-            paddingHorizontal: 28,
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>{action.label}</Text>
-        </Pressable>
-      ) : null}
+      {books === null ? (
+        <View style={{ height: 150, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="small" color={colors.primary} />
+        </View>
+      ) : (
+        <FlatList
+          horizontal
+          data={books}
+          keyExtractor={(b) => b.asin}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 20, columnGap: 12 }}
+          renderItem={({ item }) => (
+            <Pressable
+              onPress={() => onPressBook(item)}
+              accessibilityRole="button"
+              accessibilityLabel={`Details for ${item.title}`}
+              style={{ width: 110 }}
+            >
+              <View>
+                <Image
+                  source={resolveRmabUrl(item.coverArtUrl) ? { uri: resolveRmabUrl(item.coverArtUrl) } : undefined}
+                  style={{ width: 110, height: 110, borderRadius: 10, backgroundColor: colors.surfaceContainerHigh }}
+                  contentFit="cover"
+                />
+                {item.isAvailable ? (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 6,
+                      backgroundColor: colors.primaryContainer,
+                      borderRadius: 10,
+                      width: 20,
+                      height: 20,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Icon name="check" size={13} color={colors.onPrimaryContainer} />
+                  </View>
+                ) : null}
+              </View>
+              <Text numberOfLines={2} style={{ color: colors.onSurface, fontSize: 12, fontWeight: "500", marginTop: 6 }}>
+                {item.title}
+              </Text>
+              {item.author ? (
+                <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 11, marginTop: 1 }}>
+                  {item.author}
+                </Text>
+              ) : null}
+            </Pressable>
+          )}
+        />
+      )}
     </View>
   );
 }

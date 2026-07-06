@@ -5,6 +5,10 @@ jest.mock("../../utils/rmab", () => ({
   getBookdateRecommendations: jest.fn(),
   swipeBookdate: jest.fn(),
   undoBookdateSwipe: jest.fn(),
+  getPopularBooks: jest.fn().mockResolvedValue([]),
+  getNewReleases: jest.fn().mockResolvedValue([]),
+  getAudibleCategories: jest.fn().mockResolvedValue([]),
+  getCategoryBooks: jest.fn().mockResolvedValue([]),
   resolveRmabUrl: (p: any) => p || undefined,
   readRmabConfig: jest.fn(() => null),
   writeRmabConfig: jest.fn(),
@@ -20,6 +24,7 @@ import {
   getBookdateRecommendations,
   swipeBookdate,
   undoBookdateSwipe,
+  getPopularBooks,
 } from "../../utils/rmab";
 
 const RECS = [
@@ -71,10 +76,25 @@ describe("DiscoverScreen (BookDate)", () => {
     await screen.findByText("Undone Pick");
   });
 
-  it("503 renders the BookDate-disabled explainer", async () => {
+  it("BookDate disabled (400) hides the deck but keeps the RMAB shelves", async () => {
     (getBookdateRecommendations as jest.Mock).mockRejectedValue({ response: { status: 400 } });
+    (getPopularBooks as jest.Mock).mockResolvedValue([
+      { asin: "P1", title: "Popular Pick", author: "Someone", isAvailable: false },
+    ]);
     await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
-    await screen.findByText("BookDate isn't enabled");
+    await screen.findByText("Popular Pick");
+    expect(screen.getByText("Popular")).toBeTruthy();
+    expect(screen.queryByText("BookDate picks")).toBeNull();
+  });
+
+  it("shelf books open the detail sheet with a Request action", async () => {
+    (getPopularBooks as jest.Mock).mockResolvedValue([
+      { asin: "P1", title: "Popular Pick", author: "Someone", isAvailable: false },
+    ]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Popular Pick");
+    await fireEvent.press(screen.getByLabelText("Details for Popular Pick"));
+    await screen.findByLabelText("Request Popular Pick");
   });
 
   it("tapping the card opens the shared detail sheet (info only)", async () => {
