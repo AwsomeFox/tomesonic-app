@@ -380,9 +380,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       const ok = await startPlayback(itemId);
       setStarting(false);
       if (ok) {
-        // Wait a brief moment for track player setup before seeking
-        setTimeout(async () => {
-          await usePlaybackStore.getState().seek(target);
+        // Wait a brief moment for track player setup before seeking. The
+        // timer callback's promise is unobserved — a rejecting seek (player
+        // torn down in the gap) must not become an unhandled rejection.
+        setTimeout(() => {
+          usePlaybackStore
+            .getState()
+            .seek(target)
+            .catch(() => {});
         }, 300);
       }
     }
