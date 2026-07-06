@@ -19,6 +19,7 @@ import { isEbookOnly } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
 import Skeleton, { ListSkeleton } from "../components/Skeleton";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import RmabMissingSection from "../components/RmabMissingSection";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -50,7 +51,33 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   const { serverConnectionConfig } = useUserStore();
 
   const [author, setAuthor] = useState<AuthorData | null>(null);
+
   const [loading, setLoading] = useState(true);
+
+  // Missing-books discovery straight off Audible's catalog API (fast, free) —
+  // diffed locally against the author's library items. RMAB only handles the
+  // Request tap.
+  const rmabName = author?.name || authorName;
+  const authorLoading = loading;
+  const fetchMissingByAuthor = React.useCallback(async () => {
+    const { audibleAuthorBooks, titleKey } = require("../utils/audible");
+    if (!rmabName || authorLoading) return [];
+    // Derive the item list from `author` (a dep — new identity per load)
+    // inside the callback: closing over a derived array keyed on .length
+    // would go stale on a same-length content change.
+    const authorItems = author?.libraryItems || [];
+    const all = await audibleAuthorBooks(rmabName);
+    const haveAsins = new Set(
+      authorItems.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
+    );
+    const haveTitles = new Set(
+      authorItems.map((b: any) => titleKey(b.media?.metadata?.title))
+    );
+    return all.filter(
+      (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
+    );
+  }, [rmabName, authorLoading, author]);
+
   const [loadError, setLoadError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   const [descExpanded, setDescExpanded] = useState(false);
@@ -350,6 +377,9 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           renderItem={renderBookCard}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={renderHeader}
+          ListFooterComponent={
+            <RmabMissingSection title="Missing from your library" fetchMissing={fetchMissingByAuthor} />
+          }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
         />

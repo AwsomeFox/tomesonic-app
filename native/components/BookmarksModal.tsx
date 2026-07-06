@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, Pressable, Modal, ScrollView, ActivityIndicator } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, Text, ScrollView, ActivityIndicator } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { api } from "../utils/api";
 import { queueBookmark, pendingBookmarksFor, removePendingBookmark } from "../utils/progressSync";
+import BottomSheet from "./BottomSheet";
+import Pressable from "./HintPressable";
 
 interface Bookmark {
   libraryItemId?: string;
@@ -118,29 +119,7 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0, 0, 0, 0.4)" }} onPress={onClose}>
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-            maxHeight: "80%",
-          }}
-        >
-          <SafeAreaView edges={["bottom"]}>
-            {/* Drag handle (affordance parity with the other bottom sheets) */}
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-              }}
-            />
+    <BottomSheet visible={visible} onClose={onClose}>
             {/* Header */}
             <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="bookmark" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
@@ -230,9 +209,6 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
                 <Text style={{ fontFamily: "monospace", fontSize: 13, color: colors.onPrimaryContainer }}>{fmt(currentTime)}</Text>
               </Pressable>
             ) : null}
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }

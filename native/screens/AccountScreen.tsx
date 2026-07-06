@@ -249,7 +249,7 @@ export default function AccountScreen({ navigation }: any) {
       {/* Change Password Modal */}
       <Modal
         visible={showPasswordModal}
-        animationType="slide"
+        animationType="fade"
         transparent
         onRequestClose={closePasswordModal}
       >

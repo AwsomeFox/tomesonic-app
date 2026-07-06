@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,8 +16,12 @@ import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
 import AddToListModal from "../components/AddToListModal";
+import BottomSheet from "../components/BottomSheet";
+import ResultBurst from "../components/ResultBurst";
+import { useRmabStore } from "../store/useRmabStore";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
 import { formatBytes } from "../utils/format";
+import Pressable from "../components/HintPressable";
 
 /** Strip HTML tags/entities from ABS descriptions (which contain markup). */
 function stripHtml(html: string): string {
@@ -61,6 +65,27 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [startingEpisodeId, setStartingEpisodeId] = useState<string | null>(null);
   const [chaptersVisible, setChaptersVisible] = useState(false);
   const [addToVisible, setAddToVisible] = useState(false);
+  const [sendToVisible, setSendToVisible] = useState(false);
+  const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const [sendResult, setSendResult] = useState<null | { ok: boolean; device: string }>(null);
+  // Request-the-other-format via ReadMeABook (null = sheet closed).
+  const [formatReq, setFormatReq] = useState<null | {
+    kind: "ebook" | "audiobook";
+    state: "working" | "ok" | "fail";
+    msg?: string;
+  }>(null);
+  const rmabConfigured = useRmabStore((s) => s.configured);
+  const rmabAuthMode = useRmabStore((s) => s.authMode);
+  // Async send/request flows resolve after navigation away — guard their
+  // deferred setState (same pattern as DiscoverScreen).
+  const aliveRef = React.useRef(true);
+  React.useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+  const ereaderDevices = useUserStore((s) => s.ereaderDevices);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const currentSession = usePlaybackStore((state) => state.currentSession);
@@ -465,6 +490,114 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     </View>
   );
 
+  // Auto-dismiss timers for the send-result sheet and the format-request
+  // burst. Kept in refs so unmount, a manual sheet close, or a retry can
+  // cancel them — an orphaned timer would setState on an unmounted screen or
+  // yank a fresh attempt's sheet shut with stale state.
+  const sendTimersRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
+  const formatTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearSendTimers = () => {
+    sendTimersRef.current.forEach(clearTimeout);
+    sendTimersRef.current = [];
+  };
+  useEffect(() => {
+    return () => {
+      clearSendTimers();
+      if (formatTimerRef.current) clearTimeout(formatTimerRef.current);
+    };
+  }, []);
+
+  const sendEbookToDevice = async (deviceName: string) => {
+    setSendingTo(deviceName);
+    try {
+      // Same endpoint the original app used; the server emails the ebook file
+      // to the configured device (Kindle etc.).
+      await api.post("/api/emails/send-ebook-to-device", {
+        libraryItemId: itemId,
+        deviceName,
+      });
+      if (!aliveRef.current) return;
+      // In-sheet M3 result moment instead of a system alert; the sheet
+      // dismisses itself after the success burst plays.
+      setSendResult({ ok: true, device: deviceName });
+      // A previous attempt's pending dismissal must not close this fresh
+      // result early — drop it before re-arming.
+      clearSendTimers();
+      sendTimersRef.current.push(
+        setTimeout(() => {
+          setSendToVisible(false);
+          sendTimersRef.current.push(setTimeout(() => setSendResult(null), 400)); // after exit animation
+        }, 1600)
+      );
+    } catch (e) {
+      console.error("[ItemDetail] send ebook failed", e);
+      if (aliveRef.current) setSendResult({ ok: false, device: deviceName });
+    } finally {
+      if (aliveRef.current) setSendingTo(null);
+    }
+  };
+
+  const closeSendSheet = () => {
+    // Manual close cancels the pending auto-dismiss, which would otherwise
+    // fire into the sheet's next open.
+    clearSendTimers();
+    setSendToVisible(false);
+    setSendResult(null);
+  };
+
+  // The book exists in one format; ask ReadMeABook for the other. Ebook
+  // requests ride RMAB's fetch-ebook pipeline (JWT-only, needs an ebook
+  // source configured); audiobook requests are ordinary RMAB requests.
+  const requestOtherFormat = async (kind: "ebook" | "audiobook") => {
+    // A pending burst-dismiss from a previous request would null this fresh
+    // "working" state mid-flight — cancel it before re-arming.
+    if (formatTimerRef.current) clearTimeout(formatTimerRef.current);
+    setFormatReq({ kind, state: "working" });
+    try {
+      const md = item?.media?.metadata || {};
+      const title = md.title;
+      const author = md.authorName;
+      if (!title) throw new Error("Missing book metadata");
+      let asin: string | null = md.asin || null;
+      if (!asin) {
+        const { audibleFindBookAsin } = require("../utils/audible");
+        asin = await audibleFindBookAsin(title, author);
+      }
+      if (!asin) throw new Error("Couldn't match this book on Audible");
+      const rmab = require("../utils/rmab");
+      if (kind === "ebook") {
+        await rmab.requestEbookForAsin(asin);
+      } else {
+        // RMAB's schema requires author — degrade to a placeholder rather
+        // than a guaranteed 400 for items missing authorName.
+        await rmab.createRequest({
+          asin,
+          title,
+          author: author || "Unknown",
+          narrator: (md.narrators || [])[0],
+        });
+      }
+      // Keep the shared requested-state in sync so discovery surfaces flip
+      // their chips for this ASIN too.
+      useRmabStore.getState().noteRequestStatus(asin, "pending");
+      if (!aliveRef.current) return;
+      setFormatReq({ kind, state: "ok" });
+      formatTimerRef.current = setTimeout(() => setFormatReq(null), 1800);
+    } catch (e: any) {
+      if (!aliveRef.current) return;
+      const serverMsg = e?.response?.data?.error;
+      const already = ["AlreadyAvailable", "DuplicateRequest", "BeingProcessed"].includes(serverMsg);
+      setFormatReq({
+        kind,
+        state: already ? "ok" : "fail",
+        msg: already
+          ? "Already requested"
+          : serverMsg || e?.message || "Request failed",
+      });
+      if (already) formatTimerRef.current = setTimeout(() => setFormatReq(null), 1800);
+    }
+  };
+
   /** Green underlined link chip inside a metadata value. */
   const Link = ({ text, onPress }: { text: string; onPress?: () => void }) => (
     // hitSlop lifts the effective target toward 48dp — these chips are the
@@ -745,6 +878,63 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 }}
               >
                 <Icon name="list" size={22} color={colors.onSecondaryContainer} />
+              </Pressable>
+            ) : null}
+
+            {/* Send ebook to a configured e-reader device (Kindle etc.).
+                Only when the server has devices AND this item has an ebook. */}
+            {selfHasEbook && !isPodcastItem && ereaderDevices.length > 0 ? (
+              <Pressable
+                onPress={() => {
+                  // A pending auto-dismiss from the LAST send could fire
+                  // mid-open and flip the fresh sheet closed — cancel it and
+                  // start from the device list.
+                  clearSendTimers();
+                  setSendResult(null);
+                  setSendToVisible(true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Send ebook to device"
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  backgroundColor: colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="send" size={22} color={colors.onSecondaryContainer} />
+              </Pressable>
+            ) : null}
+
+            {/* Request the OTHER format via ReadMeABook: ebook for an
+                audio-only book (JWT sessions — the endpoint rejects API
+                tokens), audiobook for an ebook-only book (works on both). */}
+            {rmabConfigured &&
+            !isPodcastItem &&
+            ((selfHasAudio && !canRead && rmabAuthMode === "jwt") ||
+              (selfHasEbook && !hasAudioMedia)) ? (
+              <Pressable
+                onPress={() => requestOtherFormat(selfHasAudio && !canRead ? "ebook" : "audiobook")}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  selfHasAudio && !canRead ? "Request ebook edition" : "Request audiobook edition"
+                }
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  backgroundColor: colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon
+                  name={selfHasAudio && !canRead ? "book" : "headphones"}
+                  size={22}
+                  color={colors.onSecondaryContainer}
+                />
               </Pressable>
             ) : null}
 
@@ -1210,6 +1400,123 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           isPodcast={isPodcastItem}
         />
       ) : null}
+
+      {/* Request-other-format progress/result. */}
+      <BottomSheet visible={!!formatReq} onClose={() => setFormatReq(null)}>
+        {formatReq?.state === "working" ? (
+          <View style={{ alignItems: "center", paddingVertical: 36 }}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={{ color: colors.onSurfaceVariant, marginTop: 14 }}>
+              Requesting the {formatReq.kind} edition…
+            </Text>
+          </View>
+        ) : formatReq ? (
+          <ResultBurst
+            ok={formatReq.state === "ok"}
+            title={
+              formatReq.state === "ok"
+                ? formatReq.msg || `${formatReq.kind === "ebook" ? "Ebook" : "Audiobook"} requested`
+                : "Couldn't request"
+            }
+            subtitle={
+              formatReq.state === "ok"
+                ? "ReadMeABook is on it — track it under Requests."
+                : formatReq.msg
+            }
+          />
+        ) : null}
+      </BottomSheet>
+
+      {/* Device picker for "Send ebook to device". */}
+      <BottomSheet visible={sendToVisible} onClose={closeSendSheet}>
+        {sendResult ? (
+          <>
+            <ResultBurst
+              ok={sendResult.ok}
+              title={sendResult.ok ? `Sent to ${sendResult.device}` : "Couldn't send"}
+              subtitle={
+                sendResult.ok
+                  ? "The server is emailing your ebook."
+                  : "Check the server's email settings and try again."
+              }
+            />
+            {!sendResult.ok ? (
+              <Pressable
+                onPress={() => setSendResult(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Try again"
+                android_ripple={{ color: colors.onSecondaryContainer + "22" }}
+                style={{
+                  alignSelf: "center",
+                  backgroundColor: colors.secondaryContainer,
+                  borderRadius: 20,
+                  paddingHorizontal: 24,
+                  height: 40,
+                  justifyContent: "center",
+                  marginBottom: 20,
+                }}
+              >
+                <Text style={{ color: colors.onSecondaryContainer, fontSize: 14, fontWeight: "600" }}>
+                  Try again
+                </Text>
+              </Pressable>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 6 }}>
+              <Text style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}>
+                Send ebook to device
+              </Text>
+              <Text style={{ fontSize: 13, color: colors.onSurfaceVariant, marginTop: 2 }}>
+                The server emails the file to the device you pick.
+              </Text>
+            </View>
+            {ereaderDevices.map((d: any) => (
+              <Pressable
+                key={d.name}
+                disabled={!!sendingTo}
+                onPress={() => sendEbookToDevice(d.name)}
+                accessibilityRole="button"
+                accessibilityLabel={`Send to ${d.name}`}
+                android_ripple={{ color: colors.primary + "22" }}
+                // Plain object style: Fabric drops function-styles on this
+                // pressable path on-device (row rendered unstyled — no
+                // padding/row direction). Ripple covers pressed feedback.
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  minHeight: 64,
+                  paddingHorizontal: 24,
+                  paddingVertical: 10,
+                  opacity: sendingTo && sendingTo !== d.name ? 0.5 : 1,
+                }}
+              >
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 20,
+                    backgroundColor: colors.secondaryContainer,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginRight: 16,
+                  }}
+                >
+                  <Icon name="book" size={20} color={colors.onSecondaryContainer} />
+                </View>
+                <Text
+                  numberOfLines={1}
+                  style={{ flex: 1, fontSize: 16, fontWeight: "500", color: colors.onSurface }}
+                >
+                  {d.name}
+                </Text>
+                {sendingTo === d.name ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+              </Pressable>
+            ))}
+          </>
+        )}
+      </BottomSheet>
     </SafeAreaView>
   );
 }

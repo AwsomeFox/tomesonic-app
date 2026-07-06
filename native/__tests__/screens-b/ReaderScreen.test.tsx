@@ -454,7 +454,9 @@ describe("ReaderScreen (epub pipeline)", () => {
     expect((global as any).__injectJS).toHaveBeenCalledWith(
       expect.stringContaining('window.goToHref && window.goToHref("#intro")')
     );
-    expect(screen.queryByText("Table of Contents")).toBeNull();
+    // BottomSheet animates its exit — the sheet unmounts when the close
+    // animation finishes, not synchronously on the tap.
+    await waitFor(() => expect(screen.queryByText("Table of Contents")).toBeNull());
   });
 
   it("reading settings persist text size, font family, and line spacing to MMKV", async () => {

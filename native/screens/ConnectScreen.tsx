@@ -3,7 +3,6 @@ import {
   View,
   Text,
   TextInput,
-  Pressable,
   ScrollView,
   ActivityIndicator,
   Linking,
@@ -16,6 +15,7 @@ import { loginWithOpenId } from "../utils/oauth";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import Pressable from "../components/HintPressable";
 
 const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
 
@@ -197,11 +197,14 @@ export default function ConnectScreen() {
     onPress,
     busy,
     variant = "filled",
+    compact = false,
   }: {
     label: string;
     onPress: () => void;
     busy?: boolean;
     variant?: "filled" | "tonal";
+    /** Self-sized pill instead of full width (for aligned action rows). */
+    compact?: boolean;
   }) => {
     const bg = variant === "filled" ? colors.primary : colors.secondaryContainer;
     const fg = variant === "filled" ? colors.onPrimary : colors.onSecondaryContainer;
@@ -213,17 +216,19 @@ export default function ConnectScreen() {
         accessibilityLabel={label}
         accessibilityState={{ disabled: loading, busy: !!busy }}
         android_ripple={{ color: withAlpha(fg, 0.12) }}
-        style={({ pressed }) => ({
+        // Plain object style — Fabric drops function-styles on this
+        // pressable path on-device; the ripple supplies pressed feedback.
+        style={{
           backgroundColor: bg,
           minHeight: BUTTON_HEIGHT,
           alignItems: "center" as const,
           justifyContent: "center" as const,
           borderRadius: BUTTON_HEIGHT / 2,
           overflow: "hidden" as const,
-          elevation: variant === "filled" ? 1 : 0,
+          ...(compact ? { paddingHorizontal: 32, minWidth: 140 } : null),
+          elevation: variant === "filled" ? 2 : 0,
           opacity: loading && !busy ? 0.6 : 1,
-          transform: [{ scale: pressed ? 0.97 : 1 }],
-        })}
+        }}
       >
         {busy ? (
           <ActivityIndicator color={fg} />
@@ -301,8 +306,8 @@ export default function ConnectScreen() {
                 returnKeyType="go"
                 style={fieldStyle("address")}
               />
-              <View style={{ marginTop: 24 }}>
-                <BigButton label="Submit" onPress={handleConnectAddress} busy={loading} />
+              <View style={{ marginTop: 24, alignItems: "flex-end" }}>
+                <BigButton label="Submit" onPress={handleConnectAddress} busy={loading} compact />
               </View>
             </View>
           ) : (
@@ -318,7 +323,7 @@ export default function ConnectScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Change server address"
                 android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.12) }}
-                style={({ pressed }) => ({
+                style={{
                   flexDirection: "row" as const,
                   alignItems: "center" as const,
                   backgroundColor: colors.secondaryContainer,
@@ -327,8 +332,7 @@ export default function ConnectScreen() {
                   paddingVertical: 12,
                   marginBottom: 16,
                   overflow: "hidden" as const,
-                  transform: [{ scale: pressed ? 0.98 : 1 }],
-                })}
+                }}
               >
                 <Icon name="globe" size={20} color={colors.onSecondaryContainer} />
                 <Text
@@ -413,8 +417,8 @@ export default function ConnectScreen() {
                       <Icon name={showPassword ? "eye-off" : "eye"} size={22} color={colors.onSurfaceVariant} />
                     </Pressable>
                   </View>
-                  <View style={{ marginTop: 24 }}>
-                    <BigButton label="Submit" onPress={handleLogin} busy={loading && authFlow === "local"} />
+                  <View style={{ marginTop: 24, alignItems: "flex-end" }}>
+                    <BigButton label="Submit" onPress={handleLogin} busy={loading && authFlow === "local"} compact />
                   </View>
                 </View>
               ) : null}
@@ -432,12 +436,15 @@ export default function ConnectScreen() {
 
               {/* OpenID / SSO auth — tonal hero button */}
               {isOpenIDAuth ? (
-                <BigButton
-                  label={oauthButtonText}
-                  onPress={handleOpenId}
-                  busy={loading && authFlow === "oauth"}
-                  variant="tonal"
-                />
+                <View style={{ alignItems: "center" }}>
+                  <BigButton
+                    label={oauthButtonText}
+                    onPress={handleOpenId}
+                    busy={loading && authFlow === "oauth"}
+                    variant="tonal"
+                    compact
+                  />
+                </View>
               ) : null}
             </View>
           )}
@@ -482,19 +489,19 @@ export default function ConnectScreen() {
         </Text>
       </ScrollView>
 
-      {/* Footer — Follow the project on Github */}
+      {/* Footer — Follow the project on GitHub */}
       <Pressable
         onPress={() => Linking.openURL(GITHUB_URL)}
-        style={({ pressed }) => ({
+        android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+        style={{
           flexDirection: "row" as const,
           alignItems: "center" as const,
           justifyContent: "center" as const,
           paddingVertical: 16,
-          opacity: pressed ? 0.6 : 1,
-        })}
+        }}
       >
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontFamily: "sans-serif", marginRight: 8 }}>
-          Follow the project on Github
+          Follow the project on GitHub
         </Text>
         <Icon name="globe" size={22} color={colors.onSurfaceVariant} />
       </Pressable>

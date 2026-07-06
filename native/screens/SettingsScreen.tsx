@@ -4,8 +4,10 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
-  Pressable,
   Linking,
+  TextInput,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeStore, ThemeMode } from '../store/useThemeStore';
@@ -14,10 +16,17 @@ import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useThemeColors } from '../theme/useThemeColors';
 import Icon, { IconName } from '../components/Icon';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
+import BottomSheet from '../components/BottomSheet';
+import { useRmabStore } from '../store/useRmabStore';
 import { haptic } from '../utils/haptics';
 
-// Single source of truth for the displayed version — the Expo app config.
-const APP_VERSION: string = require('../app.json').expo?.version || '';
+import * as Application from 'expo-application';
+import Pressable from "../components/HintPressable";
+
+// The INSTALLED package's version — app.json drifts from the built APK (the
+// release flow bumps versions on master, not on feature branches).
+const APP_VERSION: string =
+  Application.nativeApplicationVersion || require('../app.json').expo?.version || '';
 const GITHUB_URL = 'https://github.com/AwsomeFox/tomesonic-app';
 
 const THEME_LABEL: Record<ThemeMode, string> = {
@@ -60,6 +69,45 @@ export default function SettingsScreen({ navigation }: any) {
   const [openPicker, setOpenPicker] = React.useState<
     null | 'theme' | 'haptic' | 'jumpFwd' | 'jumpBack'
   >(null);
+
+  // ReadMeABook connection state + connect sheet fields.
+  const rmabConfigured = useRmabStore((s) => s.configured);
+  const rmabServerUrl = useRmabStore((s) => s.serverUrl);
+  const rmabUsername = useRmabStore((s) => s.username);
+  const rmabAuthMode = useRmabStore((s) => s.authMode);
+  const rmabIsAdmin = useRmabStore((s) => s.isAdmin);
+  const rmabConnecting = useRmabStore((s) => s.connecting);
+  const rmabError = useRmabStore((s) => s.connectError);
+  const rmabConnect = useRmabStore((s) => s.connect);
+  const rmabDisconnect = useRmabStore((s) => s.disconnect);
+  const [rmabSheetOpen, setRmabSheetOpen] = React.useState(false);
+  const [rmabUrl, setRmabUrl] = React.useState('');
+  const [rmabToken, setRmabToken] = React.useState('');
+
+  // connect() accepts a one-time login URL (contains token=) pasted into
+  // EITHER field, or a plain server URL plus a separate token — allow any
+  // combination that gives it both a server address and a token.
+  const rmabTokenIsLoginUrl = rmabToken.includes('token=');
+  const rmabCanSubmit = rmabUrl.trim()
+    ? rmabUrl.includes('token=') || !!rmabToken.trim()
+    : rmabTokenIsLoginUrl;
+
+  const onRmabConnect = async () => {
+    if (!rmabCanSubmit) return;
+    const ok = await rmabConnect(rmabUrl, rmabToken);
+    if (ok) {
+      setRmabSheetOpen(false);
+      setRmabUrl('');
+      setRmabToken('');
+    }
+  };
+
+  const onRmabDisconnect = () => {
+    Alert.alert('Disconnect ReadMeABook?', 'Request features will be hidden until you reconnect.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Disconnect', style: 'destructive', onPress: () => rmabDisconnect() },
+    ]);
+  };
 
   const set = (updates: any) => {
     haptic();
@@ -224,6 +272,48 @@ export default function SettingsScreen({ navigation }: any) {
           colors={colors}
         />
 
+        {/* ── READMEABOOK (book requests) ── */}
+        <SectionHeader label="ReadMeABook" colors={colors} />
+        {rmabConfigured ? (
+          <>
+            <RowBase icon="globe" title="Server" subtitle={rmabServerUrl || ''} colors={colors} />
+            <Divider colors={colors} />
+            <RowBase
+              icon="person"
+              title="Account"
+              subtitle={(rmabUsername || 'Connected') + (rmabAuthMode === 'apiToken' ? ' • API token (search & requests only)' : '')}
+              colors={colors}
+            />
+            <Divider colors={colors} />
+            <NavRow
+              icon="send"
+              title={rmabIsAdmin && rmabAuthMode === 'jwt' ? 'Requests' : 'My Requests'}
+              subtitle={
+                rmabIsAdmin && rmabAuthMode === 'jwt'
+                  ? 'Approve, deny, and manage all requests'
+                  : 'Track your book requests'
+              }
+              onPress={() => navigation.navigate('RmabRequests')}
+              colors={colors}
+            />
+            <Divider colors={colors} />
+            <NavRow
+              icon="close"
+              title="Disconnect"
+              onPress={onRmabDisconnect}
+              colors={colors}
+            />
+          </>
+        ) : (
+          <NavRow
+            icon="send"
+            title="Connect ReadMeABook"
+            subtitle="Request books missing from your library"
+            onPress={() => setRmabSheetOpen(true)}
+            colors={colors}
+          />
+        )}
+
         {/* ── ABOUT ── */}
         <SectionHeader label="About" colors={colors} />
         <RowBase icon="info" title="Version" subtitle={APP_VERSION} colors={colors} />
@@ -238,6 +328,98 @@ export default function SettingsScreen({ navigation }: any) {
       </ScrollView>
 
       {/* Dropdown pickers */}
+      {/* ReadMeABook connect sheet */}
+      <BottomSheet visible={rmabSheetOpen} onClose={() => setRmabSheetOpen(false)}>
+        <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
+          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: '500', marginBottom: 16 }}>
+            Connect ReadMeABook
+          </Text>
+
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
+            Server URL or login URL
+          </Text>
+          <TextInput
+            value={rmabUrl}
+            onChangeText={setRmabUrl}
+            placeholder="https://rmab.example.com/auth/token/login?token=…"
+            placeholderTextColor={colors.onSurfaceVariant}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            // A pasted login URL embeds the one-time token — mask it like the
+            // token field does.
+            secureTextEntry={rmabUrl.includes('token=')}
+            accessibilityLabel="ReadMeABook server URL or login URL"
+            style={{
+              backgroundColor: colors.surfaceContainer,
+              color: colors.onSurface,
+              borderRadius: 12,
+              paddingHorizontal: 14,
+              paddingVertical: 10,
+            }}
+          />
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 14 }}>
+            Full access: paste the one-time login URL an admin generates under
+            Admin → Users → Edit permissions → Login Token. Everything below stays empty.
+          </Text>
+
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
+            API token (optional)
+          </Text>
+          <TextInput
+            value={rmabToken}
+            onChangeText={setRmabToken}
+            placeholder="rmab_…"
+            placeholderTextColor={colors.onSurfaceVariant}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            accessibilityLabel="ReadMeABook API token (optional)"
+            style={{
+              backgroundColor: colors.surfaceContainer,
+              color: colors.onSurface,
+              borderRadius: 12,
+              paddingHorizontal: 14,
+              paddingVertical: 10,
+            }}
+          />
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 8 }}>
+            Instead of a login URL: a plain server URL above plus an rmab_ token from Profile →
+            API Tokens. Limited to search and requests.
+          </Text>
+
+          {rmabError ? (
+            <Text style={{ color: colors.error, fontSize: 13, marginBottom: 4 }}>{rmabError}</Text>
+          ) : null}
+          <View style={{ alignItems: 'flex-end', marginTop: 8 }}>
+            <Pressable
+              onPress={onRmabConnect}
+              disabled={rmabConnecting || !rmabCanSubmit}
+              accessibilityRole="button"
+              accessibilityLabel="Connect"
+              android_ripple={{ color: colors.onPrimary + '22' }}
+              style={{
+                backgroundColor: colors.primary,
+                height: 48,
+                minWidth: 140,
+                paddingHorizontal: 32,
+                borderRadius: 24,
+                alignItems: 'center',
+                justifyContent: 'center',
+                elevation: 2,
+                opacity: rmabConnecting || !rmabCanSubmit ? 0.5 : 1,
+              }}
+            >
+              {rmabConnecting ? (
+                <ActivityIndicator size="small" color={colors.onPrimary} />
+              ) : (
+                <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: '600' }}>Connect</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </BottomSheet>
+
       <SettingSelectModal
         visible={openPicker === 'theme'}
         title="Theme"

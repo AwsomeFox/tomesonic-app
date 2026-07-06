@@ -67,9 +67,14 @@ import SettingsScreen from "../../screens/SettingsScreen";
 import { useUserStore } from "../../store/useUserStore";
 import { useThemeStore } from "../../store/useThemeStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useRmabStore } from "../../store/useRmabStore";
 import { storage, storageHelper } from "../../utils/storage";
 
-const APP_VERSION = require("../../app.json").expo.version;
+// The screen shows the INSTALLED package version (expo-application), falling
+// back to app.json — mirror that here.
+const APP_VERSION =
+  require("expo-application").nativeApplicationVersion ||
+  require("../../app.json").expo.version;
 
 const initialUser = useUserStore.getState();
 const initialTheme = useThemeStore.getState();
@@ -91,8 +96,11 @@ async function renderSettings() {
   return navigation;
 }
 
+const initialRmab = useRmabStore.getState();
+
 beforeEach(() => {
   useUserStore.setState(initialUser, true);
+  useRmabStore.setState(initialRmab, true);
   useThemeStore.setState(initialTheme, true);
   usePlaybackStore.setState(initialPlayback, true);
   storage.remove("userSettings");
@@ -214,5 +222,28 @@ describe("SettingsScreen", () => {
 
     await fireEvent.press(screen.getByLabelText(/^GitHub/));
     expect(openSpy).toHaveBeenCalledWith("https://github.com/AwsomeFox/tomesonic-app");
+  });
+
+  describe("ReadMeABook section", () => {
+    it("offers Connect when unconfigured and hides request rows", async () => {
+      await renderSettings();
+      expect(screen.getByText("Connect ReadMeABook")).toBeTruthy();
+      expect(screen.queryByText("My Requests")).toBeNull();
+      expect(screen.queryByText("Disconnect")).toBeNull();
+    });
+
+    it("shows server/account/requests/disconnect once connected", async () => {
+      useRmabStore.setState({
+        configured: true,
+        serverUrl: "https://rmab.test",
+        username: "tony",
+      } as any);
+      await renderSettings();
+      expect(screen.getByText("https://rmab.test")).toBeTruthy();
+      expect(screen.getByText("tony")).toBeTruthy();
+      expect(screen.getByText("My Requests")).toBeTruthy();
+      expect(screen.getByText("Disconnect")).toBeTruthy();
+      expect(screen.queryByText("Connect ReadMeABook")).toBeNull();
+    });
   });
 });

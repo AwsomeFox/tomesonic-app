@@ -134,6 +134,10 @@ android {
             // signingConfigs.debug produced DEBUG-SIGNED bundles that Play
             // rejects — the workflow's -P props were silently ignored.
             signingConfig project.hasProperty('MYAPP_UPLOAD_STORE_FILE') ? signingConfigs.release : signingConfigs.debug
+            // Side-by-side test build (scripts/install-local.sh): a distinct
+            // applicationId so a dev build can coexist with the Play-installed
+            // app (whose Google signature a local build can never update).
+            if (project.hasProperty('localTestBuild')) applicationIdSuffix '.debug'
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds

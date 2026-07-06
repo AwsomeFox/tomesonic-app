@@ -334,4 +334,46 @@ describe("useUserStore", () => {
       expect(useUserStore.getState().user).toBeNull();
     });
   });
+
+  describe("loadEReaderDevices", () => {
+    it("stores the devices from /api/authorize", async () => {
+      jest.mocked(api.post).mockResolvedValue({
+        data: { ereaderDevices: [{ name: "My Kindle" }, { name: "Kobo" }] },
+      } as any);
+      await useUserStore.getState().loadEReaderDevices();
+      expect(api.post).toHaveBeenCalledWith("/api/authorize");
+      expect(useUserStore.getState().ereaderDevices.map((d: any) => d.name)).toEqual([
+        "My Kindle",
+        "Kobo",
+      ]);
+    });
+
+    it("keeps the current list when the response has no device array", async () => {
+      useUserStore.setState({ ereaderDevices: [{ name: "Existing" }] } as any);
+      jest.mocked(api.post).mockResolvedValue({ data: {} } as any);
+      await useUserStore.getState().loadEReaderDevices();
+      expect(useUserStore.getState().ereaderDevices).toEqual([{ name: "Existing" }]);
+    });
+
+    it("drops a late response when the session changed underneath it (logout race)", async () => {
+      useUserStore.setState({
+        serverConnectionConfig: { address: "https://abs.test", token: "tok1" },
+      } as any);
+      let release: any;
+      jest.mocked(api.post).mockReturnValue(
+        new Promise((res) => (release = res)) as any
+      );
+      const pending = useUserStore.getState().loadEReaderDevices();
+      // Logout (or account switch) lands before the response.
+      useUserStore.setState({ serverConnectionConfig: null, ereaderDevices: [] } as any);
+      release({ data: { ereaderDevices: [{ name: "Ghost Kindle" }] } });
+      await pending;
+      expect(useUserStore.getState().ereaderDevices).toEqual([]);
+    });
+
+    it("swallows request failures (devices only gate a secondary action)", async () => {
+      jest.mocked(api.post).mockRejectedValue(new Error("500"));
+      await expect(useUserStore.getState().loadEReaderDevices()).resolves.toBeUndefined();
+    });
+  });
 });

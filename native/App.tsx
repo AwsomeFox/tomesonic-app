@@ -54,6 +54,8 @@ export default function App() {
     initializeTheme();
     const init = async () => {
       await initializeUser();
+      // RMAB (ReadMeABook) config is local-only — sync read from MMKV.
+      require("./store/useRmabStore").useRmabStore.getState().initialize();
       useDownloadStore.getState().loadDownloadsFromDb();
       const user = useUserStore.getState().user;
       if (user) {

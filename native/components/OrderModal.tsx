@@ -1,9 +1,9 @@
 import React from "react";
-import { View, Text, Pressable, Modal, ScrollView } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, Text, Pressable, ScrollView } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { useLibraryStore } from "../store/useLibraryStore";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
 
 /**
  * Sort bottom-sheet, mirroring the original tomesonic OrderModal.vue. Lists the
@@ -88,42 +88,7 @@ export default function OrderModal({
   };
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <Pressable
-        onPress={onClose}
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(0,0,0,0.45)",
-          justifyContent: "flex-end",
-        }}
-      >
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-            maxHeight: "80%",
-          }}
-        >
-          <SafeAreaView edges={["bottom"]}>
-            {/* Drag handle */}
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-                marginBottom: 8,
-              }}
-            />
+    <BottomSheet visible={visible} onClose={onClose}>
 
             {/* Header: sort icon + title */}
             <View
@@ -196,9 +161,6 @@ export default function OrderModal({
                 );
               })}
             </ScrollView>
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }

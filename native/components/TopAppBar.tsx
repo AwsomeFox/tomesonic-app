@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, Pressable, Modal, TextInput, BackHandler } from "react-native";
+import { View, Text, Modal, TextInput, BackHandler } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUiStore } from "../store/useUiStore";
 import Icon from "./Icon";
+import Pressable from "./HintPressable";
+import { useRmabStore } from "../store/useRmabStore";
 
 interface TopAppBarProps {
   navigation: any;
@@ -42,6 +44,9 @@ export default function TopAppBar({
 }: TopAppBarProps) {
   const colors = useThemeColors();
   const [menuOpen, setMenuOpen] = useState(false);
+  const rmabConfigured = useRmabStore((st) => st.configured);
+  const pendingApprovals = useRmabStore((st) => st.pendingApprovalCount);
+  const refreshPendingCount = useRmabStore((st) => st.refreshPendingCount);
   const openLibrarySelector = useUiStore((s) => s.openLibrarySelector);
   const { libraries, currentLibraryId } = useLibraryStore();
 
@@ -299,11 +304,18 @@ export default function TopAppBar({
 
       {/* User profile dropdown shortcut */}
       <Pressable
-        onPress={() => setMenuOpen(true)}
+        onPress={() => {
+          refreshPendingCount();
+          setMenuOpen(true);
+        }}
         hitSlop={8}
         android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 20 }}
         accessibilityRole="button"
-        accessibilityLabel="Account menu"
+        accessibilityLabel={
+          pendingApprovals > 0
+            ? `Account menu, ${pendingApprovals} requests awaiting approval`
+            : "Account menu"
+        }
         style={{
           padding: 8,
           borderRadius: 20,
@@ -312,6 +324,28 @@ export default function TopAppBar({
         }}
       >
         <Icon name="person" size={20} color={colors.onSurface} />
+        {pendingApprovals > 0 ? (
+          <View
+            style={{
+              position: "absolute",
+              top: -2,
+              right: -2,
+              minWidth: 18,
+              height: 18,
+              borderRadius: 9,
+              paddingHorizontal: 4,
+              backgroundColor: colors.error,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: 2,
+              borderColor: colors.surface,
+            }}
+          >
+            <Text style={{ color: colors.onError || "#fff", fontSize: 10, fontWeight: "700" }}>
+              {pendingApprovals > 9 ? "9+" : pendingApprovals}
+            </Text>
+          </View>
+        ) : null}
       </Pressable>
 
       {/* Profile Dropdown Modal */}
@@ -358,6 +392,51 @@ export default function TopAppBar({
                 Account
               </Text>
             </Pressable>
+
+            {rmabConfigured ? (
+              <Pressable
+                onPress={() => {
+                  setMenuOpen(false);
+                  navigation?.navigate("RmabRequests");
+                }}
+                android_ripple={{ color: colors.surfaceContainerHighest }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  pendingApprovals > 0
+                    ? `Requests, ${pendingApprovals} awaiting approval`
+                    : "Requests"
+                }
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                }}
+              >
+                <Icon name="send" size={20} color={colors.onSurface} style={{ marginRight: 12 }} />
+                <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurface, fontSize: 16 }}>
+                  Requests
+                </Text>
+                {pendingApprovals > 0 ? (
+                  <View
+                    style={{
+                      marginLeft: 10,
+                      minWidth: 20,
+                      height: 20,
+                      borderRadius: 10,
+                      paddingHorizontal: 5,
+                      backgroundColor: colors.error,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ color: colors.onError || "#fff", fontSize: 11, fontWeight: "700" }}>
+                      {pendingApprovals > 9 ? "9+" : pendingApprovals}
+                    </Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            ) : null}
 
             <Pressable
               onPress={() => {

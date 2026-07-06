@@ -21,6 +21,7 @@ import { isEbookOnly } from "../utils/bookMatch";
 import { encodeFilterValue } from "./FilterModal";
 import BookProgressBadge from "./BookProgressBadge";
 import { ListSkeleton } from "./Skeleton";
+import RmabMissingSection from "./RmabMissingSection";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -143,6 +144,19 @@ export default function SearchContent({ navigation }: { navigation: any }) {
   // passed the `|| []` truthy check and `.map` crashed the whole app (the
   // only ErrorBoundary is at the App root).
   const asArray = (x: any) => (Array.isArray(x) ? x : []);
+  // ReadMeABook catalog lookup for the query — DEBOUNCED: `query` updates on
+  // every keystroke and the section refetches whenever this callback's
+  // identity changes, which would have hit RMAB per keypress.
+  const [rmabQuery, setRmabQuery] = React.useState("");
+  React.useEffect(() => {
+    const t = setTimeout(() => setRmabQuery(query.trim()), 600);
+    return () => clearTimeout(t);
+  }, [query]);
+  const fetchRmabForQuery = React.useCallback(async () => {
+    const { searchBooks } = require("../utils/rmab");
+    if (!rmabQuery) return [];
+    return searchBooks(rmabQuery);
+  }, [rmabQuery]);
   const bookResults = [...asArray(results?.book), ...asArray(results?.podcast)].filter(
     (r: any) => r && (!hideNonAudiobooks || !isEbookOnly(r?.libraryItem || r))
   );
@@ -593,6 +607,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
           {tagResults.map((tag, index) => renderTagResult(tag, index))}
         </View>
       ) : null}
+
+      {/* ReadMeABook: catalog hits NOT in the library, requestable in place.
+          Renders nothing unless RMAB is configured in Settings. */}
+      <RmabMissingSection title="Not in your library" fetchMissing={fetchRmabForQuery} />
     </ScrollView>
   );
 }

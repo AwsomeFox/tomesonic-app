@@ -1,3 +1,12 @@
+jest.mock("../../utils/rmab", () => ({
+  readRmabConfig: jest.fn(() => null),
+  writeRmabConfig: jest.fn(),
+  rmabAuthMode: () => null,
+  exchangeLoginToken: jest.fn(),
+  getMe: jest.fn(),
+  createRequest: jest.fn(),
+  getPendingApprovalCount: jest.fn().mockResolvedValue(0),
+}));
 /**
  * TopAppBar — library pill, search activate/deactivate (incl. Android hardware
  * back), context action icons, and the account/settings dropdown navigation.

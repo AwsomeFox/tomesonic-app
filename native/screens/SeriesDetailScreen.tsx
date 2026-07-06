@@ -15,6 +15,7 @@ import Icon from "../components/Icon";
 import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
+import RmabMissingSection from "../components/RmabMissingSection";
 
 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
 const base64Encode = (input: string = '') => {
@@ -92,7 +93,48 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
 
   const [series, setSeries] = useState<SeriesData | null>(null);
+
   const [loading, setLoading] = useState(true);
+
+  // Missing-books discovery straight off Audible's catalog API (fast, free) —
+  // diffed locally against the library books this screen already loaded.
+  // RMAB is only involved when the user taps Request.
+  const displayName = series?.name || seriesName;
+  const seriesLoading = loading;
+  const fetchMissingInSeries = React.useCallback(async () => {
+    const {
+      audibleSeriesAsinFromBook,
+      audibleFindSeriesAsin,
+      audibleSeriesBooks,
+      titleKey,
+    } = require("../utils/audible");
+    if (!displayName || seriesLoading) return [];
+    // Derive the book list from `series` (a dep — new identity per load)
+    // inside the callback: closing over a derived array keyed on .length
+    // would go stale on a same-length content change.
+    const libraryBooks = series?.books || [];
+    const haveAsins = new Set(
+      libraryBooks.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
+    );
+    // Resolve the series ASIN — exact via a library book's ASIN, else by name.
+    let seriesAsin: string | null = null;
+    // Cap the exact-resolution attempts: each miss costs a network round
+    // trip, and one or two library ASINs are enough to find the parent.
+    for (const asin of Array.from(haveAsins).slice(0, 2)) {
+      seriesAsin = await audibleSeriesAsinFromBook(asin).catch(() => null);
+      if (seriesAsin) break;
+    }
+    if (!seriesAsin) seriesAsin = await audibleFindSeriesAsin(displayName);
+    if (!seriesAsin) return [];
+    const all = await audibleSeriesBooks(seriesAsin);
+    const haveTitles = new Set(
+      libraryBooks.map((b: any) => titleKey(b.media?.metadata?.title))
+    );
+    return all.filter(
+      (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
+    );
+  }, [displayName, seriesLoading, series]);
+
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   const [startingId, setStartingId] = useState<string | null>(null);
@@ -138,6 +180,8 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
               metadata: {
                 title: item.media?.metadata?.title || "Untitled",
                 authorName: item.media?.metadata?.authorName || "",
+                // Audible ASIN (when matched) — powers the missing-books diff.
+                asin: item.media?.metadata?.asin || null,
               },
               coverPath: item.media?.coverPath,
               duration: item.media?.duration || 0,
@@ -461,6 +505,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           renderItem={renderBookRow}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={ListHeader}
+          ListFooterComponent={
+            <RmabMissingSection title="Missing from this series" fetchMissing={fetchMissingInSeries} />
+          }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
         />

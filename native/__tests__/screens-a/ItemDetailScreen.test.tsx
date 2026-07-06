@@ -437,3 +437,147 @@ describe("ItemDetailScreen", () => {
     expect(screen.queryByText("Retry")).toBeNull();
   });
 });
+
+describe("send ebook to device (Kindle etc.)", () => {
+  const mockedPost = api.post as jest.Mock;
+
+  it("hides the send action when no e-reader devices are configured", async () => {
+    routeApi(ebookOnlyItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+    expect(screen.queryByLabelText("Send ebook to device")).toBeNull();
+  });
+
+  it("sends the ebook to the picked device via the email API", async () => {
+    routeApi(ebookOnlyItem);
+    useUserStore.setState({ ereaderDevices: [{ name: "My Kindle" }, { name: "Kobo" }] } as any);
+    mockedPost.mockResolvedValue({ data: {} });
+    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+
+    await fireEvent.press(screen.getByLabelText("Send ebook to device"));
+    // Device sheet lists both configured devices.
+    await screen.findByText("My Kindle");
+    expect(screen.getByText("Kobo")).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Send to My Kindle"));
+    await waitFor(() =>
+      expect(mockedPost).toHaveBeenCalledWith("/api/emails/send-ebook-to-device", {
+        libraryItemId: "item1",
+        deviceName: "My Kindle",
+      })
+    );
+    // In-sheet M3 result burst, not a system alert.
+    await screen.findByText("Sent to My Kindle");
+    expect(alertSpy).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
+  });
+
+  it("surfaces a failure alert when the server rejects the send", async () => {
+    routeApi(ebookOnlyItem);
+    useUserStore.setState({ ereaderDevices: [{ name: "My Kindle" }] } as any);
+    mockedPost.mockRejectedValue(new Error("smtp down"));
+    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+    await fireEvent.press(screen.getByLabelText("Send ebook to device"));
+    await screen.findByText("My Kindle");
+    await fireEvent.press(screen.getByLabelText("Send to My Kindle"));
+
+    // Failure burst with a retry affordance, still inside the sheet.
+    await screen.findByText("Couldn't send");
+    await screen.findByLabelText("Try again");
+    expect(alertSpy).not.toHaveBeenCalled();
+
+    // Retry returns to the device list.
+    await fireEvent.press(screen.getByLabelText("Try again"));
+    await screen.findByText("My Kindle");
+    alertSpy.mockRestore();
+    errSpy.mockRestore();
+  });
+
+  it("audio-only items never show the send action even with devices", async () => {
+    routeApi(audioOnlyItem);
+    useUserStore.setState({ ereaderDevices: [{ name: "My Kindle" }] } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByLabelText("Send ebook to device")).toBeNull();
+  });
+});
+
+describe("request the other format via ReadMeABook", () => {
+  const rmab = require("../../utils/rmab");
+  const { useRmabStore } = require("../../store/useRmabStore");
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("audio-only book on a JWT session offers Request ebook (fetch-ebook pipeline)", async () => {
+    useRmabStore.setState({ configured: true, authMode: "jwt" } as any);
+    const spy = jest.spyOn(rmab, "requestEbookForAsin").mockResolvedValue({});
+    const withAsin = {
+      ...audioOnlyItem,
+      media: { ...audioOnlyItem.media, metadata: { ...audioOnlyItem.media.metadata, asin: "B0AUDIO01" } },
+    };
+    routeApi(withAsin);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    await fireEvent.press(screen.getByLabelText("Request ebook edition"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("B0AUDIO01"));
+    await screen.findByText("Ebook requested");
+  });
+
+  it("ebook-only book offers Request audiobook as an ordinary RMAB request", async () => {
+    useRmabStore.setState({ configured: true, authMode: "apiToken" } as any);
+    const spy = jest.spyOn(rmab, "createRequest").mockResolvedValue({});
+    const withAsin = {
+      ...ebookOnlyItem,
+      media: { ...ebookOnlyItem.media, metadata: { ...ebookOnlyItem.media.metadata, asin: "B0EBOOK01" } },
+    };
+    routeApi(withAsin);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+
+    await fireEvent.press(screen.getByLabelText("Request audiobook edition"));
+    await waitFor(() =>
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ asin: "B0EBOOK01", title: "Silmarillion Reader" })
+      )
+    );
+    await screen.findByText("Audiobook requested");
+  });
+
+  it("Request ebook stays hidden on API-token sessions (endpoint rejects them) and when RMAB is off", async () => {
+    useRmabStore.setState({ configured: true, authMode: "apiToken" } as any);
+    routeApi(audioOnlyItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByLabelText("Request ebook edition")).toBeNull();
+
+    useRmabStore.setState({ configured: false, authMode: null } as any);
+    routeApi(ebookOnlyItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+    expect(screen.queryByLabelText("Request audiobook edition")).toBeNull();
+  });
+});

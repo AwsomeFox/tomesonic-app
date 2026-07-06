@@ -1,8 +1,9 @@
 import React from "react";
-import { View, Text, Pressable, Modal } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, Text } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
+import Pressable from "./HintPressable";
 
 const MIN_SPEED = 0.5;
 const MAX_SPEED = 3.0;
@@ -39,28 +40,7 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0, 0, 0, 0.4)" }} onPress={onClose}>
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.surfaceContainerHigh,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
-            paddingTop: 12,
-          }}
-        >
-          <SafeAreaView edges={["bottom"]}>
-            {/* Drag handle (affordance parity with the other bottom sheets) */}
-            <View
-              style={{
-                alignSelf: "center",
-                width: 36,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.outlineVariant,
-              }}
-            />
+    <BottomSheet visible={visible} onClose={onClose}>
             {/* Header */}
             <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="speed" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
@@ -151,9 +131,6 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
                 );
               })}
             </View>
-          </SafeAreaView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }
