@@ -62,6 +62,18 @@ export default function DiscoverScreen({ navigation }: any) {
   const translateX = useRef(new Animated.Value(0)).current;
   const enter = useRef(new Animated.Value(0)).current;
 
+  // Async loads + the "Requested" chip timer resolve after navigation away —
+  // guard every deferred setState and clear the timer on unmount.
+  const aliveRef = useRef(true);
+  const likedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (likedTimerRef.current) clearTimeout(likedTimerRef.current);
+    };
+  }, []);
+
   const playEnter = useCallback(() => {
     enter.setValue(0);
     translateX.setValue(0);
@@ -73,9 +85,11 @@ export default function DiscoverScreen({ navigation }: any) {
       setBdError(null);
       setBdDisabled(false);
       const recs = await getBookdateRecommendations();
+      if (!aliveRef.current) return;
       setDeck(recs);
       playEnter();
     } catch (e: any) {
+      if (!aliveRef.current) return;
       const status = e?.response?.status;
       // 400 (older builds 503) = BookDate isn't configured/enabled.
       if (status === 400 || status === 503) setBdDisabled(true);
@@ -131,12 +145,19 @@ export default function DiscoverScreen({ navigation }: any) {
         );
       } catch {}
     }
+    if (!aliveRef.current) return;
     setShelves(plan.map((p) => ({ id: p.id, name: p.name, books: null })));
     plan.forEach((p) =>
       p
         .load()
-        .then((books) => setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books } : s))))
-        .catch(() => setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books: [] } : s))))
+        .then((books) => {
+          if (!aliveRef.current) return;
+          setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books } : s)));
+        })
+        .catch(() => {
+          if (!aliveRef.current) return;
+          setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books: [] } : s)));
+        })
     );
   }, []);
 
@@ -171,7 +192,10 @@ export default function DiscoverScreen({ navigation }: any) {
         setDeck((d) => (d || []).slice(1));
         if (action === "right") {
           setLastLiked(rec.title);
-          setTimeout(() => setLastLiked((t) => (t === rec.title ? null : t)), 2400);
+          if (likedTimerRef.current) clearTimeout(likedTimerRef.current);
+          likedTimerRef.current = setTimeout(() => {
+            if (aliveRef.current) setLastLiked((t) => (t === rec.title ? null : t));
+          }, 2400);
         }
       });
       try {
@@ -179,7 +203,7 @@ export default function DiscoverScreen({ navigation }: any) {
       } catch (e) {
         console.warn("[BookDate] swipe failed", e);
       } finally {
-        setBusy(false);
+        if (aliveRef.current) setBusy(false);
       }
     },
     [current, busy, flyOut]
@@ -190,6 +214,7 @@ export default function DiscoverScreen({ navigation }: any) {
     setBusy(true);
     try {
       const res = await undoBookdateSwipe();
+      if (!aliveRef.current) return;
       const rec = res?.recommendation;
       if (rec) {
         setDeck((d) => [rec, ...(d || [])]);
@@ -198,7 +223,7 @@ export default function DiscoverScreen({ navigation }: any) {
     } catch (e) {
       console.warn("[BookDate] undo failed", e);
     } finally {
-      setBusy(false);
+      if (aliveRef.current) setBusy(false);
     }
   }, [busy, playEnter]);
 
