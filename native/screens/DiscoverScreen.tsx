@@ -25,6 +25,7 @@ import {
   getNewReleases,
   getAudibleCategories,
   getCategoryBooks,
+  getHomeSections,
   resolveRmabUrl,
   RmabBook,
   BookdateRec,
@@ -51,9 +52,7 @@ export default function DiscoverScreen({ navigation }: any) {
   const [busy, setBusy] = useState(false);
   const [lastLiked, setLastLiked] = useState<string | null>(null);
 
-  // ── Shelves ──────────────────────────────────────────────────────────────
-  const [popular, setPopular] = useState<RmabBook[] | null>(null);
-  const [fresh, setFresh] = useState<RmabBook[] | null>(null);
+  // ── Shelves (the user's configured home sections, in their order) ───────
   const [shelves, setShelves] = useState<{ id: string; name: string; books: RmabBook[] | null }[]>([]);
 
   // ── Detail sheet ─────────────────────────────────────────────────────────
@@ -88,28 +87,57 @@ export default function DiscoverScreen({ navigation }: any) {
     }
   }, [playEnter]);
 
-  const loadShelves = useCallback(() => {
-    getPopularBooks()
-      .then(setPopular)
-      .catch(() => setPopular([]));
-    getNewReleases()
-      .then(setFresh)
-      .catch(() => setFresh([]));
-    getAudibleCategories()
-      .then((cats) => {
-        const chosen = (cats || []).slice(0, MAX_CATEGORY_SHELVES);
-        setShelves(chosen.map((c) => ({ id: String(c.id), name: c.name, books: null })));
-        chosen.forEach((c) =>
-          getCategoryBooks(String(c.id))
-            .then((books) =>
-              setShelves((prev) => prev.map((s) => (s.id === String(c.id) ? { ...s, books } : s)))
-            )
-            .catch(() =>
-              setShelves((prev) => prev.map((s) => (s.id === String(c.id) ? { ...s, books: [] } : s)))
-            )
+  const loadShelves = useCallback(async () => {
+    // Shelf plan: the USER'S configured home sections (same as RMAB's web
+    // home). Fallback for older servers: Popular + New Releases + the first
+    // few Audible categories.
+    type Plan = { id: string; name: string; load: () => Promise<RmabBook[]> };
+    let plan: Plan[] = [];
+    try {
+      const sections = await getHomeSections();
+      plan = (sections || [])
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((sec, i): Plan | null => {
+          if (sec.sectionType === "popular")
+            return { id: `popular-${i}`, name: "Popular", load: () => getPopularBooks() };
+          if (sec.sectionType === "new_releases")
+            return { id: `new-${i}`, name: "New Releases", load: () => getNewReleases() };
+          if (sec.sectionType === "category" && sec.categoryId)
+            return {
+              id: `cat-${sec.categoryId}`,
+              name: sec.categoryName || "Category",
+              load: () => getCategoryBooks(String(sec.categoryId)),
+            };
+          return null;
+        })
+        .filter(Boolean) as Plan[];
+    } catch (e) {
+      console.warn("[Discover] home-sections unavailable, using defaults", e);
+    }
+    if (plan.length === 0) {
+      plan = [
+        { id: "popular", name: "Popular", load: () => getPopularBooks() },
+        { id: "new", name: "New Releases", load: () => getNewReleases() },
+      ];
+      try {
+        const cats = await getAudibleCategories();
+        plan.push(
+          ...(cats || []).slice(0, MAX_CATEGORY_SHELVES).map((c) => ({
+            id: `cat-${c.id}`,
+            name: c.name,
+            load: () => getCategoryBooks(String(c.id)),
+          }))
         );
-      })
-      .catch(() => setShelves([]));
+      } catch {}
+    }
+    setShelves(plan.map((p) => ({ id: p.id, name: p.name, books: null })));
+    plan.forEach((p) =>
+      p
+        .load()
+        .then((books) => setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books } : s))))
+        .catch(() => setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books: [] } : s))))
+    );
   }, []);
 
   useEffect(() => {
@@ -428,9 +456,7 @@ export default function DiscoverScreen({ navigation }: any) {
           </View>
         ) : null}
 
-        {/* ── RMAB home shelves ── */}
-        <Shelf title="Popular" books={popular} onPressBook={setDetail} colors={colors} />
-        <Shelf title="New Releases" books={fresh} onPressBook={setDetail} colors={colors} />
+        {/* ── The user's configured home shelves ── */}
         {shelves.map((s) => (
           <Shelf key={s.id} title={s.name} books={s.books} onPressBook={setDetail} colors={colors} />
         ))}

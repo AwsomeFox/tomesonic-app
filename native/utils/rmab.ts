@@ -255,6 +255,20 @@ export async function requestEbookForAsin(asin: string): Promise<any> {
 // All db-backed on the server (fast) and enriched with isAvailable +
 // requestStatus; cached like the other discovery calls.
 
+export interface RmabHomeSection {
+  sectionType: "popular" | "new_releases" | "category";
+  categoryId?: string | null;
+  categoryName?: string | null;
+  sortOrder: number;
+}
+
+/** The user's configured home shelves (ordered). Not cached — edits on the
+ *  web UI should show up on next focus. */
+export async function getHomeSections(): Promise<RmabHomeSection[]> {
+  const data = await rmabRequest<any>("get", "/api/user/home-sections");
+  return data?.sections || [];
+}
+
 export async function getPopularBooks(limit = 12): Promise<RmabBook[]> {
   const data = await discoveryGet<any>(`/api/audiobooks/popular?limit=${limit}`);
   return data?.audiobooks || data?.results || [];

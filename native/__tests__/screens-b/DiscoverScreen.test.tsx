@@ -5,6 +5,7 @@ jest.mock("../../utils/rmab", () => ({
   getBookdateRecommendations: jest.fn(),
   swipeBookdate: jest.fn(),
   undoBookdateSwipe: jest.fn(),
+  getHomeSections: jest.fn().mockResolvedValue([]),
   getPopularBooks: jest.fn().mockResolvedValue([]),
   getNewReleases: jest.fn().mockResolvedValue([]),
   getAudibleCategories: jest.fn().mockResolvedValue([]),
@@ -25,6 +26,8 @@ import {
   swipeBookdate,
   undoBookdateSwipe,
   getPopularBooks,
+  getHomeSections,
+  getCategoryBooks,
 } from "../../utils/rmab";
 
 const RECS = [
@@ -104,6 +107,26 @@ describe("DiscoverScreen (BookDate)", () => {
     // Sheet shows the title a second time; no Request button (Like requests).
     await waitFor(() => expect(screen.getAllByText("First Pick").length).toBeGreaterThanOrEqual(2));
     expect(screen.queryByLabelText("Request First Pick")).toBeNull();
+  });
+
+  it("renders the USER'S home sections in their configured order", async () => {
+    (getHomeSections as jest.Mock).mockResolvedValue([
+      { sectionType: "category", categoryId: "scifi", categoryName: "Science Fiction & Fantasy", sortOrder: 0 },
+      { sectionType: "popular", sortOrder: 1 },
+    ]);
+    (getCategoryBooks as jest.Mock).mockResolvedValue([
+      { asin: "C1", title: "Cat Pick", isAvailable: false },
+    ]);
+    (getPopularBooks as jest.Mock).mockResolvedValue([
+      { asin: "P1", title: "Popular Pick", isAvailable: true },
+    ]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Science Fiction & Fantasy");
+    await screen.findByText("Cat Pick");
+    expect(getCategoryBooks).toHaveBeenCalledWith("scifi");
+    expect(screen.getByText("Popular")).toBeTruthy();
+    // No default category shelves beyond the configured plan.
+    expect(screen.queryByText("New Releases")).toBeNull();
   });
 
   it("an empty deck offers to generate more picks", async () => {
