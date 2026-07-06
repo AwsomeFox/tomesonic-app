@@ -19,7 +19,16 @@ export interface AudibleBook {
   coverArtUrl?: string;
   releaseDate?: string;
   sequence?: string;
+  language?: string;
   isAvailable?: boolean;
+}
+
+// The app is English-only today — foreign-language editions of an author's
+// or series' books read as noise in the missing lists. Products with NO
+// language attribute are kept (dropping unknowns hides real books).
+const APP_LANGUAGE = "english";
+function inAppLanguage(b: AudibleBook): boolean {
+  return !b.language || b.language.toLowerCase() === APP_LANGUAGE;
 }
 
 function mapProduct(p: any): AudibleBook | null {
@@ -34,6 +43,7 @@ function mapProduct(p: any): AudibleBook | null {
     coverArtUrl: images["500"] || images["256"] || Object.values(images)[0] as string | undefined,
     releaseDate: p.release_date || undefined,
     sequence: p.series?.[0]?.sequence || undefined,
+    language: p.language || undefined,
   };
 }
 
@@ -57,9 +67,9 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
     },
     timeout: TIMEOUT,
   });
-  return (res.data?.products || [])
+  return ((res.data?.products || [])
     .map(mapProduct)
-    .filter(Boolean) as AudibleBook[];
+    .filter(Boolean) as AudibleBook[]).filter(inAppLanguage);
 }
 
 /** The series a book belongs to, via the book's catalog relationships. */
@@ -111,7 +121,7 @@ export async function audibleSeriesBooks(seriesAsin: string): Promise<AudibleBoo
     });
     for (const p of details.data?.products || []) {
       const mapped = mapProduct(p);
-      if (mapped) out.push(mapped);
+      if (mapped && inAppLanguage(mapped)) out.push(mapped);
     }
   }
   // Preserve series order.

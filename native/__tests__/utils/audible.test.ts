@@ -54,6 +54,46 @@ describe("audibleAuthorBooks", () => {
   });
 });
 
+describe("language filtering (app is English-only)", () => {
+  it("author books drop foreign-language editions but keep unknown-language rows", async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        products: [
+          { asin: "EN1", title: "English Book", language: "english" },
+          { asin: "DE1", title: "German Book", language: "german" },
+          { asin: "XX1", title: "No Language Field" },
+        ],
+      },
+    });
+    const books = await audibleAuthorBooks("Someone");
+    expect(books.map((b) => b.asin)).toEqual(["EN1", "XX1"]);
+  });
+
+  it("series books apply the same language filter", async () => {
+    mockedGet
+      .mockResolvedValueOnce({
+        data: {
+          product: {
+            relationships: [
+              { asin: "EN1", relationship_to_product: "child", sort: "1" },
+              { asin: "FR1", relationship_to_product: "child", sort: "2" },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          products: [
+            { asin: "EN1", title: "English Entry", language: "English" },
+            { asin: "FR1", title: "French Entry", language: "french" },
+          ],
+        },
+      });
+    const books = await audibleSeriesBooks("SERIES1");
+    expect(books.map((b) => b.asin)).toEqual(["EN1"]);
+  });
+});
+
 describe("series resolution", () => {
   it("finds the parent series from a book's relationships", async () => {
     mockedGet.mockResolvedValue({
