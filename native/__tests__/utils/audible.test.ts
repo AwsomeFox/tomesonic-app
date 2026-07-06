@@ -1,6 +1,7 @@
 jest.mock("axios", () => ({ get: jest.fn() }));
 import axios from "axios";
 import {
+  audibleBookDetails,
   audibleAuthorBooks,
   audibleSeriesAsinFromBook,
   audibleFindSeriesAsin,
@@ -91,6 +92,40 @@ describe("language filtering (app is English-only)", () => {
       });
     const books = await audibleSeriesBooks("SERIES1");
     expect(books.map((b) => b.asin)).toEqual(["EN1"]);
+  });
+});
+
+describe("audibleBookDetails (Audnexus)", () => {
+  it("maps summary/narrators/series from Audnexus (the catalog API never returns summaries)", async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        asin: "B08G9PRS1K",
+        title: "Project Hail Mary",
+        authors: [{ name: "Andy Weir" }],
+        narrators: [{ name: "Ray Porter" }],
+        summary: "<p>Ryland  Grace</p> wakes.",
+        image: "https://img/x.jpg",
+        seriesPrimary: { asin: "S1", name: "Solo", position: "1" },
+        language: "english",
+      },
+    });
+    const d = await audibleBookDetails("B08G9PRS1K");
+    expect(mockedGet).toHaveBeenCalledWith(
+      "https://api.audnex.us/books/B08G9PRS1K",
+      expect.any(Object)
+    );
+    expect(d).toMatchObject({
+      title: "Project Hail Mary",
+      narrator: "Ray Porter",
+      description: "Ryland Grace wakes.",
+      coverArtUrl: "https://img/x.jpg",
+      sequence: "1",
+    });
+  });
+
+  it("returns null for stub/missing books", async () => {
+    mockedGet.mockResolvedValue({ data: { asin: "X" } });
+    expect(await audibleBookDetails("X")).toBeNull();
   });
 });
 

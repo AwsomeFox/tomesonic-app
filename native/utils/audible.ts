@@ -73,14 +73,25 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
     .filter(Boolean) as AudibleBook[]).filter(inAppLanguage);
 }
 
-/** Full catalog details for one book — used to lazily fill descriptions the
- *  RMAB category cache doesn't carry. */
+/** Full details for one book via AUDNEXUS — the unauthenticated Audible
+ *  catalog API never returns publisher_summary (verified live: title yes,
+ *  summary always empty), so descriptions must come from Audnexus, which
+ *  serves the same Audible metadata with summaries, keyless. */
 export async function audibleBookDetails(asin: string): Promise<AudibleBook | null> {
-  const res = await axios.get(`${BASE}/catalog/products/${asin}`, {
-    params: { response_groups: GROUPS },
-    timeout: TIMEOUT,
-  });
-  return mapProduct(res.data?.product);
+  const res = await axios.get(`https://api.audnex.us/books/${asin}`, { timeout: TIMEOUT });
+  const d = res.data;
+  if (!d?.asin || !d?.title) return null;
+  return {
+    asin: d.asin,
+    title: d.title,
+    author: (d.authors || []).map((a: any) => a.name).filter(Boolean).join(", ") || undefined,
+    narrator: (d.narrators || []).map((n: any) => n.name).filter(Boolean).join(", ") || undefined,
+    description: d.summary ? String(d.summary).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : undefined,
+    coverArtUrl: d.image || undefined,
+    releaseDate: d.releaseDate || undefined,
+    sequence: d.seriesPrimary?.position || undefined,
+    language: d.language || undefined,
+  };
 }
 
 /** Best-match ASIN for a title/author — for ABS items without one. */

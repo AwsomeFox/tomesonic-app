@@ -105,6 +105,9 @@ export default function RmabBookDetailSheet({
           {description ? (
             <>
               <Text
+                // key forces a remount on toggle — Fabric doesn't reliably
+                // re-layout when numberOfLines changes on a live Text node.
+                key={expanded ? "desc-full" : "desc-clamped"}
                 style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }}
                 numberOfLines={expanded ? undefined : 6}
               >
