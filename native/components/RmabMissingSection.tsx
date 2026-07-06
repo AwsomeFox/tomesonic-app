@@ -87,6 +87,11 @@ export default function RmabMissingSection({
         <Text style={{ flex: 1, color: colors.onSurface, fontSize: 18, fontWeight: "600" }}>{title}</Text>
         {loading ? <ActivityIndicator size="small" color={colors.primary} /> : null}
       </View>
+      {loading && (!books || books.length === 0) ? (
+        <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, paddingHorizontal: 20, marginBottom: 6 }}>
+          Checking Audible for books you don't have…
+        </Text>
+      ) : null}
       {notice ? (
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, paddingHorizontal: 20, marginBottom: 6 }}>
           {notice}

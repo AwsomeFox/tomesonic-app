@@ -52,18 +52,30 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
 
   const [author, setAuthor] = useState<AuthorData | null>(null);
 
-  // ReadMeABook: this author's Audible books that aren't in the library.
-  const rmabName = author?.name || authorName;
-  const fetchMissingByAuthor = React.useCallback(async () => {
-    const { searchAuthors, getAuthorBooks } = require("../utils/rmab");
-    if (!rmabName) return [];
-    const matches = await searchAuthors(rmabName);
-    const norm = (v: string) => (v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    const best = matches.find((m: any) => norm(m.name) === norm(rmabName)) || matches[0];
-    if (!best?.asin) return [];
-    return getAuthorBooks(best.asin);
-  }, [rmabName]);
   const [loading, setLoading] = useState(true);
+
+  // Missing-books discovery straight off Audible's catalog API (fast, free) —
+  // diffed locally against the author's library items. RMAB only handles the
+  // Request tap.
+  const rmabName = author?.name || authorName;
+  const authorItems = author?.libraryItems || [];
+  const authorLoading = loading;
+  const fetchMissingByAuthor = React.useCallback(async () => {
+    const { audibleAuthorBooks, titleKey } = require("../utils/audible");
+    if (!rmabName || authorLoading) return [];
+    const all = await audibleAuthorBooks(rmabName);
+    const haveAsins = new Set(
+      authorItems.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
+    );
+    const haveTitles = new Set(
+      authorItems.map((b: any) => titleKey(b.media?.metadata?.title))
+    );
+    return all.filter(
+      (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rmabName, authorLoading, authorItems.length]);
+
   const [loadError, setLoadError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   const [descExpanded, setDescExpanded] = useState(false);
@@ -364,7 +376,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           keyExtractor={(item) => item.id}
           ListHeaderComponent={renderHeader}
           ListFooterComponent={
-            <RmabMissingSection title="Missing from your library" fetchMissing={fetchMissingByAuthor} requiresFullAuth />
+            <RmabMissingSection title="Missing from your library" fetchMissing={fetchMissingByAuthor} />
           }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
