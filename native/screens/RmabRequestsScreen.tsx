@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
-import { listMyRequests, listAllRequests, deleteRequest, approveRequest, resolveRmabUrl } from "../utils/rmab";
+import { listMyRequests, deleteRequest, approveRequest, resolveRmabUrl } from "../utils/rmab";
 import BottomSheet from "../components/BottomSheet";
 import { useRmabStore } from "../store/useRmabStore";
 import Pressable from "../components/HintPressable";
@@ -82,9 +82,9 @@ export default function RmabRequestsScreen({ navigation }: any) {
   const load = useCallback(async () => {
     try {
       setError(false);
-      // Admins on a JWT session manage EVERYONE's requests; everyone else
-      // sees their own.
-      const list = canManage ? await listAllRequests() : await listMyRequests();
+      // /api/requests returns the caller's own requests — and for admins,
+      // everyone's — always with the rich audiobook include.
+      const list = await listMyRequests();
       setRequests(Array.isArray(list) ? list : []);
     } catch (e) {
       console.warn("[RMAB] requests load failed", e);
@@ -352,6 +352,95 @@ export default function RmabRequestsScreen({ navigation }: any) {
               <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }} numberOfLines={8}>
                 {String(detail.audiobook.description).replace(/<[^>]+>/g, "").trim()}
               </Text>
+            ) : null}
+
+            {canManage ? (
+              <View style={{ flexDirection: "row", justifyContent: "flex-end", columnGap: 10, marginTop: 18 }}>
+                {["pending_approval", "awaiting_approval"].includes((detail.status || "").toLowerCase()) ? (
+                  <>
+                    <Pressable
+                      onPress={async () => {
+                        const id = String(detail.id ?? "");
+                        setDetail(null);
+                        await onApprove(id, "approve");
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Approve request"
+                      android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        backgroundColor: colors.primaryContainer,
+                        borderRadius: 20,
+                        height: 40,
+                        paddingHorizontal: 18,
+                      }}
+                    >
+                      <Icon name="check" size={18} color={colors.onPrimaryContainer} />
+                      <Text style={{ color: colors.onPrimaryContainer, fontSize: 14, fontWeight: "600", marginLeft: 6 }}>
+                        Approve
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={async () => {
+                        const id = String(detail.id ?? "");
+                        setDetail(null);
+                        await onApprove(id, "deny");
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Deny request"
+                      android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        backgroundColor: colors.surfaceContainerHigh,
+                        borderRadius: 20,
+                        height: 40,
+                        paddingHorizontal: 18,
+                      }}
+                    >
+                      <Icon name="close" size={18} color={colors.onSurfaceVariant} />
+                      <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontWeight: "600", marginLeft: 6 }}>
+                        Deny
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : null}
+                <Pressable
+                  onPress={async () => {
+                    const id = String(detail.id ?? "");
+                    setDetail(null);
+                    // Detail-sheet delete is already a deliberate action — skip
+                    // the list's two-tap arm step.
+                    setActing(id);
+                    try {
+                      await deleteRequest(id);
+                      setRequests((prev) => (prev || []).filter((r: any) => String(r?.id) !== id));
+                      refreshPendingCount();
+                    } catch (e) {
+                      console.warn("[RMAB] delete failed", e);
+                    } finally {
+                      setActing(null);
+                    }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete request"
+                  android_ripple={{ color: colors.error + "22" }}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: "rgba(179, 38, 30, 0.08)",
+                    borderRadius: 20,
+                    height: 40,
+                    paddingHorizontal: 18,
+                  }}
+                >
+                  <Icon name="trash" size={18} color={colors.error} />
+                  <Text style={{ color: colors.error, fontSize: 14, fontWeight: "600", marginLeft: 6 }}>
+                    Delete
+                  </Text>
+                </Pressable>
+              </View>
             ) : null}
           </View>
         ) : null}

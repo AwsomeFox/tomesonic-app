@@ -138,7 +138,8 @@ async function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
 async function rmabRequest<T = any>(
   method: "get" | "post" | "delete",
   path: string,
-  data?: any
+  data?: any,
+  timeout = 20000
 ): Promise<T> {
   let cfg = readRmabConfig();
   if (!cfg) throw new Error("ReadMeABook is not configured");
@@ -147,7 +148,7 @@ async function rmabRequest<T = any>(
       method,
       url: `${c.url}${path}`,
       data,
-      timeout: 20000,
+      timeout,
       headers: { Authorization: `Bearer ${c.apiToken || c.accessToken}` },
     });
   try {
@@ -158,6 +159,21 @@ async function rmabRequest<T = any>(
     cfg = await refreshAccessToken(cfg);
     return (await doCall(cfg)).data;
   }
+}
+
+// Discovery endpoints (series/author) scrape Audible/Audnexus live — slow
+// (tens of seconds cold) but stable. Give them a generous timeout and a
+// session-lifetime cache so revisits render instantly.
+const DISCOVERY_TIMEOUT = 45000;
+const DISCOVERY_TTL = 15 * 60 * 1000;
+const discoveryCache = new Map<string, { at: number; data: any }>();
+
+async function discoveryGet<T = any>(path: string): Promise<T> {
+  const hit = discoveryCache.get(path);
+  if (hit && Date.now() - hit.at < DISCOVERY_TTL) return hit.data as T;
+  const data = await rmabRequest<T>("get", path, undefined, DISCOVERY_TIMEOUT);
+  discoveryCache.set(path, { at: Date.now(), data });
+  return data;
 }
 
 // --- API surface --------------------------------------------------------
@@ -185,30 +201,24 @@ export async function searchBooks(query: string, page = 1): Promise<RmabBook[]> 
 }
 
 export async function searchSeries(query: string): Promise<any[]> {
-  const data = await rmabRequest<any>(
-    "get",
-    `/api/series/search?q=${encodeURIComponent(query)}`
-  );
+  const data = await discoveryGet<any>(`/api/series/search?q=${encodeURIComponent(query)}`);
   return data?.results || data?.series || [];
 }
 
 export async function getSeries(asin: string, page = 1): Promise<{ books: RmabBook[]; [key: string]: any }> {
-  const data = await rmabRequest<any>("get", `/api/series/${asin}?page=${page}`);
+  const data = await discoveryGet<any>(`/api/series/${asin}?page=${page}`);
   // Books live under series.books in the response envelope.
   return { ...data, books: data?.series?.books || data?.books || [] };
 }
 
 export async function searchAuthors(query: string): Promise<any[]> {
   // NOTE: this endpoint's param is `name`, not `q`.
-  const data = await rmabRequest<any>(
-    "get",
-    `/api/authors/search?name=${encodeURIComponent(query)}`
-  );
+  const data = await discoveryGet<any>(`/api/authors/search?name=${encodeURIComponent(query)}`);
   return data?.results || data?.authors || [];
 }
 
 export async function getAuthorBooks(asin: string): Promise<RmabBook[]> {
-  const data = await rmabRequest<any>("get", `/api/authors/${asin}/books`);
+  const data = await discoveryGet<any>(`/api/authors/${asin}/books`);
   return data?.results || data?.books || [];
 }
 
@@ -226,16 +236,12 @@ export async function createRequest(book: RmabBook): Promise<any> {
   });
 }
 
+/** /api/requests returns the caller's requests — and for ADMINS, everyone's
+ *  (server-side ownership filter) — always with the rich audiobook include
+ *  (cover, narrator, description) and requester. One endpoint fits all. */
 export async function listMyRequests(): Promise<any[]> {
-  const data = await rmabRequest<any>("get", "/api/requests");
+  const data = await rmabRequest<any>("get", "/api/requests?take=100");
   return data?.results || data?.requests || [];
-}
-
-/** Admin-only: EVERYONE's requests (paginated server-side; page 1 covers
- *  the management view). */
-export async function listAllRequests(): Promise<any[]> {
-  const data = await rmabRequest<any>("get", "/api/admin/requests?pageSize=100");
-  return data?.requests || data?.results || [];
 }
 
 /** Admin-only: number of requests awaiting approval. */

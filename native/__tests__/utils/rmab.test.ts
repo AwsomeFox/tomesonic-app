@@ -207,6 +207,9 @@ describe("endpoint wrappers", () => {
   it("listMyRequests unwraps either results or requests arrays", async () => {
     mockedRequest.mockResolvedValue({ data: { requests: [{ id: 1 }] } });
     expect(await listMyRequests()).toEqual([{ id: 1 }]);
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://rmab.test/api/requests?take=100" })
+    );
   });
 
   it("deleteRequest issues DELETE on the request", async () => {
