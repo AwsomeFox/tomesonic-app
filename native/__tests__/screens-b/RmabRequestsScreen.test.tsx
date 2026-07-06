@@ -10,6 +10,7 @@ jest.mock("../../utils/rmab", () => ({
   readRmabConfig: jest.fn(() => null),
   writeRmabConfig: jest.fn(),
   rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
+  resolveRmabUrl: (p: any) => p || undefined,
   getMe: jest.fn(),
   createRequest: jest.fn(),
 }));

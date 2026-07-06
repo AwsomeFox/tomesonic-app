@@ -4,7 +4,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
-import { listMyRequests, listAllRequests, deleteRequest, approveRequest } from "../utils/rmab";
+import { listMyRequests, listAllRequests, deleteRequest, approveRequest, resolveRmabUrl } from "../utils/rmab";
+import BottomSheet from "../components/BottomSheet";
 import { useRmabStore } from "../store/useRmabStore";
 import Pressable from "../components/HintPressable";
 
@@ -42,6 +43,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
   const canManage = isAdmin && authMode === "jwt";
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
+  const [detail, setDetail] = useState<any | null>(null);
 
   const onApprove = async (id: string, action: "approve" | "deny") => {
     setActing(id);
@@ -142,8 +144,13 @@ export default function RmabRequestsScreen({ navigation }: any) {
             const awaiting = ["pending_approval", "awaiting_approval"].includes(
               (item?.status || "").toLowerCase()
             );
+            const coverUri = resolveRmabUrl(cover);
             return (
-              <View
+              <Pressable
+                onPress={() => setDetail(item)}
+                accessibilityRole="button"
+                accessibilityLabel={`Details for ${item?.title || item?.audiobook?.title || "request"}`}
+                android_ripple={{ color: colors.primary + "14" }}
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
@@ -152,7 +159,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                 }}
               >
                 <Image
-                  source={cover ? { uri: cover } : undefined}
+                  source={coverUri ? { uri: coverUri } : undefined}
                   style={{ width: 48, height: 48, borderRadius: 6, backgroundColor: colors.surfaceContainerHigh }}
                   contentFit="cover"
                 />
@@ -264,11 +271,88 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     ) : null}
                   </Pressable>
                 ) : null}
-              </View>
+              </Pressable>
             );
           }}
         />
       )}
+
+      {/* Request details */}
+      <BottomSheet visible={!!detail} onClose={() => setDetail(null)}>
+        {detail ? (
+          <View style={{ paddingHorizontal: 24, paddingBottom: 16 }}>
+            <View style={{ flexDirection: "row" }}>
+              <Image
+                source={
+                  resolveRmabUrl(detail.coverArtUrl || detail.audiobook?.coverArtUrl)
+                    ? { uri: resolveRmabUrl(detail.coverArtUrl || detail.audiobook?.coverArtUrl) }
+                    : undefined
+                }
+                style={{ width: 96, height: 96, borderRadius: 10, backgroundColor: colors.surfaceContainerHigh }}
+                contentFit="cover"
+              />
+              <View style={{ flex: 1, marginLeft: 16, justifyContent: "center" }}>
+                <Text style={{ color: colors.onSurface, fontSize: 19, fontWeight: "600" }} numberOfLines={3}>
+                  {detail.title || detail.audiobook?.title || "Unknown"}
+                </Text>
+                {detail.author || detail.audiobook?.author ? (
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 4 }} numberOfLines={1}>
+                    {detail.author || detail.audiobook?.author}
+                  </Text>
+                ) : null}
+                {detail.audiobook?.narrator ? (
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }} numberOfLines={1}>
+                    Read by {detail.audiobook.narrator}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 14, flexWrap: "wrap", gap: 8 }}>
+              {(() => {
+                const meta = statusMeta(detail.status, colors);
+                return (
+                  <View style={{ backgroundColor: meta.bg, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                    <Text style={{ color: meta.fg, fontSize: 12, fontWeight: "600" }}>{meta.label}</Text>
+                  </View>
+                );
+              })()}
+              {detail.audiobook?.series ? (
+                <View style={{ backgroundColor: colors.surfaceContainerHigh, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontWeight: "600" }}>
+                    {detail.audiobook.series}
+                    {detail.audiobook.seriesPart ? ` #${detail.audiobook.seriesPart}` : ""}
+                  </Text>
+                </View>
+              ) : null}
+              {detail.audiobook?.year ? (
+                <View style={{ backgroundColor: colors.surfaceContainerHigh, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontWeight: "600" }}>
+                    {detail.audiobook.year}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {(detail.user?.plexUsername || detail.createdAt) ? (
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 12 }}>
+                {[
+                  detail.user?.plexUsername ? `Requested by ${detail.user.plexUsername}` : null,
+                  detail.createdAt ? new Date(detail.createdAt).toLocaleDateString() : null,
+                ]
+                  .filter(Boolean)
+                  .join(" • ")}
+              </Text>
+            ) : null}
+
+            {detail.audiobook?.description ? (
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }} numberOfLines={8}>
+                {String(detail.audiobook.description).replace(/<[^>]+>/g, "").trim()}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+      </BottomSheet>
     </SafeAreaView>
   );
 }

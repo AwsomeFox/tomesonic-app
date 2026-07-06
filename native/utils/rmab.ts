@@ -162,6 +162,16 @@ async function rmabRequest<T = any>(
 
 // --- API surface --------------------------------------------------------
 
+/** RMAB rewrites cover URLs to server-relative /api/cache/... paths once it
+ *  caches them (the cache routes are public). Make them absolute. */
+export function resolveRmabUrl(path?: string | null): string | undefined {
+  if (!path) return undefined;
+  if (/^https?:\/\//.test(path)) return path;
+  const cfg = readRmabConfig();
+  if (!cfg) return undefined;
+  return `${cfg.url}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
 export async function getMe(): Promise<any> {
   return rmabRequest("get", "/api/auth/me");
 }
@@ -184,13 +194,15 @@ export async function searchSeries(query: string): Promise<any[]> {
 
 export async function getSeries(asin: string, page = 1): Promise<{ books: RmabBook[]; [key: string]: any }> {
   const data = await rmabRequest<any>("get", `/api/series/${asin}?page=${page}`);
-  return { ...data, books: data?.books || [] };
+  // Books live under series.books in the response envelope.
+  return { ...data, books: data?.series?.books || data?.books || [] };
 }
 
 export async function searchAuthors(query: string): Promise<any[]> {
+  // NOTE: this endpoint's param is `name`, not `q`.
   const data = await rmabRequest<any>(
     "get",
-    `/api/authors/search?q=${encodeURIComponent(query)}`
+    `/api/authors/search?name=${encodeURIComponent(query)}`
   );
   return data?.results || data?.authors || [];
 }

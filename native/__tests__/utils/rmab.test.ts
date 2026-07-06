@@ -9,6 +9,7 @@ import {
   exchangeLoginToken,
   deleteRequest,
   approveRequest,
+  resolveRmabUrl,
   readRmabConfig,
   writeRmabConfig,
   searchBooks,
@@ -146,7 +147,8 @@ describe("endpoint wrappers", () => {
     expect(mockedRequest).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://rmab.test/api/series/search?q=Lost%20Fleet" })
     );
-    mockedRequest.mockResolvedValue({ data: { books: [{ asin: "B02" }] } });
+    // Series detail nests books under series.books.
+    mockedRequest.mockResolvedValue({ data: { series: { books: [{ asin: "B02" }] } } });
     const detail = await getSeries("B0SERIES01");
     expect(mockedRequest).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://rmab.test/api/series/B0SERIES01?page=1" })
@@ -155,7 +157,8 @@ describe("endpoint wrappers", () => {
 
     await searchAuthors("Jack Campbell");
     expect(mockedRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://rmab.test/api/authors/search?q=Jack%20Campbell" })
+      // authors/search takes `name`, not `q`
+      expect.objectContaining({ url: "https://rmab.test/api/authors/search?name=Jack%20Campbell" })
     );
     await getAuthorBooks("B0AUTH01");
     expect(mockedRequest).toHaveBeenCalledWith(
@@ -191,6 +194,14 @@ describe("endpoint wrappers", () => {
         },
       })
     );
+  });
+
+  it("resolveRmabUrl absolutizes server-relative cover paths", () => {
+    expect(resolveRmabUrl("/api/cache/thumbnails/x.jpg")).toBe(
+      "https://rmab.test/api/cache/thumbnails/x.jpg"
+    );
+    expect(resolveRmabUrl("https://img.audible.com/x.jpg")).toBe("https://img.audible.com/x.jpg");
+    expect(resolveRmabUrl(null)).toBeUndefined();
   });
 
   it("listMyRequests unwraps either results or requests arrays", async () => {
