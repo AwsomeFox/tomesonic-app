@@ -16,6 +16,12 @@ function statusMeta(status: string, colors: any): { label: string; bg: string; f
     case "completed":
     case "fulfilled":
       return { label: "Available", bg: colors.primaryContainer, fg: colors.onPrimaryContainer };
+    // Ebook requests never reach "available" — `downloaded` is their terminal
+    // success (the file is organized next to the audiobook).
+    case "downloaded":
+      return { label: "Downloaded", bg: colors.primaryContainer, fg: colors.onPrimaryContainer };
+    case "awaiting_import":
+      return { label: "Waiting for import", bg: colors.secondaryContainer, fg: colors.onSecondaryContainer };
     case "downloading":
     case "processing":
     case "importing":
