@@ -257,6 +257,10 @@ export const useUserStore = create<UserState>((set, get) => ({
       // Seed progress from the login payload; refreshed later via loadMediaProgress.
       mediaProgress: indexMediaProgress(user?.mediaProgress || []),
     });
+    // Fresh login = fresh session: fetch the e-reader devices now — the
+    // initialize() path only covers restored sessions, so without this a
+    // first login never showed "Send to device" until an app restart.
+    get().loadEReaderDevices();
   },
 
   logout: async () => {

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
+  KeyboardAvoidingView,
   Modal,
   Pressable,
   StyleSheet,
@@ -112,8 +113,15 @@ export default function BottomSheet({
         />
       </Animated.View>
 
-      {/* Sheet: the only thing that slides. */}
-      <View style={{ flex: 1, justifyContent: "flex-end" }} pointerEvents="box-none">
+      {/* Sheet: the only thing that slides. KeyboardAvoidingView because a
+          statusBarTranslucent Modal opts out of adjustResize — without it the
+          keyboard covers any inputs in the sheet (e.g. the RMAB connect
+          form). */}
+      <KeyboardAvoidingView
+        behavior="padding"
+        style={{ flex: 1, justifyContent: "flex-end" }}
+        pointerEvents="box-none"
+      >
         <Animated.View
           style={{
             transform: [{ translateY }],
@@ -140,7 +148,7 @@ export default function BottomSheet({
             {children}
           </SafeAreaView>
         </Animated.View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

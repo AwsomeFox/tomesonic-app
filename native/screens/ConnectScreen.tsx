@@ -197,11 +197,14 @@ export default function ConnectScreen() {
     onPress,
     busy,
     variant = "filled",
+    compact = false,
   }: {
     label: string;
     onPress: () => void;
     busy?: boolean;
     variant?: "filled" | "tonal";
+    /** Self-sized pill instead of full width (for aligned action rows). */
+    compact?: boolean;
   }) => {
     const bg = variant === "filled" ? colors.primary : colors.secondaryContainer;
     const fg = variant === "filled" ? colors.onPrimary : colors.onSecondaryContainer;
@@ -220,7 +223,8 @@ export default function ConnectScreen() {
           justifyContent: "center" as const,
           borderRadius: BUTTON_HEIGHT / 2,
           overflow: "hidden" as const,
-          elevation: variant === "filled" ? 1 : 0,
+          ...(compact ? { paddingHorizontal: 32, minWidth: 140 } : null),
+          elevation: variant === "filled" ? 2 : 0,
           opacity: loading && !busy ? 0.6 : 1,
           transform: [{ scale: pressed ? 0.97 : 1 }],
         })}
@@ -301,8 +305,8 @@ export default function ConnectScreen() {
                 returnKeyType="go"
                 style={fieldStyle("address")}
               />
-              <View style={{ marginTop: 24 }}>
-                <BigButton label="Submit" onPress={handleConnectAddress} busy={loading} />
+              <View style={{ marginTop: 24, alignItems: "flex-end" }}>
+                <BigButton label="Submit" onPress={handleConnectAddress} busy={loading} compact />
               </View>
             </View>
           ) : (
@@ -413,8 +417,8 @@ export default function ConnectScreen() {
                       <Icon name={showPassword ? "eye-off" : "eye"} size={22} color={colors.onSurfaceVariant} />
                     </Pressable>
                   </View>
-                  <View style={{ marginTop: 24 }}>
-                    <BigButton label="Submit" onPress={handleLogin} busy={loading && authFlow === "local"} />
+                  <View style={{ marginTop: 24, alignItems: "flex-end" }}>
+                    <BigButton label="Submit" onPress={handleLogin} busy={loading && authFlow === "local"} compact />
                   </View>
                 </View>
               ) : null}
@@ -432,12 +436,15 @@ export default function ConnectScreen() {
 
               {/* OpenID / SSO auth — tonal hero button */}
               {isOpenIDAuth ? (
-                <BigButton
-                  label={oauthButtonText}
-                  onPress={handleOpenId}
-                  busy={loading && authFlow === "oauth"}
-                  variant="tonal"
-                />
+                <View style={{ alignItems: "center" }}>
+                  <BigButton
+                    label={oauthButtonText}
+                    onPress={handleOpenId}
+                    busy={loading && authFlow === "oauth"}
+                    variant="tonal"
+                    compact
+                  />
+                </View>
               ) : null}
             </View>
           )}

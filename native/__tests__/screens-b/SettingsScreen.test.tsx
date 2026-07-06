@@ -70,7 +70,11 @@ import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useRmabStore } from "../../store/useRmabStore";
 import { storage, storageHelper } from "../../utils/storage";
 
-const APP_VERSION = require("../../app.json").expo.version;
+// The screen shows the INSTALLED package version (expo-application), falling
+// back to app.json — mirror that here.
+const APP_VERSION =
+  require("expo-application").nativeApplicationVersion ||
+  require("../../app.json").expo.version;
 
 const initialUser = useUserStore.getState();
 const initialTheme = useThemeStore.getState();

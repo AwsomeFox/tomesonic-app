@@ -21,8 +21,12 @@ import BottomSheet from '../components/BottomSheet';
 import { useRmabStore } from '../store/useRmabStore';
 import { haptic } from '../utils/haptics';
 
-// Single source of truth for the displayed version — the Expo app config.
-const APP_VERSION: string = require('../app.json').expo?.version || '';
+import * as Application from 'expo-application';
+
+// The INSTALLED package's version — app.json drifts from the built APK (the
+// release flow bumps versions on master, not on feature branches).
+const APP_VERSION: string =
+  Application.nativeApplicationVersion || require('../app.json').expo?.version || '';
 const GITHUB_URL = 'https://github.com/AwsomeFox/tomesonic-app';
 
 const THEME_LABEL: Record<ThemeMode, string> = {
