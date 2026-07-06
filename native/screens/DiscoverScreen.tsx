@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
+  PanResponder,
   useWindowDimensions,
   ScrollView,
   FlatList,
@@ -227,6 +228,60 @@ export default function DiscoverScreen({ navigation }: any) {
     }
   }, [busy, playEnter]);
 
+  // ── Tinder-style drag on the card ────────────────────────────────────────
+  // PanResponder is created once, so it reads live values through refs.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const hasCardRef = useRef(false);
+  hasCardRef.current = !!current;
+  const onSwipeRef = useRef(onSwipe);
+  onSwipeRef.current = onSwipe;
+  const widthRef = useRef(screenWidth);
+  widthRef.current = screenWidth;
+
+  const springBack = useCallback(() => {
+    Animated.spring(translateX, {
+      toValue: 0,
+      tension: 120,
+      friction: 9,
+      useNativeDriver: true,
+    }).start();
+  }, [translateX]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      // Claim only clearly-horizontal drags: taps keep opening details and
+      // vertical drags stay with the card's inner ScrollView.
+      onMoveShouldSetPanResponder: (_, g) =>
+        hasCardRef.current &&
+        !busyRef.current &&
+        Math.abs(g.dx) > 14 &&
+        Math.abs(g.dx) > Math.abs(g.dy) * 1.4,
+      onPanResponderMove: (_, g) => translateX.setValue(g.dx),
+      onPanResponderRelease: (_, g) => {
+        const w = widthRef.current;
+        // Distance OR flick velocity commits the swipe; flyOut animates from
+        // the card's current offset, so the motion continues seamlessly.
+        if (g.dx > w * 0.3 || g.vx > 0.9) onSwipeRef.current("right");
+        else if (g.dx < -w * 0.3 || g.vx < -0.9) onSwipeRef.current("left");
+        else springBack();
+      },
+      onPanResponderTerminate: () => springBack(),
+    })
+  ).current;
+
+  // Drag-direction stamps (Tinder-style): fade in as the card commits.
+  const likeStampOpacity = translateX.interpolate({
+    inputRange: [24, 120],
+    outputRange: [0, 1],
+    extrapolate: "clamp",
+  });
+  const passStampOpacity = translateX.interpolate({
+    inputRange: [-120, -24],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+
   const onRequestFromSheet = useCallback(
     async (book: RmabBook) => {
       setRequesting(true);
@@ -333,6 +388,7 @@ export default function DiscoverScreen({ navigation }: any) {
             ) : current ? (
               <View style={{ height: heroHeight }}>
                 <Animated.View
+                  {...panResponder.panHandlers}
                   style={{
                     flex: 1,
                     transform: [
@@ -351,6 +407,55 @@ export default function DiscoverScreen({ navigation }: any) {
                     overflow: "hidden",
                   }}
                 >
+                  {/* Drag stamps */}
+                  <Animated.View
+                    pointerEvents="none"
+                    style={{
+                      position: "absolute",
+                      top: 18,
+                      left: 18,
+                      zIndex: 2,
+                      opacity: likeStampOpacity,
+                      transform: [{ rotate: "-12deg" }],
+                      borderWidth: 3,
+                      borderColor: colors.primary,
+                      borderRadius: 10,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      backgroundColor: colors.primaryContainer + "E6",
+                      flexDirection: "row",
+                      alignItems: "center",
+                    }}
+                  >
+                    <Icon name="heart" size={18} color={colors.onPrimaryContainer} />
+                    <Text style={{ color: colors.onPrimaryContainer, fontSize: 16, fontWeight: "800", marginLeft: 6 }}>
+                      REQUEST
+                    </Text>
+                  </Animated.View>
+                  <Animated.View
+                    pointerEvents="none"
+                    style={{
+                      position: "absolute",
+                      top: 18,
+                      right: 18,
+                      zIndex: 2,
+                      opacity: passStampOpacity,
+                      transform: [{ rotate: "12deg" }],
+                      borderWidth: 3,
+                      borderColor: colors.error,
+                      borderRadius: 10,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      backgroundColor: (colors.errorContainer || "#F9DEDC") + "E6",
+                      flexDirection: "row",
+                      alignItems: "center",
+                    }}
+                  >
+                    <Icon name="close" size={18} color={colors.error} />
+                    <Text style={{ color: colors.error, fontSize: 16, fontWeight: "800", marginLeft: 6 }}>
+                      PASS
+                    </Text>
+                  </Animated.View>
                   <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
                     <Pressable
                       onPress={() => setDetail(current as any)}
