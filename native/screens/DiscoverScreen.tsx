@@ -494,6 +494,31 @@ export default function DiscoverScreen({ navigation }: any) {
                             {current.narrator ? ` • read by ${current.narrator}` : ""}
                           </Text>
                         ) : null}
+                        {(current as any).aiReason ? (
+                          <View
+                            style={{
+                              backgroundColor: colors.secondaryContainer,
+                              borderRadius: 14,
+                              padding: 12,
+                              marginTop: 12,
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color: colors.onSecondaryContainer,
+                                fontSize: 11,
+                                fontWeight: "700",
+                                letterSpacing: 0.8,
+                                marginBottom: 4,
+                              }}
+                            >
+                              WHY THIS WAS RECOMMENDED
+                            </Text>
+                            <Text style={{ color: colors.onSecondaryContainer, fontSize: 13, lineHeight: 19 }}>
+                              {(current as any).aiReason}
+                            </Text>
+                          </View>
+                        ) : null}
                         {current.description ? (
                           <Text
                             style={{ color: colors.onSurfaceVariant, fontSize: 13, lineHeight: 19, marginTop: 10 }}

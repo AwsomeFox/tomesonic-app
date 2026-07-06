@@ -37,7 +37,7 @@ import {
 } from "../../utils/rmab";
 
 const RECS = [
-  { id: "rec1", title: "First Pick", author: "Author One", narrator: "Narrator One", description: "<p>Great</p>", coverUrl: "/api/cache/a.jpg" },
+  { id: "rec1", title: "First Pick", author: "Author One", narrator: "Narrator One", description: "<p>Great</p>", coverUrl: "/api/cache/a.jpg", aiReason: "Because you love Neal Stephenson." },
   { id: "rec2", title: "Second Pick", author: "Author Two" },
 ];
 
@@ -53,6 +53,8 @@ describe("DiscoverScreen (BookDate)", () => {
     await screen.findByText("First Pick");
     expect(screen.getByText("Author One • read by Narrator One")).toBeTruthy();
     expect(screen.getByText("Great")).toBeTruthy();
+    // The AI's rationale renders as a callout on the card.
+    expect(screen.getByText("Because you love Neal Stephenson.")).toBeTruthy();
   });
 
   it("liking swipes right (server creates the request) and advances the deck", async () => {

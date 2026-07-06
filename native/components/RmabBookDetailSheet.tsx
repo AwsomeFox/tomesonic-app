@@ -84,6 +84,25 @@ export default function RmabBookDetailSheet({
             </View>
           ) : null}
 
+          {(book as any).aiReason ? (
+            <View style={{ backgroundColor: colors.secondaryContainer, borderRadius: 14, padding: 12, marginTop: 14 }}>
+              <Text
+                style={{
+                  color: colors.onSecondaryContainer,
+                  fontSize: 11,
+                  fontWeight: "700",
+                  letterSpacing: 0.8,
+                  marginBottom: 4,
+                }}
+              >
+                WHY THIS WAS RECOMMENDED
+              </Text>
+              <Text style={{ color: colors.onSecondaryContainer, fontSize: 13, lineHeight: 19 }}>
+                {(book as any).aiReason}
+              </Text>
+            </View>
+          ) : null}
+
           <BookDescription
             text={book.description}
             asin={lookupAsin}
