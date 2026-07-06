@@ -303,8 +303,12 @@ export default function DiscoverScreen({ navigation }: any) {
   const onRequestFromSheet = useCallback(
     async (book: RmabBook) => {
       setRequesting(true);
-      await requestBook(book);
-      setRequesting(false);
+      try {
+        await requestBook(book);
+      } finally {
+        // The request may resolve after navigation away.
+        if (aliveRef.current) setRequesting(false);
+      }
     },
     [requestBook]
   );
