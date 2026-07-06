@@ -6,6 +6,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
 import Pressable from "../components/HintPressable";
 import TopAppBar from "../components/TopAppBar";
+import RmabBookDetailSheet from "../components/RmabBookDetailSheet";
 import {
   getBookdateRecommendations,
   swipeBookdate,
@@ -30,6 +31,7 @@ export default function DiscoverScreen({ navigation }: any) {
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [lastLiked, setLastLiked] = useState<string | null>(null);
+  const [detail, setDetail] = useState<any | null>(null);
 
   // Card motion: enters with a springy pop, exits flying left/right.
   const translateX = useRef(new Animated.Value(0)).current;
@@ -192,6 +194,11 @@ export default function DiscoverScreen({ navigation }: any) {
             }}
           >
             <ScrollView showsVerticalScrollIndicator={false}>
+              <Pressable
+                onPress={() => setDetail(current)}
+                accessibilityRole="button"
+                accessibilityLabel={`Details for ${current.title}`}
+              >
               <Image
                 source={resolveRmabUrl(current.coverUrl) ? { uri: resolveRmabUrl(current.coverUrl) } : undefined}
                 style={{ width: "100%", aspectRatio: 1, backgroundColor: colors.surfaceContainerHigh }}
@@ -213,6 +220,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   </Text>
                 ) : null}
               </View>
+              </Pressable>
             </ScrollView>
           </Animated.View>
 
@@ -304,6 +312,7 @@ export default function DiscoverScreen({ navigation }: any) {
           </View>
         </View>
       ) : null}
+      <RmabBookDetailSheet book={detail} onClose={() => setDetail(null)} />
     </SafeAreaView>
   );
 }

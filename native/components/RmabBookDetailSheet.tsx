@@ -1,0 +1,139 @@
+import React from "react";
+import { View, Text, ActivityIndicator } from "react-native";
+import { Image } from "expo-image";
+import { useThemeColors } from "../theme/useThemeColors";
+import BottomSheet from "./BottomSheet";
+import Icon from "./Icon";
+import Pressable from "./HintPressable";
+import { RmabBook, resolveRmabUrl } from "../utils/rmab";
+
+/**
+ * Catalog-book details sheet shared by every discovery surface (missing-from
+ * series/author, search results, Discover deck). Same layout as the request
+ * details sheet minus the request-specific info; an optional Request action
+ * lets surfaces with request buttons offer it here too.
+ */
+export default function RmabBookDetailSheet({
+  book,
+  onClose,
+  onRequest,
+  requested = false,
+  requesting = false,
+}: {
+  book: (RmabBook & { coverUrl?: string }) | null;
+  onClose: () => void;
+  /** Omit to hide the Request action (e.g. Discover, where Like requests). */
+  onRequest?: (book: RmabBook) => void;
+  requested?: boolean;
+  requesting?: boolean;
+}) {
+  const colors = useThemeColors();
+  const cover = resolveRmabUrl(book?.coverArtUrl || book?.coverUrl);
+  const year = book?.releaseDate ? String(book.releaseDate).slice(0, 4) : null;
+
+  return (
+    <BottomSheet visible={!!book} onClose={onClose}>
+      {book ? (
+        <View style={{ paddingHorizontal: 24, paddingBottom: 16 }}>
+          <View style={{ flexDirection: "row" }}>
+            <Image
+              source={cover ? { uri: cover } : undefined}
+              style={{ width: 96, height: 96, borderRadius: 10, backgroundColor: colors.surfaceContainerHigh }}
+              contentFit="cover"
+            />
+            <View style={{ flex: 1, marginLeft: 16, justifyContent: "center" }}>
+              <Text style={{ color: colors.onSurface, fontSize: 19, fontWeight: "600" }} numberOfLines={3}>
+                {book.title}
+              </Text>
+              {book.author ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 4 }} numberOfLines={1}>
+                  {book.author}
+                </Text>
+              ) : null}
+              {book.narrator ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }} numberOfLines={1}>
+                  Read by {book.narrator}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+
+          {(book.sequence || year) ? (
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 14, flexWrap: "wrap", gap: 8 }}>
+              {book.sequence ? (
+                <View style={{ backgroundColor: colors.surfaceContainerHigh, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontWeight: "600" }}>
+                    Book {book.sequence}
+                  </Text>
+                </View>
+              ) : null}
+              {year ? (
+                <View style={{ backgroundColor: colors.surfaceContainerHigh, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontWeight: "600" }}>{year}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {book.description ? (
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, lineHeight: 20, marginTop: 12 }} numberOfLines={10}>
+              {String(book.description).replace(/<[^>]+>/g, "").trim()}
+            </Text>
+          ) : null}
+
+          {onRequest ? (
+            <View style={{ alignItems: "flex-end", marginTop: 18 }}>
+              {requested ? (
+                <View
+                  style={{
+                    backgroundColor: colors.surfaceContainerHigh,
+                    borderRadius: 20,
+                    height: 40,
+                    paddingHorizontal: 18,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexDirection: "row",
+                  }}
+                >
+                  <Icon name="check" size={18} color={colors.onSurfaceVariant} />
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontWeight: "600", marginLeft: 6 }}>
+                    Requested
+                  </Text>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={() => onRequest(book)}
+                  disabled={requesting}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Request ${book.title}`}
+                  android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                  style={{
+                    backgroundColor: colors.primaryContainer,
+                    borderRadius: 20,
+                    height: 40,
+                    paddingHorizontal: 18,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexDirection: "row",
+                    opacity: requesting ? 0.6 : 1,
+                  }}
+                >
+                  {requesting ? (
+                    <ActivityIndicator size="small" color={colors.onPrimaryContainer} />
+                  ) : (
+                    <>
+                      <Icon name="add" size={18} color={colors.onPrimaryContainer} />
+                      <Text style={{ color: colors.onPrimaryContainer, fontSize: 14, fontWeight: "600", marginLeft: 6 }}>
+                        Request
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+    </BottomSheet>
+  );
+}

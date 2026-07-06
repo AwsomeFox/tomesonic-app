@@ -8,6 +8,7 @@ jest.mock("../../utils/rmab", () => ({
   readRmabConfig: jest.fn(() => null),
   writeRmabConfig: jest.fn(),
   rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
+  resolveRmabUrl: (p: any) => p || undefined,
   getMe: jest.fn(),
   createRequest: jest.fn(),
 }));
@@ -87,6 +88,21 @@ describe("RmabMissingSection", () => {
       />
     );
     await waitFor(() => expect(screen.queryByText("Missing from this series")).toBeNull());
+  });
+
+  it("tapping a row opens the book detail sheet with a Request action", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    (createRequest as jest.Mock).mockResolvedValue({ id: "req1" });
+    await render(<RmabMissingSection fetchMissing={jest.fn().mockResolvedValue([BOOKS[0]])} />);
+    await screen.findByText("Book One");
+
+    await fireEvent.press(screen.getByLabelText("Details for Book One"));
+    // Sheet shows the book's details (title appears twice: row + sheet).
+    await waitFor(() => expect(screen.getAllByText("Book One").length).toBeGreaterThanOrEqual(2));
+    // Sheet's Request button requests it too.
+    const buttons = screen.getAllByLabelText("Request Book One");
+    await fireEvent.press(buttons[buttons.length - 1]);
+    await waitFor(() => expect(createRequest).toHaveBeenCalled());
   });
 
   it("requiresFullAuth surfaces stay hidden in apiToken mode (series/author endpoints reject static tokens)", async () => {

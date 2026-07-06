@@ -5,6 +5,8 @@ import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { useRmabStore } from "../store/useRmabStore";
 import { RmabBook } from "../utils/rmab";
+import RmabBookDetailSheet from "./RmabBookDetailSheet";
+import Pressable2 from "./HintPressable";
 import Pressable from "./HintPressable";
 
 /**
@@ -41,6 +43,7 @@ export default function RmabMissingSection({
   const [loading, setLoading] = useState(false);
   const [requesting, setRequesting] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [detail, setDetail] = useState<RmabBook | null>(null);
 
   useEffect(() => {
     if (!configured) return;
@@ -100,8 +103,12 @@ export default function RmabMissingSection({
       {shown.map((book) => {
         const status = requestedAsins[book.asin] || book.requestStatus;
         return (
-          <View
+          <Pressable2
             key={book.asin}
+            onPress={() => setDetail(book)}
+            accessibilityRole="button"
+            accessibilityLabel={`Details for ${book.title}`}
+            android_ripple={{ color: colors.primary + "14" }}
             style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 8 }}
           >
             <Image
@@ -162,9 +169,17 @@ export default function RmabMissingSection({
                 )}
               </Pressable>
             )}
-          </View>
+          </Pressable2>
         );
       })}
+
+      <RmabBookDetailSheet
+        book={detail}
+        onClose={() => setDetail(null)}
+        onRequest={(b) => onRequest(b)}
+        requested={!!(detail && (requestedAsins[detail.asin] || detail.requestStatus))}
+        requesting={!!(detail && requesting === detail.asin)}
+      />
     </View>
   );
 }

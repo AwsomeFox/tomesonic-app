@@ -77,6 +77,15 @@ describe("DiscoverScreen (BookDate)", () => {
     await screen.findByText("BookDate isn't enabled");
   });
 
+  it("tapping the card opens the shared detail sheet (info only)", async () => {
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+    await fireEvent.press(screen.getByLabelText("Details for First Pick"));
+    // Sheet shows the title a second time; no Request button (Like requests).
+    await waitFor(() => expect(screen.getAllByText("First Pick").length).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByLabelText("Request First Pick")).toBeNull();
+  });
+
   it("an empty deck offers to generate more picks", async () => {
     (getBookdateRecommendations as jest.Mock).mockResolvedValue([]);
     await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
