@@ -720,6 +720,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         minBuffer: 60,
         maxBuffer: 300,
         backBuffer: 30,
+        // 256MB LRU disk cache (app cacheDir) over streamed audio. Chapter
+        // queues clip MANY items out of ONE file URL, and every chapter
+        // boundary re-opens that URL — a fresh network fetch at exactly the
+        // moment the doze-throttled network is least reliable (the classic
+        // "book stopped at the end of a chapter overnight"). With the cache,
+        // boundary loads (and auto-rewind/chapter jumps into recent audio)
+        // hit disk instead.
+        maxCacheSize: 256 * 1024,
       } as any);
       await TrackPlayer.updateOptions(buildPlayerOptions());
       

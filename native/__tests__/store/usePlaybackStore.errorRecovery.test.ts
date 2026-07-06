@@ -90,6 +90,9 @@ describe("usePlaybackStore playback-error recovery", () => {
       expect(opts.minBuffer).toBe(60);
       expect(opts.maxBuffer).toBe(300);
       expect(opts.backBuffer).toBe(30);
+      // Disk cache: chapter-boundary loads re-open the same file URL — served
+      // from cache they can't die on a doze-flaky network.
+      expect(opts.maxCacheSize).toBe(256 * 1024);
     });
   });
 
