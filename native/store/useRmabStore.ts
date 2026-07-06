@@ -156,8 +156,12 @@ export const useRmabStore = create<RmabState>((set, get) => ({
 
   refreshPendingCount: async () => {
     const { configured, isAdmin, authMode } = get();
-    // Admin JWT sessions only — the endpoint 403s everyone else.
-    if (!configured || !isAdmin || authMode !== "jwt") return;
+    // Admin JWT sessions only — the endpoint 403s everyone else. A session
+    // that can't approve must not keep a stale badge from a previous one.
+    if (!configured || !isAdmin || authMode !== "jwt") {
+      if (get().pendingApprovalCount !== 0) set({ pendingApprovalCount: 0 });
+      return;
+    }
     try {
       const count = await getPendingApprovalCount();
       set({ pendingApprovalCount: count });

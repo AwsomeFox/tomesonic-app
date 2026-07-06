@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -43,6 +43,13 @@ export default function RmabMissingSection({
   const [requesting, setRequesting] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detail, setDetail] = useState<RmabBook | null>(null);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!configured) return;
@@ -77,6 +84,8 @@ export default function RmabMissingSection({
       setRequesting(book.asin);
       setNotice(null);
       const res = await requestBook(book);
+      // The request may resolve after navigation away.
+      if (!aliveRef.current) return;
       if (!res.ok && res.message) setNotice(res.message);
       setRequesting(null);
     },
