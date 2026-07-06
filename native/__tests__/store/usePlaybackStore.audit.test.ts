@@ -163,6 +163,35 @@ describe("usePlaybackStore audit fixes", () => {
     });
   });
 
+  describe("chapter normalization edge cases", () => {
+    it("drops the earlier of two duplicate-start chapters (empty window)", async () => {
+      await usePlaybackStore.getState().preparePlaybackSession(
+        serverSession({
+          duration: 300,
+          chapters: [
+            { id: 0, title: "dupe", start: 100, end: 180 },
+            { id: 1, title: "c2", start: 100, end: 200 },
+            { id: 2, title: "c1", start: 0, end: 100 },
+          ],
+        }),
+        true
+      );
+      const st = usePlaybackStore.getState();
+      // The duplicate-start pair would otherwise produce fully-overlapping
+      // clips with ambiguous index mapping.
+      expect(st.chapters.map((c: any) => c.title)).toEqual(["c1", "c2"]);
+      expect(st.chapters[1].start).toBe(100);
+      expect(st.chapters[1].end).toBe(300); // tail-extended
+    });
+
+    it("returns an empty-object cache for corrupted non-object JSON", () => {
+      storage.set("mediaProgressCache", JSON.stringify([1, 2, 3]));
+      expect(storageHelper.getMediaProgressCache()).toEqual({});
+      storage.set("mediaProgressCache", "42");
+      expect(storageHelper.getMediaProgressCache()).toEqual({});
+    });
+  });
+
   describe("resume mapping", () => {
     it("a finished book resumes in the LAST chapter, not chapter 0", async () => {
       await usePlaybackStore.getState().preparePlaybackSession(

@@ -1200,9 +1200,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           const start = Number(c.start);
           let end = Number(c.end);
           if (i < arr.length - 1) {
+            // Sorted by start, so nextStart >= start always. Gap → extend to
+            // the next chapter; overlap → clamp to it. A DUPLICATE start
+            // clamps end to start, producing an empty window that the filter
+            // below drops — leaving it would create fully-overlapping clips.
             const nextStart = Number(arr[i + 1].start);
-            if (nextStart > end) end = nextStart; // gap → preceding chapter
-            else if (nextStart < end && nextStart > start) end = nextStart; // overlap → clamp
+            if (nextStart !== end) end = nextStart;
           } else if (bookDurationS > end) {
             end = bookDurationS; // tail → last chapter
           }
