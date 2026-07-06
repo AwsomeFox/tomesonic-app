@@ -48,6 +48,11 @@ export default function RmabMissingSection({
     if (!configured) return;
     let cancelled = false;
     setLoading(true);
+    // A changed fetchMissing means a NEW query/series/author — drop the
+    // previous rows and notice so stale results never show while loading
+    // (and the "Checking…" copy can render).
+    setBooks(null);
+    setNotice(null);
     fetchMissing()
       .then((list) => {
         if (cancelled) return;

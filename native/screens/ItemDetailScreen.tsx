@@ -507,7 +507,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     };
   }, []);
 
-  /** Green underlined link chip inside a metadata value. */
   const sendEbookToDevice = async (deviceName: string) => {
     setSendingTo(deviceName);
     try {
@@ -599,6 +598,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     }
   };
 
+  /** Green underlined link chip inside a metadata value. */
   const Link = ({ text, onPress }: { text: string; onPress?: () => void }) => (
     // hitSlop lifts the effective target toward 48dp — these chips are the
     // page's main navigation but render as ~18dp-tall text.

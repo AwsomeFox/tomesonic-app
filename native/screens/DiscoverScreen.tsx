@@ -207,10 +207,12 @@ export default function DiscoverScreen({ navigation }: any) {
       flyOut(action === "right" ? 1 : -1, () => {
         setDeck((d) => (d || []).slice(1));
         if (action === "right") {
-          setLastLiked(rec.title);
+          // Keyed by the rec's stable id — duplicate titles must not clear
+          // each other's chip.
+          setLastLiked(rec.id);
           if (likedTimerRef.current) clearTimeout(likedTimerRef.current);
           likedTimerRef.current = setTimeout(() => {
-            if (aliveRef.current) setLastLiked((t) => (t === rec.title ? null : t));
+            if (aliveRef.current) setLastLiked((t) => (t === rec.id ? null : t));
           }, 2400);
         }
       });

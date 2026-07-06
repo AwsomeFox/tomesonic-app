@@ -38,14 +38,20 @@ export default function BookDescription({
     setExpanded(false);
     // Short text is the truncation tell — full summaries run long.
     if (!asin || (text && text.length >= 600)) return;
+    // Effect-local cancellation: a slow response for the PREVIOUS asin must
+    // not land on the book currently shown.
+    let cancelled = false;
     const { audibleBookDetails } = require("../utils/audible");
     audibleBookDetails(asin)
       .then((d: any) => {
-        if (!aliveRef.current || !d) return;
+        if (cancelled || !aliveRef.current || !d) return;
         if (d.description) setFetched(d.description);
         onFetched?.(d);
       })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asin]);
 

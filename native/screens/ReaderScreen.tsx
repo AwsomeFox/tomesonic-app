@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Linking, ActivityIndicator, Modal, FlatList, Animated, Alert } from "react-native";
+import { View, Text, Linking, ActivityIndicator, FlatList, Animated, Alert } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { useKeepAwake } from "expo-keep-awake";
