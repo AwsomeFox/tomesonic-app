@@ -121,11 +121,15 @@ export function buildOwnedTitleMatcher(
     // Owned subtitled ("Oathbringer: Book Three…") ↔ bare candidate title.
     if (haveBase.has(full)) return true;
     // Owned bare title ↔ candidate's pre-colon main title — allowed ONLY
-    // when that prefix is not the candidate's series name.
+    // when that prefix is affirmatively NOT the candidate's series name.
+    // Fail CLOSED without a series signal (candidate without seriesTitle on
+    // a screen with no fallback, e.g. the author page): hiding a real
+    // missing volume is worse than showing an owned one.
     const base = titleKey(candidate.title);
     if (base && base !== full && haveFull.has(base)) {
       const seriesKey = titleKey(candidate.seriesTitle || "") || fallbackSeriesKey;
-      return !seriesKey || base !== seriesKey;
+      if (!seriesKey) return false;
+      return base !== seriesKey;
     }
     return false;
   };

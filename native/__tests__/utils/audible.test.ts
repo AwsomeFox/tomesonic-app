@@ -508,3 +508,25 @@ describe("Copilot round-3 refinements", () => {
     expect(asin).toBe("B99");
   });
 });
+
+describe("buildOwnedTitleMatcher fail-closed guard (verify pass 2)", () => {
+  const { buildOwnedTitleMatcher } = require("../../utils/audible");
+
+  it("without ANY series signal, a bare owned title does not hide a subtitled candidate", () => {
+    // Author screen: no fallback series name, and the catalog row came back
+    // without series metadata — hiding a real missing volume is worse than
+    // showing an owned one, so the guard fails closed.
+    const matches = buildOwnedTitleMatcher(["Mistborn"]);
+    expect(matches({ title: "Mistborn: The Well of Ascension" })).toBe(false);
+  });
+
+  it("with a positive non-series signal the bare-owned match still hides the owned book", () => {
+    const matches = buildOwnedTitleMatcher(["Oathbringer"]);
+    expect(
+      matches({
+        title: "Oathbringer: Book Three of the Stormlight Archive",
+        seriesTitle: "The Stormlight Archive",
+      })
+    ).toBe(true);
+  });
+});
