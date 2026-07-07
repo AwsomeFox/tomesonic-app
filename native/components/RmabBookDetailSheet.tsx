@@ -20,6 +20,7 @@ export default function RmabBookDetailSheet({
   onRequest,
   requested = false,
   requesting = false,
+  notice = null,
 }: {
   book: (RmabBook & { coverUrl?: string }) | null;
   onClose: () => void;
@@ -27,6 +28,9 @@ export default function RmabBookDetailSheet({
   onRequest?: (book: RmabBook) => void;
   requested?: boolean;
   requesting?: boolean;
+  /** Request-outcome message rendered INSIDE the sheet — the host section's
+   *  notice line paints underneath the open sheet where it can't be seen. */
+  notice?: string | null;
 }) {
   const colors = useThemeColors();
   const cover = resolveRmabUrl(book?.coverArtUrl || book?.coverUrl);
@@ -110,6 +114,10 @@ export default function RmabBookDetailSheet({
               if (d?.narrator) setFetchedNarrator(d.narrator);
             }}
           />
+
+          {notice ? (
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 14 }}>{notice}</Text>
+          ) : null}
 
           {onRequest ? (
             <View style={{ alignItems: "flex-end", marginTop: 18 }}>

@@ -4,6 +4,7 @@ jest.mock("../../utils/audible", () => ({
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 import RmabMissingSection from "../../components/RmabMissingSection";
+import RmabBookDetailSheet from "../../components/RmabBookDetailSheet";
 import { useRmabStore } from "../../store/useRmabStore";
 
 jest.mock("../../utils/rmab", () => ({
@@ -154,14 +155,117 @@ describe("RmabMissingSection", () => {
     await screen.findByText("Book One");
   });
 
-  it("a failed lookup logs and renders nothing (never blocks the host screen)", async () => {
+  it("a failed lookup shows 'Couldn't check' with Retry — never a silent vanish", async () => {
     useRmabStore.setState({ configured: true } as any);
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-    await render(
-      <RmabMissingSection fetchMissing={jest.fn().mockRejectedValue(new Error("down"))} />
-    );
+    const fetchMissing = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("down"))
+      .mockResolvedValueOnce([BOOKS[0]]);
+    await render(<RmabMissingSection fetchMissing={fetchMissing} />);
     await waitFor(() => expect(warnSpy).toHaveBeenCalled());
-    expect(screen.queryByText("Missing from your library")).toBeNull();
+    // A failed check must be DISTINGUISHABLE from "nothing missing" — the old
+    // silent null read as "no books to request" on any Audible timeout.
+    await screen.findByText("Couldn't check for missing books.");
+
+    await fireEvent.press(screen.getByLabelText("Retry missing-books check"));
+    await screen.findByText("Book One");
+    expect(screen.queryByText("Couldn't check for missing books.")).toBeNull();
     warnSpy.mockRestore();
+  });
+
+  it("caps long lists at maxItems with a 'Show N more' expander revealing the rest", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    const many = Array.from({ length: 13 }, (_, i) => ({
+      asin: `M${String(i + 1).padStart(2, "0")}`,
+      title: `Volume ${i + 1}`,
+      author: "A. Author",
+      isAvailable: false,
+    }));
+    await render(<RmabMissingSection fetchMissing={jest.fn().mockResolvedValue(many)} />);
+    await screen.findByText("Volume 1");
+
+    // Default maxItems=10 → ten rows plus the expander for the hidden three.
+    expect(screen.getAllByLabelText(/^Details for Volume/).length).toBe(10);
+    expect(screen.queryByText("Volume 11")).toBeNull();
+    expect(screen.getByText("Show 3 more")).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Show 3 more missing books"));
+    expect(screen.getAllByLabelText(/^Details for Volume/).length).toBe(13);
+    expect(screen.getByText("Volume 13")).toBeTruthy();
+    // Everything's visible — the expander goes away.
+    expect(screen.queryByText(/^Show \d+ more$/)).toBeNull();
+  });
+
+  it("labels unreleased books as preorders; released books get a bare year", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    await render(
+      <RmabMissingSection
+        fetchMissing={jest.fn().mockResolvedValue([
+          { asin: "F1", title: "Future Book", author: "A. Author", releaseDate: "2099-03-01", isAvailable: false },
+          { asin: "P1", title: "Past Book", author: "A. Author", releaseDate: "2020-06-15", isAvailable: false },
+        ])}
+      />
+    );
+    await screen.findByText("Future Book");
+    // Requestable-but-unfulfillable preorders say so instead of a bare future year.
+    expect(screen.getByText("Preorder · 2099 • A. Author")).toBeTruthy();
+    // Released titles keep the plain year — no preorder label.
+    expect(screen.getByText("2020 • A. Author")).toBeTruthy();
+    expect(screen.queryByText(/Preorder · 2020/)).toBeNull();
+  });
+
+  it("a failed request's message renders INSIDE the still-open detail sheet", async () => {
+    // The section's notice line paints UNDERNEATH the open sheet — the sheet
+    // must show the outcome itself or a failed request looks like nothing
+    // happened.
+    const requestBook = jest
+      .fn()
+      .mockResolvedValue({ ok: false, message: "Request failed: quota exceeded" });
+    useRmabStore.setState({ configured: true, requestBook } as any);
+    await render(<RmabMissingSection fetchMissing={jest.fn().mockResolvedValue([BOOKS[0]])} />);
+    await screen.findByText("Book One");
+
+    await fireEvent.press(screen.getByLabelText("Details for Book One"));
+    await waitFor(() => expect(screen.getAllByText("Book One").length).toBeGreaterThanOrEqual(2));
+
+    const buttons = screen.getAllByLabelText("Request Book One");
+    await fireEvent.press(buttons[buttons.length - 1]);
+    await waitFor(() => expect(requestBook).toHaveBeenCalled());
+
+    // The message renders twice: the section's notice line AND inside the sheet.
+    const notices = await screen.findAllByText("Request failed: quota exceeded");
+    expect(notices.length).toBe(2);
+    // Sheet is still open (title present in row + sheet).
+    expect(screen.getAllByText("Book One").length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("RmabBookDetailSheet — notice prop", () => {
+  const book = { asin: "B01", title: "Book One", author: "A. Author" } as any;
+
+  it("renders the notice text when provided and drops it when null", async () => {
+    const view = await render(
+      <RmabBookDetailSheet book={book} onClose={jest.fn()} notice="Already requested" />
+    );
+    await screen.findByText("Already requested");
+
+    await view.rerender(<RmabBookDetailSheet book={book} onClose={jest.fn()} notice={null} />);
+    expect(screen.queryByText("Already requested")).toBeNull();
+    // The rest of the sheet is unaffected.
+    expect(screen.getByText("Book One")).toBeTruthy();
+  });
+});
+
+describe("RmabMissingSection partial-with-zero-rows disclosure", () => {
+  it("stays mounted with the incomplete notice when a partial fetch leaves no rows", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    const partialEmpty: any = [];
+    partialEmpty.partial = true;
+    await render(
+      <RmabMissingSection fetchMissing={jest.fn().mockResolvedValue(partialEmpty)} />
+    );
+    await screen.findByText("Some books couldn't be checked — this list may be incomplete.");
+    expect(screen.getByLabelText("Retry missing-books check")).toBeTruthy();
   });
 });

@@ -139,6 +139,88 @@ describe("authed requests", () => {
     await expect(searchBooks("dune")).rejects.toBeTruthy();
     expect(mockedPost).not.toHaveBeenCalled();
   });
+
+  it("concurrent 401s share a SINGLE refresh POST (single-flight)", async () => {
+    // Both calls 401 on their first attempt, then succeed on retry.
+    mockedRequest
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockResolvedValue({ data: { results: [] } });
+    // Refresh resolves a tick later so both 401s land while it is in flight.
+    mockedPost.mockImplementation(
+      () => new Promise((res) => setTimeout(() => res({ data: { accessToken: "acc2" } }), 0))
+    );
+
+    await Promise.all([searchBooks("dune"), searchBooks("hyperion")]);
+
+    const refreshCalls = mockedPost.mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/auth/refresh")
+    );
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0][1]).toEqual({ refreshToken: "ref1" });
+    // Both retries went out with the shared fresh token, which was persisted.
+    expect(mockedRequest).toHaveBeenCalledTimes(4);
+    expect(mockedRequest.mock.calls.slice(2).map(([c]: any[]) => c.headers)).toEqual([
+      { Authorization: "Bearer acc2" },
+      { Authorization: "Bearer acc2" },
+    ]);
+    expect(readRmabConfig()?.accessToken).toBe("acc2");
+  });
+
+  it("a refresh AFTER the first completes issues its own POST (no stale sharing)", async () => {
+    mockedRequest
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockResolvedValueOnce({ data: { results: [] } })
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockResolvedValueOnce({ data: { results: [] } });
+    mockedPost.mockResolvedValue({ data: { accessToken: "acc2" } });
+
+    await searchBooks("dune");
+    await searchBooks("hyperion");
+
+    expect(mockedPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("a refresh landing AFTER disconnect does not resurrect the dead session", async () => {
+    mockedRequest
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockResolvedValue({ data: { results: [] } });
+    // The refresh resolves only after we've disconnected mid-flight.
+    let releaseRefresh: (v: any) => void = () => {};
+    mockedPost.mockImplementation(() => new Promise((res) => (releaseRefresh = res)));
+
+    const call = searchBooks("dune");
+    // Give the 401 + refresh POST a chance to start, then disconnect.
+    await new Promise((r) => setTimeout(r, 0));
+    writeRmabConfig(null);
+    releaseRefresh({ data: { accessToken: "acc2" } });
+    await call;
+
+    // The fresh token must NOT be written back over the disconnect.
+    expect(readRmabConfig()).toBeNull();
+  });
+
+  it("a refresh landing after a RECONNECT to a different server keeps the new config", async () => {
+    mockedRequest
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockResolvedValue({ data: { results: [] } });
+    let releaseRefresh: (v: any) => void = () => {};
+    mockedPost.mockImplementation(() => new Promise((res) => (releaseRefresh = res)));
+
+    const call = searchBooks("dune");
+    await new Promise((r) => setTimeout(r, 0));
+    const newCfg = {
+      url: "https://other.test",
+      accessToken: "other-acc",
+      refreshToken: "other-ref",
+      user: { id: "u2" },
+    };
+    writeRmabConfig(newCfg);
+    releaseRefresh({ data: { accessToken: "acc2" } });
+    await call;
+
+    expect(readRmabConfig()).toEqual(newCfg);
+  });
 });
 
 describe("endpoint wrappers", () => {
@@ -207,6 +289,25 @@ describe("endpoint wrappers", () => {
             coverArtUrl: "https://img/x.jpg",
           },
         },
+      })
+    );
+  });
+
+  it("createRequest defaults a missing author to Unknown (RMAB requires one) but keeps a real author", async () => {
+    mockedRequest.mockResolvedValue({ data: { id: "req1" } });
+    // Audible catalog rows legitimately omit authors (anthologies, older
+    // titles) — undefined here was a guaranteed 400.
+    await createRequest({ asin: "B02", title: "Anthology of Unknowns" } as any);
+    expect(mockedRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: { audiobook: expect.objectContaining({ asin: "B02", author: "Unknown" }) },
+      })
+    );
+    // A real author passes through untouched.
+    await createRequest({ asin: "B03", title: "Dune", author: "Frank Herbert" } as any);
+    expect(mockedRequest).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: { audiobook: expect.objectContaining({ author: "Frank Herbert" }) },
       })
     );
   });

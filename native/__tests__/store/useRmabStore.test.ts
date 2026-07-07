@@ -7,6 +7,7 @@ jest.mock("../../utils/rmab", () => ({
   getMe: jest.fn(),
   createRequest: jest.fn(),
   getPendingApprovalCount: jest.fn().mockResolvedValue(0),
+  listMyRequests: jest.fn().mockResolvedValue([]),
   clearRmabCaches: jest.fn(),
 }));
 
@@ -18,6 +19,9 @@ import {
   getMe,
   createRequest,
 } from "../../utils/rmab";
+// Real in-memory MMKV (see jest.setup.ts) — the store lazy-requires this same
+// module to persist requested-state.
+import { storage } from "../../utils/storage";
 
 const initial = useRmabStore.getState();
 const mockedExchange = exchangeLoginToken as jest.Mock;
@@ -35,6 +39,7 @@ const CFG = {
 
 beforeEach(() => {
   useRmabStore.setState(initial, true);
+  storage.remove("rmab_requestedAsins");
   jest.clearAllMocks();
 });
 
@@ -230,10 +235,33 @@ describe("requestBook", () => {
     expect(useRmabStore.getState().requestedAsins["B01"]).toBeUndefined();
   });
 
-  it("generic failures report a request failure", async () => {
-    mockedCreate.mockRejectedValue(new Error("boom"));
+  it("failures without a response read as offline", async () => {
+    mockedCreate.mockRejectedValue(new Error("Network Error"));
     const res = await useRmabStore.getState().requestBook(BOOK);
-    expect(res).toEqual({ ok: false, message: "Request failed" });
+    expect(res).toEqual({ ok: false, message: "You're offline — try again when connected" });
+  });
+
+  it("401/403 point the user at reconnecting RMAB", async () => {
+    mockedCreate.mockRejectedValue({ response: { status: 401, data: {} } });
+    const res = await useRmabStore.getState().requestBook(BOOK);
+    expect(res).toEqual({
+      ok: false,
+      message: "Session expired — reconnect ReadMeABook in Settings",
+    });
+  });
+
+  it("other server rejections surface the server's detail instead of a bare failure", async () => {
+    mockedCreate.mockRejectedValue({ response: { status: 400, data: { error: "InvalidAsin" } } });
+    const res = await useRmabStore.getState().requestBook(BOOK);
+    expect(res).toEqual({ ok: false, message: "Request failed: InvalidAsin" });
+
+    mockedCreate.mockRejectedValue({ response: { status: 500, data: { message: "db down" } } });
+    const res2 = await useRmabStore.getState().requestBook(BOOK);
+    expect(res2).toEqual({ ok: false, message: "Request failed: db down" });
+
+    mockedCreate.mockRejectedValue({ response: { status: 500, data: {} } });
+    const res3 = await useRmabStore.getState().requestBook(BOOK);
+    expect(res3).toEqual({ ok: false, message: "Request failed" });
   });
 
   it("concurrent requests each land their status (functional set — no lost updates)", async () => {
@@ -259,5 +287,111 @@ describe("requestBook", () => {
       B01: "downloading",
       B02: "approved",
     });
+  });
+});
+
+describe("requested-state persistence (survives restarts)", () => {
+  it("noteRequestStatus mirrors the full map to storage", () => {
+    useRmabStore.getState().noteRequestStatus("B01", "pending");
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ B01: "pending" });
+    // Subsequent notes persist the MERGED map, not just the last entry.
+    useRmabStore.getState().noteRequestStatus("B02", "approved");
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({
+      B01: "pending",
+      B02: "approved",
+    });
+  });
+
+  it("initialize hydrates requestedAsins from storage when a config exists", () => {
+    mockedRead.mockReturnValue(CFG);
+    storage.set("rmab_requestedAsins", JSON.stringify({ B09: "pending", B10: "approved" }));
+    useRmabStore.getState().initialize();
+    const s = useRmabStore.getState();
+    expect(s.configured).toBe(true);
+    expect(s.requestedAsins).toEqual({ B09: "pending", B10: "approved" });
+  });
+
+  it("corrupt or non-object persisted JSON is ignored (empty map)", () => {
+    mockedRead.mockReturnValue(CFG);
+    storage.set("rmab_requestedAsins", "{not valid json");
+    useRmabStore.getState().initialize();
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
+
+    // Arrays don't count as a status map either.
+    useRmabStore.setState(initial, true);
+    storage.set("rmab_requestedAsins", JSON.stringify(["B01"]));
+    useRmabStore.getState().initialize();
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
+  });
+
+  it("disconnect removes the persisted key and empties the in-memory map", () => {
+    useRmabStore.getState().noteRequestStatus("B01", "pending");
+    expect(storage.getString("rmab_requestedAsins")).toBeDefined();
+
+    useRmabStore.getState().disconnect();
+
+    expect(storage.getString("rmab_requestedAsins")).toBeUndefined();
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
+  });
+});
+
+describe("reconcileRequestedAsins", () => {
+  const { listMyRequests } = require("../../utils/rmab");
+
+  it("drops chips for requests the server no longer knows, keeps the rest, persists", async () => {
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { B01: "pending", B02: "pending" },
+    } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ audiobook: { asin: "B02" } }]);
+
+    await useRmabStore.getState().reconcileRequestedAsins();
+
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B02: "pending" });
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ B02: "pending" });
+  });
+
+  it("keeps the local overlay when the server can't be reached", async () => {
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { B01: "pending" },
+    } as any);
+    (listMyRequests as jest.Mock).mockRejectedValue(new Error("offline"));
+
+    await useRmabStore.getState().reconcileRequestedAsins();
+
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("is a no-op when unconfigured", async () => {
+    (listMyRequests as jest.Mock).mockResolvedValue([]);
+    await useRmabStore.getState().reconcileRequestedAsins();
+    expect(listMyRequests).not.toHaveBeenCalled();
+  });
+});
+
+describe("reconcileRequestedAsins mid-flight race", () => {
+  const { listMyRequests } = require("../../utils/rmab");
+
+  it("keeps a chip added WHILE the server list was in flight", async () => {
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { OLD1: "pending" },
+    } as any);
+    let release: (v: any) => void = () => {};
+    (listMyRequests as jest.Mock).mockImplementation(
+      () => new Promise((res) => (release = res))
+    );
+
+    const run = useRmabStore.getState().reconcileRequestedAsins();
+    await new Promise((r) => setTimeout(r, 0));
+    // User requests a book while the (stale) server list is still loading.
+    useRmabStore.getState().noteRequestStatus("NEW1", "pending");
+    release([]); // server list knows neither asin
+    await run;
+
+    // OLD1 (pre-snapshot, server-unknown) drops; NEW1 (mid-flight) survives.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ NEW1: "pending" });
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ NEW1: "pending" });
   });
 });

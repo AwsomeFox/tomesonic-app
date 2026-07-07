@@ -106,7 +106,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       audibleSeriesAsinFromBook,
       audibleFindSeriesAsin,
       audibleSeriesBooks,
-      titleKey,
+      buildOwnedTitleMatcher,
     } = require("../utils/audible");
     if (!displayName || seriesLoading) return [];
     // Derive the book list from `series` (a dep — new identity per load)
@@ -118,21 +118,48 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     );
     // Resolve the series ASIN — exact via a library book's ASIN, else by name.
     let seriesAsin: string | null = null;
-    // Cap the exact-resolution attempts: each miss costs a network round
-    // trip, and one or two library ASINs are enough to find the parent.
-    for (const asin of Array.from(haveAsins).slice(0, 2)) {
-      seriesAsin = await audibleSeriesAsinFromBook(asin).catch(() => null);
+    // Bounded attempts: each miss costs a round trip, but stopping after 2
+    // stranded series whose first books were omnibus/regional editions with
+    // no parent relationship — those fell to the fuzzy name search. The whole
+    // phase shares one wall-clock budget: 8 sequential attempts against a
+    // hanging endpoint (15s each) would otherwise spin for two minutes.
+    const resolveDeadline = Date.now() + 20000;
+    for (const asin of Array.from(haveAsins).slice(0, 8)) {
+      const remaining = resolveDeadline - Date.now();
+      if (remaining <= 0) break;
+      // Clear the deadline timer once the lookup settles — the race loser
+      // would otherwise leave up to 8 stray timers firing later.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        seriesAsin = await Promise.race([
+          audibleSeriesAsinFromBook(asin).catch(() => null),
+          new Promise<null>((res) => {
+            timer = setTimeout(() => res(null), remaining);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       if (seriesAsin) break;
     }
     if (!seriesAsin) seriesAsin = await audibleFindSeriesAsin(displayName);
     if (!seriesAsin) return [];
     const all = await audibleSeriesBooks(seriesAsin);
-    const haveTitles = new Set(
-      libraryBooks.map((b: any) => titleKey(b.media?.metadata?.title))
+    // ASIN-first; the title fallback (for library items without an ASIN or
+    // with a regional/edition ASIN skew) must keep distinct volumes distinct —
+    // the old pre-colon titleKey diff hid every other "Series: Volume" book
+    // the moment you owned one of them. Precomputed key sets keep the diff
+    // linear, and the matcher guards the bare-owned-title-is-the-series-name
+    // case (owning a bare "Mistborn" must not hide every Mistborn volume).
+    const ownedMatches = buildOwnedTitleMatcher(
+      libraryBooks.map((b: any) => b.media?.metadata?.title),
+      displayName
     );
-    return all.filter(
-      (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
-    );
+    const missing = all.filter((b: any) => !haveAsins.has(b.asin) && !ownedMatches(b));
+    // Propagate "the catalog fetch was cut short" so the section can disclose
+    // a possibly-incomplete list instead of presenting it as the whole series.
+    if ((all as any).partial) (missing as any).partial = true;
+    return missing;
   }, [displayName, seriesLoading, series]);
 
   const [error, setError] = useState<string | null>(null);

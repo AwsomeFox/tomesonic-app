@@ -124,18 +124,41 @@ export async function exchangeLoginToken(
   throw lastAuthError || new Error("Authentication failed");
 }
 
-async function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
-  if (!cfg.refreshToken) throw new Error("No refresh token");
-  const res = await axios.post(
-    `${cfg.url}/api/auth/refresh`,
-    { refreshToken: cfg.refreshToken },
-    { timeout: 15000 }
-  );
-  const accessToken = res.data?.accessToken;
-  if (!accessToken) throw new Error("Refresh failed");
-  const next = { ...cfg, accessToken };
-  writeRmabConfig(next);
-  return next;
+// Single-flight: Discover fires several RMAB calls in parallel, and after
+// access-token expiry every one 401s at once — without coordination each
+// POSTed its own /api/auth/refresh (redundant storm; harmless only because
+// the refresh token doesn't rotate). Concurrent 401s share one refresh —
+// keyed by (url, refreshToken) so a disconnect/reconnect mid-flight never
+// shares a stale refresh with a different connection.
+let _refreshInFlight: { key: string; promise: Promise<RmabConfig> } | null = null;
+function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
+  const key = `${cfg.url}::${cfg.refreshToken || ""}`;
+  if (_refreshInFlight && _refreshInFlight.key === key) return _refreshInFlight.promise;
+  const promise = (async () => {
+    try {
+      if (!cfg.refreshToken) throw new Error("No refresh token");
+      const res = await axios.post(
+        `${cfg.url}/api/auth/refresh`,
+        { refreshToken: cfg.refreshToken },
+        { timeout: 15000 }
+      );
+      const accessToken = res.data?.accessToken;
+      if (!accessToken) throw new Error("Refresh failed");
+      const next = { ...cfg, accessToken };
+      // Persist ONLY if this refresh still describes the stored connection —
+      // a refresh landing after disconnect() used to write the token back
+      // and resurrect the disconnected session (writeRmabConfig(null) undone).
+      const current = readRmabConfig();
+      if (current && current.url === cfg.url && current.refreshToken === cfg.refreshToken) {
+        writeRmabConfig(next);
+      }
+      return next;
+    } finally {
+      if (_refreshInFlight && _refreshInFlight.key === key) _refreshInFlight = null;
+    }
+  })();
+  _refreshInFlight = { key, promise };
+  return promise;
 }
 
 /** Authenticated request with a single 401 → refresh → retry. */
@@ -253,7 +276,11 @@ export async function createRequest(book: RmabBook): Promise<any> {
     audiobook: {
       asin: book.asin,
       title: book.title,
-      author: book.author,
+      // RMAB's schema requires author; Audible catalog rows legitimately omit
+      // it (anthologies, older titles) and an undefined here was a guaranteed
+      // 400 rendered as a bare "Request failed" — the book showed in the
+      // missing list AND could never be requested.
+      author: book.author || "Unknown",
       narrator: book.narrator,
       description: book.description,
       coverArtUrl: book.coverArtUrl,

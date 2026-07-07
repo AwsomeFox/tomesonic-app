@@ -44,6 +44,15 @@ export default function RmabMissingSection({
 
   const [books, setBooks] = useState<RmabBook[] | null>(null);
   const [loading, setLoading] = useState(false);
+  // A failed lookup must NOT be indistinguishable from "nothing missing" —
+  // the old catch set books=[] and the whole section silently vanished on an
+  // Audible timeout, reading as "no books to request".
+  const [lookupFailed, setLookupFailed] = useState(false);
+  // The fetch succeeded but was cut short (a later catalog page/chunk failed)
+  // — the list renders but must not present itself as complete.
+  const [listPartial, setListPartial] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
+  const [expanded, setExpanded] = useState(false);
   const [requesting, setRequesting] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detail, setDetail] = useState<RmabBook | null>(null);
@@ -64,15 +73,22 @@ export default function RmabMissingSection({
     // (and the "Checking…" copy can render).
     setBooks(null);
     setNotice(null);
+    setLookupFailed(false);
+    setListPartial(false);
+    setExpanded(false);
     fetchMissing()
       .then((list) => {
         if (cancelled) return;
         const missing = (list || []).filter((b) => b && b.asin && !b.isAvailable);
         setBooks(missing);
+        setListPartial(!!(list as any)?.partial);
       })
       .catch((e) => {
         console.warn("[RMAB] missing-books lookup failed", e?.message || e);
-        if (!cancelled) setBooks([]);
+        if (!cancelled) {
+          setBooks([]);
+          setLookupFailed(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -81,7 +97,7 @@ export default function RmabMissingSection({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configured, fetchMissing]);
+  }, [configured, fetchMissing, retryTick]);
 
   const onRequest = useCallback(
     async (book: RmabBook) => {
@@ -97,9 +113,14 @@ export default function RmabMissingSection({
   );
 
   if (!configured) return null;
-  if (!loading && (!books || books.length === 0)) return null;
+  // Stay mounted when the check FAILED or was CUT SHORT even with zero rows —
+  // otherwise an incomplete check is indistinguishable from "nothing missing"
+  // and the Retry affordance vanishes with it.
+  if (!loading && !lookupFailed && !listPartial && (!books || books.length === 0)) return null;
 
-  const shown = (books || []).slice(0, maxItems);
+  const all = books || [];
+  const shown = expanded ? all : all.slice(0, maxItems);
+  const hiddenCount = all.length - shown.length;
 
   return (
     <View style={{ marginTop: 24 }}>
@@ -111,6 +132,23 @@ export default function RmabMissingSection({
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, paddingHorizontal: 20, marginBottom: 6 }}>
           Checking Audible for books you don't have…
         </Text>
+      ) : null}
+      {!loading && (lookupFailed || listPartial) ? (
+        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, marginBottom: 6 }}>
+          <Text style={{ flex: 1, color: colors.onSurfaceVariant, fontSize: 13 }}>
+            {lookupFailed
+              ? "Couldn't check for missing books."
+              : "Some books couldn't be checked — this list may be incomplete."}
+          </Text>
+          <Pressable
+            onPress={() => setRetryTick((t) => t + 1)}
+            accessibilityRole="button"
+            accessibilityLabel="Retry missing-books check"
+            hitSlop={8}
+          >
+            <Text style={{ color: colors.primary, fontSize: 13, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
       ) : null}
       {notice ? (
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, paddingHorizontal: 20, marginBottom: 6 }}>
@@ -133,7 +171,12 @@ export default function RmabMissingSection({
             style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 8 }}
           >
             <Pressable
-              onPress={() => setDetail(book)}
+              onPress={() => {
+                // A stale outcome from a previous request must not render
+                // inside a DIFFERENT book's sheet.
+                setNotice(null);
+                setDetail(book);
+              }}
               accessibilityRole="button"
               accessibilityLabel={`Details for ${book.title}`}
               android_ripple={{ color: colors.primary + "14" }}
@@ -153,7 +196,13 @@ export default function RmabMissingSection({
                 <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
                   {[
                     book.sequence ? `Book ${book.sequence}` : null,
-                    book.releaseDate ? String(book.releaseDate).slice(0, 4) : null,
+                    // Unreleased titles are requestable but can't be fulfilled
+                    // yet — say so instead of showing a bare future year.
+                    book.releaseDate && Date.parse(String(book.releaseDate)) > Date.now()
+                      ? `Preorder · ${String(book.releaseDate).slice(0, 4)}`
+                      : book.releaseDate
+                        ? String(book.releaseDate).slice(0, 4)
+                        : null,
                     book.author,
                     book.narrator ? `read by ${book.narrator}` : null,
                   ]
@@ -211,12 +260,26 @@ export default function RmabMissingSection({
         );
       })}
 
+      {hiddenCount > 0 ? (
+        <Pressable
+          onPress={() => setExpanded(true)}
+          accessibilityRole="button"
+          accessibilityLabel={`Show ${hiddenCount} more missing books`}
+          style={{ paddingHorizontal: 20, paddingVertical: 10 }}
+        >
+          <Text style={{ color: colors.primary, fontSize: 14, fontWeight: "600" }}>
+            Show {hiddenCount} more
+          </Text>
+        </Pressable>
+      ) : null}
+
       <RmabBookDetailSheet
         book={detail}
         onClose={() => setDetail(null)}
         onRequest={(b) => onRequest(b)}
         requested={!!(detail && (requestedAsins[detail.asin] || detail.requestStatus))}
         requesting={!!(detail && requesting === detail.asin)}
+        notice={notice}
       />
     </View>
   );

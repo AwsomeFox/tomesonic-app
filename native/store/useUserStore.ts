@@ -276,6 +276,15 @@ export const useUserStore = create<UserState>((set, get) => ({
       } catch (e) {
         console.warn("[UserStore] downloads wipe on account switch failed", e);
       }
+      // The RMAB connection is per-person (it can carry ADMIN rights over the
+      // request queue) — a different ABS account must not inherit it.
+      try {
+        const { useRmabStore } = require("./useRmabStore");
+        useRmabStore.getState().disconnect();
+      } catch (e) {
+        // Security-relevant wipe — a silent skip must at least be diagnosable.
+        console.warn("[UserStore] RMAB disconnect on account switch failed", e);
+      }
       try {
         const { storage } = require("../utils/storage");
         storage
@@ -337,6 +346,16 @@ export const useUserStore = create<UserState>((set, get) => ({
       await useDownloadStore.getState().removeAllDownloads();
     } catch (e) {
       console.warn("[UserStore] downloads wipe on logout failed", e);
+    }
+    // RMAB rides the ABS identity on this device: whoever logs in next must
+    // not inherit the previous person's connection (which can carry ADMIN
+    // rights over everyone's requests) or their requested-state.
+    try {
+      const { useRmabStore } = require("./useRmabStore");
+      useRmabStore.getState().disconnect();
+    } catch (e) {
+      // Security-relevant wipe — a silent skip must at least be diagnosable.
+      console.warn("[UserStore] RMAB disconnect on logout failed", e);
     }
     try {
       const { writeWidgetState } = require("../utils/autoCreds");

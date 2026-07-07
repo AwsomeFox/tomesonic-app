@@ -40,6 +40,7 @@ interface RmabState {
   disconnect: () => void;
   requestBook: (book: RmabBook) => Promise<{ ok: boolean; message?: string }>;
   noteRequestStatus: (asin: string, status: string) => void;
+  reconcileRequestedAsins: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
 }
 
@@ -57,14 +58,26 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   initialize: () => {
     const cfg = readRmabConfig();
     if (cfg) {
+      // Requested-state is persisted: Audible-sourced series/author rows carry
+      // no server requestStatus, so without this every "Requested" chip on
+      // those surfaces reset to a fresh Request button on app restart.
+      let requestedAsins: Record<string, string> = {};
+      try {
+        const { storage } = require("../utils/storage");
+        const parsed = JSON.parse(storage.getString("rmab_requestedAsins") || "null");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) requestedAsins = parsed;
+      } catch {}
       set({
         configured: true,
         serverUrl: cfg.url,
         username: cfg.user?.username || null,
         authMode: rmabAuthMode(cfg),
         isAdmin: cfg.user?.role === "admin",
+        requestedAsins,
       });
       get().refreshPendingCount();
+      // Drop chips for requests the server has since cleared (best-effort).
+      get().reconcileRequestedAsins();
     }
   },
 
@@ -146,6 +159,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   disconnect: () => {
     clearRmabCaches();
     writeRmabConfig(null);
+    try {
+      const { storage } = require("../utils/storage");
+      storage.remove("rmab_requestedAsins");
+    } catch {}
     set({
       configured: false,
       serverUrl: null,
@@ -187,12 +204,79 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         get().noteRequestStatus(book.asin, "pending");
         return { ok: false, message: "Already requested" };
       }
-      return { ok: false, message: "Request failed" };
+      // Everything else used to collapse to a bare "Request failed" — the
+      // server's actionable detail (offline, expired session, validation
+      // reason) was thrown away, making failures undiagnosable.
+      const status = e?.response?.status;
+      if (!e?.response) {
+        return { ok: false, message: "You're offline — try again when connected" };
+      }
+      if (status === 401 || status === 403) {
+        return { ok: false, message: "Session expired — reconnect ReadMeABook in Settings" };
+      }
+      const detail = err || e?.response?.data?.message || e?.message;
+      return { ok: false, message: detail ? `Request failed: ${detail}` : "Request failed" };
     }
   },
 
   // Functional set: concurrent requestBook calls each merge into the latest
-  // map instead of overwriting each other's status.
-  noteRequestStatus: (asin, status) =>
-    set((state) => ({ requestedAsins: { ...state.requestedAsins, [asin]: status } })),
+  // map instead of overwriting each other's status. Mirrored to disk so
+  // requested-state survives restarts (see initialize) — persisting the exact
+  // merged map computed in the updater, not a post-set re-read.
+  noteRequestStatus: (asin, status) => {
+    let merged: Record<string, string> = {};
+    set((state) => {
+      merged = { ...state.requestedAsins, [asin]: status };
+      return { requestedAsins: merged };
+    });
+    try {
+      const { storage } = require("../utils/storage");
+      storage.set("rmab_requestedAsins", JSON.stringify(merged));
+    } catch {}
+  },
+
+  // Audible-sourced rows (series/author/Discover) have no server-enriched
+  // requestStatus, so their "Requested" chips come solely from the persisted
+  // map — without reconciliation a request deleted/rejected server-side kept
+  // its chip forever with no way to re-request. Best-effort: drop local
+  // entries the server no longer knows about.
+  reconcileRequestedAsins: async () => {
+    if (!get().configured) return;
+    try {
+      const { listMyRequests } = require("../utils/rmab");
+      // Snapshot BEFORE the fetch: an entry added while the server list is
+      // in flight is absent from BOTH the snapshot and the (already-stale)
+      // server list — it must be kept by provenance, not presence.
+      const snapshot = get().requestedAsins;
+      const requests = await listMyRequests();
+      const serverAsins = new Set(
+        (requests || [])
+          .map((r: any) => r?.audiobook?.asin || r?.asin)
+          .filter(Boolean)
+      );
+      let applied: Record<string, string> | null = null;
+      set((state) => {
+        const next: Record<string, string> = {};
+        for (const [asin, status] of Object.entries(state.requestedAsins)) {
+          // Keep entries the server confirms, plus any added mid-reconcile
+          // (a just-tapped Request must not lose its chip to a stale list).
+          if (serverAsins.has(asin) || !(asin in snapshot)) next[asin] = status;
+        }
+        if (Object.keys(next).length === Object.keys(state.requestedAsins).length) {
+          return {};
+        }
+        applied = next;
+        return { requestedAsins: next };
+      });
+      if (applied) {
+        try {
+          const { storage } = require("../utils/storage");
+          storage.set("rmab_requestedAsins", JSON.stringify(applied));
+        } catch {}
+      }
+    } catch {
+      // Offline / server error — keep the local overlay; it self-corrects on
+      // a later successful reconcile.
+    }
+  },
 }));
