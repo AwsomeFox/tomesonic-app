@@ -191,15 +191,19 @@ jobs:
         id: notes
         # Passed via env (not inline ${{ }}) so notes containing quotes/backticks
         # can't break the shell. The Play "what's new" field is capped at 500
-        # chars per language — truncate rather than let the upload 400.
+        # CHARACTERS per language — truncate by codepoint (python slice), not by
+        # bytes: head -c would split a multi-byte UTF-8 char and the Play API
+        # rejects invalid UTF-8.
         env:
           RELEASE_NOTES: ${{ github.event.inputs.releaseNotes }}
         run: |
           if [ -n "$RELEASE_NOTES" ]; then
             mkdir -p distribution/whatsnew
-            printf '%s' "$RELEASE_NOTES" | head -c 500 > distribution/whatsnew/whatsnew-en-US
+            printf '%s' "$RELEASE_NOTES" \
+              | python3 -c "import sys; sys.stdout.write(sys.stdin.read()[:500])" \
+              > distribution/whatsnew/whatsnew-en-US
             echo "hasNotes=true" >> "$GITHUB_OUTPUT"
-            echo "Prepared en-US release notes ($(wc -c < distribution/whatsnew/whatsnew-en-US) bytes)."
+            echo "Prepared en-US release notes ($(wc -m < distribution/whatsnew/whatsnew-en-US) chars)."
           else
             echo "hasNotes=false" >> "$GITHUB_OUTPUT"
             echo "No release notes supplied — the previous release's notes are kept."
