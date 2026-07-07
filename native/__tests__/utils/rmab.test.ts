@@ -180,6 +180,47 @@ describe("authed requests", () => {
 
     expect(mockedPost).toHaveBeenCalledTimes(2);
   });
+
+  it("a refresh landing AFTER disconnect does not resurrect the dead session", async () => {
+    mockedRequest
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockResolvedValue({ data: { results: [] } });
+    // The refresh resolves only after we've disconnected mid-flight.
+    let releaseRefresh: (v: any) => void = () => {};
+    mockedPost.mockImplementation(() => new Promise((res) => (releaseRefresh = res)));
+
+    const call = searchBooks("dune");
+    // Give the 401 + refresh POST a chance to start, then disconnect.
+    await new Promise((r) => setTimeout(r, 0));
+    writeRmabConfig(null);
+    releaseRefresh({ data: { accessToken: "acc2" } });
+    await call;
+
+    // The fresh token must NOT be written back over the disconnect.
+    expect(readRmabConfig()).toBeNull();
+  });
+
+  it("a refresh landing after a RECONNECT to a different server keeps the new config", async () => {
+    mockedRequest
+      .mockRejectedValueOnce({ response: { status: 401 } })
+      .mockResolvedValue({ data: { results: [] } });
+    let releaseRefresh: (v: any) => void = () => {};
+    mockedPost.mockImplementation(() => new Promise((res) => (releaseRefresh = res)));
+
+    const call = searchBooks("dune");
+    await new Promise((r) => setTimeout(r, 0));
+    const newCfg = {
+      url: "https://other.test",
+      accessToken: "other-acc",
+      refreshToken: "other-ref",
+      user: { id: "u2" },
+    };
+    writeRmabConfig(newCfg);
+    releaseRefresh({ data: { accessToken: "acc2" } });
+    await call;
+
+    expect(readRmabConfig()).toEqual(newCfg);
+  });
 });
 
 describe("endpoint wrappers", () => {

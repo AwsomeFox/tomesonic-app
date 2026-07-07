@@ -281,7 +281,10 @@ export const useUserStore = create<UserState>((set, get) => ({
       try {
         const { useRmabStore } = require("./useRmabStore");
         useRmabStore.getState().disconnect();
-      } catch {}
+      } catch (e) {
+        // Security-relevant wipe — a silent skip must at least be diagnosable.
+        console.warn("[UserStore] RMAB disconnect on account switch failed", e);
+      }
       try {
         const { storage } = require("../utils/storage");
         storage
@@ -350,7 +353,10 @@ export const useUserStore = create<UserState>((set, get) => ({
     try {
       const { useRmabStore } = require("./useRmabStore");
       useRmabStore.getState().disconnect();
-    } catch {}
+    } catch (e) {
+      // Security-relevant wipe — a silent skip must at least be diagnosable.
+      console.warn("[UserStore] RMAB disconnect on logout failed", e);
+    }
     try {
       const { writeWidgetState } = require("../utils/autoCreds");
       writeWidgetState(null);
