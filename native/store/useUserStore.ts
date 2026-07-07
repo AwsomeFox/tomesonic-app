@@ -260,6 +260,19 @@ export const useUserStore = create<UserState>((set, get) => ({
     const newKey = `${(config?.address || "").replace(/\/$/, "")}::${config?.userId || user?.id || ""}`;
     const prevKey = storageHelper.getLastSessionKey();
     if (prevKey && prevKey !== newKey) {
+      // Stop the PREVIOUS account's live playback FIRST (mirrors logout's
+      // ordering). A forced-401 logout leaves the session loaded and playing;
+      // without this, its 1s tick / native samples write the old account's
+      // position into the new account's fresh progress map + server (the
+      // streaming session 404s under the new token and converts to a direct
+      // PATCH), re-saves lastPlaybackSession right after the removal below,
+      // and removeAllDownloads deletes files under the still-playing session.
+      try {
+        const { usePlaybackStore } = require("./usePlaybackStore");
+        await usePlaybackStore.getState().closePlayback();
+      } catch (e) {
+        console.warn("[UserStore] closePlayback on account switch failed", e);
+      }
       try {
         const { clearAllPending } = require("../utils/progressSync");
         clearAllPending();

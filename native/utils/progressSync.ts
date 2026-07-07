@@ -71,6 +71,15 @@ function readPending(sessionId: string): SyncPayload | null {
 // dropped across repeated offline ticks.
 function queuePending(payload: SyncPayload) {
   try {
+    // No stored session = logged out (or mid account-switch). An offline
+    // queue entry is meaningless with no credentials — and a late
+    // closeSession failure landing here AFTER logout's clearAllPending would
+    // survive the wipe and flush the previous account's position under the
+    // NEXT account's token.
+    try {
+      const { storageHelper } = require("./storage");
+      if (!storageHelper.getServerConfig()?.token) return;
+    } catch {}
     const existing = readPending(payload.sessionId);
     // Entries without a stamp (legacy) are treated as oldest.
     const takeExisting =
@@ -158,6 +167,12 @@ export function queueProgressPatch(
   extra?: Record<string, any>,
   weak = false
 ) {
+  // Same logged-out guard as queuePending: a patch queued after logout's
+  // wipe would flush under the next account's token.
+  try {
+    const { storageHelper } = require("./storage");
+    if (!storageHelper.getServerConfig()?.token) return;
+  } catch {}
   // TrackPlayer positions can transiently be NaN/negative during track
   // teardown — never persist those into a future server PATCH (a null
   // currentTime would clobber real server progress). Non-finite position

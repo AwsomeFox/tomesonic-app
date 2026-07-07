@@ -211,7 +211,12 @@ describe("ReaderScreen (epub pipeline)", () => {
       "file:///dl/book.epub",
       expect.objectContaining({ encoding: "base64" })
     );
-    expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+    // Ignore auto_downloads.json mirror bookkeeping (atomic-write pre-delete);
+    // the DOWNLOADED BOOK FILE must never be deleted.
+    const fileDeletes = (FileSystem.deleteAsync as jest.Mock).mock.calls.filter(
+      (c) => !String(c[0]).includes("auto_downloads")
+    );
+    expect(fileDeletes).toHaveLength(0);
   });
 
   it("location messages persist the cfi + save timestamp and only touch ebook fields in the store", async () => {

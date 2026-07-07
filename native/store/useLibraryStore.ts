@@ -114,7 +114,16 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
     // Swap shelves to the new library's cache (never show the old library's
     // shelves under the new library's name while the fresh fetch runs).
-    set({ currentLibraryId: id, personalizedShelves: readShelvesCache(id) });
+    // filterData/issues/playlist-count are PER-LIBRARY and must not survive
+    // the switch — FilterModal only fetches when filterData is null, so a
+    // stale object served the previous library's genres/authors/series and
+    // selecting one filtered the new library by ids that don't exist there.
+    const changed = get().currentLibraryId !== id;
+    set({
+      currentLibraryId: id,
+      personalizedShelves: readShelvesCache(id),
+      ...(changed ? { filterData: null, issues: 0, numUserPlaylists: 0 } : {}),
+    });
     // Mirror the selection into auto_creds.json so the Android Auto browse
     // service switches libraries too (it otherwise keeps browsing the library
     // mirrored at login until the next app initialize).
@@ -196,6 +205,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const filterData = data.filterdata || null;
       const issues = data.issues || 0;
       const numUserPlaylists = data.numUserPlaylists || 0;
+
+      // The user may have switched libraries while this request was in
+      // flight (same guard loadPersonalizedShelves has) — installing the
+      // stale payload would force-revert currentLibraryId and hand the new
+      // library the old one's filterData.
+      if (get().currentLibraryId !== libraryId) return data;
 
       if (!library || !library.id) {
         set({ filterData, issues, numUserPlaylists });

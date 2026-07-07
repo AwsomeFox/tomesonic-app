@@ -203,6 +203,8 @@ describe("useLibraryStore", () => {
     it("stores filter data, issues, and playlist count", async () => {
       useLibraryStore.setState({
         libraries: [{ id: "lib1", name: "Books" }] as any,
+        // Details only install for the CURRENT library (stale-switch guard).
+        currentLibraryId: "lib1",
       } as any);
       mockGet.mockResolvedValue({
         data: {
@@ -229,6 +231,42 @@ describe("useLibraryStore", () => {
       expect(data).toBeNull();
       expect(useLibraryStore.getState().currentLibraryId).toBeNull();
     });
+
+    // REGRESSION: a slow details response landing after a library switch used
+    // to force-revert currentLibraryId and install the OLD library's filters.
+    it("discards a stale response after a library switch", async () => {
+      useLibraryStore.setState({
+        libraries: [{ id: "libA" }, { id: "libB" }] as any,
+        currentLibraryId: "libB", // user already switched away from libA
+      } as any);
+      mockGet.mockResolvedValue({
+        data: { library: { id: "libA" }, filterdata: { genres: ["old"] }, issues: 9 },
+      } as any);
+
+      await useLibraryStore.getState().fetchLibraryDetails("libA");
+
+      const s = useLibraryStore.getState();
+      expect(s.currentLibraryId).toBe("libB"); // not reverted
+      expect(s.filterData).toBeNull(); // old library's filters not installed
+    });
+  });
+
+  // REGRESSION: filterData is per-library; FilterModal only refetches when it
+  // is null, so surviving a switch served the previous library's genres.
+  it("setCurrentLibraryId clears per-library filter data on an actual change", () => {
+    useLibraryStore.setState({
+      currentLibraryId: "libA",
+      filterData: { genres: ["scifi"] } as any,
+      issues: 2,
+      numUserPlaylists: 3,
+    } as any);
+
+    useLibraryStore.getState().setCurrentLibraryId("libB");
+
+    const s = useLibraryStore.getState();
+    expect(s.filterData).toBeNull();
+    expect(s.issues).toBe(0);
+    expect(s.numUserPlaylists).toBe(0);
   });
 
   it("reset clears everything", () => {

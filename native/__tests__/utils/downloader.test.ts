@@ -526,18 +526,23 @@ describe("sweepOrphanFolders", () => {
 
     await downloader.sweepOrphanFolders();
 
-    expect(FileSystem.deleteAsync).toHaveBeenCalledTimes(1);
-    expect(FileSystem.deleteAsync).toHaveBeenCalledWith(
-      "file:///test-documents/downloads/orphan_folder",
-      { idempotent: true }
+    // Ignore the auto_downloads.json mirror bookkeeping (atomic-write pre-delete).
+    const folderDeletes = (FileSystem.deleteAsync as jest.Mock).mock.calls.filter(
+      (c) => !String(c[0]).includes("auto_downloads")
     );
+    expect(folderDeletes).toHaveLength(1);
+    expect(folderDeletes[0][0]).toBe("file:///test-documents/downloads/orphan_folder");
+    expect(folderDeletes[0][1]).toEqual({ idempotent: true });
   });
 
   it("does nothing when the downloads root doesn't exist", async () => {
     (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: false });
     await downloader.sweepOrphanFolders();
     expect(FileSystem.readDirectoryAsync).not.toHaveBeenCalled();
-    expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+    const folderDeletes = (FileSystem.deleteAsync as jest.Mock).mock.calls.filter(
+      (c) => !String(c[0]).includes("auto_downloads")
+    );
+    expect(folderDeletes).toHaveLength(0);
   });
 
   it("survives a failing delete and keeps sweeping", async () => {
