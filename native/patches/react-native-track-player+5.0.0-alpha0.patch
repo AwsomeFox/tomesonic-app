@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..37b4c21 100644
+index b495b5a..d2dd8fb 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -192,7 +192,7 @@ index b495b5a..37b4c21 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,21 +105,1035 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,21 +105,1049 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -300,6 +300,20 @@ index b495b5a..37b4c21 100644
 +    // Small pool: a single slow request must not queue every subsequent
 +    // browse tap behind it (the car UI shows a spinner per folder).
 +    private val absBrowseExecutor = java.util.concurrent.Executors.newFixedThreadPool(3)
++
++    // Submit browse/resolve work to the pool. Once the pool is shut down (service
++    // teardown, see onDestroy) execute() throws RejectedExecutionException — a
++    // browse/play callback racing teardown would then return a SettableFuture
++    // that never completes, hanging the controller. On rejection, complete the
++    // future inline via onReject (all callers pass a cheap, no-disk fallback).
++    private fun absSubmitBrowse(onReject: () -> Unit, task: () -> Unit) {
++        try {
++            absBrowseExecutor.execute(task)
++        } catch (e: java.util.concurrent.RejectedExecutionException) {
++            Timber.w(e, "browse executor rejected task; completing future inline")
++            onReject()
++        }
++    }
 +
 +    // Holds a freshly-refreshed access token in memory so we don't keep hitting
 +    // the file (the JS side rewrites the file too, but not while backgrounded).
@@ -1240,7 +1254,7 @@ index b495b5a..37b4c21 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,7 +1221,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,7 +1235,11 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1253,7 +1267,7 @@ index b495b5a..37b4c21 100644
          )
          player = QueuedAudioPlayer(this@MusicService, options)
          fakePlayer.release()
-@@ -293,9 +1312,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1326,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1265,7 +1279,7 @@ index b495b5a..37b4c21 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1325,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1339,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1327,7 +1341,7 @@ index b495b5a..37b4c21 100644
          }
      }
  
-@@ -449,6 +1502,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1516,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1338,7 +1352,7 @@ index b495b5a..37b4c21 100644
      }
  
      @MainThread
-@@ -792,13 +1849,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +1863,27 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1368,7 +1382,7 @@ index b495b5a..37b4c21 100644
          super.onDestroy()
      }
  
-@@ -925,6 +1996,185 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +2010,195 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1406,7 +1420,9 @@ index b495b5a..37b4c21 100644
 +                // the browse executor to keep disk/bitmap work off the hot
 +                // pre-play path (StrictMode/ANR risk on cheap head units).
 +                val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<MediaItem>>()
-+                absBrowseExecutor.execute {
++                absSubmitBrowse(onReject = {
++                    future.set(LibraryResult.ofItem(absBrowsableItem(mediaId, mediaId), null))
++                }) {
 +                    try {
 +                        val itemId = mediaId.removePrefix("play:").substringBefore("@@").substringBefore("::")
 +                        val dl = absDownloads[itemId]
@@ -1438,7 +1454,9 @@ index b495b5a..37b4c21 100644
 +            params: MediaLibraryService.LibraryParams?
 +        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
 +            val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
-+            absBrowseExecutor.execute {
++            absSubmitBrowse(onReject = {
++                future.set(LibraryResult.ofItemList(ImmutableList.of<MediaItem>(), params))
++            }) {
 +                val children = try { absLoadChildren(parentId) } catch (e: Exception) { Timber.w(e, "absLoadChildren failed"); emptyList() }
 +                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
 +            }
@@ -1452,7 +1470,9 @@ index b495b5a..37b4c21 100644
 +            params: MediaLibraryService.LibraryParams?
 +        ): ListenableFuture<LibraryResult<Void>> {
 +            val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<Void>>()
-+            absBrowseExecutor.execute {
++            absSubmitBrowse(onReject = {
++                future.set(LibraryResult.ofVoid(params))
++            }) {
 +                val results = try { absSearch(query) } catch (e: Exception) { Timber.w(e, "absSearch failed"); emptyList() }
 +                absSearchCache[query] = results
 +                Timber.i("AA search '%s' -> %d results", query, results.size)
@@ -1493,7 +1513,9 @@ index b495b5a..37b4c21 100644
 +                return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
 +            }
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
-+            absBrowseExecutor.execute {
++            absSubmitBrowse(onReject = {
++                future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
++            }) {
 +                val id = playItem.mediaId.removePrefix("play:")
 +                val raw = id.substringBefore("@@")
 +                // Bookmark ids carry an absolute-seconds override after "@@".
@@ -1534,7 +1556,9 @@ index b495b5a..37b4c21 100644
 +            }
 +            // Cold start (JS not ready): resolve natively so playback still works.
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MutableList<MediaItem>>()
-+            absBrowseExecutor.execute {
++            absSubmitBrowse(onReject = {
++                future.set(mediaItems)
++            }) {
 +                val resolved = mediaItems.map { item ->
 +                    val id = item.mediaId
 +                    if (id.startsWith("play:")) {
@@ -1554,7 +1578,7 @@ index b495b5a..37b4c21 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +2185,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2209,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1575,7 +1599,7 @@ index b495b5a..37b4c21 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2215,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2239,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1587,26 +1611,28 @@ index b495b5a..37b4c21 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2227,34 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2251,36 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
 -            return super.onPlaybackResumption(mediaSession, controller)
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
-+            absBrowseExecutor.execute {
++            absSubmitBrowse(onReject = {
++                future.setException(UnsupportedOperationException("service unavailable"))
++            }) {
 +                try {
 +                    val f = java.io.File(filesDir, "widget_state.json")
 +                    val o = if (f.exists()) org.json.JSONObject(f.readText()) else null
 +                    val itemId = absStr(o, "itemId") ?: ""
 +                    if (itemId.isEmpty()) {
 +                        future.setException(UnsupportedOperationException("no last session"))
-+                        return@execute
++                        return@absSubmitBrowse
 +                    }
 +                    absRefreshDownloaded()
 +                    val resolved = absResolvePlayResumable(itemId, null, null)
 +                    if (resolved == null) {
 +                        future.setException(UnsupportedOperationException("unresolvable last session"))
-+                        return@execute
++                        return@absSubmitBrowse
 +                    }
 +                    val item = absPlayableItem(
 +                        "play:$itemId", itemId,
