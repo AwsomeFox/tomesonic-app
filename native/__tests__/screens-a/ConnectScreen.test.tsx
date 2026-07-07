@@ -187,6 +187,9 @@ describe("ConnectScreen", () => {
           token: "tok123",
           refreshToken: "ref456",
           name: "abs.example.com",
+          // The server version probed at connect time is persisted on the
+          // config so the Account screen's "Server version" line can render it.
+          version: "2.17.0",
         }),
         expect.objectContaining({ id: "u1", username: "bob" })
       )

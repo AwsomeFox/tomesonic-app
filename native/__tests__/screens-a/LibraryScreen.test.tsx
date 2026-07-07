@@ -206,6 +206,37 @@ describe("LibraryScreen", () => {
     expect(screen.queryByText("Ebook Only Book")).toBeNull();
   });
 
+  it("auto-advances to the next page when a raw page filters down to nothing", async () => {
+    // With hide-non-audiobooks on, a full raw page of ebook-only rows filters to
+    // zero visible items — the list doesn't grow, so onEndReached never re-fires
+    // and load-more would stall. The screen must chain straight to the next page.
+    useUserStore.setState({
+      settings: { ...useUserStore.getState().settings, hideNonAudiobooksGlobal: true },
+    } as any);
+    const audioTwo = {
+      ...audioItem,
+      id: "b2",
+      media: { ...audioItem.media, metadata: { title: "Audio Book Two", authorName: "Bob" } },
+    };
+    mockedGet.mockImplementation((url: string) => {
+      if (url.includes("page=0")) return Promise.resolve({ data: { results: [audioItem], total: 30 } });
+      // Page 1 is entirely ebook-only -> filtered empty -> must auto-chain.
+      if (url.includes("page=1")) return Promise.resolve({ data: { results: [ebookOnlyItem], total: 30 } });
+      if (url.includes("page=2")) return Promise.resolve({ data: { results: [audioTwo], total: 30 } });
+      return Promise.resolve({ data: { results: [], total: 30 } });
+    });
+    const navigation = makeNavigation();
+    await render(<LibraryScreen route={{ params: {} }} navigation={navigation} />);
+    await screen.findByText("Audio Book One");
+
+    // One end-reached fetches page 1 (all ebook); the screen chains to page 2 on
+    // its own, whose audio row appears without a second scroll gesture.
+    await fireEvent(screen.getByText("Audio Book One"), "onEndReached", { distanceFromEnd: 0 });
+
+    await waitFor(() => expect(screen.getByText("Audio Book Two")).toBeTruthy());
+    expect(mockedGet.mock.calls.some((c) => String(c[0]).includes("page=2"))).toBe(true);
+  });
+
   it("row actions: ebook-only opens the Reader, audio starts playback, podcasts get no button", async () => {
     mockItemsPage([audioItem, ebookOnlyItem, podcastRow]);
     const startPlayback = jest.fn().mockResolvedValue(true);
