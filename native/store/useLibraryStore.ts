@@ -103,8 +103,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         return;
       }
       const shelves = raw.filter((sh: any) => sh && typeof sh === "object");
+      // A 200 with an EMPTY shelf set is NOT authoritative: the server returns
+      // one while it's still indexing, during a permissions race right after a
+      // token refresh, or when the minified query path returns early. Treating
+      // it as truth wiped a populated home screen AND poisoned the per-library
+      // cache (which then hydrates empty on the next cold open, so shelves are
+      // missing before any fetch runs). When we already have shelves, keep them
+      // and flag a soft error instead of blanking. Never cache an empty set.
+      if (shelves.length === 0 && get().personalizedShelves.length > 0) {
+        console.warn("[LibraryStore] personalized returned empty but shelves exist — keeping them");
+        set({ shelvesLoadError: true });
+        return;
+      }
       set({ personalizedShelves: shelves, shelvesLoadError: false });
-      writeShelvesCache(libraryId, shelves);
+      if (shelves.length > 0) writeShelvesCache(libraryId, shelves);
     } catch (err) {
       console.error("[LibraryStore] Failed to load personalized shelves:", err);
       // Keep existing shelves on transient load error to avoid flickering —
@@ -167,21 +179,43 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // One null/id-less entry in the list used to throw mid-`.some` and
       // silently discard the WHOLE payload — keep the valid libraries.
       const libraries = rawLibraries.filter((l: any) => l && typeof l === "object" && l.id);
-      
+      // An EMPTY list is treated as a FAILED load, not "the server has zero
+      // libraries": a transient blip (server restart, auth race, proxy hiccup)
+      // that returned [] would otherwise drive currentLibraryId to null, and a
+      // null library makes loadPersonalizedShelves early-return — so the home
+      // screen blanks and pull-to-refresh (which bails the same way) can't
+      // recover it. Keeping current state leaves the existing library intact.
+      if (libraries.length === 0) {
+        console.warn("[LibraryStore] libraries response empty — keeping current state");
+        return false;
+      }
+
       let currentLibraryId = get().currentLibraryId;
-      
+
       // If last saved library exists and is in the loaded list, reuse it, otherwise default to first
       const savedLibraryId = storageHelper.getLastLibraryId();
       const hasSavedLibrary = libraries.some((l: any) => l.id === savedLibraryId);
-      
+
       if (hasSavedLibrary) {
         currentLibraryId = savedLibraryId;
-      } else if (libraries.length > 0) {
-        currentLibraryId = libraries[0].id;
+      } else if (get().currentLibraryId && libraries.some((l: any) => l.id === get().currentLibraryId)) {
+        // Keep the already-selected library if it's still present, even when it
+        // was never persisted (auto-picked on a prior launch).
+        currentLibraryId = get().currentLibraryId;
       } else {
-        currentLibraryId = null;
+        currentLibraryId = libraries[0].id;
       }
 
+      // Persist the effective pick so it survives the next cold start. Without
+      // this, users who never opened the LibrarySelector had no saved id, so the
+      // library was re-derived from /api/libraries on EVERY launch — one flaky
+      // response then reshuffled the selection and blanked their shelves.
+      if (currentLibraryId) storageHelper.setLastLibraryId(currentLibraryId);
+
+      // With the spurious-change guards above (empty-list bail + keep-current-
+      // if-still-present), a true `libraryChanged` now means a GENUINE switch
+      // (saved library deleted, or the very first pick) — so swapping shelves to
+      // the new library's cache is correct, not a transient blip wiping them.
       const libraryChanged = currentLibraryId !== get().currentLibraryId;
       set({
         libraries,

@@ -31,6 +31,7 @@ jest.mock("../../utils/autoCreds", () => ({
 }));
 
 import TrackPlayer from "react-native-track-player";
+import * as FileSystem from "expo-file-system/legacy";
 import { api } from "../../utils/api";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import { usePlaybackStore, refreshNowPlayingArtwork } from "../../store/usePlaybackStore";
@@ -147,6 +148,76 @@ describe("notification artwork sources", () => {
     expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
       "file:///docs/downloads/item1_book/cover.jpg"
     );
+  });
+
+  describe("Android Auto compact-player artwork (local cover cache)", () => {
+    // AA's home card + mini bar render art only from inline artworkData bytes,
+    // which the native layer inlines for LOCAL file covers. A streaming book's
+    // remote cover url therefore leaves the small player blank. prepare() should
+    // cache the remote cover to a file and re-point the session at it.
+    it("caches a remote cover to a local file and re-points the session artwork", async () => {
+      jest.mocked(FileSystem.getInfoAsync).mockResolvedValueOnce({ exists: false } as any);
+
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
+
+      // The track is added immediately with the remote url (full player art).
+      expect(addedTracks()[0].artwork).toContain("token=tok_CURRENT");
+
+      // Let the fire-and-forget cache task run to completion.
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(FileSystem.downloadAsync).toHaveBeenCalledWith(
+        expect.stringContaining("/api/items/item1/cover"),
+        "file:///test-cache/nowplaying/cover_item1.jpg"
+      );
+      expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
+        "file:///test-cache/nowplaying/cover_item1.jpg"
+      );
+      // The active track's metadata is refreshed with the LOCAL artwork so the
+      // native layer inlines its bytes for Android Auto's compact card.
+      expect(TrackPlayer.updateMetadataForTrack).toHaveBeenCalledWith(
+        0,
+        expect.objectContaining({ artwork: "file:///test-cache/nowplaying/cover_item1.jpg" })
+      );
+    });
+
+    it("reuses an already-cached cover file without re-downloading", async () => {
+      jest.mocked(FileSystem.getInfoAsync).mockResolvedValueOnce({ exists: true } as any);
+      jest.mocked(FileSystem.downloadAsync).mockClear();
+
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(FileSystem.downloadAsync).not.toHaveBeenCalled();
+      expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
+        "file:///test-cache/nowplaying/cover_item1.jpg"
+      );
+    });
+
+    it("does NOT cache when the cover is already a local downloaded file", async () => {
+      jest.mocked(FileSystem.downloadAsync).mockClear();
+      useDownloadStore.setState({
+        completedDownloads: {
+          item1: {
+            id: "item1",
+            status: "completed",
+            localFolderPath: "file:///docs/downloads/item1_book/",
+            parts: [
+              { id: "cover", filename: "cover.jpg", localFilePath: "file:///docs/downloads/item1_book/cover.jpg", completed: true },
+            ],
+            meta: { duration: 300, chapters: [], tracks: [] },
+          } as any,
+        },
+      });
+
+      await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(FileSystem.downloadAsync).not.toHaveBeenCalled();
+      expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
+        "file:///docs/downloads/item1_book/cover.jpg"
+      );
+    });
   });
 
   describe("refreshNowPlayingArtwork (mid-session token rotation)", () => {

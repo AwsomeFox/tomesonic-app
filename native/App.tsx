@@ -16,7 +16,7 @@ import { useThemeStore } from "./store/useThemeStore";
 import { useThemeColors } from "./theme/useThemeColors";
 import { DynamicThemeProvider } from "./theme/DynamicThemeContext";
 import { useDownloadStore } from "./store/useDownloadStore";
-import { usePlaybackStore, recoverPlaybackIfNeeded } from "./store/usePlaybackStore";
+import { usePlaybackStore, recoverPlaybackIfNeeded, reconcileWithNativePlayer } from "./store/usePlaybackStore";
 import { flushPendingSyncs } from "./utils/progressSync";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 
@@ -88,6 +88,10 @@ export default function App() {
       if (state === "active") {
         flushPendingSyncs().catch(() => {});
         recoverPlaybackIfNeeded().catch(() => {});
+        // Sync the UI with a session Android Auto may have started (or resumed)
+        // while the app was backgrounded/killed, so the progress bars reflect
+        // the live position instead of sitting frozen.
+        reconcileWithNativePlayer().catch(() => {});
       }
     });
     return () => sub.remove();

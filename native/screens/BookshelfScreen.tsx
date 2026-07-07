@@ -142,6 +142,12 @@ export default function BookshelfScreen({ navigation }: any) {
     setRefreshing(true);
     setSeriesRefreshTick((t) => t + 1);
     try {
+      // Reload the library list FIRST so a refresh can recover a lost/wrong
+      // currentLibraryId. If a transient empty /api/libraries had nulled it,
+      // loadPersonalizedShelves early-returns and the pull gesture would
+      // otherwise be a no-op for shelves — the exact "refresh doesn't fix it"
+      // symptom. force=true bypasses the 5-minute throttle.
+      await loadLibraries(true).catch(() => {});
       await Promise.all([loadPersonalizedShelves(true), loadMediaProgress()]);
       await loadContinueReading();
     } finally {

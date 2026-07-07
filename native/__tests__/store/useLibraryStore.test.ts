@@ -90,6 +90,33 @@ describe("useLibraryStore", () => {
       await useLibraryStore.getState().loadPersonalizedShelves();
       expect(useLibraryStore.getState().personalizedShelves).toEqual(existing);
     });
+
+    // REGRESSION: an EMPTY 200 (server still indexing / auth race) must not wipe
+    // a populated home screen or poison the per-library cache — otherwise the
+    // next cold open hydrates empty and shelves are gone before any fetch runs.
+    it("keeps existing shelves and does NOT cache when a 200 returns an empty set", async () => {
+      const existing = [{ id: "continue", entities: [{ id: "b1" }] }];
+      storage.set("shelvesCache_lib1", JSON.stringify(existing));
+      useLibraryStore.setState({ currentLibraryId: "lib1", personalizedShelves: existing } as any);
+      mockGet.mockResolvedValue({ data: { shelves: [] } } as any);
+
+      await useLibraryStore.getState().loadPersonalizedShelves();
+
+      expect(useLibraryStore.getState().personalizedShelves).toEqual(existing);
+      expect(useLibraryStore.getState().shelvesLoadError).toBe(true);
+      // The good cache is preserved, not overwritten with [].
+      expect(JSON.parse(storage.getString("shelvesCache_lib1")!)).toEqual(existing);
+    });
+
+    it("never writes an empty shelf set to the cache even on a genuinely empty library", async () => {
+      useLibraryStore.setState({ currentLibraryId: "lib1", personalizedShelves: [] } as any);
+      mockGet.mockResolvedValue({ data: { shelves: [] } } as any);
+
+      await useLibraryStore.getState().loadPersonalizedShelves();
+
+      expect(useLibraryStore.getState().personalizedShelves).toEqual([]);
+      expect(storage.getString("shelvesCache_lib1")).toBeUndefined();
+    });
   });
 
   describe("setCurrentLibraryId", () => {
@@ -167,10 +194,35 @@ describe("useLibraryStore", () => {
       expect(useLibraryStore.getState().personalizedShelves).toEqual([{ id: "lib1-cache" }]);
     });
 
-    it("sets currentLibraryId null when the server has no libraries", async () => {
+    // REGRESSION: an empty /api/libraries (transient blip, auth race, proxy
+    // hiccup) must NOT null currentLibraryId — a null library makes
+    // loadPersonalizedShelves early-return, blanking the home screen with no
+    // way for pull-to-refresh to recover. Treat empty as a failed load.
+    it("treats an empty libraries response as a failed load and keeps current state", async () => {
+      useLibraryStore.setState({ libraries: LIBS, currentLibraryId: "lib2" } as any);
       mockGet.mockResolvedValue({ data: { libraries: [] } } as any);
+
+      const ok = await useLibraryStore.getState().loadLibraries(true);
+
+      expect(ok).toBe(false);
+      expect(useLibraryStore.getState().currentLibraryId).toBe("lib2");
+      expect(useLibraryStore.getState().libraries).toEqual(LIBS);
+    });
+
+    it("persists the auto-picked library so it survives the next launch", async () => {
+      mockGet.mockResolvedValue({ data: { libraries: LIBS } } as any);
       await useLibraryStore.getState().loadLibraries();
-      expect(useLibraryStore.getState().currentLibraryId).toBeNull();
+      expect(storageHelper.getLastLibraryId()).toBe("lib1");
+    });
+
+    it("keeps the current (unsaved, auto-picked) library when it is still present", async () => {
+      // No saved id, but lib2 is the live selection from a prior auto-pick.
+      useLibraryStore.setState({ currentLibraryId: "lib2" } as any);
+      mockGet.mockResolvedValue({ data: { libraries: LIBS } } as any);
+
+      await useLibraryStore.getState().loadLibraries(true);
+
+      expect(useLibraryStore.getState().currentLibraryId).toBe("lib2");
     });
 
     it("keeps existing state on failure and returns false", async () => {
