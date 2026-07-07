@@ -35,8 +35,10 @@ const base64Encode = (input: string = '') => {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const COVER_WIDTH = 72;
-const COVER_HEIGHT = 72;
+// 2:3 book aspect (56×80) + radius 8, matching the Collection/Playlist detail
+// rows — a 72×72 square distorted the cover art.
+const COVER_WIDTH = 56;
+const COVER_HEIGHT = 80;
 
 // Mirrors $elapsedPretty (see LibraryScreen / ItemDetailScreen).
 function elapsedPretty(seconds: number): string {
@@ -322,7 +324,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           style={{
             width: COVER_WIDTH,
             height: COVER_HEIGHT,
-            borderRadius: 12,
+            borderRadius: 8,
             overflow: "hidden",
             backgroundColor: colors.surfaceContainerHigh,
           }}
@@ -507,7 +509,8 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         <ListSkeleton rows={7} thumb={72} />
       ) : error ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="warning" size={40} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
+          {/* colors.error to match the Collection/Playlist detail siblings. */}
+          <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
           <Pressable
             onPress={() => setRetryTick((t) => t + 1)}
@@ -522,8 +525,11 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       ) : bookCount === 0 ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
           <Icon name="series" size={48} color={colors.onSurfaceVariant} />
-          <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "bold", marginTop: 16 }}>
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "700", marginTop: 16, textAlign: "center" }}>
             No books in this series
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, marginTop: 8, textAlign: "center" }}>
+            Books in this series will appear here once they're in your library.
           </Text>
         </View>
       ) : (

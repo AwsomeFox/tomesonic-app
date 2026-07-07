@@ -11,6 +11,8 @@
 import { BackHandler } from "react-native";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 
+// Toggle for the OS reduce-motion setting (Confetti reads useReducedMotion).
+let mockReduceMotion = false;
 // Minimal reanimated mock — the setup-level one pulls real react-native-worklets.
 // withTiming deliberately does NOT fire its completion callback so one-shot
 // effects (Confetti) stay visible for assertions.
@@ -95,7 +97,7 @@ jest.mock("react-native-reanimated", () => {
       out: (f: any) => f,
       inOut: (f: any) => f,
     },
-    useReducedMotion: () => false,
+    useReducedMotion: () => mockReduceMotion,
     LinearTransition: chainable(),
     FadeIn: chainable(),
     FadeOut: chainable(),
@@ -470,6 +472,17 @@ describe("PlayerBottomSheet — top bar actions", () => {
     await fireEvent.press(screen.getAllByLabelText("Bookmarks")[0]);
     expect(await screen.findByText("Your Bookmarks")).toBeTruthy();
   });
+
+  // Stop is the only in-player way to dismiss a session (final sync + save
+  // cleanup); a dead button would strand a finished book on-screen.
+  it("Stop button collapses the player and closes playback", async () => {
+    const closePlayback = jest.fn().mockResolvedValue(undefined);
+    seedPlayer({ isPlayerExpanded: true, closePlayback });
+    await render(<PlayerBottomSheet />);
+    await fireEvent.press(screen.getAllByLabelText("Stop and close player")[0]);
+    expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
+    expect(closePlayback).toHaveBeenCalled();
+  });
 });
 
 describe("PlayerBottomSheet — landscape layout", () => {
@@ -507,6 +520,31 @@ describe("PlayerBottomSheet — landscape layout", () => {
     const expand = screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2");
     await fireEvent.press(expand[expand.length - 1]);
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
+  });
+
+  // Parity with portrait: the landscape header must carry Stop (the only
+  // in-player dismissal) and Read-from-here, or a finished book can't be
+  // closed and format-switch is unreachable when the phone is rotated.
+  it("landscape header has Stop and Read-from-here, and Stop closes playback", async () => {
+    const closePlayback = jest.fn().mockResolvedValue(undefined);
+    seedPlayer({ isPlayerExpanded: true, closePlayback });
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+
+    // Portrait + landscape subtrees both render (portrait a11y-hidden while
+    // landscape is active), so each label now appears twice — landscape used
+    // to contribute neither.
+    expect(
+      screen.getAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
+    ).toBe(2);
+    expect(
+      screen.getAllByLabelText("Read from here", { includeHiddenElements: true }).length
+    ).toBe(2);
+
+    // The visible (landscape) Stop closes playback.
+    const stops = screen.getAllByLabelText("Stop and close player");
+    await fireEvent.press(stops[stops.length - 1]);
+    expect(closePlayback).toHaveBeenCalled();
   });
 
   it("hides the landscape full player from TalkBack while collapsed", async () => {
@@ -571,14 +609,40 @@ describe("PlayerBottomSheet — finish-line confetti", () => {
     return n;
   }
 
-  it("fires once when playback CROSSES the finish line", async () => {
-    seedPlayer({ position: 700 });
+  it("fires once when playback NATURALLY crosses the finish line", async () => {
+    // Resume just before the line, then a normal playback tick carries it over.
+    seedPlayer({ position: 3597 });
     await render(<PlayerBottomSheet />);
     expect(countParticles(screen.toJSON())).toBe(0);
     await act(async () => {
-      usePlaybackStore.setState({ position: 3599 } as any);
+      usePlaybackStore.setState({ position: 3599 } as any); // +2s natural advance
     });
     expect(countParticles(screen.toJSON())).toBe(28);
+  });
+
+  it("does NOT fire when SCRUBBING/seeking to the end (big position jump)", async () => {
+    seedPlayer({ position: 700 });
+    await render(<PlayerBottomSheet />);
+    await act(async () => {
+      // A drag/seek from the middle to the end lands as one large jump.
+      usePlaybackStore.setState({ position: 3599 } as any);
+    });
+    expect(countParticles(screen.toJSON())).toBe(0);
+  });
+
+  it("suppresses the burst entirely under OS reduce-motion", async () => {
+    mockReduceMotion = true;
+    try {
+      seedPlayer({ position: 3597 });
+      await render(<PlayerBottomSheet />);
+      await act(async () => {
+        usePlaybackStore.setState({ position: 3599 } as any); // natural crossing
+      });
+      // The celebration is decorative — reduce-motion users get no particles.
+      expect(countParticles(screen.toJSON())).toBe(0);
+    } finally {
+      mockReduceMotion = false;
+    }
   });
 
   it("does NOT fire when restoring a session already at the end", async () => {

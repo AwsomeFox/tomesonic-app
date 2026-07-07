@@ -6,6 +6,7 @@
  * progressSync module — this file mocks it to assert the queue wiring.)
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { Alert } from "react-native";
 
 // Named exports (SafeAreaView/useSafeAreaInsets) are missing from the global
 // safe-area mock (default-only export) — provide them file-locally.
@@ -49,10 +50,21 @@ const serverBookmarks = [
   { libraryItemId: "item1", title: "Great quote", time: 90.7 }, // floored to 90 for dedupe keys
 ];
 
+let alertSpy: jest.SpyInstance;
+
 beforeEach(() => {
   (pendingBookmarksFor as jest.Mock).mockReturnValue([]);
   (pendingBookmarkDeletionsFor as jest.Mock).mockReturnValue([]);
   apiGet.mockResolvedValue({ data: { bookmarks: serverBookmarks } });
+  // Deletion now confirms first — auto-tap the destructive button so the
+  // existing deletion assertions still exercise the delete path.
+  alertSpy = jest.spyOn(Alert, "alert").mockImplementation((_t: any, _m: any, buttons: any) => {
+    (buttons || []).find((b: any) => b.style === "destructive")?.onPress?.();
+  });
+});
+
+afterEach(() => {
+  alertSpy.mockRestore();
 });
 
 describe("BookmarksModal offline deletion", () => {
@@ -71,6 +83,26 @@ describe("BookmarksModal offline deletion", () => {
     // The row stays gone locally despite the failed request.
     expect(screen.queryByText("Great quote")).toBeNull();
     expect(screen.getByText("Chapter start")).toBeTruthy();
+  });
+
+  it("confirms before deleting, and Cancel keeps the bookmark", async () => {
+    // Cancel path: the alert shows but no destructive button is invoked.
+    alertSpy.mockImplementation(() => {});
+    await render(
+      <BookmarksModal visible onClose={noop} libraryItemId="item1" currentTime={200} onSeek={noop} />
+    );
+    await screen.findByText("Great quote");
+
+    await fireEvent.press(screen.getAllByLabelText("Delete bookmark")[1]);
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      "Delete bookmark",
+      expect.stringContaining("Great quote"),
+      expect.any(Array)
+    );
+    // Nothing deleted while the confirmation is pending / cancelled.
+    expect(apiDelete).not.toHaveBeenCalled();
+    expect(screen.getByText("Great quote")).toBeTruthy();
   });
 
   it("never queues a deletion when the DELETE succeeds", async () => {

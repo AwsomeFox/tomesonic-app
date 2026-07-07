@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, Alert } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { api } from "../utils/api";
@@ -127,7 +127,7 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
     }
   };
 
-  const deleteBookmark = async (bm: Bookmark) => {
+  const performDeleteBookmark = async (bm: Bookmark) => {
     setBookmarks((prev) => prev.filter((b) => b.time !== bm.time));
     if (!libraryItemId) return;
     // If it was queued offline, unqueue it too (there's no server row yet —
@@ -140,6 +140,19 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
       // bookmark deleted offline used to silently reappear from the server.
       queueBookmarkDeletion(libraryItemId, bm.time);
     }
+  };
+
+  // Deleting a bookmark is destructive and irreversible offline — confirm first
+  // (a mis-tap on the small delete affordance otherwise lost it silently).
+  const deleteBookmark = (bm: Bookmark) => {
+    Alert.alert(
+      "Delete bookmark",
+      bm.title ? `Delete "${bm.title}"?` : "Delete this bookmark?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => performDeleteBookmark(bm) },
+      ]
+    );
   };
 
   return (

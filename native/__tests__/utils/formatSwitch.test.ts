@@ -162,6 +162,26 @@ describe("resolveAudioTarget", () => {
     mockedGet.mockResolvedValueOnce({ data: null } as any);
     expect(await resolveAudioTarget("gone")).toBeNull();
   });
+
+  // REGRESSION: a downloaded book plays fully offline, so the resolver must
+  // find it locally and NOT report "no audiobook available" when the network
+  // is down (the callers translate null into exactly that message).
+  it("resolves a downloaded audiobook locally without hitting the network", async () => {
+    const { useDownloadStore } = require("../../store/useDownloadStore");
+    useDownloadStore.setState({
+      completedDownloads: {
+        dl1: {
+          id: "dl1",
+          title: "Local Book",
+          meta: { duration: 1234, chapters: [], tracks: [{ index: 0, filename: "a.mp3", duration: 1234, startOffset: 0 }] },
+        },
+      },
+    } as any);
+    const target = await resolveAudioTarget("dl1");
+    expect(target).toEqual({ itemId: "dl1", duration: 1234, title: "Local Book" });
+    expect(mockedGet).not.toHaveBeenCalled();
+    useDownloadStore.setState({ completedDownloads: {} } as any);
+  });
 });
 
 describe("resolveEbookTarget", () => {
@@ -197,5 +217,18 @@ describe("resolveEbookTarget", () => {
 
     mockedGet.mockRejectedValue(new Error("offline"));
     await expect(resolveEbookTarget("x")).resolves.toBeNull();
+  });
+
+  it("resolves a downloaded ebook locally (format from the file) without the network", async () => {
+    const { useDownloadStore } = require("../../store/useDownloadStore");
+    useDownloadStore.setState({
+      completedDownloads: {
+        dl2: { id: "dl2", title: "Local Ebook", parts: [{ id: "ebook", filename: "book.epub" }] },
+      },
+    } as any);
+    const target = await resolveEbookTarget("dl2");
+    expect(target).toEqual({ itemId: "dl2", ebookFormat: "epub", title: "Local Ebook" });
+    expect(mockedGet).not.toHaveBeenCalled();
+    useDownloadStore.setState({ completedDownloads: {} } as any);
   });
 });

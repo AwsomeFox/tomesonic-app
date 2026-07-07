@@ -142,6 +142,17 @@ describe("BookmarksModal", () => {
     { libraryItemId: "other", title: "Different book", time: 10 },
   ];
 
+  // Bookmark deletion now confirms first — auto-tap the destructive button so
+  // these delete assertions still exercise the delete path.
+  let bmAlertSpy: jest.SpyInstance;
+  beforeEach(() => {
+    const { Alert } = require("react-native");
+    bmAlertSpy = jest.spyOn(Alert, "alert").mockImplementation((_t: any, _m: any, buttons: any) => {
+      (buttons || []).find((b: any) => b.style === "destructive")?.onPress?.();
+    });
+  });
+  afterEach(() => bmAlertSpy.mockRestore());
+
   it("loads, filters to the item, and sorts bookmarks by time", async () => {
     apiGet.mockResolvedValue({ data: { bookmarks: serverBookmarks } });
     await render(

@@ -175,6 +175,43 @@ describe("SeriesListScreen", () => {
     );
   });
 
+  it("persists the chosen sort to user settings", async () => {
+    const updateSpy = jest.fn().mockResolvedValue(undefined);
+    useUserStore.setState({ updateUserSettings: updateSpy } as any);
+
+    await renderSeriesList();
+    await screen.findByText("First Series");
+
+    await fireEvent.press(screen.getByLabelText("Sort"));
+    await fireEvent.press(screen.getByText("Added At"));
+
+    await waitFor(() =>
+      expect(updateSpy).toHaveBeenCalledWith({
+        mobileSeriesOrderBy: "addedAt",
+        mobileSeriesOrderDesc: true,
+      })
+    );
+  });
+
+  it("restores the persisted sort on mount and queries the server with it", async () => {
+    // A previous session saved a duration-descending sort.
+    useUserStore.setState({
+      settings: {
+        ...useUserStore.getState().settings,
+        mobileSeriesOrderBy: "totalDuration",
+        mobileSeriesOrderDesc: true,
+      },
+    } as any);
+
+    await renderSeriesList();
+    await screen.findByText("First Series");
+
+    // The very first fetch already uses the restored sort — no OrderModal touch.
+    expect(api.get).toHaveBeenCalledWith(
+      "/api/libraries/lib1/series?limit=20&page=0&minified=1&sort=totalDuration&desc=1"
+    );
+  });
+
   it("swaps to the search overlay when search is active", async () => {
     await renderSeriesList();
     await screen.findByText("First Series");

@@ -19,6 +19,24 @@ import Pressable from "../components/HintPressable";
 
 const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
 
+// A failed TLS handshake (self-signed / untrusted cert) surfaces through axios
+// as a generic "Network Error", but the underlying platform message names the
+// cause. Sniff it so we can tell the user it's a certificate problem, not a
+// wrong URL.
+function isTlsError(err: any): boolean {
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    msg.includes("certificate") ||
+    msg.includes("trust anchor") ||
+    msg.includes("sslhandshake") ||
+    msg.includes("ssl handshake") ||
+    msg.includes("cert_") ||
+    msg.includes("self-signed") ||
+    msg.includes("self signed") ||
+    msg.includes("certpathvalidator")
+  );
+}
+
 // M3 Expressive control metrics for this screen: hero-size touch targets.
 const FIELD_HEIGHT = 56;
 const BUTTON_HEIGHT = 56;
@@ -112,14 +130,28 @@ export default function ConnectScreen() {
       // auth methods it supports (local, openid).
       let cleanUrl = candidates[0];
       let statusRes: any = null;
+      let sawTlsError = false;
       for (let i = 0; i < candidates.length; i++) {
         try {
           statusRes = await axios.get(`${candidates[i]}/status`, { timeout: 10000 });
           cleanUrl = candidates[i];
           break;
         } catch (err) {
-          if (i === candidates.length - 1) throw err;
+          if (isTlsError(err)) sawTlsError = true;
         }
+      }
+      if (!statusRes) {
+        // A self-signed / untrusted certificate fails the TLS handshake with a
+        // message the user can't act on ("Network Error"). Name the real problem
+        // instead of blaming the URL. (When a bare host was tried over https then
+        // http, the http attempt usually fails with connection-refused, so we
+        // remember whether ANY attempt hit a cert error.)
+        setError(
+          sawTlsError
+            ? "Couldn't verify this server's security certificate. A self-signed certificate isn't trusted on this device — install it in Android settings, or use a domain with a valid certificate."
+            : "Unable to connect to the server. Please verify the URL."
+        );
+        return;
       }
       if (!statusRes.data || statusRes.data.app !== "audiobookshelf") {
         setError("This does not appear to be an Audiobookshelf server.");

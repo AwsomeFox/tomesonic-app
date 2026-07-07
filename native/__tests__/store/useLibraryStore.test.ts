@@ -225,6 +225,48 @@ describe("useLibraryStore", () => {
       expect(useLibraryStore.getState().currentLibraryId).toBe("lib2");
     });
 
+    // REGRESSION: when the effective library changes (saved one deleted →
+    // default to first), the per-library state must clear the same way
+    // setCurrentLibraryId does — otherwise FilterModal serves the old
+    // library's genres and the counts show the wrong library's numbers.
+    it("clears per-library state when the effective library changes", async () => {
+      storageHelper.setLastLibraryId("deleted-lib");
+      useLibraryStore.setState({
+        currentLibraryId: "deleted-lib",
+        filterData: { genres: ["scifi"] },
+        issues: 3,
+        numUserPlaylists: 4,
+        shelvesLoadError: true,
+      } as any);
+      mockGet.mockResolvedValue({ data: { libraries: LIBS } } as any);
+
+      await useLibraryStore.getState().loadLibraries();
+
+      const s = useLibraryStore.getState();
+      expect(s.currentLibraryId).toBe("lib1");
+      expect(s.filterData).toBeNull();
+      expect(s.issues).toBe(0);
+      expect(s.numUserPlaylists).toBe(0);
+      expect(s.shelvesLoadError).toBe(false);
+    });
+
+    it("keeps per-library state when the effective library is unchanged", async () => {
+      storageHelper.setLastLibraryId("lib2");
+      useLibraryStore.setState({
+        currentLibraryId: "lib2",
+        filterData: { genres: ["scifi"] },
+        issues: 2,
+      } as any);
+      mockGet.mockResolvedValue({ data: { libraries: LIBS } } as any);
+
+      await useLibraryStore.getState().loadLibraries();
+
+      const s = useLibraryStore.getState();
+      expect(s.currentLibraryId).toBe("lib2");
+      expect(s.filterData).toEqual({ genres: ["scifi"] });
+      expect(s.issues).toBe(2);
+    });
+
     it("keeps existing state on failure and returns false", async () => {
       useLibraryStore.setState({ libraries: LIBS, currentLibraryId: "lib2" } as any);
       mockGet.mockRejectedValue(new Error("offline"));

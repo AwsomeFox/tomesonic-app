@@ -146,9 +146,10 @@ describe("DownloadsScreen", () => {
     expect(screen.getByText("Ebook DL")).toBeTruthy();
     expect(screen.getByText("1.0 MB")).toBeTruthy();
 
-    // Storage summary sums every part (fileSize or bytes actually written).
+    // Storage summary sums every part (fileSize or bytes actually written), and
+    // once device free space loads it's appended for context.
     expect(screen.getByText("Internal App Storage")).toBeTruthy();
-    expect(screen.getByText("2 items · 9.5 MB used")).toBeTruthy();
+    expect(await screen.findByText(/2 items · 9\.5 MB used · .* free/)).toBeTruthy();
   });
 
   it("plays audio rows offline and opens ebook-only rows in the Reader", async () => {

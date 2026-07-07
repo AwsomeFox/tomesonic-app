@@ -168,6 +168,14 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
         android_ripple={{ color: colors.surfaceContainerHighest }}
         style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 }}
         onPress={() => navigation.navigate("ItemDetail", { itemId: book.id })}
+        accessibilityRole="button"
+        accessibilityLabel={bookAuthor ? `${bookTitle} by ${bookAuthor}` : bookTitle}
+        // The nested Play button collapses into this accessible row and is
+        // unreachable by TalkBack — expose it as a custom action instead.
+        accessibilityActions={showPlayBtn ? [{ name: "play", label: "Play" }] : undefined}
+        onAccessibilityAction={(e) => {
+          if (e.nativeEvent.actionName === "play") playBook(book.id);
+        }}
       >
         {/* cover */}
         <View
@@ -334,7 +342,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 20, paddingBottom: 16 }}>
             <CollageCover bookItems={bookItems} size={120} getCoverUrl={getCoverUrl} colors={colors} />
             <View style={{ flex: 1, marginLeft: 16, justifyContent: "center" }}>
-              <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "800" }}>
+              <Text numberOfLines={3} style={{ color: colors.onSurface, fontSize: 22, fontWeight: "800" }}>
                 {collectionName}
               </Text>
               <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 4 }}>

@@ -333,6 +333,22 @@ describe("StatsScreen", () => {
     ).toBeNull();
   });
 
+  it("groups stat tiles and exposes a chart summary for TalkBack", async () => {
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    // Totals read as one item each instead of value + label as two nodes.
+    expect(screen.getByLabelText("2 Items Finished")).toBeTruthy();
+    expect(screen.getByLabelText("36 minutes", { exact: false })).toBeTruthy();
+
+    // The View-drawn chart exposes its 7-day series as spoken text.
+    const chart = screen.getByLabelText(/Minutes listening over the last 7 days/);
+    expect(chart.props.accessibilityRole).toBe("image");
+
+    // Recent-session rows collapse title + time + duration into one label.
+    expect(screen.getByLabelText("Latest Listen, 2h ago, 61 min")).toBeTruthy();
+  });
+
   it("back button goes back", async () => {
     const navigation = await renderStats();
     await screen.findByText("Recent Sessions");

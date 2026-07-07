@@ -1059,6 +1059,24 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             ) : null}
           </View>
 
+          {/* Podcasts have no Download button (the downloader handles book
+              tracks, not episodes) — say so, so its absence doesn't read as a
+              bug. Episodes stream and can be added to playlists for later. */}
+          {isPodcastItem ? (
+            <Text
+              accessibilityRole="text"
+              style={{
+                color: colors.onSurfaceVariant,
+                fontSize: 13,
+                textAlign: "center",
+                paddingHorizontal: 32,
+                marginTop: 12,
+              }}
+            >
+              Podcast episodes stream and aren't downloaded for offline playback.
+            </Text>
+          ) : null}
+
           {/* Your Progress card — one icon-labeled row per format so listening
               and reading progress can never be mistaken for each other. */}
           {showAudioRow || showEbookRow ? (

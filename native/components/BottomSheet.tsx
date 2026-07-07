@@ -20,6 +20,19 @@ import { useThemeColors } from "../theme/useThemeColors";
  * animate; the backdrop FADES in place while only the sheet translates, the
  * standard M3 bottom-sheet motion.
  */
+
+// Drag-to-dismiss thresholds, extracted so the gesture decision is unit-testable
+// without replaying a PanResponder (RNTL can't drive its gesture state).
+// Claim the gesture only for a deliberate DOWNWARD drag (not a horizontal swipe
+// through a scrollable child, nor a tiny jitter).
+export function shouldClaimDrag(dy: number, dx: number): boolean {
+  return dy > 4 && Math.abs(dy) > Math.abs(dx);
+}
+// Dismiss on a long enough drag OR a fast downward flick.
+export function shouldDismissOnRelease(dy: number, vy: number): boolean {
+  return dy > 80 || vy > 0.5;
+}
+
 export default function BottomSheet({
   visible,
   onClose,
@@ -69,12 +82,12 @@ export default function BottomSheet({
   onCloseRef.current = onClose;
   const handlePan = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_e, g) => g.dy > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onMoveShouldSetPanResponder: (_e, g) => shouldClaimDrag(g.dy, g.dx),
       onPanResponderMove: (_e, g) => {
         translateY.setValue(Math.max(0, g.dy));
       },
       onPanResponderRelease: (_e, g) => {
-        if (g.dy > 80 || g.vy > 0.5) {
+        if (shouldDismissOnRelease(g.dy, g.vy)) {
           // The close effect animates from the current drag offset the rest
           // of the way off-screen.
           onCloseRef.current();

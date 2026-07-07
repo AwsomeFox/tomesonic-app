@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..565ff5f 100644
+index b495b5a..585a5ed 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -223,7 +223,7 @@ index b495b5a..565ff5f 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +106,1151 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +106,1183 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -374,6 +374,11 @@ index b495b5a..565ff5f 100644
 +    // Holds a freshly-refreshed access token in memory so we don't keep hitting
 +    // the file (the JS side rewrites the file too, but not while backgrounded).
 +    @Volatile private var absTokenOverride: String? = null
++    // The server the override token was minted for. A refreshed token is only
++    // valid against the server it came from — when the user switches servers
++    // (auto_creds.json rewritten with a new address), the stale override must
++    // NOT be applied to the new server (it would 401 every browse/play).
++    @Volatile private var absTokenOverrideServer: String? = null
 +
 +    private data class AbsCreds(val server: String, val token: String, val refreshToken: String?)
 +
@@ -381,7 +386,9 @@ index b495b5a..565ff5f 100644
 +        return try {
 +            val o = org.json.JSONObject(file.readText())
 +            val server = o.optString("server").trimEnd('/')
-+            val token = absTokenOverride ?: o.optString("token")
++            // Only honor the in-memory override when it belongs to THIS server.
++            val override = if (absTokenOverride != null && absTokenOverrideServer == server) absTokenOverride else null
++            val token = override ?: o.optString("token")
 +            // isNull guard: a JS-written `refreshToken: null` would otherwise
 +            // read back as the string "null" (org.json optString behavior).
 +            val refresh = if (o.isNull("refreshToken")) null else o.optString("refreshToken").ifEmpty { null }
@@ -426,6 +433,8 @@ index b495b5a..565ff5f 100644
 +            val newToken = resp.optJSONObject("user")?.optString("accessToken")?.ifEmpty { null } ?: return null
 +            val newRefresh = resp.optJSONObject("user")?.optString("refreshToken")?.ifEmpty { null } ?: refresh
 +            absTokenOverride = newToken
++            // Scope the override to the server it was minted for (see field doc).
++            absTokenOverrideServer = creds.server
 +            // Persist so subsequent cold starts also get the fresh token.
 +            try {
 +                val f = java.io.File(filesDir, "auto_creds.json")
@@ -677,10 +686,33 @@ index b495b5a..565ff5f 100644
 +                    ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
 +            } ?: false
 +            val cb = object : android.net.ConnectivityManager.NetworkCallback() {
++                // A network becoming the default does NOT mean it reaches the
++                // internet — a captive-portal Wi-Fi or a no-service cellular
++                // attach both fire onAvailable. Marking browse ONLINE for those
++                // pins Android Auto to the online tree, whose server fetches then
++                // hang/fail. Gate on the actual INTERNET capability (mirroring
++                // the onLost check); onCapabilitiesChanged flips it once the link
++                // validates (captive portal signed in, or service comes up).
++                private fun hasInternet(n: android.net.Network): Boolean =
++                    cm.getNetworkCapabilities(n)
++                        ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++
 +                override fun onAvailable(network: android.net.Network) {
 +                    val was = absNetworkAvailable
-+                    absNetworkAvailable = true
-+                    if (!was) absNotifyBrowseChanged("network available")
++                    val up = hasInternet(network)
++                    absNetworkAvailable = up
++                    if (up && !was) absNotifyBrowseChanged("network available")
++                    else if (!up && was) absNotifyBrowseChanged("network available without internet")
++                }
++                override fun onCapabilitiesChanged(
++                    network: android.net.Network,
++                    caps: android.net.NetworkCapabilities
++                ) {
++                    val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
++                    if (up != absNetworkAvailable) {
++                        absNetworkAvailable = up
++                        absNotifyBrowseChanged(if (up) "internet validated" else "internet dropped")
++                    }
 +                }
 +                override fun onLost(network: android.net.Network) {
 +                    val cmNow = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
@@ -1388,7 +1420,7 @@ index b495b5a..565ff5f 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1338,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1370,21 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1412,7 +1444,7 @@ index b495b5a..565ff5f 100644
          observeEvents()
      }
  
-@@ -293,9 +1435,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1467,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1424,7 +1456,7 @@ index b495b5a..565ff5f 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1448,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1480,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1486,7 +1518,7 @@ index b495b5a..565ff5f 100644
          }
      }
  
-@@ -449,6 +1625,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1657,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1497,7 +1529,37 @@ index b495b5a..565ff5f 100644
      }
  
      @MainThread
-@@ -717,7 +1897,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1727,29 @@ class MusicService : HeadlessJsMediaService() {
+             }
+         }
+         emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
++        // The home-screen resume widget reads widget_state.json (JS mirrors the
++        // current book there on prepare), but its manifest updatePeriodMillis is
++        // 30 minutes — so starting a new book left the widget showing the old one
++        // for up to half an hour. Poke it to redraw now that the book changed.
++        absRefreshResumeWidget()
++    }
++
++    // Fire an APPWIDGET_UPDATE at the app's resume widget so it re-reads
++    // widget_state.json immediately. No-op (cheap) when no widget is placed.
++    private fun absRefreshResumeWidget() {
++        try {
++            val mgr = android.appwidget.AppWidgetManager.getInstance(this) ?: return
++            val cn = android.content.ComponentName(packageName, "$packageName.widget.ResumeWidgetProvider")
++            val ids = mgr.getAppWidgetIds(cn)
++            if (ids == null || ids.isEmpty()) return
++            val intent = android.content.Intent(android.appwidget.AppWidgetManager.ACTION_APPWIDGET_UPDATE).apply {
++                component = cn
++                putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
++            }
++            sendBroadcast(intent)
++        } catch (e: Exception) {
++            Timber.w(e, "resume widget refresh failed")
++        }
+     }
+ 
+     private fun emitQueueEndedEvent() {
+@@ -717,7 +1952,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1506,7 +1568,7 @@ index b495b5a..565ff5f 100644
              return
          }
  
-@@ -780,8 +1960,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2015,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1522,7 +1584,7 @@ index b495b5a..565ff5f 100644
          return mediaSession
      }
  
-@@ -792,13 +1978,41 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2033,41 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1566,7 +1628,7 @@ index b495b5a..565ff5f 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2119,230 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2174,230 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1814,7 +1876,7 @@ index b495b5a..565ff5f 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2351,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2406,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -1844,7 +1906,7 @@ index b495b5a..565ff5f 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2383,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2438,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -1860,7 +1922,7 @@ index b495b5a..565ff5f 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,6 +2399,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2454,81 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1872,11 +1934,22 @@ index b495b5a..565ff5f 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2411,61 @@ class MusicService : HeadlessJsMediaService() {
-             emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
-                 putString("package", controller.packageName)
-             })
+         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+-            emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
+-                putString("package", controller.packageName)
+-            })
 -            return super.onPlaybackResumption(mediaSession, controller)
++            // This callback can arrive on a binder thread (Bluetooth/headset
++            // resume, Android Auto). emitDeviceEvent bridges to JS and must not
++            // race the RN bridge off-thread — post to the main looper. The emit
++            // is a fire-and-forget notification, so its timing relative to the
++            // returned future is irrelevant.
++            val resumePkg = controller.packageName
++            android.os.Handler(android.os.Looper.getMainLooper()).post {
++                emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
++                    putString("package", resumePkg)
++                })
++            }
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
 +            // JS alive: route through the full JS session path (real queue,
 +            // chapters, progress sync) — same as a browse tap. The native

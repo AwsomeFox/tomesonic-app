@@ -101,6 +101,7 @@ import React from "react";
 import { Linking } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import * as FileSystem from "expo-file-system/legacy";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import ReaderScreen from "../../screens/ReaderScreen";
 import { api } from "../../utils/api";
 import { queueEbookProgressPatch } from "../../utils/progressSync";
@@ -558,6 +559,20 @@ describe("ReaderScreen (epub pipeline)", () => {
 
     expect(await screen.findByText(/Couldn't open this EPUB in-app/)).toBeTruthy();
   });
+
+  it("jumps to the Read-from-here fraction on WebView ready", async () => {
+    await renderReader({ itemId: ITEM, ebookFormat: "epub", title: "My Book", initialFraction: 0.42 });
+    const webProps = await readyWebView();
+    (global as any).__injectJS.mockClear();
+
+    await act(async () => {
+      webProps.onMessage({ nativeEvent: { data: JSON.stringify({ type: "ready" }) } });
+    });
+
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("goToFraction(0.42)")
+    );
+  });
 });
 
 describe("ReaderScreen (pdf)", () => {
@@ -580,6 +595,47 @@ describe("ReaderScreen (pdf)", () => {
     });
     expect(screen.getByText("Page 5 of 200")).toBeTruthy();
     expect(storage.getNumber(`pdfPage_${PDF_ITEM}`)).toBe(5);
+    // PDF progress mirrors into the store and (debounced) the server, like epub.
+    expect(useUserStore.getState().mediaProgress[PDF_ITEM]).toMatchObject({
+      ebookLocation: "5",
+      ebookProgress: 0.025,
+    });
+  });
+
+  it("flushes the last PDF page to the server on unmount (debounce cancelled)", async () => {
+    storage.set(`pdfPage_${PDF_ITEM}`, 1);
+    const { unmount } = await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF" });
+    await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
+
+    await act(async () => {
+      (global as any).__pdfProps.onPageChanged(120, 200);
+    });
+    (api.patch as jest.Mock).mockClear();
+    // Leave within the 2s debounce window — the scheduled sync is cancelled,
+    // so only the unmount flush must reach the server.
+    await act(async () => {
+      await unmount();
+    });
+    expect(api.patch).toHaveBeenCalledWith(
+      `/api/me/progress/${PDF_ITEM}`,
+      expect.objectContaining({ ebookLocation: "120" })
+    );
+  });
+
+  it("turns PDF pages with the footer buttons (a11y: scroll-only otherwise)", async () => {
+    storage.set(`pdfPage_${PDF_ITEM}`, 10);
+    await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF" });
+    await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
+    // Footer (and its buttons) render once onPageChanged has reported a page.
+    await act(async () => {
+      (global as any).__pdfProps.onPageChanged(10, 200);
+    });
+
+    await fireEvent.press(screen.getByLabelText("Next page"));
+    await waitFor(() => expect((global as any).__pdfProps.page).toBe(11));
+
+    await fireEvent.press(screen.getByLabelText("Previous page"));
+    await waitFor(() => expect((global as any).__pdfProps.page).toBe(10));
   });
 
   it("shows a PDF-specific error with retry when the PDF component errors", async () => {
@@ -622,5 +678,20 @@ describe("ReaderScreen (unsupported formats)", () => {
 
     await fireEvent.press(screen.getByLabelText("Close reader"));
     expect(navigation.goBack).toHaveBeenCalled();
+  });
+
+  it("keeps the screen awake only while focused — activates on mount, releases on unmount", async () => {
+    const { navigation, unmount } = await renderReader();
+
+    expect(activateKeepAwakeAsync).toHaveBeenCalledWith("reader");
+    // Subscribes to focus/blur so navigating forward (leaving it mounted but
+    // blurred) releases the lock instead of holding it off-screen.
+    expect(navigation.addListener).toHaveBeenCalledWith("focus", expect.any(Function));
+    expect(navigation.addListener).toHaveBeenCalledWith("blur", expect.any(Function));
+
+    await act(async () => {
+      unmount();
+    });
+    expect(deactivateKeepAwake).toHaveBeenCalledWith("reader");
   });
 });

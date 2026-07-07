@@ -484,6 +484,44 @@ describe("flushPendingSyncs", () => {
     expect(mockedPost).not.toHaveBeenCalled();
   });
 
+  // REGRESSION: a straggler queued under account A must never sync/PATCH under
+  // account B's token on a shared server (colliding item ids → cross-account
+  // progress corruption). The entry is stamped with A's identity at enqueue
+  // and skipped (left in place) while a different account is current.
+  it("skips a pending sync stamped for a different account, then delivers it when that account is current again", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokA", userId: "uA" });
+    mockedPost.mockRejectedValue(errNetwork());
+    await syncProgress({ sessionId: "s1", currentTime: 50, timeListened: 5, duration: 3600 });
+    expect(readJson("pendingSync_s1").sid).toBe("http://abs.local::uA");
+
+    // Switch to account B (same server) and flush — A's entry must not POST.
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokB", userId: "uB" });
+    mockedPost.mockReset();
+    mockedPost.mockResolvedValue({ data: {} } as any);
+    await flushPendingSyncs();
+    expect(mockedPost).not.toHaveBeenCalled();
+    expect(readJson("pendingSync_s1")).not.toBeNull(); // left in place, not dropped
+
+    // Switch back to A — now it delivers (guard isn't a blanket skip).
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokA2", userId: "uA" });
+    await flushPendingSyncs();
+    expect(mockedPost).toHaveBeenCalledWith("/api/session/s1/sync", expect.objectContaining({ currentTime: 50 }));
+    expect(readJson("pendingSync_s1")).toBeNull();
+  });
+
+  it("skips a pending PATCH stamped for a different account", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokA", userId: "uA" });
+    queueProgressPatch("li1", 30, 100);
+    expect(readJson("pendingPatch_li1").sid).toBe("http://abs.local::uA");
+
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokB", userId: "uB" });
+    mockedPatch.mockReset();
+    mockedPatch.mockResolvedValue({ data: {} } as any);
+    await flushPendingSyncs();
+    expect(mockedPatch).not.toHaveBeenCalled();
+    expect(readJson("pendingPatch_li1")).not.toBeNull();
+  });
+
   it("flushes queued PATCHes (new body shape) before syncs and clears on success", async () => {
     queueProgressPatch("li1", 10, 100);
     storage.set(

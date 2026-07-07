@@ -269,7 +269,14 @@ export default function PlayerBottomSheet() {
     // First observation of this session (resume point) never celebrates,
     // nor does a position already past the line.
     if (!prev || prev.id !== sessionId || prev.pos >= duration - 2) return;
-    if (position >= duration - 2 && celebratedRef.current !== sessionId) {
+    // Only a NATURAL playback advance celebrates. Scrubbing/seeking/skipping to
+    // the end lands as one big position jump — dragging the scrubber to the
+    // finish shouldn't fire confetti you didn't earn. A foreground playback tick
+    // advances at most a few seconds (speed x interval), so a small forward
+    // delta is the "listened to the end" signal.
+    const delta = position - prev.pos;
+    const naturalCrossing = delta > 0 && delta <= 15;
+    if (position >= duration - 2 && naturalCrossing && celebratedRef.current !== sessionId) {
       celebratedRef.current = sessionId;
       setShowConfetti(true);
     }
@@ -869,7 +876,7 @@ export default function PlayerBottomSheet() {
                 >
                   <Icon name="chevron-down" size={28} color={colors.onSecondaryContainer} />
                 </Pressable>
-                <View style={{ flexDirection: "row", columnGap: 12 }}>
+                <View style={{ flexDirection: "row", columnGap: 8 }}>
                   <Pressable
                     onPress={() => {
                       try {
@@ -881,9 +888,9 @@ export default function PlayerBottomSheet() {
                     accessibilityRole="button"
                     accessibilityLabel="Cast to device"
                     style={{
-                      width: 56,
-                      height: 56,
-                      borderRadius: 28,
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
@@ -900,9 +907,9 @@ export default function PlayerBottomSheet() {
                     accessibilityLabel="Chapters"
                     accessibilityState={{ disabled: !hasChapters }}
                     style={{
-                      width: 56,
-                      height: 56,
-                      borderRadius: 28,
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
@@ -936,9 +943,9 @@ export default function PlayerBottomSheet() {
                     accessibilityRole="button"
                     accessibilityLabel="View book details"
                     style={{
-                      width: 56,
-                      height: 56,
-                      borderRadius: 28,
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
@@ -952,9 +959,9 @@ export default function PlayerBottomSheet() {
                       accessibilityRole="button"
                       accessibilityLabel="Read from here"
                       style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: 28,
+                        width: 48,
+                        height: 48,
+                        borderRadius: 24,
                         backgroundColor: colors.secondaryContainer,
                         alignItems: "center",
                         justifyContent: "center",
@@ -975,9 +982,9 @@ export default function PlayerBottomSheet() {
                     accessibilityRole="button"
                     accessibilityLabel="Stop and close player"
                     style={{
-                      width: 56,
-                      height: 56,
-                      borderRadius: 28,
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
@@ -1560,6 +1567,23 @@ export default function PlayerBottomSheet() {
                   style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}
                 >
                   <Icon name="book" size={22} color={colors.onSecondaryContainer} />
+                </Pressable>
+                {/* Read-from-here + Stop were portrait-only — in landscape a
+                    finished book couldn't be dismissed from the player at all
+                    (Stop is the only in-player dismissal), and format-switch
+                    was unreachable. */}
+                {!currentSession?.episodeId ? (
+                  <Pressable onPress={readFromHere} accessibilityRole="button" accessibilityLabel="Read from here" style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                    <Icon name="auto-stories" size={22} color={colors.onSecondaryContainer} />
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => { setPlayerExpanded(false); closePlayback().catch(() => {}); }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Stop and close player"
+                  style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Icon name="close" size={22} color={colors.onSecondaryContainer} />
                 </Pressable>
               </View>
             </View>

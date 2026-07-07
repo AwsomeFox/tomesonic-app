@@ -363,7 +363,9 @@ export default function AddToListModal({
               }}
             >
               <Icon name="playlist-add" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-              <Text style={{ fontSize: 20, fontWeight: "600", color: colors.onSurface }}>
+              {/* Match the bottom-sheet header type scale used across the app
+                  (Bookmarks / Chapters / Speed / Sleep all use 22/500). */}
+              <Text style={{ fontSize: 22, fontWeight: "500", color: colors.onSurface }}>
                 Add to…
               </Text>
             </View>

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { View, Text, Linking, ActivityIndicator, FlatList, Animated, Alert } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
-import { useKeepAwake } from "expo-keep-awake";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { storageHelper, storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import { usePlaybackStore } from "../store/usePlaybackStore";
@@ -263,9 +263,36 @@ function getExtForFormat(format: string): string {
 export default function ReaderScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
-  // Reading is a long touch-free activity — keep the screen awake while the
-  // reader is mounted (released automatically on unmount).
-  useKeepAwake();
+  // Reading is a long touch-free activity — keep the screen awake, but only
+  // while the reader is actually the FOCUSED screen. useKeepAwake() held the
+  // lock for as long as the reader stayed mounted, so navigating forward from
+  // it (leaving it in the stack) kept the screen on off-screen, draining the
+  // battery. Activate on focus, release on blur AND unmount.
+  const KEEP_AWAKE_TAG = "reader";
+  useEffect(() => {
+    let held = false;
+    const activate = () => {
+      if (held) return;
+      held = true;
+      // Wrapped: the async activator may return void in some environments.
+      Promise.resolve(activateKeepAwakeAsync(KEEP_AWAKE_TAG)).catch(() => {});
+    };
+    const release = () => {
+      if (!held) return;
+      held = false;
+      try {
+        deactivateKeepAwake(KEEP_AWAKE_TAG);
+      } catch {}
+    };
+    activate(); // focused on mount
+    const unsubFocus = navigation?.addListener?.("focus", activate);
+    const unsubBlur = navigation?.addListener?.("blur", release);
+    return () => {
+      release();
+      unsubFocus?.();
+      unsubBlur?.();
+    };
+  }, [navigation]);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const { itemId, ebookFormat, title, initialFraction } = route.params || {};
   // One-shot "jump to fraction" from the player's Read-from-here handoff —
@@ -277,10 +304,20 @@ export default function ReaderScreen({ route, navigation }: any) {
   );
   const [pdfError, setPdfError] = useState(false);
   // PDF page tracking: restore the last-read page and show a footer indicator,
-  // mirroring what the epub path gets from foliate relocations.
+  // mirroring what the epub path gets from foliate relocations. Controlled
+  // page state so the footer prev/next buttons (a11y: PDF page turns are
+  // otherwise scroll-only) can drive it and an in-place book change re-seeds it.
   const pdfPageKey = `pdfPage_${itemId}`;
-  const initialPdfPageRef = useRef<number>(Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
+  const [pdfPage, setPdfPage] = useState<number>(() => Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
   const [pdfProgress, setPdfProgress] = useState<{ page: number; pages: number } | null>(null);
+  // The last PDF position, flushed on unmount like latestProgressRef does for
+  // epub — the debounced onPageChanged sync alone is cancelled by the cleanup
+  // clearing syncTimeoutRef, losing a page turn made within ~2s of leaving.
+  const latestPdfProgressRef = useRef<{ page: number; fraction: number } | null>(null);
+  // In-place itemId changes update route params WITHOUT unmounting, so these
+  // mount-seeded values must be re-seeded for the new book — the reseed lives in
+  // an effect (see below, keyed on itemId) rather than during render, so the
+  // previous book's flush effect can run its cleanup FIRST.
   // Bumped by the error-state Retry button to re-run the ebook load effect.
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -436,7 +473,41 @@ export default function ReaderScreen({ route, navigation }: any) {
         // (which could even one-way auto-finish B).
         latestProgressRef.current = null;
       }
+      // PDF equivalent of the epub flush above: the debounced onPageChanged
+      // sync is cancelled by clearing syncTimeoutRef, so flush the last page.
+      if (latestPdfProgressRef.current) {
+        const { page, fraction } = latestPdfProgressRef.current;
+        api
+          .patch(`/api/me/progress/${itemId}`, {
+            ebookLocation: String(page),
+            ebookProgress: fraction,
+            ...(fraction >= 0.99 ? { isFinished: true } : {}),
+          })
+          .catch(() => queueEbookProgressPatch(itemId, String(page), fraction, fraction >= 0.99));
+        latestPdfProgressRef.current = null;
+      }
     };
+  }, [itemId]);
+
+  // Re-seed the per-book PDF state when the itemId changes IN PLACE (route
+  // params swap without an unmount). Keyed on [itemId] and defined AFTER the
+  // flush effect above so, on a change, React runs that effect's cleanup FIRST
+  // (flushing book A's last page) before this clears latestPdfProgressRef and
+  // seeds book B — moving it out of the render body also removes the
+  // setState-during-render anti-pattern. Skips the mount run: the useState/
+  // useRef initializers already seed the first book.
+  const readerReseededRef = useRef(false);
+  useEffect(() => {
+    if (!readerReseededRef.current) {
+      readerReseededRef.current = true;
+      return;
+    }
+    setPdfPage(Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
+    latestPdfProgressRef.current = null;
+    pendingJumpRef.current =
+      typeof initialFraction === "number" && Number.isFinite(initialFraction)
+        ? Math.max(0, Math.min(1, initialFraction))
+        : null;
   }, [itemId]);
 
   // Load ebook contents and generate the HTML wrapper
@@ -867,15 +938,20 @@ export default function ReaderScreen({ route, navigation }: any) {
       .completedDownloads[itemId]?.parts?.find((p: any) => p.id === "ebook")?.localFilePath;
     body = (
       <Pdf
+        // Remount for a new book so the controlled page starts fresh.
+        key={itemId}
         source={
           localPdf
             ? { uri: localPdf }
             : { uri: ebookUri, headers: { Authorization: `Bearer ${token}` } }
         }
         style={{ flex: 1, backgroundColor: colors.surface }}
-        page={initialPdfPageRef.current}
+        page={pdfPage}
         onPageChanged={(page: number, numberOfPages: number) => {
           setPdfProgress({ page, pages: numberOfPages });
+          // Keep the controlled page in sync with scroll (no-op jump when the
+          // prop already equals the current page).
+          setPdfPage((prev) => (prev !== page ? page : prev));
           // Remember where the user left off so reopening resumes here.
           storage.set(pdfPageKey, page);
           // PDFs get the SAME server sync the epub path has (ebook fields
@@ -883,6 +959,9 @@ export default function ReaderScreen({ route, navigation }: any) {
           // number) — without it PDF progress never left the device: no
           // cross-device resume, no "Reading" row, no finish.
           const fraction = numberOfPages > 0 ? Math.min(1, page / numberOfPages) : 0;
+          // Snapshot for the unmount flush (mirrors the epub latestProgressRef)
+          // so a page turn within the debounce window still reaches the server.
+          latestPdfProgressRef.current = { page, fraction };
           useUserStore.setState({
             mediaProgress: {
               ...useUserStore.getState().mediaProgress,
@@ -986,22 +1065,46 @@ export default function ReaderScreen({ route, navigation }: any) {
       {Header}
       <View style={{ flex: 1 }}>{body}</View>
 
-      {/* PDF footer — page indicator matching the epub footer below */}
+      {/* PDF footer — page indicator + focusable prev/next (a11y: PDF page
+          turns are otherwise scroll-only, unreachable under TalkBack), mirroring
+          the epub footer's buttons below. */}
       {canRenderPdf && pdfProgress && (
         <View
           style={{
+            flexDirection: "row",
             alignItems: "center",
-            justifyContent: "center",
-            paddingVertical: 10,
-            paddingHorizontal: 24,
+            paddingVertical: 6,
+            paddingHorizontal: 12,
             backgroundColor: colors.surface,
             borderTopWidth: 1,
             borderTopColor: colors.outlineVariant,
           }}
         >
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
+          <Pressable
+            onPress={() => setPdfPage((p) => Math.max(1, p - 1))}
+            disabled={pdfProgress.page <= 1}
+            accessibilityRole="button"
+            accessibilityLabel="Previous page"
+            accessibilityState={{ disabled: pdfProgress.page <= 1 }}
+            hitSlop={8}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", opacity: pdfProgress.page <= 1 ? 0.4 : 1 }}
+          >
+            <Icon name="chevron-left" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
+          <Text style={{ flex: 1, textAlign: "center", color: colors.onSurfaceVariant, fontSize: 12 }}>
             Page {pdfProgress.page} of {pdfProgress.pages}
           </Text>
+          <Pressable
+            onPress={() => setPdfPage((p) => Math.min(pdfProgress.pages || p + 1, p + 1))}
+            disabled={pdfProgress.page >= pdfProgress.pages}
+            accessibilityRole="button"
+            accessibilityLabel="Next page"
+            accessibilityState={{ disabled: pdfProgress.page >= pdfProgress.pages }}
+            hitSlop={8}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", opacity: pdfProgress.page >= pdfProgress.pages ? 0.4 : 1 }}
+          >
+            <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
         </View>
       )}
 

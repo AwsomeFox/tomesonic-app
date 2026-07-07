@@ -24,7 +24,27 @@ jest.mock("../../utils/progressSync", () => ({
   clearAllPending: jest.fn(),
   hasPendingWritesFor: jest.fn().mockReturnValue(false),
 }));
+// updateServerAddress probes the candidate address with RAW axios.
+jest.mock("axios", () => {
+  const mockAxios: any = {
+    get: jest.fn(),
+    post: jest.fn(),
+    create: jest.fn(() => ({
+      interceptors: { request: { use: jest.fn() }, response: { use: jest.fn() } },
+      get: jest.fn(),
+      post: jest.fn(),
+      patch: jest.fn(),
+      delete: jest.fn(),
+      defaults: {},
+    })),
+    isAxiosError: (e: any) => !!e?.isAxiosError,
+  };
+  mockAxios.default = mockAxios;
+  mockAxios.__esModule = true;
+  return mockAxios;
+});
 
+import axios from "axios";
 import { api } from "../../utils/api";
 import { readAutoCreds, writeAutoCreds } from "../../utils/autoCreds";
 import { downloader } from "../../utils/downloader";
@@ -216,6 +236,28 @@ describe("useUserStore", () => {
 
       await useUserStore.getState().loadMediaProgress();
       expect(useUserStore.getState().mediaProgress["item1"].currentTime).toBe(900);
+    });
+
+    // REGRESSION: /api/me is built with the current account's token; if a
+    // logout/account-switch lands while it's in flight, its response must not
+    // write account A's progress into account B's (or a logged-out) store.
+    it("bails without writing progress when the session changes during the /api/me await", async () => {
+      useUserStore.setState({
+        serverConnectionConfig: { address: "https://a.example.com", token: "tokA", userId: "uA" },
+        mediaProgress: {},
+      } as any);
+      mockGet.mockImplementation(async () => {
+        // Account B switches in while A's /api/me is in flight.
+        useUserStore.setState({
+          serverConnectionConfig: { address: "https://b.example.com", token: "tokB", userId: "uB" },
+        } as any);
+        return {
+          data: { mediaProgress: [{ libraryItemId: "itemA", currentTime: 99, lastUpdate: 1 }] },
+        } as any;
+      });
+
+      await useUserStore.getState().loadMediaProgress();
+      expect(useUserStore.getState().mediaProgress["itemA"]).toBeUndefined();
     });
 
     it("keeps a local-only entry while its offline write is still queued", async () => {
@@ -580,6 +622,74 @@ describe("useUserStore", () => {
     it("swallows request failures (devices only gate a secondary action)", async () => {
       jest.mocked(api.post).mockRejectedValue(new Error("500"));
       await expect(useUserStore.getState().loadEReaderDevices()).resolves.toBeUndefined();
+    });
+  });
+
+  describe("updateServerAddress (in-place, keeps downloads)", () => {
+    const mockAxiosGet = (axios as any).get as jest.Mock;
+
+    beforeEach(() => {
+      mockAxiosGet.mockReset();
+      useUserStore.setState({
+        user: { id: "u1", username: "bob" },
+        serverConnectionConfig: { address: "https://old.example.com", token: "tok", userId: "u1", refreshToken: "ref" },
+      } as any);
+      storageHelper.setServerConfig({ address: "https://old.example.com", token: "tok", userId: "u1", refreshToken: "ref" });
+      storageHelper.setLastSessionKey("https://old.example.com::u1");
+      useLibraryStore.setState({ currentLibraryId: "lib1" } as any);
+    });
+
+    it("moves the address in place without wiping downloads when the same account answers", async () => {
+      const removeAllDownloads = jest.fn().mockResolvedValue(undefined);
+      useDownloadStore.setState({ removeAllDownloads } as any);
+      mockAxiosGet.mockResolvedValue({ data: { id: "u1", username: "bob" } });
+
+      const res = await useUserStore.getState().updateServerAddress("https://new.example.com");
+
+      expect(res.ok).toBe(true);
+      expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://new.example.com");
+      expect(storageHelper.getServerConfig()?.address).toBe("https://new.example.com");
+      // Re-keyed to the new address so a later restore isn't seen as an account switch.
+      expect(storageHelper.getLastSessionKey()).toBe("https://new.example.com::u1");
+      // The whole point: downloads/progress are NOT wiped.
+      expect(removeAllDownloads).not.toHaveBeenCalled();
+      // AA creds re-mirrored to the new host.
+      expect(writeAutoCreds).toHaveBeenCalledWith("https://new.example.com", "tok", "lib1", "ref", true);
+    });
+
+    it("tries https:// first for a bare hostname", async () => {
+      mockAxiosGet.mockResolvedValue({ data: { id: "u1" } });
+      await useUserStore.getState().updateServerAddress("new.example.com");
+      expect(mockAxiosGet).toHaveBeenCalledWith(
+        "https://new.example.com/api/me",
+        expect.objectContaining({ headers: { Authorization: "Bearer tok" } })
+      );
+    });
+
+    it("refuses to switch in place when the server reports a DIFFERENT account", async () => {
+      mockAxiosGet.mockResolvedValue({ data: { id: "someone-else" } });
+      const res = await useUserStore.getState().updateServerAddress("https://new.example.com");
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/different account/i);
+      // Config untouched.
+      expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
+      expect(storageHelper.getLastSessionKey()).toBe("https://old.example.com::u1");
+    });
+
+    it("returns an error and leaves the config untouched when the address is unreachable", async () => {
+      mockAxiosGet.mockRejectedValue(new Error("network down"));
+      const res = await useUserStore.getState().updateServerAddress("https://unreachable.example.com");
+      expect(res.ok).toBe(false);
+      expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
+    });
+
+    it("refuses a 200 that lacks a user id when the account has a known userId (proxy page)", async () => {
+      // A proxy/error page can 200 without an ABS user id — that must not count
+      // as proof of the same account, so the address is NOT switched.
+      mockAxiosGet.mockResolvedValue({ data: { app: "not-abs" } });
+      const res = await useUserStore.getState().updateServerAddress("https://proxy.example.com");
+      expect(res.ok).toBe(false);
+      expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
     });
   });
 });
