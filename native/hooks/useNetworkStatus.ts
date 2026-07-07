@@ -55,9 +55,14 @@ export function useNetworkStatus(): NetworkStatus {
       // Lazy require so a missing/broken native module can't crash import time.
       const NetInfo = require("@react-native-community/netinfo").default;
       unsubscribe = NetInfo.addEventListener((state: any) => {
+        const isConnected = state?.isConnected ?? true;
         const next = {
-          isConnected: state?.isConnected ?? true,
-          isInternetReachable: state?.isInternetReachable ?? true,
+          isConnected,
+          // NetInfo reports null while reachability is UNKNOWN — falling back
+          // to `true` there persisted {isConnected:false, reachable:true},
+          // which a later cold start would trust. Unknown inherits the
+          // connection state instead.
+          isInternetReachable: state?.isInternetReachable ?? isConnected,
         };
         persistStatus(next);
         setStatus(next);

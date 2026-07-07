@@ -57,6 +57,27 @@ describe("useNetworkStatus", () => {
     expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
   });
 
+  it("unknown reachability inherits the connection state (offline + null ≠ reachable)", async () => {
+    let listener: (state: any) => void = () => {};
+    jest.mocked(NetInfo.addEventListener).mockImplementation((cb: any) => {
+      listener = cb;
+      return jest.fn();
+    });
+
+    const { result } = await renderHook(() => useNetworkStatus());
+
+    // NetInfo's common "unknown" shape while offline — must not persist
+    // {isConnected:false, isInternetReachable:true} for the next cold start.
+    await act(async () => {
+      listener({ isConnected: false, isInternetReachable: null });
+    });
+    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+    expect(JSON.parse(storage.getString("lastNetworkStatus")!)).toEqual({
+      isConnected: false,
+      isInternetReachable: false,
+    });
+  });
+
   it("initializes offline from the persisted lastNetworkStatus BEFORE any NetInfo event", async () => {
     storage.set("lastNetworkStatus", '{"isConnected":false,"isInternetReachable":false}');
     // Subscribe but never fire — the initial render alone must be offline.

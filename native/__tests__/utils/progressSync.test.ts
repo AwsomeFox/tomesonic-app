@@ -773,9 +773,14 @@ describe("hasAnyPendingSyncs", () => {
     expect(hasAnyPendingSyncs()).toBe(false);
   });
 
-  it("is true when a pending session sync is queued", () => {
-    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1" }));
+  it("is true when a pending session sync carries listened seconds", () => {
+    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1", timeListened: 4 }));
     expect(hasAnyPendingSyncs()).toBe(true);
+  });
+
+  it("ignores position-only session remainders (timeListened 0 after a flush)", () => {
+    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1", currentTime: 500, timeListened: 0 }));
+    expect(hasAnyPendingSyncs()).toBe(false);
   });
 
   it("ignores pending progress PATCHes (position/finished only — no listening seconds)", () => {

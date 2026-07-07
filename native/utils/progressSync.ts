@@ -660,7 +660,17 @@ export function flushPendingSyncs(): Promise<void> {
 export function hasAnyPendingSyncs(): boolean {
   try {
     return storage.getAllKeys().some((k) => {
-      if (k.startsWith(PENDING_PREFIX)) return true;
+      if (k.startsWith(PENDING_PREFIX)) {
+        // A flush can legitimately leave a position-only remainder
+        // (timeListened 0 after the TOCTOU subtraction) — no listening
+        // seconds are missing from stats in that case.
+        try {
+          const rec = JSON.parse(storage.getString(k) || "null");
+          return (Number(rec?.timeListened) || 0) > 0;
+        } catch {
+          return false;
+        }
+      }
       if (k.startsWith(LOCAL_SESSION_PREFIX)) {
         // Local-session day records persist after delivery (they accumulate);
         // only an undelivered remainder counts as pending.
