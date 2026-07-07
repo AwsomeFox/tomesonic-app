@@ -3,7 +3,9 @@ name: Deploy to Play Store
 # Two ways to release:
 #
 #  1. MANUAL (recommended): Actions → "Deploy to Play Store" → Run workflow.
-#     Give it the version (e.g. 1.0.1) and the track. The workflow bumps every
+#     Give it the version (e.g. 1.0.1), the track, and optionally the release
+#     notes shown on the Play Store "What's new" (en-US, max 500 chars; left
+#     blank keeps the previous release's notes). The workflow bumps every
 #     version file (build.gradle versionName+versionCode, app.json,
 #     package.json) via native/scripts/set-version.mjs, commits that bump back
 #     to the branch you dispatched on, tags it v<version>, builds the signed
@@ -43,6 +45,10 @@ on:
           - alpha
           - beta
           - production
+      releaseNotes:
+        description: 'Release notes shown on the Play Store "What''s new" (en-US, max 500 chars). Optional — leave blank to keep the previous release''s notes.'
+        required: false
+        type: string
 
 # Never run two releases at once, and never cancel one mid-upload.
 concurrency:
@@ -181,6 +187,24 @@ jobs:
             -PMYAPP_UPLOAD_KEY_ALIAS="${{ secrets.UPLOAD_KEY_ALIAS }}" \
             -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.UPLOAD_KEY_PASSWORD }}"
 
+      - name: Prepare Play Store release notes
+        id: notes
+        # Passed via env (not inline ${{ }}) so notes containing quotes/backticks
+        # can't break the shell. The Play "what's new" field is capped at 500
+        # chars per language — truncate rather than let the upload 400.
+        env:
+          RELEASE_NOTES: ${{ github.event.inputs.releaseNotes }}
+        run: |
+          if [ -n "$RELEASE_NOTES" ]; then
+            mkdir -p distribution/whatsnew
+            printf '%s' "$RELEASE_NOTES" | head -c 500 > distribution/whatsnew/whatsnew-en-US
+            echo "hasNotes=true" >> "$GITHUB_OUTPUT"
+            echo "Prepared en-US release notes ($(wc -c < distribution/whatsnew/whatsnew-en-US) bytes)."
+          else
+            echo "hasNotes=false" >> "$GITHUB_OUTPUT"
+            echo "No release notes supplied — the previous release's notes are kept."
+          fi
+
       - name: Upload to Play Store
         uses: r0adkll/upload-google-play@v1.1.3
         with:
@@ -190,6 +214,9 @@ jobs:
           track: ${{ github.event.inputs.track || 'alpha' }}
           status: completed
           inAppUpdatePriority: 2
+          # Empty string when no notes were supplied → the action skips the
+          # "what's new" update and Play keeps the prior release's notes.
+          whatsNewDirectory: ${{ steps.notes.outputs.hasNotes == 'true' && 'distribution/whatsnew' || '' }}
 
       - name: Clean up keystore
         if: always()
