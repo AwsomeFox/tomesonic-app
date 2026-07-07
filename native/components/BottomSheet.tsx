@@ -132,10 +132,13 @@ export default function BottomSheet({
             the sheet's own close controls cover screen-reader dismissal. */}
         <Pressable
           testID="sheet-backdrop"
-          // "no" (not "no-hide-descendants") drops just the backdrop from the
-          // TalkBack focus order while keeping tap-to-dismiss — it used to be
-          // the first element focused, before any real option.
+          // Drop the backdrop from the screen-reader focus order while keeping
+          // tap-to-dismiss — it used to be the first element focused, before any
+          // real option. importantForAccessibility is Android-only, so pair it
+          // with accessible={false} + accessibilityElementsHidden for iOS/VoiceOver.
           importantForAccessibility="no"
+          accessible={false}
+          accessibilityElementsHidden
           onPress={onClose}
           style={StyleSheet.absoluteFill}
         />

@@ -220,8 +220,17 @@ describe("permission denied", () => {
 });
 
 describe("ensurePlaybackNotificationPermission", () => {
+  // The runtime POST_NOTIFICATIONS permission only exists on Android 13+.
+  // Platform.OS is a getter in jest-expo — defineProperty to override it.
+  function setPlatform(os: string, version: number) {
+    const { Platform } = require("react-native");
+    Object.defineProperty(Platform, "OS", { value: os, configurable: true });
+    Object.defineProperty(Platform, "Version", { value: version, configurable: true });
+  }
+
   it("requests permission once and remembers it (no re-prompt on the next launch)", async () => {
     jest.resetModules();
+    setPlatform("android", 34);
     const isolatedNotifee = require("@notifee/react-native").default;
     isolatedNotifee.requestPermission.mockClear();
     isolatedNotifee.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
@@ -240,6 +249,7 @@ describe("ensurePlaybackNotificationPermission", () => {
 
   it("does not re-ask when the persisted flag is already set (next launch)", async () => {
     jest.resetModules();
+    setPlatform("android", 34);
     const isolatedNotifee = require("@notifee/react-native").default;
     isolatedNotifee.requestPermission.mockClear();
     const { storage } = require("../../utils/storage");
@@ -247,6 +257,23 @@ describe("ensurePlaybackNotificationPermission", () => {
 
     const mod = require("../../utils/downloadNotifications");
     await mod.ensurePlaybackNotificationPermission();
+    expect(isolatedNotifee.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("never prompts on iOS or on Android < 13 (no runtime permission there)", async () => {
+    jest.resetModules();
+    setPlatform("ios", 17);
+    let isolatedNotifee = require("@notifee/react-native").default;
+    isolatedNotifee.requestPermission.mockClear();
+    require("../../utils/storage").storage.remove("notifPermRequested");
+    await require("../../utils/downloadNotifications").ensurePlaybackNotificationPermission();
+    expect(isolatedNotifee.requestPermission).not.toHaveBeenCalled();
+
+    jest.resetModules();
+    setPlatform("android", 30); // Android 11 — permission auto-granted
+    isolatedNotifee = require("@notifee/react-native").default;
+    isolatedNotifee.requestPermission.mockClear();
+    await require("../../utils/downloadNotifications").ensurePlaybackNotificationPermission();
     expect(isolatedNotifee.requestPermission).not.toHaveBeenCalled();
   });
 });

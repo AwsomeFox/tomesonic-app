@@ -47,7 +47,7 @@ describe("BottomSheet", () => {
     );
     // The backdrop is intentionally out of the a11y tree now (it used to be
     // the first "Dismiss" element TalkBack focused) — target it by testID.
-    const dismiss = screen.getByTestId("sheet-backdrop");
+    const dismiss = screen.getByTestId("sheet-backdrop", { includeHiddenElements: true });
     // Walk up from the scrim pressable: no ancestor may carry a translateY
     // transform (that was the bug — the dim lived inside the sliding view).
     let node: any = dismiss.parent;
@@ -70,7 +70,7 @@ describe("BottomSheet", () => {
         <Text>Sheet content</Text>
       </BottomSheet>
     );
-    await fireEvent.press(screen.getByTestId("sheet-backdrop"));
+    await fireEvent.press(screen.getByTestId("sheet-backdrop", { includeHiddenElements: true }));
     expect(onClose).toHaveBeenCalled();
   });
 

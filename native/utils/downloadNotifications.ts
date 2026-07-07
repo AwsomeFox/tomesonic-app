@@ -30,6 +30,11 @@ const _active = new Set<string>();
 let _playbackPermRequested = false;
 export async function ensurePlaybackNotificationPermission(): Promise<void> {
   if (_playbackPermRequested) return;
+  // Only Android 13+ (API 33) has a runtime POST_NOTIFICATIONS permission that
+  // can suppress the media/lock-screen controls. Older Android grants it
+  // implicitly; iOS would show an unwanted push prompt on first playback,
+  // which is unrelated to this Android-only media-visibility goal.
+  if (Platform.OS !== "android" || Number(Platform.Version) < 33) return;
   _playbackPermRequested = true;
   try {
     const { storage } = require("./storage");
