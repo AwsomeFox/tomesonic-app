@@ -101,6 +101,7 @@ import React from "react";
 import { Linking } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import * as FileSystem from "expo-file-system/legacy";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import ReaderScreen from "../../screens/ReaderScreen";
 import { api } from "../../utils/api";
 import { queueEbookProgressPatch } from "../../utils/progressSync";
@@ -677,5 +678,20 @@ describe("ReaderScreen (unsupported formats)", () => {
 
     await fireEvent.press(screen.getByLabelText("Close reader"));
     expect(navigation.goBack).toHaveBeenCalled();
+  });
+
+  it("keeps the screen awake only while focused — activates on mount, releases on unmount", async () => {
+    const { navigation, unmount } = await renderReader();
+
+    expect(activateKeepAwakeAsync).toHaveBeenCalledWith("reader");
+    // Subscribes to focus/blur so navigating forward (leaving it mounted but
+    // blurred) releases the lock instead of holding it off-screen.
+    expect(navigation.addListener).toHaveBeenCalledWith("focus", expect.any(Function));
+    expect(navigation.addListener).toHaveBeenCalledWith("blur", expect.any(Function));
+
+    await act(async () => {
+      unmount();
+    });
+    expect(deactivateKeepAwake).toHaveBeenCalledWith("reader");
   });
 });

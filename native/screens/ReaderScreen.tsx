@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { View, Text, Linking, ActivityIndicator, FlatList, Animated, Alert } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
-import { useKeepAwake } from "expo-keep-awake";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { storageHelper, storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import { usePlaybackStore } from "../store/usePlaybackStore";
@@ -263,9 +263,36 @@ function getExtForFormat(format: string): string {
 export default function ReaderScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
-  // Reading is a long touch-free activity — keep the screen awake while the
-  // reader is mounted (released automatically on unmount).
-  useKeepAwake();
+  // Reading is a long touch-free activity — keep the screen awake, but only
+  // while the reader is actually the FOCUSED screen. useKeepAwake() held the
+  // lock for as long as the reader stayed mounted, so navigating forward from
+  // it (leaving it in the stack) kept the screen on off-screen, draining the
+  // battery. Activate on focus, release on blur AND unmount.
+  const KEEP_AWAKE_TAG = "reader";
+  useEffect(() => {
+    let held = false;
+    const activate = () => {
+      if (held) return;
+      held = true;
+      // Wrapped: the async activator may return void in some environments.
+      Promise.resolve(activateKeepAwakeAsync(KEEP_AWAKE_TAG)).catch(() => {});
+    };
+    const release = () => {
+      if (!held) return;
+      held = false;
+      try {
+        deactivateKeepAwake(KEEP_AWAKE_TAG);
+      } catch {}
+    };
+    activate(); // focused on mount
+    const unsubFocus = navigation?.addListener?.("focus", activate);
+    const unsubBlur = navigation?.addListener?.("blur", release);
+    return () => {
+      release();
+      unsubFocus?.();
+      unsubBlur?.();
+    };
+  }, [navigation]);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const { itemId, ebookFormat, title, initialFraction } = route.params || {};
   // One-shot "jump to fraction" from the player's Read-from-here handoff —
