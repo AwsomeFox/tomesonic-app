@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..d2a0e14 100644
+index b495b5a..37b4c21 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -1338,7 +1338,7 @@ index b495b5a..d2a0e14 100644
      }
  
      @MainThread
-@@ -792,12 +1849,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +1849,27 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1360,9 +1360,15 @@ index b495b5a..d2a0e14 100644
  
 +        absUnregisterNetworkCallback()
          progressUpdateJob?.cancel()
++        // Stop the browse pool so its 3 threads don't outlive a service teardown
++        // without process death (idle stop, Android Auto unbind). shutdown() lets
++        // any in-flight onGetItem/onLoadChildren offload finish; no new work is
++        // accepted after this.
++        absBrowseExecutor.shutdown()
          super.onDestroy()
      }
-@@ -925,6 +1991,185 @@ class MusicService : HeadlessJsMediaService() {
+ 
+@@ -925,6 +1996,185 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1548,7 +1554,7 @@ index b495b5a..d2a0e14 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +2180,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2185,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1569,7 +1575,7 @@ index b495b5a..d2a0e14 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2210,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2215,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1581,7 +1587,7 @@ index b495b5a..d2a0e14 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2222,34 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2227,34 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
