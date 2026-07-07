@@ -127,10 +127,19 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     for (const asin of Array.from(haveAsins).slice(0, 8)) {
       const remaining = resolveDeadline - Date.now();
       if (remaining <= 0) break;
-      seriesAsin = await Promise.race([
-        audibleSeriesAsinFromBook(asin).catch(() => null),
-        new Promise<null>((res) => setTimeout(() => res(null), remaining)),
-      ]);
+      // Clear the deadline timer once the lookup settles — the race loser
+      // would otherwise leave up to 8 stray timers firing later.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        seriesAsin = await Promise.race([
+          audibleSeriesAsinFromBook(asin).catch(() => null),
+          new Promise<null>((res) => {
+            timer = setTimeout(() => res(null), remaining);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       if (seriesAsin) break;
     }
     if (!seriesAsin) seriesAsin = await audibleFindSeriesAsin(displayName);

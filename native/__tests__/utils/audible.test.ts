@@ -530,3 +530,27 @@ describe("buildOwnedTitleMatcher fail-closed guard (verify pass 2)", () => {
     ).toBe(true);
   });
 });
+
+describe("audibleFindBookAsin segment-boundary containment (verify pass 3)", () => {
+  it("does NOT match a shorter DIFFERENT book contained in the query", async () => {
+    // "Dune" is a different book than "Dune Messiah" — raw substring
+    // containment used to score it and silently request the wrong ASIN.
+    mockedGet.mockResolvedValue({
+      data: { products: [{ asin: "DUNE1", title: "Dune" }] },
+    });
+    const asin = await audibleFindBookAsin("Dune Messiah", "Frank Herbert");
+    expect(asin).toBeNull();
+  });
+
+  it("still matches series-prefix mismatches on real segment boundaries, both ways", async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: { products: [{ asin: "B1", title: "Mistborn: The Final Empire" }] },
+    });
+    expect(await audibleFindBookAsin("The Final Empire", "Brandon Sanderson")).toBe("B1");
+
+    mockedGet.mockResolvedValueOnce({
+      data: { products: [{ asin: "B2", title: "The Final Empire" }] },
+    });
+    expect(await audibleFindBookAsin("Mistborn: The Final Empire", "Brandon Sanderson")).toBe("B2");
+  });
+});

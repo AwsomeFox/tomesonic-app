@@ -198,6 +198,24 @@ export async function audibleBookDetails(asin: string): Promise<AudibleBook | nu
   };
 }
 
+/** Colon-delimited title segments, each normalized like titleKeyFull —
+ *  "Mistborn: The Final Empire" → ["mistborn", "finalempire"]. Lets the
+ *  matcher accept a series-prefix mismatch ONLY on a real segment boundary:
+ *  raw substring containment matched "Dune" inside "Dune Messiah" and
+ *  silently requested the wrong book. */
+function titleSegmentKeys(title?: string | null): string[] {
+  return String(title || "")
+    .split(":")
+    .map((s) =>
+      s
+        .toLowerCase()
+        .replace(/\b(unabridged|abridged|a novel)\b/g, "")
+        .replace(/^\s*(the|a|an)\s+/, "")
+        .replace(/[^a-z0-9]/g, "")
+    )
+    .filter(Boolean);
+}
+
 /** Best-match ASIN for a title/author — for ABS items without one. */
 export async function audibleFindBookAsin(title: string, author?: string): Promise<string | null> {
   const res = await axios.get(`${BASE}/catalog/products`, {
@@ -222,10 +240,17 @@ export async function audibleFindBookAsin(title: string, author?: string): Promi
     let score = 0;
     if (full && full === wantFull) score = 4;
     else if (titlesLikelySame(p.title, title)) score = 3;
-    // Containment BOTH ways: the catalog may add a series prefix the library
-    // lacks ("Mistborn: The Final Empire" ⊇ "The Final Empire") — or the
-    // library may carry the prefix the catalog drops.
-    else if (wantFull && full && (full.includes(wantFull) || wantFull.includes(full))) score = 2;
+    // Series-prefix mismatch BOTH ways, but only on a real segment boundary:
+    // the catalog may add a prefix the library lacks ("Mistborn: The Final
+    // Empire" vs "The Final Empire") or vice versa. Raw substring containment
+    // scored "Dune" for the query "Dune Messiah" — a DIFFERENT book — and a
+    // wrong ASIN here silently requests the wrong title.
+    else if (
+      wantFull &&
+      full &&
+      (titleSegmentKeys(p.title).includes(wantFull) || titleSegmentKeys(title).includes(full))
+    )
+      score = 2;
     else if (wantBase && base === wantBase) score = 1;
     if (score > bestScore) {
       best = p;
