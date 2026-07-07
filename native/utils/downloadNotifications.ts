@@ -57,8 +57,23 @@ async function ensureReady(): Promise<boolean> {
   try {
     if (!_permChecked) {
       _permChecked = true;
-      const settings = await notifee.requestPermission();
-      _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+      // Honor the shared "asked once" flag both request paths persist — if the
+      // prompt already ran (this launch's playback path or a previous launch),
+      // read the current status WITHOUT re-prompting.
+      let asked = false;
+      try {
+        const { storage } = require("./storage");
+        asked = !!storage.getBoolean("notifPermRequested");
+        const settings = asked
+          ? await notifee.getNotificationSettings()
+          : await notifee.requestPermission();
+        _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+        if (!asked) storage.set("notifPermRequested", true);
+      } catch {
+        // Storage unavailable — fall back to a single request.
+        const settings = await notifee.requestPermission();
+        _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+      }
     }
     if (!_channelReady && Platform.OS === "android") {
       await notifee.createChannel({

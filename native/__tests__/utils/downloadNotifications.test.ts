@@ -260,6 +260,24 @@ describe("ensurePlaybackNotificationPermission", () => {
     expect(isolatedNotifee.requestPermission).not.toHaveBeenCalled();
   });
 
+  it("the download path reads status without re-prompting once the flag is set", async () => {
+    jest.resetModules();
+    setPlatform("android", 34);
+    const isolatedNotifee = require("@notifee/react-native").default;
+    isolatedNotifee.requestPermission.mockClear();
+    isolatedNotifee.getNotificationSettings.mockClear();
+    isolatedNotifee.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
+    require("../../utils/storage").storage.set("notifPermRequested", true); // asked already
+    const mod = require("../../utils/downloadNotifications");
+
+    mod.downloadNotifications.start("dlA", "Book A");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(isolatedNotifee.requestPermission).not.toHaveBeenCalled();
+    expect(isolatedNotifee.getNotificationSettings).toHaveBeenCalled();
+    await mod.downloadNotifications.clear("dlA");
+  });
+
   it("never prompts on iOS or on Android < 13 (no runtime permission there)", async () => {
     jest.resetModules();
     setPlatform("ios", 17);

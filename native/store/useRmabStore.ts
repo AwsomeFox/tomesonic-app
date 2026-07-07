@@ -267,6 +267,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
           .filter(Boolean)
       );
       let applied: Record<string, string> | null = null;
+      // Replace-mode functional set: a true no-op returns the SAME state ref so
+      // Zustand skips the notify (returning {} would still mint a new state
+      // object and re-render every subscriber).
       set((state) => {
         const next: Record<string, string> = {};
         for (const [asin, status] of Object.entries(state.requestedAsins)) {
@@ -275,11 +278,11 @@ export const useRmabStore = create<RmabState>((set, get) => ({
           if (serverAsins.has(asin) || !(asin in snapshot)) next[asin] = status;
         }
         if (Object.keys(next).length === Object.keys(state.requestedAsins).length) {
-          return {};
+          return state;
         }
         applied = next;
-        return { requestedAsins: next };
-      });
+        return { ...state, requestedAsins: next };
+      }, true);
       if (applied) {
         try {
           const { storage } = require("../utils/storage");

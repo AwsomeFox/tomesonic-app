@@ -167,6 +167,7 @@ jest.mock("@notifee/react-native", () => ({
     cancelNotification: jest.fn().mockResolvedValue(undefined),
     createChannel: jest.fn().mockResolvedValue("channel"),
     requestPermission: jest.fn().mockResolvedValue({ authorizationStatus: 1 }),
+    getNotificationSettings: jest.fn().mockResolvedValue({ authorizationStatus: 1 }),
   },
   AndroidImportance: { LOW: 2, DEFAULT: 3, HIGH: 4 },
   AuthorizationStatus: { DENIED: 0, AUTHORIZED: 1 },
