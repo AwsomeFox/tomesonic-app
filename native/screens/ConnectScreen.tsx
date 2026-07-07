@@ -464,9 +464,12 @@ export default function ConnectScreen() {
             </View>
           )}
 
-          {/* Inline error banner — M3 error container */}
+          {/* Inline error banner — M3 error container. Live region so a
+              failed login is announced instead of appearing silently. */}
           {error ? (
             <View
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
               style={{
                 marginTop: 20,
                 paddingHorizontal: 16,

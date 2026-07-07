@@ -197,6 +197,11 @@ export default function FilterModal({
     <Pressable
       key={key}
       onPress={onPress}
+      accessibilityRole="button"
+      // The active filter was visual-only (tint), and sublist rows gave no
+      // cue they open a second level.
+      accessibilityState={{ selected }}
+      accessibilityLabel={chevron === "chevron-right" ? `${text}, opens list` : text}
       android_ripple={{ color: colors.surfaceContainerHighest }}
       style={{
         flexDirection: "row",
@@ -260,7 +265,13 @@ export default function FilterModal({
                 Filter
               </Text>
               {filterBy !== "all" && !sublist ? (
-                <Pressable onPress={clearSelected} hitSlop={8}>
+                <Pressable
+                  onPress={clearSelected}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear filter"
+                  style={{ minHeight: 48, justifyContent: "center", paddingHorizontal: 4 }}
+                >
                   <Text
                     style={{ color: colors.primary, fontSize: 14, fontWeight: "600" }}
                   >

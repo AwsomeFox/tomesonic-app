@@ -126,6 +126,16 @@ export default function OrderModal({
                   <Pressable
                     key={item.value}
                     onPress={() => clickedOption(item.value)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    // The chevron is the only visual cue for sort direction,
+                    // and re-tapping the selected field silently reverses it —
+                    // spell both out for screen readers.
+                    accessibilityLabel={
+                      selected
+                        ? `${item.text}, sorted ${descending ? "descending" : "ascending"}, double tap to reverse`
+                        : item.text
+                    }
                     android_ripple={{ color: colors.surfaceContainerHighest }}
                     style={{
                       flexDirection: "row",

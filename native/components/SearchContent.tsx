@@ -472,7 +472,13 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         }}
       >
         <Icon name="warning" size={48} color={colors.error} />
-        <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+        {/* Live region: state changes while the user types are otherwise
+            silent to screen readers. Same for the no-results/results states. */}
+        <Text
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}
+        >
           Search failed
         </Text>
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
@@ -512,7 +518,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
       >
         <View style={{ alignItems: "center", paddingTop: 96, paddingHorizontal: 32 }}>
           <Icon name="search" size={48} color={colors.onSurfaceVariant} />
-          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+          <Text
+            accessibilityLiveRegion="polite"
+            style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}
+          >
             No results{query.trim() ? ` for “${query.trim()}”` : ""} in your library
           </Text>
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
@@ -544,6 +553,18 @@ export default function SearchContent({ navigation }: { navigation: any }) {
       contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
       keyboardShouldPersistTaps="handled"
     >
+      {/* Invisible live region: announces arriving results while the user is
+          still focused in the search field. */}
+      <Text
+        accessibilityLiveRegion="polite"
+        importantForAccessibility="yes"
+        style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
+      >
+        {`${
+          bookResults.length + seriesResults.length + authorResults.length +
+          narratorResults.length + tagResults.length
+        } search results`}
+      </Text>
       {bookResults.length > 0 ? (
         <View>
           {renderSectionHeader("Books")}

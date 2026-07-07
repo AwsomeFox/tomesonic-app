@@ -805,7 +805,9 @@ function Shelf({
             <Pressable
               onPress={() => onPressBook(item)}
               accessibilityRole="button"
-              accessibilityLabel={`Details for ${item.title}`}
+              // The check badge is visual-only — without the suffix a screen
+              // reader user may request a book they already own.
+              accessibilityLabel={`Details for ${item.title}${item.isAvailable ? ", already in your library" : ""}`}
               style={{ width: 110 }}
             >
               <View>

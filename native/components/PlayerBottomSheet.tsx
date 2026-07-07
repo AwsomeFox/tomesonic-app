@@ -8,6 +8,8 @@ import {
   useWindowDimensions,
   BackHandler,
   StyleSheet,
+  AccessibilityInfo,
+  findNodeHandle,
 } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -50,6 +52,18 @@ function secondsToTimestamp(seconds: number) {
     return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
   }
   return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+// Spoken form for screen readers — "3:12" reads as "three twelve", which is
+// indistinguishable from the chapter row's numbers.
+function spokenTime(seconds: number) {
+  let s = seconds;
+  if (!s || s < 0) s = 0;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h} ${h === 1 ? "hour" : "hours"} ${m} ${m === 1 ? "minute" : "minutes"}`;
+  if (m > 0) return `${m} ${m === 1 ? "minute" : "minutes"}`;
+  return `${Math.floor(s % 60)} seconds`;
 }
 
 // Circular transport helper button. Hoisted out of the player component:
@@ -162,6 +176,19 @@ export default function PlayerBottomSheet() {
   const isPlayerExpandedRef = useRef(isPlayerExpanded);
   useEffect(() => {
     isPlayerExpandedRef.current = isPlayerExpanded;
+  }, [isPlayerExpanded]);
+
+  // On expand, move screen-reader focus to the Collapse button once the
+  // spring settles — otherwise TalkBack keeps focus on the (now covered and
+  // a11y-hidden) screen behind the player and the user is stranded.
+  const collapseBtnRef = useRef<any>(null);
+  useEffect(() => {
+    if (!isPlayerExpanded) return;
+    const t = setTimeout(() => {
+      const node = findNodeHandle(collapseBtnRef.current);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    }, 450);
+    return () => clearTimeout(t);
   }, [isPlayerExpanded]);
 
   const [showChapters, setShowChapters] = useState(false);
@@ -775,6 +802,7 @@ export default function PlayerBottomSheet() {
                 }}
               >
                 <Pressable
+                  ref={collapseBtnRef}
                   onPress={() => setPlayerExpanded(false)}
                   accessibilityRole="button"
                   accessibilityLabel="Collapse player"
@@ -910,7 +938,14 @@ export default function PlayerBottomSheet() {
               <View style={{ height: COVER_SIZE_EXP, marginTop: COVER_Y_EXP - SOURCE_LABEL_Y - 20 }} />
 
               {/* Book progress bar */}
-              <View style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}>
+              <View
+                style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}
+                // One grouped element: the bare "3:12" / "-6:02" texts read as
+                // context-free number pairs indistinguishable from the chapter
+                // row, and the wave itself has no accessible form.
+                accessible
+                accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
+              >
                 <View style={{ flexDirection: "row", marginBottom: 4 }}>
                   <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     {secondsToTimestamp(position)}
@@ -943,7 +978,13 @@ export default function PlayerBottomSheet() {
                   justifyContent: "center",
                 }}
               >
-                <View style={{ flexDirection: "row", marginBottom: 4 }}>
+                {/* Hidden from screen readers: the scrubber below announces
+                    the same chapter position via its accessibilityValue. */}
+                <View
+                  style={{ flexDirection: "row", marginBottom: 4 }}
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
+                >
                   <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     {secondsToTimestamp(chapterElapsed)}
                   </Text>
@@ -1473,7 +1514,12 @@ export default function PlayerBottomSheet() {
                   <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {currentChapterIndex + 1} of {chapters.length}</Text>
                 ) : null}
 
-                <View style={{ marginTop: 14 }}>
+                <View
+                  style={{ marginTop: 14 }}
+                  // Grouped like the portrait book row — see the comment there.
+                  accessible
+                  accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
+                >
                   <View style={{ flexDirection: "row", marginBottom: 2 }}>
                     <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(position)}</Text>
                     <View style={{ flexGrow: 1 }} />
@@ -1483,7 +1529,12 @@ export default function PlayerBottomSheet() {
                 </View>
 
                 <View style={{ marginTop: 8 }}>
-                  <View style={{ flexDirection: "row", marginBottom: 2 }}>
+                  {/* Hidden: redundant with the scrubber's accessibilityValue. */}
+                  <View
+                    style={{ flexDirection: "row", marginBottom: 2 }}
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                  >
                     <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(chapterElapsed)}</Text>
                     <View style={{ flexGrow: 1 }} />
                     <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>

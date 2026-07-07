@@ -406,28 +406,41 @@ export default function DownloadsScreen({ navigation }: any) {
                 </Pressable>
               </View>
 
-              {/* Progress bar */}
+              {/* Progress bar — one accessible progressbar element; a bare
+                  "42%" Text announced with no context. */}
               <View
-                style={{
-                  height: 6,
-                  backgroundColor: colors.surfaceContainerHighest,
-                  borderRadius: 3,
-                  overflow: "hidden",
-                  marginTop: 12,
+                accessible
+                accessibilityRole="progressbar"
+                accessibilityLabel={`${item.title} download progress`}
+                accessibilityValue={{
+                  min: 0,
+                  max: 100,
+                  now: Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0,
+                  text: `${Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0} percent downloaded`,
                 }}
               >
                 <View
                   style={{
-                    height: "100%",
-                    backgroundColor: colors.primary,
+                    height: 6,
+                    backgroundColor: colors.surfaceContainerHighest,
                     borderRadius: 3,
-                    width: `${Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%`,
+                    overflow: "hidden",
+                    marginTop: 12,
                   }}
-                />
+                >
+                  <View
+                    style={{
+                      height: "100%",
+                      backgroundColor: colors.primary,
+                      borderRadius: 3,
+                      width: `${Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%`,
+                    }}
+                  />
+                </View>
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "right", marginTop: 4 }}>
+                  {Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%
+                </Text>
               </View>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "right", marginTop: 4 }}>
-                {Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%
-              </Text>
             </View>
           )}
         />

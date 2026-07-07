@@ -57,7 +57,7 @@ function ebookHtml(
   // Compute the filename extension for foliate-js format detection
   const ext = mimeHint === "application/epub+zip" ? ".epub" : mimeHint === "application/x-mobipocket-ebook" ? ".mobi" : ".azw3";
   return `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html,body{margin:0;padding:0;height:100%;background:${bg};overflow:hidden;}
   foliate-view{height:100%;width:100%;}
@@ -922,30 +922,53 @@ export default function ReaderScreen({ route, navigation }: any) {
       {isFoliateFormat && canRenderEbook && pageProgress && (
         <View
           style={{
+            flexDirection: "row",
             alignItems: "center",
-            justifyContent: "center",
-            paddingVertical: 10,
-            paddingHorizontal: 24,
+            paddingVertical: 6,
+            paddingHorizontal: 12,
             backgroundColor: colors.surface,
             borderTopWidth: 1,
             borderTopColor: colors.outlineVariant,
           }}
         >
-          {pageProgress.tocItem?.label ? (
-            <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
-              {pageProgress.tocItem.label}
+          {/* Page turning is otherwise gesture-only inside the WebView (tap
+              zones/swipes on document listeners) — with TalkBack running
+              there is no focusable way to turn a page without these. */}
+          <Pressable
+            onPress={() => webRef.current?.injectJavaScript("window.goPrev && window.goPrev();true;")}
+            accessibilityRole="button"
+            accessibilityLabel="Previous page"
+            hitSlop={8}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
+          >
+            <Icon name="chevron-left" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            {pageProgress.tocItem?.label ? (
+              <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
+                {pageProgress.tocItem.label}
+              </Text>
+            ) : null}
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
+              {/* Percent clamped to 1–99 while mid-book: never "0%" right after
+                  starting, and "100%" only at the finished threshold (>=0.99,
+                  matching the isFinished sync cutoff). */}
+              Page {pageProgress.page} of {pageProgress.pages} (
+              {pageProgress.fraction >= 0.99
+                ? 100
+                : Math.max(pageProgress.fraction > 0 ? 1 : 0, Math.min(99, Math.round(pageProgress.fraction * 100)))}
+              %)
             </Text>
-          ) : null}
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
-            {/* Percent clamped to 1–99 while mid-book: never "0%" right after
-                starting, and "100%" only at the finished threshold (>=0.99,
-                matching the isFinished sync cutoff). */}
-            Page {pageProgress.page} of {pageProgress.pages} (
-            {pageProgress.fraction >= 0.99
-              ? 100
-              : Math.max(pageProgress.fraction > 0 ? 1 : 0, Math.min(99, Math.round(pageProgress.fraction * 100)))}
-            %)
-          </Text>
+          </View>
+          <Pressable
+            onPress={() => webRef.current?.injectJavaScript("window.goNext && window.goNext();true;")}
+            accessibilityRole="button"
+            accessibilityLabel="Next page"
+            hitSlop={8}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
+          >
+            <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
         </View>
       )}
 
@@ -1027,7 +1050,13 @@ export default function ReaderScreen({ route, navigation }: any) {
                 >
                   <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>-</Text>
                 </Pressable>
-                <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>{fontSize}%</Text>
+                {/* Live region: each +/- step announces the new value. */}
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}
+                >
+                  {fontSize}%
+                </Text>
                 <Pressable
                   onPress={() => setFontSize(prev => Math.min(FONT_SIZE_MAX, prev + 10))}
                   disabled={fontSize >= FONT_SIZE_MAX}
