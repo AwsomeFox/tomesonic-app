@@ -97,3 +97,8 @@ sw.*
 
 # Expo local state (root and native both)
 .expo/
+
+# Claude Code agent system: local session telemetry (never committed)
+.claude/evidence/
+.claude/memory/handoff-*.md
+.claude/settings.local.json
