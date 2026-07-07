@@ -51,6 +51,9 @@ interface LibraryState {
   
   // Actions
   personalizedShelves: any[];
+  // Last shelves fetch failed (network/proxy). Lets the home screen show a
+  // real error+retry instead of masquerading as an empty library.
+  shelvesLoadError: boolean;
   loadPersonalizedShelves: (force?: boolean) => Promise<void>;
   setCurrentLibraryId: (id: string | null) => void;
   loadLibraries: (force?: boolean) => Promise<boolean>;
@@ -68,6 +71,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   // Hydrate synchronously from the cache so the very first frame shows books
   // (revalidated in the background by loadPersonalizedShelves).
   personalizedShelves: readShelvesCache(initialLibraryId),
+  shelvesLoadError: false,
 
   loadPersonalizedShelves: async (force = false) => {
     const libraryId = get().currentLibraryId;
@@ -95,14 +99,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // crashed the home screen (`.find` on a string). Keep previous shelves.
       if (!Array.isArray(raw)) {
         console.warn("[LibraryStore] personalized response is not an array — keeping previous shelves");
+        set({ shelvesLoadError: true });
         return;
       }
       const shelves = raw.filter((sh: any) => sh && typeof sh === "object");
-      set({ personalizedShelves: shelves });
+      set({ personalizedShelves: shelves, shelvesLoadError: false });
       writeShelvesCache(libraryId, shelves);
     } catch (err) {
       console.error("[LibraryStore] Failed to load personalized shelves:", err);
-      // Keep existing shelves on transient load error to avoid flickering
+      // Keep existing shelves on transient load error to avoid flickering —
+      // but flag it so an EMPTY home screen can say "couldn't load" + Retry
+      // instead of masquerading as an empty library.
+      set({ shelvesLoadError: true });
     }
   },
 
@@ -114,7 +122,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
     // Swap shelves to the new library's cache (never show the old library's
     // shelves under the new library's name while the fresh fetch runs).
-    set({ currentLibraryId: id, personalizedShelves: readShelvesCache(id) });
+    // filterData/issues/playlist-count are PER-LIBRARY and must not survive
+    // the switch — FilterModal only fetches when filterData is null, so a
+    // stale object served the previous library's genres/authors/series and
+    // selecting one filtered the new library by ids that don't exist there.
+    const changed = get().currentLibraryId !== id;
+    set({
+      currentLibraryId: id,
+      personalizedShelves: readShelvesCache(id),
+      // shelvesLoadError is per-library too: library A's failed fetch must
+      // not paint library B's (not-yet-fetched) home screen as an error.
+      ...(changed ? { filterData: null, issues: 0, numUserPlaylists: 0, shelvesLoadError: false } : {}),
+    });
     // Mirror the selection into auto_creds.json so the Android Auto browse
     // service switches libraries too (it otherwise keeps browsing the library
     // mirrored at login until the next app initialize).
@@ -197,6 +216,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const issues = data.issues || 0;
       const numUserPlaylists = data.numUserPlaylists || 0;
 
+      // The user may have switched libraries while this request was in
+      // flight (same guard loadPersonalizedShelves has) — installing the
+      // stale payload would force-revert currentLibraryId and hand the new
+      // library the old one's filterData.
+      if (get().currentLibraryId !== libraryId) return data;
+
       if (!library || !library.id) {
         set({ filterData, issues, numUserPlaylists });
         return data;
@@ -231,6 +256,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       filterData: null,
       numUserPlaylists: 0,
       personalizedShelves: [],
+      shelvesLoadError: false,
     });
   },
 }));

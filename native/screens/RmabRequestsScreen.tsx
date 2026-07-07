@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -71,6 +71,12 @@ export default function RmabRequestsScreen({ navigation }: any) {
       refreshPendingCount();
     } catch (e) {
       console.warn("[RMAB] approve failed", e);
+      // The row un-dims on failure with no other signal — say WHY the action
+      // didn't stick (expired session, offline) instead of looking swallowed.
+      Alert.alert(
+        action === "approve" ? "Couldn't approve" : "Couldn't deny",
+        "The request couldn't be updated. Check your connection (or reconnect ReadMeABook in Settings) and try again."
+      );
     } finally {
       setActing(null);
     }
@@ -100,6 +106,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
       refreshPendingCount();
     } catch (e) {
       console.warn("[RMAB] delete failed", e);
+      Alert.alert(
+        "Couldn't delete",
+        "The request couldn't be deleted. Check your connection (or reconnect ReadMeABook in Settings) and try again."
+      );
     } finally {
       setActing(null);
     }
@@ -157,6 +167,30 @@ export default function RmabRequestsScreen({ navigation }: any) {
           keyExtractor={(r: any, i) => String(r?.id ?? i)}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
           contentContainerStyle={{ paddingBottom: 32 }}
+          // A failed refresh with a list already showing was silent — the
+          // stale statuses just sat there looking current.
+          ListHeaderComponent={
+            error && (requests?.length ?? 0) > 0 ? (
+              <View
+                accessibilityLiveRegion="polite"
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginHorizontal: 16,
+                  marginBottom: 8,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  backgroundColor: colors.errorContainer,
+                  borderRadius: 12,
+                }}
+              >
+                <Icon name="warning" size={16} color={colors.onErrorContainer} />
+                <Text style={{ color: colors.onErrorContainer, fontSize: 13, marginLeft: 8, flex: 1 }}>
+                  Couldn't refresh — showing older statuses. Pull to retry.
+                </Text>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={{ alignItems: "center", paddingTop: 64, paddingHorizontal: 32 }}>
               <Icon name="send" size={44} color={colors.onSurfaceVariant} />
@@ -293,7 +327,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       borderRadius: 18,
                       paddingHorizontal: confirmingDelete === id ? 12 : 0,
                       backgroundColor:
-                        confirmingDelete === id ? colors.error : "rgba(179, 38, 30, 0.08)",
+                        confirmingDelete === id ? colors.error : withAlpha(colors.error, 0.08),
                       alignItems: "center",
                       justifyContent: "center",
                       flexDirection: "row",
@@ -303,10 +337,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     <Icon
                       name="trash"
                       size={18}
-                      color={confirmingDelete === id ? colors.onPrimary : colors.error}
+                      color={confirmingDelete === id ? colors.onError : colors.error}
                     />
                     {confirmingDelete === id ? (
-                      <Text style={{ color: colors.onPrimary, fontSize: 12, fontWeight: "700", marginLeft: 4 }}>
+                      <Text style={{ color: colors.onError, fontSize: 12, fontWeight: "700", marginLeft: 4 }}>
                         Sure?
                       </Text>
                     ) : null}
@@ -452,6 +486,12 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       refreshPendingCount();
                     } catch (e) {
                       console.warn("[RMAB] delete failed", e);
+                      // The sheet already closed — without this the item just
+                      // stays in the list with no explanation.
+                      Alert.alert(
+                        "Couldn't delete",
+                        "The request couldn't be deleted. Check your connection (or reconnect ReadMeABook in Settings) and try again."
+                      );
                     } finally {
                       setActing(null);
                     }
@@ -462,7 +502,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
-                    backgroundColor: "rgba(179, 38, 30, 0.08)",
+                    backgroundColor: withAlpha(colors.error, 0.08),
                     borderRadius: 20,
                     height: 40,
                     paddingHorizontal: 18,

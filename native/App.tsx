@@ -23,13 +23,23 @@ import { useNetworkStatus } from "./hooks/useNetworkStatus";
 function AppShell() {
   const colors = useThemeColors();
   const user = useUserStore((state) => state.user);
+  // The expanded player is an in-tree overlay, not a Modal — without this the
+  // covered navigator (whole screen + tab bar) stays FIRST in TalkBack's
+  // focus order and its controls remain double-tap activatable underneath.
+  const isPlayerExpanded = usePlaybackStore((s) => s.isPlayerExpanded);
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
       {/* Follow the app's resolved theme, not the OS scheme — the in-app
           Theme setting can force light/dark independently of the system. */}
       <StatusBar style={colors.isDark ? "light" : "dark"} />
-      <OfflineBanner />
-      <AppNavigator />
+      <View
+        style={{ flex: 1 }}
+        accessibilityElementsHidden={isPlayerExpanded}
+        importantForAccessibility={isPlayerExpanded ? "no-hide-descendants" : "auto"}
+      >
+        <OfflineBanner />
+        <AppNavigator />
+      </View>
       <PlayerBottomSheet />
       {user ? <CastController /> : null}
       {user ? <LibrarySelector /> : null}

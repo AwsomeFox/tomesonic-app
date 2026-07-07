@@ -4,6 +4,7 @@ import {
   Easing,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -59,6 +60,43 @@ export default function BottomSheet({
   visibleRef.current = visible;
   const backdrop = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(windowHeight)).current;
+
+  // Drag-to-dismiss on the handle area: the M3 handle advertises dragging, so
+  // honor it (previously dismissal was backdrop tap / back button only). The
+  // gesture lives on the handle strip, not the whole sheet, so scrollable
+  // sheet content keeps its own touch handling.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const handlePan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dy > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_e, g) => {
+        translateY.setValue(Math.max(0, g.dy));
+      },
+      onPanResponderRelease: (_e, g) => {
+        if (g.dy > 80 || g.vy > 0.5) {
+          // The close effect animates from the current drag offset the rest
+          // of the way off-screen.
+          onCloseRef.current();
+        } else {
+          Animated.timing(translateY, {
+            toValue: 0,
+            duration: 180,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration: 180,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }).start();
+      },
+    })
+  ).current;
 
   useEffect(() => {
     if (visible) {
@@ -168,16 +206,21 @@ export default function BottomSheet({
         >
           <View style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
             {showHandle ? (
+              // Full-width grab strip (taller than the visible pill) so the
+              // drag target isn't a 36×4 sliver.
               <View
-                style={{
-                  alignSelf: "center",
-                  width: 36,
-                  height: 4,
-                  borderRadius: 2,
-                  backgroundColor: colors.outlineVariant,
-                  marginBottom: 8,
-                }}
-              />
+                {...handlePan.panHandlers}
+                style={{ alignSelf: "stretch", alignItems: "center", paddingVertical: 8, marginTop: -12 }}
+              >
+                <View
+                  style={{
+                    width: 36,
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor: colors.outlineVariant,
+                  }}
+                />
+              </View>
             ) : null}
             {children}
           </View>

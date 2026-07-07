@@ -13,6 +13,7 @@ import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
+import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -126,17 +127,30 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
 
   // The playlist payload carries no user progress — look it up in the global
   // map (episodes use composite `${itemId}-${episodeId}` keys), or "Play all"
-  // always restarts the first item.
+  // always restarts the first item. Ebook-only entries can't play — skip them
+  // for Play-all instead of erroring on the first one.
   const nextUnfinishedItem = (): any | undefined =>
     items.find((i) => {
+      if (!i.episode && isEbookOnly(i.libraryItem)) return false;
       const libId = i.libraryItemId || i.libraryItem?.id;
       const key = i.episodeId ? `${libId}-${i.episodeId}` : libId;
       return !(mediaProgress[key] || i.userMediaProgress)?.isFinished;
-    }) || items[0];
+    }) || items.find((i) => i.episode || !isEbookOnly(i.libraryItem));
 
   const startItem = async (item: any) => {
     const libraryItemId = item?.libraryItemId || item?.libraryItem?.id;
     if (!libraryItemId || starting) return;
+    // Ebook-only entries have nothing to play — open the Reader instead of
+    // letting startPlayback error on an audio-less item (SeriesDetail routes
+    // the same book to the Reader; CollectionDetail hides the button).
+    if (!item.episode && isEbookOnly(item.libraryItem)) {
+      navigation.navigate("Reader", {
+        itemId: libraryItemId,
+        ebookFormat: getEbookFormat(item.libraryItem),
+        title: item.libraryItem?.media?.metadata?.title,
+      });
+      return;
+    }
     setStarting(true);
     try {
       await startPlayback(libraryItemId, item.episodeId);
@@ -164,6 +178,9 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
       metadata.authorName || item.episode?.podcast?.metadata?.title || metadata.author || "";
     const duration = item.episode?.duration || item.libraryItem?.media?.duration || 0;
     const coverUrl = getCoverUrl(libraryItemId);
+    // Ebook-only rows open the Reader (startItem routes them) — reflect that
+    // in the icon + spoken label instead of promising audio.
+    const ebookOnly = !isEpisode && isEbookOnly(item.libraryItem);
 
     return (
       <AnimatedPressable
@@ -234,7 +251,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
             hitSlop={6}
             android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), radius: 24 }}
             accessibilityRole="button"
-            accessibilityLabel={`Play ${title}`}
+            accessibilityLabel={ebookOnly ? `Read ${title}` : `Play ${title}`}
             style={{
               width: 48,
               height: 48,
@@ -251,7 +268,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
               shadowRadius: 2,
             }}
           >
-            <Icon name="play" size={26} color={colors.onPrimary} />
+            <Icon name={ebookOnly ? "book" : "play"} size={26} color={colors.onPrimary} />
           </Pressable>
         ) : null}
       </AnimatedPressable>

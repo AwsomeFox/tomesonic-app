@@ -14,6 +14,7 @@ import { useThemeStore, ThemeMode } from '../store/useThemeStore';
 import { useUserStore } from '../store/useUserStore';
 import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useThemeColors } from '../theme/useThemeColors';
+import { withAlpha } from '../theme/palette';
 import Icon, { IconName } from '../components/Icon';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
 import BottomSheet from '../components/BottomSheet';
@@ -389,7 +390,15 @@ export default function SettingsScreen({ navigation }: any) {
           </Text>
 
           {rmabError ? (
-            <Text style={{ color: colors.error, fontSize: 13, marginBottom: 4 }}>{rmabError}</Text>
+            // Live region: a failed connect otherwise just leaves the sheet
+            // open with no announcement.
+            <Text
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
+              style={{ color: colors.error, fontSize: 13, marginBottom: 4 }}
+            >
+              {rmabError}
+            </Text>
           ) : null}
           <View style={{ alignItems: 'flex-end', marginTop: 8 }}>
             <Pressable
@@ -397,7 +406,7 @@ export default function SettingsScreen({ navigation }: any) {
               disabled={rmabConnecting || !rmabCanSubmit}
               accessibilityRole="button"
               accessibilityLabel="Connect"
-              android_ripple={{ color: colors.onPrimary + '22' }}
+              android_ripple={{ color: withAlpha(colors.onPrimary, 0.13) }}
               style={{
                 backgroundColor: colors.primary,
                 height: 48,

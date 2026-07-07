@@ -8,6 +8,9 @@ import {
   useWindowDimensions,
   BackHandler,
   StyleSheet,
+  AccessibilityInfo,
+  findNodeHandle,
+  Alert,
 } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -37,6 +40,11 @@ import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
 import { haptic } from "../utils/haptics";
 import Pressable from "./HintPressable";
+import {
+  resolveEbookTarget,
+  canJumpToFraction,
+  readingFractionForAudioPosition,
+} from "../utils/formatSwitch";
 
 const MINIPLAYER_HEIGHT = 68;
 
@@ -50,6 +58,18 @@ function secondsToTimestamp(seconds: number) {
     return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
   }
   return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+// Spoken form for screen readers — "3:12" reads as "three twelve", which is
+// indistinguishable from the chapter row's numbers.
+function spokenTime(seconds: number) {
+  let s = seconds;
+  if (!s || s < 0) s = 0;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h} ${h === 1 ? "hour" : "hours"} ${m} ${m === 1 ? "minute" : "minutes"}`;
+  if (m > 0) return `${m} ${m === 1 ? "minute" : "minutes"}`;
+  return `${Math.floor(s % 60)} seconds`;
 }
 
 // Circular transport helper button. Hoisted out of the player component:
@@ -136,6 +156,7 @@ export default function PlayerBottomSheet() {
   const playbackSpeed = usePlaybackStore((s) => s.playbackSpeed);
   const setPlaybackSpeed = usePlaybackStore((s) => s.setPlaybackSpeed);
   const seekForward = usePlaybackStore((s) => s.seekForward);
+  const closePlayback = usePlaybackStore((s) => s.closePlayback);
   const seekBackward = usePlaybackStore((s) => s.seekBackward);
   const seek = usePlaybackStore((s) => s.seek);
   const chapters = usePlaybackStore((s) => s.chapters);
@@ -161,6 +182,65 @@ export default function PlayerBottomSheet() {
   const isPlayerExpandedRef = useRef(isPlayerExpanded);
   useEffect(() => {
     isPlayerExpandedRef.current = isPlayerExpanded;
+  }, [isPlayerExpanded]);
+
+  // "Read from here": jump to the ebook edition at (approximately) the
+  // current listening position — the Whispersync-style handoff the
+  // formatSwitch module implements (this is its player-side entry point).
+  const readFromHere = () => {
+    const st = usePlaybackStore.getState();
+    const cur = st.currentSession;
+    if (!cur || cur.episodeId) return; // book-only feature
+    const bookItemId = cur.libraryItemId || cur.libraryItem?.id;
+    if (!bookItemId) return;
+    (async () => {
+      const target = await resolveEbookTarget(bookItemId);
+      if (!target) {
+        Alert.alert("No ebook available", "This book doesn't have an ebook edition in your library.");
+        return;
+      }
+      const frac = readingFractionForAudioPosition(st.position, st.duration);
+      const jump = canJumpToFraction(target.ebookFormat);
+      Alert.alert(
+        "Read from here?",
+        jump
+          ? `Open the ebook at about ${Math.round(frac * 100)}%? Position matching is approximate.`
+          : "This ebook format can't jump to a position — it will open at your last reading spot.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Read",
+            onPress: () => {
+              st.pause().catch(() => {});
+              st.setPlayerExpanded(false);
+              setTimeout(() => {
+                if (navigationRef.isReady()) {
+                  (navigationRef.navigate as any)("Reader", {
+                    itemId: target.itemId,
+                    ebookFormat: target.ebookFormat,
+                    title: target.title || st.currentSession?.displayTitle,
+                    ...(jump ? { initialFraction: frac } : {}),
+                  });
+                }
+              }, 300);
+            },
+          },
+        ]
+      );
+    })();
+  };
+
+  // On expand, move screen-reader focus to the Collapse button once the
+  // spring settles — otherwise TalkBack keeps focus on the (now covered and
+  // a11y-hidden) screen behind the player and the user is stranded.
+  const collapseBtnRef = useRef<any>(null);
+  useEffect(() => {
+    if (!isPlayerExpanded) return;
+    const t = setTimeout(() => {
+      const node = findNodeHandle(collapseBtnRef.current);
+      if (node) AccessibilityInfo.setAccessibilityFocus(node);
+    }, 450);
+    return () => clearTimeout(t);
   }, [isPlayerExpanded]);
 
   const [showChapters, setShowChapters] = useState(false);
@@ -336,7 +416,7 @@ export default function PlayerBottomSheet() {
   const [chapterBarWidth, setChapterBarWidth] = useState(0);
   const [dragFrac, setDragFrac] = useState<number | null>(null);
   const chapterBarWidthRef = useRef(0);
-  const chapterBoundsRef = useRef({ start: 0, end: 0, span: 0 });
+  const chapterBoundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
 
   // Draggable chapter scrubber PanResponder
   const chapterScrubPanResponder = useRef(
@@ -358,9 +438,13 @@ export default function PlayerBottomSheet() {
         const w = chapterBarWidthRef.current;
         if (w) {
           const frac = Math.max(0, Math.min(1, e.nativeEvent.locationX / w));
-          const { start, span } = chapterBoundsRef.current;
+          // Read duration from the ref, not the closure: PanResponder.create
+          // runs once, so a closed-over `duration` captured the FIRST render's
+          // value (0 — mounted before any session), making this fallback dead
+          // and silently discarding drags on a zero-span (malformed) chapter.
+          const { start, span, duration: dur } = chapterBoundsRef.current;
           if (span > 0) seek(start + frac * span);
-          else if (duration > 0) seek(frac * duration);
+          else if (dur > 0) seek(frac * dur);
         }
         setDragFrac(null);
       },
@@ -597,14 +681,17 @@ export default function PlayerBottomSheet() {
   const chapterStart = currentChapter ? currentChapter.start || 0 : 0;
   const chapterEnd = currentChapter ? currentChapter.end || duration : duration;
   const chapterSpan = Math.max(0, chapterEnd - chapterStart);
-  chapterBoundsRef.current = { start: chapterStart, end: chapterEnd, span: chapterSpan };
+  chapterBoundsRef.current = { start: chapterStart, end: chapterEnd, span: chapterSpan, duration };
 
   const liveChapterFrac =
     chapterSpan > 0 ? Math.min(Math.max((position - chapterStart) / chapterSpan, 0), 1) : bookFrac;
   const chapterFrac = dragFrac != null ? dragFrac : liveChapterFrac;
 
-  const chapterElapsed = currentChapter ? chapterFrac * chapterSpan : position;
-  const chapterRemaining = currentChapter ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
+  // Derive from chapterFrac so the numbers FOLLOW a drag on chapterless books
+  // too (chapterSpan is already the whole-book duration there) — they used to
+  // stay pinned to the live position while the wave previewed the drag.
+  const chapterElapsed = chapterSpan > 0 ? chapterFrac * chapterSpan : position;
+  const chapterRemaining = chapterSpan > 0 ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
 
   // Clean speed label — a server-restored playbackRate can carry float noise
   // (e.g. 1.2999999), which "+toFixed(2)" collapses to 1.3 / 3 / 1.75.
@@ -767,6 +854,7 @@ export default function PlayerBottomSheet() {
                 }}
               >
                 <Pressable
+                  ref={collapseBtnRef}
                   onPress={() => setPlayerExpanded(false)}
                   accessibilityRole="button"
                   accessibilityLabel="Collapse player"
@@ -858,6 +946,45 @@ export default function PlayerBottomSheet() {
                   >
                     <Icon name="book" size={22} color={colors.onSecondaryContainer} />
                   </Pressable>
+                  {!currentSession?.episodeId ? (
+                    <Pressable
+                      onPress={readFromHere}
+                      accessibilityRole="button"
+                      accessibilityLabel="Read from here"
+                      style={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: 28,
+                        backgroundColor: colors.secondaryContainer,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Icon name="auto-stories" size={22} color={colors.onSecondaryContainer} />
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    onPress={() => {
+                      // The ONLY other way to dismiss a session was swiping the
+                      // notification (paused-only, non-obvious) — a finished
+                      // book pinned the mini player over every screen forever.
+                      // closePlayback does the final sync + save cleanup.
+                      setPlayerExpanded(false);
+                      closePlayback().catch(() => {});
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Stop and close player"
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: 28,
+                      backgroundColor: colors.secondaryContainer,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      }}
+                  >
+                    <Icon name="close" size={22} color={colors.onSecondaryContainer} />
+                  </Pressable>
                 </View>
               </View>
 
@@ -880,7 +1007,14 @@ export default function PlayerBottomSheet() {
               <View style={{ height: COVER_SIZE_EXP, marginTop: COVER_Y_EXP - SOURCE_LABEL_Y - 20 }} />
 
               {/* Book progress bar */}
-              <View style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}>
+              <View
+                style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}
+                // One grouped element: the bare "3:12" / "-6:02" texts read as
+                // context-free number pairs indistinguishable from the chapter
+                // row, and the wave itself has no accessible form.
+                accessible
+                accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
+              >
                 <View style={{ flexDirection: "row", marginBottom: 4 }}>
                   <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     {secondsToTimestamp(position)}
@@ -913,7 +1047,13 @@ export default function PlayerBottomSheet() {
                   justifyContent: "center",
                 }}
               >
-                <View style={{ flexDirection: "row", marginBottom: 4 }}>
+                {/* Hidden from screen readers: the scrubber below announces
+                    the same chapter position via its accessibilityValue. */}
+                <View
+                  style={{ flexDirection: "row", marginBottom: 4 }}
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
+                >
                   <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
                     {secondsToTimestamp(chapterElapsed)}
                   </Text>
@@ -1443,7 +1583,12 @@ export default function PlayerBottomSheet() {
                   <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {currentChapterIndex + 1} of {chapters.length}</Text>
                 ) : null}
 
-                <View style={{ marginTop: 14 }}>
+                <View
+                  style={{ marginTop: 14 }}
+                  // Grouped like the portrait book row — see the comment there.
+                  accessible
+                  accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
+                >
                   <View style={{ flexDirection: "row", marginBottom: 2 }}>
                     <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(position)}</Text>
                     <View style={{ flexGrow: 1 }} />
@@ -1453,7 +1598,12 @@ export default function PlayerBottomSheet() {
                 </View>
 
                 <View style={{ marginTop: 8 }}>
-                  <View style={{ flexDirection: "row", marginBottom: 2 }}>
+                  {/* Hidden: redundant with the scrubber's accessibilityValue. */}
+                  <View
+                    style={{ flexDirection: "row", marginBottom: 2 }}
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                  >
                     <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(chapterElapsed)}</Text>
                     <View style={{ flexGrow: 1 }} />
                     <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>

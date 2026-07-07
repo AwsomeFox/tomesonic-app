@@ -87,16 +87,44 @@ describe("ConnectScreen", () => {
     expect(mockedGet).not.toHaveBeenCalled();
   });
 
-  it("prefixes http://, checks /status, and advances to credentials with a cleartext warning", async () => {
+  it("tries https:// first for a bare hostname and advances without a cleartext warning", async () => {
     mockedGet.mockResolvedValue(absStatus());
     await render(<ConnectScreen />);
     await connect("abs.example.com");
 
     await screen.findByPlaceholderText("Username");
-    expect(mockedGet).toHaveBeenCalledWith("http://abs.example.com/status", { timeout: 10000 });
+    // https-first: most ABS deployments sit behind TLS, and defaulting to
+    // http:// sent credentials in the clear when the server answered on both.
+    expect(mockedGet).toHaveBeenCalledWith("https://abs.example.com/status", { timeout: 10000 });
     expect(screen.getByText("abs.example.com", { exact: false })).toBeTruthy();
     expect(screen.getByPlaceholderText("Password")).toBeTruthy();
+    expect(screen.queryByText(/unencrypted HTTP/)).toBeNull();
+  });
+
+  it("falls back to http:// when https is unreachable, with a cleartext warning", async () => {
+    mockedGet.mockImplementation((url: string) =>
+      url.startsWith("https://")
+        ? Promise.reject(new Error("ECONNREFUSED"))
+        : Promise.resolve(absStatus())
+    );
+    await render(<ConnectScreen />);
+    await connect("abs.example.com");
+
+    await screen.findByPlaceholderText("Username");
+    expect(mockedGet).toHaveBeenCalledWith("https://abs.example.com/status", { timeout: 10000 });
+    expect(mockedGet).toHaveBeenCalledWith("http://abs.example.com/status", { timeout: 10000 });
     // Plain-http server → unencrypted-connection warning.
+    expect(screen.getByText(/unencrypted HTTP/)).toBeTruthy();
+  });
+
+  it("respects an explicit http:// scheme without probing https", async () => {
+    mockedGet.mockResolvedValue(absStatus());
+    await render(<ConnectScreen />);
+    await connect("http://abs.example.com");
+
+    await screen.findByPlaceholderText("Username");
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    expect(mockedGet).toHaveBeenCalledWith("http://abs.example.com/status", { timeout: 10000 });
     expect(screen.getByText(/unencrypted HTTP/)).toBeTruthy();
   });
 
@@ -145,7 +173,7 @@ describe("ConnectScreen", () => {
 
     await waitFor(() =>
       expect(mockedPost).toHaveBeenCalledWith(
-        "http://abs.example.com/login",
+        "https://abs.example.com/login",
         { username: "bob", password: "hunter2" },
         expect.objectContaining({ timeout: 15000 })
       )
@@ -153,7 +181,7 @@ describe("ConnectScreen", () => {
     await waitFor(() =>
       expect(login).toHaveBeenCalledWith(
         expect.objectContaining({
-          address: "http://abs.example.com",
+          address: "https://abs.example.com",
           userId: "u1",
           username: "bob",
           token: "tok123",
@@ -192,7 +220,7 @@ describe("ConnectScreen", () => {
     expect(screen.queryByPlaceholderText("Username")).toBeNull();
 
     await fireEvent.press(ssoButton);
-    await waitFor(() => expect(mockedOpenId).toHaveBeenCalledWith("http://abs.example.com"));
+    await waitFor(() => expect(mockedOpenId).toHaveBeenCalledWith("https://abs.example.com"));
     await waitFor(() =>
       expect(login).toHaveBeenCalledWith(
         expect.objectContaining({ token: "at1", userId: "u2", username: "sso-user" }),

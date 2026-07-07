@@ -129,7 +129,13 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
             >
               <Text style={{ fontSize: 24, color: colors.onSecondaryContainer, marginTop: -2 }}>−</Text>
             </Pressable>
-            <Text style={{ fontSize: 28, fontWeight: "600", color: colors.onSurface }}>{customMin} min</Text>
+            {/* Live region: each +/- step announces the new value. */}
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{ fontSize: 28, fontWeight: "600", color: colors.onSurface }}
+            >
+              {customMin} min
+            </Text>
             <Pressable
               onPress={() => setCustomMin((m) => m + 1)}
               accessibilityRole="button"

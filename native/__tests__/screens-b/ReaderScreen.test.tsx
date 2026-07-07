@@ -211,7 +211,12 @@ describe("ReaderScreen (epub pipeline)", () => {
       "file:///dl/book.epub",
       expect.objectContaining({ encoding: "base64" })
     );
-    expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+    // Ignore auto_downloads.json mirror bookkeeping (atomic-write pre-delete);
+    // the DOWNLOADED BOOK FILE must never be deleted.
+    const fileDeletes = (FileSystem.deleteAsync as jest.Mock).mock.calls.filter(
+      (c) => !String(c[0]).includes("auto_downloads")
+    );
+    expect(fileDeletes).toHaveLength(0);
   });
 
   it("location messages persist the cfi + save timestamp and only touch ebook fields in the store", async () => {
@@ -577,7 +582,7 @@ describe("ReaderScreen (pdf)", () => {
     expect(storage.getNumber(`pdfPage_${PDF_ITEM}`)).toBe(5);
   });
 
-  it("falls back when the PDF component errors", async () => {
+  it("shows a PDF-specific error with retry when the PDF component errors", async () => {
     await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF" });
     await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
 
@@ -585,9 +590,15 @@ describe("ReaderScreen (pdf)", () => {
       (global as any).__pdfProps.onError(new Error("corrupt"));
     });
 
-    expect(
-      await screen.findByText("This ebook format can't be viewed in-app yet.")
-    ).toBeTruthy();
+    // A transient PDF failure (network blip mid-stream) must offer a retry,
+    // not the terminal "can't be viewed in-app" copy.
+    expect(await screen.findByText(/Couldn't open this PDF/)).toBeTruthy();
+    (global as any).__pdfProps = null;
+
+    await fireEvent.press(screen.getByText("Try again"));
+    // Retry remounts the viewer instead of leaving the dead-end screen up.
+    await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
+    expect(screen.queryByText(/Couldn't open this PDF/)).toBeNull();
   });
 });
 

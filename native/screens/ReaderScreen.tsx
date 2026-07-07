@@ -14,6 +14,7 @@ import { useDownloadStore } from "../store/useDownloadStore";
 import { FOLIATE_BUNDLE } from "../utils/foliateBundle";
 import BottomSheet from "../components/BottomSheet";
 import Pressable from "../components/HintPressable";
+import { resolveAudioTarget, audioPositionForReadingFraction, approximateClock } from "../utils/formatSwitch";
 
 // Height of the collapsed mini player (mirrors PlayerBottomSheet MINIPLAYER_HEIGHT)
 // so reader content can reserve space and not sit underneath it.
@@ -57,7 +58,7 @@ function ebookHtml(
   // Compute the filename extension for foliate-js format detection
   const ext = mimeHint === "application/epub+zip" ? ".epub" : mimeHint === "application/x-mobipocket-ebook" ? ".mobi" : ".azw3";
   return `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html,body{margin:0;padding:0;height:100%;background:${bg};overflow:hidden;}
   foliate-view{height:100%;width:100%;}
@@ -266,7 +267,14 @@ export default function ReaderScreen({ route, navigation }: any) {
   // reader is mounted (released automatically on unmount).
   useKeepAwake();
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
-  const { itemId, ebookFormat, title } = route.params || {};
+  const { itemId, ebookFormat, title, initialFraction } = route.params || {};
+  // One-shot "jump to fraction" from the player's Read-from-here handoff —
+  // consumed on the WebView's 'ready' message, then cleared.
+  const pendingJumpRef = useRef<number | null>(
+    typeof initialFraction === "number" && Number.isFinite(initialFraction)
+      ? Math.max(0, Math.min(1, initialFraction))
+      : null
+  );
   const [pdfError, setPdfError] = useState(false);
   // PDF page tracking: restore the last-read page and show a footer indicator,
   // mirroring what the epub path gets from foliate relocations.
@@ -394,6 +402,11 @@ export default function ReaderScreen({ route, navigation }: any) {
 
   // Sync pending ebook progress to server on unmount/screen change
   useEffect(() => {
+    // Re-arm on an IN-PLACE itemId change: navigate("Reader", {itemId: B})
+    // from inside the reader updates params without unmounting, so the
+    // previous run's cleanup set unmountedRef true — without this reset,
+    // every message for the NEW book was dropped (no saves at all).
+    unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
       if (syncTimeoutRef.current) {
@@ -418,6 +431,10 @@ export default function ReaderScreen({ route, navigation }: any) {
           // server (and Storyteller/other devices) when connectivity returns.
           queueEbookProgressPatch(itemId, cfi, fraction, fraction >= 0.99);
         });
+        // The snapshot belongs to THIS itemId. Clearing it stops an in-place
+        // book change from flushing book A's cfi onto book B's server record
+        // (which could even one-way auto-finish B).
+        latestProgressRef.current = null;
       }
     };
   }, [itemId]);
@@ -568,6 +585,16 @@ export default function ReaderScreen({ route, navigation }: any) {
         }, 2000);
       } else if (data.type === "toc") {
         setToc(data.toc || []);
+      } else if (data.type === "ready") {
+        // Player → reader handoff: jump to the mapped fraction once the book
+        // is actually rendered (overrides the startCfi restore).
+        const f = pendingJumpRef.current;
+        if (f != null && webRef.current) {
+          pendingJumpRef.current = null;
+          webRef.current.injectJavaScript(
+            `window.goToFraction && window.goToFraction(${Number(f)});true;`
+          );
+        }
       } else if (data.type === "error") {
         setEbookError(`render: ${data.message || "unknown"}`);
         setEbookStatus("error");
@@ -578,6 +605,22 @@ export default function ReaderScreen({ route, navigation }: any) {
   const openExternally = async () => {
     try {
       if (Sharing && (await Sharing.isAvailableAsync())) {
+        // Downloaded book: share the local file directly — re-downloading
+        // fails exactly when downloads matter (offline / "too large" books).
+        const localEbook = useDownloadStore
+          .getState()
+          .completedDownloads[itemId]?.parts?.find((p: any) => p.id === "ebook")?.localFilePath;
+        if (localEbook) {
+          // localFilePath may be a bare absolute path (older/cached download
+          // rows) — expo-sharing wants a URI (same normalization as the
+          // playback store's local track resolution).
+          const uri =
+            localEbook.startsWith("file://") || localEbook.startsWith("content://")
+              ? localEbook
+              : `file://${localEbook}`;
+          await Sharing.shareAsync(uri, { dialogTitle: title || "Open ebook" });
+          return;
+        }
         const localPath = `${FileSystem.cacheDirectory}book_${itemId}.${format || "bin"}`;
         const dl = await FileSystem.downloadAsync(ebookUri, localPath, {
           headers: { Authorization: `Bearer ${token}` },
@@ -589,6 +632,48 @@ export default function ReaderScreen({ route, navigation }: any) {
       console.warn("[Reader] share failed", e);
     }
     if (ebookUri) Linking.openURL(ebookUri).catch(() => {});
+  };
+
+  // "Listen from here": start the audiobook edition at (approximately) the
+  // current reading position — the reader-side Whispersync entry point
+  // (player-side lives in PlayerBottomSheet's Read-from-here).
+  const listenFromHere = () => {
+    (async () => {
+      const target = await resolveAudioTarget(itemId);
+      if (!target) {
+        Alert.alert("No audiobook available", "This book doesn't have an audio edition in your library.");
+        return;
+      }
+      const fraction = isPdf
+        ? (pdfProgress ? pdfProgress.page / Math.max(1, pdfProgress.pages) : 0)
+        : latestProgressRef.current?.fraction ?? pageProgress?.fraction ?? 0;
+      const estimate = target.duration
+        ? ` at about ${approximateClock(audioPositionForReadingFraction(fraction, target.duration))}`
+        : "";
+      Alert.alert("Listen from here?", `Start the audiobook${estimate}? Position matching is approximate.`, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Listen",
+          onPress: () => {
+            (async () => {
+              try {
+                const ok = await usePlaybackStore.getState().startPlayback(target.itemId);
+                if (!ok) throw new Error("start failed");
+                // Seek against the LIVE duration — the resolver's metadata
+                // duration is display-grade only.
+                const live = usePlaybackStore.getState();
+                const dur = live.duration || target.duration || 0;
+                if (dur > 0) await live.seek(audioPositionForReadingFraction(fraction, dur));
+                navigation.goBack();
+              } catch (e) {
+                console.warn("[Reader] listen-from-here failed", e);
+                Alert.alert("Couldn't start playback", "Check your connection to the server and try again.");
+              }
+            })();
+          },
+        },
+      ]);
+    })();
   };
 
   const selectTocItem = (href: string) => {
@@ -624,6 +709,17 @@ export default function ReaderScreen({ route, navigation }: any) {
       <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginLeft: 4, flex: 1 }}>
         {title || "Reader"}
       </Text>
+      {(isFoliateFormat && canRenderEbook) || canRenderPdf ? (
+        <Pressable
+          onPress={listenFromHere}
+          style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Listen from here"
+        >
+          <Icon name="headphones" size={24} color={colors.onSurface} />
+        </Pressable>
+      ) : null}
       {isFoliateFormat && canRenderEbook ? (
         <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
           <Pressable
@@ -782,6 +878,36 @@ export default function ReaderScreen({ route, navigation }: any) {
           setPdfProgress({ page, pages: numberOfPages });
           // Remember where the user left off so reopening resumes here.
           storage.set(pdfPageKey, page);
+          // PDFs get the SAME server sync the epub path has (ebook fields
+          // only, matching the ABS web PDF reader: ebookLocation = page
+          // number) — without it PDF progress never left the device: no
+          // cross-device resume, no "Reading" row, no finish.
+          const fraction = numberOfPages > 0 ? Math.min(1, page / numberOfPages) : 0;
+          useUserStore.setState({
+            mediaProgress: {
+              ...useUserStore.getState().mediaProgress,
+              [itemId]: {
+                ...useUserStore.getState().mediaProgress[itemId],
+                libraryItemId: itemId,
+                ebookLocation: String(page),
+                ebookProgress: fraction,
+                updatedAt: Date.now(),
+              },
+            },
+          });
+          if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+          syncTimeoutRef.current = setTimeout(async () => {
+            try {
+              await api.patch(`/api/me/progress/${itemId}`, {
+                ebookLocation: String(page),
+                ebookProgress: fraction,
+                ...(fraction >= 0.99 ? { isFinished: true } : {}),
+              });
+            } catch (e) {
+              console.warn("[Reader] Failed to sync PDF progress:", e);
+              queueEbookProgressPatch(itemId, String(page), fraction, fraction >= 0.99);
+            }
+          }, 2000);
         }}
         onError={() => setPdfError(true)}
       />
@@ -836,6 +962,15 @@ export default function ReaderScreen({ route, navigation }: any) {
         />
       );
     }
+  } else if (isPdf && pdfError) {
+    // A PDF LOAD failure is not a format problem — the old fallthrough told
+    // the user the format was unsupported and offered no way back.
+    body = (
+      <Fallback
+        message="Couldn't open this PDF. Check your connection and try again, or open it in another app."
+        onRetry={() => setPdfError(false)}
+      />
+    );
   } else if (isShareOnly) {
     body = (
       <Fallback
@@ -874,30 +1009,53 @@ export default function ReaderScreen({ route, navigation }: any) {
       {isFoliateFormat && canRenderEbook && pageProgress && (
         <View
           style={{
+            flexDirection: "row",
             alignItems: "center",
-            justifyContent: "center",
-            paddingVertical: 10,
-            paddingHorizontal: 24,
+            paddingVertical: 6,
+            paddingHorizontal: 12,
             backgroundColor: colors.surface,
             borderTopWidth: 1,
             borderTopColor: colors.outlineVariant,
           }}
         >
-          {pageProgress.tocItem?.label ? (
-            <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
-              {pageProgress.tocItem.label}
+          {/* Page turning is otherwise gesture-only inside the WebView (tap
+              zones/swipes on document listeners) — with TalkBack running
+              there is no focusable way to turn a page without these. */}
+          <Pressable
+            onPress={() => webRef.current?.injectJavaScript("window.goPrev && window.goPrev();true;")}
+            accessibilityRole="button"
+            accessibilityLabel="Previous page"
+            hitSlop={8}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
+          >
+            <Icon name="chevron-left" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            {pageProgress.tocItem?.label ? (
+              <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
+                {pageProgress.tocItem.label}
+              </Text>
+            ) : null}
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
+              {/* Percent clamped to 1–99 while mid-book: never "0%" right after
+                  starting, and "100%" only at the finished threshold (>=0.99,
+                  matching the isFinished sync cutoff). */}
+              Page {pageProgress.page} of {pageProgress.pages} (
+              {pageProgress.fraction >= 0.99
+                ? 100
+                : Math.max(pageProgress.fraction > 0 ? 1 : 0, Math.min(99, Math.round(pageProgress.fraction * 100)))}
+              %)
             </Text>
-          ) : null}
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
-            {/* Percent clamped to 1–99 while mid-book: never "0%" right after
-                starting, and "100%" only at the finished threshold (>=0.99,
-                matching the isFinished sync cutoff). */}
-            Page {pageProgress.page} of {pageProgress.pages} (
-            {pageProgress.fraction >= 0.99
-              ? 100
-              : Math.max(pageProgress.fraction > 0 ? 1 : 0, Math.min(99, Math.round(pageProgress.fraction * 100)))}
-            %)
-          </Text>
+          </View>
+          <Pressable
+            onPress={() => webRef.current?.injectJavaScript("window.goNext && window.goNext();true;")}
+            accessibilityRole="button"
+            accessibilityLabel="Next page"
+            hitSlop={8}
+            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
+          >
+            <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
         </View>
       )}
 
@@ -979,7 +1137,13 @@ export default function ReaderScreen({ route, navigation }: any) {
                 >
                   <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>-</Text>
                 </Pressable>
-                <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>{fontSize}%</Text>
+                {/* Live region: each +/- step announces the new value. */}
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}
+                >
+                  {fontSize}%
+                </Text>
                 <Pressable
                   onPress={() => setFontSize(prev => Math.min(FONT_SIZE_MAX, prev + 10))}
                   disabled={fontSize >= FONT_SIZE_MAX}

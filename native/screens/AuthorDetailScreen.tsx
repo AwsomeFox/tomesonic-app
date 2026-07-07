@@ -365,12 +365,13 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           renderItem={null as any}
           ListHeaderComponent={renderHeader}
           ListEmptyComponent={
-            <View style={{ alignItems: "center", paddingVertical: 40 }}>
-              <Icon name="book" size={40} color={colors.onSurfaceVariant} />
-              <Text
-                style={{ color: colors.onSurfaceVariant, fontSize: 15, marginTop: 8 }}
-              >
-                No books by this author.
+            <View style={{ alignItems: "center", paddingVertical: 40, paddingHorizontal: 32 }}>
+              <Icon name="book" size={44} color={colors.onSurfaceVariant} />
+              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 16 }}>
+                No books by this author
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, textAlign: "center", marginTop: 8 }}>
+                Books appear here once this library has titles matched to this author.
               </Text>
             </View>
           }

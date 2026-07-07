@@ -15,6 +15,7 @@ import TrackPlayer from "react-native-track-player";
 import { useRemoteMediaClient } from "react-native-google-cast";
 import CastController from "../../components/CastController";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useUserStore } from "../../store/useUserStore";
 import { storageHelper } from "../../utils/storage";
 
 const useClientMock = useRemoteMediaClient as jest.Mock;
@@ -381,5 +382,244 @@ describe("CastController — disconnect", () => {
     expect(seek).toHaveBeenCalledWith(1750);
     expect(TrackPlayer.play).not.toHaveBeenCalled();
     expect(usePlaybackStore.getState().isPlaying).toBe(false);
+  });
+});
+
+describe("CastController — suspension grace window", () => {
+  it("resume within 5s: no local handback, no reload, seek handler drives the NEW client", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 1500, // inside track 2 → base offset 1000
+      isPlaying: true,
+      playbackSpeed: 1,
+    } as any);
+    const fakeA = makeFakeClient();
+    useClientMock.mockReturnValue(fakeA.client);
+    const { rerender } = await render(<CastController />);
+    await act(async () => {});
+    expect(fakeA.client.loadMedia).toHaveBeenCalledTimes(1);
+
+    // Wifi blip / backgrounding: client → null → NEW client object, all
+    // inside the 5s grace. Treating the null as a real disconnect used to
+    // blast local audio over the still-playing TV and reload the queue.
+    const seek = jest.fn().mockResolvedValue(undefined);
+    usePlaybackStore.setState({ seek } as any);
+    const fakeB = makeFakeClient();
+    jest.useFakeTimers();
+    try {
+      useClientMock.mockReturnValue(null);
+      await rerender(<CastController />);
+      await act(async () => {
+        jest.advanceTimersByTime(2000); // still inside the grace window
+        await Promise.resolve();
+      });
+      useClientMock.mockReturnValue(fakeB.client);
+      await rerender(<CastController />);
+      await act(async () => {});
+      // The pending handback must be CANCELLED, not merely late — sailing
+      // past the 5s mark now must not hand playback back to the phone.
+      await act(async () => {
+        jest.advanceTimersByTime(6000);
+        await Promise.resolve();
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+
+    // No local handback ran: no local play, cast routing never dropped.
+    expect(TrackPlayer.play).not.toHaveBeenCalled();
+    expect(seek).not.toHaveBeenCalled();
+    expect(usePlaybackStore.getState().isCasting).toBe(true);
+    expect(usePlaybackStore.getState().castClient).toBe(fakeB.client);
+    // resumedSameBook: the receiver still holds the queue — do NOT reload it.
+    expect(fakeB.client.loadMedia).not.toHaveBeenCalled();
+    expect(fakeA.client.loadMedia).toHaveBeenCalledTimes(1);
+
+    // The re-registered absolute-seek handler must close over the NEW client
+    // object — the old one is a dead SDK handle and its seeks go nowhere.
+    await act(async () => {
+      await usePlaybackStore.getState().castSeekAbs!(1200); // same track → seek
+    });
+    expect(fakeB.client.seek).toHaveBeenCalledWith({ position: 200 });
+    expect(fakeA.client.seek).not.toHaveBeenCalled();
+  });
+
+  it("unmount inside the grace window cancels the pending handback", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 1500,
+      isPlaying: true,
+      playbackSpeed: 1,
+    } as any);
+    const fake = makeFakeClient();
+    useClientMock.mockReturnValue(fake.client);
+    const { rerender, unmount } = await render(<CastController />);
+    await act(async () => {});
+
+    const seek = jest.fn().mockResolvedValue(undefined);
+    usePlaybackStore.setState({ seek } as any);
+    jest.useFakeTimers();
+    try {
+      useClientMock.mockReturnValue(null);
+      await rerender(<CastController />);
+      // Logout/account switch tears the controller down mid-grace: the
+      // deferred handback must die with it — firing post-unmount used to
+      // poke a torn-down store (phantom isPlaying with no session).
+      await unmount();
+      await act(async () => {
+        jest.advanceTimersByTime(6000);
+        await Promise.resolve();
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(TrackPlayer.play).not.toHaveBeenCalled();
+    expect(seek).not.toHaveBeenCalled();
+    // The handback never ran: cast state was never flipped off/back.
+    expect(usePlaybackStore.getState().isCasting).toBe(true);
+    expect(usePlaybackStore.getState().isPlaying).toBe(true);
+  });
+});
+
+describe("CastController — castSeekAbs failure rollback", () => {
+  it("rolls the base offset back and un-arms the settle guard when the reload rejects", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 1500, // idx 1, base 1000
+      isPlaying: true,
+      playbackSpeed: 1,
+    } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+
+    // Cross-track seek whose queue reload dies on the wire.
+    fake.client.loadMedia.mockRejectedValueOnce(new Error("cast dead"));
+    await act(async () => {
+      await expect(usePlaybackStore.getState().castSeekAbs!(2500)).rejects.toThrow("cast dead");
+    });
+
+    // The receiver never moved: it keeps reporting from track 2 (base 1000).
+    // Without the rollback the refs would say base 2000 → abs 2700; without
+    // un-arming the settle guard this tick (far from the 2500 target) would
+    // be swallowed as "pre-seek noise" for the full 10s timeout.
+    await act(async () => {
+      fake.emitProgress(700);
+    });
+    expect(usePlaybackStore.getState().position).toBe(1700);
+  });
+});
+
+describe("CastController — progress-mirror garbage guards", () => {
+  it("drops NaN / negative / past-the-end samples: no position update, nothing persisted", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 1500,
+      isPlaying: true,
+      playbackSpeed: 1,
+    } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+
+    // Land at the connect target first so the settle guard is CLEARED —
+    // otherwise garbage would be masked by settle suppression instead of
+    // the dedicated guards this test pins.
+    await act(async () => {
+      fake.emitProgress(500); // abs 1500 — mirrored + persisted
+    });
+    expect(usePlaybackStore.getState().position).toBe(1500);
+    usePlaybackStore.setState({ duration: 3000 } as any);
+    // Persistence writes replace the mediaProgress entry object, so reference
+    // equality proves NOTHING flowed into the save/sync pipeline afterwards.
+    const persisted = useUserStore.getState().mediaProgress["item1"];
+    expect(persisted?.currentTime).toBe(1500);
+
+    await act(async () => {
+      fake.emitProgress(NaN); // abs NaN — would poison MMKV + server sync
+      fake.emitProgress(-1600); // abs -600
+      fake.emitProgress(2200); // abs 3200 > duration 3000 + 60 slack
+    });
+    expect(usePlaybackStore.getState().position).toBe(1500);
+    expect(useUserStore.getState().mediaProgress["item1"]).toBe(persisted);
+  });
+});
+
+describe("CastController — id-less MediaStatus rebase guard", () => {
+  it("does not rebase to track 1 on a status with currentItemId null and null item ids", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 1500, // idx 1, base 1000
+      isPlaying: true,
+      playbackSpeed: 1,
+    } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+    await act(async () => {
+      fake.emitProgress(500); // clear the settle guard at the target
+    });
+
+    // Some receiver states serialize queue items WITHOUT real ids (itemId
+    // null) alongside currentItemId null — the null==null "match" used to
+    // rebase to the FIRST item and yank the scrubber back to track 1.
+    await act(async () => {
+      fake.emitStatus({
+        playerState: "playing",
+        currentItemId: null,
+        queueItems: [{ itemId: null }, { itemId: null }, { itemId: null }],
+      });
+      fake.emitProgress(600);
+    });
+    // Still mapped with the OLD base offset (1000), not rebased to 0.
+    expect(usePlaybackStore.getState().position).toBe(1600);
+  });
+});
+
+describe("CastController — session close/reopen while connected", () => {
+  it("reloads the receiver when the SAME book is reopened after the session closed", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 100,
+      isPlaying: false,
+      playbackSpeed: 1,
+    } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+    expect(fake.client.loadMedia).toHaveBeenCalledTimes(1);
+
+    // Dismiss playback (session → null) with the cast session still up, then
+    // reopen the very same book. Without clearing the dedupe key the second
+    // open is skipped: isPlaying true, receiver empty, silence.
+    await act(async () => {
+      usePlaybackStore.setState({ currentSession: null } as any);
+    });
+    await act(async () => {
+      usePlaybackStore.setState({ currentSession: { ...session }, position: 100 } as any);
+    });
+    await act(async () => {});
+    expect(fake.client.loadMedia).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("CastController — cross-track reload hygiene", () => {
+  it("scrubs every per-item startTime from the reloaded queue", async () => {
+    usePlaybackStore.setState({
+      currentSession: session,
+      position: 1500,
+      isPlaying: true,
+      playbackSpeed: 1,
+    } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+    // The ORIGINAL connect stamped the start item with its within-track time.
+    expect(fake.client.loadMedia.mock.calls[0][0].queueData.items[1].startTime).toBe(500);
+
+    await act(async () => {
+      await usePlaybackStore.getState().castSeekAbs!(2500); // cross-track reload
+    });
+    // Leftover startTime is honored by the receiver whenever the queue
+    // naturally reaches that item later — silently skipping everything
+    // before the stale offset. Every item must be scrubbed.
+    const items = fake.client.loadMedia.mock.calls[1][0].queueData.items;
+    expect(items).toHaveLength(3);
+    for (const it of items) expect("startTime" in it).toBe(false);
   });
 });

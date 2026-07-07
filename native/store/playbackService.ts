@@ -171,6 +171,27 @@ export async function playbackService() {
     usePlaybackStore.getState().pause().catch(() => {});
   });
 
+  // The single play/pause TOGGLE key — the most common headset / AVRCP
+  // steering-wheel button (KEYCODE_MEDIA_PLAY_PAUSE). The native service
+  // consumes it and emits this event, but no listener existed, so the button
+  // was a silent no-op everywhere. Mirrors RemotePlay's headless restore so a
+  // BT toggle press with no session loaded still resumes the last book.
+  TrackPlayer.addEventListener(Event.RemotePlayPause, async () => {
+    console.log("[PlaybackService] RemotePlayPause");
+    let s = usePlaybackStore.getState();
+    if (!s.currentSession) {
+      try {
+        await s.loadLastSession();
+      } catch (e) {
+        console.warn("[PlaybackService] headless session restore failed", e);
+      }
+      s = usePlaybackStore.getState();
+      if (!s.currentSession) return;
+    }
+    if (s.isPlaying) s.pause().catch(() => {});
+    else s.play().catch((e) => console.warn("[PlaybackService] play failed", e));
+  });
+
   // Stop = user dismissed playback: close the ABS session (final sync) and clear.
   TrackPlayer.addEventListener(Event.RemoteStop, () => {
     console.log("[PlaybackService] RemoteStop");

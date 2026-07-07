@@ -76,9 +76,14 @@ export default function SeriesListScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const isFetchingRef = useRef(false);
-  // Sort state (series support name / added at / total duration).
-  const [orderBy, setOrderBy] = useState("name");
-  const [descending, setDescending] = useState(false);
+  // Sort state (series support name / added at / total duration) — persisted
+  // like Library (mobileOrderBy) and Authors (mobileAuthorsOrderBy).
+  const savedSettings = useUserStore.getState().settings;
+  const updateUserSettings = useUserStore((s) => s.updateUserSettings);
+  const [orderBy, setOrderBy] = useState(savedSettings?.mobileSeriesOrderBy || "name");
+  const [descending, setDescending] = useState<boolean>(
+    savedSettings?.mobileSeriesOrderDesc ?? false
+  );
   const [sortOpen, setSortOpen] = useState(false);
   // Cover books fetched lazily per-series when the series payload omits `books`.
   const [coverBooksMap, setCoverBooksMap] = useState<Record<string, SeriesBook[]>>({});
@@ -123,7 +128,13 @@ export default function SeriesListScreen({ navigation }: any) {
         const totalCount = data.total || 0;
 
         setTotal(totalCount);
-        setSeriesList((prev) => (reset ? results : [...prev, ...results]));
+        setSeriesList((prev) => {
+          if (reset) return results;
+          // Dedupe by id — page boundaries shift when the library changes
+          // mid-scroll, re-serving rows (duplicate keys crash the grid).
+          const seen = new Set(prev.map((s: any) => s?.id).filter(Boolean));
+          return [...prev, ...results.filter((s: any) => !s?.id || !seen.has(s.id))];
+        });
         setPage(pageNum);
       } catch (err) {
         if (fetchId !== fetchIdRef.current) return;
@@ -382,6 +393,7 @@ export default function SeriesListScreen({ navigation }: any) {
         onChange={(o, d) => {
           setOrderBy(o);
           setDescending(d);
+          updateUserSettings({ mobileSeriesOrderBy: o, mobileSeriesOrderDesc: d }).catch(() => {});
         }}
       />
 

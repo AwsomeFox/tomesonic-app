@@ -355,7 +355,17 @@ export default function TopAppBar({
         animationType="fade"
         onRequestClose={() => setMenuOpen(false)}
       >
-        <Pressable style={{ flex: 1 }} onPress={() => setMenuOpen(false)}>
+        <Pressable
+          style={{ flex: 1 }}
+          onPress={() => setMenuOpen(false)}
+          // Same treatment as the BottomSheet backdrop: keep tap-to-dismiss
+          // but out of the screen-reader focus order — this was the FIRST
+          // TalkBack focus in the menu, a nameless full-screen element.
+          // (Unlike BottomSheet, the menu rows are CHILDREN of this Pressable,
+          // so "no" — not "no-hide-descendants" — keeps them reachable.)
+          importantForAccessibility="no"
+          accessible={false}
+        >
           <View
             style={{
               position: "absolute",
@@ -379,6 +389,8 @@ export default function TopAppBar({
                 setMenuOpen(false);
                 navigation?.navigate("Account");
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Account"
               android_ripple={{ color: colors.surfaceContainerHighest }}
               style={{
                 flexDirection: "row",
@@ -443,6 +455,8 @@ export default function TopAppBar({
                 setMenuOpen(false);
                 navigation?.navigate("Settings");
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
               android_ripple={{ color: colors.surfaceContainerHighest }}
               style={{
                 flexDirection: "row",

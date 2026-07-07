@@ -181,10 +181,16 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..ccb6ba3 100644
+index b495b5a..565ff5f 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-@@ -19,6 +19,7 @@ import androidx.media3.common.Player
+@@ -14,11 +14,13 @@ import android.view.KeyEvent
+ import androidx.annotation.MainThread
+ import androidx.annotation.OptIn
+ import androidx.media.utils.MediaConstants
++import androidx.media3.common.AudioAttributes
+ import androidx.media3.common.C
+ import androidx.media3.common.Player
  import androidx.media3.common.util.UnstableApi
  import androidx.media3.session.CacheBitmapLoader
  import androidx.media3.session.LibraryResult
@@ -192,7 +198,7 @@ index b495b5a..ccb6ba3 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -61,6 +62,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -61,6 +63,10 @@ class MusicService : HeadlessJsMediaService() {
      private lateinit var player: QueuedAudioPlayer
      private val binder = MusicBinder()
      private val scope = MainScope()
@@ -203,7 +209,46 @@ index b495b5a..ccb6ba3 100644
      private lateinit var fakePlayer: ExoPlayer
      private lateinit var mediaSession: MediaLibrarySession
      private var progressUpdateJob: Job? = null
-@@ -104,21 +109,1092 @@ class MusicService : HeadlessJsMediaService() {
+@@ -79,10 +85,13 @@ class MusicService : HeadlessJsMediaService() {
+     }
+ 
+     fun getBitmapLoader(): BitmapLoader {
++        // Degraded-onCreate safety: never dereference the lateinit unguarded.
++        if (!::mediaSession.isInitialized) return CacheBitmapLoader(CoilBitmapLoader(this))
+         return mediaSession.bitmapLoader
+     }
+ 
+     fun getCurrentBitmap(): ListenableFuture<Bitmap>? {
++        if (!::player.isInitialized || !::mediaSession.isInitialized) return null
+         return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
+             mediaSession.bitmapLoader.loadBitmapFromMetadata(
+                 it
+@@ -97,28 +106,1151 @@ class MusicService : HeadlessJsMediaService() {
+                 return "RNTP-${element.className}:${element.methodName}"
+             }
+         })
+-        fakePlayer = ExoPlayer.Builder(this).build()
++        // The session player until JS calls setupPlayer — but on an Android
++        // Auto cold start the resume/browse flow can PLAY on it before (or
++        // without) JS ever booting, so it must behave like the real player:
++        // hold wake/WiFi locks while playing (default WAKE_MODE_NONE stalled
++        // streams the moment the phone dozed), arbitrate audio focus, and
++        // pause on becoming-noisy (unplug). Speech content type to match the
++        // real player's focus/ducking semantics.
++        fakePlayer = ExoPlayer.Builder(this)
++            .setWakeMode(C.WAKE_MODE_NETWORK)
++            .setAudioAttributes(
++                AudioAttributes.Builder()
++                    .setUsage(C.USAGE_MEDIA)
++                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
++                    .build(),
++                /* handleAudioFocus= */ true
++            )
++            .setHandleAudioBecomingNoisy(true)
++            .build()
+         val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+             // Add the Uri data so apps can identify that it was a notification click
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -548,13 +593,33 @@ index b495b5a..ccb6ba3 100644
 +
 +    @Volatile private var absDownloads: Map<String, AbsDownload> = emptyMap()
 +
++    // Mirror files are swapped by JS via delete-then-rename (its moveAsync
++    // rejects on an existing destination): a read landing between the delete
++    // and the rename finds NO main file even though a fully-written .tmp
++    // exists. Fall back to the temp instead of treating the gap as "absent" —
++    // that wiped the offline catalog / resume state for a browse cycle.
++    private fun absReadMirror(name: String): String? {
++        val f = java.io.File(filesDir, name)
++        if (f.exists()) {
++            try { return f.readText() } catch (_: Exception) {}
++        }
++        val tmp = java.io.File(filesDir, "$name.tmp")
++        if (tmp.exists()) {
++            try { return tmp.readText() } catch (_: Exception) {}
++        }
++        return null
++    }
++
 +    private fun absRefreshDownloaded() {
 +        absDownloads = try {
-+            val f = java.io.File(filesDir, "auto_downloads.json")
-+            if (!f.exists()) {
-+                emptyMap()
++            val raw = absReadMirror("auto_downloads.json")
++            if (raw == null) {
++                // Neither main nor temp readable: fresh install (nothing
++                // downloaded yet — previous map is already empty) or a read
++                // mid-swap — keep the last good map either way.
++                absDownloads
 +            } else {
-+                val arr = org.json.JSONArray(f.readText())
++                val arr = org.json.JSONArray(raw)
 +                val out = HashMap<String, AbsDownload>()
 +                for (i in 0 until arr.length()) {
 +                    val v = arr.opt(i)
@@ -585,7 +650,13 @@ index b495b5a..ccb6ba3 100644
 +                }
 +                out
 +            }
-+        } catch (e: Exception) { Timber.w(e, "auto_downloads parse failed"); emptyMap() }
++        } catch (e: Exception) {
++            // JS rewrites this file every ~15s while a downloaded book plays;
++            // a torn read must not wipe the catalog — keep the last good map
++            // so offline browse/tap-to-play keeps working mid-drive.
++            Timber.w(e, "auto_downloads parse failed; keeping previous map")
++            absDownloads
++        }
 +    }
 +
 +    // ===== Connectivity: offline browse falls back to downloads; when the
@@ -613,7 +684,13 @@ index b495b5a..ccb6ba3 100644
 +                }
 +                override fun onLost(network: android.net.Network) {
 +                    val cmNow = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-+                    val stillUp = cmNow.activeNetwork != null
++                    // Same INTERNET-capability check as the seed above — a
++                    // lingering captive-portal/no-internet transport must not
++                    // keep browse pinned to online mode.
++                    val stillUp = cmNow.activeNetwork?.let { n ->
++                        cmNow.getNetworkCapabilities(n)
++                            ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++                    } ?: false
 +                    val was = absNetworkAvailable
 +                    absNetworkAvailable = stillUp
 +                    if (was && !stillUp) absNotifyBrowseChanged("network lost")
@@ -647,9 +724,12 @@ index b495b5a..ccb6ba3 100644
 +            try {
 +                Timber.i("AA browse: notifyChildrenChanged (%s)", reason)
 +                // A connectivity flip invalidates everything cached: an online tree
-+                // must never be served while offline, and vice versa.
++                // must never be served while offline, and vice versa. Search
++                // results too — stale online hits (server-URL artwork) would
++                // otherwise be served offline via onGetSearchResult.
 +                absChildrenCache.clear()
 +                absProgressCache = null
++                absSearchCache.clear()
 +                mediaSession.notifyChildrenChanged("__ROOT__", Int.MAX_VALUE, null)
 +                mediaSession.notifyChildrenChanged("__DOWNLOADS__", Int.MAX_VALUE, null)
 +            } catch (e: Exception) { Timber.w(e, "notifyChildrenChanged failed") }
@@ -1308,7 +1388,7 @@ index b495b5a..ccb6ba3 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,7 +1282,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1338,21 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1321,7 +1401,18 @@ index b495b5a..ccb6ba3 100644
          )
          player = QueuedAudioPlayer(this@MusicService, options)
          fakePlayer.release()
-@@ -293,9 +1373,10 @@ class MusicService : HeadlessJsMediaService() {
+-        mediaSession.player = player.forwardingPlayer
++        // Degraded onCreate (no session built): the service already stopSelf'd;
++        // don't crash the JS bind path on the uninitialized lateinit.
++        if (::mediaSession.isInitialized) {
++            mediaSession.player = player.forwardingPlayer
++        } else {
++            Timber.e("setupPlayer with no media session (degraded onCreate) — skipping session attach")
++        }
+         observeEvents()
+     }
+ 
+@@ -293,9 +1435,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1333,7 +1424,7 @@ index b495b5a..ccb6ba3 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1386,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1448,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1395,7 +1486,7 @@ index b495b5a..ccb6ba3 100644
          }
      }
  
-@@ -449,6 +1563,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1625,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1406,7 +1497,32 @@ index b495b5a..ccb6ba3 100644
      }
  
      @MainThread
-@@ -792,13 +1910,36 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +1897,7 @@ class MusicService : HeadlessJsMediaService() {
+         onUnbind(rootIntent)
+         Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
+         if (!::player.isInitialized) {
+-            mediaSession.release()
++            if (::mediaSession.isInitialized) mediaSession.release()
+             return
+         }
+ 
+@@ -780,8 +1960,14 @@ class MusicService : HeadlessJsMediaService() {
+         return false
+     }
+ 
+-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession {
++    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
+         Timber.d("${controllerInfo.packageName}")
++        // Degraded onCreate (5 session-build failures → stopSelf) leaves the
++        // lateinit unset, but the service is still bindable for a beat — an
++        // Android Auto rebind here used to crash on the uninitialized property,
++        // resurrecting the exact crash loop the build guard exists to stop.
++        // Returning null rejects the connection cleanly.
++        if (!::mediaSession.isInitialized) return null
+         return mediaSession
+     }
+ 
+@@ -792,13 +1978,41 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1427,6 +1543,11 @@ index b495b5a..ccb6ba3 100644
 +        if (::player.isInitialized) {
 +            Timber.d("Destroying player")
              player.destroy()
++        } else if (::fakePlayer.isInitialized) {
++            // Browse-only service lifetime (AA connect → browse → unbind with
++            // no playback): setupPlayer never ran, so the placeholder ExoPlayer
++            // (and its internal playback thread) would leak per cycle.
++            fakePlayer.release()
          }
  
 +        absUnregisterNetworkCallback()
@@ -1445,7 +1566,7 @@ index b495b5a..ccb6ba3 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2046,227 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2119,230 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1564,7 +1685,7 @@ index b495b5a..ccb6ba3 100644
 +            }) {
 +                val children = try { absLoadChildren(parentId) } catch (e: Exception) { Timber.w(e, "absLoadChildren failed"); emptyList() }
 +                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
-             }
++            }
 +            return future
 +        }
 +
@@ -1579,6 +1700,9 @@ index b495b5a..ccb6ba3 100644
 +                future.set(LibraryResult.ofVoid(params))
 +            }) {
 +                val results = try { absSearch(query) } catch (e: Exception) { Timber.w(e, "absSearch failed"); emptyList() }
++                // Bounded: one entry per unique voice query for the service's
++                // lifetime otherwise grows without limit.
++                if (absSearchCache.size >= 30) absSearchCache.clear()
 +                absSearchCache[query] = results
 +                Timber.i("AA search '%s' -> %d results", query, results.size)
 +                // This runs on the browse pool and can complete AFTER onDestroy
@@ -1592,7 +1716,7 @@ index b495b5a..ccb6ba3 100644
 +                } finally {
 +                    future.set(LibraryResult.ofVoid(params))
 +                }
-+            }
+             }
 +            return future
 +        }
 +
@@ -1690,7 +1814,16 @@ index b495b5a..ccb6ba3 100644
          }
  
          override fun onCustomCommand(
-@@ -935,8 +2279,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2351,27 @@ class MusicService : HeadlessJsMediaService() {
+             command: SessionCommand,
+             args: Bundle
+         ): ListenableFuture<SessionResult> {
++            // Custom commands are only granted post-setupPlayer today, but keep
++            // the lateinit dereference guarded against future command grants.
++            if (!::player.isInitialized) {
++                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_INVALID_STATE))
++            }
+             player.forwardingPlayer.let {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1711,7 +1844,23 @@ index b495b5a..ccb6ba3 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2309,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2383,15 @@ class MusicService : HeadlessJsMediaService() {
+             controllerInfo: MediaSession.ControllerInfo,
+             intent: Intent
+         ): Boolean {
++            // With no JS context (process just restarted by a BT/headset key),
++            // the emitted events go nowhere — but the key was still consumed,
++            // which blocked Media3's default handling (empty-player play →
++            // onPlaybackResumption). A play press on dead headphones did
++            // nothing until headless JS finished booting. Let the framework
++            // handle keys until JS is alive.
++            if (reactContext == null) {
++                return super.onMediaButtonEvent(session, controllerInfo, intent)
++            }
+             return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
+                 session,
+                 controllerInfo,
+@@ -955,6 +2399,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1723,18 +1872,43 @@ index b495b5a..ccb6ba3 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2321,36 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2411,61 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
 -            return super.onPlaybackResumption(mediaSession, controller)
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
++            // JS alive: route through the full JS session path (real queue,
++            // chapters, progress sync) — same as a browse tap. The native
++            // resolve below plays on the bare session player with NO progress
++            // persistence (an hour of resume-card listening snapped back on the
++            // next app open), so it is strictly a JS-dead fallback.
++            if (reactContext != null) {
++                absSubmitBrowse(onReject = {
++                    future.setException(UnsupportedOperationException("service unavailable"))
++                }) {
++                    try {
++                        val itemId = absStr(
++                            absReadMirror("widget_state.json")?.let { org.json.JSONObject(it) },
++                            "itemId"
++                        ) ?: ""
++                        if (itemId.isNotEmpty()) {
++                            emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply { putString("id", itemId) })
++                        }
++                    } catch (e: Exception) {
++                        Timber.w(e, "resumption JS route failed")
++                    } finally {
++                        // JS drives playback; the framework must not ALSO play.
++                        future.setException(UnsupportedOperationException("routed to JS"))
++                    }
++                }
++                return future
++            }
 +            absSubmitBrowse(onReject = {
 +                future.setException(UnsupportedOperationException("service unavailable"))
 +            }) {
 +                try {
-+                    val f = java.io.File(filesDir, "widget_state.json")
-+                    val o = if (f.exists()) org.json.JSONObject(f.readText()) else null
++                    val o = absReadMirror("widget_state.json")?.let { org.json.JSONObject(it) }
 +                    val itemId = absStr(o, "itemId") ?: ""
 +                    if (itemId.isEmpty()) {
 +                        future.setException(UnsupportedOperationException("no last session"))
@@ -1761,3 +1935,24 @@ index b495b5a..ccb6ba3 100644
          }
  
          override fun onSetRating(
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/utils/CoilBitmapLoader.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/utils/CoilBitmapLoader.kt
+index d85e2c7..db6b437 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/utils/CoilBitmapLoader.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/utils/CoilBitmapLoader.kt
+@@ -34,9 +34,13 @@ class CoilBitmapLoader @Inject constructor(
+     }
+ 
+     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
+-        val bitmap = BitmapFactory.decodeByteArray(data,  /* offset= */0, data.size)
+-        return scope.future {
+-            bitmap ?: throw IOException("Unable to decode bitmap")
++        // Decode INSIDE the future on a worker dispatcher — the old code ran
++        // decodeByteArray synchronously on the caller (main) thread before
++        // wrapping the result, which is newly load-bearing now that offline
++        // browse items carry inline artworkData bytes.
++        return scope.future(kotlinx.coroutines.Dispatchers.IO) {
++            BitmapFactory.decodeByteArray(data, /* offset= */ 0, data.size)
++                ?: throw IOException("Unable to decode bitmap")
+         }
+     }
+ 

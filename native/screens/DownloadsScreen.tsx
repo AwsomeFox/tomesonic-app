@@ -3,6 +3,7 @@ import { View, Text, Pressable, FlatList, Alert } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
@@ -79,8 +80,8 @@ export default function DownloadsScreen({ navigation }: any) {
     </View>
   );
 
-  const EmptyState = ({ icon, label }: { icon: any; label: string }) => (
-    <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 80 }}>
+  const EmptyState = ({ icon, title, label }: { icon: any; title: string; label: string }) => (
+    <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 80, paddingHorizontal: 32 }}>
       <View
         style={{
           width: 72,
@@ -94,7 +95,10 @@ export default function DownloadsScreen({ navigation }: any) {
       >
         <Icon name={icon} size={36} color={colors.onSecondaryContainer} />
       </View>
-      <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{label}</Text>
+      <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600" }}>{title}</Text>
+      <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>
+        {label}
+      </Text>
     </View>
   );
 
@@ -103,6 +107,9 @@ export default function DownloadsScreen({ navigation }: any) {
     return (
       <Pressable
         onPress={() => setActiveTab(tab)}
+        accessibilityRole="tab"
+        accessibilityState={{ selected }}
+        android_ripple={{ color: withAlpha(colors.primary, 0.12) }}
         style={{ flex: 1, paddingVertical: 14, alignItems: "center", justifyContent: "center" }}
       >
         <Text style={{ color: selected ? colors.primary : colors.onSurfaceVariant, fontSize: 15, fontWeight: "700" }}>
@@ -190,7 +197,7 @@ export default function DownloadsScreen({ navigation }: any) {
                   marginBottom: 16,
                 }}
               >
-                <Icon name="folder" size={24} color="#FBC02D" />
+                <Icon name="folder" size={24} color={colors.tertiary} />
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>
                     Internal App Storage
@@ -236,7 +243,13 @@ export default function DownloadsScreen({ navigation }: any) {
               </View>
             ) : null
           }
-          ListEmptyComponent={<EmptyState icon="download" label="No downloaded audiobooks found." />}
+          ListEmptyComponent={
+            <EmptyState
+              icon="download"
+              title="No downloads yet"
+              label="Downloaded books play offline. Download one from its details page."
+            />
+          }
           renderItem={({ item }) => (
             <Pressable
               onPress={() => handlePlayOffline(item)}
@@ -309,7 +322,13 @@ export default function DownloadsScreen({ navigation }: any) {
           data={activeList}
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ padding: 16 }}
-          ListEmptyComponent={<EmptyState icon="cloud" label="No active downloads in progress." />}
+          ListEmptyComponent={
+            <EmptyState
+              icon="cloud"
+              title="Nothing downloading"
+              label="Active and failed downloads show up here while they run."
+            />
+          }
           renderItem={({ item }) => (
             <View
               style={{
@@ -360,7 +379,24 @@ export default function DownloadsScreen({ navigation }: any) {
                   </Pressable>
                 ) : null}
                 <Pressable
-                  onPress={() => cancelDownload(item.id)}
+                  onPress={() => {
+                    // Cancel is a full DISCARD (record + partial files deleted)
+                    // and the X sits beside Retry on failed rows — confirm for
+                    // live downloads so a mistap can't throw away gigabytes.
+                    // Failed rows stay one-tap (nothing in flight to lose).
+                    if (item.status === "downloading" || item.status === "pending") {
+                      Alert.alert(
+                        "Cancel download?",
+                        `"${item.title}" will stop downloading and its partial files will be deleted.`,
+                        [
+                          { text: "Keep downloading", style: "cancel" },
+                          { text: "Cancel download", style: "destructive", onPress: () => cancelDownload(item.id) },
+                        ]
+                      );
+                    } else {
+                      cancelDownload(item.id);
+                    }
+                  }}
                   style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                   hitSlop={6}
                   accessibilityRole="button"
@@ -370,28 +406,41 @@ export default function DownloadsScreen({ navigation }: any) {
                 </Pressable>
               </View>
 
-              {/* Progress bar */}
+              {/* Progress bar — one accessible progressbar element; a bare
+                  "42%" Text announced with no context. */}
               <View
-                style={{
-                  height: 6,
-                  backgroundColor: colors.surfaceContainerHighest,
-                  borderRadius: 3,
-                  overflow: "hidden",
-                  marginTop: 12,
+                accessible
+                accessibilityRole="progressbar"
+                accessibilityLabel={`${item.title} download progress`}
+                accessibilityValue={{
+                  min: 0,
+                  max: 100,
+                  now: Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0,
+                  text: `${Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0} percent downloaded`,
                 }}
               >
                 <View
                   style={{
-                    height: "100%",
-                    backgroundColor: colors.primary,
+                    height: 6,
+                    backgroundColor: colors.surfaceContainerHighest,
                     borderRadius: 3,
-                    width: `${Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%`,
+                    overflow: "hidden",
+                    marginTop: 12,
                   }}
-                />
+                >
+                  <View
+                    style={{
+                      height: "100%",
+                      backgroundColor: colors.primary,
+                      borderRadius: 3,
+                      width: `${Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%`,
+                    }}
+                  />
+                </View>
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "right", marginTop: 4 }}>
+                  {Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%
+                </Text>
               </View>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "right", marginTop: 4 }}>
-                {Number.isFinite(item.progress) ? Math.round(item.progress * 100) : 0}%
-              </Text>
             </View>
           )}
         />

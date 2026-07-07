@@ -1764,7 +1764,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await get().seek((chapters[active]?.start || 0) + pos);
       return;
     }
-    if (!isCasting && _trackOffsets.length > 1) {
+    if (_trackOffsets.length > 1) {
+      // Applies while casting too: the app's media notification (the single
+      // control surface during a cast) reports its seekbar relative to the
+      // PAUSED LOCAL item — the local active index is exactly the offset the
+      // reported position is relative to. seek() then routes the mapped
+      // absolute position to the receiver via the cast branch.
       const active = (await TrackPlayer.getActiveTrackIndex().catch(() => null)) ?? 0;
       await get().seek((_trackOffsets[active] || 0) + pos);
       return;

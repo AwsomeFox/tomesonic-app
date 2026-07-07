@@ -70,6 +70,8 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
 
               <Text
                 accessibilityLabel={`Current speed ${speed.toFixed(2)} times`}
+                // Announce each +/- step — the buttons alone give no feedback.
+                accessibilityLiveRegion="polite"
                 style={{ fontSize: 44, fontWeight: "600", color: colors.onSurface, minWidth: 130, textAlign: "center" }}
               >
                 {speed.toFixed(2)}

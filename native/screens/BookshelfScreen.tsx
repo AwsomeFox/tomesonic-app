@@ -32,7 +32,7 @@ export default function BookshelfScreen({ navigation }: any) {
   const { serverConnectionConfig } = useUserStore();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
-  const { personalizedShelves, loadPersonalizedShelves, currentLibraryId, loadLibraries } = useLibraryStore();
+  const { personalizedShelves, loadPersonalizedShelves, currentLibraryId, loadLibraries, shelvesLoadError } = useLibraryStore();
   // Continue Reading is cached per library (stale-while-revalidate, like the
   // shelves) so it renders on the first frame instead of popping in after the
   // per-item fetches finish.
@@ -339,10 +339,39 @@ export default function BookshelfScreen({ navigation }: any) {
       return ordered;
     };
 
+    // Fallback when the series-list fetch failed on a cold cache: the
+    // server's own continue-series shelf entities carry series ids, so the
+    // shelf can still render (single-cover cards) instead of vanishing.
+    const buildFromServerShelf = () => {
+      const cs = personalizedShelves.find((s: any) => s.id === "continue-series");
+      const ordered: any[] = [];
+      const seen = new Set<string>();
+      (cs?.entities || []).forEach((b: any) => {
+        const s = b?.media?.metadata?.series;
+        const so = Array.isArray(s) ? s[0] : s;
+        if (so?.id && !seen.has(so.id)) {
+          seen.add(so.id);
+          const cover = getCoverUrl(b?.id);
+          ordered.push({
+            id: so.id,
+            name: so.name || "",
+            books: [b],
+            covers: cover ? [cover] : [],
+            booksCount: 1,
+          });
+        }
+      });
+      return ordered;
+    };
+
     // Fully synchronous: the series list arrives via its own parallel fetch
     // above, so this just re-derives whenever any input changes.
-    if (personalizedShelves.length === 0 || !currentLibraryId || seriesList.length === 0) {
+    if (personalizedShelves.length === 0 || !currentLibraryId) {
       setContinueSeries([]);
+      return;
+    }
+    if (seriesList.length === 0) {
+      setContinueSeries(buildFromServerShelf());
       return;
     }
     setContinueSeries(buildFrom(seriesList));
@@ -733,15 +762,39 @@ export default function BookshelfScreen({ navigation }: any) {
               state instead of a blank scroll area. RefreshControl stays live
               (flexGrow centers this within the scrollable viewport). */}
           {!displayShelves.some((s: any) => s.entities && s.entities.length > 0) ? (
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingBottom: 48 }}>
-              <Icon name="library" size={48} color={colors.onSurfaceVariant} />
-              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
-                Nothing on the shelf yet
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
-                Books added to this library will show up here. Pull down to refresh.
-              </Text>
-            </View>
+            shelvesLoadError ? (
+              // The fetch FAILED and there's no cache to show — an error
+              // disguised as an empty library sends the user hunting through
+              // their server for missing books.
+              <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingBottom: 48 }}>
+                <Icon name="warning" size={48} color={colors.onSurfaceVariant} />
+                <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+                  Couldn't load your library
+                </Text>
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+                  Check your connection to the server, then try again.
+                </Text>
+                <Pressable
+                  onPress={() => loadPersonalizedShelves(true)}
+                  android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading your library"
+                  style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+                >
+                  <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingBottom: 48 }}>
+                <Icon name="library" size={48} color={colors.onSurfaceVariant} />
+                <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+                  Nothing on the shelf yet
+                </Text>
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+                  Books added to this library will show up here. Pull down to refresh.
+                </Text>
+              </View>
+            )
           ) : null}
           {displayShelves.map((shelf: any) => {
             // Dispatch by shelf type. We transform "Continue Series" into a

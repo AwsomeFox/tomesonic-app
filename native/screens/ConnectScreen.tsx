@@ -40,6 +40,9 @@ export default function ConnectScreen() {
   const [error, setError] = useState("");
   const [authMethods, setAuthMethods] = useState<string[]>([]);
   const [oauthButtonText, setOauthButtonText] = useState("Login with OpenID");
+  // From /status — persisted into the connection config so the Account
+  // screen's "Server version" line can actually render.
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
 
   const isLocalAuth = authMethods.includes("local") || authMethods.length === 0;
   const isOpenIDAuth = authMethods.includes("openid");
@@ -81,6 +84,7 @@ export default function ConnectScreen() {
         token,
         refreshToken,
         name: address.replace(/^https?:\/\//, ""),
+        ...(serverVersion ? { version: serverVersion } : {}),
       },
       user
     );
@@ -95,15 +99,28 @@ export default function ConnectScreen() {
     setLoading(true);
 
     try {
-      // Clean and validate URL formatting
-      let cleanUrl = address.trim().replace(/\/+$/, "");
-      if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
-        cleanUrl = "http://" + cleanUrl;
-      }
+      // Clean and validate URL formatting. A bare hostname tries https://
+      // first, falling back to http:// — most real ABS deployments sit behind
+      // TLS (reverse proxy / abs.example.com), and defaulting to http:// made
+      // those fail outright (or sent credentials in the clear when the server
+      // answered on both).
+      const trimmed = address.trim().replace(/\/+$/, "");
+      const hasScheme = trimmed.startsWith("http://") || trimmed.startsWith("https://");
+      const candidates = hasScheme ? [trimmed] : [`https://${trimmed}`, `http://${trimmed}`];
 
       // Verify this is a reachable Audiobookshelf server and discover which
       // auth methods it supports (local, openid).
-      const statusRes = await axios.get(`${cleanUrl}/status`, { timeout: 10000 });
+      let cleanUrl = candidates[0];
+      let statusRes: any = null;
+      for (let i = 0; i < candidates.length; i++) {
+        try {
+          statusRes = await axios.get(`${candidates[i]}/status`, { timeout: 10000 });
+          cleanUrl = candidates[i];
+          break;
+        } catch (err) {
+          if (i === candidates.length - 1) throw err;
+        }
+      }
       if (!statusRes.data || statusRes.data.app !== "audiobookshelf") {
         setError("This does not appear to be an Audiobookshelf server.");
         return;
@@ -113,6 +130,7 @@ export default function ConnectScreen() {
       setOauthButtonText(
         statusRes.data.authFormData?.authOpenIDButtonText || "Login with OpenID"
       );
+      setServerVersion(statusRes.data.serverVersion || null);
       setAddress(cleanUrl);
       setShowAuthFields(true);
     } catch (err) {
@@ -451,9 +469,12 @@ export default function ConnectScreen() {
             </View>
           )}
 
-          {/* Inline error banner — M3 error container */}
+          {/* Inline error banner — M3 error container. Live region so a
+              failed login is announced instead of appearing silently. */}
           {error ? (
             <View
+              accessibilityRole="alert"
+              accessibilityLiveRegion="polite"
               style={{
                 marginTop: 20,
                 paddingHorizontal: 16,

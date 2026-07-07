@@ -107,15 +107,26 @@ export default function AuthorsScreen({ navigation }: any) {
 
   const fetchAuthors = useCallback(async () => {
     if (!currentLibraryId) return;
+    const requestedLibraryId = currentLibraryId;
     setLoading(true);
     setLoadError(false);
     try {
       const response = await api.get(
-        `/api/libraries/${currentLibraryId}/authors`
+        `/api/libraries/${requestedLibraryId}/authors`
       );
+      // A slow response from the PREVIOUS library must not overwrite the new
+      // library's list after a switch (same guard SeriesList has).
+      if (useLibraryStore.getState().currentLibraryId !== requestedLibraryId) return;
       const data = response.data || {};
-      const results: Author[] = data.authors || data.results || data || [];
-      setAuthors(results);
+      // Only ever install an ARRAY: a proxy/captive-portal HTML-or-object body
+      // with HTTP 200 would otherwise land in state and crash the spread/map.
+      const raw = data.authors ?? data.results ?? data;
+      if (!Array.isArray(raw)) {
+        console.warn("[AuthorsScreen] non-array authors payload — keeping previous list");
+        setLoadError(true);
+        return;
+      }
+      setAuthors(raw as Author[]);
     } catch (err) {
       console.error("[AuthorsScreen] Failed to fetch authors:", err);
       setLoadError(true);
@@ -246,7 +257,8 @@ export default function AuthorsScreen({ navigation }: any) {
           </View>
         )}
 
-        {/* Translucent grey bottom panel with name + book count */}
+        {/* Fixed dark scrim + onMedia text, like every other artwork overlay —
+            an onSurface-based scrim turned light-on-light in dark theme. */}
         <View
           style={{
             position: "absolute",
@@ -256,13 +268,13 @@ export default function AuthorsScreen({ navigation }: any) {
             paddingHorizontal: 12,
             paddingTop: 10,
             paddingBottom: 12,
-            backgroundColor: withAlpha(colors.onSurface, 0.55),
+            backgroundColor: "rgba(0, 0, 0, 0.55)",
           }}
         >
           <Text
             numberOfLines={1}
             style={{
-              color: colors.isDark ? colors.onSurface : "#FFFFFF",
+              color: colors.onMedia,
               fontSize: 15,
               fontWeight: "700",
             }}
@@ -279,12 +291,12 @@ export default function AuthorsScreen({ navigation }: any) {
             <Icon
               name="book"
               size={13}
-              color={withAlpha(colors.isDark ? colors.onSurface : "#FFFFFF", 0.85)}
+              color={colors.onMediaVariant}
             />
             <Text
               numberOfLines={1}
               style={{
-                color: withAlpha(colors.isDark ? colors.onSurface : "#FFFFFF", 0.85),
+                color: colors.onMediaVariant,
                 fontSize: 12,
                 fontWeight: "500",
                 marginLeft: 5,

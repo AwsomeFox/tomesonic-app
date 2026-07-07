@@ -1,4 +1,4 @@
-import { storage } from "../../utils/storage";
+import { storage, storageHelper } from "../../utils/storage";
 import { api } from "../../utils/api";
 import {
   syncProgress,
@@ -53,6 +53,9 @@ const localSessionKeys = () =>
 
 beforeEach(() => {
   storage.getAllKeys().forEach((k) => storage.remove(k));
+  // Queuing is gated on a stored session (a logged-out device must never bank
+  // offline syncs) — these tests exercise the logged-IN paths.
+  storageHelper.setServerConfig({ address: "http://abs.local", token: "tok" });
   mockedPost.mockResolvedValue({ data: {} } as any);
   mockedPatch.mockResolvedValue({ data: {} } as any);
   mockedDelete.mockResolvedValue({ data: {} } as any);
@@ -1047,6 +1050,11 @@ describe("monotonic stamp cross-restart seeding", () => {
     const freshApi = require("../../utils/api").api;
     const ps = require("../../utils/progressSync");
     freshStorage.getAllKeys().forEach((k: string) => freshStorage.remove(k));
+    // Queuing is gated on a stored session (fresh module copy = fresh storage).
+    require("../../utils/storage").storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "tok",
+    });
     // Persisted by a previous boot, stamped BEFORE the wall clock was set back.
     freshStorage.set(
       "pendingSync_sess1",

@@ -21,7 +21,10 @@ class ResumeWidgetProvider : AppWidgetProvider() {
         var title = "TomeSonic"
         var subtitle = "Tap to resume listening"
         try {
-            val f = File(context.filesDir, "widget_state.json")
+            // JS swaps this file via delete-then-rename — if a widget update
+            // lands in that gap, the fully-written .tmp still holds the state.
+            var f = File(context.filesDir, "widget_state.json")
+            if (!f.exists()) f = File(context.filesDir, "widget_state.json.tmp")
             if (f.exists()) {
                 val o = JSONObject(f.readText())
                 val t = o.optString("title")

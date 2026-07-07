@@ -1,6 +1,6 @@
 import axios from "axios";
 import { storageHelper } from "./storage";
-import { writeAutoCreds, readAutoCreds } from "./autoCreds";
+import { writeAutoCreds, readAutoCreds, writeWidgetState } from "./autoCreds";
 import { appLogger } from "./logger";
 
 export const api = axios.create({
@@ -30,6 +30,12 @@ const forceLogout = () => {
       storage.set("logout_reason", "session_expired");
     } catch {}
     storageHelper.clearServerConfig();
+    // Clear the native mirrors too (logout() does): otherwise the Android
+    // Auto service keeps the dead token pair and fails noisily in the car
+    // instead of showing signed-out, and the resume widget keeps advertising
+    // a book whose tap path can no longer play.
+    writeAutoCreds(null, null, null).catch(() => {});
+    writeWidgetState(null).catch(() => {});
     const { useUserStore } = require("../store/useUserStore");
     const prevConfig = useUserStore.getState().serverConnectionConfig;
     // user === null drives the navigator back to the Connect screen. Keep only
@@ -54,6 +60,21 @@ const forceLogout = () => {
 // 3. the Android Auto creds mirror — the native browse service reads it.
 // Lazy require for the same circular-import reason as forceLogout.
 const applyRefreshedConfig = (config: any) => {
+  // The refresh can take up to 20s; the user may have logged out (stored
+  // config gone) or switched accounts/servers meanwhile. Unconditionally
+  // persisting would RESURRECT the logged-out account's credentials (secure
+  // store + auto_creds, silently re-logging them in on next launch) or
+  // clobber the new account's config with the old one's. Only apply when the
+  // refresh still belongs to the currently stored session.
+  const cur = storageHelper.getServerConfig();
+  if (
+    !cur?.token ||
+    cur.address !== config?.address ||
+    (cur.userId && config?.userId && cur.userId !== config.userId)
+  ) {
+    appLogger.warn("Refreshed config no longer matches the stored session — discarding", "API");
+    return;
+  }
   storageHelper.setServerConfig(config);
   try {
     const { useUserStore } = require("../store/useUserStore");

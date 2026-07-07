@@ -61,14 +61,27 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
   const fetchData = useCallback(async () => {
     try {
       setLoadError(false);
+      // Only ever install an ARRAY: a proxy/captive-portal HTML-or-object body
+      // with HTTP 200 would otherwise land in state and crash the row map.
+      const asArray = (v: any): any[] | null => (Array.isArray(v) ? v : null);
       if (activeTab === "collections" && currentLibraryId) {
         const res = await api.get(`/api/libraries/${currentLibraryId}/collections`);
-        setCollections(res.data?.results || res.data?.collections || res.data || []);
+        const list = asArray(res.data?.results) ?? asArray(res.data?.collections) ?? asArray(res.data);
+        if (!list) {
+          setLoadError(true);
+          return;
+        }
+        setCollections(list);
       } else if (activeTab === "playlists" && currentLibraryId) {
         // Library-scoped (matches the collections tab and the Add-to sheet) —
         // the global /api/playlists mixes in other libraries' playlists.
         const res = await api.get(`/api/libraries/${currentLibraryId}/playlists`);
-        setPlaylists(res.data?.results || res.data?.playlists || res.data || []);
+        const list = asArray(res.data?.results) ?? asArray(res.data?.playlists) ?? asArray(res.data);
+        if (!list) {
+          setLoadError(true);
+          return;
+        }
+        setPlaylists(list);
       }
     } catch (err) {
       console.error(`[CollectionsPlaylists] Failed to load ${activeTab}:`, err);
@@ -124,8 +137,12 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
       await fetchData();
     } catch (e: any) {
       console.warn("[CollectionsPlaylists] create failed", e);
+      // Only string bodies — a JSON error body stringifies to "[object Object]".
+      const body = e?.response?.data;
       setCreateError(
-        e?.response?.data?.toString?.() || "Couldn't create it — check the server connection."
+        typeof body === "string" && body.trim()
+          ? body
+          : "Couldn't create it — check the server connection."
       );
     } finally {
       setCreating(false);

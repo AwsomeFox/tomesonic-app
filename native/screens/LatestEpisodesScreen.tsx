@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -30,6 +30,10 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     setStartingId(episode.id);
     try {
       await startPlayback(episode.libraryItemId, episode.id);
+    } catch (e) {
+      // Was an unhandled rejection — spinner cleared and nothing happened.
+      console.warn("[LatestEpisodes] play failed", e);
+      Alert.alert("Couldn't play episode", "Check your connection to the server and try again.");
     } finally {
       setStartingId(null);
     }
@@ -240,8 +244,11 @@ export default function LatestEpisodesScreen({ navigation }: any) {
         </View>
       ) : error ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="warning" size={40} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
+          <Icon name="warning" size={44} color={colors.onSurfaceVariant} style={{ marginBottom: 4 }} />
+          <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 12 }}>
+            Couldn't load episodes
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>{error}</Text>
           {currentLibraryId ? (
             <Pressable
               onPress={() => setRetryTick((t) => t + 1)}
@@ -256,9 +263,12 @@ export default function LatestEpisodesScreen({ navigation }: any) {
         </View>
       ) : episodes.length === 0 ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="podcast" size={48} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
-            No recent episodes found.
+          <Icon name="podcast" size={44} color={colors.onSurfaceVariant} style={{ marginBottom: 4 }} />
+          <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 12 }}>
+            No recent episodes
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>
+            New episodes from this library's podcasts will show up here.
           </Text>
         </View>
       ) : (

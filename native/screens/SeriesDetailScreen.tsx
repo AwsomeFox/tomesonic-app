@@ -507,7 +507,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         <ListSkeleton rows={7} thumb={72} />
       ) : error ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
+          <Icon name="warning" size={40} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
           <Pressable
             onPress={() => setRetryTick((t) => t + 1)}
