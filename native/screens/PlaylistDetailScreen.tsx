@@ -191,6 +191,14 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           if (libraryItemId) navigation.navigate("ItemDetail", { itemId: libraryItemId });
         }}
         style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 }}
+        accessibilityRole="button"
+        accessibilityLabel={subtitle ? `${title} by ${subtitle}` : title}
+        // The nested Play/Read button collapses into this accessible row and is
+        // unreachable by TalkBack — expose it as a custom action instead.
+        accessibilityActions={[{ name: "play", label: ebookOnly ? "Read" : "Play" }]}
+        onAccessibilityAction={(e) => {
+          if (e.nativeEvent.actionName === "play") startItem(item);
+        }}
       >
         {/* Cover */}
         <View
@@ -341,7 +349,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 20, paddingBottom: 16 }}>
             <PlaylistCollage covers={collageCovers} size={120} colors={colors} />
             <View style={{ flex: 1, marginLeft: 16, justifyContent: "center" }}>
-              <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "800" }}>
+              <Text numberOfLines={3} style={{ color: colors.onSurface, fontSize: 22, fontWeight: "800" }}>
                 {playlist.name || "Untitled Playlist"}
               </Text>
               <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 4 }}>
