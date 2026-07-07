@@ -166,6 +166,9 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
       }
     }
     if (products.length < 50) break;
+    // Hard page cap hit on a FULL page — more almost certainly exists, so
+    // the list must not present itself as the complete backlist.
+    if (page === 4) (out as any).partial = true;
   }
   return out;
 }
@@ -215,7 +218,10 @@ export async function audibleFindBookAsin(title: string, author?: string): Promi
     let score = 0;
     if (full && full === wantFull) score = 4;
     else if (titlesLikelySame(p.title, title)) score = 3;
-    else if (wantFull && full.includes(wantFull)) score = 2;
+    // Containment BOTH ways: the catalog may add a series prefix the library
+    // lacks ("Mistborn: The Final Empire" ⊇ "The Final Empire") — or the
+    // library may carry the prefix the catalog drops.
+    else if (wantFull && full && (full.includes(wantFull) || wantFull.includes(full))) score = 2;
     else if (wantBase && base === wantBase) score = 1;
     if (score > bestScore) {
       best = p;

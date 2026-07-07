@@ -484,3 +484,27 @@ describe("partial-list flags", () => {
     expect((full as any).partial).toBeUndefined();
   });
 });
+
+describe("Copilot round-3 refinements", () => {
+  it("audibleAuthorBooks hitting the page cap on a FULL page marks the list partial", async () => {
+    const fullPage = (p: number) =>
+      Array.from({ length: 50 }, (_, i) => ({ asin: `P${p}_${i}`, title: `B${p}_${i}` }));
+    mockedGet
+      .mockResolvedValueOnce({ data: { products: fullPage(1) } })
+      .mockResolvedValueOnce({ data: { products: fullPage(2) } })
+      .mockResolvedValueOnce({ data: { products: fullPage(3) } })
+      .mockResolvedValueOnce({ data: { products: fullPage(4) } });
+    const books = await audibleAuthorBooks("Prolific Author");
+    expect(books).toHaveLength(200);
+    expect((books as any).partial).toBe(true);
+  });
+
+  it("audibleFindBookAsin matches when the LIBRARY title carries the series prefix", async () => {
+    mockedGet.mockResolvedValue({
+      data: { products: [{ asin: "B99", title: "The Final Empire" }] },
+    });
+    // Library stored "Mistborn: The Final Empire"; catalog row lacks the prefix.
+    const asin = await audibleFindBookAsin("Mistborn: The Final Empire", "Brandon Sanderson");
+    expect(asin).toBe("B99");
+  });
+});
