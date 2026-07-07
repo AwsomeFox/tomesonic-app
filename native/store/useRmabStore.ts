@@ -275,7 +275,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         for (const [asin, status] of Object.entries(state.requestedAsins)) {
           // Keep entries the server confirms, plus any added mid-reconcile
           // (a just-tapped Request must not lose its chip to a stale list).
-          if (serverAsins.has(asin) || !(asin in snapshot)) next[asin] = status;
+          // Own-property check, not `in` — `in` walks the prototype so a plain
+          // (non-null-proto) snapshot would treat "toString" etc. as present.
+          if (serverAsins.has(asin) || !Object.prototype.hasOwnProperty.call(snapshot, asin))
+            next[asin] = status;
         }
         if (Object.keys(next).length === Object.keys(state.requestedAsins).length) {
           return state;

@@ -56,24 +56,27 @@ export async function ensurePlaybackNotificationPermission(): Promise<void> {
 async function ensureReady(): Promise<boolean> {
   try {
     if (!_permChecked) {
-      _permChecked = true;
       // Honor the shared "asked once" flag both request paths persist — if the
       // prompt already ran (this launch's playback path or a previous launch),
       // read the current status WITHOUT re-prompting.
       let asked = false;
+      let settings;
       try {
         const { storage } = require("./storage");
         asked = !!storage.getBoolean("notifPermRequested");
-        const settings = asked
+        settings = asked
           ? await notifee.getNotificationSettings()
           : await notifee.requestPermission();
-        _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
         if (!asked) storage.set("notifPermRequested", true);
       } catch {
         // Storage unavailable — fall back to a single request.
-        const settings = await notifee.requestPermission();
-        _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+        settings = await notifee.requestPermission();
       }
+      _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+      // Set only AFTER a successful settings call — a throw above leaves this
+      // false so the next download update retries instead of staying disabled
+      // for the whole session.
+      _permChecked = true;
     }
     if (!_channelReady && Platform.OS === "android") {
       await notifee.createChannel({
