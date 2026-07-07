@@ -8,16 +8,31 @@ import Icon from "../components/Icon";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { formatBytes } from "../utils/format";
+import * as FileSystem from "expo-file-system/legacy";
 
 export default function DownloadsScreen({ navigation }: any) {
   const colors = useThemeColors();
   const { activeDownloads, completedDownloads, loadDownloadsFromDb, cancelDownload, retryDownload, removeDownload, removeAllDownloads } = useDownloadStore();
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const [activeTab, setActiveTab] = useState<"completed" | "active">("completed");
+  // Device free space, so "X used" has context — users can see whether there's
+  // room to download more without leaving the app for system settings.
+  const [freeBytes, setFreeBytes] = useState<number | null>(null);
 
   useEffect(() => {
     loadDownloadsFromDb();
   }, [loadDownloadsFromDb]);
+
+  useEffect(() => {
+    let alive = true;
+    FileSystem.getFreeDiskStorageAsync()
+      .then((b) => alive && typeof b === "number" && setFreeBytes(b))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // Re-read after the set of downloads changes (a delete frees space).
+  }, [Object.keys(completedDownloads).length, Object.keys(activeDownloads).length]);
 
   // Alphabetical so the list doesn't reorder by whatever the DB load order was.
   const byTitle = (a: any, b: any) => String(a.title || "").localeCompare(String(b.title || ""));
@@ -205,6 +220,7 @@ export default function DownloadsScreen({ navigation }: any) {
                   <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
                     {completedList.length} {completedList.length === 1 ? "item" : "items"} ·{" "}
                     {formatBytes(completedList.reduce((acc, it) => acc + itemBytes(it), 0))} used
+                    {freeBytes != null ? ` · ${formatBytes(freeBytes)} free` : ""}
                   </Text>
                 </View>
                 <Pressable

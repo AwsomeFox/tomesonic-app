@@ -143,6 +143,24 @@ describe("ConnectScreen", () => {
     await screen.findByText("Unable to connect to the server. Please verify the URL.");
   });
 
+  it("names a certificate problem when the TLS handshake fails (self-signed)", async () => {
+    // https fails the handshake (untrusted cert); the http fallback is refused.
+    mockedGet.mockImplementation((url: string) =>
+      url.startsWith("https://")
+        ? Promise.reject(
+            new Error(
+              "java.security.cert.CertPathValidatorException: Trust anchor for certification path not found."
+            )
+          )
+        : Promise.reject(new Error("ECONNREFUSED"))
+    );
+    await render(<ConnectScreen />);
+    await connect("abs.example.com");
+    // Not the generic "verify the URL" — a certificate-specific message.
+    await screen.findByText(/security certificate/);
+    expect(screen.queryByPlaceholderText("Username")).toBeNull();
+  });
+
   it("requires username and password before logging in", async () => {
     mockedGet.mockResolvedValue(absStatus());
     await render(<ConnectScreen />);
