@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import BottomSheet from "./BottomSheet";
 import Icon from "./Icon";
 import Pressable from "./HintPressable";
@@ -158,7 +159,7 @@ export default function RmabBookDetailSheet({
                   accessibilityRole="button"
                   accessibilityLabel={`Request ${book.title}`}
                   accessibilityState={{ disabled: requesting, busy: requesting }}
-                  android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
                   style={{
                     backgroundColor: colors.primaryContainer,
                     borderRadius: 20,

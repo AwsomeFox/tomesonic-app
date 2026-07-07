@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon from "./Icon";
 import { useRmabStore } from "../store/useRmabStore";
 import { RmabBook, resolveRmabUrl } from "../utils/rmab";
@@ -179,7 +180,7 @@ export default function RmabMissingSection({
               }}
               accessibilityRole="button"
               accessibilityLabel={`Details for ${book.title}`}
-              android_ripple={{ color: colors.primary + "14" }}
+              android_ripple={{ color: withAlpha(colors.primary, 0.08) }}
               style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
             >
               <Image

@@ -129,10 +129,23 @@ export async function writeAutoCreds(
         // native browse service doesn't lose its selection on every refresh.
         creds.libraryId = existing.libraryId;
       }
-      await FileSystem.writeAsStringAsync(
-        CREDS_PATH,
-        JSON.stringify(creds)
-      );
+      // Atomic write: this file can hold the ONLY valid (rotated) refresh-token
+      // pair, and the native Android Auto service reads/writes it too. Write a
+      // temp then move (rename) over the destination — moveAsync is an atomic
+      // path swap on the same filesystem, so a concurrent reader (native or a
+      // second JS write) never sees a half-written file, and a kill mid-write
+      // leaves the previous complete file intact.
+      const tmpPath = `${CREDS_PATH}.tmp`;
+      await FileSystem.writeAsStringAsync(tmpPath, JSON.stringify(creds));
+      try {
+        await FileSystem.moveAsync({ from: tmpPath, to: CREDS_PATH });
+      } catch (mvErr) {
+        // Move failed (unexpected) — fall back to a direct write so the fresh
+        // token still persists, then clean up the temp.
+        console.warn("[AutoCreds] atomic move failed; direct write", mvErr);
+        await FileSystem.writeAsStringAsync(CREDS_PATH, JSON.stringify(creds));
+        await FileSystem.deleteAsync(tmpPath, { idempotent: true }).catch(() => {});
+      }
     } else {
       await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
     }

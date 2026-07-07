@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import Pressable from "../components/HintPressable";
 import TopAppBar from "../components/TopAppBar";
@@ -368,7 +369,7 @@ export default function DiscoverScreen({ navigation }: any) {
                 accessibilityLabel="BookDate preferences"
                 // padding 6 alone is ~32dp — below the 48dp Android target.
                 hitSlop={12}
-                android_ripple={{ color: colors.onSurfaceVariant + "22", borderless: true, radius: 20 }}
+                android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13), borderless: true, radius: 20 }}
                 style={{ padding: 6 }}
               >
                 <Icon name="settings" size={20} color={colors.onSurfaceVariant} />
@@ -407,7 +408,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   onPress={loadDeck}
                   accessibilityRole="button"
                   accessibilityLabel="Retry"
-                  android_ripple={{ color: colors.onSecondaryContainer + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.13) }}
                   style={{
                     marginTop: 12,
                     backgroundColor: colors.secondaryContainer,
@@ -438,7 +439,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   onPress={loadDeck}
                   accessibilityRole="button"
                   accessibilityLabel="Get more picks"
-                  android_ripple={{ color: colors.onPrimary + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onPrimary, 0.13) }}
                   style={{
                     marginTop: 12,
                     backgroundColor: colors.primary,
@@ -489,7 +490,7 @@ export default function DiscoverScreen({ navigation }: any) {
                       borderRadius: 10,
                       paddingHorizontal: 10,
                       paddingVertical: 4,
-                      backgroundColor: colors.primaryContainer + "E6",
+                      backgroundColor: withAlpha(colors.primaryContainer, 0.9),
                       flexDirection: "row",
                       alignItems: "center",
                     }}
@@ -664,7 +665,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   accessibilityRole="button"
                   accessibilityLabel="Pass"
                   accessibilityState={{ disabled: busy }}
-                  android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13) }}
                   style={{
                     width: 60,
                     height: 60,
@@ -683,7 +684,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   accessibilityRole="button"
                   accessibilityLabel="Undo last swipe"
                   accessibilityState={{ disabled: busy }}
-                  android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13) }}
                   style={{
                     width: 60,
                     height: 60,
@@ -702,7 +703,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   accessibilityRole="button"
                   accessibilityLabel="Like and request"
                   accessibilityState={{ disabled: busy }}
-                  android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
                   style={{
                     width: 60,
                     height: 60,

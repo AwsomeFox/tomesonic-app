@@ -3,6 +3,7 @@ import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, RefreshContr
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import { listMyRequests, deleteRequest, approveRequest, resolveRmabUrl } from "../utils/rmab";
 import BottomSheet from "../components/BottomSheet";
@@ -194,7 +195,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                   onPress={() => setDetail(item)}
                   accessibilityRole="button"
                   accessibilityLabel={`Details for ${item?.title || item?.audiobook?.title || "request"}`}
-                  android_ripple={{ color: colors.primary + "14" }}
+                  android_ripple={{ color: withAlpha(colors.primary, 0.08) }}
                   style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
                 >
                   <Image
@@ -238,7 +239,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       disabled={acting === id}
                       accessibilityRole="button"
                       accessibilityLabel={`Approve ${item?.title || "request"}`}
-                      android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                      android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
                       style={{
                         marginLeft: 8,
                         width: 36,
@@ -257,7 +258,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       disabled={acting === id}
                       accessibilityRole="button"
                       accessibilityLabel={`Deny ${item?.title || "request"}`}
-                      android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                      android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13) }}
                       style={{
                         marginLeft: 6,
                         width: 36,
@@ -284,7 +285,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                         ? `Confirm delete ${item?.title || "request"}`
                         : `Delete ${item?.title || "request"}`
                     }
-                    android_ripple={{ color: colors.error + "22" }}
+                    android_ripple={{ color: withAlpha(colors.error, 0.13) }}
                     style={{
                       marginLeft: 6,
                       height: 36,
@@ -398,7 +399,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       }}
                       accessibilityRole="button"
                       accessibilityLabel="Approve request"
-                      android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                      android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
                       style={{
                         flexDirection: "row",
                         alignItems: "center",
@@ -421,7 +422,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       }}
                       accessibilityRole="button"
                       accessibilityLabel="Deny request"
-                      android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                      android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13) }}
                       style={{
                         flexDirection: "row",
                         alignItems: "center",
@@ -457,7 +458,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                   }}
                   accessibilityRole="button"
                   accessibilityLabel="Delete request"
-                  android_ripple={{ color: colors.error + "22" }}
+                  android_ripple={{ color: withAlpha(colors.error, 0.13) }}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",

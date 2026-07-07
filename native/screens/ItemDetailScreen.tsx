@@ -8,6 +8,7 @@ import { queueFinishedPatch } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { downloader } from "../utils/downloader";
@@ -1481,7 +1482,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 onPress={() => setSendResult(null)}
                 accessibilityRole="button"
                 accessibilityLabel="Try again"
-                android_ripple={{ color: colors.onSecondaryContainer + "22" }}
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.13) }}
                 style={{
                   alignSelf: "center",
                   backgroundColor: colors.secondaryContainer,
@@ -1515,7 +1516,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 onPress={() => sendEbookToDevice(d.name)}
                 accessibilityRole="button"
                 accessibilityLabel={`Send to ${d.name}`}
-                android_ripple={{ color: colors.primary + "22" }}
+                android_ripple={{ color: withAlpha(colors.primary, 0.13) }}
                 // Plain object style: Fabric drops function-styles on this
                 // pressable path on-device (row rendered unstyled — no
                 // padding/row direction). Ripple covers pressed feedback.

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { View, Text, TextInput, ScrollView, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import BottomSheet from "./BottomSheet";
 import Icon from "./Icon";
 import Pressable from "./HintPressable";
@@ -163,11 +164,11 @@ export default function BookdatePreferencesSheet({
         accessibilityRole="button"
         accessibilityLabel={title}
         accessibilityState={{ selected: active }}
-        android_ripple={{ color: colors.primary + "14" }}
+        android_ripple={{ color: withAlpha(colors.primary, 0.08) }}
         style={{
           borderWidth: 2,
           borderColor: active ? colors.primary : colors.outlineVariant,
-          backgroundColor: active ? colors.primaryContainer + "33" : "transparent",
+          backgroundColor: active ? withAlpha(colors.primaryContainer, 0.2) : "transparent",
           borderRadius: 16,
           padding: 14,
           marginBottom: 10,
@@ -257,7 +258,7 @@ export default function BookdatePreferencesSheet({
                           onPress={() => toggleFavorite(b.id)}
                           accessibilityRole="button"
                           accessibilityLabel={`${selected ? "Remove" : "Add"} ${b.title}`}
-                          android_ripple={{ color: colors.primary + "14" }}
+                          android_ripple={{ color: withAlpha(colors.primary, 0.08) }}
                           style={{ flexDirection: "row", alignItems: "center", paddingVertical: 7 }}
                         >
                           <Image
@@ -321,7 +322,7 @@ export default function BookdatePreferencesSheet({
                 disabled={regenerating || saving}
                 accessibilityRole="button"
                 accessibilityLabel="Regenerate picks now"
-                android_ripple={{ color: colors.onSecondaryContainer + "22" }}
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.13) }}
                 style={{
                   marginTop: 16,
                   height: 44,
@@ -353,7 +354,7 @@ export default function BookdatePreferencesSheet({
                   onPress={onClose}
                   accessibilityRole="button"
                   accessibilityLabel="Cancel"
-                  android_ripple={{ color: colors.onSurfaceVariant + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13) }}
                   style={{
                     height: 44,
                     paddingHorizontal: 20,
@@ -370,7 +371,7 @@ export default function BookdatePreferencesSheet({
                   disabled={!canSave}
                   accessibilityRole="button"
                   accessibilityLabel="Save preferences"
-                  android_ripple={{ color: colors.onPrimary + "22" }}
+                  android_ripple={{ color: withAlpha(colors.onPrimary, 0.13) }}
                   style={{
                     height: 44,
                     paddingHorizontal: 24,
