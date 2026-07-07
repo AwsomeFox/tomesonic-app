@@ -197,7 +197,10 @@ jobs:
         env:
           RELEASE_NOTES: ${{ github.event.inputs.releaseNotes }}
         run: |
-          if [ -n "$RELEASE_NOTES" ]; then
+          # Whitespace-only counts as empty: a stray space must not overwrite
+          # the previous release's notes with blank text. grep -q exits 0 only
+          # when there is at least one non-whitespace char.
+          if printf '%s' "$RELEASE_NOTES" | grep -q '[^[:space:]]'; then
             mkdir -p distribution/whatsnew
             printf '%s' "$RELEASE_NOTES" \
               | python3 -c "import sys; sys.stdout.write(sys.stdin.read()[:500])" \
