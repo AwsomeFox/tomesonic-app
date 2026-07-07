@@ -3,7 +3,7 @@
  * top-level option list per library media type, sublist drill-in built from
  * filterData, selection emitting raw query values, and Clear Filter.
  */
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 
 // The global setup mock for react-native-safe-area-context only provides a
 // `default` export, so NAMED imports (SafeAreaView / useSafeAreaInsets) resolve
@@ -214,5 +214,25 @@ describe("FilterModal", () => {
     await render(<FilterModal visible onClose={noop} filterBy="all" onChange={noop} />);
     await fireEvent.press(screen.getByText("Genre"));
     expect(screen.getByText("No genres yet")).toBeTruthy();
+  });
+
+  it("surfaces an error with a retry affordance when the filter fetch fails, and re-fetches on press", async () => {
+    // fetchLibraryDetails returns null on failure (it swallows its own errors);
+    // the modal must show a real error + Retry instead of a bare "No items".
+    const fetchLibraryDetails = jest
+      .fn()
+      .mockResolvedValueOnce(undefined) // first (lazy) load fails
+      .mockResolvedValueOnce({ genres: ["Fantasy"] }); // retry succeeds
+    seedLibrary({ filterData: null, fetchLibraryDetails });
+    await render(<FilterModal visible onClose={noop} filterBy="all" onChange={noop} />);
+
+    await waitFor(() => expect(fetchLibraryDetails).toHaveBeenCalledTimes(1));
+    await fireEvent.press(screen.getByText("Genre"));
+    expect(screen.getByText(/Couldn't load filters/)).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Retry loading filters"));
+    await waitFor(() => expect(fetchLibraryDetails).toHaveBeenCalledTimes(2));
+    // Successful retry clears the error state.
+    await waitFor(() => expect(screen.queryByText(/Couldn't load filters/)).toBeNull());
   });
 });
