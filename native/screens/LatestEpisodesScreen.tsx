@@ -3,6 +3,7 @@ import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-nati
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "../components/Icon";
 import { api } from "../utils/api";
@@ -22,6 +23,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
   // Episode id currently being started, so the tapped row shows a spinner and
   // double-taps can't start two sessions.
   const [startingId, setStartingId] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   const playEpisode = async (episode: any) => {
     if (!episode?.libraryItemId || !episode?.id || startingId) return;
@@ -60,7 +62,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     };
 
     fetchEpisodes();
-  }, [currentLibraryId]);
+  }, [currentLibraryId, retryTick]);
 
   const getCoverUrl = (libraryItemId: string) => {
     if (!libraryItemId || !serverAddress || !token) return null;
@@ -240,6 +242,17 @@ export default function LatestEpisodesScreen({ navigation }: any) {
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
           <Icon name="warning" size={40} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
+          {currentLibraryId ? (
+            <Pressable
+              onPress={() => setRetryTick((t) => t + 1)}
+              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading episodes"
+              style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
+            >
+              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : episodes.length === 0 ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>

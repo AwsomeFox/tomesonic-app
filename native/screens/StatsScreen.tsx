@@ -227,11 +227,17 @@ export default function StatsScreen({ navigation }: any) {
         </View>
       ) : error ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }}>
-          <Text style={{ color: colors.error, fontSize: 15, textAlign: 'center', marginBottom: 16 }}>
+          <Icon name="warning" size={48} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: '700', marginBottom: 4 }}>
+            Couldn't load stats
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: 'center', marginBottom: 16 }}>
             {error}
           </Text>
           <TouchableOpacity
             onPress={loadStats}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading stats"
             style={{
               backgroundColor: colors.primary,
               paddingHorizontal: 24,

@@ -153,11 +153,16 @@ describe("response interceptor", () => {
     });
     // 2. User store (cover/stream URL builders) updated.
     expect(useUserStore.getState().serverConnectionConfig).toMatchObject({ token: "fresh" });
-    // 3. Android Auto creds mirror rewritten.
+    // 3. Android Auto creds mirror rewritten (atomically: content goes to the
+    // temp, which is renamed over the destination).
     expect(FileSystem.writeAsStringAsync).toHaveBeenCalledWith(
-      "file:///test-documents/auto_creds.json",
+      "file:///test-documents/auto_creds.json.tmp",
       expect.stringContaining('"token":"fresh"')
     );
+    expect(FileSystem.moveAsync).toHaveBeenCalledWith({
+      from: "file:///test-documents/auto_creds.json.tmp",
+      to: "file:///test-documents/auto_creds.json",
+    });
   });
 
   it("keeps the old refresh token when the refresh response doesn't rotate it", async () => {

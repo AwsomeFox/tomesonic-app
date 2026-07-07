@@ -61,12 +61,53 @@ describe("readAutoCreds", () => {
     readStr.mockRejectedValue(new Error("io"));
     expect(await readAutoCreds()).toBeNull();
   });
+
+  // The atomic write deletes the main file before renaming the temp into
+  // place — a kill between those steps leaves ONLY the fully-written temp.
+  it("promotes the temp file when the main file is missing (crash-window recovery)", async () => {
+    const move = FileSystem.moveAsync as jest.Mock;
+    getInfo.mockImplementation(async (path: string) => ({
+      exists: path === `${CREDS_PATH}.tmp`, // main gone, temp present
+    }));
+    readStr.mockResolvedValue(JSON.stringify({ server: "http://abs.local", token: "t" }));
+
+    expect(await readAutoCreds()).toEqual({ server: "http://abs.local", token: "t" });
+    expect(move).toHaveBeenCalledWith({ from: `${CREDS_PATH}.tmp`, to: CREDS_PATH });
+  });
+
+  it("recovers from the temp when the main file exists but is corrupt", async () => {
+    const move = FileSystem.moveAsync as jest.Mock;
+    getInfo.mockResolvedValue({ exists: true }); // both files present
+    readStr.mockImplementation(async (path: string) =>
+      path === CREDS_PATH
+        ? "{torn-mid-write" // interrupted direct-write fallback
+        : JSON.stringify({ server: "http://abs.local", token: "t2" })
+    );
+
+    expect(await readAutoCreds()).toEqual({ server: "http://abs.local", token: "t2" });
+    // Promoted over the corrupt main: delete then rename.
+    expect(del).toHaveBeenCalledWith(CREDS_PATH, { idempotent: true });
+    expect(move).toHaveBeenCalledWith({ from: `${CREDS_PATH}.tmp`, to: CREDS_PATH });
+  });
+
+  it("returns null when both the main file and the temp are missing", async () => {
+    const move = FileSystem.moveAsync as jest.Mock;
+    getInfo.mockResolvedValue({ exists: false });
+    expect(await readAutoCreds()).toBeNull();
+    expect(move).not.toHaveBeenCalled();
+    expect(readStr).not.toHaveBeenCalled();
+  });
 });
 
 describe("writeAutoCreds", () => {
   it("writes server (trailing slash stripped) + token, omitting absent fields", async () => {
+    const move = FileSystem.moveAsync as jest.Mock;
     await writeAutoCreds("http://abs.local/", "tok");
-    expect(writeStr).toHaveBeenCalledWith(CREDS_PATH, expect.any(String));
+    // Atomic write: content lands in the temp, which is then renamed over the
+    // (pre-deleted) destination — never an in-place write of the main file.
+    expect(writeStr).toHaveBeenCalledWith(`${CREDS_PATH}.tmp`, expect.any(String));
+    expect(del).toHaveBeenCalledWith(CREDS_PATH, { idempotent: true });
+    expect(move).toHaveBeenCalledWith({ from: `${CREDS_PATH}.tmp`, to: CREDS_PATH });
     expect(lastWrittenJson()).toEqual({ server: "http://abs.local", token: "tok" });
   });
 

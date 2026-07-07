@@ -171,6 +171,13 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
                       }}
                       accessibilityRole="button"
                       accessibilityLabel={`Bookmark ${bm.title}, ${fmt(bm.time)}`}
+                      // The row is one accessible button (its children collapse
+                      // into it), so the nested trash Pressable is unreachable by
+                      // TalkBack — expose deletion as a custom a11y action instead.
+                      accessibilityActions={[{ name: "delete", label: "Delete bookmark" }]}
+                      onAccessibilityAction={(e) => {
+                        if (e.nativeEvent.actionName === "delete") deleteBookmark(bm);
+                      }}
                       style={{
                         flexDirection: "row",
                         alignItems: "center",

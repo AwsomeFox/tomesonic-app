@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import BottomSheet from "./BottomSheet";
 import Icon from "./Icon";
 import Pressable from "./HintPressable";
@@ -116,13 +117,26 @@ export default function RmabBookDetailSheet({
           />
 
           {notice ? (
-            <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 14 }}>{notice}</Text>
+            <Text
+              // Request outcome (error / "already requested") — announce it; a
+              // TalkBack user otherwise gets no feedback from the tap.
+              accessibilityLiveRegion="polite"
+              style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 14 }}
+            >
+              {notice}
+            </Text>
           ) : null}
 
           {onRequest ? (
             <View style={{ alignItems: "flex-end", marginTop: 18 }}>
               {requested ? (
                 <View
+                  // Announce the Request→Requested transition for screen readers.
+                  // accessible marks it as one focusable element so the live
+                  // region reliably fires.
+                  accessible
+                  accessibilityLiveRegion="polite"
+                  accessibilityLabel="Requested"
                   style={{
                     backgroundColor: colors.surfaceContainerHigh,
                     borderRadius: 20,
@@ -144,7 +158,8 @@ export default function RmabBookDetailSheet({
                   disabled={requesting}
                   accessibilityRole="button"
                   accessibilityLabel={`Request ${book.title}`}
-                  android_ripple={{ color: colors.onPrimaryContainer + "22" }}
+                  accessibilityState={{ disabled: requesting, busy: requesting }}
+                  android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
                   style={{
                     backgroundColor: colors.primaryContainer,
                     borderRadius: 20,

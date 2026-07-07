@@ -236,20 +236,10 @@ export async function playbackService() {
   // immediate position save. In a chapter queue the remote seekbar is
   // CHAPTER-relative (each queue item is a clipped chapter), so map it to the
   // absolute book position the store expects.
-  TrackPlayer.addEventListener(Event.RemoteSeek, async (event) => {
+  TrackPlayer.addEventListener(Event.RemoteSeek, (event) => {
     console.log(`[PlaybackService] RemoteSeek to ${event.position}s`);
-    const st = usePlaybackStore.getState();
-    if (st.chapterQueue && st.chapters?.length) {
-      // While casting the local active index is the stale handoff item —
-      // currentChapterIndex tracks the RECEIVER's chapter, which is the one
-      // the user is actually listening to.
-      const active = st.isCasting
-        ? st.currentChapterIndex
-        : (await TrackPlayer.getActiveTrackIndex().catch(() => null)) ?? st.currentChapterIndex;
-      const abs = (st.chapters[active]?.start || 0) + (event.position || 0);
-      st.seek(abs).catch(() => {});
-    } else {
-      st.seek(event.position || 0).catch(() => {});
-    }
+    // The store maps the (track-relative) seekbar position to an absolute book
+    // position for both chapter queues AND multi-file books before seeking.
+    usePlaybackStore.getState().remoteSeek(event.position || 0).catch(() => {});
   });
 }

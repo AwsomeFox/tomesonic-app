@@ -68,13 +68,41 @@ export interface AutoCreds {
 // useUserStore.initialize) use it to recover the freshest pair instead of
 // forcing a logout with a stale one.
 export async function readAutoCreds(): Promise<AutoCreds | null> {
+  const parseFile = async (path: string): Promise<AutoCreds | null> => {
+    try {
+      const raw = await FileSystem.readAsStringAsync(path);
+      const creds = JSON.parse(raw);
+      if (!creds?.server || !creds?.token) return null;
+      return creds as AutoCreds;
+    } catch {
+      return null;
+    }
+  };
   try {
     const info = await FileSystem.getInfoAsync(CREDS_PATH);
-    if (!info.exists) return null;
-    const raw = await FileSystem.readAsStringAsync(CREDS_PATH);
-    const creds = JSON.parse(raw);
-    if (!creds?.server || !creds?.token) return null;
-    return creds as AutoCreds;
+    if (info.exists) {
+      const main = await parseFile(CREDS_PATH);
+      if (main) return main;
+    }
+    // Crash-window recovery: the atomic write (see writeAutoCreds) deletes the
+    // destination before renaming the temp into place, and its last-resort
+    // fallback is a direct write. So the main file can be MISSING (kill
+    // between delete and rename) or CORRUPT (kill mid direct-write) — in both
+    // cases the fully-written temp, created before any of that, still holds a
+    // complete pair. Read it and promote it rather than dropping the only
+    // valid rotated pair.
+    const tmpPath = `${CREDS_PATH}.tmp`;
+    const tmpInfo = await FileSystem.getInfoAsync(tmpPath);
+    if (!tmpInfo.exists) return null;
+    const recovered = await parseFile(tmpPath);
+    if (!recovered) return null;
+    try {
+      await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
+      await FileSystem.moveAsync({ from: tmpPath, to: CREDS_PATH });
+    } catch {
+      // Promotion is best-effort — the recovered pair is already in hand.
+    }
+    return recovered;
   } catch (e) {
     return null;
   }
@@ -129,10 +157,32 @@ export async function writeAutoCreds(
         // native browse service doesn't lose its selection on every refresh.
         creds.libraryId = existing.libraryId;
       }
-      await FileSystem.writeAsStringAsync(
-        CREDS_PATH,
-        JSON.stringify(creds)
-      );
+      // Atomic write: this file can hold the ONLY valid (rotated) refresh-token
+      // pair, and the native Android Auto service reads/writes it too. Write a
+      // temp then move (rename) over the destination — moveAsync is an atomic
+      // path swap on the same filesystem, so a concurrent reader (native or a
+      // second JS write) never sees a half-written file, and a kill mid-write
+      // leaves the previous complete file intact.
+      const tmpPath = `${CREDS_PATH}.tmp`;
+      const payload = JSON.stringify(creds);
+      await FileSystem.writeAsStringAsync(tmpPath, payload);
+      try {
+        // moveAsync REJECTS when the destination already exists (the common
+        // case), so clear it first — the move then just renames the
+        // fully-written temp into place. A reader (native or JS) always sees
+        // either the previous complete file or the new one, never a
+        // half-written one; the sub-tick gap where neither exists is safe (a
+        // missing file reads as "no creds" and self-heals on the next write)
+        // and can't corrupt the token, unlike an interrupted in-place write.
+        await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
+        await FileSystem.moveAsync({ from: tmpPath, to: CREDS_PATH });
+      } catch (mvErr) {
+        // The rename mechanism itself failed (rare) — last resort so the fresh
+        // token still persists; then drop the temp.
+        console.warn("[AutoCreds] atomic move failed; direct write", mvErr);
+        await FileSystem.writeAsStringAsync(CREDS_PATH, payload);
+        await FileSystem.deleteAsync(tmpPath, { idempotent: true }).catch(() => {});
+      }
     } else {
       await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
     }

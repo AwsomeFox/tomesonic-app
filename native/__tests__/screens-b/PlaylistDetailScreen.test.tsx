@@ -201,7 +201,7 @@ describe("PlaylistDetailScreen", () => {
     });
     await renderPlaylist();
 
-    expect(await screen.findByText("This playlist is empty.")).toBeTruthy();
+    expect(await screen.findByText("No items yet")).toBeTruthy();
     expect(screen.queryByText("Play all")).toBeNull();
   });
 

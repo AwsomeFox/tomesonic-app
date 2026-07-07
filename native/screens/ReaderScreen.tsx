@@ -970,6 +970,7 @@ export default function ReaderScreen({ route, navigation }: any) {
                   disabled={fontSize <= FONT_SIZE_MIN}
                   accessibilityRole="button"
                   accessibilityLabel="Decrease text size"
+                  accessibilityState={{ disabled: fontSize <= FONT_SIZE_MIN }}
                   style={{
                     width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
                     alignItems: "center", justifyContent: "center",
@@ -984,6 +985,7 @@ export default function ReaderScreen({ route, navigation }: any) {
                   disabled={fontSize >= FONT_SIZE_MAX}
                   accessibilityRole="button"
                   accessibilityLabel="Increase text size"
+                  accessibilityState={{ disabled: fontSize >= FONT_SIZE_MAX }}
                   style={{
                     width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
                     alignItems: "center", justifyContent: "center",

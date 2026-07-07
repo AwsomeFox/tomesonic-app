@@ -191,6 +191,7 @@ jest.mock("expo-file-system/legacy", () => ({
   makeDirectoryAsync: jest.fn().mockResolvedValue(undefined),
   readDirectoryAsync: jest.fn().mockResolvedValue([]),
   deleteAsync: jest.fn().mockResolvedValue(undefined),
+  moveAsync: jest.fn().mockResolvedValue(undefined),
   downloadAsync: jest.fn().mockResolvedValue({ uri: "file:///test-cache/dl", status: 200 }),
   readAsStringAsync: jest.fn().mockResolvedValue(""),
   writeAsStringAsync: jest.fn().mockResolvedValue(undefined),

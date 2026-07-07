@@ -215,7 +215,7 @@ describe("CollectionDetailScreen", () => {
     });
     await renderCollection();
 
-    expect(await screen.findByText("This collection is empty.")).toBeTruthy();
+    expect(await screen.findByText("No items yet")).toBeTruthy();
     expect(screen.getByText("Empty Collection")).toBeTruthy(); // collage placeholder
   });
 

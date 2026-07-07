@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -39,6 +39,32 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   const [starting, setStarting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = () => {
+    Alert.alert(
+      "Delete playlist?",
+      `"${playlist?.name || "This playlist"}" will be removed from your server. Your books aren't affected.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            if (!playlistId || deleting) return;
+            setDeleting(true);
+            try {
+              await api.delete(`/api/playlists/${playlistId}`);
+              navigation.goBack();
+            } catch {
+              setDeleting(false);
+              Alert.alert("Couldn't delete", "The playlist couldn't be deleted. Check your connection and try again.");
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -258,6 +284,20 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
           {playlist?.name || "Playlist"}
         </Text>
+        {playlist ? (
+          <Pressable
+            onPress={handleDelete}
+            disabled={deleting}
+            hitSlop={8}
+            android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+            accessibilityRole="button"
+            accessibilityLabel="Delete playlist"
+            accessibilityState={{ disabled: deleting, busy: deleting }}
+            style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: deleting ? 0.5 : 1 }}
+          >
+            <Icon name="trash" size={20} color={colors.onSurfaceVariant} />
+          </Pressable>
+        ) : null}
       </View>
 
       {loading ? (
@@ -334,9 +374,14 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           {items.length > 0 ? (
             items.map((item, index) => renderPlaylistItem(item, index))
           ) : (
-            <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 60 }}>
-              <Icon name="list" size={40} color={colors.onSurfaceVariant} style={{ marginBottom: 8 }} />
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15 }}>This playlist is empty.</Text>
+            <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 60, paddingHorizontal: 32 }}>
+              <Icon name="list" size={48} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
+              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "700", marginBottom: 4 }}>
+                No items yet
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
+                Add books to this playlist from a book's details screen.
+              </Text>
             </View>
           )}
         </ScrollView>

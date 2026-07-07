@@ -169,24 +169,39 @@ async function downloadPartWithAuthRetry(
 }
 
 /**
- * After a book finishes downloading, optionally kick off the next book in
- * its series (if the user has that setting on). Best-effort only — any
- * failure here must never surface as a failure of the primary download.
+ * Called when the user FINISHES LISTENING to a book. If "auto-download next in
+ * series" is on AND the just-finished book was itself downloaded, download the
+ * SINGLE next book in its series.
+ *
+ * This used to fire on download COMPLETION and chain — each finished download
+ * kicked off the next, so enabling the setting and downloading book 1 silently
+ * pulled the ENTIRE series (many GB, possibly over mobile data) with no consent.
+ * Tying it to finishing LISTENING, gating on the finished book being downloaded,
+ * and only ever grabbing one book, matches what the setting actually promises.
+ * Best-effort — never throws to the caller.
  */
-async function maybeAutoDownloadNext(libraryItem: any, serverAddress: string, token: string) {
+export async function autoDownloadNextAfterFinish(libraryItemId: string) {
   try {
     if (!useUserStore.getState().settings?.autoDownloadNextInSeries) return;
+    if (!libraryItemId || autoNextInFlight.has(libraryItemId)) return;
+    // Only when the finished book was downloaded — a streaming-only listener
+    // finishing a book must not trigger a surprise download.
+    if (!useDownloadStore.getState().completedDownloads[libraryItemId]) return;
 
-    const id = libraryItem.id;
-    if (autoNextInFlight.has(id)) return;
+    const config = storageHelper.getServerConfig();
+    const serverAddress = config?.address;
+    const token = config?.token;
+    if (!serverAddress || !token) return;
 
-    const libraryId = libraryItem.libraryId;
-    const metadata = libraryItem.media?.metadata || {};
-    const seriesList = metadata.series || [];
-    const series = seriesList[0];
+    autoNextInFlight.add(libraryItemId);
+
+    // The playback session doesn't carry full series metadata — fetch the
+    // finished item to learn its series + sequence.
+    const curRes = await api.get(`/api/items/${libraryItemId}?expanded=1`);
+    const libraryItem = curRes.data;
+    const libraryId = libraryItem?.libraryId;
+    const series = (libraryItem?.media?.metadata?.series || [])[0];
     if (!libraryId || !series?.id) return;
-
-    autoNextInFlight.add(id);
 
     const currentSequence = parseFloat(series.sequence);
     const res = await api.get(`/api/libraries/${libraryId}/series/${series.id}`);
@@ -198,7 +213,7 @@ async function maybeAutoDownloadNext(libraryItem: any, serverAddress: string, to
     // Prefer the book whose sequence is strictly next after the current one;
     // fall back to the first book not yet downloaded/downloading.
     const sorted = books
-      .filter(b => b.id !== id)
+      .filter(b => b.id !== libraryItemId)
       .sort((a, b) => (parseFloat(a?.media?.metadata?.series?.[0]?.sequence) || 0) - (parseFloat(b?.media?.metadata?.series?.[0]?.sequence) || 0));
 
     let next = sorted.find(b => {
@@ -215,12 +230,12 @@ async function maybeAutoDownloadNext(libraryItem: any, serverAddress: string, to
     const expandedItem = expandedRes.data;
     if (!expandedItem) return;
 
-    console.log("[Downloader] Auto-downloading next in series:", expandedItem?.media?.metadata?.title);
+    console.log("[Downloader] Auto-downloading next in series after finish:", expandedItem?.media?.metadata?.title);
     await downloader.downloadBook(expandedItem, serverAddress, token);
   } catch (e) {
     console.warn("[Downloader] Auto-download-next-in-series failed:", e);
   } finally {
-    autoNextInFlight.delete(libraryItem.id);
+    autoNextInFlight.delete(libraryItemId);
   }
 }
 
@@ -374,13 +389,12 @@ export const downloader = {
       downloadNotifications.complete(id, title);
       console.log(`[Downloader] Download completed successfully for book: ${title}`);
 
-      // This book is done — release the running guard BEFORE the auto-next
-      // chain (which awaits the entire next book) so a delete + re-download of
-      // this book isn't blocked for the duration of the next one.
+      // This book is done — release the running guard.
       runningBooks.delete(id);
-
-      // Best-effort: queue up the next book in the series if the user wants that.
-      await maybeAutoDownloadNext(libraryItem, serverAddress, token);
+      // NOTE: auto-download-next-in-series is NOT triggered here anymore.
+      // Firing it on download completion chained the whole series; it now fires
+      // when the user FINISHES LISTENING (see autoDownloadNextAfterFinish, called
+      // from the playback finished-transition).
     } catch (err: any) {
       if (!isCurrent()) return; // superseded — don't fail the new run's state
       console.error(`[Downloader] Download failed for book ${title}:`, err);

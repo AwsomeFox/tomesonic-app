@@ -339,6 +339,15 @@ function persistProgressSample(
           },
         },
       });
+      // Finishing a downloaded book is the trigger for auto-download-next-in-
+      // series (only for books, not podcast episodes) — one book, opt-in, gated
+      // on this one being downloaded. Fire-and-forget; never block persistence.
+      if (!sessionEpisodeId) {
+        try {
+          const { autoDownloadNextAfterFinish } = require("../utils/downloader");
+          autoDownloadNextAfterFinish(libraryItemId).catch(() => {});
+        } catch {}
+      }
     }
   }
 }
@@ -619,6 +628,10 @@ interface PlaybackState {
   play: () => Promise<void>;
   pause: () => Promise<void>;
   seek: (value: number) => Promise<void>;
+  // Seek from a remote (notification / Android Auto) seekbar, whose position is
+  // reported relative to the ACTIVE queue item. Maps that to an absolute book
+  // position before seeking.
+  remoteSeek: (trackPosition: number) => Promise<void>;
   seekForward: (value: number) => Promise<void>;
   seekBackward: (value: number) => Promise<void>;
   seekToChapter: (index: number) => Promise<void>;
@@ -760,6 +773,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // play) must share ONE init — otherwise two 1s progress intervals leak.
     if (_initPromise) return _initPromise;
     _initPromise = (async () => {
+    // Set true after setup succeeds — fresh OR the benign "already initialized"
+    // case — so the shared progress-poll setup below runs for both paths (a
+    // native player that survived a JS reload still needs the JS poll).
+    let ready = false;
 
     try {
       await TrackPlayer.setupPlayer({
@@ -822,11 +839,31 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
       set({ isInitialized: true });
       console.log("[PlaybackStore] TrackPlayer initialized successfully.");
+      ready = true;
+    } catch (error: any) {
+      // RNTP throws an "already initialized" error if the native player survived
+      // a JS reload — that's benign, so mark initialized AND start the poll
+      // below. Any OTHER failure is real: leave isInitialized false so the next
+      // play()/startPlayback retries setup instead of every transport call
+      // silently no-oping.
+      const alreadyInit = String(error?.code ?? error?.message ?? "")
+        .toLowerCase()
+        .includes("already");
+      if (alreadyInit) {
+        set({ isInitialized: true });
+        ready = true;
+      } else {
+        console.error("[PlaybackStore] TrackPlayer setup failed:", error);
+      }
+    }
 
-      // Sync player state to Zustand reactively. Guard against a second interval
-      // (e.g. a double init across a Fast Refresh) and skip the native
-      // round-trips entirely when no session is loaded so we don't poll the
-      // player while idle.
+    // Progress poll — OUTSIDE the try/catch so the "already initialized"
+    // recovery starts it too (it previously only ran on the fresh-setup path,
+    // leaving a surviving-native-player session with no JS poll). Sync player
+    // state to Zustand reactively; guard against a second interval (double init
+    // across a Fast Refresh) and skip the native round-trips when no session is
+    // loaded so we don't poll the player while idle.
+    if (ready) {
       if (progressInterval) clearInterval(progressInterval);
       progressInterval = setInterval(async () => {
         if (!get().isInitialized || !get().currentSession) return;
@@ -946,20 +983,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           // Player might not be active/loaded
         }
       }, 1000);
-
-    } catch (error: any) {
-      // RNTP throws an "already initialized" error if the native player survived
-      // a JS reload — that's benign, so mark initialized. Any OTHER failure is
-      // real: leave isInitialized false so the next play()/startPlayback retries
-      // setup instead of every transport call silently no-oping.
-      const alreadyInit = String(error?.code ?? error?.message ?? "")
-        .toLowerCase()
-        .includes("already");
-      if (alreadyInit) {
-        set({ isInitialized: true });
-      } else {
-        console.error("[PlaybackStore] TrackPlayer setup failed:", error);
-      }
     }
     })();
     try {
@@ -1720,6 +1743,33 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     await TrackPlayer.seekTo(value);
     set({ position: value });
     saveSessionPositionNow(value);
+  },
+
+  // The notification / Android Auto seekbar reports its position relative to the
+  // ACTIVE queue item, not the whole book. Chapter queues clip each chapter into
+  // its own item and multi-file books put each file in its own item, so the raw
+  // value is track-relative in both. Map it to an absolute book position — the
+  // chapter branch was already handled in the service; the multi-file case used
+  // to pass the file-relative value straight to seek() as if absolute, so
+  // dragging the seekbar while in file 2+ resolved back into file 1.
+  remoteSeek: async (trackPosition) => {
+    const pos = Number.isFinite(trackPosition) ? trackPosition : 0;
+    const { isCasting, chapterQueue, chapters, currentChapterIndex } = get();
+    if (chapterQueue && chapters?.length) {
+      // While casting the local active index is the stale handoff item —
+      // currentChapterIndex tracks the RECEIVER's chapter.
+      const active = isCasting
+        ? currentChapterIndex
+        : (await TrackPlayer.getActiveTrackIndex().catch(() => null)) ?? currentChapterIndex;
+      await get().seek((chapters[active]?.start || 0) + pos);
+      return;
+    }
+    if (!isCasting && _trackOffsets.length > 1) {
+      const active = (await TrackPlayer.getActiveTrackIndex().catch(() => null)) ?? 0;
+      await get().seek((_trackOffsets[active] || 0) + pos);
+      return;
+    }
+    await get().seek(pos);
   },
 
   // seekForward/Backward funnel through seek() so they inherit cast routing.

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -56,6 +56,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   const [starting, setStarting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -242,6 +243,31 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     );
   };
 
+  const handleDelete = () => {
+    Alert.alert(
+      "Delete collection?",
+      `"${collectionName || "This collection"}" will be removed from your server. Your books aren't affected.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            if (!collectionId || deleting) return;
+            setDeleting(true);
+            try {
+              await api.delete(`/api/collections/${collectionId}`);
+              navigation.goBack();
+            } catch {
+              setDeleting(false);
+              Alert.alert("Couldn't delete", "The collection couldn't be deleted. Check your connection and try again.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       {/* Header bar */}
@@ -268,6 +294,20 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
           {collectionName || "Collection"}
         </Text>
+        {collection ? (
+          <Pressable
+            onPress={handleDelete}
+            disabled={deleting}
+            hitSlop={8}
+            android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+            accessibilityRole="button"
+            accessibilityLabel="Delete collection"
+            accessibilityState={{ disabled: deleting, busy: deleting }}
+            style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: deleting ? 0.5 : 1 }}
+          >
+            <Icon name="trash" size={20} color={colors.onSurfaceVariant} />
+          </Pressable>
+        ) : null}
       </View>
 
       {loading ? (
@@ -344,9 +384,14 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           {bookItems.length > 0 ? (
             bookItems.map((book, index) => renderBookRow(book, index))
           ) : (
-            <View style={{ alignItems: "center", paddingVertical: 60 }}>
-              <Icon name="collections" size={40} color={colors.onSurfaceVariant} style={{ marginBottom: 8 }} />
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15 }}>This collection is empty.</Text>
+            <View style={{ alignItems: "center", paddingVertical: 60, paddingHorizontal: 32 }}>
+              <Icon name="collections" size={48} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
+              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "700", marginBottom: 4 }}>
+                No items yet
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
+                Add books to this collection from a book's details screen.
+              </Text>
             </View>
           )}
         </ScrollView>

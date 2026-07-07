@@ -410,5 +410,20 @@ describe("usePlaybackStore seek + chapter navigation", () => {
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(20);
       expect(usePlaybackStore.getState().position).toBe(110);
     });
+
+    // REGRESSION: the notification/Android Auto seekbar reports its position
+    // relative to the ACTIVE file. remoteSeek must add the file's offset —
+    // before the fix it passed the file-relative value straight to seek() as
+    // absolute, so a drag in file 2 landed back in file 1.
+    it("remoteSeek maps a file-relative seekbar drag to the absolute book position", async () => {
+      jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+
+      await usePlaybackStore.getState().remoteSeek(30); // 30s into file 2
+
+      // 90 (file-2 offset) + 30 = 120 absolute; seek re-derives file-2-relative 30.
+      expect(usePlaybackStore.getState().position).toBe(120);
+      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(30);
+      expect(TrackPlayer.skip).not.toHaveBeenCalled(); // already on file 2
+    });
   });
 });

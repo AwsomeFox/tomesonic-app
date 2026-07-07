@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..d2dd8fb 100644
+index b495b5a..ccb6ba3 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -192,7 +192,18 @@ index b495b5a..d2dd8fb 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,21 +105,1049 @@ class MusicService : HeadlessJsMediaService() {
+@@ -61,6 +62,10 @@ class MusicService : HeadlessJsMediaService() {
+     private lateinit var player: QueuedAudioPlayer
+     private val binder = MusicBinder()
+     private val scope = MainScope()
++    // Set at the very start of onDestroy so browse-pool tasks (onSearch) and
++    // posted browse-refreshes that finish AFTER the session is released no-op
++    // their session touch instead of crashing on a released MediaLibrarySession.
++    @Volatile private var absDestroyed = false
+     private lateinit var fakePlayer: ExoPlayer
+     private lateinit var mediaSession: MediaLibrarySession
+     private var progressUpdateJob: Job? = null
+@@ -104,21 +109,1092 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -321,17 +332,33 @@ index b495b5a..d2dd8fb 100644
 +
 +    private data class AbsCreds(val server: String, val token: String, val refreshToken: String?)
 +
-+    private fun absCreds(): AbsCreds? {
++    private fun absParseCreds(file: java.io.File): AbsCreds? {
 +        return try {
-+            val f = java.io.File(filesDir, "auto_creds.json")
-+            if (!f.exists()) return null
-+            val o = org.json.JSONObject(f.readText())
++            val o = org.json.JSONObject(file.readText())
 +            val server = o.optString("server").trimEnd('/')
 +            val token = absTokenOverride ?: o.optString("token")
 +            // isNull guard: a JS-written `refreshToken: null` would otherwise
 +            // read back as the string "null" (org.json optString behavior).
 +            val refresh = if (o.isNull("refreshToken")) null else o.optString("refreshToken").ifEmpty { null }
 +            if (server.isEmpty() || token.isEmpty()) null else AbsCreds(server, token, refresh)
++        } catch (e: Exception) { null }
++    }
++
++    private fun absCreds(): AbsCreds? {
++        return try {
++            val f = java.io.File(filesDir, "auto_creds.json")
++            if (f.exists()) absParseCreds(f)?.let { return it }
++            // Crash-window recovery: the JS atomic write deletes the main file
++            // before renaming its temp into place, and its last-resort fallback
++            // is a direct write — so the main file can be MISSING or CORRUPT.
++            // Either way the fully-written temp still holds a complete pair:
++            // read it and promote it (Os.rename atomically replaces a corrupt
++            // main) rather than losing the sole rotated refresh-token pair.
++            val tmp = java.io.File(filesDir, "auto_creds.json.tmp")
++            if (!tmp.exists()) return null
++            val recovered = absParseCreds(tmp) ?: return null
++            try { android.system.Os.rename(tmp.absolutePath, f.absolutePath) } catch (_: Exception) {}
++            recovered
 +        } catch (e: Exception) { null }
 +    }
 +
@@ -359,7 +386,26 @@ index b495b5a..d2dd8fb 100644
 +                val f = java.io.File(filesDir, "auto_creds.json")
 +                val o = if (f.exists()) org.json.JSONObject(f.readText()) else org.json.JSONObject()
 +                o.put("server", creds.server); o.put("token", newToken); o.put("refreshToken", newRefresh)
-+                f.writeText(o.toString())
++                // Atomic replace: ABS rotates the refresh token on every refresh,
++                // so this file can hold the ONLY valid pair — a torn write (a
++                // concurrent JS rewrite, or a process kill mid-write) would lose it
++                // and force a logout. Write a temp then POSIX-rename over the
++                // destination: Os.rename atomically REPLACES an existing file (no
++                // File.renameTo "false when dest exists" caveat), and because the
++                // readers here (native absCreds + the JS side) do plain reads, an
++                // atomic path swap — not AtomicFile, whose guarantee only covers
++                // AtomicFile.openRead() readers — is what keeps them from ever
++                // seeing a half-written file.
++                val tmp = java.io.File(filesDir, "auto_creds.json.tmp")
++                tmp.writeText(o.toString())
++                try {
++                    android.system.Os.rename(tmp.absolutePath, f.absolutePath)
++                } catch (re: Exception) {
++                    // Rename failed (unexpected) — fall back to a direct write so
++                    // the fresh token still persists, then drop the temp.
++                    Timber.w(re, "auto_creds atomic rename failed; direct write")
++                    f.writeText(o.toString()); tmp.delete()
++                }
 +            } catch (e: Exception) { Timber.w(e, "absRefreshToken persist failed") }
 +            Timber.i("absRefreshToken: refreshed access token natively")
 +            newToken
@@ -591,15 +637,23 @@ index b495b5a..d2dd8fb 100644
 +    // Tell every connected browser (Android Auto) the tree changed so it
 +    // re-queries — used when connectivity flips either way.
 +    private fun absNotifyBrowseChanged(reason: String) {
-+        try {
-+            Timber.i("AA browse: notifyChildrenChanged (%s)", reason)
-+            // A connectivity flip invalidates everything cached: an online tree
-+            // must never be served while offline, and vice versa.
-+            absChildrenCache.clear()
-+            absProgressCache = null
-+            mediaSession.notifyChildrenChanged("__ROOT__", Int.MAX_VALUE, null)
-+            mediaSession.notifyChildrenChanged("__DOWNLOADS__", Int.MAX_VALUE, null)
-+        } catch (e: Exception) { Timber.w(e, "notifyChildrenChanged failed") }
++        // The ConnectivityManager callback fires on a background thread, but the
++        // MediaLibrarySession may only be touched on the main thread — post there
++        // (the previous off-thread call threw IllegalStateException, which the
++        // catch swallowed, so the online<->offline browse refresh silently never
++        // happened).
++        android.os.Handler(android.os.Looper.getMainLooper()).post {
++            if (absDestroyed || !::mediaSession.isInitialized) return@post
++            try {
++                Timber.i("AA browse: notifyChildrenChanged (%s)", reason)
++                // A connectivity flip invalidates everything cached: an online tree
++                // must never be served while offline, and vice versa.
++                absChildrenCache.clear()
++                absProgressCache = null
++                mediaSession.notifyChildrenChanged("__ROOT__", Int.MAX_VALUE, null)
++                mediaSession.notifyChildrenChanged("__DOWNLOADS__", Int.MAX_VALUE, null)
++            } catch (e: Exception) { Timber.w(e, "notifyChildrenChanged failed") }
++        }
 +    }
 +
 +    // Downloaded covers, decoded + scaled once and inlined as BYTES: Android
@@ -1254,7 +1308,7 @@ index b495b5a..d2dd8fb 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,7 +1235,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,7 +1282,11 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1267,7 +1321,7 @@ index b495b5a..d2dd8fb 100644
          )
          player = QueuedAudioPlayer(this@MusicService, options)
          fakePlayer.release()
-@@ -293,9 +1326,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1373,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1279,7 +1333,7 @@ index b495b5a..d2dd8fb 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1339,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1386,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1341,7 +1395,7 @@ index b495b5a..d2dd8fb 100644
          }
      }
  
-@@ -449,6 +1516,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1563,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1352,12 +1406,15 @@ index b495b5a..d2dd8fb 100644
      }
  
      @MainThread
-@@ -792,13 +1863,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +1910,36 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
 -        if (::player.isInitialized) {
 -            Timber.d("Releasing media session and destroying player")
++        // Flag teardown FIRST so any in-flight browse-pool task or posted browse
++        // refresh that lands after the release below skips its session touch.
++        absDestroyed = true
 +        // Always release the session — even if the player was never initialized
 +        // (e.g. Android Auto browsed/connected but playback never started). The
 +        // original guard skipped release in that case, leaking the framework
@@ -1379,13 +1436,61 @@ index b495b5a..d2dd8fb 100644
 +        // any in-flight onGetItem/onLoadChildren offload finish; no new work is
 +        // accepted after this.
 +        absBrowseExecutor.shutdown()
++        // Cancel the coroutine scope on EVERY teardown path — only the
++        // task-removed path did before, so on a normal Android Auto unbind / idle
++        // stop a launched job (e.g. the PLAYBACK_SPEED command's delayed
++        // pushCustomLayoutToControllers) could still resume against the released
++        // session.
++        scope.cancel()
          super.onDestroy()
      }
  
-@@ -925,6 +2010,195 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2046,227 @@ class MusicService : HeadlessJsMediaService() {
+                     onStartCommand(null, 0, 0)
+                 }
              }
-         }
- 
+-            return if (
+-                isMediaNotificationController ||
+-                isAutomotiveController ||
+-                isAutoCompanionController
+-            ) {
+-                MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+-                    .setCustomLayout(customLayout)
+-                    .setAvailableSessionCommands(
+-                        sessionCommands
+-                            ?: MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+-                    )
+-                    .setAvailablePlayerCommands(
+-                        playerCommands ?: MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+-                    )
+-                    .build()
+-            } else {
+-                super.onConnect(session, controller)
++            // EVERY controller gets the same custom layout (jump ±, speed) and
++            // the capability-derived session/player commands — not just the
++            // notification/Automotive/Auto-companion trio. Wear OS media
++            // controls (and Assistant, AVRCP bridges, third-party controllers)
++            // used to fall through to super.onConnect() and get Media3's
++            // DEFAULTS: no custom buttons and a command set that ignored the
++            // app's capability config, so the watch showed different transport
++            // controls than Android Auto for the same playback — and only
++            // "caught up" if pushCustomLayoutToControllers() happened to fire
++            // (an options/speed change) AFTER the watch connected. This also
++            // makes onConnect agree with pushCustomLayoutToControllers, which
++            // already broadcasts the same layout+commands to every connected
++            // controller.
++            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
++                .setCustomLayout(customLayout)
++                .setAvailableSessionCommands(
++                    sessionCommands
++                        ?: MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
++                )
++                .setAvailablePlayerCommands(
++                    playerCommands ?: MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
++                )
++                .build()
++        }
++
 +        // --- Android Auto / Automotive browse tree (fetched from the ABS server
 +        // using credentials mirrored to filesDir/auto_creds.json by the JS app) ---
 +        override fun onGetLibraryRoot(
@@ -1459,7 +1564,7 @@ index b495b5a..d2dd8fb 100644
 +            }) {
 +                val children = try { absLoadChildren(parentId) } catch (e: Exception) { Timber.w(e, "absLoadChildren failed"); emptyList() }
 +                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
-+            }
+             }
 +            return future
 +        }
 +
@@ -1476,8 +1581,17 @@ index b495b5a..d2dd8fb 100644
 +                val results = try { absSearch(query) } catch (e: Exception) { Timber.w(e, "absSearch failed"); emptyList() }
 +                absSearchCache[query] = results
 +                Timber.i("AA search '%s' -> %d results", query, results.size)
-+                session.notifySearchResultChanged(browser, query, results.size, params)
-+                future.set(LibraryResult.ofVoid(params))
++                // This runs on the browse pool and can complete AFTER onDestroy
++                // released the session — touch it only if still alive, and ALWAYS
++                // complete the future so a search racing teardown never leaves the
++                // controller hanging on an unset future.
++                try {
++                    if (!absDestroyed) session.notifySearchResultChanged(browser, query, results.size, params)
++                } catch (e: Exception) {
++                    Timber.w(e, "notifySearchResultChanged failed")
++                } finally {
++                    future.set(LibraryResult.ofVoid(params))
++                }
 +            }
 +            return future
 +        }
@@ -1573,12 +1687,10 @@ index b495b5a..d2dd8fb 100644
 +                future.set(resolved)
 +            }
 +            return future
-+        }
-+
+         }
+ 
          override fun onCustomCommand(
-             session: MediaSession,
-             controller: MediaSession.ControllerInfo,
-@@ -935,8 +2209,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2279,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1599,7 +1711,7 @@ index b495b5a..d2dd8fb 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2239,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2309,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1611,7 +1723,7 @@ index b495b5a..d2dd8fb 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2251,36 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2321,36 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
