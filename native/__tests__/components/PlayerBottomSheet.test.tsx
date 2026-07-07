@@ -509,6 +509,29 @@ describe("PlayerBottomSheet — landscape layout", () => {
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
   });
 
+  it("hides the landscape full player from TalkBack while collapsed", async () => {
+    seedPlayer(); // collapsed
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+    // "Collapse player" lives only in the full-player subtree — it must not be
+    // reachable by an accessibility query while collapsed (only behind the
+    // includeHiddenElements escape hatch), so TalkBack can't wander into the
+    // opacity-0 controls behind the mini bar.
+    expect(screen.queryByLabelText("Collapse player")).toBeNull();
+    expect(
+      screen.getAllByLabelText("Collapse player", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("hides the landscape mini bar from TalkBack while expanded", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+    // Expanded: the mini bar's duplicate "Expand player" affordance must be
+    // out of the a11y tree so it isn't offered on an already-expanded player.
+    expect(screen.queryByLabelText(/^Expand player\./)).toBeNull();
+  });
+
   it("landscape expanded pane: collapse, chapters, speed and sleep controls", async () => {
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);

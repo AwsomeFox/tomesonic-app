@@ -1337,7 +1337,12 @@ export default function PlayerBottomSheet() {
           pointerEvents={isLandscape ? "box-none" : "none"}
         >
           {/* ===== LANDSCAPE: collapsed mini bar + two-pane expanded ===== */}
+          {/* Same a11y guards as portrait: opacity/pointerEvents don't remove
+              a subtree from TalkBack, so the mini bar must be hidden while
+              EXPANDED (else a duplicate expand button + transport is reachable). */}
           <Animated.View
+            accessibilityElementsHidden={isPlayerExpanded}
+            importantForAccessibility={isPlayerExpanded ? "no-hide-descendants" : "auto"}
             style={[
               {
                 position: "absolute", left: 0, right: 0, top: 0, height: MINIPLAYER_HEIGHT,
@@ -1380,7 +1385,12 @@ export default function PlayerBottomSheet() {
             </View>
           </Animated.View>
 
+          {/* Landscape full player — hidden from TalkBack while collapsed so
+              its (opacity-0) controls can't be reached behind the mini bar,
+              mirroring the portrait subtree guard. */}
           <Animated.View
+            accessibilityElementsHidden={!isPlayerExpanded}
+            importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
             style={[
               StyleSheet.absoluteFill,
               { paddingTop: insets.top, paddingBottom: insets.bottom, paddingHorizontal: 16 },
