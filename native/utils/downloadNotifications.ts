@@ -21,12 +21,70 @@ const MIN_UPDATE_INTERVAL_MS = 500;
 // await so a display racing clear()/complete() can't resurrect a dismissed one.
 const _active = new Set<string>();
 
+// Proactively request POST_NOTIFICATIONS (Android 13+). Without this the media
+// notification and lock-screen transport controls silently never appear for a
+// listen-only user, because on targetSdk 33+ a foreground-service notification
+// whose permission is denied is suppressed — and the ONLY other request site
+// is the download path, which a streaming user may never hit. Asked at most
+// once (a denial is remembered so we don't nag on every launch).
+let _playbackPermRequested = false;
+export async function ensurePlaybackNotificationPermission(): Promise<void> {
+  if (_playbackPermRequested) return;
+  // Only Android 13+ (API 33) has a runtime POST_NOTIFICATIONS permission that
+  // can suppress the media/lock-screen controls. Older Android grants it
+  // implicitly; iOS would show an unwanted push prompt on first playback,
+  // which is unrelated to this Android-only media-visibility goal.
+  if (Platform.OS !== "android" || Number(Platform.Version) < 33) return;
+  _playbackPermRequested = true;
+  try {
+    const { storage } = require("./storage");
+    if (storage.getBoolean("notifPermRequested")) return;
+    // Persist ONLY after the prompt actually completes — flagging first meant a
+    // transient requestPermission() throw permanently suppressed the prompt (and
+    // thus the media/lock-screen controls) for a streaming-only user.
+    const settings = await notifee.requestPermission();
+    _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+    _permChecked = true;
+    storage.set("notifPermRequested", true);
+  } catch {
+    // Prompt failed to run — allow a retry on the next launch (don't persist
+    // the flag, and clear the in-memory guard).
+    _playbackPermRequested = false;
+  }
+}
+
 async function ensureReady(): Promise<boolean> {
   try {
     if (!_permChecked) {
-      _permChecked = true;
-      const settings = await notifee.requestPermission();
+      // Honor the shared "asked once" flag both request paths persist — if the
+      // prompt already ran (this launch's playback path or a previous launch),
+      // read the current status WITHOUT re-prompting.
+      let asked = false;
+      try {
+        const { storage } = require("./storage");
+        asked = !!storage.getBoolean("notifPermRequested");
+      } catch {
+        // Storage unavailable — treat as not-yet-asked (a single request is
+        // the correct fallback below).
+      }
+      // Deliberately NOT wrapped in a try that falls back to requestPermission:
+      // once asked, a getNotificationSettings() failure must not re-prompt
+      // (that breaks "asked at most once"). A throw here propagates to the
+      // outer catch, leaving _permChecked false so the next update retries.
+      let settings;
+      if (asked) {
+        settings = await notifee.getNotificationSettings();
+      } else {
+        settings = await notifee.requestPermission();
+        try {
+          require("./storage").storage.set("notifPermRequested", true);
+        } catch {}
+      }
       _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+      // Set only AFTER a successful settings call — a throw above leaves this
+      // false so the next download update retries instead of staying disabled
+      // for the whole session.
+      _permChecked = true;
     }
     if (!_channelReady && Platform.OS === "android") {
       await notifee.createChannel({

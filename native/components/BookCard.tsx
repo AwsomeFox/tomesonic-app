@@ -9,7 +9,7 @@ import { useUserStore } from "../store/useUserStore";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { withAlpha } from "../theme/palette";
 import Icon from "./Icon";
-import BookProgressBadge from "./BookProgressBadge";
+import BookProgressBadge, { bookStatusA11yLabel } from "./BookProgressBadge";
 import { hasAudio, hasEbook } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -132,7 +132,15 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       onPressOut={() => { scale.value = withSpring(1, { damping: 18, stiffness: 320 }); }}
       android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
       accessibilityRole="button"
-      accessibilityLabel={author ? `${title} by ${author}` : title || "Book"}
+      // Fold the progress/finished/downloaded status into the card's label —
+      // the outer Pressable's label overrides the badge, so a screen-reader
+      // user otherwise gets none of the badge's information.
+      accessibilityLabel={[
+        author ? `${title} by ${author}` : title || "Book",
+        bookStatusA11yLabel(item, mediaProgress, isDownloaded),
+      ]
+        .filter(Boolean)
+        .join(". ")}
       style={[
         {
           width: size,

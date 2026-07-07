@@ -215,6 +215,11 @@ export default function DiscoverScreen({ navigation }: any) {
       const rec = current;
       flyOut(action === "right" ? 1 : -1, () => {
         setDeck((d) => (d || []).slice(1));
+        // Release the guard only once the card has ACTUALLY advanced — the
+        // fly-out runs ~240ms, longer than a fast/offline network settle, so
+        // clearing busy on the request finally let a second swipe hit the
+        // SAME rec (duplicate request).
+        if (aliveRef.current) setBusy(false);
       });
       try {
         await swipeBookdate(rec.id, action);
@@ -241,9 +246,9 @@ export default function DiscoverScreen({ navigation }: any) {
             if (aliveRef.current) setSwipeFailed(false);
           }, 3200);
         }
-      } finally {
-        if (aliveRef.current) setBusy(false);
       }
+      // busy is cleared in the flyOut callback (card-advance), NOT here — a
+      // fast network settle must not re-enable swiping before the card moves.
     },
     [current, busy, flyOut]
   );

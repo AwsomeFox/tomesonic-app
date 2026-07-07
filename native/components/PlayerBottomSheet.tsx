@@ -710,7 +710,12 @@ export default function PlayerBottomSheet() {
           <Pressable
             onPress={() => setPlayerExpanded(true)}
             accessibilityRole="button"
-            accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}`}
+            // Carries everything the collapsed mini shows visually (book,
+            // author, and the current chapter) — the decorative mini-title
+            // (2a) is a11y-hidden to avoid a double announcement.
+            accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}${
+              currentChapterTitle ? `. ${currentChapterTitle}` : ""
+            }`}
             style={{
               position: "absolute",
               top: 0,
@@ -730,7 +735,13 @@ export default function PlayerBottomSheet() {
           pointerEvents={isLandscape ? "none" : "box-none"}
         >
         {/* --- FULL PLAYER LAYOUT (OPACITY FADED IN) --- */}
+        {/* Opacity animation alone does NOT remove the subtree from TalkBack —
+            while collapsed, all ~10 full-player controls stayed reachable (and
+            actionable) on every screen. Hide the whole subtree from a11y until
+            expanded. */}
         <Animated.View
+          accessibilityElementsHidden={!isPlayerExpanded}
+          importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
           style={[
             StyleSheet.absoluteFill,
             { paddingTop: insets.top, paddingBottom: insets.bottom },
@@ -1114,8 +1125,15 @@ export default function PlayerBottomSheet() {
         </Animated.View>
 
         {/* 2a. Title & Author — MINI (left-aligned beside the thumb). */}
+        {/* Decorative for a11y: the collapsed expand-row (line ~709) already
+            speaks "Expand player. {title} by {author}", and the expanded title
+            lives in the now-hidden full-player subtree — so this visual mini
+            title must stay OUT of the TalkBack tree in both states or the title
+            gets announced twice. */}
         <Animated.View
           pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
           style={[
             {
               position: "absolute",
@@ -1148,8 +1166,14 @@ export default function PlayerBottomSheet() {
         </Animated.View>
 
         {/* 2b. Title & Author — EXPANDED (centered under the cover). */}
+        {/* This overlay is a SIBLING of the hidden full-player subtree, so it
+            needs its own a11y guard — opacity-0 doesn't remove it from the
+            TalkBack tree, and while collapsed it double-announced the title
+            (the expand-row already speaks it) and leaked the chapter line. */}
         <Animated.View
           pointerEvents="none"
+          accessibilityElementsHidden={!isPlayerExpanded}
+          importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
           style={[
             {
               position: "absolute",
@@ -1313,7 +1337,12 @@ export default function PlayerBottomSheet() {
           pointerEvents={isLandscape ? "box-none" : "none"}
         >
           {/* ===== LANDSCAPE: collapsed mini bar + two-pane expanded ===== */}
+          {/* Same a11y guards as portrait: opacity/pointerEvents don't remove
+              a subtree from TalkBack, so the mini bar must be hidden while
+              EXPANDED (else a duplicate expand button + transport is reachable). */}
           <Animated.View
+            accessibilityElementsHidden={isPlayerExpanded}
+            importantForAccessibility={isPlayerExpanded ? "no-hide-descendants" : "auto"}
             style={[
               {
                 position: "absolute", left: 0, right: 0, top: 0, height: MINIPLAYER_HEIGHT,
@@ -1322,7 +1351,7 @@ export default function PlayerBottomSheet() {
               animatedLandscapeMiniStyle,
             ]}
           >
-            <Pressable onPress={() => setPlayerExpanded(true)} accessibilityRole="button" accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}`} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
+            <Pressable onPress={() => setPlayerExpanded(true)} accessibilityRole="button" accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}${currentChapterTitle ? `. ${currentChapterTitle}` : ""}`} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
               <View style={{ width: 50, height: 50, borderRadius: 8, overflow: "hidden", backgroundColor: colors.surfaceContainerHigh, alignItems: "center", justifyContent: "center" }}>
                 {coverUrl ? <Image source={coverSource(coverUrl)} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
               </View>
@@ -1356,7 +1385,12 @@ export default function PlayerBottomSheet() {
             </View>
           </Animated.View>
 
+          {/* Landscape full player — hidden from TalkBack while collapsed so
+              its (opacity-0) controls can't be reached behind the mini bar,
+              mirroring the portrait subtree guard. */}
           <Animated.View
+            accessibilityElementsHidden={!isPlayerExpanded}
+            importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
             style={[
               StyleSheet.absoluteFill,
               { paddingTop: insets.top, paddingBottom: insets.bottom, paddingHorizontal: 16 },

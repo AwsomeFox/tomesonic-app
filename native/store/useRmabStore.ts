@@ -65,7 +65,16 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       try {
         const { storage } = require("../utils/storage");
         const parsed = JSON.parse(storage.getString("rmab_requestedAsins") || "null");
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) requestedAsins = parsed;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          // Copy into a null-proto object with only own string entries — a
+          // corrupt/hostile persisted map (e.g. a "__proto__" key) must not
+          // pollute the prototype or poison later spreads/"in" checks.
+          const clean: Record<string, string> = Object.create(null);
+          for (const [k, v] of Object.entries(parsed)) {
+            if (k !== "__proto__" && typeof v === "string") clean[k] = v;
+          }
+          requestedAsins = clean;
+        }
       } catch {}
       set({
         configured: true,
@@ -224,6 +233,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   // requested-state survives restarts (see initialize) — persisting the exact
   // merged map computed in the updater, not a post-set re-read.
   noteRequestStatus: (asin, status) => {
+    // asin comes from network-derived book objects — reject a special key
+    // ("__proto__" etc.) before it lands in the map and gets persisted.
+    if (!asin || typeof asin !== "string" || asin === "__proto__") return;
     let merged: Record<string, string> = {};
     set((state) => {
       merged = { ...state.requestedAsins, [asin]: status };
@@ -255,19 +267,25 @@ export const useRmabStore = create<RmabState>((set, get) => ({
           .filter(Boolean)
       );
       let applied: Record<string, string> | null = null;
+      // Replace-mode functional set: a true no-op returns the SAME state ref so
+      // Zustand skips the notify (returning {} would still mint a new state
+      // object and re-render every subscriber).
       set((state) => {
         const next: Record<string, string> = {};
         for (const [asin, status] of Object.entries(state.requestedAsins)) {
           // Keep entries the server confirms, plus any added mid-reconcile
           // (a just-tapped Request must not lose its chip to a stale list).
-          if (serverAsins.has(asin) || !(asin in snapshot)) next[asin] = status;
+          // Own-property check, not `in` — `in` walks the prototype so a plain
+          // (non-null-proto) snapshot would treat "toString" etc. as present.
+          if (serverAsins.has(asin) || !Object.prototype.hasOwnProperty.call(snapshot, asin))
+            next[asin] = status;
         }
         if (Object.keys(next).length === Object.keys(state.requestedAsins).length) {
-          return {};
+          return state;
         }
         applied = next;
-        return { requestedAsins: next };
-      });
+        return { ...state, requestedAsins: next };
+      }, true);
       if (applied) {
         try {
           const { storage } = require("../utils/storage");

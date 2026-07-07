@@ -459,6 +459,36 @@ describe("ReaderScreen (epub pipeline)", () => {
     await waitFor(() => expect(screen.queryByText("Table of Contents")).toBeNull());
   });
 
+  it("escapes hostile TOC hrefs — the ebook's own nav must not run script in the WebView", async () => {
+    await renderReader();
+    const webProps = await readyWebView();
+
+    const hostile = '#x");window.ReactNativeWebView.postMessage("pwn");//';
+    await act(async () => {
+      webProps.onMessage({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "toc",
+            toc: [{ label: "Evil", href: hostile }, { label: "NoHref" }],
+          }),
+        },
+      });
+    });
+
+    await fireEvent.press(screen.getByLabelText("Table of contents"));
+    await fireEvent.press(screen.getByText("Evil"));
+
+    // JSON-escaped: the quote can't terminate the string, the payload stays inert.
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining(`window.goToHref && window.goToHref(${JSON.stringify(hostile)})`)
+    );
+
+    // A TOC row without an href must not inject at all.
+    (global as any).__injectJS.mockClear();
+    await fireEvent.press(screen.getByText("NoHref"));
+    expect((global as any).__injectJS).not.toHaveBeenCalled();
+  });
+
   it("reading settings persist text size, font family, and line spacing to MMKV", async () => {
     await renderReader();
     await readyWebView();

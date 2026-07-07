@@ -126,9 +126,19 @@ export default function BottomSheet({
           },
         ]}
       >
+        {/* Tap-to-dismiss stays, but out of the TalkBack swipe order — it used
+            to be the FIRST focused element, forcing a swipe past "Dismiss"
+            before reaching any real option. onRequestClose (hardware back) and
+            the sheet's own close controls cover screen-reader dismissal. */}
         <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss"
+          testID="sheet-backdrop"
+          // Drop the backdrop from the screen-reader focus order while keeping
+          // tap-to-dismiss — it used to be the first element focused, before any
+          // real option. importantForAccessibility is Android-only, so pair it
+          // with accessible={false} + accessibilityElementsHidden for iOS/VoiceOver.
+          importantForAccessibility="no"
+          accessible={false}
+          accessibilityElementsHidden
           onPress={onClose}
           style={StyleSheet.absoluteFill}
         />
@@ -144,6 +154,9 @@ export default function BottomSheet({
         pointerEvents="box-none"
       >
         <Animated.View
+          // Modal isolation: TalkBack focus stays within the sheet content
+          // instead of bleeding into the screen behind it.
+          accessibilityViewIsModal
           style={{
             transform: [{ translateY }],
             backgroundColor: colors.surfaceContainerHigh,

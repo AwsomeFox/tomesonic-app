@@ -395,3 +395,24 @@ describe("reconcileRequestedAsins mid-flight race", () => {
     expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ NEW1: "pending" });
   });
 });
+
+describe("prototype-pollution hardening", () => {
+  it("noteRequestStatus rejects a __proto__ asin", () => {
+    useRmabStore.getState().noteRequestStatus("__proto__", "pending");
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
+    expect(({} as any).polluted).toBeUndefined();
+  });
+
+  it("initialize sanitizes a hostile persisted requestedAsins map", () => {
+    mockedRead.mockReturnValue(CFG);
+    storage.set(
+      "rmab_requestedAsins",
+      JSON.stringify({ __proto__: { polluted: true }, B01: "pending", B02: 5 })
+    );
+    useRmabStore.getState().initialize();
+    const map = useRmabStore.getState().requestedAsins;
+    expect(map.B01).toBe("pending");
+    expect(map.B02).toBeUndefined(); // non-string dropped
+    expect(({} as any).polluted).toBeUndefined();
+  });
+});

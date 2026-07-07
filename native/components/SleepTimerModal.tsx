@@ -53,6 +53,15 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
   const renderBody = () => {
     // Active timer view
     if (timer) {
+      // Extend in place: "I'm not asleep yet, give me more time" is the most
+      // common sleep-timer interaction — cancelling and rebuilding the timer
+      // (the old only option) fully wakes the user. Adds onto the current
+      // remaining and converts an End-of-chapter timer to a fixed one, which
+      // is the intent when you're actively asking for N more minutes.
+      const extend = (mins: number) => {
+        onSet(Math.max(0, Math.round(timer.remaining)) + mins * 60, false);
+        onClose();
+      };
       return (
         <View style={{ paddingHorizontal: 24, paddingTop: 8, paddingBottom: 24 }}>
           <Text style={{ fontSize: 44, fontWeight: "600", color: colors.onSurface, textAlign: "center", marginVertical: 12 }}>
@@ -63,6 +72,27 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
               End of chapter
             </Text>
           ) : null}
+          <View style={{ flexDirection: "row", justifyContent: "center", gap: 12, marginBottom: 16 }}>
+            {[5, 15].map((mins) => (
+              <Pressable
+                key={mins}
+                onPress={() => extend(mins)}
+                accessibilityRole="button"
+                accessibilityLabel={`Add ${mins} minutes`}
+                style={{
+                  flex: 1,
+                  backgroundColor: colors.secondaryContainer,
+                  borderRadius: 24,
+                  paddingVertical: 14,
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ color: colors.onSecondaryContainer, fontSize: 16, fontWeight: "600" }}>
+                  +{mins} min
+                </Text>
+              </Pressable>
+            ))}
+          </View>
           <Pressable
             onPress={() => {
               onCancel();

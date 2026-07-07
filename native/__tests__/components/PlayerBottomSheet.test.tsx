@@ -199,22 +199,30 @@ describe("PlayerBottomSheet — render basics", () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
     // Miniplayer title prefers the current CHAPTER title; the subtitle then
-    // carries the BOOK too, matching the notification's format.
-    expect(screen.getAllByText("Ch 2").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("The Hobbit • J.R.R. Tolkien").length).toBeGreaterThan(0);
+    // carries the BOOK too, matching the notification's format. The visual
+    // mini-title (2a) is decorative for a11y (includeHiddenElements) — the
+    // expand affordance's label carries book, author AND chapter for TalkBack.
+    expect(screen.getAllByText("Ch 2", { includeHiddenElements: true }).length).toBeGreaterThan(0);
     expect(
-      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien").length
+      screen.getAllByText("The Hobbit • J.R.R. Tolkien", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2").length
     ).toBeGreaterThan(0);
   });
 
   it("falls back to the book title without chapters", async () => {
     seedPlayer({ chapters: [], currentChapterIndex: -1 });
     await render(<PlayerBottomSheet />);
-    expect(screen.getAllByText("The Hobbit").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("The Hobbit", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
   });
 
   it("shows STREAMING for a server session and LOCAL when downloaded", async () => {
-    seedPlayer();
+    // Full-player content is a11y-hidden while collapsed (so TalkBack can't
+    // reach it behind the mini bar) — expand to assert it.
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("STREAMING").length).toBeGreaterThan(0);
 
@@ -222,7 +230,7 @@ describe("PlayerBottomSheet — render basics", () => {
       useDownloadStore.setState({
         completedDownloads: { item1: { id: "item1", status: "completed" } },
       } as any);
-      seedPlayer();
+      seedPlayer({ isPlayerExpanded: true });
     });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("LOCAL").length).toBeGreaterThan(0);
@@ -231,7 +239,11 @@ describe("PlayerBottomSheet — render basics", () => {
   it("shows the chapter caption when chapters exist", async () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
-    expect(screen.getByText("Chapter 2 of 3")).toBeTruthy();
+    // Lives in the expanded-title overlay (a11y-hidden while collapsed);
+    // portrait + landscape both render it.
+    expect(
+      screen.getAllByText("Chapter 2 of 3", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -272,7 +284,7 @@ describe("PlayerBottomSheet — transport controls", () => {
   });
 
   it("chapter next/prev buttons are wired", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Next chapter")[0]);
     expect(store().nextChapter).toHaveBeenCalledTimes(1);
@@ -281,7 +293,7 @@ describe("PlayerBottomSheet — transport controls", () => {
   });
 
   it("chapter scrubber a11y actions seek by the configured jumps", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     const scrubber = screen.getAllByLabelText("Chapter position")[0];
     await fireEvent(scrubber, "accessibilityAction", {
@@ -297,20 +309,20 @@ describe("PlayerBottomSheet — transport controls", () => {
 
 describe("PlayerBottomSheet — speed label + modal", () => {
   it("formats float-noise speeds cleanly (1.2999999 → 1.3×)", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("1.3×").length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText("Playback speed, 1.3×").length).toBeGreaterThan(0);
   });
 
   it("formats a whole-number speed without trailing zeros (3 → 3×)", async () => {
-    seedPlayer({ playbackSpeed: 3.0000001 });
+    seedPlayer({ playbackSpeed: 3.0000001, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("3×").length).toBeGreaterThan(0);
   });
 
   it("opens the speed modal and forwards the chosen rate", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Playback speed, 1.3×")[0]);
     expect(screen.getByText("Playback Speed")).toBeTruthy(); // modal header
@@ -321,14 +333,15 @@ describe("PlayerBottomSheet — speed label + modal", () => {
 
 describe("PlayerBottomSheet — sleep timer", () => {
   it("shows remaining time on the pill while a timer runs", async () => {
-    seedPlayer({ sleepTimer: { endOfChapter: false, remaining: 754 } });
+    seedPlayer({ sleepTimer: { endOfChapter: false, remaining: 754 }, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByLabelText("Sleep timer, 12:34 remaining").length).toBeGreaterThan(0);
     expect(screen.getAllByText("12:34").length).toBeGreaterThan(0);
   });
 
   it("opens the sleep modal; End of chapter arms the remaining-chapter seconds", async () => {
-    seedPlayer(); // position 700, Ch 2 ends at 1200 → 500s remaining
+    // position 700, Ch 2 ends at 1200 → 500s remaining
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Sleep timer")[0]);
     expect(screen.getByText("Sleep Timer")).toBeTruthy(); // modal header
@@ -337,17 +350,26 @@ describe("PlayerBottomSheet — sleep timer", () => {
   });
 
   it("preset selection arms a fixed timer", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Sleep timer")[0]);
     await fireEvent.press(screen.getByText("30 min"));
     expect(store().setSleepTimer).toHaveBeenCalledWith(1800, false);
   });
+
+  it("a running timer can be extended in place without cancelling", async () => {
+    seedPlayer({ sleepTimer: { endOfChapter: false, remaining: 120 }, isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await fireEvent.press(screen.getAllByLabelText("Sleep timer, 2:00 remaining")[0]);
+    // +15 extends onto the current remaining (120s + 15m) as a fixed timer.
+    await fireEvent.press(screen.getByLabelText("Add 15 minutes"));
+    expect(store().setSleepTimer).toHaveBeenCalledWith(120 + 15 * 60, false);
+  });
 });
 
 describe("PlayerBottomSheet — chapters modal", () => {
   it("opens the chapters list and seeks on selection", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     // Modal lists all chapters; tap one → seekToChapter(index).
@@ -356,7 +378,7 @@ describe("PlayerBottomSheet — chapters modal", () => {
   });
 
   it("chapters button is disabled without chapters", async () => {
-    seedPlayer({ chapters: [], currentChapterIndex: -1 });
+    seedPlayer({ chapters: [], currentChapterIndex: -1, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     const buttons = screen.getAllByLabelText("Chapters");
     expect(buttons[0].props.accessibilityState?.disabled).toBe(true);
@@ -368,7 +390,7 @@ describe("PlayerBottomSheet — expand / collapse", () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
     await fireEvent.press(
-      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien")[0]
+      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2")[0]
     );
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
   });
@@ -482,9 +504,32 @@ describe("PlayerBottomSheet — landscape layout", () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
     await goLandscape();
-    const expand = screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien");
+    const expand = screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2");
     await fireEvent.press(expand[expand.length - 1]);
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
+  });
+
+  it("hides the landscape full player from TalkBack while collapsed", async () => {
+    seedPlayer(); // collapsed
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+    // "Collapse player" lives only in the full-player subtree — it must not be
+    // reachable by an accessibility query while collapsed (only behind the
+    // includeHiddenElements escape hatch), so TalkBack can't wander into the
+    // opacity-0 controls behind the mini bar.
+    expect(screen.queryByLabelText("Collapse player")).toBeNull();
+    expect(
+      screen.getAllByLabelText("Collapse player", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("hides the landscape mini bar from TalkBack while expanded", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+    // Expanded: the mini bar's duplicate "Expand player" affordance must be
+    // out of the a11y tree so it isn't offered on an already-expanded player.
+    expect(screen.queryByLabelText(/^Expand player\./)).toBeNull();
   });
 
   it("landscape expanded pane: collapse, chapters, speed and sleep controls", async () => {

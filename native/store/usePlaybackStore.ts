@@ -800,9 +800,26 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // (kotlinaudio's fallback FocusManager only emits an event nothing
         // listens to; it never pauses).
         autoHandleInterruptions: true,
+        // Speech content type: audiobooks aren't music, and the hint changes
+        // system focus/ducking semantics (nav prompts and the assistant duck
+        // vs. interrupt differently) and engages speech-aware output routing on
+        // some head units. Native maps "speech" → C.AUDIO_CONTENT_TYPE_SPEECH;
+        // without it the else-branch defaulted to MUSIC.
+        androidAudioContentType: "speech",
       } as any);
       await TrackPlayer.updateOptions(buildPlayerOptions());
-      
+
+      // Request notification permission now (Android 13+) so the media
+      // notification + lock-screen controls actually appear for listen-only
+      // users — the download path is the only other request site and a
+      // streaming user may never hit it.
+      try {
+        const { ensurePlaybackNotificationPermission } = require("../utils/downloadNotifications");
+        // Fire-and-forget: the try/catch only guards the sync require, so a
+        // rejected promise needs its own .catch() to avoid an unhandled rejection.
+        ensurePlaybackNotificationPermission().catch(() => {});
+      } catch {}
+
       set({ isInitialized: true });
       console.log("[PlaybackStore] TrackPlayer initialized successfully.");
 
