@@ -130,7 +130,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     set({
       currentLibraryId: id,
       personalizedShelves: readShelvesCache(id),
-      ...(changed ? { filterData: null, issues: 0, numUserPlaylists: 0 } : {}),
+      // shelvesLoadError is per-library too: library A's failed fetch must
+      // not paint library B's (not-yet-fetched) home screen as an error.
+      ...(changed ? { filterData: null, issues: 0, numUserPlaylists: 0, shelvesLoadError: false } : {}),
     });
     // Mirror the selection into auto_creds.json so the Android Auto browse
     // service switches libraries too (it otherwise keeps browsing the library
@@ -254,6 +256,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       filterData: null,
       numUserPlaylists: 0,
       personalizedShelves: [],
+      shelvesLoadError: false,
     });
   },
 }));

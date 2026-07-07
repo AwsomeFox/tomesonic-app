@@ -259,6 +259,9 @@ describe("useLibraryStore", () => {
       filterData: { genres: ["scifi"] } as any,
       issues: 2,
       numUserPlaylists: 3,
+      // Library A's failed shelves fetch must not paint library B's
+      // (not-yet-fetched) home screen as an error.
+      shelvesLoadError: true,
     } as any);
 
     useLibraryStore.getState().setCurrentLibraryId("libB");
@@ -267,6 +270,7 @@ describe("useLibraryStore", () => {
     expect(s.filterData).toBeNull();
     expect(s.issues).toBe(0);
     expect(s.numUserPlaylists).toBe(0);
+    expect(s.shelvesLoadError).toBe(false);
   });
 
   it("reset clears everything", () => {
@@ -278,6 +282,7 @@ describe("useLibraryStore", () => {
       filterData: {},
       numUserPlaylists: 2,
       personalizedShelves: [{ id: "s" }],
+      shelvesLoadError: true,
     } as any);
     useLibraryStore.getState().reset();
     const s = useLibraryStore.getState();
@@ -285,5 +290,6 @@ describe("useLibraryStore", () => {
     expect(s.currentLibraryId).toBeNull();
     expect(s.lastLoad).toBe(0);
     expect(s.personalizedShelves).toEqual([]);
+    expect(s.shelvesLoadError).toBe(false);
   });
 });
