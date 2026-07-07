@@ -72,7 +72,7 @@ const applyRefreshedConfig = (config: any) => {
     cur.address !== config?.address ||
     (cur.userId && config?.userId && cur.userId !== config.userId)
   ) {
-    console.log("[API] refreshed config no longer matches the stored session — discarding");
+    appLogger.warn("Refreshed config no longer matches the stored session — discarding", "API");
     return;
   }
   storageHelper.setServerConfig(config);
