@@ -60,17 +60,25 @@ async function ensureReady(): Promise<boolean> {
       // prompt already ran (this launch's playback path or a previous launch),
       // read the current status WITHOUT re-prompting.
       let asked = false;
-      let settings;
       try {
         const { storage } = require("./storage");
         asked = !!storage.getBoolean("notifPermRequested");
-        settings = asked
-          ? await notifee.getNotificationSettings()
-          : await notifee.requestPermission();
-        if (!asked) storage.set("notifPermRequested", true);
       } catch {
-        // Storage unavailable — fall back to a single request.
+        // Storage unavailable — treat as not-yet-asked (a single request is
+        // the correct fallback below).
+      }
+      // Deliberately NOT wrapped in a try that falls back to requestPermission:
+      // once asked, a getNotificationSettings() failure must not re-prompt
+      // (that breaks "asked at most once"). A throw here propagates to the
+      // outer catch, leaving _permChecked false so the next update retries.
+      let settings;
+      if (asked) {
+        settings = await notifee.getNotificationSettings();
+      } else {
         settings = await notifee.requestPermission();
+        try {
+          require("./storage").storage.set("notifPermRequested", true);
+        } catch {}
       }
       _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
       // Set only AFTER a successful settings call — a throw above leaves this

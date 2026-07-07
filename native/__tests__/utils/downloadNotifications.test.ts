@@ -278,6 +278,32 @@ describe("ensurePlaybackNotificationPermission", () => {
     await mod.downloadNotifications.clear("dlA");
   });
 
+  it("does not re-prompt (or display) if the non-prompt status read throws once asked", async () => {
+    jest.resetModules();
+    setPlatform("android", 34);
+    const isolatedNotifee = require("@notifee/react-native").default;
+    isolatedNotifee.requestPermission.mockClear();
+    isolatedNotifee.getNotificationSettings.mockClear();
+    // Already asked → ensureReady must take the non-prompt branch. Make that
+    // read fail and assert it never falls back to requestPermission().
+    isolatedNotifee.getNotificationSettings.mockRejectedValueOnce(new Error("notifee init"));
+    require("../../utils/storage").storage.set("notifPermRequested", true);
+    const mod = require("../../utils/downloadNotifications");
+
+    mod.downloadNotifications.start("dlThrow", "Book");
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(isolatedNotifee.requestPermission).not.toHaveBeenCalled();
+    expect(isolatedNotifee.displayNotification).not.toHaveBeenCalled();
+
+    // _permChecked stayed false — a later update retries the status read.
+    isolatedNotifee.getNotificationSettings.mockResolvedValue({ authorizationStatus: 1 });
+    mod.downloadNotifications.progress("dlThrow", "Book", 0.5);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(isolatedNotifee.getNotificationSettings).toHaveBeenCalledTimes(2);
+    await mod.downloadNotifications.clear("dlThrow");
+  });
+
   it("never prompts on iOS or on Android < 13 (no runtime permission there)", async () => {
     jest.resetModules();
     setPlatform("ios", 17);
