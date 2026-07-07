@@ -269,7 +269,14 @@ export default function PlayerBottomSheet() {
     // First observation of this session (resume point) never celebrates,
     // nor does a position already past the line.
     if (!prev || prev.id !== sessionId || prev.pos >= duration - 2) return;
-    if (position >= duration - 2 && celebratedRef.current !== sessionId) {
+    // Only a NATURAL playback advance celebrates. Scrubbing/seeking/skipping to
+    // the end lands as one big position jump — dragging the scrubber to the
+    // finish shouldn't fire confetti you didn't earn. A foreground playback tick
+    // advances at most a few seconds (speed x interval), so a small forward
+    // delta is the "listened to the end" signal.
+    const delta = position - prev.pos;
+    const naturalCrossing = delta > 0 && delta <= 15;
+    if (position >= duration - 2 && naturalCrossing && celebratedRef.current !== sessionId) {
       celebratedRef.current = sessionId;
       setShowConfetti(true);
     }

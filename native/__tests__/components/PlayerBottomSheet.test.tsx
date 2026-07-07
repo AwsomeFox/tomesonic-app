@@ -607,14 +607,25 @@ describe("PlayerBottomSheet — finish-line confetti", () => {
     return n;
   }
 
-  it("fires once when playback CROSSES the finish line", async () => {
-    seedPlayer({ position: 700 });
+  it("fires once when playback NATURALLY crosses the finish line", async () => {
+    // Resume just before the line, then a normal playback tick carries it over.
+    seedPlayer({ position: 3597 });
     await render(<PlayerBottomSheet />);
     expect(countParticles(screen.toJSON())).toBe(0);
     await act(async () => {
-      usePlaybackStore.setState({ position: 3599 } as any);
+      usePlaybackStore.setState({ position: 3599 } as any); // +2s natural advance
     });
     expect(countParticles(screen.toJSON())).toBe(28);
+  });
+
+  it("does NOT fire when SCRUBBING/seeking to the end (big position jump)", async () => {
+    seedPlayer({ position: 700 });
+    await render(<PlayerBottomSheet />);
+    await act(async () => {
+      // A drag/seek from the middle to the end lands as one large jump.
+      usePlaybackStore.setState({ position: 3599 } as any);
+    });
+    expect(countParticles(screen.toJSON())).toBe(0);
   });
 
   it("does NOT fire when restoring a session already at the end", async () => {
