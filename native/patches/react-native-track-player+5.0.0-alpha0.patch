@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..7c614ae 100644
+index b495b5a..d2a0e14 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -238,9 +238,9 @@ index b495b5a..7c614ae 100644
 +                    .build()
 +                Timber.i("MediaLibrarySession built on attempt %d id=%s", attempt, id)
 +                break
-+            } catch (e: Throwable) {
-+                // Broadened from IllegalStateException: ANY build failure must
-+                // not escape the loop as an uncaught throw below.
++            } catch (e: Exception) {
++                // Broadened from IllegalStateException so any recoverable build
++                // failure retries; Exception (not Throwable) lets a JVM Error escape.
 +                Timber.w(e, "MediaLibrarySession build attempt %d failed: %s", attempt, e.message)
 +                purgeStaleSessionRegistrations()
 +            }

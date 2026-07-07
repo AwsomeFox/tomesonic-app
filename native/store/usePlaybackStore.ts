@@ -815,7 +815,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // streaming user may never hit it.
       try {
         const { ensurePlaybackNotificationPermission } = require("../utils/downloadNotifications");
-        ensurePlaybackNotificationPermission();
+        // Fire-and-forget: the try/catch only guards the sync require, so a
+        // rejected promise needs its own .catch() to avoid an unhandled rejection.
+        ensurePlaybackNotificationPermission().catch(() => {});
       } catch {}
 
       set({ isInitialized: true });
