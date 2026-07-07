@@ -40,6 +40,10 @@ export async function writeWidgetState(
       await atomicWrite(WIDGET_STATE_PATH, JSON.stringify(state));
     } else {
       await FileSystem.deleteAsync(WIDGET_STATE_PATH, { idempotent: true });
+      // Also drop any stale temp: the native readers fall back to .tmp when
+      // the main file is missing (mid-swap recovery), and a leftover temp
+      // from an interrupted write would resurrect the cleared state.
+      await FileSystem.deleteAsync(`${WIDGET_STATE_PATH}.tmp`, { idempotent: true }).catch(() => {});
     }
   } catch (e) {
     console.warn("[Widget] state write failed", e);

@@ -207,6 +207,9 @@ describe("writeWidgetState", () => {
   it("deletes the state file for null or title-less state", async () => {
     await writeWidgetState(null);
     expect(del).toHaveBeenCalledWith(WIDGET_PATH, { idempotent: true });
+    // Also the temp: the native readers fall back to .tmp when the main file
+    // is missing, so a stale temp would resurrect the cleared state.
+    expect(del).toHaveBeenCalledWith(`${WIDGET_PATH}.tmp`, { idempotent: true });
 
     del.mockClear();
     await writeWidgetState({ author: "nobody" } as any);
