@@ -592,8 +592,15 @@ export default function ReaderScreen({ route, navigation }: any) {
   };
 
   const selectTocItem = (href: string) => {
+    // href comes from the EBOOK's own TOC via the bridge — untrusted. Escape
+    // like startCfi (JSON.stringify): raw interpolation both broke navigation
+    // for titles with quotes AND let a crafted epub execute arbitrary JS in
+    // the reader WebView, which holds the native bridge.
+    if (typeof href !== "string" || !href) return;
     if (webRef.current) {
-      webRef.current.injectJavaScript(`window.goToHref && window.goToHref("${href}");true;`);
+      webRef.current.injectJavaScript(
+        `window.goToHref && window.goToHref(${JSON.stringify(String(href))});true;`
+      );
       setShowToc(false);
     }
   };
