@@ -214,7 +214,9 @@ describe("PlayerBottomSheet — render basics", () => {
   });
 
   it("shows STREAMING for a server session and LOCAL when downloaded", async () => {
-    seedPlayer();
+    // Full-player content is a11y-hidden while collapsed (so TalkBack can't
+    // reach it behind the mini bar) — expand to assert it.
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("STREAMING").length).toBeGreaterThan(0);
 
@@ -222,7 +224,7 @@ describe("PlayerBottomSheet — render basics", () => {
       useDownloadStore.setState({
         completedDownloads: { item1: { id: "item1", status: "completed" } },
       } as any);
-      seedPlayer();
+      seedPlayer({ isPlayerExpanded: true });
     });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("LOCAL").length).toBeGreaterThan(0);
@@ -272,7 +274,7 @@ describe("PlayerBottomSheet — transport controls", () => {
   });
 
   it("chapter next/prev buttons are wired", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Next chapter")[0]);
     expect(store().nextChapter).toHaveBeenCalledTimes(1);
@@ -281,7 +283,7 @@ describe("PlayerBottomSheet — transport controls", () => {
   });
 
   it("chapter scrubber a11y actions seek by the configured jumps", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     const scrubber = screen.getAllByLabelText("Chapter position")[0];
     await fireEvent(scrubber, "accessibilityAction", {
@@ -297,20 +299,20 @@ describe("PlayerBottomSheet — transport controls", () => {
 
 describe("PlayerBottomSheet — speed label + modal", () => {
   it("formats float-noise speeds cleanly (1.2999999 → 1.3×)", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("1.3×").length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText("Playback speed, 1.3×").length).toBeGreaterThan(0);
   });
 
   it("formats a whole-number speed without trailing zeros (3 → 3×)", async () => {
-    seedPlayer({ playbackSpeed: 3.0000001 });
+    seedPlayer({ playbackSpeed: 3.0000001, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByText("3×").length).toBeGreaterThan(0);
   });
 
   it("opens the speed modal and forwards the chosen rate", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Playback speed, 1.3×")[0]);
     expect(screen.getByText("Playback Speed")).toBeTruthy(); // modal header
@@ -321,14 +323,15 @@ describe("PlayerBottomSheet — speed label + modal", () => {
 
 describe("PlayerBottomSheet — sleep timer", () => {
   it("shows remaining time on the pill while a timer runs", async () => {
-    seedPlayer({ sleepTimer: { endOfChapter: false, remaining: 754 } });
+    seedPlayer({ sleepTimer: { endOfChapter: false, remaining: 754 }, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     expect(screen.getAllByLabelText("Sleep timer, 12:34 remaining").length).toBeGreaterThan(0);
     expect(screen.getAllByText("12:34").length).toBeGreaterThan(0);
   });
 
   it("opens the sleep modal; End of chapter arms the remaining-chapter seconds", async () => {
-    seedPlayer(); // position 700, Ch 2 ends at 1200 → 500s remaining
+    // position 700, Ch 2 ends at 1200 → 500s remaining
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Sleep timer")[0]);
     expect(screen.getByText("Sleep Timer")).toBeTruthy(); // modal header
@@ -337,17 +340,26 @@ describe("PlayerBottomSheet — sleep timer", () => {
   });
 
   it("preset selection arms a fixed timer", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Sleep timer")[0]);
     await fireEvent.press(screen.getByText("30 min"));
     expect(store().setSleepTimer).toHaveBeenCalledWith(1800, false);
   });
+
+  it("a running timer can be extended in place without cancelling", async () => {
+    seedPlayer({ sleepTimer: { endOfChapter: false, remaining: 120 }, isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await fireEvent.press(screen.getAllByLabelText("Sleep timer, 2:00 remaining")[0]);
+    // +15 extends onto the current remaining (120s + 15m) as a fixed timer.
+    await fireEvent.press(screen.getByLabelText("Add 15 minutes"));
+    expect(store().setSleepTimer).toHaveBeenCalledWith(120 + 15 * 60, false);
+  });
 });
 
 describe("PlayerBottomSheet — chapters modal", () => {
   it("opens the chapters list and seeks on selection", async () => {
-    seedPlayer();
+    seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     // Modal lists all chapters; tap one → seekToChapter(index).
@@ -356,7 +368,7 @@ describe("PlayerBottomSheet — chapters modal", () => {
   });
 
   it("chapters button is disabled without chapters", async () => {
-    seedPlayer({ chapters: [], currentChapterIndex: -1 });
+    seedPlayer({ chapters: [], currentChapterIndex: -1, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
     const buttons = screen.getAllByLabelText("Chapters");
     expect(buttons[0].props.accessibilityState?.disabled).toBe(true);

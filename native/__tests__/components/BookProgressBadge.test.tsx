@@ -260,3 +260,36 @@ describe("BookProgressBadge — podcasts", () => {
     expect(screen.toJSON()).toBeNull();
   });
 });
+
+describe("bookStatusA11yLabel (spoken card status for TalkBack)", () => {
+  const { bookStatusA11yLabel } = require("../../components/BookProgressBadge");
+
+  it("spells out remaining time for an in-progress audiobook", () => {
+    const item = { id: "b1", media: { audioFiles: [{}], duration: 36000 } };
+    const label = bookStatusA11yLabel(
+      item,
+      { b1: { libraryItemId: "b1", duration: 36000, currentTime: 3600, progress: 0.1 } },
+      false
+    );
+    expect(label).toContain("left");
+    expect(label).toMatch(/hour|minute/);
+  });
+
+  it("says Finished, and appends Downloaded", () => {
+    const item = { id: "b1", media: { audioFiles: [{}], duration: 100 } };
+    expect(bookStatusA11yLabel(item, { b1: { libraryItemId: "b1", isFinished: true } }, true)).toBe(
+      "Finished, Downloaded"
+    );
+  });
+
+  it("returns empty for an untouched, undownloaded book", () => {
+    const item = { id: "b1", media: { audioFiles: [{}], duration: 100 } };
+    expect(bookStatusA11yLabel(item, {}, false)).toBe("");
+  });
+
+  it("summarizes a podcast to Downloaded or nothing", () => {
+    const item = { id: "p1", mediaType: "podcast" };
+    expect(bookStatusA11yLabel(item, {}, true)).toBe("Downloaded");
+    expect(bookStatusA11yLabel(item, {}, false)).toBe("");
+  });
+});

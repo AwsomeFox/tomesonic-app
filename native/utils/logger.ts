@@ -27,8 +27,28 @@ export const appLogger = {
   },
 };
 
+// Redact bearer tokens/secrets at WRITE time, independent of the Logs screen's
+// display-masking toggle — a user who turns masking off to share diagnostics
+// must not thereby leak tokens that rode through a logged URL/header. ABS cover
+// and download URLs embed `?token=...`.
+function redactSecrets(message: string): string {
+  try {
+    return String(message)
+      .replace(/([?&](?:token|access_token|refresh_token)=)[^&\s"']+/gi, "$1[REDACTED]")
+      .replace(/(authorization|x-refresh-token)(["']?\s*[:=]\s*["']?)(bearer\s+)?[A-Za-z0-9._\-]+/gi,
+        "$1$2$3[REDACTED]");
+  } catch {
+    return message;
+  }
+}
+
 function addLog(level: LogLevel, message: string, tag?: string) {
-  const entry: LogEntry = { level, message, timestamp: new Date().toISOString(), tag };
+  const entry: LogEntry = {
+    level,
+    message: redactSecrets(message),
+    timestamp: new Date().toISOString(),
+    tag,
+  };
   logs.push(entry);
   if (logs.length > 500) logs.shift();
   listeners.forEach((fn) => fn(entry));

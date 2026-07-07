@@ -218,3 +218,35 @@ describe("permission denied", () => {
     expect(isolatedNotifee.displayNotification).not.toHaveBeenCalled();
   });
 });
+
+describe("ensurePlaybackNotificationPermission", () => {
+  it("requests permission once and remembers it (no re-prompt on the next launch)", async () => {
+    jest.resetModules();
+    const isolatedNotifee = require("@notifee/react-native").default;
+    isolatedNotifee.requestPermission.mockClear();
+    isolatedNotifee.requestPermission.mockResolvedValue({ authorizationStatus: 1 });
+    const { storage } = require("../../utils/storage");
+    storage.remove("notifPermRequested");
+
+    const mod = require("../../utils/downloadNotifications");
+    await mod.ensurePlaybackNotificationPermission();
+    expect(isolatedNotifee.requestPermission).toHaveBeenCalledTimes(1);
+    expect(storage.getBoolean("notifPermRequested")).toBe(true);
+
+    // Same JS lifetime → the in-memory guard blocks a second request.
+    await mod.ensurePlaybackNotificationPermission();
+    expect(isolatedNotifee.requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-ask when the persisted flag is already set (next launch)", async () => {
+    jest.resetModules();
+    const isolatedNotifee = require("@notifee/react-native").default;
+    isolatedNotifee.requestPermission.mockClear();
+    const { storage } = require("../../utils/storage");
+    storage.set("notifPermRequested", true); // as if a previous launch asked
+
+    const mod = require("../../utils/downloadNotifications");
+    await mod.ensurePlaybackNotificationPermission();
+    expect(isolatedNotifee.requestPermission).not.toHaveBeenCalled();
+  });
+});

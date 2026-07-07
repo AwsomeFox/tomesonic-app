@@ -730,7 +730,13 @@ export default function PlayerBottomSheet() {
           pointerEvents={isLandscape ? "none" : "box-none"}
         >
         {/* --- FULL PLAYER LAYOUT (OPACITY FADED IN) --- */}
+        {/* Opacity animation alone does NOT remove the subtree from TalkBack —
+            while collapsed, all ~10 full-player controls stayed reachable (and
+            actionable) on every screen. Hide the whole subtree from a11y until
+            expanded. */}
         <Animated.View
+          accessibilityElementsHidden={!isPlayerExpanded}
+          importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
           style={[
             StyleSheet.absoluteFill,
             { paddingTop: insets.top, paddingBottom: insets.bottom },
@@ -1114,8 +1120,15 @@ export default function PlayerBottomSheet() {
         </Animated.View>
 
         {/* 2a. Title & Author — MINI (left-aligned beside the thumb). */}
+        {/* Decorative for a11y: the collapsed expand-row (line ~709) already
+            speaks "Expand player. {title} by {author}", and the expanded title
+            lives in the now-hidden full-player subtree — so this visual mini
+            title must stay OUT of the TalkBack tree in both states or the title
+            gets announced twice. */}
         <Animated.View
           pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
           style={[
             {
               position: "absolute",

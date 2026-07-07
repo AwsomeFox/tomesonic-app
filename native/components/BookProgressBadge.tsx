@@ -23,6 +23,61 @@ function pctLabel(fraction: number): string {
   return `${Math.min(99, Math.max(1, Math.round(fraction * 100)))}%`;
 }
 
+/** Remaining time spelled out for TTS ("3 hours 20 minutes"), vs the badge's
+ *  compact visual "3h 20m" which TalkBack reads as "3h 20m". */
+function remainingSpoken(seconds: number): string {
+  if (!seconds || seconds < 60) return "less than a minute";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h} ${h === 1 ? "hour" : "hours"}`);
+  if (m > 0) parts.push(`${m} ${m === 1 ? "minute" : "minutes"}`);
+  return parts.join(" ");
+}
+
+/** Spoken status for a book card, folded into the card's accessibilityLabel so
+ *  TalkBack conveys the badge's Finished / remaining / Downloaded state (the
+ *  card's outer label otherwise overrides the badge, hiding it). Books only —
+ *  podcasts summarize to Downloaded or nothing. Returns "" when the badge shows
+ *  nothing. */
+export function bookStatusA11yLabel(
+  item: any,
+  mediaProgress: Record<string, any>,
+  isDownloaded: boolean
+): string {
+  try {
+    const itemId = item?.id;
+    if (item?.mediaType === "podcast") return isDownloaded ? "Downloaded" : "";
+    const p = itemId ? mediaProgress?.[itemId] : null;
+    const itemHasAudio = hasAudio(item);
+    const duration = itemHasAudio ? Number(p?.duration || 0) : 0;
+    const currentTime = itemHasAudio ? Number(p?.currentTime || 0) : 0;
+    const audioFraction = itemHasAudio
+      ? Math.max(Math.min(1, Number(p?.progress ?? (duration > 0 ? currentTime / duration : 0))), 0)
+      : 0;
+    const ebookFraction = hasEbook(item)
+      ? Number(p?.ebookProgress || (!itemHasAudio ? p?.progress : 0) || 0)
+      : 0;
+    const readerSetFinished = ebookFraction >= 0.99 && audioFraction > 0 && audioFraction < 0.99;
+    const finished = !!p?.isFinished && !readerSetFinished;
+
+    const bits: string[] = [];
+    if (finished || (ebookFraction >= 0.99 && !itemHasAudio)) {
+      bits.push("Finished");
+    } else if (audioFraction > 0 && duration > 0) {
+      bits.push(`${remainingSpoken(duration * (1 - audioFraction))} left`);
+    } else if (audioFraction > 0) {
+      bits.push(`${Math.min(99, Math.max(1, Math.round(audioFraction * 100)))} percent`);
+    } else if (ebookFraction > 0) {
+      bits.push(`${Math.min(99, Math.max(1, Math.round(ebookFraction * 100)))} percent read`);
+    }
+    if (isDownloaded) bits.push("Downloaded");
+    return bits.join(", ");
+  } catch {
+    return "";
+  }
+}
+
 interface Props {
   itemId: string;
   item?: any;

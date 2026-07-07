@@ -277,7 +277,7 @@ describe("DiscoverScreen (BookDate)", () => {
     await screen.findByText("Already in the library");
 
     // Close the sheet (backdrop press) — the notice must not linger…
-    await fireEvent.press(screen.getByLabelText("Dismiss"));
+    await fireEvent.press(screen.getByTestId("sheet-backdrop"));
     await waitFor(() => expect(screen.queryByText("Already in the library")).toBeNull());
 
     // …and reopening shows a clean sheet, not the stale outcome.

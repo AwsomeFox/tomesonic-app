@@ -21,6 +21,29 @@ const MIN_UPDATE_INTERVAL_MS = 500;
 // await so a display racing clear()/complete() can't resurrect a dismissed one.
 const _active = new Set<string>();
 
+// Proactively request POST_NOTIFICATIONS (Android 13+). Without this the media
+// notification and lock-screen transport controls silently never appear for a
+// listen-only user, because on targetSdk 33+ a foreground-service notification
+// whose permission is denied is suppressed — and the ONLY other request site
+// is the download path, which a streaming user may never hit. Asked at most
+// once (a denial is remembered so we don't nag on every launch).
+let _playbackPermRequested = false;
+export async function ensurePlaybackNotificationPermission(): Promise<void> {
+  if (_playbackPermRequested) return;
+  _playbackPermRequested = true;
+  try {
+    const { storage } = require("./storage");
+    if (storage.getBoolean("notifPermRequested")) return;
+    storage.set("notifPermRequested", true);
+    const settings = await notifee.requestPermission();
+    _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+    _permChecked = true;
+  } catch {
+    // Permission module unavailable — playback still works, just without the
+    // shade/lock-screen controls until a later download prompt.
+  }
+}
+
 async function ensureReady(): Promise<boolean> {
   try {
     if (!_permChecked) {

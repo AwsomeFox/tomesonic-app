@@ -56,3 +56,17 @@ describe("appLogger", () => {
     expect(() => unsub()).not.toThrow();
   });
 });
+
+describe("secret redaction at write time", () => {
+  const { appLogger } = require("../../utils/logger");
+  it("redacts token query params and bearer/refresh headers regardless of display masking", () => {
+    appLogger.clearLogs();
+    appLogger.info("GET https://abs.example/api/items/x/cover?width=200&token=SECRETTOKEN123");
+    appLogger.warn('headers { authorization: "Bearer abc.def.ghi", x-refresh-token: rt_9988 }');
+    const msgs = appLogger.getLogs().map((e: any) => e.message);
+    expect(msgs[0]).toContain("token=[REDACTED]");
+    expect(msgs[0]).not.toContain("SECRETTOKEN123");
+    expect(msgs[1]).not.toContain("abc.def.ghi");
+    expect(msgs[1]).not.toContain("rt_9988");
+  });
+});
