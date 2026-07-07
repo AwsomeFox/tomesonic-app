@@ -369,3 +369,29 @@ describe("reconcileRequestedAsins", () => {
     expect(listMyRequests).not.toHaveBeenCalled();
   });
 });
+
+describe("reconcileRequestedAsins mid-flight race", () => {
+  const { listMyRequests } = require("../../utils/rmab");
+
+  it("keeps a chip added WHILE the server list was in flight", async () => {
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { OLD1: "pending" },
+    } as any);
+    let release: (v: any) => void = () => {};
+    (listMyRequests as jest.Mock).mockImplementation(
+      () => new Promise((res) => (release = res))
+    );
+
+    const run = useRmabStore.getState().reconcileRequestedAsins();
+    await new Promise((r) => setTimeout(r, 0));
+    // User requests a book while the (stale) server list is still loading.
+    useRmabStore.getState().noteRequestStatus("NEW1", "pending");
+    release([]); // server list knows neither asin
+    await run;
+
+    // OLD1 (pre-snapshot, server-unknown) drops; NEW1 (mid-flight) survives.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ NEW1: "pending" });
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ NEW1: "pending" });
+  });
+});

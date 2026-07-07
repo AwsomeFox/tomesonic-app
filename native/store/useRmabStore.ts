@@ -244,22 +244,34 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     if (!get().configured) return;
     try {
       const { listMyRequests } = require("../utils/rmab");
+      // Snapshot BEFORE the fetch: an entry added while the server list is
+      // in flight is absent from BOTH the snapshot and the (already-stale)
+      // server list — it must be kept by provenance, not presence.
+      const snapshot = get().requestedAsins;
       const requests = await listMyRequests();
       const serverAsins = new Set(
         (requests || [])
           .map((r: any) => r?.audiobook?.asin || r?.asin)
           .filter(Boolean)
       );
-      const current = get().requestedAsins;
-      const next: Record<string, string> = {};
-      for (const [asin, status] of Object.entries(current)) {
-        if (serverAsins.has(asin)) next[asin] = status;
-      }
-      if (Object.keys(next).length !== Object.keys(current).length) {
-        set({ requestedAsins: next });
+      let applied: Record<string, string> | null = null;
+      set((state) => {
+        const next: Record<string, string> = {};
+        for (const [asin, status] of Object.entries(state.requestedAsins)) {
+          // Keep entries the server confirms, plus any added mid-reconcile
+          // (a just-tapped Request must not lose its chip to a stale list).
+          if (serverAsins.has(asin) || !(asin in snapshot)) next[asin] = status;
+        }
+        if (Object.keys(next).length === Object.keys(state.requestedAsins).length) {
+          return {};
+        }
+        applied = next;
+        return { requestedAsins: next };
+      });
+      if (applied) {
         try {
           const { storage } = require("../utils/storage");
-          storage.set("rmab_requestedAsins", JSON.stringify(next));
+          storage.set("rmab_requestedAsins", JSON.stringify(applied));
         } catch {}
       }
     } catch {
