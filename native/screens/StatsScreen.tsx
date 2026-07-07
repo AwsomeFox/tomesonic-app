@@ -16,8 +16,10 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hasAnyPendingSyncs } from '../utils/progressSync';
 
 // Gold accent for the data-viz line, matching the original app's `yellow-400`.
-// This is a chart accent, not a theme role, so it is intentionally fixed.
+// The original app is dark-first — against a LIGHT surface yellow-400 is
+// ~1.5:1 (invisible), so light theme swaps to a darker amber (~3:1+).
 const CHART_GOLD = 'rgb(250, 204, 21)';
+const CHART_GOLD_ON_LIGHT = 'rgb(180, 130, 10)';
 
 interface RecentSession {
   id?: string;
@@ -416,6 +418,7 @@ function MiniStat({
 // polyline via rotated segment Views + dots over a gridded plot area, with a
 // left Y axis and weekday labels along the bottom — matching screenshot 13.
 function ListeningChart({ data, colors }: { data: DayPoint[]; colors: any }) {
+  const chartAccent = colors.isDark ? CHART_GOLD : CHART_GOLD_ON_LIGHT;
   const PLOT_H = 220;
   const Y_LABEL_W = 30;
   const DOT = 9;
@@ -505,7 +508,7 @@ function ListeningChart({ data, colors }: { data: DayPoint[]; colors: any }) {
                     top: s.y,
                     width: s.width,
                     height: 2.5,
-                    backgroundColor: CHART_GOLD,
+                    backgroundColor: chartAccent,
                     transform: [
                       { translateY: -1.25 },
                       { rotateZ: `${s.angle}deg` },
@@ -527,7 +530,7 @@ function ListeningChart({ data, colors }: { data: DayPoint[]; colors: any }) {
                     width: DOT,
                     height: DOT,
                     borderRadius: DOT / 2,
-                    backgroundColor: CHART_GOLD,
+                    backgroundColor: chartAccent,
                   }}
                 />
               ))}

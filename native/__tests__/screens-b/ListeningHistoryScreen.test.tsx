@@ -184,14 +184,14 @@ describe("ListeningHistoryScreen", () => {
     (api.get as jest.Mock).mockResolvedValue({ data: { sessions: [] } });
     await renderHistory();
 
-    expect(await screen.findByText("No listening history yet.")).toBeTruthy();
+    expect(await screen.findByText("No listening history yet")).toBeTruthy();
   });
 
   it("tolerates a malformed payload (sessions not an array)", async () => {
     (api.get as jest.Mock).mockResolvedValue({ data: { sessions: null } });
     await renderHistory();
 
-    expect(await screen.findByText("No listening history yet.")).toBeTruthy();
+    expect(await screen.findByText("No listening history yet")).toBeTruthy();
   });
 
   it("shows the error state when the fetch fails", async () => {

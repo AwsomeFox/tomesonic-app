@@ -692,15 +692,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             <Pressable
               onPress={loadItem}
               accessibilityRole="button"
+              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
               style={{
                 marginTop: 20,
                 backgroundColor: colors.primary,
                 paddingHorizontal: 24,
                 paddingVertical: 10,
-                borderRadius: 20,
+                borderRadius: 24,
+                overflow: "hidden",
               }}
             >
-              <Text style={{ color: colors.onPrimary, fontSize: 14, fontWeight: "600" }}>Retry</Text>
+              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
             </Pressable>
           ) : null}
         </View>
@@ -770,8 +772,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 disabled={starting}
                 accessibilityRole="button"
                 accessibilityLabel={!isFinished && audioProgressFraction > 0 ? "Continue listening" : "Play"}
+                android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
                 style={{
                   flex: 1,
+                  overflow: "hidden",
                   backgroundColor: colors.primary,
                   height: 52,
                   borderRadius: 26,
@@ -806,8 +810,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 onPress={openReader}
                 accessibilityRole="button"
                 accessibilityLabel="Read ebook"
+                android_ripple={{
+                  color: withAlpha(hasAudioMedia ? colors.onSecondaryContainer : colors.onPrimary, 0.2),
+                }}
                 style={{
                   flex: 1,
+                  overflow: "hidden",
                   backgroundColor: hasAudioMedia ? colors.secondaryContainer : colors.primary,
                   height: 52,
                   borderRadius: 26,
@@ -864,13 +872,20 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     ? "Download failed, tap to retry"
                     : "Download"
                 }
+                android_ripple={{
+                  color: withAlpha(
+                    isDownloaded || isDownloadFailed ? colors.error : colors.onSecondaryContainer,
+                    0.15
+                  ),
+                }}
                 style={{
                   width: 52,
                   height: 52,
                   borderRadius: 26,
+                  overflow: "hidden",
                   backgroundColor:
                     isDownloaded || isDownloadFailed
-                      ? "rgba(179, 38, 30, 0.1)"
+                      ? withAlpha(colors.error, 0.1)
                       : colors.secondaryContainer,
                   alignItems: "center",
                   justifyContent: "center",
@@ -905,10 +920,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 onPress={() => setChaptersVisible(true)}
                 accessibilityRole="button"
                 accessibilityLabel="View chapters"
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
                 style={{
                   width: 52,
                   height: 52,
                   borderRadius: 26,
+                  overflow: "hidden",
                   backgroundColor: colors.secondaryContainer,
                   alignItems: "center",
                   justifyContent: "center",
@@ -932,10 +949,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 }}
                 accessibilityRole="button"
                 accessibilityLabel="Send ebook to device"
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
                 style={{
                   width: 52,
                   height: 52,
                   borderRadius: 26,
+                  overflow: "hidden",
                   backgroundColor: colors.secondaryContainer,
                   alignItems: "center",
                   justifyContent: "center",
@@ -958,10 +977,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 accessibilityLabel={
                   selfHasAudio && !canRead ? "Request ebook edition" : "Request audiobook edition"
                 }
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
                 style={{
                   width: 52,
                   height: 52,
                   borderRadius: 26,
+                  overflow: "hidden",
                   backgroundColor: colors.secondaryContainer,
                   alignItems: "center",
                   justifyContent: "center",
@@ -981,10 +1002,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               accessibilityRole="button"
               accessibilityLabel={isFinished ? "Mark as not finished" : "Mark as finished"}
               accessibilityState={{ selected: isFinished }}
+              android_ripple={{
+                color: withAlpha(
+                  isFinished ? colors.onPrimaryContainer : colors.onSecondaryContainer,
+                  0.15
+                ),
+              }}
               style={{
                 width: 52,
                 height: 52,
                 borderRadius: 26,
+                overflow: "hidden",
                 backgroundColor: isFinished ? colors.primaryContainer : colors.secondaryContainer,
                 alignItems: "center",
                 justifyContent: "center",
@@ -1006,10 +1034,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 onPress={() => setAddToVisible(true)}
                 accessibilityRole="button"
                 accessibilityLabel="Add to collection or playlist"
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
                 style={{
                   width: 52,
                   height: 52,
                   borderRadius: 26,
+                  overflow: "hidden",
                   backgroundColor: colors.secondaryContainer,
                   alignItems: "center",
                   justifyContent: "center",

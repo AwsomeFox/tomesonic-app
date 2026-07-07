@@ -526,15 +526,17 @@ export default function SearchScreen({ navigation }: any) {
             onPress={() => performSearch(query)}
             accessibilityRole="button"
             accessibilityLabel="Retry search"
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
             style={{
               marginTop: 16,
-              backgroundColor: colors.primaryContainer,
-              borderRadius: 20,
-              paddingHorizontal: 20,
+              backgroundColor: colors.primary,
+              borderRadius: 24,
+              overflow: "hidden",
+              paddingHorizontal: 24,
               paddingVertical: 10,
             }}
           >
-            <Text style={{ color: colors.onPrimaryContainer, fontWeight: "600" }}>Retry</Text>
+            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
           </Pressable>
         </View>
       ) : hasSearched && !hasResults ? (

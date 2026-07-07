@@ -238,11 +238,11 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
             paddingHorizontal: 12,
           }}
         >
-          <Text numberOfLines={1} style={{ color: "#FFFFFF", fontSize: 15, fontWeight: "700", letterSpacing: -0.1 }}>
+          <Text numberOfLines={1} style={{ color: colors.onMedia, fontSize: 15, fontWeight: "700", letterSpacing: -0.1 }}>
             {title}
           </Text>
           {author ? (
-            <Text numberOfLines={1} style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontWeight: "500", marginTop: 2 }}>
+            <Text numberOfLines={1} style={{ color: withAlpha(colors.onMedia, 0.7), fontSize: 12, fontWeight: "500", marginTop: 2 }}>
               {author}
             </Text>
           ) : null}

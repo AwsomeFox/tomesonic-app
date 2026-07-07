@@ -175,7 +175,7 @@ describe("AuthorDetailScreen", () => {
     });
     await renderAuthor();
 
-    expect(await screen.findByText("No books by this author.")).toBeTruthy();
+    expect(await screen.findByText("No books by this author")).toBeTruthy();
     expect(screen.getByText("0 books")).toBeTruthy();
   });
 

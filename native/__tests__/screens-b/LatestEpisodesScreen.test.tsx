@@ -160,7 +160,7 @@ describe("LatestEpisodesScreen", () => {
     (api.get as jest.Mock).mockResolvedValue({ data: { episodes: [] } });
     await renderEpisodes();
 
-    expect(await screen.findByText("No recent episodes found.")).toBeTruthy();
+    expect(await screen.findByText("No recent episodes")).toBeTruthy();
   });
 
   it("shows the error state when the fetch fails", async () => {

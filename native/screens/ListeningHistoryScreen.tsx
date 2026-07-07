@@ -225,8 +225,11 @@ export default function ListeningHistoryScreen({ navigation }: any) {
               >
                 <Icon name="clock" size={36} color={colors.onSecondaryContainer} />
               </View>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
-                No listening history yet.
+              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600" }}>
+                No listening history yet
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>
+                Sessions appear here as you listen.
               </Text>
             </View>
           }

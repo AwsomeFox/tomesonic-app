@@ -529,13 +529,16 @@ export default function DiscoverScreen({ navigation }: any) {
                       borderRadius: 10,
                       paddingHorizontal: 10,
                       paddingVertical: 4,
-                      backgroundColor: (colors.errorContainer || "#F9DEDC") + "E6",
+                      // withAlpha, not hex-suffix concat — the tokens are
+                      // rgb() strings, so "+ 'E6'" was rejected by the color
+                      // parser and the stamp rendered with NO fill at all.
+                      backgroundColor: withAlpha(colors.errorContainer, 0.9),
                       flexDirection: "row",
                       alignItems: "center",
                     }}
                   >
-                    <Icon name="close" size={18} color={colors.error} />
-                    <Text style={{ color: colors.error, fontSize: 16, fontWeight: "800", marginLeft: 6 }}>
+                    <Icon name="close" size={18} color={colors.onErrorContainer} />
+                    <Text style={{ color: colors.onErrorContainer, fontSize: 16, fontWeight: "800", marginLeft: 6 }}>
                       PASS
                     </Text>
                   </Animated.View>

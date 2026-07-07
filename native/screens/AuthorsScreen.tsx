@@ -257,7 +257,8 @@ export default function AuthorsScreen({ navigation }: any) {
           </View>
         )}
 
-        {/* Translucent grey bottom panel with name + book count */}
+        {/* Fixed dark scrim + onMedia text, like every other artwork overlay —
+            an onSurface-based scrim turned light-on-light in dark theme. */}
         <View
           style={{
             position: "absolute",
@@ -267,13 +268,13 @@ export default function AuthorsScreen({ navigation }: any) {
             paddingHorizontal: 12,
             paddingTop: 10,
             paddingBottom: 12,
-            backgroundColor: withAlpha(colors.onSurface, 0.55),
+            backgroundColor: "rgba(0, 0, 0, 0.55)",
           }}
         >
           <Text
             numberOfLines={1}
             style={{
-              color: colors.isDark ? colors.onSurface : "#FFFFFF",
+              color: colors.onMedia,
               fontSize: 15,
               fontWeight: "700",
             }}
@@ -290,12 +291,12 @@ export default function AuthorsScreen({ navigation }: any) {
             <Icon
               name="book"
               size={13}
-              color={withAlpha(colors.isDark ? colors.onSurface : "#FFFFFF", 0.85)}
+              color={colors.onMediaVariant}
             />
             <Text
               numberOfLines={1}
               style={{
-                color: withAlpha(colors.isDark ? colors.onSurface : "#FFFFFF", 0.85),
+                color: colors.onMediaVariant,
                 fontSize: 12,
                 fontWeight: "500",
                 marginLeft: 5,

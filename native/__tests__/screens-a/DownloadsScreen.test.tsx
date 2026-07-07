@@ -269,11 +269,11 @@ describe("DownloadsScreen", () => {
     const navigation = makeNavigation();
     await render(<DownloadsScreen navigation={navigation} />);
 
-    expect(screen.getByText("No downloaded audiobooks found.")).toBeTruthy();
+    expect(screen.getByText("No downloads yet")).toBeTruthy();
     expect(screen.queryByText("Internal App Storage")).toBeNull(); // header hidden when empty
 
     await fireEvent.press(screen.getByText("Downloading (0)"));
-    expect(screen.getByText("No active downloads in progress.")).toBeTruthy();
+    expect(screen.getByText("Nothing downloading")).toBeTruthy();
 
     await fireEvent.press(screen.getByLabelText("Go back"));
     expect(navigation.goBack).toHaveBeenCalled();

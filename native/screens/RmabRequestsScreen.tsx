@@ -303,7 +303,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       borderRadius: 18,
                       paddingHorizontal: confirmingDelete === id ? 12 : 0,
                       backgroundColor:
-                        confirmingDelete === id ? colors.error : "rgba(179, 38, 30, 0.08)",
+                        confirmingDelete === id ? colors.error : withAlpha(colors.error, 0.08),
                       alignItems: "center",
                       justifyContent: "center",
                       flexDirection: "row",
@@ -313,10 +313,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     <Icon
                       name="trash"
                       size={18}
-                      color={confirmingDelete === id ? colors.onPrimary : colors.error}
+                      color={confirmingDelete === id ? colors.onError : colors.error}
                     />
                     {confirmingDelete === id ? (
-                      <Text style={{ color: colors.onPrimary, fontSize: 12, fontWeight: "700", marginLeft: 4 }}>
+                      <Text style={{ color: colors.onError, fontSize: 12, fontWeight: "700", marginLeft: 4 }}>
                         Sure?
                       </Text>
                     ) : null}
@@ -478,7 +478,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
-                    backgroundColor: "rgba(179, 38, 30, 0.08)",
+                    backgroundColor: withAlpha(colors.error, 0.08),
                     borderRadius: 20,
                     height: 40,
                     paddingHorizontal: 18,
