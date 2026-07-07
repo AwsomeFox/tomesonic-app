@@ -673,8 +673,16 @@ export async function reconcileWithNativePlayer(): Promise<boolean> {
       return false;
     }
 
-    // No JS session. Adopt only an Android-Auto-originated item — its mediaId is
-    // tagged "play:<itemId>" / "play:<itemId>::<episodeId>" (see the RNTP patch
+    // No JS session. Only adopt when the native player is ACTIVELY playing —
+    // adoption goes through startPlayback, which always prepares with
+    // playWhenReady=true, so adopting a paused/idle native session would start
+    // playback merely because the user foregrounded the app (e.g. an AA session
+    // they'd paused). When it isn't playing, fall through to the disk restore
+    // (which restores paused), so foregrounding never auto-starts audio.
+    if (!playing) return false;
+
+    // Adopt only an Android-Auto-originated item — its mediaId is tagged
+    // "play:<itemId>" / "play:<itemId>::<episodeId>" (see the RNTP patch
     // onAddMediaItems). A queue with any other mediaId isn't ours to rebuild.
     const active: any = await TrackPlayer.getActiveTrack().catch(() => null);
     const mediaId = String(active?.mediaId ?? active?.id ?? "");

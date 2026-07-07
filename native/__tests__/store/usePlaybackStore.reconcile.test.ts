@@ -68,6 +68,7 @@ describe("reconcileWithNativePlayer", () => {
 
   it("parses the episode id out of a podcast play: mediaId", async () => {
     usePlaybackStore.setState({ currentSession: null } as any);
+    mockState.mockResolvedValue({ state: State.Playing } as any);
     mockActive.mockResolvedValue({ mediaId: "play:pod1::ep7" } as any);
 
     await reconcileWithNativePlayer();
@@ -77,11 +78,26 @@ describe("reconcileWithNativePlayer", () => {
 
   it("strips a bookmark @@ suffix before resolving the item id", async () => {
     usePlaybackStore.setState({ currentSession: null } as any);
+    mockState.mockResolvedValue({ state: State.Playing } as any);
     mockActive.mockResolvedValue({ mediaId: "play:item9@@123.5" } as any);
 
     await reconcileWithNativePlayer();
 
     expect(startSpy).toHaveBeenCalledWith("item9", undefined);
+  });
+
+  it("does NOT adopt (autoplay) when the native player is paused/idle", async () => {
+    // Foregrounding the app with a PAUSED Android Auto session must not start
+    // playback — startPlayback always autoplays, so adoption is gated on
+    // active playback; paused falls through to the disk restore.
+    usePlaybackStore.setState({ currentSession: null } as any);
+    mockState.mockResolvedValue({ state: State.Paused } as any);
+    mockActive.mockResolvedValue({ mediaId: "play:item42" } as any);
+
+    const adopted = await reconcileWithNativePlayer();
+
+    expect(adopted).toBe(false);
+    expect(startSpy).not.toHaveBeenCalled();
   });
 
   it("does NOT adopt a non-Android-Auto queue (no play: mediaId)", async () => {
