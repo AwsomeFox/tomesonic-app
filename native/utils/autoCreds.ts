@@ -68,24 +68,41 @@ export interface AutoCreds {
 // useUserStore.initialize) use it to recover the freshest pair instead of
 // forcing a logout with a stale one.
 export async function readAutoCreds(): Promise<AutoCreds | null> {
+  const parseFile = async (path: string): Promise<AutoCreds | null> => {
+    try {
+      const raw = await FileSystem.readAsStringAsync(path);
+      const creds = JSON.parse(raw);
+      if (!creds?.server || !creds?.token) return null;
+      return creds as AutoCreds;
+    } catch {
+      return null;
+    }
+  };
   try {
     const info = await FileSystem.getInfoAsync(CREDS_PATH);
-    if (!info.exists) {
-      // Crash-window recovery: the atomic write (see writeAutoCreds) deletes
-      // the destination before renaming the temp into place. A kill between
-      // those two steps leaves NO main file — but the temp is fully written
-      // (it's created first), so promote it instead of dropping the only
-      // valid rotated pair.
-      const tmpPath = `${CREDS_PATH}.tmp`;
-      const tmpInfo = await FileSystem.getInfoAsync(tmpPath);
-      if (!tmpInfo.exists) return null;
-      // The destination is absent, so this move can't hit the exists-rejection.
-      await FileSystem.moveAsync({ from: tmpPath, to: CREDS_PATH });
+    if (info.exists) {
+      const main = await parseFile(CREDS_PATH);
+      if (main) return main;
     }
-    const raw = await FileSystem.readAsStringAsync(CREDS_PATH);
-    const creds = JSON.parse(raw);
-    if (!creds?.server || !creds?.token) return null;
-    return creds as AutoCreds;
+    // Crash-window recovery: the atomic write (see writeAutoCreds) deletes the
+    // destination before renaming the temp into place, and its last-resort
+    // fallback is a direct write. So the main file can be MISSING (kill
+    // between delete and rename) or CORRUPT (kill mid direct-write) — in both
+    // cases the fully-written temp, created before any of that, still holds a
+    // complete pair. Read it and promote it rather than dropping the only
+    // valid rotated pair.
+    const tmpPath = `${CREDS_PATH}.tmp`;
+    const tmpInfo = await FileSystem.getInfoAsync(tmpPath);
+    if (!tmpInfo.exists) return null;
+    const recovered = await parseFile(tmpPath);
+    if (!recovered) return null;
+    try {
+      await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
+      await FileSystem.moveAsync({ from: tmpPath, to: CREDS_PATH });
+    } catch {
+      // Promotion is best-effort — the recovered pair is already in hand.
+    }
+    return recovered;
   } catch (e) {
     return null;
   }

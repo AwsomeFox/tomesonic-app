@@ -75,6 +75,21 @@ describe("readAutoCreds", () => {
     expect(move).toHaveBeenCalledWith({ from: `${CREDS_PATH}.tmp`, to: CREDS_PATH });
   });
 
+  it("recovers from the temp when the main file exists but is corrupt", async () => {
+    const move = FileSystem.moveAsync as jest.Mock;
+    getInfo.mockResolvedValue({ exists: true }); // both files present
+    readStr.mockImplementation(async (path: string) =>
+      path === CREDS_PATH
+        ? "{torn-mid-write" // interrupted direct-write fallback
+        : JSON.stringify({ server: "http://abs.local", token: "t2" })
+    );
+
+    expect(await readAutoCreds()).toEqual({ server: "http://abs.local", token: "t2" });
+    // Promoted over the corrupt main: delete then rename.
+    expect(del).toHaveBeenCalledWith(CREDS_PATH, { idempotent: true });
+    expect(move).toHaveBeenCalledWith({ from: `${CREDS_PATH}.tmp`, to: CREDS_PATH });
+  });
+
   it("returns null when both the main file and the temp are missing", async () => {
     const move = FileSystem.moveAsync as jest.Mock;
     getInfo.mockResolvedValue({ exists: false });
