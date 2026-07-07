@@ -22,6 +22,7 @@ export interface AudibleBook {
   coverArtUrl?: string;
   releaseDate?: string;
   sequence?: string;
+  seriesTitle?: string;
   language?: string;
   isAvailable?: boolean;
 }
@@ -48,6 +49,7 @@ function mapProduct(p: any): AudibleBook | null {
     coverArtUrl: images["500"] || images["256"] || Object.values(images)[0] as string | undefined,
     releaseDate: p.release_date || undefined,
     sequence: p.series?.[0]?.sequence || undefined,
+    seriesTitle: p.series?.[0]?.title || undefined,
     language: p.language || undefined,
   };
 }
@@ -91,6 +93,44 @@ export function titlesLikelySame(a?: string | null, b?: string | null): boolean 
   return titleKey(a) === fullB || fullA === titleKey(b);
 }
 
+/** Fast owned-title matcher for the missing-book diffs: precomputed key sets
+ *  (linear instead of owned×candidates), full-title equality plus the
+ *  one-sided-subtitle rule — with one crucial guard titlesLikelySame lacks:
+ *  a bare owned title that IS the candidate's series name must not match
+ *  ("Series: Volume" candidates all share that pre-colon prefix, so owning a
+ *  bare "Mistborn" would hide every other Mistborn volume). */
+export function buildOwnedTitleMatcher(
+  ownedTitles: (string | null | undefined)[],
+  seriesName?: string
+): (candidate: { title?: string; seriesTitle?: string }) => boolean {
+  const haveFull = new Set<string>();
+  const haveBase = new Set<string>();
+  for (const t of ownedTitles) {
+    const full = titleKeyFull(t);
+    if (!full) continue;
+    haveFull.add(full);
+    const base = titleKey(t);
+    if (base) haveBase.add(base);
+  }
+  const fallbackSeriesKey = titleKey(seriesName || "");
+  return (candidate) => {
+    const full = titleKeyFull(candidate.title);
+    if (!full) return false;
+    // Same full normalized title.
+    if (haveFull.has(full)) return true;
+    // Owned subtitled ("Oathbringer: Book Three…") ↔ bare candidate title.
+    if (haveBase.has(full)) return true;
+    // Owned bare title ↔ candidate's pre-colon main title — allowed ONLY
+    // when that prefix is not the candidate's series name.
+    const base = titleKey(candidate.title);
+    if (base && base !== full && haveFull.has(base)) {
+      const seriesKey = titleKey(candidate.seriesTitle || "") || fallbackSeriesKey;
+      return !seriesKey || base !== seriesKey;
+    }
+    return false;
+  };
+}
+
 export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
   // Paginate: a single 50-result page silently truncated prolific authors'
   // backlists out of the missing list. Stop on a short page; later pages are
@@ -113,6 +153,9 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
       products = res.data?.products || [];
     } catch (e) {
       if (page === 1) throw e;
+      // Signal partiality so the missing-list UI can say "may be incomplete"
+      // instead of presenting a truncated backlist as the whole catalog.
+      (out as any).partial = true;
       break;
     }
     for (const p of products) {
@@ -250,6 +293,8 @@ export async function audibleSeriesBooks(seriesAsin: string): Promise<AudibleBoo
     } catch (e) {
       if (i === 0) throw e;
       console.warn("[Audible] series detail chunk failed — returning partial list", e);
+      // Signal partiality so the missing-list UI can say "may be incomplete".
+      (out as any).partial = true;
       break;
     }
   }

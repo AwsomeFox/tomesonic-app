@@ -60,7 +60,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   const rmabName = author?.name || authorName;
   const authorLoading = loading;
   const fetchMissingByAuthor = React.useCallback(async () => {
-    const { audibleAuthorBooks, titlesLikelySame } = require("../utils/audible");
+    const { audibleAuthorBooks, buildOwnedTitleMatcher } = require("../utils/audible");
     if (!rmabName || authorLoading) return [];
     // Derive the item list from `author` (a dep — new identity per load)
     // inside the callback: closing over a derived array keyed on .length
@@ -70,16 +70,16 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     const haveAsins = new Set(
       authorItems.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
     );
-    const haveTitles = authorItems
-      .map((b: any) => b.media?.metadata?.title)
-      .filter(Boolean);
-    // Same subtitle-safe matching as the series screen — the pre-colon
-    // titleKey diff collapsed an author's whole "Series: Volume" run into one
-    // key and hid the unowned volumes.
-    return all.filter(
-      (b: any) =>
-        !haveAsins.has(b.asin) && !haveTitles.some((t: string) => titlesLikelySame(t, b.title))
+    // Same subtitle-safe matching as the series screen (the pre-colon titleKey
+    // diff collapsed an author's whole "Series: Volume" run into one key),
+    // linear via precomputed key sets; candidates carry their own seriesTitle
+    // for the bare-owned-title guard.
+    const ownedMatches = buildOwnedTitleMatcher(
+      authorItems.map((b: any) => b.media?.metadata?.title)
     );
+    const missing = all.filter((b: any) => !haveAsins.has(b.asin) && !ownedMatches(b));
+    if ((all as any).partial) (missing as any).partial = true;
+    return missing;
   }, [rmabName, authorLoading, author]);
 
   const [loadError, setLoadError] = useState(false);

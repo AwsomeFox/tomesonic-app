@@ -7,6 +7,7 @@ jest.mock("../../utils/rmab", () => ({
   getMe: jest.fn(),
   createRequest: jest.fn(),
   getPendingApprovalCount: jest.fn().mockResolvedValue(0),
+  listMyRequests: jest.fn().mockResolvedValue([]),
   clearRmabCaches: jest.fn(),
 }));
 
@@ -331,5 +332,40 @@ describe("requested-state persistence (survives restarts)", () => {
 
     expect(storage.getString("rmab_requestedAsins")).toBeUndefined();
     expect(useRmabStore.getState().requestedAsins).toEqual({});
+  });
+});
+
+describe("reconcileRequestedAsins", () => {
+  const { listMyRequests } = require("../../utils/rmab");
+
+  it("drops chips for requests the server no longer knows, keeps the rest, persists", async () => {
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { B01: "pending", B02: "pending" },
+    } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ audiobook: { asin: "B02" } }]);
+
+    await useRmabStore.getState().reconcileRequestedAsins();
+
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B02: "pending" });
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ B02: "pending" });
+  });
+
+  it("keeps the local overlay when the server can't be reached", async () => {
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { B01: "pending" },
+    } as any);
+    (listMyRequests as jest.Mock).mockRejectedValue(new Error("offline"));
+
+    await useRmabStore.getState().reconcileRequestedAsins();
+
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("is a no-op when unconfigured", async () => {
+    (listMyRequests as jest.Mock).mockResolvedValue([]);
+    await useRmabStore.getState().reconcileRequestedAsins();
+    expect(listMyRequests).not.toHaveBeenCalled();
   });
 });

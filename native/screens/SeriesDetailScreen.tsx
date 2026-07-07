@@ -106,7 +106,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       audibleSeriesAsinFromBook,
       audibleFindSeriesAsin,
       audibleSeriesBooks,
-      titlesLikelySame,
+      buildOwnedTitleMatcher,
     } = require("../utils/audible");
     if (!displayName || seriesLoading) return [];
     // Derive the book list from `series` (a dep — new identity per load)
@@ -120,25 +120,37 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     let seriesAsin: string | null = null;
     // Bounded attempts: each miss costs a round trip, but stopping after 2
     // stranded series whose first books were omnibus/regional editions with
-    // no parent relationship — those fell to the fuzzy name search.
+    // no parent relationship — those fell to the fuzzy name search. The whole
+    // phase shares one wall-clock budget: 8 sequential attempts against a
+    // hanging endpoint (15s each) would otherwise spin for two minutes.
+    const resolveDeadline = Date.now() + 20000;
     for (const asin of Array.from(haveAsins).slice(0, 8)) {
-      seriesAsin = await audibleSeriesAsinFromBook(asin).catch(() => null);
+      const remaining = resolveDeadline - Date.now();
+      if (remaining <= 0) break;
+      seriesAsin = await Promise.race([
+        audibleSeriesAsinFromBook(asin).catch(() => null),
+        new Promise<null>((res) => setTimeout(() => res(null), remaining)),
+      ]);
       if (seriesAsin) break;
     }
     if (!seriesAsin) seriesAsin = await audibleFindSeriesAsin(displayName);
     if (!seriesAsin) return [];
     const all = await audibleSeriesBooks(seriesAsin);
-    const haveTitles = libraryBooks
-      .map((b: any) => b.media?.metadata?.title)
-      .filter(Boolean);
     // ASIN-first; the title fallback (for library items without an ASIN or
     // with a regional/edition ASIN skew) must keep distinct volumes distinct —
     // the old pre-colon titleKey diff hid every other "Series: Volume" book
-    // the moment you owned one of them.
-    return all.filter(
-      (b: any) =>
-        !haveAsins.has(b.asin) && !haveTitles.some((t: string) => titlesLikelySame(t, b.title))
+    // the moment you owned one of them. Precomputed key sets keep the diff
+    // linear, and the matcher guards the bare-owned-title-is-the-series-name
+    // case (owning a bare "Mistborn" must not hide every Mistborn volume).
+    const ownedMatches = buildOwnedTitleMatcher(
+      libraryBooks.map((b: any) => b.media?.metadata?.title),
+      displayName
     );
+    const missing = all.filter((b: any) => !haveAsins.has(b.asin) && !ownedMatches(b));
+    // Propagate "the catalog fetch was cut short" so the section can disclose
+    // a possibly-incomplete list instead of presenting it as the whole series.
+    if ((all as any).partial) (missing as any).partial = true;
+    return missing;
   }, [displayName, seriesLoading, series]);
 
   const [error, setError] = useState<string | null>(null);

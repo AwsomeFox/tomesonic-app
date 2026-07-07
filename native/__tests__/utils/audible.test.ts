@@ -406,3 +406,81 @@ describe("audibleSeriesBooks partial tolerance", () => {
     await expect(audibleSeriesBooks("SERIES1")).rejects.toThrow("boom");
   });
 });
+
+describe("buildOwnedTitleMatcher (series-name guard over titlesLikelySame)", () => {
+  const { buildOwnedTitleMatcher } = require("../../utils/audible");
+
+  it("a bare owned title that IS the series name does not hide 'Series: Volume' candidates", () => {
+    // Owning a bare "Mistborn" (omnibus / series-titled item) must not match
+    // — and hide — every other volume that shares the pre-colon prefix.
+    const matches = buildOwnedTitleMatcher(["Mistborn"]);
+    expect(
+      matches({ title: "Mistborn: The Well of Ascension", seriesTitle: "Mistborn" })
+    ).toBe(false);
+    expect(
+      matches({ title: "Mistborn: The Hero of Ages", seriesTitle: "Mistborn" })
+    ).toBe(false);
+    // The exact same-title candidate still matches.
+    expect(matches({ title: "Mistborn", seriesTitle: "Mistborn" })).toBe(true);
+  });
+
+  it("a bare owned BOOK title still matches its subtitled catalog variant", () => {
+    const matches = buildOwnedTitleMatcher(["Oathbringer"]);
+    expect(
+      matches({
+        title: "Oathbringer: Book Three of the Stormlight Archive",
+        seriesTitle: "The Stormlight Archive",
+      })
+    ).toBe(true);
+  });
+
+  it("falls back to the screen's series name when the candidate lacks seriesTitle", () => {
+    const matches = buildOwnedTitleMatcher(["Mistborn"], "Mistborn");
+    expect(matches({ title: "Mistborn: The Well of Ascension" })).toBe(false);
+  });
+
+  it("owned subtitled titles match bare candidates; distinct volumes stay distinct", () => {
+    const matches = buildOwnedTitleMatcher(["Mistborn: The Final Empire"]);
+    expect(matches({ title: "Mistborn", seriesTitle: "Mistborn" })).toBe(true);
+    expect(
+      matches({ title: "Mistborn: The Well of Ascension", seriesTitle: "Mistborn" })
+    ).toBe(false);
+  });
+});
+
+describe("partial-list flags", () => {
+  it("audibleSeriesBooks marks a cut-short list as partial", async () => {
+    const children = Array.from({ length: 41 }, (_, i) => ({
+      asin: `C${i}`,
+      relationship_to_product: "child",
+      sort: String(i + 1),
+    }));
+    const chunk1 = Array.from({ length: 40 }, (_, i) => ({ asin: `C${i}`, title: `V${i}` }));
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      mockedGet
+        .mockResolvedValueOnce({ data: { product: { relationships: children } } })
+        .mockResolvedValueOnce({ data: { products: chunk1 } })
+        .mockRejectedValueOnce(new Error("timeout"));
+      const books = await audibleSeriesBooks("SERIES1");
+      expect((books as any).partial).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("audibleAuthorBooks marks a cut-short backlist as partial; full lists are not", async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => ({ asin: `A${i}`, title: `B${i}` }));
+    mockedGet
+      .mockResolvedValueOnce({ data: { products: page1 } })
+      .mockRejectedValueOnce(new Error("timeout"));
+    const cut = await audibleAuthorBooks("Author");
+    expect(cut).toHaveLength(50);
+    expect((cut as any).partial).toBe(true);
+
+    mockedGet.mockReset();
+    mockedGet.mockResolvedValueOnce({ data: { products: page1.slice(0, 3) } });
+    const full = await audibleAuthorBooks("Author");
+    expect((full as any).partial).toBeUndefined();
+  });
+});

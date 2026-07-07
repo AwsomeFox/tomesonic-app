@@ -40,6 +40,7 @@ interface RmabState {
   disconnect: () => void;
   requestBook: (book: RmabBook) => Promise<{ ok: boolean; message?: string }>;
   noteRequestStatus: (asin: string, status: string) => void;
+  reconcileRequestedAsins: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
 }
 
@@ -75,6 +76,8 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         requestedAsins,
       });
       get().refreshPendingCount();
+      // Drop chips for requests the server has since cleared (best-effort).
+      get().reconcileRequestedAsins();
     }
   },
 
@@ -218,12 +221,50 @@ export const useRmabStore = create<RmabState>((set, get) => ({
 
   // Functional set: concurrent requestBook calls each merge into the latest
   // map instead of overwriting each other's status. Mirrored to disk so
-  // requested-state survives restarts (see initialize).
+  // requested-state survives restarts (see initialize) — persisting the exact
+  // merged map computed in the updater, not a post-set re-read.
   noteRequestStatus: (asin, status) => {
-    set((state) => ({ requestedAsins: { ...state.requestedAsins, [asin]: status } }));
+    let merged: Record<string, string> = {};
+    set((state) => {
+      merged = { ...state.requestedAsins, [asin]: status };
+      return { requestedAsins: merged };
+    });
     try {
       const { storage } = require("../utils/storage");
-      storage.set("rmab_requestedAsins", JSON.stringify(get().requestedAsins));
+      storage.set("rmab_requestedAsins", JSON.stringify(merged));
     } catch {}
+  },
+
+  // Audible-sourced rows (series/author/Discover) have no server-enriched
+  // requestStatus, so their "Requested" chips come solely from the persisted
+  // map — without reconciliation a request deleted/rejected server-side kept
+  // its chip forever with no way to re-request. Best-effort: drop local
+  // entries the server no longer knows about.
+  reconcileRequestedAsins: async () => {
+    if (!get().configured) return;
+    try {
+      const { listMyRequests } = require("../utils/rmab");
+      const requests = await listMyRequests();
+      const serverAsins = new Set(
+        (requests || [])
+          .map((r: any) => r?.audiobook?.asin || r?.asin)
+          .filter(Boolean)
+      );
+      const current = get().requestedAsins;
+      const next: Record<string, string> = {};
+      for (const [asin, status] of Object.entries(current)) {
+        if (serverAsins.has(asin)) next[asin] = status;
+      }
+      if (Object.keys(next).length !== Object.keys(current).length) {
+        set({ requestedAsins: next });
+        try {
+          const { storage } = require("../utils/storage");
+          storage.set("rmab_requestedAsins", JSON.stringify(next));
+        } catch {}
+      }
+    } catch {
+      // Offline / server error — keep the local overlay; it self-corrects on
+      // a later successful reconcile.
+    }
   },
 }));

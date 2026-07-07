@@ -48,6 +48,9 @@ export default function RmabMissingSection({
   // the old catch set books=[] and the whole section silently vanished on an
   // Audible timeout, reading as "no books to request".
   const [lookupFailed, setLookupFailed] = useState(false);
+  // The fetch succeeded but was cut short (a later catalog page/chunk failed)
+  // — the list renders but must not present itself as complete.
+  const [listPartial, setListPartial] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [requesting, setRequesting] = useState<string | null>(null);
@@ -71,12 +74,14 @@ export default function RmabMissingSection({
     setBooks(null);
     setNotice(null);
     setLookupFailed(false);
+    setListPartial(false);
     setExpanded(false);
     fetchMissing()
       .then((list) => {
         if (cancelled) return;
         const missing = (list || []).filter((b) => b && b.asin && !b.isAvailable);
         setBooks(missing);
+        setListPartial(!!(list as any)?.partial);
       })
       .catch((e) => {
         console.warn("[RMAB] missing-books lookup failed", e?.message || e);
@@ -125,10 +130,12 @@ export default function RmabMissingSection({
           Checking Audible for books you don't have…
         </Text>
       ) : null}
-      {!loading && lookupFailed ? (
+      {!loading && (lookupFailed || listPartial) ? (
         <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, marginBottom: 6 }}>
           <Text style={{ flex: 1, color: colors.onSurfaceVariant, fontSize: 13 }}>
-            Couldn't check for missing books.
+            {lookupFailed
+              ? "Couldn't check for missing books."
+              : "Some books couldn't be checked — this list may be incomplete."}
           </Text>
           <Pressable
             onPress={() => setRetryTick((t) => t + 1)}
