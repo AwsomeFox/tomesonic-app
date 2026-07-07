@@ -131,6 +131,9 @@ export default function RmabBookDetailSheet({
               {requested ? (
                 <View
                   // Announce the Request→Requested transition for screen readers.
+                  // accessible marks it as one focusable element so the live
+                  // region reliably fires.
+                  accessible
                   accessibilityLiveRegion="polite"
                   accessibilityLabel="Requested"
                   style={{

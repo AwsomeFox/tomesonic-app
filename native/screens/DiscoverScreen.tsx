@@ -592,6 +592,9 @@ export default function DiscoverScreen({ navigation }: any) {
                   <View
                     // Transient visual chip — announce it so a TalkBack user gets
                     // confirmation the request went through (it auto-dismisses).
+                    // accessible marks it as one focusable element so the live
+                    // region reliably fires.
+                    accessible
                     accessibilityLiveRegion="polite"
                     accessibilityLabel="Requested"
                     style={{
@@ -617,7 +620,9 @@ export default function DiscoverScreen({ navigation }: any) {
                 {swipeFailed ? (
                   <View
                     // Failure is exactly when feedback matters most — announce it
-                    // assertively since the chip auto-dismisses.
+                    // assertively since the chip auto-dismisses. accessible marks
+                    // it as one focusable element so the live region reliably fires.
+                    accessible
                     accessibilityLiveRegion="assertive"
                     accessibilityLabel="Request didn't send — check your connection"
                     style={{
