@@ -212,7 +212,20 @@ describe("DownloadsScreen", () => {
     // Non-failed items get no retry affordance.
     expect(screen.queryByLabelText("Retry download of Active Book")).toBeNull();
 
+    // Cancelling a LIVE download is destructive (partial files are deleted)
+    // and now goes through a confirm Alert first.
+    const alertSpy = jest.spyOn(Alert, "alert");
     await fireEvent.press(screen.getByLabelText("Cancel download of Active Book"));
+    expect(cancelDownload).not.toHaveBeenCalled(); // not before confirming
+    expect(alertSpy).toHaveBeenCalledWith(
+      "Cancel download?",
+      expect.stringContaining("Active Book"),
+      expect.any(Array)
+    );
+    const buttons = alertSpy.mock.calls[0][2] as any[];
+    await act(async () => {
+      buttons.find((b) => b.text === "Cancel download").onPress();
+    });
     expect(cancelDownload).toHaveBeenCalledWith("a1");
   });
 

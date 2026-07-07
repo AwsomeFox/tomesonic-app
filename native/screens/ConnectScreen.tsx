@@ -95,15 +95,28 @@ export default function ConnectScreen() {
     setLoading(true);
 
     try {
-      // Clean and validate URL formatting
-      let cleanUrl = address.trim().replace(/\/+$/, "");
-      if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
-        cleanUrl = "http://" + cleanUrl;
-      }
+      // Clean and validate URL formatting. A bare hostname tries https://
+      // first, falling back to http:// — most real ABS deployments sit behind
+      // TLS (reverse proxy / abs.example.com), and defaulting to http:// made
+      // those fail outright (or sent credentials in the clear when the server
+      // answered on both).
+      const trimmed = address.trim().replace(/\/+$/, "");
+      const hasScheme = trimmed.startsWith("http://") || trimmed.startsWith("https://");
+      const candidates = hasScheme ? [trimmed] : [`https://${trimmed}`, `http://${trimmed}`];
 
       // Verify this is a reachable Audiobookshelf server and discover which
       // auth methods it supports (local, openid).
-      const statusRes = await axios.get(`${cleanUrl}/status`, { timeout: 10000 });
+      let cleanUrl = candidates[0];
+      let statusRes: any = null;
+      for (let i = 0; i < candidates.length; i++) {
+        try {
+          statusRes = await axios.get(`${candidates[i]}/status`, { timeout: 10000 });
+          cleanUrl = candidates[i];
+          break;
+        } catch (err) {
+          if (i === candidates.length - 1) throw err;
+        }
+      }
       if (!statusRes.data || statusRes.data.app !== "audiobookshelf") {
         setError("This does not appear to be an Audiobookshelf server.");
         return;

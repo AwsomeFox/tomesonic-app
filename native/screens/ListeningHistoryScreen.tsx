@@ -37,23 +37,36 @@ function formatDate(ms: number | null): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+const PAGE_SIZE = 50;
+
 export default function ListeningHistoryScreen({ navigation }: any) {
   const colors = useThemeColors();
   const [sessions, setSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  // Next page to request + in-flight latch, kept in refs so rapid
+  // onEndReached bursts can't double-fetch the same page.
+  const pageRef = React.useRef(0);
+  const fetchingMoreRef = React.useRef(false);
 
   const serverConfig = storageHelper.getServerConfig();
   const serverAddress = serverConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConfig?.token || "";
 
-  const fetchSessions = async () => {
+  const fetchSessions = async (page: number) => {
     const res = await api.get("/api/me/listening-sessions", {
-      params: { itemsPerPage: 100, page: 0 },
+      params: { itemsPerPage: PAGE_SIZE, page },
     });
-    return Array.isArray(res.data?.sessions) ? res.data.sessions : [];
+    const list = Array.isArray(res.data?.sessions) ? res.data.sessions : [];
+    // Prefer the server's page count; fall back to "full page ⇒ maybe more"
+    // for older servers that omit numPages.
+    const numPages = typeof res.data?.numPages === "number" ? res.data.numPages : null;
+    const more = numPages != null ? page + 1 < numPages : list.length === PAGE_SIZE;
+    return { list, more };
   };
 
   useEffect(() => {
@@ -62,8 +75,12 @@ export default function ListeningHistoryScreen({ navigation }: any) {
       try {
         setLoading(true);
         setError(null);
-        const list = await fetchSessions();
-        if (!cancelled) setSessions(list);
+        const { list, more } = await fetchSessions(0);
+        if (!cancelled) {
+          pageRef.current = 0;
+          setSessions(list);
+          setHasMore(more);
+        }
       } catch (e) {
         if (!cancelled) setError("Failed to load listening history.");
       } finally {
@@ -78,12 +95,38 @@ export default function ListeningHistoryScreen({ navigation }: any) {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      setSessions(await fetchSessions());
+      const { list, more } = await fetchSessions(0);
+      pageRef.current = 0;
+      setSessions(list);
+      setHasMore(more);
       setError(null);
     } catch {
       // keep the current list on a failed refresh
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (fetchingMoreRef.current || !hasMore || loading || refreshing) return;
+    fetchingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const nextPage = pageRef.current + 1;
+      const { list, more } = await fetchSessions(nextPage);
+      pageRef.current = nextPage;
+      setSessions((prev) => {
+        // Sessions still accrue while the user scrolls, shifting page
+        // boundaries — dedupe by id so a row straddling pages isn't doubled.
+        const seen = new Set(prev.map((s: any) => s?.id).filter(Boolean));
+        return [...prev, ...list.filter((s: any) => !s?.id || !seen.has(s.id))];
+      });
+      setHasMore(more);
+    } catch {
+      // keep what we have; the next onEndReached retries this page
+    } finally {
+      fetchingMoreRef.current = false;
+      setLoadingMore(false);
     }
   };
 
@@ -150,6 +193,15 @@ export default function ListeningHistoryScreen({ navigation }: any) {
           data={sessions}
           keyExtractor={(item, index) => item?.id ? String(item.id) : String(index)}
           contentContainerStyle={{ padding: 16 }}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={{ paddingVertical: 16, alignItems: "center" }}>
+                <ActivityIndicator size="small" color={colors.primary} />
+              </View>
+            ) : null
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

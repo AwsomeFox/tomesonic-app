@@ -791,6 +791,36 @@ export default function ReaderScreen({ route, navigation }: any) {
           setPdfProgress({ page, pages: numberOfPages });
           // Remember where the user left off so reopening resumes here.
           storage.set(pdfPageKey, page);
+          // PDFs get the SAME server sync the epub path has (ebook fields
+          // only, matching the ABS web PDF reader: ebookLocation = page
+          // number) — without it PDF progress never left the device: no
+          // cross-device resume, no "Reading" row, no finish.
+          const fraction = numberOfPages > 0 ? Math.min(1, page / numberOfPages) : 0;
+          useUserStore.setState({
+            mediaProgress: {
+              ...useUserStore.getState().mediaProgress,
+              [itemId]: {
+                ...useUserStore.getState().mediaProgress[itemId],
+                libraryItemId: itemId,
+                ebookLocation: String(page),
+                ebookProgress: fraction,
+                updatedAt: Date.now(),
+              },
+            },
+          });
+          if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+          syncTimeoutRef.current = setTimeout(async () => {
+            try {
+              await api.patch(`/api/me/progress/${itemId}`, {
+                ebookLocation: String(page),
+                ebookProgress: fraction,
+                ...(fraction >= 0.99 ? { isFinished: true } : {}),
+              });
+            } catch (e) {
+              console.warn("[Reader] Failed to sync PDF progress:", e);
+              queueEbookProgressPatch(itemId, String(page), fraction, fraction >= 0.99);
+            }
+          }, 2000);
         }}
         onError={() => setPdfError(true)}
       />
@@ -845,6 +875,15 @@ export default function ReaderScreen({ route, navigation }: any) {
         />
       );
     }
+  } else if (isPdf && pdfError) {
+    // A PDF LOAD failure is not a format problem — the old fallthrough told
+    // the user the format was unsupported and offered no way back.
+    body = (
+      <Fallback
+        message="Couldn't open this PDF. Check your connection and try again, or open it in another app."
+        onRetry={() => setPdfError(false)}
+      />
+    );
   } else if (isShareOnly) {
     body = (
       <Fallback

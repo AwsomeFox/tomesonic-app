@@ -136,6 +136,7 @@ export default function PlayerBottomSheet() {
   const playbackSpeed = usePlaybackStore((s) => s.playbackSpeed);
   const setPlaybackSpeed = usePlaybackStore((s) => s.setPlaybackSpeed);
   const seekForward = usePlaybackStore((s) => s.seekForward);
+  const closePlayback = usePlaybackStore((s) => s.closePlayback);
   const seekBackward = usePlaybackStore((s) => s.seekBackward);
   const seek = usePlaybackStore((s) => s.seek);
   const chapters = usePlaybackStore((s) => s.chapters);
@@ -864,6 +865,28 @@ export default function PlayerBottomSheet() {
                       }}
                   >
                     <Icon name="book" size={22} color={colors.onSecondaryContainer} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      // The ONLY other way to dismiss a session was swiping the
+                      // notification (paused-only, non-obvious) — a finished
+                      // book pinned the mini player over every screen forever.
+                      // closePlayback does the final sync + save cleanup.
+                      setPlayerExpanded(false);
+                      closePlayback().catch(() => {});
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Stop and close player"
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: 28,
+                      backgroundColor: colors.secondaryContainer,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      }}
+                  >
+                    <Icon name="close" size={22} color={colors.onSecondaryContainer} />
                   </Pressable>
                 </View>
               </View>

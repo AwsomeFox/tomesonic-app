@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -71,6 +71,12 @@ export default function RmabRequestsScreen({ navigation }: any) {
       refreshPendingCount();
     } catch (e) {
       console.warn("[RMAB] approve failed", e);
+      // The row un-dims on failure with no other signal — say WHY the action
+      // didn't stick (expired session, offline) instead of looking swallowed.
+      Alert.alert(
+        action === "approve" ? "Couldn't approve" : "Couldn't deny",
+        "The request couldn't be updated. Check your connection (or reconnect ReadMeABook in Settings) and try again."
+      );
     } finally {
       setActing(null);
     }
@@ -100,6 +106,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
       refreshPendingCount();
     } catch (e) {
       console.warn("[RMAB] delete failed", e);
+      Alert.alert(
+        "Couldn't delete",
+        "The request couldn't be deleted. Check your connection (or reconnect ReadMeABook in Settings) and try again."
+      );
     } finally {
       setActing(null);
     }
@@ -452,6 +462,12 @@ export default function RmabRequestsScreen({ navigation }: any) {
                       refreshPendingCount();
                     } catch (e) {
                       console.warn("[RMAB] delete failed", e);
+                      // The sheet already closed — without this the item just
+                      // stays in the list with no explanation.
+                      Alert.alert(
+                        "Couldn't delete",
+                        "The request couldn't be deleted. Check your connection (or reconnect ReadMeABook in Settings) and try again."
+                      );
                     } finally {
                       setActing(null);
                     }

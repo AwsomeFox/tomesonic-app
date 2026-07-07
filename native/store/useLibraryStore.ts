@@ -51,6 +51,9 @@ interface LibraryState {
   
   // Actions
   personalizedShelves: any[];
+  // Last shelves fetch failed (network/proxy). Lets the home screen show a
+  // real error+retry instead of masquerading as an empty library.
+  shelvesLoadError: boolean;
   loadPersonalizedShelves: (force?: boolean) => Promise<void>;
   setCurrentLibraryId: (id: string | null) => void;
   loadLibraries: (force?: boolean) => Promise<boolean>;
@@ -68,6 +71,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   // Hydrate synchronously from the cache so the very first frame shows books
   // (revalidated in the background by loadPersonalizedShelves).
   personalizedShelves: readShelvesCache(initialLibraryId),
+  shelvesLoadError: false,
 
   loadPersonalizedShelves: async (force = false) => {
     const libraryId = get().currentLibraryId;
@@ -95,14 +99,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // crashed the home screen (`.find` on a string). Keep previous shelves.
       if (!Array.isArray(raw)) {
         console.warn("[LibraryStore] personalized response is not an array — keeping previous shelves");
+        set({ shelvesLoadError: true });
         return;
       }
       const shelves = raw.filter((sh: any) => sh && typeof sh === "object");
-      set({ personalizedShelves: shelves });
+      set({ personalizedShelves: shelves, shelvesLoadError: false });
       writeShelvesCache(libraryId, shelves);
     } catch (err) {
       console.error("[LibraryStore] Failed to load personalized shelves:", err);
-      // Keep existing shelves on transient load error to avoid flickering
+      // Keep existing shelves on transient load error to avoid flickering —
+      // but flag it so an EMPTY home screen can say "couldn't load" + Retry
+      // instead of masquerading as an empty library.
+      set({ shelvesLoadError: true });
     }
   },
 

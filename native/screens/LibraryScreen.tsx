@@ -381,8 +381,11 @@ export default function LibraryScreen({ route, navigation }: any) {
         filterBy={filterBy}
         onChange={(f) => {
           setFilterBy(f);
-          // Persist so the choice survives restarts (mirrors the original app).
-          updateUserSettings({ mobileFilterBy: f }).catch(() => {});
+          // Persist so the choice survives restarts (mirrors the original app)
+          // — but NOT on a pushed genre/tag/narrator list (routeFilter): those
+          // are one-off views, and persisting from them silently rewrote the
+          // main Library tab's saved filter.
+          if (!routeFilter) updateUserSettings({ mobileFilterBy: f }).catch(() => {});
         }}
       />
       <OrderModal

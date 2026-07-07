@@ -360,7 +360,24 @@ export default function DownloadsScreen({ navigation }: any) {
                   </Pressable>
                 ) : null}
                 <Pressable
-                  onPress={() => cancelDownload(item.id)}
+                  onPress={() => {
+                    // Cancel is a full DISCARD (record + partial files deleted)
+                    // and the X sits beside Retry on failed rows — confirm for
+                    // live downloads so a mistap can't throw away gigabytes.
+                    // Failed rows stay one-tap (nothing in flight to lose).
+                    if (item.status === "downloading" || item.status === "pending") {
+                      Alert.alert(
+                        "Cancel download?",
+                        `"${item.title}" will stop downloading and its partial files will be deleted.`,
+                        [
+                          { text: "Keep downloading", style: "cancel" },
+                          { text: "Cancel download", style: "destructive", onPress: () => cancelDownload(item.id) },
+                        ]
+                      );
+                    } else {
+                      cancelDownload(item.id);
+                    }
+                  }}
                   style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                   hitSlop={6}
                   accessibilityRole="button"

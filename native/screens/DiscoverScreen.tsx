@@ -18,6 +18,8 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import Pressable from "../components/HintPressable";
 import TopAppBar from "../components/TopAppBar";
+import SearchContent from "../components/SearchContent";
+import { useUiStore } from "../store/useUiStore";
 import RmabBookDetailSheet from "../components/RmabBookDetailSheet";
 import BookdatePreferencesSheet from "../components/BookdatePreferencesSheet";
 import { useRmabStore } from "../store/useRmabStore";
@@ -345,6 +347,19 @@ export default function DiscoverScreen({ navigation }: any) {
   );
 
   const heroHeight = Math.min(560, Math.round(screenHeight * 0.6));
+
+  // The TopAppBar magnifier flips the GLOBAL search mode — every other tab
+  // mounts SearchContent for it; without this branch, typing on Discover
+  // updated the query and rendered nothing (search looked broken).
+  const isSearchActive = useUiStore((s) => s.isSearchActive);
+  if (isSearchActive) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
+        <TopAppBar navigation={navigation} />
+        <SearchContent navigation={navigation} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>

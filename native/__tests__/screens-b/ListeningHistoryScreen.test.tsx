@@ -60,7 +60,7 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 import ListeningHistoryScreen from "../../screens/ListeningHistoryScreen";
 import { api } from "../../utils/api";
 import { storageHelper, secureStorage } from "../../utils/storage";
@@ -120,7 +120,7 @@ describe("ListeningHistoryScreen", () => {
 
     expect(await screen.findByText("Big Audiobook")).toBeTruthy();
     expect(api.get).toHaveBeenCalledWith("/api/me/listening-sessions", {
-      params: { itemsPerPage: 100, page: 0 },
+      params: { itemsPerPage: 50, page: 0 },
     });
     expect(screen.getByText("Author One")).toBeTruthy();
     // 4000s -> "1h 6m"; 40s stays seconds; 150s -> minutes.
@@ -129,6 +129,42 @@ describe("ListeningHistoryScreen", () => {
     expect(screen.getByText(/2m listened/)).toBeTruthy();
     // Dates resolve from updatedAt / date / startedAt alike (month + day).
     expect(screen.getByText(/Jan 1[45]/)).toBeTruthy();
+  });
+
+  it("pages on end-reached, dedupes rows straddling a shifted page boundary, and stops at numPages", async () => {
+    const makeSession = (i: number) => ({
+      id: `s${i}`,
+      libraryItemId: `li${i}`,
+      displayTitle: `Session ${i}`,
+      timeListening: 120,
+      updatedAt: Date.UTC(2026, 0, 15, 12, 0, 0),
+    });
+    // Short pages with a server-provided numPages: hasMore is driven by the
+    // page count, and everything stays inside the virtualized render window.
+    const page0 = [makeSession(0), makeSession(1), makeSession(2)];
+    // New sessions accrue while the user scrolls, shifting page boundaries —
+    // page 1 re-serves s2 and must not double it in the list.
+    const page1 = [makeSession(2), makeSession(3), makeSession(4)];
+    (api.get as jest.Mock).mockImplementation((_url: string, cfg: any) =>
+      Promise.resolve({
+        data: { sessions: cfg?.params?.page === 0 ? page0 : page1, numPages: 2 },
+      })
+    );
+    await renderHistory();
+    const row = await screen.findByText("Session 0");
+
+    await fireEvent(row, "onEndReached", { distanceFromEnd: 0 });
+    expect(api.get).toHaveBeenLastCalledWith("/api/me/listening-sessions", {
+      params: { itemsPerPage: 50, page: 1 },
+    });
+    expect(await screen.findByText("Session 4")).toBeTruthy();
+    // s2 re-served by page 1 was deduped, not doubled.
+    expect(screen.getAllByText("Session 2")).toHaveLength(1);
+
+    // numPages exhausted — a further end-reached must not fetch page 2.
+    (api.get as jest.Mock).mockClear();
+    await fireEvent(row, "onEndReached", { distanceFromEnd: 0 });
+    expect(api.get).not.toHaveBeenCalled();
   });
 
   it("row tap opens the item detail when the session has a library item", async () => {
