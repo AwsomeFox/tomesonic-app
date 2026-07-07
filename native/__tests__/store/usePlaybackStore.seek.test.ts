@@ -371,6 +371,9 @@ describe("usePlaybackStore seek + chapter navigation", () => {
     beforeEach(async () => {
       const { storageHelper } = require("../../utils/storage");
       storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+      // Skip the real initializePlayer: its 1s progress interval is a live
+      // node handle that keeps an in-band jest process from exiting.
+      usePlaybackStore.setState({ isInitialized: true } as any);
       await usePlaybackStore.getState().preparePlaybackSession(MULTI as any, false);
       jest.mocked(TrackPlayer.skip).mockClear();
       jest.mocked(TrackPlayer.seekTo).mockClear();
@@ -424,6 +427,23 @@ describe("usePlaybackStore seek + chapter navigation", () => {
       expect(usePlaybackStore.getState().position).toBe(120);
       expect(TrackPlayer.seekTo).toHaveBeenCalledWith(30);
       expect(TrackPlayer.skip).not.toHaveBeenCalled(); // already on file 2
+    });
+
+    // REGRESSION: while CASTING the multi-file mapping used to be skipped —
+    // the notification seekbar (relative to the paused local item) was passed
+    // to seek() as absolute, so a drag while in file 2 sent the receiver back
+    // into file 1.
+    it("remoteSeek while casting still maps through the local file offset to the receiver", async () => {
+      jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+      const castClient = { seek: jest.fn().mockResolvedValue(undefined) };
+      usePlaybackStore.setState({ isCasting: true, castClient } as any);
+
+      await usePlaybackStore.getState().remoteSeek(30); // 30s into (paused local) file 2
+
+      // Mapped to absolute 120 and routed to the RECEIVER, not the local player.
+      expect(castClient.seek).toHaveBeenCalledWith({ position: 120 });
+      expect(usePlaybackStore.getState().position).toBe(120);
+      expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
     });
   });
 });

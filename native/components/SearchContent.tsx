@@ -117,6 +117,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
     }
 
     if (!query.trim()) {
+      // Invalidate any in-flight search — its stale-guard id must not stay
+      // "current", or a slow response would reinstall results under the
+      // now-empty search box.
+      searchIdRef.current++;
       setResults(null);
       setHasSearched(false);
       setLoading(false);

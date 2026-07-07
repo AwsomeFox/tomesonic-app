@@ -336,7 +336,7 @@ export default function PlayerBottomSheet() {
   const [chapterBarWidth, setChapterBarWidth] = useState(0);
   const [dragFrac, setDragFrac] = useState<number | null>(null);
   const chapterBarWidthRef = useRef(0);
-  const chapterBoundsRef = useRef({ start: 0, end: 0, span: 0 });
+  const chapterBoundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
 
   // Draggable chapter scrubber PanResponder
   const chapterScrubPanResponder = useRef(
@@ -358,9 +358,13 @@ export default function PlayerBottomSheet() {
         const w = chapterBarWidthRef.current;
         if (w) {
           const frac = Math.max(0, Math.min(1, e.nativeEvent.locationX / w));
-          const { start, span } = chapterBoundsRef.current;
+          // Read duration from the ref, not the closure: PanResponder.create
+          // runs once, so a closed-over `duration` captured the FIRST render's
+          // value (0 — mounted before any session), making this fallback dead
+          // and silently discarding drags on a zero-span (malformed) chapter.
+          const { start, span, duration: dur } = chapterBoundsRef.current;
           if (span > 0) seek(start + frac * span);
-          else if (duration > 0) seek(frac * duration);
+          else if (dur > 0) seek(frac * dur);
         }
         setDragFrac(null);
       },
@@ -597,14 +601,17 @@ export default function PlayerBottomSheet() {
   const chapterStart = currentChapter ? currentChapter.start || 0 : 0;
   const chapterEnd = currentChapter ? currentChapter.end || duration : duration;
   const chapterSpan = Math.max(0, chapterEnd - chapterStart);
-  chapterBoundsRef.current = { start: chapterStart, end: chapterEnd, span: chapterSpan };
+  chapterBoundsRef.current = { start: chapterStart, end: chapterEnd, span: chapterSpan, duration };
 
   const liveChapterFrac =
     chapterSpan > 0 ? Math.min(Math.max((position - chapterStart) / chapterSpan, 0), 1) : bookFrac;
   const chapterFrac = dragFrac != null ? dragFrac : liveChapterFrac;
 
-  const chapterElapsed = currentChapter ? chapterFrac * chapterSpan : position;
-  const chapterRemaining = currentChapter ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
+  // Derive from chapterFrac so the numbers FOLLOW a drag on chapterless books
+  // too (chapterSpan is already the whole-book duration there) — they used to
+  // stay pinned to the live position while the wave previewed the drag.
+  const chapterElapsed = chapterSpan > 0 ? chapterFrac * chapterSpan : position;
+  const chapterRemaining = chapterSpan > 0 ? Math.max(0, chapterSpan - chapterElapsed) : bookRemaining;
 
   // Clean speed label — a server-restored playbackRate can carry float noise
   // (e.g. 1.2999999), which "+toFixed(2)" collapses to 1.3 / 3 / 1.75.

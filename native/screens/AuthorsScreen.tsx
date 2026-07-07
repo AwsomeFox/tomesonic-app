@@ -107,15 +107,26 @@ export default function AuthorsScreen({ navigation }: any) {
 
   const fetchAuthors = useCallback(async () => {
     if (!currentLibraryId) return;
+    const requestedLibraryId = currentLibraryId;
     setLoading(true);
     setLoadError(false);
     try {
       const response = await api.get(
-        `/api/libraries/${currentLibraryId}/authors`
+        `/api/libraries/${requestedLibraryId}/authors`
       );
+      // A slow response from the PREVIOUS library must not overwrite the new
+      // library's list after a switch (same guard SeriesList has).
+      if (useLibraryStore.getState().currentLibraryId !== requestedLibraryId) return;
       const data = response.data || {};
-      const results: Author[] = data.authors || data.results || data || [];
-      setAuthors(results);
+      // Only ever install an ARRAY: a proxy/captive-portal HTML-or-object body
+      // with HTTP 200 would otherwise land in state and crash the spread/map.
+      const raw = data.authors ?? data.results ?? data;
+      if (!Array.isArray(raw)) {
+        console.warn("[AuthorsScreen] non-array authors payload — keeping previous list");
+        setLoadError(true);
+        return;
+      }
+      setAuthors(raw as Author[]);
     } catch (err) {
       console.error("[AuthorsScreen] Failed to fetch authors:", err);
       setLoadError(true);

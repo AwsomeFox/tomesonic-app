@@ -394,6 +394,11 @@ export default function ReaderScreen({ route, navigation }: any) {
 
   // Sync pending ebook progress to server on unmount/screen change
   useEffect(() => {
+    // Re-arm on an IN-PLACE itemId change: navigate("Reader", {itemId: B})
+    // from inside the reader updates params without unmounting, so the
+    // previous run's cleanup set unmountedRef true — without this reset,
+    // every message for the NEW book was dropped (no saves at all).
+    unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
       if (syncTimeoutRef.current) {
@@ -418,6 +423,10 @@ export default function ReaderScreen({ route, navigation }: any) {
           // server (and Storyteller/other devices) when connectivity returns.
           queueEbookProgressPatch(itemId, cfi, fraction, fraction >= 0.99);
         });
+        // The snapshot belongs to THIS itemId. Clearing it stops an in-place
+        // book change from flushing book A's cfi onto book B's server record
+        // (which could even one-way auto-finish B).
+        latestProgressRef.current = null;
       }
     };
   }, [itemId]);
