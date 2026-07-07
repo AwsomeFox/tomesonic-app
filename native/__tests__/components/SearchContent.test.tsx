@@ -100,13 +100,30 @@ jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
 
+// RMAB catalog lookups (the "Not in your library" section on no-results and
+// results screens) — same mock surface as RmabMissingSection.test.tsx.
+jest.mock("../../utils/rmab", () => ({
+  searchBooks: jest.fn().mockResolvedValue([]),
+  exchangeLoginToken: jest.fn(),
+  readRmabConfig: jest.fn(() => null),
+  writeRmabConfig: jest.fn(),
+  rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
+  resolveRmabUrl: (p: any) => p || undefined,
+  getMe: jest.fn(),
+  createRequest: jest.fn(),
+  clearRmabCaches: jest.fn(),
+  getPendingApprovalCount: jest.fn().mockResolvedValue(0),
+}));
+
 import SearchContent from "../../components/SearchContent";
 import { encodeFilterValue } from "../../components/FilterModal";
 import { api } from "../../utils/api";
+import { searchBooks } from "../../utils/rmab";
 import { useUiStore } from "../../store/useUiStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useRmabStore } from "../../store/useRmabStore";
 
 const apiGet = api.get as jest.Mock;
 
@@ -114,6 +131,7 @@ const uiInitial = useUiStore.getState();
 const libraryInitial = useLibraryStore.getState();
 const userInitial = useUserStore.getState();
 const playbackInitial = usePlaybackStore.getState();
+const rmabInitial = useRmabStore.getState();
 
 // Tab-level navigation stub whose getParent() returns the ROOT stack — every
 // result tap must route through the parent (see SearchContent's rootNav note).
@@ -152,6 +170,8 @@ beforeEach(() => {
   useLibraryStore.setState(libraryInitial, true);
   useUserStore.setState(userInitial, true);
   usePlaybackStore.setState(playbackInitial, true);
+  useRmabStore.setState(rmabInitial, true);
+  (searchBooks as jest.Mock).mockResolvedValue([]);
   useLibraryStore.setState({ currentLibraryId: "lib1" } as any);
   useUserStore.setState({
     serverConnectionConfig: { address: "https://abs.example.com", token: "tok" },
@@ -249,6 +269,40 @@ describe("SearchContent — states", () => {
       useUiStore.setState({ searchQuery: "" } as any);
     });
     expect(screen.getByText("Search your library")).toBeTruthy();
+  });
+});
+
+describe("SearchContent — RMAB 'Not in your library' on the no-results screen", () => {
+  const EMPTY = { book: [], series: [], authors: [], narrators: [], tags: [] };
+
+  it("mounts the request section alongside the no-results copy when RMAB is configured", async () => {
+    // Searching for a book you don't own is THE reason to request one — the
+    // old early return made the section unreachable exactly there.
+    useRmabStore.setState({ configured: true } as any);
+    (searchBooks as jest.Mock).mockResolvedValue([
+      { asin: "R1", title: "Catalog Only Book", author: "C. Author", isAvailable: false },
+    ]);
+    await renderSearch("zzz", EMPTY);
+    // RMAB's own query debounce is 600ms (renderSearch already ran 500ms).
+    await act(async () => {
+      jest.advanceTimersByTime(600);
+    });
+
+    expect(screen.getByText(/No results for/)).toBeTruthy();
+    expect(screen.getByText("Not in your library")).toBeTruthy();
+    expect(screen.getByText("Catalog Only Book")).toBeTruthy();
+    expect(searchBooks).toHaveBeenCalledWith("zzz");
+  });
+
+  it("self-hides when RMAB is unconfigured — plain no-results screen, no catalog fetch", async () => {
+    await renderSearch("zzz", EMPTY);
+    await act(async () => {
+      jest.advanceTimersByTime(600);
+    });
+
+    expect(screen.getByText(/No results for/)).toBeTruthy();
+    expect(screen.queryByText("Not in your library")).toBeNull();
+    expect(searchBooks).not.toHaveBeenCalled();
   });
 });
 

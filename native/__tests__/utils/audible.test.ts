@@ -3,10 +3,13 @@ import axios from "axios";
 import {
   audibleBookDetails,
   audibleAuthorBooks,
+  audibleFindBookAsin,
   audibleSeriesAsinFromBook,
   audibleFindSeriesAsin,
   audibleSeriesBooks,
   titleKey,
+  titleKeyFull,
+  titlesLikelySame,
 } from "../../utils/audible";
 
 const mockedGet = axios.get as jest.Mock;
@@ -17,6 +20,51 @@ describe("titleKey", () => {
   it("normalizes subtitles, articles, and noise", () => {
     expect(titleKey("The Hobbit: There and Back Again")).toBe(titleKey("Hobbit"));
     expect(titleKey("Dune (Unabridged)")).toBe(titleKey("DUNE!"));
+  });
+});
+
+describe("titleKeyFull", () => {
+  it("keeps subtitles, so distinct series volumes stay distinct", () => {
+    expect(titleKeyFull("Mistborn: The Final Empire")).not.toBe(
+      titleKeyFull("Mistborn: The Well of Ascension")
+    );
+    // titleKey (pre-colon) collapses them — the exact bug titleKeyFull fixes.
+    expect(titleKey("Mistborn: The Final Empire")).toBe(titleKey("Mistborn: The Well of Ascension"));
+  });
+
+  it("still normalizes articles, punctuation, and edition noise", () => {
+    expect(titleKeyFull("The Hobbit (Unabridged)")).toBe(titleKeyFull("Hobbit"));
+    expect(titleKeyFull("Dune!")).toBe(titleKeyFull("DUNE"));
+  });
+});
+
+describe("titlesLikelySame", () => {
+  it("distinct volumes sharing a series prefix are NOT the same book", () => {
+    expect(titlesLikelySame("Mistborn: The Final Empire", "Mistborn: The Well of Ascension")).toBe(
+      false
+    );
+  });
+
+  it("a subtitle on ONE side only still matches via the pre-colon main title", () => {
+    expect(titlesLikelySame("Oathbringer", "Oathbringer: Book Three of the Stormlight Archive")).toBe(
+      true
+    );
+    // Symmetric: subtitle-bearing side first.
+    expect(titlesLikelySame("Oathbringer: Book Three of the Stormlight Archive", "Oathbringer")).toBe(
+      true
+    );
+  });
+
+  it("identical full titles match through punctuation/article/edition drift", () => {
+    expect(titlesLikelySame("The Final Empire", "Final Empire (Unabridged)")).toBe(true);
+    expect(titlesLikelySame("The Goldfinch: A Novel", "Goldfinch")).toBe(true);
+  });
+
+  it("empty or null titles never match anything", () => {
+    expect(titlesLikelySame("", "Dune")).toBe(false);
+    expect(titlesLikelySame("Dune", "")).toBe(false);
+    expect(titlesLikelySame(null, null)).toBe(false);
+    expect(titlesLikelySame(undefined, "")).toBe(false);
   });
 });
 
@@ -55,6 +103,57 @@ describe("audibleAuthorBooks", () => {
   });
 });
 
+describe("audibleAuthorBooks pagination", () => {
+  const fullPage = (prefix: string) =>
+    Array.from({ length: 50 }, (_, i) => ({ asin: `${prefix}${i}`, title: `Book ${prefix}${i}` }));
+
+  it("follows a full 50-result page onto page 2 and dedupes by asin", async () => {
+    mockedGet
+      .mockResolvedValueOnce({ data: { products: fullPage("A") } })
+      .mockResolvedValueOnce({
+        data: {
+          products: [
+            { asin: "A0", title: "Book A0" }, // straddles the page boundary — deduped
+            { asin: "B50", title: "Book B50" },
+            { asin: "B51", title: "Book B51" },
+          ],
+        },
+      });
+
+    const books = await audibleAuthorBooks("Prolific Author");
+
+    expect(mockedGet).toHaveBeenCalledTimes(2); // short page 2 stops the loop
+    expect(mockedGet).toHaveBeenNthCalledWith(
+      1,
+      "https://api.audible.com/1.0/catalog/products",
+      expect.objectContaining({ params: expect.objectContaining({ page: 1 }) })
+    );
+    expect(mockedGet).toHaveBeenNthCalledWith(
+      2,
+      "https://api.audible.com/1.0/catalog/products",
+      expect.objectContaining({ params: expect.objectContaining({ page: 2 }) })
+    );
+    expect(books).toHaveLength(52);
+    expect(books.filter((b) => b.asin === "A0")).toHaveLength(1);
+    expect(books.slice(-2).map((b) => b.asin)).toEqual(["B50", "B51"]);
+  });
+
+  it("a later page failing keeps page 1's books instead of throwing", async () => {
+    mockedGet
+      .mockResolvedValueOnce({ data: { products: fullPage("A") } })
+      .mockRejectedValueOnce(new Error("timeout"));
+
+    const books = await audibleAuthorBooks("Prolific Author");
+    expect(books).toHaveLength(50);
+    expect(books[0].asin).toBe("A0");
+  });
+
+  it("page 1 failing still throws (nothing loaded — not a partial result)", async () => {
+    mockedGet.mockRejectedValueOnce(new Error("network down"));
+    await expect(audibleAuthorBooks("Anyone")).rejects.toThrow("network down");
+  });
+});
+
 describe("language filtering (app is English-only)", () => {
   it("author books drop foreign-language editions but keep unknown-language rows", async () => {
     mockedGet.mockResolvedValue({
@@ -68,6 +167,20 @@ describe("language filtering (app is English-only)", () => {
     });
     const books = await audibleAuthorBooks("Someone");
     expect(books.map((b) => b.asin)).toEqual(["EN1", "XX1"]);
+  });
+
+  it('keeps "English (US)"-style variants (startsWith, not strict equality)', async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        products: [
+          { asin: "US1", title: "US Edition", language: "English (US)" },
+          { asin: "GB1", title: "UK Edition", language: "English (UK)" },
+          { asin: "DE1", title: "German Book", language: "german" },
+        ],
+      },
+    });
+    const books = await audibleAuthorBooks("Someone");
+    expect(books.map((b) => b.asin)).toEqual(["US1", "GB1"]);
   });
 
   it("series books apply the same language filter", async () => {
@@ -178,5 +291,118 @@ describe("series resolution", () => {
       });
     const books = await audibleSeriesBooks("SERIES1");
     expect(books.map((b) => b.title)).toEqual(["Book One", "Book Two"]);
+  });
+});
+
+describe("audibleFindBookAsin scoring", () => {
+  it("matches a bare library title against the catalog's series-prefixed title (containment)", async () => {
+    mockedGet.mockResolvedValue({
+      data: { products: [{ asin: "B1", title: "Mistborn: The Final Empire" }] },
+    });
+    expect(await audibleFindBookAsin("The Final Empire", "Brandon Sanderson")).toBe("B1");
+    expect(mockedGet).toHaveBeenCalledWith(
+      "https://api.audible.com/1.0/catalog/products",
+      expect.objectContaining({
+        params: expect.objectContaining({ keywords: "The Final Empire Brandon Sanderson" }),
+      })
+    );
+  });
+
+  it("an exact full-title match outranks a containment match regardless of result order", async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        products: [
+          // Containment hit listed FIRST — must not win over the exact hit below.
+          { asin: "CONTAIN", title: "Mistborn: The Final Empire" },
+          { asin: "EXACT", title: "The Final Empire" },
+        ],
+      },
+    });
+    expect(await audibleFindBookAsin("The Final Empire")).toBe("EXACT");
+  });
+
+  it("returns null when nothing scores", async () => {
+    mockedGet.mockResolvedValue({
+      data: { products: [{ asin: "X1", title: "Completely Unrelated Memoir" }] },
+    });
+    expect(await audibleFindBookAsin("The Final Empire")).toBeNull();
+  });
+});
+
+describe("audibleFindSeriesAsin matching tiers", () => {
+  it("an exact normalized name match wins over an earlier contains-only match", async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        products: [
+          { series: [{ asin: "SCONTAIN", title: "The Stormlight Archive Companion" }] },
+          { series: [{ asin: "SEXACT", title: "Stormlight Archive" }] },
+        ],
+      },
+    });
+    expect(await audibleFindSeriesAsin("The Stormlight Archive")).toBe("SEXACT");
+  });
+
+  it("accepts a contains-style near match when no exact name exists", async () => {
+    mockedGet.mockResolvedValue({
+      data: {
+        products: [
+          { series: [{ asin: "SNEAR", title: "The Wheel of Time (Original Recording)" }] },
+        ],
+      },
+    });
+    expect(await audibleFindSeriesAsin("Wheel of Time")).toBe("SNEAR");
+  });
+
+  it("returns null when the top hits belong to unrelated series (no arbitrary fallback)", async () => {
+    // The old code grabbed the top hit's first series here — rendering a
+    // DIFFERENT series' books as "missing", request buttons and all.
+    mockedGet.mockResolvedValue({
+      data: {
+        products: [
+          { series: [{ asin: "SWRONG", title: "Some Other Saga" }] },
+          { series: [{ asin: "SWRONG2", title: "Another Thing Entirely" }] },
+        ],
+      },
+    });
+    expect(await audibleFindSeriesAsin("Lost Fleet")).toBeNull();
+  });
+});
+
+describe("audibleSeriesBooks partial tolerance", () => {
+  const children = Array.from({ length: 41 }, (_, i) => ({
+    asin: `C${i}`,
+    relationship_to_product: "child",
+    sort: String(i + 1),
+  }));
+  const chunk1Products = Array.from({ length: 40 }, (_, i) => ({
+    asin: `C${i}`,
+    title: `Volume ${i}`,
+  }));
+
+  it("a failed LATER detail chunk keeps the earlier chunk's books", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      mockedGet
+        .mockResolvedValueOnce({ data: { product: { relationships: children } } })
+        .mockResolvedValueOnce({ data: { products: chunk1Products } })
+        .mockRejectedValueOnce(new Error("timeout"));
+
+      const books = await audibleSeriesBooks("SERIES1");
+
+      expect(mockedGet).toHaveBeenCalledTimes(3); // relationships + 2 detail chunks
+      expect(books).toHaveLength(40);
+      expect(books[0].asin).toBe("C0");
+      expect(books[39].asin).toBe("C39");
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("the FIRST detail chunk failing still throws (nothing partial to keep)", async () => {
+    mockedGet
+      .mockResolvedValueOnce({ data: { product: { relationships: children } } })
+      .mockRejectedValueOnce(new Error("boom"));
+    await expect(audibleSeriesBooks("SERIES1")).rejects.toThrow("boom");
   });
 });

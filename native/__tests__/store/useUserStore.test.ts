@@ -33,10 +33,14 @@ import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
+// Real store (like useDownloadStore above): login/logout lazy-require it, and
+// its disconnect() only touches the in-memory MMKV fakes — no network.
+import { useRmabStore } from "../../store/useRmabStore";
 
 const initialUser = useUserStore.getState();
 const initialLibrary = useLibraryStore.getState();
 const initialDownloads = useDownloadStore.getState();
+const initialRmab = useRmabStore.getState();
 const mockGet = jest.mocked(api.get);
 
 function clearStorage() {
@@ -50,6 +54,7 @@ describe("useUserStore", () => {
     useUserStore.setState(initialUser, true);
     useLibraryStore.setState(initialLibrary, true);
     useDownloadStore.setState(initialDownloads, true);
+    useRmabStore.setState(initialRmab, true);
     useDownloadStore.setState({ activeDownloads: {}, completedDownloads: {} });
     jest.mocked(readAutoCreds).mockResolvedValue(null);
   });
@@ -466,6 +471,73 @@ describe("useUserStore", () => {
 
       await useUserStore.getState().logout();
       expect(useUserStore.getState().user).toBeNull();
+    });
+  });
+
+  describe("RMAB hygiene (connection must not survive to the next account)", () => {
+    const CONFIG_A = { address: "https://a.example.com", token: "tokA", userId: "userA" };
+    const CONFIG_B = { address: "https://b.example.com", token: "tokB", userId: "userB" };
+
+    function seedRmabConnection() {
+      secureStorage.set(
+        "rmab_config",
+        JSON.stringify({ url: "https://rmab.test", accessToken: "a", refreshToken: "r" })
+      );
+      storage.set("rmab_requestedAsins", JSON.stringify({ B01: "pending" }));
+      useRmabStore.setState({
+        configured: true,
+        serverUrl: "https://rmab.test",
+        username: "tony",
+        authMode: "jwt",
+        isAdmin: true,
+        requestedAsins: { B01: "pending" },
+      } as any);
+    }
+
+    it("logout disconnects RMAB: config, requested-state, and store identity are gone", async () => {
+      seedRmabConnection();
+      useUserStore.setState({
+        user: { id: "userA" },
+        serverConnectionConfig: { address: "https://a.example.com", token: "tokA" },
+      } as any);
+      jest.mocked(api.post).mockResolvedValue({} as any);
+
+      await useUserStore.getState().logout();
+
+      const rmab = useRmabStore.getState();
+      expect(rmab.configured).toBe(false);
+      expect(rmab.serverUrl).toBeNull();
+      expect(rmab.isAdmin).toBe(false);
+      expect(rmab.requestedAsins).toEqual({});
+      expect(secureStorage.getString("rmab_config")).toBeUndefined();
+      expect(storage.getString("rmab_requestedAsins")).toBeUndefined();
+    });
+
+    it("switching accounts on login disconnects RMAB too", async () => {
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      seedRmabConnection();
+
+      await useUserStore.getState().login(CONFIG_B, { id: "userB" });
+
+      const rmab = useRmabStore.getState();
+      expect(rmab.configured).toBe(false);
+      expect(rmab.requestedAsins).toEqual({});
+      expect(secureStorage.getString("rmab_config")).toBeUndefined();
+      expect(storage.getString("rmab_requestedAsins")).toBeUndefined();
+    });
+
+    it("SAME-account re-login keeps the RMAB connection", async () => {
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      seedRmabConnection();
+
+      await useUserStore.getState().login(CONFIG_A, { id: "userA" });
+
+      const rmab = useRmabStore.getState();
+      expect(rmab.configured).toBe(true);
+      expect(rmab.serverUrl).toBe("https://rmab.test");
+      expect(rmab.requestedAsins).toEqual({ B01: "pending" });
+      expect(secureStorage.getString("rmab_config")).toBeDefined();
+      expect(storage.getString("rmab_requestedAsins")).toBeDefined();
     });
   });
 

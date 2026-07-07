@@ -36,7 +36,11 @@ import {
   getPopularBooks,
   getHomeSections,
   getCategoryBooks,
+  createRequest,
 } from "../../utils/rmab";
+import { useRmabStore } from "../../store/useRmabStore";
+
+const rmabInitial = useRmabStore.getState();
 
 const RECS = [
   { id: "rec1", title: "First Pick", author: "Author One", narrator: "Narrator One", description: "<p>Great</p>", coverUrl: "/api/cache/a.jpg", aiReason: "Because you love Neal Stephenson." },
@@ -45,6 +49,7 @@ const RECS = [
 
 beforeEach(() => {
   jest.clearAllMocks();
+  useRmabStore.setState(rmabInitial, true);
   (getBookdateRecommendations as jest.Mock).mockResolvedValue(RECS);
   (swipeBookdate as jest.Mock).mockResolvedValue({});
 });
@@ -233,6 +238,52 @@ describe("DiscoverScreen (BookDate)", () => {
     await waitFor(() => expect(generateBookdateRecommendations).toHaveBeenCalled());
     // onSaved -> deck reload.
     await waitFor(() => expect(getBookdateRecommendations).toHaveBeenCalled());
+  });
+
+  it("a failed right-swipe shows the error chip, never a false 'Requested'", async () => {
+    // The old optimistic chip said "Requested" even when the POST never
+    // reached the server — the request was silently lost.
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    (swipeBookdate as jest.Mock).mockRejectedValue(new Error("offline"));
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+
+    await fireEvent.press(screen.getByLabelText("Like and request"));
+    await waitFor(() => expect(swipeBookdate).toHaveBeenCalledWith("rec1", "right"));
+
+    await screen.findByText("Request didn't send — check your connection");
+    // Deck still advances (the card already flew out), but no success chip.
+    await screen.findByText("Second Pick");
+    expect(screen.queryByText("Requested")).toBeNull();
+    warnSpy.mockRestore();
+  });
+
+  it("a failed shelf request surfaces its message inside the sheet; closing clears it", async () => {
+    // 409 AlreadyAvailable → the store classifies it as "Already in the
+    // library" and the sheet (not the invisible under-sheet notice line)
+    // must show it.
+    (createRequest as jest.Mock).mockRejectedValue({
+      response: { status: 409, data: { error: "AlreadyAvailable" } },
+    });
+    (getPopularBooks as jest.Mock).mockResolvedValue([
+      { asin: "P1", title: "Popular Pick", author: "Someone", isAvailable: false },
+    ]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Popular Pick");
+
+    await fireEvent.press(screen.getByLabelText("Details for Popular Pick"));
+    await fireEvent.press(await screen.findByLabelText("Request Popular Pick"));
+    await waitFor(() => expect(createRequest).toHaveBeenCalled());
+    await screen.findByText("Already in the library");
+
+    // Close the sheet (backdrop press) — the notice must not linger…
+    await fireEvent.press(screen.getByLabelText("Dismiss"));
+    await waitFor(() => expect(screen.queryByText("Already in the library")).toBeNull());
+
+    // …and reopening shows a clean sheet, not the stale outcome.
+    await fireEvent.press(screen.getByLabelText("Details for Popular Pick"));
+    await screen.findByLabelText("Request Popular Pick");
+    expect(screen.queryByText("Already in the library")).toBeNull();
   });
 
   it("an empty deck offers to generate more picks", async () => {

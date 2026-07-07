@@ -18,6 +18,9 @@ import {
   getMe,
   createRequest,
 } from "../../utils/rmab";
+// Real in-memory MMKV (see jest.setup.ts) — the store lazy-requires this same
+// module to persist requested-state.
+import { storage } from "../../utils/storage";
 
 const initial = useRmabStore.getState();
 const mockedExchange = exchangeLoginToken as jest.Mock;
@@ -35,6 +38,7 @@ const CFG = {
 
 beforeEach(() => {
   useRmabStore.setState(initial, true);
+  storage.remove("rmab_requestedAsins");
   jest.clearAllMocks();
 });
 
@@ -282,5 +286,50 @@ describe("requestBook", () => {
       B01: "downloading",
       B02: "approved",
     });
+  });
+});
+
+describe("requested-state persistence (survives restarts)", () => {
+  it("noteRequestStatus mirrors the full map to storage", () => {
+    useRmabStore.getState().noteRequestStatus("B01", "pending");
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ B01: "pending" });
+    // Subsequent notes persist the MERGED map, not just the last entry.
+    useRmabStore.getState().noteRequestStatus("B02", "approved");
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({
+      B01: "pending",
+      B02: "approved",
+    });
+  });
+
+  it("initialize hydrates requestedAsins from storage when a config exists", () => {
+    mockedRead.mockReturnValue(CFG);
+    storage.set("rmab_requestedAsins", JSON.stringify({ B09: "pending", B10: "approved" }));
+    useRmabStore.getState().initialize();
+    const s = useRmabStore.getState();
+    expect(s.configured).toBe(true);
+    expect(s.requestedAsins).toEqual({ B09: "pending", B10: "approved" });
+  });
+
+  it("corrupt or non-object persisted JSON is ignored (empty map)", () => {
+    mockedRead.mockReturnValue(CFG);
+    storage.set("rmab_requestedAsins", "{not valid json");
+    useRmabStore.getState().initialize();
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
+
+    // Arrays don't count as a status map either.
+    useRmabStore.setState(initial, true);
+    storage.set("rmab_requestedAsins", JSON.stringify(["B01"]));
+    useRmabStore.getState().initialize();
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
+  });
+
+  it("disconnect removes the persisted key and empties the in-memory map", () => {
+    useRmabStore.getState().noteRequestStatus("B01", "pending");
+    expect(storage.getString("rmab_requestedAsins")).toBeDefined();
+
+    useRmabStore.getState().disconnect();
+
+    expect(storage.getString("rmab_requestedAsins")).toBeUndefined();
+    expect(useRmabStore.getState().requestedAsins).toEqual({});
   });
 });

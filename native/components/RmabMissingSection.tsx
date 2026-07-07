@@ -161,7 +161,12 @@ export default function RmabMissingSection({
             style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 8 }}
           >
             <Pressable
-              onPress={() => setDetail(book)}
+              onPress={() => {
+                // A stale outcome from a previous request must not render
+                // inside a DIFFERENT book's sheet.
+                setNotice(null);
+                setDetail(book);
+              }}
               accessibilityRole="button"
               accessibilityLabel={`Details for ${book.title}`}
               android_ripple={{ color: colors.primary + "14" }}
