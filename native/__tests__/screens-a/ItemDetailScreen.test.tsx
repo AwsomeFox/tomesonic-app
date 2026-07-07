@@ -439,6 +439,10 @@ describe("ItemDetailScreen", () => {
     expect(screen.getByText("Episode One")).toBeTruthy();
     expect(screen.getByText("Episode Two")).toBeTruthy();
 
+    // No Download button for podcasts, and a note explaining why (not a bug).
+    expect(screen.queryByLabelText("Download")).toBeNull();
+    expect(screen.getByText(/Podcast episodes stream and aren't downloaded/)).toBeTruthy();
+
     await fireEvent.press(screen.getByLabelText("Play Episode One"));
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
   });
