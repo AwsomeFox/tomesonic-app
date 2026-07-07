@@ -71,6 +71,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   usePlaybackStore.setState(initial, true);
+  // clearMocks resets calls but NOT implementations, so a mockResolvedValue set
+  // by another test/file could leak in and make the tests that rely on the
+  // default getActiveTrackIndex order-dependent — pin a deterministic default.
+  jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
 });
 
 describe("playbackService remote events", () => {
