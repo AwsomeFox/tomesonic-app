@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..fbcbfa1 100644
+index b495b5a..6805dc9 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -1429,10 +1429,52 @@ index b495b5a..fbcbfa1 100644
          super.onDestroy()
      }
  
-@@ -925,6 +2050,204 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2030,227 @@ class MusicService : HeadlessJsMediaService() {
+                     onStartCommand(null, 0, 0)
+                 }
              }
-         }
- 
+-            return if (
+-                isMediaNotificationController ||
+-                isAutomotiveController ||
+-                isAutoCompanionController
+-            ) {
+-                MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+-                    .setCustomLayout(customLayout)
+-                    .setAvailableSessionCommands(
+-                        sessionCommands
+-                            ?: MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+-                    )
+-                    .setAvailablePlayerCommands(
+-                        playerCommands ?: MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+-                    )
+-                    .build()
+-            } else {
+-                super.onConnect(session, controller)
++            // EVERY controller gets the same custom layout (jump ±, speed) and
++            // the capability-derived session/player commands — not just the
++            // notification/Automotive/Auto-companion trio. Wear OS media
++            // controls (and Assistant, AVRCP bridges, third-party controllers)
++            // used to fall through to super.onConnect() and get Media3's
++            // DEFAULTS: no custom buttons and a command set that ignored the
++            // app's capability config, so the watch showed different transport
++            // controls than Android Auto for the same playback — and only
++            // "caught up" if pushCustomLayoutToControllers() happened to fire
++            // (an options/speed change) AFTER the watch connected. This also
++            // makes onConnect agree with pushCustomLayoutToControllers, which
++            // already broadcasts the same layout+commands to every connected
++            // controller.
++            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
++                .setCustomLayout(customLayout)
++                .setAvailableSessionCommands(
++                    sessionCommands
++                        ?: MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
++                )
++                .setAvailablePlayerCommands(
++                    playerCommands ?: MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
++                )
++                .build()
++        }
++
 +        // --- Android Auto / Automotive browse tree (fetched from the ABS server
 +        // using credentials mirrored to filesDir/auto_creds.json by the JS app) ---
 +        override fun onGetLibraryRoot(
@@ -1506,7 +1548,7 @@ index b495b5a..fbcbfa1 100644
 +            }) {
 +                val children = try { absLoadChildren(parentId) } catch (e: Exception) { Timber.w(e, "absLoadChildren failed"); emptyList() }
 +                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
-+            }
+             }
 +            return future
 +        }
 +
@@ -1629,12 +1671,10 @@ index b495b5a..fbcbfa1 100644
 +                future.set(resolved)
 +            }
 +            return future
-+        }
-+
+         }
+ 
          override fun onCustomCommand(
-             session: MediaSession,
-             controller: MediaSession.ControllerInfo,
-@@ -935,8 +2258,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2263,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1655,7 +1695,7 @@ index b495b5a..fbcbfa1 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2288,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2293,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1667,7 +1707,7 @@ index b495b5a..fbcbfa1 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2300,36 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2305,36 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
