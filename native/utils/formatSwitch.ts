@@ -72,6 +72,16 @@ async function fetchItem(itemId: string): Promise<any | null> {
   return r.data || null;
 }
 
+/** The downloaded copy of `itemId`, if any (offline resolution source). */
+function downloadedItem(itemId: string): any | null {
+  try {
+    const { useDownloadStore } = require("../store/useDownloadStore");
+    return useDownloadStore.getState().completedDownloads[itemId] || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Same-book sibling in the other format, via library search + bestCounterpart
  *  (mirrors ItemDetailScreen's counterpart effect). */
 async function findCounterpart(item: any): Promise<any | null> {
@@ -93,6 +103,13 @@ async function findCounterpart(item: any): Promise<any | null> {
  */
 export async function resolveAudioTarget(itemId: string): Promise<AudioTarget | null> {
   try {
+    // Offline-first: a downloaded book plays fully from local files (no /play
+    // session), so a network failure here must not report "no audiobook
+    // available" when the audio is already on the device.
+    const dl = downloadedItem(itemId);
+    if (dl && Array.isArray(dl?.meta?.tracks) && dl.meta.tracks.length > 0) {
+      return { itemId, duration: Number(dl?.meta?.duration) || undefined, title: dl.title };
+    }
     const item = await fetchItem(itemId);
     if (!item || item.mediaType === "podcast") return null;
     const title = item?.media?.metadata?.title || undefined;
@@ -121,6 +138,14 @@ export async function resolveAudioTarget(itemId: string): Promise<AudioTarget | 
  */
 export async function resolveEbookTarget(itemId: string): Promise<EbookTarget | null> {
   try {
+    // Offline-first (see resolveAudioTarget): a downloaded ebook opens from
+    // its local file, so resolve it without the network when present.
+    const dl = downloadedItem(itemId);
+    const ebookPart = dl?.parts?.find((p: any) => p?.id === "ebook");
+    if (ebookPart?.filename) {
+      const fmt = String(ebookPart.filename.split(".").pop() || "").toLowerCase();
+      if (fmt) return { itemId, ebookFormat: fmt, title: dl.title };
+    }
     const item = await fetchItem(itemId);
     if (!item || item.mediaType === "podcast") return null;
     const title = item?.media?.metadata?.title || undefined;
