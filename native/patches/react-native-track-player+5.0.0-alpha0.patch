@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..c60cbc4 100644
+index b495b5a..7c614ae 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -192,7 +192,7 @@ index b495b5a..c60cbc4 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -104,21 +105,1023 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,21 +105,1035 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -238,12 +238,24 @@ index b495b5a..c60cbc4 100644
 +                    .build()
 +                Timber.i("MediaLibrarySession built on attempt %d id=%s", attempt, id)
 +                break
-+            } catch (e: IllegalStateException) {
++            } catch (e: Throwable) {
++                // Broadened from IllegalStateException: ANY build failure must
++                // not escape the loop as an uncaught throw below.
 +                Timber.w(e, "MediaLibrarySession build attempt %d failed: %s", attempt, e.message)
 +                purgeStaleSessionRegistrations()
 +            }
 +        }
-+        mediaSession = built!!
++        if (built == null) {
++            // Five build failures (e.g. an aggressive-OEM zombie-session map we
++            // couldn't purge on rapid Android Auto rebind): `built!!` here NPE'd
++            // inside onCreate, crashing the process into a reconnect crash loop.
++            // Degrade gracefully instead — stop the service and bail.
++            Timber.e("MediaLibrarySession could not be built after retries; stopping service")
++            super.onCreate()
++            stopSelf()
++            return
++        }
++        mediaSession = built
 +        // Track connectivity so Android Auto browse flips between the online
 +        // catalog and downloaded-only (and back) via notifyChildrenChanged.
 +        absRegisterNetworkCallback()
@@ -1228,7 +1240,7 @@ index b495b5a..c60cbc4 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,7 +1209,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,7 +1221,11 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1241,7 +1253,7 @@ index b495b5a..c60cbc4 100644
          )
          player = QueuedAudioPlayer(this@MusicService, options)
          fakePlayer.release()
-@@ -293,9 +1300,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1312,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1253,7 +1265,7 @@ index b495b5a..c60cbc4 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1313,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1325,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1315,7 +1327,7 @@ index b495b5a..c60cbc4 100644
          }
      }
  
-@@ -449,6 +1490,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1502,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1326,7 +1338,7 @@ index b495b5a..c60cbc4 100644
      }
  
      @MainThread
-@@ -792,12 +1837,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,12 +1849,21 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1350,7 +1362,7 @@ index b495b5a..c60cbc4 100644
          progressUpdateJob?.cancel()
          super.onDestroy()
      }
-@@ -925,6 +1979,168 @@ class MusicService : HeadlessJsMediaService() {
+@@ -925,6 +1991,185 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
  
@@ -1382,14 +1394,31 @@ index b495b5a..c60cbc4 100644
 +            // before playing — a "play:" id must come back playable, not as a
 +            // bare browsable folder named after the raw id.
 +            if (mediaId.startsWith("play:")) {
-+                val itemId = mediaId.removePrefix("play:").substringBefore("@@").substringBefore("::")
-+                val dl = absDownloads[itemId]
-+                return Futures.immediateFuture(
-+                    LibraryResult.ofItem(
-+                        absPlayableItem(mediaId, itemId, dl?.title ?: "Audiobook", dl?.author, null),
-+                        null
-+                    )
-+                )
++                // absPlayableItem reads auto_creds.json (and, offline, decodes +
++                // re-compresses the cover bitmap). Media3 invokes this on the
++                // MAIN thread, so — like every sibling browse callback — hop to
++                // the browse executor to keep disk/bitmap work off the hot
++                // pre-play path (StrictMode/ANR risk on cheap head units).
++                val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<MediaItem>>()
++                absBrowseExecutor.execute {
++                    try {
++                        val itemId = mediaId.removePrefix("play:").substringBefore("@@").substringBefore("::")
++                        val dl = absDownloads[itemId]
++                        future.set(
++                            LibraryResult.ofItem(
++                                absPlayableItem(mediaId, itemId, dl?.title ?: "Audiobook", dl?.author, null),
++                                null
++                            )
++                        )
++                    } catch (e: Exception) {
++                        // Defensive only (creds/art work is now off the main
++                        // thread): never leave the future unset — fall back to a
++                        // minimal item so the controller gets a response.
++                        Timber.w(e, "onGetItem play resolution failed")
++                        future.set(LibraryResult.ofItem(absBrowsableItem(mediaId, mediaId), null))
++                    }
++                }
++                return future
 +            }
 +            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem(mediaId, mediaId), null))
 +        }
@@ -1519,7 +1548,7 @@ index b495b5a..c60cbc4 100644
          override fun onCustomCommand(
              session: MediaSession,
              controller: MediaSession.ControllerInfo,
-@@ -935,8 +2151,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2180,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1540,7 +1569,7 @@ index b495b5a..c60cbc4 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2181,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2210,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1552,7 +1581,7 @@ index b495b5a..c60cbc4 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2193,34 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2222,34 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })
