@@ -76,7 +76,7 @@ jest.mock("../../hooks/useNetworkStatus", () => {
 });
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import StatsScreen from "../../screens/StatsScreen";
 import { api } from "../../utils/api";
 import { hasAnyPendingSyncs } from "../../utils/progressSync";
@@ -288,6 +288,34 @@ describe("StatsScreen", () => {
         "You're offline — recent listening will be added to these stats once you reconnect."
       )
     ).toBeNull();
+  });
+
+  it("clears the pending-sync caption (and refreshes) when the flush lands while the screen stays open", async () => {
+    jest.useFakeTimers();
+    try {
+      mockedPending.mockReturnValue(true);
+      await renderStats();
+      await screen.findByText("Some recent listening is still syncing and may not be reflected yet.");
+      const statsCallsBefore = (api.get as jest.Mock).mock.calls.filter(
+        (c) => c[0] === "/api/me/listening-stats"
+      ).length;
+
+      // The background flush completes; the periodic re-check must clear the
+      // caption and silently reload the stats so the landed minutes render.
+      mockedPending.mockReturnValue(false);
+      await act(async () => {
+        jest.advanceTimersByTime(5_000);
+      });
+
+      expect(
+        screen.queryByText("Some recent listening is still syncing and may not be reflected yet.")
+      ).toBeNull();
+      expect(
+        (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/me/listening-stats").length
+      ).toBeGreaterThan(statsCallsBefore);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("shows no sync caption when online and fully synced", async () => {

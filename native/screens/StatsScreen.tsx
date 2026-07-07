@@ -136,6 +136,26 @@ export default function StatsScreen({ navigation }: any) {
     return unsub;
   }, [navigation]);
 
+  // While listening time is still syncing, re-check periodically so the
+  // caption clears itself — and the freshly-landed minutes render — when the
+  // background flush completes. Focus alone left the caption stuck if the
+  // user stayed on the screen through a reconnect. The interval exists only
+  // while the caption is showing, so there's no idle polling cost.
+  useEffect(() => {
+    if (!pendingSync) return;
+    const id = setInterval(() => {
+      let still = true;
+      try {
+        still = hasAnyPendingSyncs();
+      } catch {}
+      if (!still) {
+        setPendingSync(false);
+        loadStats();
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [pendingSync]);
+
   const hasDataRef = React.useRef(false);
 
   async function loadStats() {
