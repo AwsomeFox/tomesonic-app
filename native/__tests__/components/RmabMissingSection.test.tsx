@@ -256,3 +256,16 @@ describe("RmabBookDetailSheet — notice prop", () => {
     expect(screen.getByText("Book One")).toBeTruthy();
   });
 });
+
+describe("RmabMissingSection partial-with-zero-rows disclosure", () => {
+  it("stays mounted with the incomplete notice when a partial fetch leaves no rows", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    const partialEmpty: any = [];
+    partialEmpty.partial = true;
+    await render(
+      <RmabMissingSection fetchMissing={jest.fn().mockResolvedValue(partialEmpty)} />
+    );
+    await screen.findByText("Some books couldn't be checked — this list may be incomplete.");
+    expect(screen.getByLabelText("Retry missing-books check")).toBeTruthy();
+  });
+});

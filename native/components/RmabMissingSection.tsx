@@ -113,7 +113,10 @@ export default function RmabMissingSection({
   );
 
   if (!configured) return null;
-  if (!loading && !lookupFailed && (!books || books.length === 0)) return null;
+  // Stay mounted when the check FAILED or was CUT SHORT even with zero rows —
+  // otherwise an incomplete check is indistinguishable from "nothing missing"
+  // and the Retry affordance vanishes with it.
+  if (!loading && !lookupFailed && !listPartial && (!books || books.length === 0)) return null;
 
   const all = books || [];
   const shown = expanded ? all : all.slice(0, maxItems);
