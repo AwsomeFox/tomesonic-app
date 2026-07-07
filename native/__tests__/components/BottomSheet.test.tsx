@@ -7,7 +7,7 @@
 import React from "react";
 import { Animated, Text } from "react-native";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
-import BottomSheet from "../../components/BottomSheet";
+import BottomSheet, { shouldClaimDrag, shouldDismissOnRelease } from "../../components/BottomSheet";
 
 describe("BottomSheet", () => {
   it("renders children when visible", async () => {
@@ -72,6 +72,29 @@ describe("BottomSheet", () => {
     );
     await fireEvent.press(screen.getByTestId("sheet-backdrop", { includeHiddenElements: true }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  describe("drag-to-dismiss thresholds", () => {
+    it("dismisses past the distance threshold (dy > 80)", () => {
+      expect(shouldDismissOnRelease(120, 0.1)).toBe(true);
+      expect(shouldDismissOnRelease(81, 0)).toBe(true);
+    });
+
+    it("dismisses on a fast downward flick (vy > 0.5) even below the distance threshold", () => {
+      expect(shouldDismissOnRelease(30, 0.9)).toBe(true);
+    });
+
+    it("springs back (no dismiss) on a short, slow drag", () => {
+      expect(shouldDismissOnRelease(20, 0.1)).toBe(false);
+      expect(shouldDismissOnRelease(80, 0.5)).toBe(false); // exactly at bounds -> keep open
+    });
+
+    it("claims the gesture only for a deliberate downward drag", () => {
+      expect(shouldClaimDrag(20, 3)).toBe(true); // clear downward
+      expect(shouldClaimDrag(6, 40)).toBe(false); // horizontal swipe dominates
+      expect(shouldClaimDrag(2, 0)).toBe(false); // tiny jitter
+      expect(shouldClaimDrag(-30, 0)).toBe(false); // upward drag
+    });
   });
 
   it("a close animation completing during a fast reopen does not tear down the sheet", async () => {

@@ -94,6 +94,28 @@ describe("DiscoverScreen (BookDate)", () => {
     await screen.findByText("Undone Pick");
   });
 
+  it("shows a failure chip when a like-swipe request doesn't reach the server", async () => {
+    (swipeBookdate as jest.Mock).mockRejectedValue(new Error("offline"));
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+
+    await fireEvent.press(screen.getByLabelText("Like and request"));
+
+    // No false "Requested" confirmation; an honest failure chip instead.
+    await screen.findByText("Request didn't send — check your connection");
+    expect(screen.queryByText("Requested")).toBeNull();
+  });
+
+  it("shows a failure chip when undo fails", async () => {
+    (undoBookdateSwipe as jest.Mock).mockRejectedValue(new Error("offline"));
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+
+    await fireEvent.press(screen.getByLabelText("Undo last swipe"));
+
+    await screen.findByText("Couldn't undo — check your connection");
+  });
+
   it("BookDate disabled (400) hides the deck but keeps the RMAB shelves", async () => {
     (getBookdateRecommendations as jest.Mock).mockRejectedValue({ response: { status: 400 } });
     (getPopularBooks as jest.Mock).mockResolvedValue([
