@@ -3,7 +3,7 @@ import TrackPlayer from 'react-native-track-player';
 import App from './App';
 import { playbackService } from './store/playbackService';
 import { initSentry } from './utils/sentry';
-import { appLogger } from './utils/logger';
+import { appLogger, redactSecrets } from './utils/logger';
 
 // Initialize crash reporting as early as possible so setup-time errors are
 // captured too. No-op unless EXPO_PUBLIC_SENTRY_DSN is set (and never in dev).
@@ -17,7 +17,9 @@ initSentry();
   const persist = (level: 'ERROR' | 'WARN', message: string) => {
     try {
       const { db } = require('./utils/db');
-      db.saveLog({ level, message, timestamp: Date.now(), tag: 'Global' });
+      // Same redaction as the in-RAM logger — a token embedded in an error
+      // message/URL/stack must not survive into durable storage.
+      db.saveLog({ level, message: redactSecrets(message), timestamp: Date.now(), tag: 'Global' });
     } catch {}
   };
   try {

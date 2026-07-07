@@ -199,18 +199,24 @@ describe("PlayerBottomSheet — render basics", () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
     // Miniplayer title prefers the current CHAPTER title; the subtitle then
-    // carries the BOOK too, matching the notification's format.
-    expect(screen.getAllByText("Ch 2").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("The Hobbit • J.R.R. Tolkien").length).toBeGreaterThan(0);
+    // carries the BOOK too, matching the notification's format. The visual
+    // mini-title (2a) is decorative for a11y (includeHiddenElements) — the
+    // expand affordance's label carries book, author AND chapter for TalkBack.
+    expect(screen.getAllByText("Ch 2", { includeHiddenElements: true }).length).toBeGreaterThan(0);
     expect(
-      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien").length
+      screen.getAllByText("The Hobbit • J.R.R. Tolkien", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2").length
     ).toBeGreaterThan(0);
   });
 
   it("falls back to the book title without chapters", async () => {
     seedPlayer({ chapters: [], currentChapterIndex: -1 });
     await render(<PlayerBottomSheet />);
-    expect(screen.getAllByText("The Hobbit").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("The Hobbit", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
   });
 
   it("shows STREAMING for a server session and LOCAL when downloaded", async () => {
@@ -233,7 +239,11 @@ describe("PlayerBottomSheet — render basics", () => {
   it("shows the chapter caption when chapters exist", async () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
-    expect(screen.getByText("Chapter 2 of 3")).toBeTruthy();
+    // Lives in the expanded-title overlay (a11y-hidden while collapsed);
+    // portrait + landscape both render it.
+    expect(
+      screen.getAllByText("Chapter 2 of 3", { includeHiddenElements: true }).length
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -380,7 +390,7 @@ describe("PlayerBottomSheet — expand / collapse", () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
     await fireEvent.press(
-      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien")[0]
+      screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2")[0]
     );
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
   });
@@ -494,7 +504,7 @@ describe("PlayerBottomSheet — landscape layout", () => {
     seedPlayer();
     await render(<PlayerBottomSheet />);
     await goLandscape();
-    const expand = screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien");
+    const expand = screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2");
     await fireEvent.press(expand[expand.length - 1]);
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
   });

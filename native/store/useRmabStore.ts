@@ -65,7 +65,16 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       try {
         const { storage } = require("../utils/storage");
         const parsed = JSON.parse(storage.getString("rmab_requestedAsins") || "null");
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) requestedAsins = parsed;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          // Copy into a null-proto object with only own string entries — a
+          // corrupt/hostile persisted map (e.g. a "__proto__" key) must not
+          // pollute the prototype or poison later spreads/"in" checks.
+          const clean: Record<string, string> = Object.create(null);
+          for (const [k, v] of Object.entries(parsed)) {
+            if (k !== "__proto__" && typeof v === "string") clean[k] = v;
+          }
+          requestedAsins = clean;
+        }
       } catch {}
       set({
         configured: true,
@@ -224,6 +233,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   // requested-state survives restarts (see initialize) — persisting the exact
   // merged map computed in the updater, not a post-set re-read.
   noteRequestStatus: (asin, status) => {
+    // asin comes from network-derived book objects — reject a special key
+    // ("__proto__" etc.) before it lands in the map and gets persisted.
+    if (!asin || typeof asin !== "string" || asin === "__proto__") return;
     let merged: Record<string, string> = {};
     set((state) => {
       merged = { ...state.requestedAsins, [asin]: status };

@@ -30,8 +30,9 @@ export const appLogger = {
 // Redact bearer tokens/secrets at WRITE time, independent of the Logs screen's
 // display-masking toggle — a user who turns masking off to share diagnostics
 // must not thereby leak tokens that rode through a logged URL/header. ABS cover
-// and download URLs embed `?token=...`.
-function redactSecrets(message: string): string {
+// and download URLs embed `?token=...`. Exported so other durable log writers
+// (the global crash handler → db.saveLog) redact through the same rules.
+export function redactSecrets(message: string): string {
   try {
     return String(message)
       .replace(/([?&](?:token|access_token|refresh_token)=)[^&\s"']+/gi, "$1[REDACTED]")

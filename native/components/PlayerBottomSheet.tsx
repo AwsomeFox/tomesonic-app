@@ -710,7 +710,12 @@ export default function PlayerBottomSheet() {
           <Pressable
             onPress={() => setPlayerExpanded(true)}
             accessibilityRole="button"
-            accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}`}
+            // Carries everything the collapsed mini shows visually (book,
+            // author, and the current chapter) — the decorative mini-title
+            // (2a) is a11y-hidden to avoid a double announcement.
+            accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}${
+              currentChapterTitle ? `. ${currentChapterTitle}` : ""
+            }`}
             style={{
               position: "absolute",
               top: 0,
@@ -1161,8 +1166,14 @@ export default function PlayerBottomSheet() {
         </Animated.View>
 
         {/* 2b. Title & Author — EXPANDED (centered under the cover). */}
+        {/* This overlay is a SIBLING of the hidden full-player subtree, so it
+            needs its own a11y guard — opacity-0 doesn't remove it from the
+            TalkBack tree, and while collapsed it double-announced the title
+            (the expand-row already speaks it) and leaked the chapter line. */}
         <Animated.View
           pointerEvents="none"
+          accessibilityElementsHidden={!isPlayerExpanded}
+          importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
           style={[
             {
               position: "absolute",
@@ -1335,7 +1346,7 @@ export default function PlayerBottomSheet() {
               animatedLandscapeMiniStyle,
             ]}
           >
-            <Pressable onPress={() => setPlayerExpanded(true)} accessibilityRole="button" accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}`} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
+            <Pressable onPress={() => setPlayerExpanded(true)} accessibilityRole="button" accessibilityLabel={`Expand player. ${mediaTitle} by ${authorName}${currentChapterTitle ? `. ${currentChapterTitle}` : ""}`} style={{ flex: 1, flexDirection: "row", alignItems: "center", marginRight: 8 }}>
               <View style={{ width: 50, height: 50, borderRadius: 8, overflow: "hidden", backgroundColor: colors.surfaceContainerHigh, alignItems: "center", justifyContent: "center" }}>
                 {coverUrl ? <Image source={coverSource(coverUrl)} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : <Icon name="book" size={22} color={withAlpha(colors.onSurface, 0.4)} />}
               </View>

@@ -50,26 +50,39 @@ export function bookStatusA11yLabel(
     if (item?.mediaType === "podcast") return isDownloaded ? "Downloaded" : "";
     const p = itemId ? mediaProgress?.[itemId] : null;
     const itemHasAudio = hasAudio(item);
+    const itemHasEbook = hasEbook(item);
     const duration = itemHasAudio ? Number(p?.duration || 0) : 0;
     const currentTime = itemHasAudio ? Number(p?.currentTime || 0) : 0;
     const audioFraction = itemHasAudio
       ? Math.max(Math.min(1, Number(p?.progress ?? (duration > 0 ? currentTime / duration : 0))), 0)
       : 0;
-    const ebookFraction = hasEbook(item)
+    const ebookFraction = itemHasEbook
       ? Number(p?.ebookProgress || (!itemHasAudio ? p?.progress : 0) || 0)
       : 0;
+    // Mirror the visual badge's finished/in-progress computation EXACTLY so the
+    // spoken label can't drift from the icon (see the badge render below).
     const readerSetFinished = ebookFraction >= 0.99 && audioFraction > 0 && audioFraction < 0.99;
-    const finished = !!p?.isFinished && !readerSetFinished;
+    const isEbookFinished = itemHasEbook && (ebookFraction >= 0.99 || (!!p?.isFinished && !readerSetFinished));
+    const isAudioFinished = itemHasAudio && !!p?.isFinished && !readerSetFinished;
+    const isAudioInProgress = audioFraction > 0 && !isAudioFinished;
+    const isEbookInProgress = itemHasEbook && ebookFraction > 0 && !isEbookFinished;
+    const anyFinished = isAudioFinished || isEbookFinished;
+    const anyInProgress = isAudioInProgress || isEbookInProgress;
 
     const bits: string[] = [];
-    if (finished || (ebookFraction >= 0.99 && !itemHasAudio)) {
+    if (anyFinished && !anyInProgress) {
       bits.push("Finished");
-    } else if (audioFraction > 0 && duration > 0) {
-      bits.push(`${remainingSpoken(duration * (1 - audioFraction))} left`);
-    } else if (audioFraction > 0) {
-      bits.push(`${Math.min(99, Math.max(1, Math.round(audioFraction * 100)))} percent`);
-    } else if (ebookFraction > 0) {
-      bits.push(`${Math.min(99, Math.max(1, Math.round(ebookFraction * 100)))} percent read`);
+    } else {
+      if (isAudioInProgress) {
+        bits.push(
+          duration > 0
+            ? `${remainingSpoken(duration * (1 - audioFraction))} left`
+            : `${Math.min(99, Math.max(1, Math.round(audioFraction * 100)))} percent`
+        );
+      }
+      if (isEbookInProgress) {
+        bits.push(`${Math.min(99, Math.max(1, Math.round(ebookFraction * 100)))} percent read`);
+      }
     }
     if (isDownloaded) bits.push("Downloaded");
     return bits.join(", ");
