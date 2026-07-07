@@ -18,7 +18,7 @@ jest.mock("../../utils/autoCreds", () => ({
 }));
 
 import { DeviceEventEmitter } from "react-native";
-import TrackPlayer from "react-native-track-player";
+import TrackPlayer, { State } from "react-native-track-player";
 import { playbackService } from "../../store/playbackService";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -248,6 +248,53 @@ describe("playbackService remote events", () => {
       emit("remote-seek", { position: 5 });
       await flush();
       expect(a.seek).toHaveBeenCalledWith(105);
+    });
+  });
+
+  describe("PlaybackState reconciliation (audio-focus loss in background)", () => {
+    it("flips isPlaying false when the player reports paused", () => {
+      spyActions();
+      usePlaybackStore.setState({ isPlaying: true } as any);
+      emit("playback-state", { state: State.Paused });
+      expect(usePlaybackStore.getState().isPlaying).toBe(false);
+    });
+
+    it("flips isPlaying true when the player reports playing", () => {
+      spyActions();
+      usePlaybackStore.setState({ isPlaying: false } as any);
+      emit("playback-state", { state: State.Playing });
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+    });
+
+    it("treats stopped/ended/error/none as not playing", () => {
+      for (const s of [State.Stopped, State.Ended, State.Error, State.None]) {
+        spyActions();
+        usePlaybackStore.setState({ isPlaying: true } as any);
+        emit("playback-state", { state: s });
+        expect(usePlaybackStore.getState().isPlaying).toBe(false);
+      }
+    });
+
+    it("leaves isPlaying untouched for transitional states", () => {
+      for (const s of [State.Buffering, State.Loading, State.Ready]) {
+        spyActions();
+        usePlaybackStore.setState({ isPlaying: true } as any);
+        emit("playback-state", { state: s });
+        expect(usePlaybackStore.getState().isPlaying).toBe(true);
+      }
+    });
+
+    it("is a no-op while casting (the receiver is the source of truth)", () => {
+      spyActions();
+      usePlaybackStore.setState({ isPlaying: true, isCasting: true } as any);
+      emit("playback-state", { state: State.Paused });
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+    });
+
+    it("is a no-op with no session loaded", () => {
+      usePlaybackStore.setState({ ...initial, isPlaying: true, currentSession: null } as any);
+      emit("playback-state", { state: State.Paused });
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
     });
   });
 

@@ -161,6 +161,15 @@ export default function CastController() {
         }
       })();
     }, SUSPEND_GRACE_MS);
+    // Clear the pending suspend-handback if we unmount (e.g. logout/account
+    // switch fires within the grace window) — otherwise it fires post-unmount
+    // and touches a torn-down store (phantom isPlaying with no session).
+    return () => {
+      if (pendingHandbackRef.current) {
+        clearTimeout(pendingHandbackRef.current);
+        pendingHandbackRef.current = null;
+      }
+    };
   }, [client]);
 
   // Mirror the receiver's progress + play state into the store.

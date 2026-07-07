@@ -366,6 +366,8 @@ export default function DiscoverScreen({ navigation }: any) {
                 onPress={() => setPrefsOpen(true)}
                 accessibilityRole="button"
                 accessibilityLabel="BookDate preferences"
+                // padding 6 alone is ~32dp — below the 48dp Android target.
+                hitSlop={12}
                 android_ripple={{ color: colors.onSurfaceVariant + "22", borderless: true, radius: 20 }}
                 style={{ padding: 6 }}
               >
@@ -588,6 +590,10 @@ export default function DiscoverScreen({ navigation }: any) {
 
                 {lastLiked ? (
                   <View
+                    // Transient visual chip — announce it so a TalkBack user gets
+                    // confirmation the request went through (it auto-dismisses).
+                    accessibilityLiveRegion="polite"
+                    accessibilityLabel="Requested"
                     style={{
                       position: "absolute",
                       top: 12,
@@ -610,6 +616,10 @@ export default function DiscoverScreen({ navigation }: any) {
                 ) : null}
                 {swipeFailed ? (
                   <View
+                    // Failure is exactly when feedback matters most — announce it
+                    // assertively since the chip auto-dismisses.
+                    accessibilityLiveRegion="assertive"
+                    accessibilityLabel="Request didn't send — check your connection"
                     style={{
                       position: "absolute",
                       top: 12,
@@ -648,6 +658,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   disabled={busy}
                   accessibilityRole="button"
                   accessibilityLabel="Pass"
+                  accessibilityState={{ disabled: busy }}
                   android_ripple={{ color: colors.onSurfaceVariant + "22" }}
                   style={{
                     width: 60,
@@ -666,6 +677,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   disabled={busy}
                   accessibilityRole="button"
                   accessibilityLabel="Undo last swipe"
+                  accessibilityState={{ disabled: busy }}
                   android_ripple={{ color: colors.onSurfaceVariant + "22" }}
                   style={{
                     width: 60,
@@ -684,6 +696,7 @@ export default function DiscoverScreen({ navigation }: any) {
                   disabled={busy}
                   accessibilityRole="button"
                   accessibilityLabel="Like and request"
+                  accessibilityState={{ disabled: busy }}
                   android_ripple={{ color: colors.onPrimaryContainer + "22" }}
                   style={{
                     width: 60,
