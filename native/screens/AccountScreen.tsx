@@ -26,7 +26,7 @@ const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
  */
 export default function AccountScreen({ navigation }: any) {
   const colors = useThemeColors();
-  const { user, serverConnectionConfig, logout } = useUserStore();
+  const { user, serverConnectionConfig, logout, updateServerAddress } = useUserStore();
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
 
   const serverAddress = serverConnectionConfig?.address || "";
@@ -45,6 +45,31 @@ export default function AccountScreen({ navigation }: any) {
         { text: "Log Out", style: "destructive", onPress: () => logout() }
       ]
     );
+  };
+
+  const [showAddressModal, setShowAddressModal] = React.useState(false);
+  const [newAddress, setNewAddress] = React.useState("");
+  const [savingAddress, setSavingAddress] = React.useState(false);
+
+  const openAddressModal = () => {
+    setNewAddress(serverAddress);
+    setShowAddressModal(true);
+  };
+
+  const handleSaveAddress = async () => {
+    if (savingAddress) return;
+    setSavingAddress(true);
+    try {
+      const res = await updateServerAddress(newAddress);
+      if (res.ok) {
+        setShowAddressModal(false);
+        Alert.alert("Server updated", "Your server address was updated. Your downloads and progress are unchanged.");
+      } else {
+        Alert.alert("Couldn't update server", res.error || "Please check the address and try again.");
+      }
+    } finally {
+      setSavingAddress(false);
+    }
   };
 
   const [showPasswordModal, setShowPasswordModal] = React.useState(false);
@@ -189,6 +214,32 @@ export default function AccountScreen({ navigation }: any) {
           <Icon name="chevron-right" size={20} color={colors.onSurfaceVariant} />
         </Pressable>
 
+        {/* Edit server address — same account moved (DNS/IP/proxy/scheme). This
+            updates the address in place, keeping downloads + progress (unlike
+            Switch Server, which logs out and wipes them). */}
+        <Pressable
+          onPress={openAddressModal}
+          accessibilityRole="button"
+          accessibilityLabel="Edit server address"
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            marginTop: 12,
+            paddingVertical: 14,
+            paddingHorizontal: 16,
+            borderRadius: 16,
+            backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
+            borderWidth: 1,
+            borderColor: colors.outlineVariant || colors.outline,
+          }}
+        >
+          <Icon name="globe" size={22} color={colors.primary} style={{ marginRight: 12 }} />
+          <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600", flex: 1 }}>
+            Edit server address
+          </Text>
+          <Icon name="chevron-right" size={20} color={colors.onSurfaceVariant} />
+        </Pressable>
+
         <View
           style={{
             flexDirection: "row",
@@ -261,6 +312,82 @@ export default function AccountScreen({ navigation }: any) {
           <Icon name="globe" size={22} color={colors.onSurface} />
         </View>
       </Pressable>
+      {/* Edit Server Address Modal */}
+      <Modal
+        visible={showAddressModal}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setShowAddressModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
+          <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
+            <Text style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}>
+              Edit server address
+            </Text>
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginBottom: 20 }}>
+              Use this when your server moved (new domain, IP, or port) but it's the same
+              account. Your downloads and progress are kept. To sign into a different
+              server or account, use Switch Server instead.
+            </Text>
+
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontWeight: "500", marginBottom: 6 }}>
+              Server address
+            </Text>
+            <TextInput
+              value={newAddress}
+              onChangeText={setNewAddress}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              placeholder="https://abs.example.com"
+              placeholderTextColor={colors.onSurfaceVariant}
+              accessibilityLabel="Server address"
+              style={{
+                backgroundColor: colors.surface,
+                color: colors.onSurface,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 16,
+                borderWidth: 1,
+                borderColor: colors.outline,
+                marginBottom: 24,
+              }}
+            />
+
+            <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+              <Pressable
+                onPress={() => setShowAddressModal(false)}
+                accessibilityRole="button"
+                style={{ paddingHorizontal: 20, paddingVertical: 12, marginRight: 8 }}
+              >
+                <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "600" }}>Cancel</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={handleSaveAddress}
+                disabled={savingAddress}
+                accessibilityRole="button"
+                accessibilityLabel="Save server address"
+                accessibilityState={{ disabled: savingAddress, busy: savingAddress }}
+                style={{
+                  backgroundColor: colors.primary,
+                  paddingHorizontal: 20,
+                  paddingVertical: 12,
+                  borderRadius: 24,
+                  flexDirection: "row",
+                  alignItems: "center",
+                }}
+              >
+                {savingAddress ? (
+                  <ActivityIndicator size="small" color={colors.onPrimary} style={{ marginRight: 8 }} />
+                ) : null}
+                <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600" }}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Change Password Modal */}
       <Modal
         visible={showPasswordModal}

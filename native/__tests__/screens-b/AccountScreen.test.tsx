@@ -60,7 +60,7 @@ jest.mock("../../utils/api", () => ({
 
 import React from "react";
 import { Alert, Linking } from "react-native";
-import { render, screen, fireEvent, act } from "@testing-library/react-native";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import AccountScreen from "../../screens/AccountScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
@@ -252,6 +252,38 @@ describe("AccountScreen", () => {
     expect(switchUser.props.accessibilityRole).toBe("button");
     const github = screen.getByLabelText(/contribute on GitHub/);
     expect(github.props.accessibilityRole).toBe("link");
+  });
+
+  it("edits the server address in place via updateServerAddress", async () => {
+    const updateServerAddress = jest.fn().mockResolvedValue({ ok: true });
+    useUserStore.setState({ updateServerAddress } as any);
+    await renderAccount();
+
+    await fireEvent.press(screen.getByLabelText("Edit server address"));
+    // The field seeds with the current address; change it and save.
+    const input = screen.getByLabelText("Server address");
+    await fireEvent.changeText(input, "https://moved.example.com");
+    await fireEvent.press(screen.getByLabelText("Save server address"));
+
+    await waitFor(() =>
+      expect(updateServerAddress).toHaveBeenCalledWith("https://moved.example.com")
+    );
+    // Success closes the modal and reassures the user their data is kept.
+    expect(alertSpy).toHaveBeenCalledWith("Server updated", expect.stringContaining("unchanged"));
+  });
+
+  it("surfaces an error when the in-place address change fails", async () => {
+    const updateServerAddress = jest.fn().mockResolvedValue({ ok: false, error: "Couldn't reach that server." });
+    useUserStore.setState({ updateServerAddress } as any);
+    await renderAccount();
+
+    await fireEvent.press(screen.getByLabelText("Edit server address"));
+    await fireEvent.changeText(screen.getByLabelText("Server address"), "https://bad.example.com");
+    await fireEvent.press(screen.getByLabelText("Save server address"));
+
+    await waitFor(() =>
+      expect(alertSpy).toHaveBeenCalledWith("Couldn't update server", "Couldn't reach that server.")
+    );
   });
 
   it("labels the change-password inputs for screen readers", async () => {

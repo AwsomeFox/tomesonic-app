@@ -54,6 +54,9 @@ interface UserState {
   getMediaProgress: (libraryItemId: string, episodeId?: string) => any | null;
   login: (config: any, user: any) => Promise<void>;
   logout: () => Promise<void>;
+  // In-place server-address change for the SAME account (DNS/IP/proxy/scheme
+  // moved). Unlike logging out and back in, this keeps downloads/progress.
+  updateServerAddress: (rawAddress: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 function indexMediaProgress(list: any[]): Record<string, any> {
@@ -441,6 +444,66 @@ export const useUserStore = create<UserState>((set, get) => ({
       ereaderDevices: [],
       settings: DEFAULT_SETTINGS,
     });
+  },
+
+  updateServerAddress: async (rawAddress) => {
+    const cur = get().serverConnectionConfig;
+    if (!cur?.token) return { ok: false, error: "You're not logged in." };
+    const trimmed = (rawAddress || "").trim().replace(/\/+$/, "");
+    if (!trimmed) return { ok: false, error: "Enter a server address." };
+    // Bare host -> try https first (most ABS installs sit behind TLS), matching
+    // the Connect screen's probe order.
+    const hasScheme = /^https?:\/\//i.test(trimmed);
+    const candidates = hasScheme ? [trimmed] : [`https://${trimmed}`, `http://${trimmed}`];
+
+    const axios = require("axios").default;
+    let picked: string | null = null;
+    for (const base of candidates) {
+      try {
+        const res = await axios.get(`${base}/api/me`, {
+          headers: { Authorization: `Bearer ${cur.token}` },
+          timeout: 15000,
+        });
+        const uid = res?.data?.id;
+        // Must be the SAME account. A different server that happens to accept
+        // the token (or a different user id) would leak this account's
+        // downloads/progress if we switched in place — send them to a full
+        // re-login instead.
+        if (uid && cur.userId && uid !== cur.userId) {
+          return {
+            ok: false,
+            error: "That server has a different account. Use Switch Server to log in there instead.",
+          };
+        }
+        picked = base;
+        break;
+      } catch {
+        // Try the next candidate scheme.
+      }
+    }
+    if (!picked) {
+      return { ok: false, error: "Couldn't reach that server with your current login. Check the address." };
+    }
+    if (picked === (cur.address || "").replace(/\/+$/, "")) return { ok: true };
+
+    // In-place move: keep the SAME session identity so a later restore/login on
+    // the new address isn't seen as an account switch (which wipes downloads).
+    const next = { ...cur, address: picked };
+    const userId = cur.userId || get().user?.id || "";
+    storageHelper.setServerConfig(next);
+    storageHelper.setLastSessionKey(`${picked}::${userId}`);
+    // Re-mirror creds for Android Auto and refresh the notification artwork host
+    // (its baked-in address is now stale). No wipe — downloads are keyed by
+    // libraryItemId and their local files stay valid; stream/cover URLs rebuild
+    // from the new address on the next request.
+    try {
+      writeAutoCreds(picked, cur.token, useLibraryStore.getState().currentLibraryId, cur.refreshToken, true);
+    } catch {}
+    set({ serverConnectionConfig: next });
+    try {
+      require("./usePlaybackStore").refreshNowPlayingArtwork();
+    } catch {}
+    return { ok: true };
   },
 }));
 
