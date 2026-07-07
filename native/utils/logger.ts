@@ -35,7 +35,9 @@ function redactSecrets(message: string): string {
   try {
     return String(message)
       .replace(/([?&](?:token|access_token|refresh_token)=)[^&\s"']+/gi, "$1[REDACTED]")
-      .replace(/(authorization|x-refresh-token)(["']?\s*[:=]\s*["']?)(bearer\s+)?[A-Za-z0-9._\-]+/gi,
+      // Token chars cover base64/base64url/JWT payloads: letters, digits, and
+      // . _ - + / = ~ — a narrower class left padding/opaque tails unredacted.
+      .replace(/(authorization|x-refresh-token)(["']?\s*[:=]\s*["']?)(bearer\s+)?[A-Za-z0-9._+/=~-]+/gi,
         "$1$2$3[REDACTED]");
   } catch {
     return message;

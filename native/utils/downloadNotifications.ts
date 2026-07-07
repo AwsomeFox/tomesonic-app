@@ -34,13 +34,17 @@ export async function ensurePlaybackNotificationPermission(): Promise<void> {
   try {
     const { storage } = require("./storage");
     if (storage.getBoolean("notifPermRequested")) return;
-    storage.set("notifPermRequested", true);
+    // Persist ONLY after the prompt actually completes — flagging first meant a
+    // transient requestPermission() throw permanently suppressed the prompt (and
+    // thus the media/lock-screen controls) for a streaming-only user.
     const settings = await notifee.requestPermission();
     _granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
     _permChecked = true;
+    storage.set("notifPermRequested", true);
   } catch {
-    // Permission module unavailable — playback still works, just without the
-    // shade/lock-screen controls until a later download prompt.
+    // Prompt failed to run — allow a retry on the next launch (don't persist
+    // the flag, and clear the in-memory guard).
+    _playbackPermRequested = false;
   }
 }
 
