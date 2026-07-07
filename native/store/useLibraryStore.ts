@@ -188,8 +188,19 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         currentLibraryId,
         lastLoad: Date.now(),
         // If the effective library changed (e.g. saved one was deleted), swap
-        // the shelves to the new library's cache instead of showing stale ones.
-        ...(libraryChanged ? { personalizedShelves: readShelvesCache(currentLibraryId) } : {}),
+        // the shelves to the new library's cache instead of showing stale ones,
+        // AND clear the per-library state the same way setCurrentLibraryId does
+        // — otherwise FilterModal serves the old library's genres/authors and
+        // the issues/playlist counts show the wrong library's numbers.
+        ...(libraryChanged
+          ? {
+              personalizedShelves: readShelvesCache(currentLibraryId),
+              filterData: null,
+              issues: 0,
+              numUserPlaylists: 0,
+              shelvesLoadError: false,
+            }
+          : {}),
       });
       return true;
     } catch (err) {

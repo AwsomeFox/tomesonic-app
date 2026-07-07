@@ -168,12 +168,21 @@ export const useUserStore = create<UserState>((set, get) => ({
   },
 
   loadMediaProgress: async () => {
+    // Fires on every Bookshelf/Stats focus. Snapshot the session so a slow
+    // /api/me (built with THIS account's token) can't write account A's
+    // progress into account B's — or a logged-out — store after a switch/
+    // logout lands mid-flight (mirrors loadEReaderDevices' guard).
+    const cfg = get().serverConnectionConfig;
+    const sessionToken = cfg?.token;
+    const sessionUserId = cfg?.userId;
     try {
       const res = await api.get("/api/me");
       const list = res.data?.mediaProgress;
       // A degenerate 200 (proxy error page / null field) must not wipe the
       // in-memory progress map — bail and keep what we have.
       if (!Array.isArray(list)) return;
+      const now = get().serverConnectionConfig;
+      if (now?.token !== sessionToken || now?.userId !== sessionUserId) return;
       const next = indexMediaProgress(list);
       const prev = get().mediaProgress;
       // FRESHEST-WINS per entry: local writers (player tick, reader, finish

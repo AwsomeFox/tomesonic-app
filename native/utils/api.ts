@@ -1,6 +1,6 @@
 import axios from "axios";
 import { storageHelper } from "./storage";
-import { writeAutoCreds, readAutoCreds, writeWidgetState } from "./autoCreds";
+import { writeAutoCreds, readAutoCreds, writeWidgetState, writeAutoDownloads } from "./autoCreds";
 import { appLogger } from "./logger";
 
 export const api = axios.create({
@@ -29,13 +29,26 @@ const forceLogout = () => {
       const { storage } = require("./storage");
       storage.set("logout_reason", "session_expired");
     } catch {}
+    // Stop playback FIRST, the way logout() does. A live session keeps its 1s
+    // tick + native progress samples running (they gate on currentSession,
+    // still non-null here), so a bare forceLogout left the SIGNED-OUT account's
+    // positions being written to the store/cache and its ~15s sync POSTing —
+    // each POST 401s → refresh (no token) → forceLogout again, churning
+    // indefinitely on the Connect screen. closePlayback nulls currentSession
+    // (disarming the poll) and does the final sync/save cleanup.
+    try {
+      const { usePlaybackStore } = require("../store/usePlaybackStore");
+      usePlaybackStore.getState().closePlayback().catch(() => {});
+    } catch {}
     storageHelper.clearServerConfig();
     // Clear the native mirrors too (logout() does): otherwise the Android
     // Auto service keeps the dead token pair and fails noisily in the car
-    // instead of showing signed-out, and the resume widget keeps advertising
-    // a book whose tap path can no longer play.
+    // instead of showing signed-out, the resume widget keeps advertising a
+    // book whose tap path can no longer play, and the downloads mirror keeps
+    // the car browsing + playing the signed-out user's downloaded books.
     writeAutoCreds(null, null, null).catch(() => {});
     writeWidgetState(null).catch(() => {});
+    writeAutoDownloads([]).catch(() => {});
     const { useUserStore } = require("../store/useUserStore");
     const prevConfig = useUserStore.getState().serverConnectionConfig;
     // user === null drives the navigator back to the Connect screen. Keep only
@@ -67,11 +80,18 @@ const applyRefreshedConfig = (config: any) => {
   // clobber the new account's config with the old one's. Only apply when the
   // refresh still belongs to the currently stored session.
   const cur = storageHelper.getServerConfig();
-  if (
-    !cur?.token ||
-    cur.address !== config?.address ||
-    (cur.userId && config?.userId && cur.userId !== config.userId)
-  ) {
+  // Two accounts on one server share `address`, so userId is the real
+  // discriminator. Discard when the ids differ, OR when the STORED config has
+  // a userId the refresh lacks — that means the refresh came from an older/
+  // different session and must not clobber the modern one. (A normal refresh
+  // builds its config by spreading the stored one, so their userIds always
+  // match; and when the stored config itself lacks a userId we can't
+  // discriminate, so we keep the old address-only behavior rather than
+  // discarding every legitimate refresh for that account.)
+  const idMismatch =
+    (cur?.userId && config?.userId && cur.userId !== config.userId) ||
+    (cur?.userId && !config?.userId);
+  if (!cur?.token || cur.address !== config?.address || idMismatch) {
     appLogger.warn("Refreshed config no longer matches the stored session — discarding", "API");
     return;
   }

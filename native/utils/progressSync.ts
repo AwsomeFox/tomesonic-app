@@ -22,6 +22,29 @@ interface SyncPayload {
   // AFTER a fast-failing close), and last-caller-wins let the older position
   // overwrite the close's newer one.
   at?: number;
+  // Session identity (`address::userId`) captured at enqueue. A straggler
+  // closeSession from account A can fail and queue in the switch window AFTER
+  // login()'s clearAllPending but BEFORE the new config lands (A's token is
+  // still present, so the presence guard passes) — the flush then skips any
+  // entry whose sid doesn't match the CURRENT session rather than PATCHing A's
+  // position under B's token on a shared server.
+  sid?: string;
+}
+
+// `address::userId` for the currently-stored session, or null when logged out
+// OR when the config carries no userId — without a userId two accounts on one
+// server are indistinguishable, so we can't scope by identity and fall back to
+// the old behavior (entries with no sid flush as before), exactly like
+// applyRefreshedConfig's guard.
+function currentSid(): string | null {
+  try {
+    const { storageHelper } = require("./storage");
+    const cfg = storageHelper.getServerConfig();
+    if (!cfg?.token || !cfg?.userId) return null;
+    return `${(cfg.address || "").replace(/\/$/, "")}::${cfg.userId}`;
+  } catch {
+    return null;
+  }
 }
 
 // Monotonic freshness stamp: Date.now() can jump BACKWARD (NTP sync, manual
@@ -96,6 +119,9 @@ function queuePending(payload: SyncPayload) {
       // these — dropping them here made that recovery path dead code.
       libraryItemId: payload.libraryItemId ?? existing?.libraryItemId,
       episodeId: payload.episodeId ?? existing?.episodeId,
+      // Stamp the session identity so the flush can refuse it under a different
+      // account (existing sid wins — it's the one that opened the session).
+      sid: existing?.sid ?? currentSid() ?? undefined,
     };
     storage.set(pendingKey(payload.sessionId), JSON.stringify(merged));
   } catch (e) {
@@ -133,10 +159,12 @@ function mergePendingPatch(
     if (!libraryItemId) return;
     const key = `${PATCH_PREFIX}${libraryItemId}${episodeId ? `-${episodeId}` : ""}`;
     let prevBody: Record<string, any> = {};
+    let prevSid: string | undefined;
     try {
       const prevRaw = storage.getString(key);
       if (prevRaw) {
         const prev = JSON.parse(prevRaw);
+        prevSid = prev?.sid;
         // Legacy entries stored audio fields at the top level.
         prevBody = prev?.body || {
           ...(typeof prev?.currentTime === "number"
@@ -152,6 +180,9 @@ function mergePendingPatch(
         libraryItemId,
         episodeId: episodeId || undefined,
         body: weak ? { ...fields, ...prevBody } : { ...prevBody, ...fields },
+        // Session identity — the flush refuses it under a different account
+        // (see currentSid). Existing sid wins.
+        sid: prevSid ?? currentSid() ?? undefined,
       })
     );
   } catch (e) {
@@ -541,6 +572,10 @@ async function flushPendingPatches(): Promise<void> {
       } catch {}
       continue;
     }
+    // Belongs to a different (switched/logged-out) account — never PATCH it
+    // under the current session's token. Leave it: switching back restores a
+    // matching sid, and login()'s clearAllPending sweeps it otherwise.
+    if (p.sid && p.sid !== currentSid()) continue;
     try {
       const path = p.episodeId
         ? `/api/me/progress/${encodeURIComponent(p.libraryItemId)}/${encodeURIComponent(p.episodeId)}`
@@ -606,6 +641,9 @@ export function flushPendingSyncs(): Promise<void> {
           clearPending(sessionId);
           continue;
         }
+        // A straggler from a switched/logged-out account — never sync it under
+        // the current token (see currentSid). Left in place, not cleared.
+        if (pending.sid && pending.sid !== currentSid()) continue;
         try {
           await api.post(`/api/session/${sessionId}/sync`, {
             currentTime: pending.currentTime,

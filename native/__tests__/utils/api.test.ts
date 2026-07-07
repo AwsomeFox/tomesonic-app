@@ -117,6 +117,23 @@ describe("response interceptor", () => {
     expect(storageHelper.getServerConfig()).toBeNull();
   });
 
+  // REGRESSION: a bare forceLogout left the live session's 1s tick + ~15s sync
+  // running under the signed-out account, churning refresh→forceLogout. It must
+  // stop playback (the way logout() does) so the session goes quiet.
+  it("stops playback on forced logout", async () => {
+    const { usePlaybackStore } = require("../../store/usePlaybackStore");
+    const closeSpy = jest
+      .spyOn(usePlaybackStore.getState(), "closePlayback")
+      .mockResolvedValue(undefined);
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t" }); // no refreshToken
+    useUserStore.setState({ user: { id: "u1" } } as any);
+
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+
+    expect(closeSpy).toHaveBeenCalled();
+    closeSpy.mockRestore();
+  });
+
   it("refreshes the token, persists it everywhere and replays the request", async () => {
     storageHelper.setServerConfig({
       address: "http://abs.local/",

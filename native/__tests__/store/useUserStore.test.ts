@@ -218,6 +218,28 @@ describe("useUserStore", () => {
       expect(useUserStore.getState().mediaProgress["item1"].currentTime).toBe(900);
     });
 
+    // REGRESSION: /api/me is built with the current account's token; if a
+    // logout/account-switch lands while it's in flight, its response must not
+    // write account A's progress into account B's (or a logged-out) store.
+    it("bails without writing progress when the session changes during the /api/me await", async () => {
+      useUserStore.setState({
+        serverConnectionConfig: { address: "https://a.example.com", token: "tokA", userId: "uA" },
+        mediaProgress: {},
+      } as any);
+      mockGet.mockImplementation(async () => {
+        // Account B switches in while A's /api/me is in flight.
+        useUserStore.setState({
+          serverConnectionConfig: { address: "https://b.example.com", token: "tokB", userId: "uB" },
+        } as any);
+        return {
+          data: { mediaProgress: [{ libraryItemId: "itemA", currentTime: 99, lastUpdate: 1 }] },
+        } as any;
+      });
+
+      await useUserStore.getState().loadMediaProgress();
+      expect(useUserStore.getState().mediaProgress["itemA"]).toBeUndefined();
+    });
+
     it("keeps a local-only entry while its offline write is still queued", async () => {
       const { hasPendingWritesFor } = require("../../utils/progressSync");
       jest.mocked(hasPendingWritesFor).mockReturnValue(true);
