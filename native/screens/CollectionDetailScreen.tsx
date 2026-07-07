@@ -302,6 +302,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
             android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
             accessibilityRole="button"
             accessibilityLabel="Delete collection"
+            accessibilityState={{ disabled: deleting, busy: deleting }}
             style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: deleting ? 0.5 : 1 }}
           >
             <Icon name="trash" size={20} color={colors.onSurfaceVariant} />

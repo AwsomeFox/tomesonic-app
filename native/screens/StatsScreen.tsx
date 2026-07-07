@@ -236,6 +236,8 @@ export default function StatsScreen({ navigation }: any) {
           </Text>
           <TouchableOpacity
             onPress={loadStats}
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading stats"
             style={{
               backgroundColor: colors.primary,
               paddingHorizontal: 24,

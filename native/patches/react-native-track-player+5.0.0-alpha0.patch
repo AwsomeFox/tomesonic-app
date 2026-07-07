@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..6805dc9 100644
+index b495b5a..b602bcf 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -19,6 +19,7 @@ import androidx.media3.common.Player
@@ -203,7 +203,7 @@ index b495b5a..6805dc9 100644
      private lateinit var fakePlayer: ExoPlayer
      private lateinit var mediaSession: MediaLibrarySession
      private var progressUpdateJob: Job? = null
-@@ -104,21 +109,1076 @@ class MusicService : HeadlessJsMediaService() {
+@@ -104,21 +109,1084 @@ class MusicService : HeadlessJsMediaService() {
              data = Uri.parse("trackplayer://notification.click")
              action = Intent.ACTION_VIEW
          }
@@ -335,7 +335,15 @@ index b495b5a..6805dc9 100644
 +    private fun absCreds(): AbsCreds? {
 +        return try {
 +            val f = java.io.File(filesDir, "auto_creds.json")
-+            if (!f.exists()) return null
++            if (!f.exists()) {
++                // Crash-window recovery: the JS atomic write deletes the main
++                // file before renaming its temp into place — a kill between
++                // those steps leaves only the (fully-written) temp. Promote it
++                // rather than losing the sole rotated refresh-token pair.
++                val tmp = java.io.File(filesDir, "auto_creds.json.tmp")
++                if (!tmp.exists()) return null
++                try { android.system.Os.rename(tmp.absolutePath, f.absolutePath) } catch (e: Exception) { return null }
++            }
 +            val o = org.json.JSONObject(f.readText())
 +            val server = o.optString("server").trimEnd('/')
 +            val token = absTokenOverride ?: o.optString("token")
@@ -1292,7 +1300,7 @@ index b495b5a..6805dc9 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,7 +1266,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,7 +1274,11 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1305,7 +1313,7 @@ index b495b5a..6805dc9 100644
          )
          player = QueuedAudioPlayer(this@MusicService, options)
          fakePlayer.release()
-@@ -293,9 +1357,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1365,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1317,7 +1325,7 @@ index b495b5a..6805dc9 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1370,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1378,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1379,7 +1387,7 @@ index b495b5a..6805dc9 100644
          }
      }
  
-@@ -449,6 +1547,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1555,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1390,7 +1398,7 @@ index b495b5a..6805dc9 100644
      }
  
      @MainThread
-@@ -792,13 +1894,36 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +1902,36 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1429,7 +1437,7 @@ index b495b5a..6805dc9 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2030,227 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2038,227 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1674,7 +1682,7 @@ index b495b5a..6805dc9 100644
          }
  
          override fun onCustomCommand(
-@@ -935,8 +2263,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -935,8 +2271,18 @@ class MusicService : HeadlessJsMediaService() {
                  when (command.customAction) {
                      CustomCommandButton.JUMP_BACKWARD.customAction -> { it.seekBack() }
                      CustomCommandButton.JUMP_FORWARD.customAction -> { it.seekForward() }
@@ -1695,7 +1703,7 @@ index b495b5a..6805dc9 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -955,6 +2293,11 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,6 +2301,11 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -1707,7 +1715,7 @@ index b495b5a..6805dc9 100644
          override fun onPlaybackResumption(
              mediaSession: MediaSession,
              controller: MediaSession.ControllerInfo
-@@ -962,7 +2305,36 @@ class MusicService : HeadlessJsMediaService() {
+@@ -962,7 +2313,36 @@ class MusicService : HeadlessJsMediaService() {
              emit(MusicEvents.PLAYBACK_RESUME, Bundle().apply {
                  putString("package", controller.packageName)
              })

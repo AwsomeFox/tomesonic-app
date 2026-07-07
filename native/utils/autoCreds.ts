@@ -70,7 +70,18 @@ export interface AutoCreds {
 export async function readAutoCreds(): Promise<AutoCreds | null> {
   try {
     const info = await FileSystem.getInfoAsync(CREDS_PATH);
-    if (!info.exists) return null;
+    if (!info.exists) {
+      // Crash-window recovery: the atomic write (see writeAutoCreds) deletes
+      // the destination before renaming the temp into place. A kill between
+      // those two steps leaves NO main file — but the temp is fully written
+      // (it's created first), so promote it instead of dropping the only
+      // valid rotated pair.
+      const tmpPath = `${CREDS_PATH}.tmp`;
+      const tmpInfo = await FileSystem.getInfoAsync(tmpPath);
+      if (!tmpInfo.exists) return null;
+      // The destination is absent, so this move can't hit the exists-rejection.
+      await FileSystem.moveAsync({ from: tmpPath, to: CREDS_PATH });
+    }
     const raw = await FileSystem.readAsStringAsync(CREDS_PATH);
     const creds = JSON.parse(raw);
     if (!creds?.server || !creds?.token) return null;
