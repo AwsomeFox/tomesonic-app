@@ -611,7 +611,14 @@ export default function ReaderScreen({ route, navigation }: any) {
           .getState()
           .completedDownloads[itemId]?.parts?.find((p: any) => p.id === "ebook")?.localFilePath;
         if (localEbook) {
-          await Sharing.shareAsync(localEbook, { dialogTitle: title || "Open ebook" });
+          // localFilePath may be a bare absolute path (older/cached download
+          // rows) — expo-sharing wants a URI (same normalization as the
+          // playback store's local track resolution).
+          const uri =
+            localEbook.startsWith("file://") || localEbook.startsWith("content://")
+              ? localEbook
+              : `file://${localEbook}`;
+          await Sharing.shareAsync(uri, { dialogTitle: title || "Open ebook" });
           return;
         }
         const localPath = `${FileSystem.cacheDirectory}book_${itemId}.${format || "bin"}`;
