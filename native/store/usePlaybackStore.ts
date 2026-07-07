@@ -638,6 +638,58 @@ export async function recoverPlaybackIfNeeded(): Promise<boolean> {
   }
 }
 
+// Reconcile the JS store with a session the NATIVE player is already driving.
+//
+// Android Auto can cold-start playback while the JS engine is DEAD: the native
+// Media3 session resolves and plays the book itself and never calls
+// preparePlaybackSession, so the store keeps currentSession=null / position=0.
+// When the user then opens the app the progress bars sit frozen at the pre-AA
+// position (or empty), because the 1s poll is gated on `isPlaying` and there is
+// no session to poll. This adopts the live session so the bars go live:
+//   • No JS session but the native player is on a "play:<itemId>" queue item
+//     (an Android-Auto-originated play) → rebuild the real session via
+//     startPlayback so chapters/duration are correct, then let the poll drive.
+//   • Session already known but `isPlaying` was left false while the native
+//     player actually plays (e.g. the JS context reloaded, or an external
+//     resume) → flip isPlaying so the existing poll resumes advancing the bars.
+// Best-effort and side-effect-free on failure: if the native player exposes no
+// live "play:" track (its queue was torn down when the real player initialised)
+// this returns false and the caller falls back to the normal disk restore.
+export async function reconcileWithNativePlayer(): Promise<boolean> {
+  try {
+    const st = usePlaybackStore.getState();
+    if (st.isCasting) return false;
+    const ps: any = await TrackPlayer.getPlaybackState().catch(() => null);
+    const playing = ps?.state === State.Playing || ps?.state === State.Buffering;
+
+    if (st.currentSession) {
+      // The session is known; the only staleness the poll can't self-heal is a
+      // stuck isPlaying=false (the poll early-returns on it). Flip it so the
+      // next tick recomputes position/duration — the poll owns the correct
+      // per-queue-mode position translation, so we don't touch position here.
+      if (playing && !st.isPlaying) {
+        usePlaybackStore.setState({ isPlaying: true });
+      }
+      return false;
+    }
+
+    // No JS session. Adopt only an Android-Auto-originated item — its mediaId is
+    // tagged "play:<itemId>" / "play:<itemId>::<episodeId>" (see the RNTP patch
+    // onAddMediaItems). A queue with any other mediaId isn't ours to rebuild.
+    const active: any = await TrackPlayer.getActiveTrack().catch(() => null);
+    const mediaId = String(active?.mediaId ?? active?.id ?? "");
+    if (!mediaId.startsWith("play:")) return false;
+    const raw = mediaId.slice("play:".length).split("@@")[0];
+    const itemId = raw.split("::")[0];
+    const episodeId = raw.includes("::") ? raw.split("::")[1] || undefined : undefined;
+    if (!itemId) return false;
+    console.log(`[PlaybackStore] Adopting Android Auto native session for ${itemId}.`);
+    return await usePlaybackStore.getState().startPlayback(itemId, episodeId);
+  } catch {
+    return false;
+  }
+}
+
 interface PlaybackState {
   currentSession: any | null;
   isPlaying: boolean;
@@ -751,6 +803,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // starts with an empty store.
     if (get().currentSession) {
       console.log("[PlaybackStore] Live session active — skipping saved-session restore.");
+      return;
+    }
+    // Android Auto may have cold-started playback while JS was dead — adopt that
+    // live native session instead of restoring the (stale) disk save paused over
+    // it. No-ops when there's no live "play:" track, so cold starts still fall
+    // through to the disk restore below.
+    if (await reconcileWithNativePlayer()) {
+      console.log("[PlaybackStore] Adopted live native session — skipping disk restore.");
       return;
     }
     const serverConfig = storageHelper.getServerConfig();
