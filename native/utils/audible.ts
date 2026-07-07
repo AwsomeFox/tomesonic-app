@@ -232,6 +232,7 @@ export async function audibleFindBookAsin(title: string, author?: string): Promi
   // to fail the whole request with "Couldn't match this book on Audible".
   const wantFull = titleKeyFull(title);
   const wantBase = titleKey(title);
+  const wantSegments = titleSegmentKeys(title);
   let best: any = null;
   let bestScore = 0;
   for (const p of res.data?.products || []) {
@@ -248,7 +249,7 @@ export async function audibleFindBookAsin(title: string, author?: string): Promi
     else if (
       wantFull &&
       full &&
-      (titleSegmentKeys(p.title).includes(wantFull) || titleSegmentKeys(title).includes(full))
+      (titleSegmentKeys(p.title).includes(wantFull) || wantSegments.includes(full))
     )
       score = 2;
     else if (wantBase && base === wantBase) score = 1;
