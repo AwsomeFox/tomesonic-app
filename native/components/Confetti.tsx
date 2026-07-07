@@ -8,6 +8,7 @@ import Animated, {
   runOnJS,
   interpolate,
   cancelAnimation,
+  useReducedMotion,
   type SharedValue,
 } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -30,6 +31,9 @@ export default function Confetti({
   const colors = useThemeColors();
   const { width } = useWindowDimensions();
   const t = useSharedValue(0);
+  // Respect the OS "reduce motion" setting — a celebratory burst is exactly the
+  // kind of non-essential animation it exists to suppress.
+  const reduceMotion = useReducedMotion();
 
   // Fixed per-particle parameters (angle spread, distance, spin, color, size).
   const particles = React.useMemo(() => {
@@ -58,6 +62,12 @@ export default function Confetti({
 
   useEffect(() => {
     if (visible) {
+      if (reduceMotion) {
+        // Skip the burst entirely, but still resolve so the parent clears its
+        // "celebrate" state (otherwise it'd think a burst were mid-flight).
+        onDone?.();
+        return;
+      }
       t.value = 0;
       // Easing.out(quad) is deliberate (decelerating "physics" for the burst),
       // not a UI transition — the M3 motion tokens don't apply here.
@@ -67,9 +77,9 @@ export default function Confetti({
     }
     // Cancel on unmount so the burst can't outlive the player closing mid-flight.
     return () => cancelAnimation(t);
-  }, [visible]);
+  }, [visible, reduceMotion]);
 
-  if (!visible) return null;
+  if (!visible || reduceMotion) return null;
 
   return (
     <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>

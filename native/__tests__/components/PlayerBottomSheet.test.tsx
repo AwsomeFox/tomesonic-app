@@ -11,6 +11,8 @@
 import { BackHandler } from "react-native";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 
+// Toggle for the OS reduce-motion setting (Confetti reads useReducedMotion).
+let mockReduceMotion = false;
 // Minimal reanimated mock — the setup-level one pulls real react-native-worklets.
 // withTiming deliberately does NOT fire its completion callback so one-shot
 // effects (Confetti) stay visible for assertions.
@@ -95,7 +97,7 @@ jest.mock("react-native-reanimated", () => {
       out: (f: any) => f,
       inOut: (f: any) => f,
     },
-    useReducedMotion: () => false,
+    useReducedMotion: () => mockReduceMotion,
     LinearTransition: chainable(),
     FadeIn: chainable(),
     FadeOut: chainable(),
@@ -626,6 +628,21 @@ describe("PlayerBottomSheet — finish-line confetti", () => {
       usePlaybackStore.setState({ position: 3599 } as any);
     });
     expect(countParticles(screen.toJSON())).toBe(0);
+  });
+
+  it("suppresses the burst entirely under OS reduce-motion", async () => {
+    mockReduceMotion = true;
+    try {
+      seedPlayer({ position: 3597 });
+      await render(<PlayerBottomSheet />);
+      await act(async () => {
+        usePlaybackStore.setState({ position: 3599 } as any); // natural crossing
+      });
+      // The celebration is decorative — reduce-motion users get no particles.
+      expect(countParticles(screen.toJSON())).toBe(0);
+    } finally {
+      mockReduceMotion = false;
+    }
   });
 
   it("does NOT fire when restoring a session already at the end", async () => {
