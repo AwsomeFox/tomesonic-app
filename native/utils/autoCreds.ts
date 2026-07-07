@@ -136,14 +136,23 @@ export async function writeAutoCreds(
       // second JS write) never sees a half-written file, and a kill mid-write
       // leaves the previous complete file intact.
       const tmpPath = `${CREDS_PATH}.tmp`;
-      await FileSystem.writeAsStringAsync(tmpPath, JSON.stringify(creds));
+      const payload = JSON.stringify(creds);
+      await FileSystem.writeAsStringAsync(tmpPath, payload);
       try {
+        // moveAsync REJECTS when the destination already exists (the common
+        // case), so clear it first — the move then just renames the
+        // fully-written temp into place. A reader (native or JS) always sees
+        // either the previous complete file or the new one, never a
+        // half-written one; the sub-tick gap where neither exists is safe (a
+        // missing file reads as "no creds" and self-heals on the next write)
+        // and can't corrupt the token, unlike an interrupted in-place write.
+        await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
         await FileSystem.moveAsync({ from: tmpPath, to: CREDS_PATH });
       } catch (mvErr) {
-        // Move failed (unexpected) — fall back to a direct write so the fresh
-        // token still persists, then clean up the temp.
+        // The rename mechanism itself failed (rare) — last resort so the fresh
+        // token still persists; then drop the temp.
         console.warn("[AutoCreds] atomic move failed; direct write", mvErr);
-        await FileSystem.writeAsStringAsync(CREDS_PATH, JSON.stringify(creds));
+        await FileSystem.writeAsStringAsync(CREDS_PATH, payload);
         await FileSystem.deleteAsync(tmpPath, { idempotent: true }).catch(() => {});
       }
     } else {
