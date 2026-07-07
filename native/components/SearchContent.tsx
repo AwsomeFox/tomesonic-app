@@ -495,24 +495,28 @@ export default function SearchContent({ navigation }: { navigation: any }) {
   }
 
   if (hasSearched && !hasResults) {
+    // The RMAB "Not in your library" section MUST render here too: searching
+    // for a book you don't own is the single most common reason to request
+    // one, and the old early return made the request option unreachable in
+    // exactly that case. The section self-hides when RMAB is unconfigured or
+    // has no catalog hits.
     return (
-      <View
-        style={{
-          flex: 1,
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 32,
-          backgroundColor: colors.surface,
-        }}
+      <ScrollView
+        style={{ flex: 1, backgroundColor: colors.surface }}
+        contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
+        keyboardShouldPersistTaps="handled"
       >
-        <Icon name="search" size={48} color={colors.onSurfaceVariant} />
-        <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
-          No results{query.trim() ? ` for “${query.trim()}”` : ""}
-        </Text>
-        <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
-          Try a different title, author, series, or narrator.
-        </Text>
-      </View>
+        <View style={{ alignItems: "center", paddingTop: 96, paddingHorizontal: 32 }}>
+          <Icon name="search" size={48} color={colors.onSurfaceVariant} />
+          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
+            No results{query.trim() ? ` for “${query.trim()}”` : ""} in your library
+          </Text>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
+            Try a different title, author, series, or narrator.
+          </Text>
+        </View>
+        <RmabMissingSection title="Not in your library" fetchMissing={fetchRmabForQuery} />
+      </ScrollView>
     );
   }
 

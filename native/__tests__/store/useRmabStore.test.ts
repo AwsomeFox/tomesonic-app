@@ -230,10 +230,33 @@ describe("requestBook", () => {
     expect(useRmabStore.getState().requestedAsins["B01"]).toBeUndefined();
   });
 
-  it("generic failures report a request failure", async () => {
-    mockedCreate.mockRejectedValue(new Error("boom"));
+  it("failures without a response read as offline", async () => {
+    mockedCreate.mockRejectedValue(new Error("Network Error"));
     const res = await useRmabStore.getState().requestBook(BOOK);
-    expect(res).toEqual({ ok: false, message: "Request failed" });
+    expect(res).toEqual({ ok: false, message: "You're offline — try again when connected" });
+  });
+
+  it("401/403 point the user at reconnecting RMAB", async () => {
+    mockedCreate.mockRejectedValue({ response: { status: 401, data: {} } });
+    const res = await useRmabStore.getState().requestBook(BOOK);
+    expect(res).toEqual({
+      ok: false,
+      message: "Session expired — reconnect ReadMeABook in Settings",
+    });
+  });
+
+  it("other server rejections surface the server's detail instead of a bare failure", async () => {
+    mockedCreate.mockRejectedValue({ response: { status: 400, data: { error: "InvalidAsin" } } });
+    const res = await useRmabStore.getState().requestBook(BOOK);
+    expect(res).toEqual({ ok: false, message: "Request failed: InvalidAsin" });
+
+    mockedCreate.mockRejectedValue({ response: { status: 500, data: { message: "db down" } } });
+    const res2 = await useRmabStore.getState().requestBook(BOOK);
+    expect(res2).toEqual({ ok: false, message: "Request failed: db down" });
+
+    mockedCreate.mockRejectedValue({ response: { status: 500, data: {} } });
+    const res3 = await useRmabStore.getState().requestBook(BOOK);
+    expect(res3).toEqual({ ok: false, message: "Request failed" });
   });
 
   it("concurrent requests each land their status (functional set — no lost updates)", async () => {

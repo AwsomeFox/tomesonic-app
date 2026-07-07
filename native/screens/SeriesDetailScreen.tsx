@@ -106,7 +106,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       audibleSeriesAsinFromBook,
       audibleFindSeriesAsin,
       audibleSeriesBooks,
-      titleKey,
+      titlesLikelySame,
     } = require("../utils/audible");
     if (!displayName || seriesLoading) return [];
     // Derive the book list from `series` (a dep — new identity per load)
@@ -118,20 +118,26 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     );
     // Resolve the series ASIN — exact via a library book's ASIN, else by name.
     let seriesAsin: string | null = null;
-    // Cap the exact-resolution attempts: each miss costs a network round
-    // trip, and one or two library ASINs are enough to find the parent.
-    for (const asin of Array.from(haveAsins).slice(0, 2)) {
+    // Bounded attempts: each miss costs a round trip, but stopping after 2
+    // stranded series whose first books were omnibus/regional editions with
+    // no parent relationship — those fell to the fuzzy name search.
+    for (const asin of Array.from(haveAsins).slice(0, 8)) {
       seriesAsin = await audibleSeriesAsinFromBook(asin).catch(() => null);
       if (seriesAsin) break;
     }
     if (!seriesAsin) seriesAsin = await audibleFindSeriesAsin(displayName);
     if (!seriesAsin) return [];
     const all = await audibleSeriesBooks(seriesAsin);
-    const haveTitles = new Set(
-      libraryBooks.map((b: any) => titleKey(b.media?.metadata?.title))
-    );
+    const haveTitles = libraryBooks
+      .map((b: any) => b.media?.metadata?.title)
+      .filter(Boolean);
+    // ASIN-first; the title fallback (for library items without an ASIN or
+    // with a regional/edition ASIN skew) must keep distinct volumes distinct —
+    // the old pre-colon titleKey diff hid every other "Series: Volume" book
+    // the moment you owned one of them.
     return all.filter(
-      (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
+      (b: any) =>
+        !haveAsins.has(b.asin) && !haveTitles.some((t: string) => titlesLikelySame(t, b.title))
     );
   }, [displayName, seriesLoading, series]);
 

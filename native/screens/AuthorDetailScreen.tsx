@@ -60,7 +60,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   const rmabName = author?.name || authorName;
   const authorLoading = loading;
   const fetchMissingByAuthor = React.useCallback(async () => {
-    const { audibleAuthorBooks, titleKey } = require("../utils/audible");
+    const { audibleAuthorBooks, titlesLikelySame } = require("../utils/audible");
     if (!rmabName || authorLoading) return [];
     // Derive the item list from `author` (a dep — new identity per load)
     // inside the callback: closing over a derived array keyed on .length
@@ -70,11 +70,15 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     const haveAsins = new Set(
       authorItems.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
     );
-    const haveTitles = new Set(
-      authorItems.map((b: any) => titleKey(b.media?.metadata?.title))
-    );
+    const haveTitles = authorItems
+      .map((b: any) => b.media?.metadata?.title)
+      .filter(Boolean);
+    // Same subtitle-safe matching as the series screen — the pre-colon
+    // titleKey diff collapsed an author's whole "Series: Volume" run into one
+    // key and hid the unowned volumes.
     return all.filter(
-      (b: any) => !haveAsins.has(b.asin) && !haveTitles.has(titleKey(b.title))
+      (b: any) =>
+        !haveAsins.has(b.asin) && !haveTitles.some((t: string) => titlesLikelySame(t, b.title))
     );
   }, [rmabName, authorLoading, author]);
 

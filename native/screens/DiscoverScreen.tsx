@@ -55,6 +55,9 @@ export default function DiscoverScreen({ navigation }: any) {
   const [bdError, setBdError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [lastLiked, setLastLiked] = useState<string | null>(null);
+  // A right-swipe whose POST failed — the old optimistic chip said
+  // "Requested" even when the request never reached the server.
+  const [swipeFailed, setSwipeFailed] = useState(false);
 
   // ── Shelves (the user's configured home sections, in their order) ───────
   const [shelves, setShelves] = useState<{ id: string; name: string; books: RmabBook[] | null }[]>([]);
@@ -212,7 +215,14 @@ export default function DiscoverScreen({ navigation }: any) {
       const rec = current;
       flyOut(action === "right" ? 1 : -1, () => {
         setDeck((d) => (d || []).slice(1));
-        if (action === "right") {
+      });
+      try {
+        await swipeBookdate(rec.id, action);
+        // The "Requested" chip shows only AFTER the server accepted the
+        // swipe — the old optimistic chip claimed success for POSTs that
+        // failed (offline, server error), silently losing the request.
+        if (action === "right" && aliveRef.current) {
+          setSwipeFailed(false);
           // Keyed by the rec's stable id — duplicate titles must not clear
           // each other's chip.
           setLastLiked(rec.id);
@@ -221,11 +231,16 @@ export default function DiscoverScreen({ navigation }: any) {
             if (aliveRef.current) setLastLiked((t) => (t === rec.id ? null : t));
           }, 2400);
         }
-      });
-      try {
-        await swipeBookdate(rec.id, action);
       } catch (e) {
         console.warn("[BookDate] swipe failed", e);
+        if (action === "right" && aliveRef.current) {
+          setLastLiked(null);
+          setSwipeFailed(true);
+          if (likedTimerRef.current) clearTimeout(likedTimerRef.current);
+          likedTimerRef.current = setTimeout(() => {
+            if (aliveRef.current) setSwipeFailed(false);
+          }, 3200);
+        }
       } finally {
         if (aliveRef.current) setBusy(false);
       }
@@ -305,11 +320,16 @@ export default function DiscoverScreen({ navigation }: any) {
     extrapolate: "clamp",
   });
 
+  // Request-outcome message rendered inside the detail sheet — discarding
+  // the result left failed shelf requests with zero visible feedback.
+  const [sheetNotice, setSheetNotice] = useState<string | null>(null);
   const onRequestFromSheet = useCallback(
     async (book: RmabBook) => {
       setRequesting(true);
+      setSheetNotice(null);
       try {
-        await requestBook(book);
+        const res = await requestBook(book);
+        if (aliveRef.current && !res.ok && res.message) setSheetNotice(res.message);
       } finally {
         // The request may resolve after navigation away.
         if (aliveRef.current) setRequesting(false);
@@ -583,6 +603,28 @@ export default function DiscoverScreen({ navigation }: any) {
                     </Text>
                   </View>
                 ) : null}
+                {swipeFailed ? (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 12,
+                      alignSelf: "center",
+                      backgroundColor: colors.errorContainer,
+                      borderRadius: 16,
+                      paddingHorizontal: 14,
+                      paddingVertical: 6,
+                      flexDirection: "row",
+                      alignItems: "center",
+                    }}
+                  >
+                    <Icon name="warning" size={16} color={colors.onErrorContainer} />
+                    <Text
+                      style={{ color: colors.onErrorContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}
+                    >
+                      Request didn't send — check your connection
+                    </Text>
+                  </View>
+                ) : null}
               </View>
             ) : null}
 
@@ -669,12 +711,16 @@ export default function DiscoverScreen({ navigation }: any) {
 
       <RmabBookDetailSheet
         book={detail}
-        onClose={() => setDetail(null)}
+        onClose={() => {
+          setDetail(null);
+          setSheetNotice(null);
+        }}
         // BookDate recs carry audnexusAsin, not asin — RMAB's request payload
         // needs the real asin, so deck details stay info-only (Like requests).
         onRequest={detail && detail.asin && !detail.isAvailable ? onRequestFromSheet : undefined}
         requested={!!(detail && (requestedAsins[detail.asin] || detail.requestStatus))}
         requesting={requesting}
+        notice={sheetNotice}
       />
     </SafeAreaView>
   );

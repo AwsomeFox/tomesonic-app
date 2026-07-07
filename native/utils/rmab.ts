@@ -124,18 +124,31 @@ export async function exchangeLoginToken(
   throw lastAuthError || new Error("Authentication failed");
 }
 
-async function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
-  if (!cfg.refreshToken) throw new Error("No refresh token");
-  const res = await axios.post(
-    `${cfg.url}/api/auth/refresh`,
-    { refreshToken: cfg.refreshToken },
-    { timeout: 15000 }
-  );
-  const accessToken = res.data?.accessToken;
-  if (!accessToken) throw new Error("Refresh failed");
-  const next = { ...cfg, accessToken };
-  writeRmabConfig(next);
-  return next;
+// Single-flight: Discover fires several RMAB calls in parallel, and after
+// access-token expiry every one 401s at once — without coordination each
+// POSTed its own /api/auth/refresh (redundant storm; harmless only because
+// the refresh token doesn't rotate). Concurrent 401s now share one refresh.
+let _refreshInFlight: Promise<RmabConfig> | null = null;
+function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
+  if (_refreshInFlight) return _refreshInFlight;
+  _refreshInFlight = (async () => {
+    try {
+      if (!cfg.refreshToken) throw new Error("No refresh token");
+      const res = await axios.post(
+        `${cfg.url}/api/auth/refresh`,
+        { refreshToken: cfg.refreshToken },
+        { timeout: 15000 }
+      );
+      const accessToken = res.data?.accessToken;
+      if (!accessToken) throw new Error("Refresh failed");
+      const next = { ...cfg, accessToken };
+      writeRmabConfig(next);
+      return next;
+    } finally {
+      _refreshInFlight = null;
+    }
+  })();
+  return _refreshInFlight;
 }
 
 /** Authenticated request with a single 401 → refresh → retry. */
@@ -253,7 +266,11 @@ export async function createRequest(book: RmabBook): Promise<any> {
     audiobook: {
       asin: book.asin,
       title: book.title,
-      author: book.author,
+      // RMAB's schema requires author; Audible catalog rows legitimately omit
+      // it (anthologies, older titles) and an undefined here was a guaranteed
+      // 400 rendered as a bare "Request failed" — the book showed in the
+      // missing list AND could never be requested.
+      author: book.author || "Unknown",
       narrator: book.narrator,
       description: book.description,
       coverArtUrl: book.coverArtUrl,

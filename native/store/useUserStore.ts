@@ -276,6 +276,12 @@ export const useUserStore = create<UserState>((set, get) => ({
       } catch (e) {
         console.warn("[UserStore] downloads wipe on account switch failed", e);
       }
+      // The RMAB connection is per-person (it can carry ADMIN rights over the
+      // request queue) — a different ABS account must not inherit it.
+      try {
+        const { useRmabStore } = require("./useRmabStore");
+        useRmabStore.getState().disconnect();
+      } catch {}
       try {
         const { storage } = require("../utils/storage");
         storage
@@ -338,6 +344,13 @@ export const useUserStore = create<UserState>((set, get) => ({
     } catch (e) {
       console.warn("[UserStore] downloads wipe on logout failed", e);
     }
+    // RMAB rides the ABS identity on this device: whoever logs in next must
+    // not inherit the previous person's connection (which can carry ADMIN
+    // rights over everyone's requests) or their requested-state.
+    try {
+      const { useRmabStore } = require("./useRmabStore");
+      useRmabStore.getState().disconnect();
+    } catch {}
     try {
       const { writeWidgetState } = require("../utils/autoCreds");
       writeWidgetState(null);

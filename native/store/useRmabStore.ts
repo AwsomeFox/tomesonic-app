@@ -57,12 +57,22 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   initialize: () => {
     const cfg = readRmabConfig();
     if (cfg) {
+      // Requested-state is persisted: Audible-sourced series/author rows carry
+      // no server requestStatus, so without this every "Requested" chip on
+      // those surfaces reset to a fresh Request button on app restart.
+      let requestedAsins: Record<string, string> = {};
+      try {
+        const { storage } = require("../utils/storage");
+        const parsed = JSON.parse(storage.getString("rmab_requestedAsins") || "null");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) requestedAsins = parsed;
+      } catch {}
       set({
         configured: true,
         serverUrl: cfg.url,
         username: cfg.user?.username || null,
         authMode: rmabAuthMode(cfg),
         isAdmin: cfg.user?.role === "admin",
+        requestedAsins,
       });
       get().refreshPendingCount();
     }
@@ -146,6 +156,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   disconnect: () => {
     clearRmabCaches();
     writeRmabConfig(null);
+    try {
+      const { storage } = require("../utils/storage");
+      storage.remove("rmab_requestedAsins");
+    } catch {}
     set({
       configured: false,
       serverUrl: null,
@@ -187,12 +201,29 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         get().noteRequestStatus(book.asin, "pending");
         return { ok: false, message: "Already requested" };
       }
-      return { ok: false, message: "Request failed" };
+      // Everything else used to collapse to a bare "Request failed" — the
+      // server's actionable detail (offline, expired session, validation
+      // reason) was thrown away, making failures undiagnosable.
+      const status = e?.response?.status;
+      if (!e?.response) {
+        return { ok: false, message: "You're offline — try again when connected" };
+      }
+      if (status === 401 || status === 403) {
+        return { ok: false, message: "Session expired — reconnect ReadMeABook in Settings" };
+      }
+      const detail = err || e?.response?.data?.message || e?.message;
+      return { ok: false, message: detail ? `Request failed: ${detail}` : "Request failed" };
     }
   },
 
   // Functional set: concurrent requestBook calls each merge into the latest
-  // map instead of overwriting each other's status.
-  noteRequestStatus: (asin, status) =>
-    set((state) => ({ requestedAsins: { ...state.requestedAsins, [asin]: status } })),
+  // map instead of overwriting each other's status. Mirrored to disk so
+  // requested-state survives restarts (see initialize).
+  noteRequestStatus: (asin, status) => {
+    set((state) => ({ requestedAsins: { ...state.requestedAsins, [asin]: status } }));
+    try {
+      const { storage } = require("../utils/storage");
+      storage.set("rmab_requestedAsins", JSON.stringify(get().requestedAsins));
+    } catch {}
+  },
 }));

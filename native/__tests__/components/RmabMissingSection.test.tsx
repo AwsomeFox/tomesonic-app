@@ -154,14 +154,22 @@ describe("RmabMissingSection", () => {
     await screen.findByText("Book One");
   });
 
-  it("a failed lookup logs and renders nothing (never blocks the host screen)", async () => {
+  it("a failed lookup shows 'Couldn't check' with Retry — never a silent vanish", async () => {
     useRmabStore.setState({ configured: true } as any);
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
-    await render(
-      <RmabMissingSection fetchMissing={jest.fn().mockRejectedValue(new Error("down"))} />
-    );
+    const fetchMissing = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("down"))
+      .mockResolvedValueOnce([BOOKS[0]]);
+    await render(<RmabMissingSection fetchMissing={fetchMissing} />);
     await waitFor(() => expect(warnSpy).toHaveBeenCalled());
-    expect(screen.queryByText("Missing from your library")).toBeNull();
+    // A failed check must be DISTINGUISHABLE from "nothing missing" — the old
+    // silent null read as "no books to request" on any Audible timeout.
+    await screen.findByText("Couldn't check for missing books.");
+
+    await fireEvent.press(screen.getByLabelText("Retry missing-books check"));
+    await screen.findByText("Book One");
+    expect(screen.queryByText("Couldn't check for missing books.")).toBeNull();
     warnSpy.mockRestore();
   });
 });

@@ -29,9 +29,11 @@ export interface AudibleBook {
 // The app is English-only today — foreign-language editions of an author's
 // or series' books read as noise in the missing lists. Products with NO
 // language attribute are kept (dropping unknowns hides real books).
+// startsWith, not equality: catalog rows come back with variants like
+// "English (US)" and strict comparison silently dropped real books.
 const APP_LANGUAGE = "english";
 function inAppLanguage(b: AudibleBook): boolean {
-  return !b.language || b.language.toLowerCase() === APP_LANGUAGE;
+  return !b.language || b.language.toLowerCase().startsWith(APP_LANGUAGE);
 }
 
 function mapProduct(p: any): AudibleBook | null {
@@ -50,7 +52,11 @@ function mapProduct(p: any): AudibleBook | null {
   };
 }
 
-/** Loose title identity: lowercase, drop subtitles/punctuation/articles. */
+/** Loose title identity: lowercase, drop subtitles/punctuation/articles.
+ *  LOSSY on purpose — "Mistborn: The Final Empire" and "Mistborn: The Well of
+ *  Ascension" both collapse to "mistborn". NEVER use this alone to decide two
+ *  titles are the same book (see titlesLikelySame); it exists for matching a
+ *  title against a bare series/main-title string. */
 export function titleKey(title?: string | null): string {
   return String(title || "")
     .toLowerCase()
@@ -60,19 +66,65 @@ export function titleKey(title?: string | null): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
+/** Strict title identity: like titleKey but KEEPS subtitle text, so distinct
+ *  series volumes ("Series: Book One" vs "Series: Book Two") stay distinct. */
+export function titleKeyFull(title?: string | null): string {
+  return String(title || "")
+    .toLowerCase()
+    .replace(/\b(unabridged|abridged|a novel)\b/g, "")
+    .replace(/^(the|a|an)\s+/, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/** Whether two titles plausibly name the SAME book. Full normalized titles
+ *  must match — except when exactly one side carries a subtitle, where the
+ *  bare side may equal the other's pre-colon main title ("Oathbringer" vs
+ *  "Oathbringer: Book Three of the Stormlight Archive"). Two subtitle-bearing
+ *  titles with different subtitles are DIFFERENT books even when their main
+ *  titles match — the old pre-colon-only comparison hid every other volume of
+ *  a series-prefixed set once you owned one. */
+export function titlesLikelySame(a?: string | null, b?: string | null): boolean {
+  const fullA = titleKeyFull(a);
+  const fullB = titleKeyFull(b);
+  if (!fullA || !fullB) return false;
+  if (fullA === fullB) return true;
+  return titleKey(a) === fullB || fullA === titleKey(b);
+}
+
 export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
-  const res = await axios.get(`${BASE}/catalog/products`, {
-    params: {
-      author: name,
-      num_results: 50,
-      products_sort_by: "-ReleaseDate",
-      response_groups: GROUPS,
-    },
-    timeout: TIMEOUT,
-  });
-  return ((res.data?.products || [])
-    .map(mapProduct)
-    .filter(Boolean) as AudibleBook[]).filter(inAppLanguage);
+  // Paginate: a single 50-result page silently truncated prolific authors'
+  // backlists out of the missing list. Stop on a short page; later pages are
+  // best-effort (keep what already loaded on a transient failure).
+  const out: AudibleBook[] = [];
+  const seen = new Set<string>();
+  for (let page = 1; page <= 4; page++) {
+    let products: any[] = [];
+    try {
+      const res = await axios.get(`${BASE}/catalog/products`, {
+        params: {
+          author: name,
+          num_results: 50,
+          page,
+          products_sort_by: "-ReleaseDate",
+          response_groups: GROUPS,
+        },
+        timeout: TIMEOUT,
+      });
+      products = res.data?.products || [];
+    } catch (e) {
+      if (page === 1) throw e;
+      break;
+    }
+    for (const p of products) {
+      const mapped = mapProduct(p);
+      if (mapped && inAppLanguage(mapped) && !seen.has(mapped.asin)) {
+        seen.add(mapped.asin);
+        out.push(mapped);
+      }
+    }
+    if (products.length < 50) break;
+  }
+  return out;
 }
 
 /** Full details for one book via AUDNEXUS — the unauthenticated Audible
@@ -106,9 +158,28 @@ export async function audibleFindBookAsin(title: string, author?: string): Promi
     },
     timeout: TIMEOUT,
   });
-  const want = titleKey(title);
-  const hit = (res.data?.products || []).find((p: any) => titleKey(p.title) === want);
-  return hit?.asin || null;
+  // Score candidates rather than demanding exact pre-colon equality: library
+  // titles routinely omit (or add) the series prefix/subtitle relative to the
+  // catalog ("The Final Empire" vs "Mistborn: The Final Empire"), which used
+  // to fail the whole request with "Couldn't match this book on Audible".
+  const wantFull = titleKeyFull(title);
+  const wantBase = titleKey(title);
+  let best: any = null;
+  let bestScore = 0;
+  for (const p of res.data?.products || []) {
+    const full = titleKeyFull(p.title);
+    const base = titleKey(p.title);
+    let score = 0;
+    if (full && full === wantFull) score = 4;
+    else if (titlesLikelySame(p.title, title)) score = 3;
+    else if (wantFull && full.includes(wantFull)) score = 2;
+    else if (wantBase && base === wantBase) score = 1;
+    if (score > bestScore) {
+      best = p;
+      bestScore = score;
+    }
+  }
+  return best?.asin || null;
 }
 
 /** The series a book belongs to, via the book's catalog relationships. */
@@ -134,8 +205,19 @@ export async function audibleFindSeriesAsin(seriesName: string): Promise<string 
     const s = (p.series || []).find((x: any) => titleKey(x.title) === want);
     if (s?.asin) return s.asin;
   }
-  // No exact name match — take any series from the top hit as a last resort.
-  return res.data?.products?.[0]?.series?.[0]?.asin || null;
+  // No exact name match — accept a series whose normalized name merely
+  // CONTAINS the query (punctuation/subtitle drift), but never an unrelated
+  // arbitrary series: the old any-top-hit fallback rendered a DIFFERENT
+  // series' books as "missing from this series", request buttons and all.
+  if (want) {
+    for (const p of res.data?.products || []) {
+      for (const s of p.series || []) {
+        const got = titleKey(s.title);
+        if (s.asin && got && (got.includes(want) || want.includes(got))) return s.asin;
+      }
+    }
+  }
+  return null;
 }
 
 /** Every book in a series, in series order. */
@@ -150,17 +232,25 @@ export async function audibleSeriesBooks(seriesAsin: string): Promise<AudibleBoo
   const asins: string[] = children.map((c: any) => c.asin).filter(Boolean);
   if (asins.length === 0) return [];
 
-  // Batch product details (API caps ~50 asins per call).
+  // Batch product details (API caps ~50 asins per call). Later chunks are
+  // best-effort: one transient failure used to reject the whole lookup and
+  // silently erase every already-fetched book from the missing list.
   const out: AudibleBook[] = [];
   for (let i = 0; i < asins.length; i += 40) {
     const chunk = asins.slice(i, i + 40);
-    const details = await axios.get(`${BASE}/catalog/products`, {
-      params: { asins: chunk.join(","), response_groups: GROUPS },
-      timeout: TIMEOUT,
-    });
-    for (const p of details.data?.products || []) {
-      const mapped = mapProduct(p);
-      if (mapped && inAppLanguage(mapped)) out.push(mapped);
+    try {
+      const details = await axios.get(`${BASE}/catalog/products`, {
+        params: { asins: chunk.join(","), response_groups: GROUPS },
+        timeout: TIMEOUT,
+      });
+      for (const p of details.data?.products || []) {
+        const mapped = mapProduct(p);
+        if (mapped && inAppLanguage(mapped)) out.push(mapped);
+      }
+    } catch (e) {
+      if (i === 0) throw e;
+      console.warn("[Audible] series detail chunk failed — returning partial list", e);
+      break;
     }
   }
   // Preserve series order.
