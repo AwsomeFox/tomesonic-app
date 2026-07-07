@@ -90,7 +90,11 @@ export default function AccountScreen({ navigation }: any) {
 
   // Read-only field with a label above (matches ui-text-input-with-label)
   const LabeledField = ({ label, value }: { label: string; value: string }) => (
-    <View style={{ marginBottom: 16 }}>
+    <View
+      style={{ marginBottom: 16 }}
+      accessible
+      accessibilityLabel={`${label}: ${value}`}
+    >
       <Text
         style={{
           color: colors.onSurface,
@@ -164,6 +168,8 @@ export default function AccountScreen({ navigation }: any) {
         {/* Change Password row */}
         <Pressable
           onPress={() => setShowPasswordModal(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Change Password"
           style={{
             flexDirection: "row",
             alignItems: "center",
@@ -194,9 +200,13 @@ export default function AccountScreen({ navigation }: any) {
           {/* User Stats link */}
           <Pressable
             onPress={() => navigation.navigate("Stats")}
+            accessibilityRole="button"
+            accessibilityLabel="User Stats"
             style={{
               flexDirection: "row",
               alignItems: "center",
+              // Reach the 48dp minimum touch target (icon+text is only ~20dp tall).
+              minHeight: 48,
             }}
             hitSlop={8}
           >
@@ -211,9 +221,12 @@ export default function AccountScreen({ navigation }: any) {
           {/* Switch Server/User — logout icon */}
           <Pressable
             onPress={handleSwitch}
+            accessibilityRole="button"
+            accessibilityLabel="Switch server or user"
             style={{
               flexDirection: "row",
               alignItems: "center",
+              minHeight: 48,
             }}
             hitSlop={8}
           >
@@ -230,6 +243,8 @@ export default function AccountScreen({ navigation }: any) {
       {/* Footer — report bugs on GitHub */}
       <Pressable
         onPress={() => Linking.openURL(GITHUB_URL)}
+        accessibilityRole="link"
+        accessibilityLabel="Report bugs, request features, and contribute on GitHub"
         style={{
           flexDirection: "row",
           alignItems: "center",
@@ -266,6 +281,7 @@ export default function AccountScreen({ navigation }: any) {
               secureTextEntry
               value={currentPassword}
               onChangeText={setCurrentPassword}
+              accessibilityLabel="Current Password"
               style={{
                 backgroundColor: colors.surface,
                 color: colors.onSurface,
@@ -285,6 +301,7 @@ export default function AccountScreen({ navigation }: any) {
               secureTextEntry
               value={newPassword}
               onChangeText={setNewPassword}
+              accessibilityLabel="New Password"
               style={{
                 backgroundColor: colors.surface,
                 color: colors.onSurface,
@@ -304,6 +321,7 @@ export default function AccountScreen({ navigation }: any) {
               secureTextEntry
               value={confirmPassword}
               onChangeText={setConfirmPassword}
+              accessibilityLabel="Confirm New Password"
               style={{
                 backgroundColor: colors.surface,
                 color: colors.onSurface,
@@ -328,6 +346,9 @@ export default function AccountScreen({ navigation }: any) {
               <Pressable
                 onPress={handleChangePassword}
                 disabled={changingPassword}
+                accessibilityRole="button"
+                accessibilityLabel="Save"
+                accessibilityState={{ disabled: changingPassword, busy: changingPassword }}
                 style={{
                   backgroundColor: colors.primary,
                   paddingHorizontal: 20,

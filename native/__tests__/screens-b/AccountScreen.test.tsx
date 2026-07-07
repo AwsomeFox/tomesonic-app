@@ -236,6 +236,33 @@ describe("AccountScreen", () => {
     expect(screen.getByText("Save")).toBeTruthy();
   });
 
+  it("exposes accessible roles and grouped labels for TalkBack", async () => {
+    await renderAccount();
+
+    // Read-only fields are grouped so the label and value read as one item.
+    expect(screen.getByLabelText("Host: https://abs.example.com")).toBeTruthy();
+    expect(screen.getByLabelText("Username: tony")).toBeTruthy();
+
+    // Interactive rows carry button/link roles with explicit labels.
+    const changePw = screen.getByLabelText("Change Password");
+    expect(changePw.props.accessibilityRole).toBe("button");
+    const stats = screen.getByLabelText("User Stats");
+    expect(stats.props.accessibilityRole).toBe("button");
+    const switchUser = screen.getByLabelText("Switch server or user");
+    expect(switchUser.props.accessibilityRole).toBe("button");
+    const github = screen.getByLabelText(/contribute on GitHub/);
+    expect(github.props.accessibilityRole).toBe("link");
+  });
+
+  it("labels the change-password inputs for screen readers", async () => {
+    await renderAccount();
+    await fireEvent.press(screen.getByLabelText("Change Password"));
+
+    expect(screen.getByLabelText("Current Password")).toBeTruthy();
+    expect(screen.getByLabelText("New Password")).toBeTruthy();
+    expect(screen.getByLabelText("Confirm New Password")).toBeTruthy();
+  });
+
   it("cancel closes the modal and drops typed passwords", async () => {
     await renderAccount();
 

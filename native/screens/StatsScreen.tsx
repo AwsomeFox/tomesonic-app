@@ -331,6 +331,8 @@ export default function StatsScreen({ navigation }: any) {
               recentSessions.map((session, index) => (
                 <View
                   key={session.id || index}
+                  accessible
+                  accessibilityLabel={`${session.mediaMetadata?.title || session.displayTitle || 'Session'}, ${dateDistanceFromNow(session.updatedAt)}, ${elapsedPretty(session.timeListening)}`}
                   style={{
                     flexDirection: 'row',
                     alignItems: 'center',
@@ -374,7 +376,13 @@ export default function StatsScreen({ navigation }: any) {
 function StatTotal({ label, value }: { label: string; value: string }) {
   const colors = useThemeColors();
   return (
-    <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
+    // Grouped so TalkBack reads "1,234 Items Finished" as one item instead of
+    // the number and its label as two disconnected nodes.
+    <View
+      style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}
+      accessible
+      accessibilityLabel={`${value} ${label}`}
+    >
       <Text style={{ color: colors.onSurface, fontSize: 30, fontWeight: '800' }}>{value}</Text>
       <Text
         style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 4, textAlign: 'center' }}
@@ -397,7 +405,11 @@ function MiniStat({
   colors: any;
 }) {
   return (
-    <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 2 }}>
+    <View
+      style={{ flex: 1, alignItems: 'center', paddingHorizontal: 2 }}
+      accessible
+      accessibilityLabel={`${title}: ${value} ${unit}`}
+    >
       <Text
         style={{ color: colors.onSurface, fontSize: 12, textAlign: 'center' }}
         numberOfLines={1}
@@ -452,8 +464,20 @@ function ListeningChart({ data, colors }: { data: DayPoint[]; colors: any }) {
     segments.push({ x: a.x, y: a.y, width, angle });
   }
 
+  // TalkBack can't read a chart drawn from bare Views, so expose the series as
+  // a single spoken summary and hide the decorative plot geometry beneath it.
+  const chartSummary =
+    'Minutes listening over the last 7 days. ' +
+    data.map((d) => `${d.label} ${d.minutes}`).join(', ') +
+    '.';
+
   return (
-    <View style={{ paddingHorizontal: 24 }}>
+    <View
+      style={{ paddingHorizontal: 24 }}
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={chartSummary}
+    >
       <View style={{ flexDirection: 'row' }}>
         {/* Y axis labels */}
         <View style={{ width: Y_LABEL_W, height: PLOT_H }}>
