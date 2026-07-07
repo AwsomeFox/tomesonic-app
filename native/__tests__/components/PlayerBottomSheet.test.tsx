@@ -470,6 +470,17 @@ describe("PlayerBottomSheet — top bar actions", () => {
     await fireEvent.press(screen.getAllByLabelText("Bookmarks")[0]);
     expect(await screen.findByText("Your Bookmarks")).toBeTruthy();
   });
+
+  // Stop is the only in-player way to dismiss a session (final sync + save
+  // cleanup); a dead button would strand a finished book on-screen.
+  it("Stop button collapses the player and closes playback", async () => {
+    const closePlayback = jest.fn().mockResolvedValue(undefined);
+    seedPlayer({ isPlayerExpanded: true, closePlayback });
+    await render(<PlayerBottomSheet />);
+    await fireEvent.press(screen.getAllByLabelText("Stop and close player")[0]);
+    expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
+    expect(closePlayback).toHaveBeenCalled();
+  });
 });
 
 describe("PlayerBottomSheet — landscape layout", () => {
@@ -507,6 +518,31 @@ describe("PlayerBottomSheet — landscape layout", () => {
     const expand = screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2");
     await fireEvent.press(expand[expand.length - 1]);
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
+  });
+
+  // Parity with portrait: the landscape header must carry Stop (the only
+  // in-player dismissal) and Read-from-here, or a finished book can't be
+  // closed and format-switch is unreachable when the phone is rotated.
+  it("landscape header has Stop and Read-from-here, and Stop closes playback", async () => {
+    const closePlayback = jest.fn().mockResolvedValue(undefined);
+    seedPlayer({ isPlayerExpanded: true, closePlayback });
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+
+    // Portrait + landscape subtrees both render (portrait a11y-hidden while
+    // landscape is active), so each label now appears twice — landscape used
+    // to contribute neither.
+    expect(
+      screen.getAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
+    ).toBe(2);
+    expect(
+      screen.getAllByLabelText("Read from here", { includeHiddenElements: true }).length
+    ).toBe(2);
+
+    // The visible (landscape) Stop closes playback.
+    const stops = screen.getAllByLabelText("Stop and close player");
+    await fireEvent.press(stops[stops.length - 1]);
+    expect(closePlayback).toHaveBeenCalled();
   });
 
   it("hides the landscape full player from TalkBack while collapsed", async () => {
