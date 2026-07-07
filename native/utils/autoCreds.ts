@@ -37,7 +37,7 @@ export async function writeWidgetState(
 ) {
   try {
     if (state && state.title) {
-      await FileSystem.writeAsStringAsync(WIDGET_STATE_PATH, JSON.stringify(state));
+      await atomicWrite(WIDGET_STATE_PATH, JSON.stringify(state));
     } else {
       await FileSystem.deleteAsync(WIDGET_STATE_PATH, { idempotent: true });
     }
@@ -48,9 +48,31 @@ export async function writeWidgetState(
 
 export async function writeAutoDownloads(entries: AutoDownloadEntry[]) {
   try {
-    await FileSystem.writeAsStringAsync(DOWNLOADS_PATH, JSON.stringify(entries || []));
+    await atomicWrite(DOWNLOADS_PATH, JSON.stringify(entries || []));
   } catch (e) {
     console.warn("[AutoCreds] downloads write failed", e);
+  }
+}
+
+// Temp-then-rename write. These files are read by the NATIVE Android Auto
+// service on its own schedule (auto_downloads on every uncached browse,
+// widget_state on resumption) while JS rewrites them — auto_downloads every
+// ~15s during downloaded-book playback. A plain truncate-and-write hands a
+// concurrent native reader a torn file; the rename swap means it only ever
+// sees the previous or the new complete content.
+async function atomicWrite(path: string, payload: string) {
+  const tmpPath = `${path}.tmp`;
+  await FileSystem.writeAsStringAsync(tmpPath, payload);
+  try {
+    // moveAsync rejects when the destination exists — clear it first so the
+    // swap is a rename in every case.
+    await FileSystem.deleteAsync(path, { idempotent: true });
+    await FileSystem.moveAsync({ from: tmpPath, to: path });
+  } catch (mvErr) {
+    // Rename mechanism failed (unexpected) — last resort direct write.
+    console.warn("[AutoCreds] atomic write failed; direct write", mvErr);
+    await FileSystem.writeAsStringAsync(path, payload);
+    await FileSystem.deleteAsync(tmpPath, { idempotent: true }).catch(() => {});
   }
 }
 

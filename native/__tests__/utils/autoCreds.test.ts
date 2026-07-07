@@ -174,12 +174,13 @@ describe("writeAutoDownloads", () => {
 
   it("writes the rich entries as JSON (native offline browse reads these)", async () => {
     await writeAutoDownloads([entry]);
-    expect(writeStr).toHaveBeenCalledWith(DOWNLOADS_PATH, JSON.stringify([entry]));
+    expect(writeStr).toHaveBeenCalledWith(`${DOWNLOADS_PATH}.tmp`, JSON.stringify([entry]));
+    expect(FileSystem.moveAsync).toHaveBeenCalledWith({ from: `${DOWNLOADS_PATH}.tmp`, to: DOWNLOADS_PATH });
   });
 
   it("writes an empty array for falsy input", async () => {
     await writeAutoDownloads(undefined as any);
-    expect(writeStr).toHaveBeenCalledWith(DOWNLOADS_PATH, "[]");
+    expect(writeStr).toHaveBeenCalledWith(`${DOWNLOADS_PATH}.tmp`, "[]");
   });
 
   it("swallows failures with a warning", async () => {
@@ -193,7 +194,7 @@ describe("writeWidgetState", () => {
   it("writes the state when a title is present", async () => {
     await writeWidgetState({ title: "Dune", author: "Frank Herbert" });
     expect(writeStr).toHaveBeenCalledWith(
-      WIDGET_PATH,
+      `${WIDGET_PATH}.tmp`,
       JSON.stringify({ title: "Dune", author: "Frank Herbert" })
     );
   });

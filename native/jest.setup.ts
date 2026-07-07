@@ -94,6 +94,7 @@ jest.mock("react-native-track-player", () => {
     default: TrackPlayer,
     Event: {
       RemotePlay: "remote-play",
+      RemotePlayPause: "remote-play-pause",
       RemotePause: "remote-pause",
       RemoteStop: "remote-stop",
       RemoteNext: "remote-next",
