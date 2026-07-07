@@ -128,6 +128,11 @@ api.interceptors.response.use(
         })
           .then((token) => {
             originalRequest.headers.Authorization = `Bearer ${token}`;
+            // Replays are one-shot: without this, a replayed request that
+            // 401s again (per-resource authz, post-rotation rejection)
+            // re-entered the interceptor and kicked off a SECOND full
+            // refresh, rotating tokens an extra time under churn.
+            originalRequest._retry = true;
             return api(originalRequest);
           })
           .catch((err) => Promise.reject(err));
@@ -237,6 +242,29 @@ api.interceptors.response.use(
         // simply retries the refresh.
         const refreshStatus = refreshError?.response?.status;
         if (refreshStatus === 401 || refreshStatus === 403) {
+          // LAST RESORT before logging out: the native Android Auto service
+          // refreshes in a separate process and can rotate the pair between
+          // our candidate snapshot and this rejection. If auto_creds.json now
+          // holds a refresh token we did NOT try, the session may still be
+          // alive — leave it un-logged-out and let the caller's next 401
+          // retry the refresh with the fresh file pair instead of stranding
+          // a recoverable session at the Connect screen.
+          try {
+            const latestFile = await readAutoCreds();
+            const latestHost = storageHelper.getServerConfig()?.address?.replace(/\/$/, "");
+            if (
+              latestFile &&
+              latestFile.server === latestHost &&
+              latestFile.refreshToken &&
+              !refreshCandidates.includes(latestFile.refreshToken)
+            ) {
+              appLogger.warn(
+                "Refresh rejected but auto_creds has a newer pair — skipping logout",
+                "API"
+              );
+              return Promise.reject(refreshError);
+            }
+          } catch {}
           forceLogout();
         }
 

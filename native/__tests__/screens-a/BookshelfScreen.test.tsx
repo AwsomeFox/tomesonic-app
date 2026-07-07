@@ -198,6 +198,8 @@ beforeEach(() => {
 describe("BookshelfScreen offline", () => {
   const seedDownloads = () =>
     useDownloadStore.setState({
+      // The empty/list rendering is gated on DB hydration having finished.
+      downloadsLoaded: true,
       completedDownloads: {
         b1: {
           id: "b1",
@@ -258,8 +260,26 @@ describe("BookshelfScreen offline", () => {
   it("shows the offline empty state when nothing is downloaded", async () => {
     mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
     seedOnline(baseShelves);
+    useDownloadStore.setState({ downloadsLoaded: true } as any);
     const navigation = makeNavigation();
     await render(<BookshelfScreen navigation={navigation} />);
+    await screen.findByText("No downloaded books");
+  });
+
+  it("holds a blank placeholder until downloads hydrate — no premature empty state", async () => {
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    seedOnline(baseShelves);
+    // downloadsLoaded stays false: the DB hydration hasn't landed yet.
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Available Offline");
+    expect(screen.queryByText("No downloaded books")).toBeNull();
+
+    // Hydration lands with nothing on disk — NOW the empty state may show.
+    await act(async () => {
+      useDownloadStore.setState({ downloadsLoaded: true } as any);
+    });
     await screen.findByText("No downloaded books");
   });
 

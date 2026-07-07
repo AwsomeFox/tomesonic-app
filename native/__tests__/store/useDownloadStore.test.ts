@@ -269,6 +269,118 @@ describe("useDownloadStore", () => {
     });
   });
 
+  describe("removeAllDownloads", () => {
+    it("aborts, deletes files, clears db rows, and empties both maps (completed AND active)", async () => {
+      const done = baseItem({
+        id: "done1",
+        libraryItemId: "done1",
+        status: "completed",
+        localFolderPath: "file:///downloads/done1/",
+      });
+      const act = baseItem({
+        id: "act1",
+        libraryItemId: "act1",
+        status: "downloading",
+        localFolderPath: "file:///downloads/act1/",
+      });
+      db.saveDownloadItem(done);
+      db.saveDownloadItem(act);
+      db.saveLocalLibraryItem({ id: "done1", libraryItemId: "done1" });
+      useDownloadStore.setState({
+        completedDownloads: { done1: done },
+        activeDownloads: { act1: act },
+      });
+
+      await useDownloadStore.getState().removeAllDownloads();
+
+      // In-flight parts stopped for BOTH ids before their files are touched.
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("done1");
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("act1");
+      // Both on-device folders deleted.
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/done1/", {
+        idempotent: true,
+      });
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/act1/", {
+        idempotent: true,
+      });
+      // No db rows survive: download records nor the offline-library mapping.
+      expect(db.getAllDownloads()).toHaveLength(0);
+      expect(db.getLocalLibraryItem("done1")).toBeNull();
+      // Orphan folders swept as a final pass.
+      expect(downloader.sweepOrphanFolders).toHaveBeenCalled();
+      const s = useDownloadStore.getState();
+      expect(s.completedDownloads).toEqual({});
+      expect(s.activeDownloads).toEqual({});
+    });
+
+    it("empties both maps SYNCHRONOUSLY before the aborts, while still deleting files and db rows", async () => {
+      // An in-flight download loop checks its store entry after every part —
+      // the store must already be empty by the time abortBookParts runs, or
+      // the loop can throw into failDownload and resurrect a ghost db row.
+      const done = baseItem({
+        id: "done1",
+        libraryItemId: "done1",
+        status: "completed",
+        localFolderPath: "file:///downloads/done1/",
+      });
+      const act = baseItem({
+        id: "act1",
+        libraryItemId: "act1",
+        status: "downloading",
+        localFolderPath: "file:///downloads/act1/",
+      });
+      db.saveDownloadItem(done);
+      db.saveDownloadItem(act);
+      useDownloadStore.setState({
+        completedDownloads: { done1: done },
+        activeDownloads: { act1: act },
+      });
+
+      const seenAtAbort: Array<{ active: any; completed: any }> = [];
+      (downloader.abortBookParts as jest.Mock).mockImplementation(async () => {
+        const s = useDownloadStore.getState();
+        seenAtAbort.push({ active: s.activeDownloads, completed: s.completedDownloads });
+      });
+
+      await useDownloadStore.getState().removeAllDownloads();
+
+      // One abort per id, and the store was ALREADY empty at each call.
+      expect(seenAtAbort).toHaveLength(2);
+      for (const snap of seenAtAbort) {
+        expect(snap.active).toEqual({});
+        expect(snap.completed).toEqual({});
+      }
+      // Items captured before the clear still get their folders deleted...
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/done1/", {
+        idempotent: true,
+      });
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/act1/", {
+        idempotent: true,
+      });
+      // ...and their db rows removed.
+      expect(db.getAllDownloads()).toHaveLength(0);
+    });
+
+    it("resolves safely with nothing downloaded", async () => {
+      await useDownloadStore.getState().removeAllDownloads();
+      expect(downloader.abortBookParts).not.toHaveBeenCalled();
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      expect(useDownloadStore.getState().completedDownloads).toEqual({});
+      expect(useDownloadStore.getState().activeDownloads).toEqual({});
+    });
+  });
+
+  describe("downloadsLoaded", () => {
+    it("is false until loadDownloadsFromDb hydrates, then true even with zero downloads", () => {
+      expect(useDownloadStore.getState().downloadsLoaded).toBe(false);
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      expect(db.getAllDownloads()).toHaveLength(0); // nothing in the db
+      expect(useDownloadStore.getState().downloadsLoaded).toBe(true);
+    });
+  });
+
   describe("loadDownloadsFromDb", () => {
     it("splits completed and active rows", () => {
       db.saveDownloadItem(baseItem({ id: "done1", status: "completed" }));
@@ -346,6 +458,137 @@ describe("useDownloadStore", () => {
     it("is a no-op for unknown items or unchanged paths", () => {
       useDownloadStore.getState().setDownloadFolder("missing", "file:///x/");
       expect(useDownloadStore.getState().activeDownloads["missing"]).toBeUndefined();
+    });
+  });
+
+  describe("Android Auto downloads mirror (resume-position write-through)", () => {
+    // The mirror block runs at module load and keeps module-level _lastKeys
+    // state, so each test loads a FRESH copy of the store. jest.resetModules
+    // (not isolateModules) on purpose: the mirror resolves useUserStore and
+    // utils/storage through LAZY requires at sync time — isolateModules only
+    // isolates requires made during its callback, so those runtime requires
+    // would escape to the stale outer registry. Resetting the registry keeps
+    // every require (ours below and the store's lazy ones) on the same fresh
+    // instances. Safe here because this describe is the LAST in the file.
+    function loadFresh() {
+      jest.resetModules();
+      const writeAutoDownloads = require("../../utils/autoCreds").writeAutoDownloads as jest.Mock;
+      const freshStorageHelper = require("../../utils/storage").storageHelper as typeof storageHelper;
+      const userStore = require("../../store/useUserStore").useUserStore;
+      const store = require("../../store/useDownloadStore").useDownloadStore as typeof useDownloadStore;
+      return { writeAutoDownloads, storageHelper: freshStorageHelper, userStore, store };
+    }
+
+    // Completed AUDIO download (the mirror skips ebook-only items).
+    function audioItem(id: string): DownloadItem {
+      return {
+        ...baseItem({ id, libraryItemId: id, status: "completed", progress: 1 }),
+        meta: {
+          duration: 3600,
+          chapters: [],
+          tracks: [{ index: 0, filename: "a.m4b", duration: 3600, startOffset: 0 }],
+        },
+      };
+    }
+
+    // The userStore subscription is ALSO rate-limited to the 15s bucket
+    // granularity (leading-only) — control the clock so each setState below
+    // lands outside the window and the assertions exercise the bucket key,
+    // not the rate limit.
+    function mockClock(startMs = 1_000_000) {
+      let nowMs = startMs;
+      const spy = jest.spyOn(Date, "now").mockImplementation(() => nowMs);
+      return {
+        advance: (ms: number) => {
+          nowMs += ms;
+        },
+        restore: () => spy.mockRestore(),
+      };
+    }
+
+    it("re-writes the car file when a resume position crosses a 15s bucket", () => {
+      const m = loadFresh();
+      const clock = mockClock();
+      try {
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 10 } } });
+
+        m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+        expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
+          expect.objectContaining({ id: "book1", currentTime: 10 }),
+        ]);
+
+        // 10 → 40 crosses the 15s bucket boundary (bucket 0 → 2): re-emit with
+        // the advanced position (this is the fix — the old ids-only key meant
+        // listening progress never reached the car's cold-start file).
+        clock.advance(20_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 40 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(2);
+        expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
+          expect.objectContaining({ id: "book1", currentTime: 40 }),
+        ]);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("does NOT re-write for movements inside the same 15s bucket", () => {
+      const m = loadFresh();
+      const clock = mockClock();
+      try {
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 3 } } });
+        m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+
+        // 3 → 14 stays in bucket 0 — file writes must stay rare while playing.
+        // (Clock advanced past the rate-limit window so it's the BUCKET key
+        // suppressing the write here.)
+        clock.advance(20_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 14 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("rate-limits per-tick progress updates to the 15s window", () => {
+      const m = loadFresh();
+      const clock = mockClock();
+      try {
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 10 } } });
+        m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+
+        // A bucket-crossing move INSIDE the rate-limit window is deferred —
+        // per-second playback ticks must not rebuild the key every tick.
+        clock.advance(5_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 40 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+
+        // The next tick past the window picks it up.
+        clock.advance(15_000);
+        m.userStore.setState({ mediaProgress: { book1: { currentTime: 41 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(2);
+        expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
+          expect.objectContaining({ id: "book1", currentTime: 41 }),
+        ]);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("falls back to the disk progress cache when the in-memory map is cold", () => {
+      const m = loadFresh();
+      // Nothing hydrated the in-memory map (headless boot), but the durable
+      // cache knows the position — the mirrored file must not regress to 0.
+      m.storageHelper.setMediaProgressCache({ book1: { currentTime: 300 } });
+
+      m.store.setState({ completedDownloads: { book1: audioItem("book1") } });
+
+      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: "book1", currentTime: 300 }),
+      ]);
     });
   });
 });

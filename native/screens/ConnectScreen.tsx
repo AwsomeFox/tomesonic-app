@@ -58,7 +58,9 @@ export default function ConnectScreen() {
   }, []);
 
   // Build the stored config from an ABS user payload and persist the session.
-  const finishLogin = (user: any) => {
+  // Awaited by callers so the loading spinner covers login's account-switch
+  // cleanup (download/cache wipes) instead of leaving the form interactive.
+  const finishLogin = async (user: any) => {
     const token = user.accessToken || user.token;
     // A 200 login whose user carries NO token (misconfigured proxy stripping
     // fields) must not "log in" — the app entered the main stack with
@@ -71,7 +73,7 @@ export default function ConnectScreen() {
     // Don't keep the password in component state any longer than needed — the
     // session tokens are what get persisted, never the password itself.
     setPassword("");
-    login(
+    await login(
       {
         address: address.replace(/\/+$/, ""),
         userId: user.id,
@@ -141,7 +143,7 @@ export default function ConnectScreen() {
         setError("Authentication failed. Please check your credentials.");
         return;
       }
-      finishLogin(user);
+      await finishLogin(user);
     } catch (err: any) {
       if (err?.response?.status === 401) {
         setError("Invalid username or password.");
@@ -160,7 +162,7 @@ export default function ConnectScreen() {
     setAuthFlow("oauth");
     try {
       const user = await loginWithOpenId(address);
-      if (user) finishLogin(user);
+      if (user) await finishLogin(user);
     } catch (err: any) {
       setError(err?.message || "OpenID login failed.");
     } finally {

@@ -8,14 +8,31 @@ import {
   queueProgressPatch,
   queueEbookProgressPatch,
   queueFinishedPatch,
+  queueBookmark,
+  queueBookmarkDeletion,
+  pendingBookmarkDeletionsFor,
+  recordLocalListening,
+  hasAnyPendingSyncs,
 } from "../../utils/progressSync";
 
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
 
+// recordLocalListening lazy-requires the download store for display metadata —
+// mock it so the test doesn't pull in expo-file-system/db, and so we can
+// assert the display fields land in the POSTed local session.
+jest.mock("../../store/useDownloadStore", () => ({
+  useDownloadStore: {
+    getState: () => ({
+      completedDownloads: { li1: { title: "Book One", author: "Author A" } },
+    }),
+  },
+}));
+
 const mockedPost = jest.mocked(api.post);
 const mockedPatch = jest.mocked(api.patch);
+const mockedDelete = jest.mocked(api.delete);
 
 const err404 = () => ({ response: { status: 404 } });
 const errNetwork = () => new Error("Network Error");
@@ -26,11 +43,19 @@ const readJson = (key: string) => {
 };
 const pendingKeys = () => storage.getAllKeys().filter((k) => k.startsWith("pendingSync_"));
 const patchKeys = () => storage.getAllKeys().filter((k) => k.startsWith("pendingPatch_"));
+const bookmarkDeleteKeys = () =>
+  storage.getAllKeys().filter((k) => k.startsWith("pendingBookmarkDelete_"));
+// "pendingBookmarkDelete_*" does NOT match the "pendingBookmark_" prefix
+// (the char after "pendingBookmark" is "D", not "_"), so this is create-only.
+const bookmarkKeys = () => storage.getAllKeys().filter((k) => k.startsWith("pendingBookmark_"));
+const localSessionKeys = () =>
+  storage.getAllKeys().filter((k) => k.startsWith("pendingLocalSession_"));
 
 beforeEach(() => {
   storage.getAllKeys().forEach((k) => storage.remove(k));
   mockedPost.mockResolvedValue({ data: {} } as any);
   mockedPatch.mockResolvedValue({ data: {} } as any);
+  mockedDelete.mockResolvedValue({ data: {} } as any);
 });
 
 describe("syncProgress", () => {
@@ -366,6 +391,47 @@ describe("flushPendingSyncs", () => {
     expect(readJson("pendingSync_s1")).toMatchObject({ timeListened: 5, currentTime: 20 });
   });
 
+  it("TOCTOU: a FRESHER position (at-stamp) with NO new seconds merged during the POST is not cleared", async () => {
+    // closeSession after a seek passes timeListened 0 but a newer `at` — the
+    // guard used to key only on timeListened growth, so the final position was
+    // blind-cleared with the delivered entry.
+    storage.set(
+      "pendingSync_s1",
+      JSON.stringify({ sessionId: "s1", currentTime: 10, timeListened: 7, duration: 100, at: 1000 })
+    );
+    mockedPost.mockImplementationOnce(async () => {
+      // While the POST is in flight, a failed close merges a FRESHER position
+      // with the SAME accumulated timeListened (no new seconds).
+      storage.set(
+        "pendingSync_s1",
+        JSON.stringify({ sessionId: "s1", currentTime: 55, timeListened: 7, duration: 100, at: 2000 })
+      );
+      return { data: {} } as any;
+    });
+    await flushPendingSyncs();
+    expect(mockedPost).toHaveBeenCalledWith("/api/session/s1/sync", {
+      currentTime: 10,
+      timeListened: 7,
+      duration: 100,
+    });
+    // The fresher position stays queued; delivered seconds are subtracted and
+    // clamped to >= 0.
+    expect(readJson("pendingSync_s1")).toMatchObject({
+      currentTime: 55,
+      timeListened: 0,
+      at: 2000,
+    });
+
+    // The next flush delivers the final position and clears the entry.
+    await flushPendingSyncs();
+    expect(mockedPost).toHaveBeenLastCalledWith("/api/session/s1/sync", {
+      currentTime: 55,
+      timeListened: 0,
+      duration: 100,
+    });
+    expect(pendingKeys()).toHaveLength(0);
+  });
+
   it("keeps queued syncs on non-404 failure", async () => {
     storage.set(
       "pendingSync_s1",
@@ -524,5 +590,486 @@ describe("clearAllPending", () => {
     expect(pendingKeys()).toHaveLength(0);
     expect(patchKeys()).toHaveLength(0);
     expect(storage.getString("unrelatedKey")).toBe("keep-me");
+  });
+
+  it("wipes queued bookmark deletions on logout", () => {
+    queueBookmarkDeletion("li1", 42);
+    queueBookmarkDeletion("li2", 7);
+    expect(bookmarkDeleteKeys()).toHaveLength(2);
+
+    clearAllPending();
+
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+    expect(pendingBookmarkDeletionsFor("li1")).toEqual([]);
+  });
+});
+
+describe("flushPendingSyncs — patch TOCTOU guard", () => {
+  it("keeps an entry that was merged into WHILE its PATCH was in flight (removes only byte-identical entries)", async () => {
+    // Regression for the one-shot-field-loss race: flush snapshots a queued
+    // PATCH, sends it, and used to blind-remove the key on success — deleting
+    // any fields merged into the SAME key during the await (e.g. the finish
+    // toggle, which never re-queues).
+    queueProgressPatch("li1", 10, 100);
+    let releasePatch!: () => void;
+    const gate = new Promise<void>((resolve) => (releasePatch = resolve));
+    mockedPatch.mockImplementationOnce(() => gate as any);
+
+    const flushP = flushPendingSyncs();
+    // Drain microtasks until the flush has read its snapshot and started the PATCH.
+    for (let i = 0; i < 50 && mockedPatch.mock.calls.length === 0; i++) {
+      await Promise.resolve();
+    }
+    expect(mockedPatch).toHaveBeenCalledTimes(1);
+    expect(mockedPatch).toHaveBeenCalledWith("/api/me/progress/li1", {
+      currentTime: 10,
+      duration: 100,
+      progress: 0.1,
+    });
+
+    // New progress merges into the same key while the PATCH is in flight.
+    queueProgressPatch("li1", 25, 100);
+    releasePatch();
+    await flushP;
+
+    // The merged entry survives the successful PATCH (kept for the next pass).
+    expect(readJson("pendingPatch_li1")).toEqual({
+      libraryItemId: "li1",
+      body: { currentTime: 25, duration: 100, progress: 0.25 },
+    });
+
+    // The next flush delivers the merged entry and clears it.
+    await flushPendingSyncs();
+    expect(mockedPatch).toHaveBeenLastCalledWith("/api/me/progress/li1", {
+      currentTime: 25,
+      duration: 100,
+      progress: 0.25,
+    });
+    expect(patchKeys()).toHaveLength(0);
+  });
+
+  it("removes an untouched entry after a successful PATCH (guard does not over-keep)", async () => {
+    queueProgressPatch("li1", 10, 100);
+    await flushPendingSyncs();
+    expect(mockedPatch).toHaveBeenCalledTimes(1);
+    expect(patchKeys()).toHaveLength(0);
+  });
+});
+
+describe("bookmark deletion queue", () => {
+  it("queueBookmarkDeletion floors the time; pendingBookmarkDeletionsFor returns only that item's times", () => {
+    queueBookmarkDeletion("li1", 12.9);
+    queueBookmarkDeletion("li1", 30);
+    queueBookmarkDeletion("li2", 5);
+    expect(pendingBookmarkDeletionsFor("li1").sort((a, b) => a - b)).toEqual([12, 30]);
+    expect(pendingBookmarkDeletionsFor("li2")).toEqual([5]);
+    expect(pendingBookmarkDeletionsFor("other")).toEqual([]);
+  });
+
+  it("replays a fractional-time deletion with the RAW time (server keys bookmarks exactly)", async () => {
+    queueBookmarkDeletion("li1", 90.7);
+    // UI filter compares floored values...
+    expect(pendingBookmarkDeletionsFor("li1")).toEqual([90]);
+    // ...but the replayed DELETE must hit the server's exact time.
+    await flushPendingSyncs();
+    expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/90.7");
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+  });
+
+  it("ignores invalid deletions (empty id, negative or non-finite time)", () => {
+    queueBookmarkDeletion("", 5);
+    queueBookmarkDeletion("li1", -1);
+    queueBookmarkDeletion("li1", NaN);
+    queueBookmarkDeletion("li1", Infinity);
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+  });
+
+  it("flushPendingSyncs DELETEs each queued deletion and clears the queue on success", async () => {
+    queueBookmarkDeletion("li1", 12.9);
+    queueBookmarkDeletion("li1", 30);
+    await flushPendingSyncs();
+    expect(mockedDelete).toHaveBeenCalledTimes(2);
+    // Raw time in the replay — the server keys bookmarks by exact time.
+    expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/12.9");
+    expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/30");
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+    expect(pendingBookmarkDeletionsFor("li1")).toEqual([]);
+  });
+
+  it("drops the queue entry on 404 (bookmark already gone server-side)", async () => {
+    queueBookmarkDeletion("li1", 42);
+    mockedDelete.mockRejectedValue(err404());
+    await flushPendingSyncs();
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+  });
+
+  it("keeps the queue entry on network failure and delivers it on the next flush", async () => {
+    queueBookmarkDeletion("li1", 42);
+    mockedDelete.mockRejectedValue(errNetwork());
+    await flushPendingSyncs();
+    expect(pendingBookmarkDeletionsFor("li1")).toEqual([42]);
+
+    // Connectivity returns — the queued deletion lands and clears.
+    mockedDelete.mockResolvedValue({ data: {} } as any);
+    await flushPendingSyncs();
+    expect(mockedDelete).toHaveBeenLastCalledWith("/api/me/item/li1/bookmark/42");
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+  });
+
+  it("drops corrupt deletion entries without calling the API", async () => {
+    storage.set("pendingBookmarkDelete_bad", "{not json");
+    await flushPendingSyncs();
+    expect(mockedDelete).not.toHaveBeenCalled();
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+  });
+
+  it("flushes deletions BEFORE creations so a re-added bookmark at the same time survives", async () => {
+    // Offline: delete the synced bookmark at 42s, then bookmark the same spot
+    // again. Creations-first would POST the new bookmark and immediately
+    // DELETE it server-side — the user's last action loses.
+    queueBookmarkDeletion("li1", 42);
+    queueBookmark("li1", 42, "re-added");
+
+    await flushPendingSyncs();
+
+    expect(mockedDelete).toHaveBeenCalledWith("/api/me/item/li1/bookmark/42");
+    expect(mockedPost).toHaveBeenCalledWith("/api/me/item/li1/bookmark", {
+      title: "re-added",
+      time: 42,
+    });
+    // The DELETE must land strictly before the POST create.
+    expect(mockedDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      mockedPost.mock.invocationCallOrder[0]
+    );
+    // Both queues drained.
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+    expect(bookmarkKeys()).toHaveLength(0);
+  });
+});
+
+describe("monotonic at stamps", () => {
+  it("queued at stamps strictly increase even when Date.now() goes BACKWARD", async () => {
+    // Clock adjustment mid-playback: Date.now() returns a decreasing
+    // sequence. The queue's freshest-wins merge keys on `at`, so stamps must
+    // still strictly increase or a stale position could beat a newer close.
+    mockedPost.mockRejectedValue(errNetwork());
+    let t = 10_000_000;
+    const nowSpy = jest.spyOn(Date, "now").mockImplementation(() => (t -= 1000));
+    try {
+      await syncProgress({ sessionId: "sa", currentTime: 1, timeListened: 1, duration: 10 });
+      await syncProgress({ sessionId: "sb", currentTime: 2, timeListened: 1, duration: 10 });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    const atA = readJson("pendingSync_sa").at;
+    const atB = readJson("pendingSync_sb").at;
+    expect(typeof atA).toBe("number");
+    expect(atB).toBeGreaterThan(atA);
+  });
+});
+
+describe("hasAnyPendingSyncs", () => {
+  it("is false when nothing is queued", () => {
+    expect(hasAnyPendingSyncs()).toBe(false);
+  });
+
+  it("is true when a pending session sync carries listened seconds", () => {
+    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1", timeListened: 4 }));
+    expect(hasAnyPendingSyncs()).toBe(true);
+  });
+
+  it("ignores position-only session remainders (timeListened 0 after a flush)", () => {
+    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1", currentTime: 500, timeListened: 0 }));
+    expect(hasAnyPendingSyncs()).toBe(false);
+  });
+
+  it("ignores pending progress PATCHes (position/finished only — no listening seconds)", () => {
+    queueProgressPatch("li1", 1, 10);
+    expect(hasAnyPendingSyncs()).toBe(false);
+  });
+
+  it("ignores bookmark queues (bookmarks are not listening progress)", () => {
+    storage.set("pendingBookmark_li1_5", JSON.stringify({ libraryItemId: "li1", time: 5 }));
+    queueBookmarkDeletion("li1", 9);
+    expect(hasAnyPendingSyncs()).toBe(false);
+  });
+
+  it("returns false instead of throwing when storage fails", () => {
+    jest.spyOn(storage, "getAllKeys").mockImplementationOnce(() => {
+      throw new Error("mmkv broken");
+    });
+    expect(hasAnyPendingSyncs()).toBe(false);
+  });
+});
+
+describe("offline local-session listening bank", () => {
+  // Fixed local-time instant: 2026-01-15 (a Thursday) at noon, so the
+  // per-day record key is deterministic regardless of the host timezone.
+  const T = new Date(2026, 0, 15, 12, 0, 0).getTime();
+  const DAY_KEY = "pendingLocalSession_local_li1_2026-01-15";
+
+  // clearMocks would strip a spy's implementation but NOT restore the
+  // original, leaving Date.now() returning undefined for later tests —
+  // always restore explicitly.
+  const withFixedNow = async (fn: () => Promise<void> | void) => {
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(T);
+    try {
+      await fn();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  };
+
+  it("recordLocalListening accumulates seconds into ONE per-item+day record; currentTime tracks the latest call", async () => {
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+      recordLocalListening("li1", undefined, 130, 3600, 30);
+    });
+    expect(localSessionKeys()).toEqual([DAY_KEY]);
+    expect(readJson(DAY_KEY)).toMatchObject({
+      id: "local_li1_2026-01-15",
+      libraryItemId: "li1",
+      date: "2026-01-15",
+      dayOfWeek: "Thursday",
+      timeListening: 60, // 30 + 30 accumulates
+      syncedTimeListening: 0,
+      currentTime: 130, // latest call wins
+      duration: 3600,
+      displayTitle: "Book One", // from the (mocked) download store
+      displayAuthor: "Author A",
+    });
+  });
+
+  it("records nothing for zero or negative timeListened", () => {
+    recordLocalListening("li1", undefined, 100, 3600, 0);
+    recordLocalListening("li1", undefined, 100, 3600, -5);
+    expect(localSessionKeys()).toHaveLength(0);
+  });
+
+  it("syncProgress on a local_ session banks the seconds AND queues the progress patch when offline", async () => {
+    mockedPost.mockRejectedValue(errNetwork());
+    mockedPatch.mockRejectedValue(errNetwork());
+    await withFixedNow(async () => {
+      await syncProgress({
+        sessionId: "local_li1",
+        currentTime: 100,
+        timeListened: 30,
+        duration: 3600,
+        libraryItemId: "li1",
+      });
+      // Join the fire-and-forget flush syncProgress kicked off (everything
+      // rejects, so both records survive it).
+      await flushPendingSyncs();
+    });
+    expect(readJson(DAY_KEY)).toMatchObject({ libraryItemId: "li1", timeListening: 30 });
+    expect(readJson("pendingPatch_li1")).toMatchObject({
+      libraryItemId: "li1",
+      body: { currentTime: 100, duration: 3600 },
+    });
+  });
+
+  it("flush POSTs the cumulative day total to /api/session/local and KEEPS today's record marked delivered", async () => {
+    await withFixedNow(async () => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+      recordLocalListening("li1", undefined, 130, 3600, 30);
+      await flushPendingSyncs();
+    });
+    expect(mockedPost).toHaveBeenCalledTimes(1);
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({
+        id: "local_li1_2026-01-15",
+        libraryItemId: "li1",
+        episodeId: null,
+        playMethod: 3, // LOCAL
+        date: "2026-01-15",
+        dayOfWeek: "Thursday",
+        timeListening: 60,
+        currentTime: 130,
+        displayTitle: "Book One",
+        displayAuthor: "Author A",
+      })
+    );
+    // Today's record REMAINS (further listening accumulates into the same
+    // server session), with exactly what was sent marked as delivered.
+    expect(readJson(DAY_KEY)).toMatchObject({
+      timeListening: 60,
+      syncedTimeListening: 60,
+    });
+    // A book session (no episodeId) is labeled as such.
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({ mediaType: "book" })
+    );
+  });
+
+  it("labels episode sessions as podcasts", async () => {
+    await withFixedNow(async () => {
+      recordLocalListening("li1", "ep1", 100, 3600, 30);
+      await flushPendingSyncs();
+    });
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({
+        id: "local_li1-ep1_2026-01-15",
+        episodeId: "ep1",
+        mediaType: "podcast",
+      })
+    );
+  });
+
+  it("fully-synced local record is NOT pending; more listening makes it pending again and re-POSTs the GROWN total", async () => {
+    await withFixedNow(async () => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+      await flushPendingSyncs();
+      expect(mockedPost).toHaveBeenLastCalledWith(
+        "/api/session/local",
+        expect.objectContaining({ timeListening: 30 })
+      );
+      // Delivered in full — the surviving record must not count as pending.
+      expect(hasAnyPendingSyncs()).toBe(false);
+
+      recordLocalListening("li1", undefined, 145, 3600, 15);
+      expect(hasAnyPendingSyncs()).toBe(true);
+
+      await flushPendingSyncs();
+      // ABS upserts by session id REPLACING timeListening — the grown
+      // cumulative total is re-sent, not the delta.
+      expect(mockedPost).toHaveBeenLastCalledWith(
+        "/api/session/local",
+        expect.objectContaining({ id: "local_li1_2026-01-15", timeListening: 45 })
+      );
+      expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 45, syncedTimeListening: 45 });
+      expect(hasAnyPendingSyncs()).toBe(false);
+    });
+  });
+
+  it("a 4xx rejection drops the record (retry can never succeed)", async () => {
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+    });
+    mockedPost.mockRejectedValue(err404());
+    await flushPendingSyncs();
+    expect(localSessionKeys()).toHaveLength(0);
+  });
+
+  it("transient statuses keep the record queued (401/403 token rotation, 429/408 proxies, 5xx)", async () => {
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+    });
+    for (const status of [401, 403, 408, 429, 500, 503]) {
+      mockedPost.mockRejectedValue({ response: { status } });
+      await flushPendingSyncs();
+      expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 30, syncedTimeListening: 0 });
+    }
+    expect(hasAnyPendingSyncs()).toBe(true);
+  });
+
+  it("a network error (no response) keeps the record queued for the next flush", async () => {
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+    });
+    mockedPost.mockRejectedValue(errNetwork());
+    await flushPendingSyncs();
+    expect(readJson(DAY_KEY)).toMatchObject({ timeListening: 30, syncedTimeListening: 0 });
+    expect(hasAnyPendingSyncs()).toBe(true);
+
+    // Connectivity returns — it lands.
+    mockedPost.mockResolvedValue({ data: {} } as any);
+    await flushPendingSyncs();
+    expect(mockedPost).toHaveBeenLastCalledWith(
+      "/api/session/local",
+      expect.objectContaining({ id: "local_li1_2026-01-15", timeListening: 30 })
+    );
+  });
+
+  it("removes a fully-synced record from a PREVIOUS day without re-POSTing it", async () => {
+    // Real "today" is not 2026-01-14, so this record is an older day's.
+    storage.set(
+      "pendingLocalSession_local_li1_2026-01-14",
+      JSON.stringify({
+        id: "local_li1_2026-01-14",
+        libraryItemId: "li1",
+        date: "2026-01-14",
+        dayOfWeek: "Wednesday",
+        timeListening: 30,
+        syncedTimeListening: 30,
+      })
+    );
+    await flushPendingSyncs();
+    expect(mockedPost).not.toHaveBeenCalled();
+    expect(localSessionKeys()).toHaveLength(0);
+  });
+
+  it("an OLD-day record with unsynced seconds still POSTs (then is removed once fully delivered)", async () => {
+    storage.set(
+      "pendingLocalSession_local_li1_2026-01-14",
+      JSON.stringify({
+        id: "local_li1_2026-01-14",
+        libraryItemId: "li1",
+        date: "2026-01-14",
+        dayOfWeek: "Wednesday",
+        timeListening: 30,
+        syncedTimeListening: 0,
+      })
+    );
+    await flushPendingSyncs();
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({ id: "local_li1_2026-01-14", timeListening: 30 })
+    );
+    // Marked delivered on this pass; the NEXT flush removes the stale-day record.
+    expect(readJson("pendingLocalSession_local_li1_2026-01-14")).toMatchObject({
+      syncedTimeListening: 30,
+    });
+    await flushPendingSyncs();
+    expect(localSessionKeys()).toHaveLength(0);
+  });
+
+  it("clearAllPending wipes pendingLocalSession_ records", async () => {
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+    });
+    expect(localSessionKeys()).toHaveLength(1);
+    clearAllPending();
+    expect(localSessionKeys()).toHaveLength(0);
+  });
+});
+
+describe("monotonic stamp cross-restart seeding", () => {
+  // monotonicNow is only monotonic within one JS lifetime; on first use it
+  // seeds from the freshest `at` persisted in the queue so a backward clock
+  // adjustment across a RESTART can't let an old on-disk entry outrank every
+  // new stamp. Needs a fresh module copy (the seed is once-per-boot).
+  it("a new stamp beats a persisted entry stamped before a backward clock jump", async () => {
+    jest.resetModules();
+    const freshStorage = require("../../utils/storage").storage;
+    const freshApi = require("../../utils/api").api;
+    const ps = require("../../utils/progressSync");
+    freshStorage.getAllKeys().forEach((k: string) => freshStorage.remove(k));
+    // Persisted by a previous boot, stamped BEFORE the wall clock was set back.
+    freshStorage.set(
+      "pendingSync_sess1",
+      JSON.stringify({
+        sessionId: "sess1",
+        currentTime: 100,
+        timeListened: 5,
+        duration: 3600,
+        at: 5_000_000,
+      })
+    );
+    (freshApi.post as jest.Mock).mockRejectedValue(new Error("Network Error"));
+    const nowSpy = jest.spyOn(Date, "now").mockReturnValue(1_000_000); // clock now BEHIND the stamp
+    try {
+      await ps.syncProgress({ sessionId: "sess1", currentTime: 200, timeListened: 1, duration: 3600 });
+      const rec = JSON.parse(freshStorage.getString("pendingSync_sess1")!);
+      // The NEW position won the freshest-wins merge despite the backward clock...
+      expect(rec.currentTime).toBe(200);
+      expect(rec.at).toBeGreaterThan(5_000_000);
+      // ...and listened seconds still accumulated.
+      expect(rec.timeListened).toBe(6);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

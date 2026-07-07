@@ -24,6 +24,32 @@ interface SyncPayload {
   at?: number;
 }
 
+// Monotonic freshness stamp: Date.now() can jump BACKWARD (NTP sync, manual
+// clock change), which inverted the queue's freshest-wins comparison and kept
+// a stale position over a newer close. Never yields a smaller stamp than the
+// previous one within this JS lifetime — and on first use, seeds from the
+// freshest stamp already persisted in the queue, so a backward clock
+// adjustment across a RESTART can't let an old on-disk entry outrank every
+// new stamp either.
+let _lastAtStamp = 0;
+let _atStampSeeded = false;
+function monotonicNow(): number {
+  if (!_atStampSeeded) {
+    _atStampSeeded = true;
+    try {
+      for (const k of storage.getAllKeys()) {
+        if (!k.startsWith(PENDING_PREFIX)) continue;
+        try {
+          const at = Number(JSON.parse(storage.getString(k) || "null")?.at) || 0;
+          if (at > _lastAtStamp) _lastAtStamp = at;
+        } catch {}
+      }
+    } catch {}
+  }
+  _lastAtStamp = Math.max(Date.now(), _lastAtStamp + 1);
+  return _lastAtStamp;
+}
+
 const PENDING_PREFIX = "pendingSync_";
 
 function pendingKey(sessionId: string) {
@@ -224,6 +250,76 @@ export function pendingBookmarksFor(libraryItemId: string): { time: number; titl
   }
 }
 
+// Offline DELETION of a server-synced bookmark. Creations already queue; a
+// delete that failed offline was swallowed, and the bookmark silently
+// reappeared from the server on the next load.
+const BOOKMARK_DELETE_PREFIX = "pendingBookmarkDelete_";
+
+export function queueBookmarkDeletion(libraryItemId: string, time: number) {
+  try {
+    if (!libraryItemId || !Number.isFinite(time) || time < 0) return;
+    // Key floored (dedupe per second, matching creation keying) but store the
+    // RAW time: the server keys bookmarks by exact time, so replaying a
+    // fractional-time bookmark's deletion with a floored value would miss it
+    // and the bookmark would reappear.
+    storage.set(
+      `${BOOKMARK_DELETE_PREFIX}${libraryItemId}_${Math.floor(time)}`,
+      JSON.stringify({ libraryItemId, time: Number(time) })
+    );
+  } catch (e) {
+    appLogger.warn(`Failed to queue bookmark deletion: ${e}`, "ProgressSync");
+  }
+}
+
+/** Times (floored seconds) with a queued offline deletion for this item —
+ *  the bookmark list filters these out so a deleted bookmark can't reappear
+ *  from the server copy before the deletion flushes. Floored so callers can
+ *  compare against Math.floor(serverBookmark.time) regardless of how the
+ *  deletion was stored. */
+export function pendingBookmarkDeletionsFor(libraryItemId: string): number[] {
+  try {
+    return storage
+      .getAllKeys()
+      .filter((k) => k.startsWith(`${BOOKMARK_DELETE_PREFIX}${libraryItemId}_`))
+      .map((k) => {
+        try {
+          return Number(JSON.parse(storage.getString(k) || "")?.time);
+        } catch {
+          return NaN;
+        }
+      })
+      .filter((t) => Number.isFinite(t))
+      .map((t) => Math.floor(t));
+  } catch {
+    return [];
+  }
+}
+
+async function flushPendingBookmarkDeletions(): Promise<void> {
+  const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_DELETE_PREFIX));
+  for (const key of keys) {
+    let b: any = null;
+    try {
+      const raw = storage.getString(key);
+      b = raw ? JSON.parse(raw) : null;
+    } catch {}
+    if (!b?.libraryItemId || !Number.isFinite(b?.time)) {
+      try {
+        storage.remove(key);
+      } catch {}
+      continue;
+    }
+    try {
+      await api.delete(`/api/me/item/${b.libraryItemId}/bookmark/${b.time}`);
+      storage.remove(key);
+    } catch (e: any) {
+      // Already gone server-side (or item deleted) — done either way.
+      if (e?.response?.status === 404) storage.remove(key);
+      // Otherwise still offline — keep it queued.
+    }
+  }
+}
+
 async function flushPendingBookmarks(): Promise<void> {
   const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_PREFIX));
   for (const key of keys) {
@@ -253,6 +349,150 @@ async function flushPendingBookmarks(): Promise<void> {
   }
 }
 
+// ----- Offline listening time (local sessions) -------------------------------
+// Sessions started while offline (id "local_*") have no server session, so
+// their queued progress PATCH carries only the POSITION — the server computes
+// Minutes Listening / Days Listened / streaks from playback sessions, meaning
+// every minute listened in an offline-started session used to vanish from
+// stats forever. Bank those seconds durably (one record per item+day) and
+// flush them to POST /api/session/local, which ABS upserts by session id,
+// REPLACING timeListening with the value sent — so re-sending a grown
+// cumulative day total is safe and idempotent.
+const LOCAL_SESSION_PREFIX = "pendingLocalSession_";
+
+function dayParts(ts: number) {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    dayOfWeek: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()],
+  };
+}
+
+export function recordLocalListening(
+  libraryItemId: string,
+  episodeId: string | undefined,
+  currentTime: number,
+  duration: number,
+  timeListened: number
+) {
+  try {
+    if (!libraryItemId) return;
+    const seconds = Number(timeListened) || 0;
+    if (seconds <= 0) return;
+    const now = Date.now();
+    const { date, dayOfWeek } = dayParts(now);
+    const id = `local_${libraryItemId}${episodeId ? `-${episodeId}` : ""}_${date}`;
+    const key = `${LOCAL_SESSION_PREFIX}${id}`;
+    let rec: any = null;
+    try {
+      rec = JSON.parse(storage.getString(key) || "null");
+    } catch {}
+    if (!rec || typeof rec !== "object" || rec.id !== id) {
+      // Local sessions only exist for downloaded books — grab display fields
+      // so the server's "recent sessions" list isn't blank for them.
+      let displayTitle: string | undefined;
+      let displayAuthor: string | undefined;
+      try {
+        const { useDownloadStore } = require("../store/useDownloadStore");
+        const dl = useDownloadStore.getState().completedDownloads[libraryItemId];
+        displayTitle = dl?.title;
+        displayAuthor = dl?.author;
+      } catch {}
+      rec = {
+        id,
+        libraryItemId,
+        episodeId,
+        date,
+        dayOfWeek,
+        displayTitle,
+        displayAuthor,
+        startedAt: now,
+        timeListening: 0,
+        syncedTimeListening: 0,
+      };
+    }
+    rec.timeListening = (Number(rec.timeListening) || 0) + seconds;
+    if (Number.isFinite(Number(currentTime))) rec.currentTime = Number(currentTime);
+    if (Number(duration) > 0) rec.duration = Number(duration);
+    rec.updatedAt = now;
+    storage.set(key, JSON.stringify(rec));
+  } catch {}
+}
+
+async function flushPendingLocalSessions(): Promise<void> {
+  const keys = storage.getAllKeys().filter((k) => k.startsWith(LOCAL_SESSION_PREFIX));
+  const { date: today } = dayParts(Date.now());
+  for (const key of keys) {
+    let rec: any = null;
+    try {
+      rec = JSON.parse(storage.getString(key) || "null");
+    } catch {}
+    if (!rec || typeof rec !== "object" || !rec.id || !rec.libraryItemId || !(Number(rec.timeListening) > 0)) {
+      try {
+        storage.remove(key);
+      } catch {}
+      continue;
+    }
+    const total = Number(rec.timeListening) || 0;
+    if (total <= (Number(rec.syncedTimeListening) || 0)) {
+      // Fully delivered. Keep TODAY's record so later offline listening keeps
+      // accumulating into the same server session; older days are done.
+      if (rec.date !== today) storage.remove(key);
+      continue;
+    }
+    try {
+      await api.post("/api/session/local", {
+        id: rec.id,
+        libraryItemId: rec.libraryItemId,
+        episodeId: rec.episodeId || null,
+        // An episode session is by definition a podcast's; everything else in
+        // the offline-download path is a book.
+        mediaType: rec.episodeId ? "podcast" : "book",
+        displayTitle: rec.displayTitle || "",
+        displayAuthor: rec.displayAuthor || "",
+        duration: Number(rec.duration) || 0,
+        playMethod: 3, // LOCAL
+        mediaPlayer: "TomeSonic",
+        deviceInfo: { clientName: "TomeSonic" },
+        date: rec.date,
+        dayOfWeek: rec.dayOfWeek,
+        timeListening: total,
+        startTime: 0,
+        currentTime: Number(rec.currentTime) || 0,
+        startedAt: Number(rec.startedAt) || Date.now(),
+        updatedAt: Number(rec.updatedAt) || Date.now(),
+      });
+      // TOCTOU: seconds recorded while the POST was in flight must stay
+      // pending — mark only what we actually sent as delivered.
+      let now2: any = null;
+      try {
+        now2 = JSON.parse(storage.getString(key) || "null");
+      } catch {}
+      if (now2 && typeof now2 === "object" && now2.id === rec.id) {
+        now2.syncedTimeListening = total;
+        storage.set(key, JSON.stringify(now2));
+      }
+    } catch (e: any) {
+      const status = e?.response?.status;
+      // The server REJECTED it (validation, endpoint missing on an old ABS) —
+      // a retry can never succeed; drop it rather than poison every flush.
+      // ONLY genuinely permanent codes drop (400/404/422 — the other flushers
+      // drop on 404 alone): 401/403 can be a token mid-rotation, and
+      // 408/425/429 are transient proxy/rate-limit responses — re-sending is
+      // idempotent, so keeping those queued costs nothing while a drop loses
+      // the minutes forever.
+      if (status === 400 || status === 404 || status === 422) {
+        appLogger.warn(`local session ${rec.id} rejected (${status}) — dropping`, "ProgressSync");
+        try {
+          storage.remove(key);
+        } catch {}
+      }
+      // Otherwise offline / transient server error — keep it queued.
+    }
+  }
+}
+
 // EBOOK progress queue — ebook fields ONLY (plus the one-way finish). Never
 // includes `progress`/`currentTime`: those are the AUDIO fields, and flushing
 // them from a reader save would clobber audio progress on both-format books.
@@ -275,9 +515,10 @@ async function flushPendingPatches(): Promise<void> {
     // Corrupt entries (bad JSON, no item id) can never send — drop them
     // instead of retrying for the lifetime of the install.
     let p: any = null;
+    let sentRaw: string | undefined;
     try {
-      const raw = storage.getString(key);
-      p = raw ? JSON.parse(raw) : null;
+      sentRaw = storage.getString(key);
+      p = sentRaw ? JSON.parse(sentRaw) : null;
     } catch {}
     if (!p || typeof p !== "object" || !p.libraryItemId) {
       try {
@@ -300,7 +541,14 @@ async function flushPendingPatches(): Promise<void> {
           ...(p.extra || {}),
         };
       await api.patch(path, body);
-      storage.remove(key);
+      // TOCTOU guard (mirrors the pending-sync loop): a write merged into
+      // this SAME key during the await — the finish toggle at the end of a
+      // book is a one-shot that never re-queues — must not be deleted with
+      // the entry. Remove only if the entry is byte-identical to what we
+      // sent; otherwise leave the merged entry for the next flush pass
+      // (re-sending already-delivered fields is harmless — the PATCH is
+      // per-field latest-wins).
+      if (storage.getString(key) === sentRaw) storage.remove(key);
     } catch (e: any) {
       // 404 = the item no longer exists server-side — a retry can never
       // succeed (mirrors the pending-sync loop's give-up rule).
@@ -325,6 +573,13 @@ export function flushPendingSyncs(): Promise<void> {
   _flushInFlight = (async () => {
     try {
       await flushPendingPatches();
+      await flushPendingLocalSessions();
+      // Deletions BEFORE creations: with a queued delete and a queued re-add
+      // at the same floored time (delete a synced bookmark offline, then
+      // bookmark the same spot again), creations-first would POST the new
+      // bookmark and immediately DELETE it — the user's last action loses.
+      // Deletions-first is correct for every coexisting pair.
+      await flushPendingBookmarkDeletions();
       await flushPendingBookmarks();
       const keys = storage.getAllKeys().filter((k) => k.startsWith(PENDING_PREFIX));
       for (const key of keys) {
@@ -343,16 +598,22 @@ export function flushPendingSyncs(): Promise<void> {
             duration: pending.duration,
           });
           // TOCTOU guard: while our POST was in flight, a concurrent failed
-          // sync may have merged NEW seconds into this entry. Blind-clearing
-          // would eat them (verified listening-time loss under flaky
-          // networks) — clear only what we actually delivered, keep the rest.
+          // sync may have merged NEW seconds — or a fresher position with no
+          // new seconds (closeSession after a seek passes timeListened 0) —
+          // into this entry. Blind-clearing would eat them (verified
+          // listening-time loss under flaky networks) — clear only what we
+          // actually delivered, keep the rest.
           const now = readPending(sessionId);
-          if (now && (now.timeListened || 0) > (pending.timeListened || 0)) {
+          if (
+            now &&
+            ((now.timeListened || 0) > (pending.timeListened || 0) ||
+              (Number(now.at) || 0) > (Number(pending.at) || 0))
+          ) {
             storage.set(
               pendingKey(sessionId),
               JSON.stringify({
                 ...now,
-                timeListened: (now.timeListened || 0) - (pending.timeListened || 0),
+                timeListened: Math.max(0, (now.timeListened || 0) - (pending.timeListened || 0)),
               })
             );
           } else {
@@ -390,6 +651,43 @@ export function flushPendingSyncs(): Promise<void> {
   return _flushInFlight;
 }
 
+// True when queued LISTENING TIME hasn't reached the server yet — i.e. the
+// server's stats/streak don't reflect everything on this device. Progress
+// PATCHes (pendingPatch_*: position, isFinished, ebook fields) are excluded:
+// they never carry session seconds, so they can't move
+// /api/me/listening-stats, and counting them made the Stats caption claim
+// listening was "still syncing" over a mere reader-position update.
+export function hasAnyPendingSyncs(): boolean {
+  try {
+    return storage.getAllKeys().some((k) => {
+      if (k.startsWith(PENDING_PREFIX)) {
+        // A flush can legitimately leave a position-only remainder
+        // (timeListened 0 after the TOCTOU subtraction) — no listening
+        // seconds are missing from stats in that case.
+        try {
+          const rec = JSON.parse(storage.getString(k) || "null");
+          return (Number(rec?.timeListened) || 0) > 0;
+        } catch {
+          return false;
+        }
+      }
+      if (k.startsWith(LOCAL_SESSION_PREFIX)) {
+        // Local-session day records persist after delivery (they accumulate);
+        // only an undelivered remainder counts as pending.
+        try {
+          const rec = JSON.parse(storage.getString(k) || "null");
+          return (Number(rec?.timeListening) || 0) > (Number(rec?.syncedTimeListening) || 0);
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+  } catch {
+    return false;
+  }
+}
+
 // Wipes all queued syncs/patches. Called on logout so a previous account's
 // listening time can never be flushed under the next account's credentials.
 export function clearAllPending() {
@@ -398,7 +696,11 @@ export function clearAllPending() {
       .getAllKeys()
       .filter(
         (k) =>
-          k.startsWith(PENDING_PREFIX) || k.startsWith(PATCH_PREFIX) || k.startsWith(BOOKMARK_PREFIX)
+          k.startsWith(PENDING_PREFIX) ||
+          k.startsWith(PATCH_PREFIX) ||
+          k.startsWith(BOOKMARK_PREFIX) ||
+          k.startsWith(BOOKMARK_DELETE_PREFIX) ||
+          k.startsWith(LOCAL_SESSION_PREFIX)
       )
       .forEach((k) => storage.remove(k));
   } catch {}
@@ -411,11 +713,15 @@ export function clearAllPending() {
 export async function syncProgress(payload: SyncPayload): Promise<void> {
   // Stamp when this position was read — the queue merge (queuePending) keys
   // freshness on it, since failures are observed out of request order.
-  if (!payload.at) payload = { ...payload, at: Date.now() };
+  if (!payload.at) payload = { ...payload, at: monotonicNow() };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
-    queueProgressPatch(sessionId.replace(/^local_/, ""), currentTime, duration, payload.episodeId);
+    const itemId = payload.libraryItemId || sessionId.replace(/^local_/, "");
+    // Bank the listened seconds too — the PATCH below carries only the
+    // position, and stats/streaks are computed from sessions server-side.
+    recordLocalListening(itemId, payload.episodeId, currentTime, duration, timeListened);
+    queueProgressPatch(itemId, currentTime, duration, payload.episodeId);
     // Opportunistically flush — if we regained connectivity, this lands now.
     flushPendingSyncs().catch(() => {});
     return;
@@ -442,11 +748,13 @@ export async function syncProgress(payload: SyncPayload): Promise<void> {
 export async function closeSession(payload: SyncPayload): Promise<void> {
   // Same freshness stamp as syncProgress — a close always carries the newest
   // position and must win the queue merge even if an older sync fails later.
-  if (!payload.at) payload = { ...payload, at: Date.now() };
+  if (!payload.at) payload = { ...payload, at: monotonicNow() };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
-    queueProgressPatch(sessionId.replace(/^local_/, ""), currentTime, duration, payload.episodeId);
+    const itemId = payload.libraryItemId || sessionId.replace(/^local_/, "");
+    recordLocalListening(itemId, payload.episodeId, currentTime, duration, timeListened);
+    queueProgressPatch(itemId, currentTime, duration, payload.episodeId);
     flushPendingSyncs().catch(() => {});
     return;
   }

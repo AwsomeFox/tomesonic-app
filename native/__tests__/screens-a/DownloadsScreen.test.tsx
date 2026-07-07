@@ -1,7 +1,9 @@
 /**
  * DownloadsScreen — completed tab rows (title/author/size, storage summary),
  * ebook-only rows routing to the Reader, delete confirmation → removeDownload,
- * and the active tab's progress/retry/cancel wiring.
+ * the Delete-all confirmation → removeAllDownloads, the split
+ * Downloading/Failed tab label, and the active tab's progress/retry/cancel
+ * wiring.
  */
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import { Alert } from "react-native";
@@ -116,6 +118,7 @@ function seed(overrides: Partial<Record<string, any>> = {}) {
     cancelDownload: jest.fn(),
     retryDownload: jest.fn(),
     removeDownload: jest.fn(),
+    removeAllDownloads: jest.fn(),
     ...overrides,
   } as any);
 }
@@ -133,7 +136,8 @@ describe("DownloadsScreen", () => {
     await render(<DownloadsScreen navigation={navigation} />);
 
     expect(screen.getByText("Downloaded (2)")).toBeTruthy();
-    expect(screen.getByText("Downloading (2)")).toBeTruthy();
+    // 1 in-flight + 1 failed: the tab label splits the counts honestly.
+    expect(screen.getByText("Downloading (1) · Failed (1)")).toBeTruthy();
 
     // Rows: title + author + formatted byte size (8.5 MB and 1.0 MB).
     expect(screen.getByText("Audio DL")).toBeTruthy();
@@ -194,7 +198,7 @@ describe("DownloadsScreen", () => {
     const navigation = makeNavigation();
     await render(<DownloadsScreen navigation={navigation} />);
 
-    await fireEvent.press(screen.getByText("Downloading (2)"));
+    await fireEvent.press(screen.getByText("Downloading (1) · Failed (1)"));
 
     expect(screen.getByText("Active Book")).toBeTruthy();
     expect(screen.getByText("42%")).toBeTruthy();
@@ -210,6 +214,41 @@ describe("DownloadsScreen", () => {
 
     await fireEvent.press(screen.getByLabelText("Cancel download of Active Book"));
     expect(cancelDownload).toHaveBeenCalledWith("a1");
+  });
+
+  it("omits the Failed split from the tab label when nothing has failed", async () => {
+    seed({ activeDownloads: { a1: activeDownload } });
+    const navigation = makeNavigation();
+    await render(<DownloadsScreen navigation={navigation} />);
+
+    expect(screen.getByText("Downloading (1)")).toBeTruthy();
+    expect(screen.queryByText(/Failed \(/)).toBeNull();
+  });
+
+  it("Delete all goes through a confirm Alert before removeAllDownloads", async () => {
+    seed();
+    const removeAllDownloads = useDownloadStore.getState().removeAllDownloads as jest.Mock;
+    const alertSpy = jest.spyOn(Alert, "alert");
+    const navigation = makeNavigation();
+    await render(<DownloadsScreen navigation={navigation} />);
+
+    await fireEvent.press(screen.getByLabelText("Delete all downloads"));
+    expect(alertSpy).toHaveBeenCalledWith(
+      "Delete all downloads",
+      // Copy must disclose the FULL scope: completed items AND the in-flight/
+      // failed downloads the wipe aborts (seed has 2 of each).
+      expect.stringContaining("2 downloaded items and cancel 2 in-progress/failed downloads"),
+      expect.any(Array)
+    );
+    expect(removeAllDownloads).not.toHaveBeenCalled(); // not before confirming
+
+    const buttons = alertSpy.mock.calls[0][2] as any[];
+    const destructive = buttons.find((b) => b.text === "Delete all");
+    expect(destructive.style).toBe("destructive");
+    await act(async () => {
+      destructive.onPress();
+    });
+    expect(removeAllDownloads).toHaveBeenCalled();
   });
 
   it("shows empty states on both tabs and navigates back", async () => {

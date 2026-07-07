@@ -444,7 +444,9 @@ describe("ItemDetailScreen", () => {
   });
 
   it("shows the error state and recovers via Retry", async () => {
-    mockedGet.mockRejectedValueOnce(new Error("boom"));
+    // A rejection WITH a response is a server failure (the offline copy is
+    // reserved for requests that never reached the server).
+    mockedGet.mockRejectedValueOnce({ response: { status: 500 } });
     const navigation = makeNavigation();
     await render(
       <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
@@ -454,6 +456,31 @@ describe("ItemDetailScreen", () => {
     routeApi(bothFormatItem);
     await fireEvent.press(screen.getByText("Retry"));
     await screen.findByText("Listening");
+  });
+
+  it("shows offline copy when the request never reached the server", async () => {
+    mockedGet.mockRejectedValueOnce(new Error("Network Error"));
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText(
+      "You're offline. Reconnect to load this item, or download books ahead of time to use them offline."
+    );
+  });
+
+  it("points offline users at the Downloads tab when the book is already downloaded", async () => {
+    mockedGet.mockRejectedValueOnce(new Error("Network Error"));
+    useDownloadStore.setState({
+      completedDownloads: {
+        item1: { id: "item1", libraryItemId: "item1", title: "The Hobbit", status: "completed", parts: [] },
+      },
+    } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText(
+      "You're offline. This book is downloaded — you can keep listening from the Downloads tab."
+    );
   });
 
   it("shows an error when no itemId is provided", async () => {

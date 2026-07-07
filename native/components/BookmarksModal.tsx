@@ -3,7 +3,13 @@ import { View, Text, ScrollView, ActivityIndicator } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { api } from "../utils/api";
-import { queueBookmark, pendingBookmarksFor, removePendingBookmark } from "../utils/progressSync";
+import {
+  queueBookmark,
+  pendingBookmarksFor,
+  removePendingBookmark,
+  queueBookmarkDeletion,
+  pendingBookmarkDeletionsFor,
+} from "../utils/progressSync";
 import BottomSheet from "./BottomSheet";
 import Pressable from "./HintPressable";
 
@@ -42,6 +48,10 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
   const colors = useThemeColors();
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(false);
+  // Which item the current `bookmarks` state belongs to — the modal stays
+  // mounted across book switches, so an offline load must not merge the new
+  // item's queued bookmarks into (or silently keep) the PREVIOUS item's list.
+  const loadedForRef = React.useRef<string | null>(null);
 
   const loadBookmarks = useCallback(async () => {
     if (!libraryItemId) {
@@ -54,12 +64,19 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
     try {
       const res = await api.get("/api/me");
       const all: Bookmark[] = res.data?.bookmarks || [];
-      const server = all.filter((b) => b.libraryItemId === libraryItemId);
+      // Hide server bookmarks whose offline DELETION hasn't flushed yet —
+      // they'd otherwise reappear here until the queued delete lands.
+      const deletions = pendingBookmarkDeletionsFor(libraryItemId);
+      const server = all.filter(
+        (b) =>
+          b.libraryItemId === libraryItemId && !deletions.includes(Math.floor(b.time))
+      );
       // Merge queued-offline bookmarks not yet flushed to the server.
       const pending = pendingBookmarksFor(libraryItemId)
         .filter((p) => !server.some((s) => Math.floor(s.time) === p.time))
         .map((p) => ({ libraryItemId, title: p.title, time: p.time }));
       setBookmarks([...server, ...pending].sort((a, b) => a.time - b.time));
+      loadedForRef.current = libraryItemId;
     } catch (e) {
       // Offline / local item: show the queued bookmarks so they aren't
       // invisible until connectivity returns.
@@ -68,15 +85,20 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
         title: p.title,
         time: p.time,
       }));
-      if (pending.length) {
-        setBookmarks((prev) => {
-          const merged = [...prev];
-          for (const p of pending) {
-            if (!merged.some((b) => Math.floor(b.time) === p.time)) merged.push(p);
-          }
-          return merged.sort((a, b) => a.time - b.time);
-        });
-      }
+      // Keep previously-loaded rows only if they belong to THIS item —
+      // otherwise a book switched to while offline showed (and let the user
+      // "delete") the previous book's bookmarks against the wrong id.
+      // Captured BEFORE setBookmarks: React defers the functional updater, so
+      // reading the ref inside it would see the reassignment below.
+      const sameItem = loadedForRef.current === libraryItemId;
+      setBookmarks((prev) => {
+        const merged = sameItem ? [...prev] : [];
+        for (const p of pending) {
+          if (!merged.some((b) => Math.floor(b.time) === p.time)) merged.push(p);
+        }
+        return merged.sort((a, b) => a.time - b.time);
+      });
+      loadedForRef.current = libraryItemId;
     } finally {
       setLoading(false);
     }
@@ -114,7 +136,9 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
     try {
       await api.delete(`/api/me/item/${libraryItemId}/bookmark/${bm.time}`);
     } catch (e) {
-      // Already removed locally.
+      // Offline: queue the deletion so it replays on reconnect — a synced
+      // bookmark deleted offline used to silently reappear from the server.
+      queueBookmarkDeletion(libraryItemId, bm.time);
     }
   };
 

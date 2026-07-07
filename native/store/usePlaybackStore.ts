@@ -676,6 +676,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   setCastSeekHandler: (fn) => set({ castSeekAbs: fn }),
 
   loadLastSession: async () => {
+    // A session is already loaded — restoring over it would TrackPlayer.reset()
+    // the LIVE queue and re-prepare it paused. This is not theoretical: Android
+    // reclaims the Activity while the foreground service keeps playing, and
+    // reopening the app remounts App.tsx on the living JS context, re-running
+    // its init → loadLastSession — which paused active background playback the
+    // moment the user opened the app. The in-memory session (playing OR
+    // paused) is always fresher than the disk save; restore is only for cold
+    // starts with an empty store.
+    if (get().currentSession) {
+      console.log("[PlaybackStore] Live session active — skipping saved-session restore.");
+      return;
+    }
     const serverConfig = storageHelper.getServerConfig();
     if (!serverConfig || !serverConfig.token || !serverConfig.address) {
       console.log("[PlaybackStore] No active authenticated session, skipping session load.");
@@ -1138,7 +1150,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         const key = `track_${track.index ?? idx}`;
         // Legacy completed rows can lack `parts` entirely — an unguarded
         // .find made such books unplayable even STREAMING (throw mid-prepare).
-        const part = (download.parts || []).find((p: any) => p.id === key);
+        // POSITIONAL match first: the downloader collision-uniquifies part
+        // ids when metadata repeats track.index (track_1, track_1_1) — an
+        // id-only lookup resolved BOTH logical tracks to the FIRST file, so
+        // track 2 played track 1's audio. Track parts preserve the server
+        // track order, so the idx-th track part is the right one whenever
+        // its id is the expected key or its uniquified variant.
+        const trackParts = (download.parts || []).filter((p: any) =>
+          String(p?.id || "").startsWith("track_")
+        );
+        const positional = trackParts[idx];
+        const part =
+          positional &&
+          (positional.id === key || String(positional.id).startsWith(`${key}_`))
+            ? positional
+            : (download.parts || []).find((p: any) => p.id === key);
         const path = part?.localFilePath || (localFolder && part ? `${localFolder}${part.filename}` : null);
         if (!path) return null;
         return path.startsWith("file://") ? path : `file://${path}`;
