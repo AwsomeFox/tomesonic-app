@@ -137,8 +137,12 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
       await fetchData();
     } catch (e: any) {
       console.warn("[CollectionsPlaylists] create failed", e);
+      // Only string bodies — a JSON error body stringifies to "[object Object]".
+      const body = e?.response?.data;
       setCreateError(
-        e?.response?.data?.toString?.() || "Couldn't create it — check the server connection."
+        typeof body === "string" && body.trim()
+          ? body
+          : "Couldn't create it — check the server connection."
       );
     } finally {
       setCreating(false);

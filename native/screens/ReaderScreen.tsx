@@ -14,6 +14,7 @@ import { useDownloadStore } from "../store/useDownloadStore";
 import { FOLIATE_BUNDLE } from "../utils/foliateBundle";
 import BottomSheet from "../components/BottomSheet";
 import Pressable from "../components/HintPressable";
+import { resolveAudioTarget, audioPositionForReadingFraction, approximateClock } from "../utils/formatSwitch";
 
 // Height of the collapsed mini player (mirrors PlayerBottomSheet MINIPLAYER_HEIGHT)
 // so reader content can reserve space and not sit underneath it.
@@ -266,7 +267,14 @@ export default function ReaderScreen({ route, navigation }: any) {
   // reader is mounted (released automatically on unmount).
   useKeepAwake();
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
-  const { itemId, ebookFormat, title } = route.params || {};
+  const { itemId, ebookFormat, title, initialFraction } = route.params || {};
+  // One-shot "jump to fraction" from the player's Read-from-here handoff —
+  // consumed on the WebView's 'ready' message, then cleared.
+  const pendingJumpRef = useRef<number | null>(
+    typeof initialFraction === "number" && Number.isFinite(initialFraction)
+      ? Math.max(0, Math.min(1, initialFraction))
+      : null
+  );
   const [pdfError, setPdfError] = useState(false);
   // PDF page tracking: restore the last-read page and show a footer indicator,
   // mirroring what the epub path gets from foliate relocations.
@@ -577,6 +585,16 @@ export default function ReaderScreen({ route, navigation }: any) {
         }, 2000);
       } else if (data.type === "toc") {
         setToc(data.toc || []);
+      } else if (data.type === "ready") {
+        // Player → reader handoff: jump to the mapped fraction once the book
+        // is actually rendered (overrides the startCfi restore).
+        const f = pendingJumpRef.current;
+        if (f != null && webRef.current) {
+          pendingJumpRef.current = null;
+          webRef.current.injectJavaScript(
+            `window.goToFraction && window.goToFraction(${Number(f)});true;`
+          );
+        }
       } else if (data.type === "error") {
         setEbookError(`render: ${data.message || "unknown"}`);
         setEbookStatus("error");
@@ -587,6 +605,15 @@ export default function ReaderScreen({ route, navigation }: any) {
   const openExternally = async () => {
     try {
       if (Sharing && (await Sharing.isAvailableAsync())) {
+        // Downloaded book: share the local file directly — re-downloading
+        // fails exactly when downloads matter (offline / "too large" books).
+        const localEbook = useDownloadStore
+          .getState()
+          .completedDownloads[itemId]?.parts?.find((p: any) => p.id === "ebook")?.localFilePath;
+        if (localEbook) {
+          await Sharing.shareAsync(localEbook, { dialogTitle: title || "Open ebook" });
+          return;
+        }
         const localPath = `${FileSystem.cacheDirectory}book_${itemId}.${format || "bin"}`;
         const dl = await FileSystem.downloadAsync(ebookUri, localPath, {
           headers: { Authorization: `Bearer ${token}` },
@@ -598,6 +625,48 @@ export default function ReaderScreen({ route, navigation }: any) {
       console.warn("[Reader] share failed", e);
     }
     if (ebookUri) Linking.openURL(ebookUri).catch(() => {});
+  };
+
+  // "Listen from here": start the audiobook edition at (approximately) the
+  // current reading position — the reader-side Whispersync entry point
+  // (player-side lives in PlayerBottomSheet's Read-from-here).
+  const listenFromHere = () => {
+    (async () => {
+      const target = await resolveAudioTarget(itemId);
+      if (!target) {
+        Alert.alert("No audiobook available", "This book doesn't have an audio edition in your library.");
+        return;
+      }
+      const fraction = isPdf
+        ? (pdfProgress ? pdfProgress.page / Math.max(1, pdfProgress.pages) : 0)
+        : latestProgressRef.current?.fraction ?? pageProgress?.fraction ?? 0;
+      const estimate = target.duration
+        ? ` at about ${approximateClock(audioPositionForReadingFraction(fraction, target.duration))}`
+        : "";
+      Alert.alert("Listen from here?", `Start the audiobook${estimate}? Position matching is approximate.`, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Listen",
+          onPress: () => {
+            (async () => {
+              try {
+                const ok = await usePlaybackStore.getState().startPlayback(target.itemId);
+                if (!ok) throw new Error("start failed");
+                // Seek against the LIVE duration — the resolver's metadata
+                // duration is display-grade only.
+                const live = usePlaybackStore.getState();
+                const dur = live.duration || target.duration || 0;
+                if (dur > 0) await live.seek(audioPositionForReadingFraction(fraction, dur));
+                navigation.goBack();
+              } catch (e) {
+                console.warn("[Reader] listen-from-here failed", e);
+                Alert.alert("Couldn't start playback", "Check your connection to the server and try again.");
+              }
+            })();
+          },
+        },
+      ]);
+    })();
   };
 
   const selectTocItem = (href: string) => {
@@ -633,6 +702,17 @@ export default function ReaderScreen({ route, navigation }: any) {
       <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginLeft: 4, flex: 1 }}>
         {title || "Reader"}
       </Text>
+      {(isFoliateFormat && canRenderEbook) || canRenderPdf ? (
+        <Pressable
+          onPress={listenFromHere}
+          style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Listen from here"
+        >
+          <Icon name="headphones" size={24} color={colors.onSurface} />
+        </Pressable>
+      ) : null}
       {isFoliateFormat && canRenderEbook ? (
         <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
           <Pressable

@@ -10,6 +10,7 @@ import {
   StyleSheet,
   AccessibilityInfo,
   findNodeHandle,
+  Alert,
 } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -39,6 +40,11 @@ import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
 import { haptic } from "../utils/haptics";
 import Pressable from "./HintPressable";
+import {
+  resolveEbookTarget,
+  canJumpToFraction,
+  readingFractionForAudioPosition,
+} from "../utils/formatSwitch";
 
 const MINIPLAYER_HEIGHT = 68;
 
@@ -177,6 +183,52 @@ export default function PlayerBottomSheet() {
   useEffect(() => {
     isPlayerExpandedRef.current = isPlayerExpanded;
   }, [isPlayerExpanded]);
+
+  // "Read from here": jump to the ebook edition at (approximately) the
+  // current listening position — the Whispersync-style handoff the
+  // formatSwitch module implements (this is its player-side entry point).
+  const readFromHere = () => {
+    const st = usePlaybackStore.getState();
+    const cur = st.currentSession;
+    if (!cur || cur.episodeId) return; // book-only feature
+    const bookItemId = cur.libraryItemId || cur.libraryItem?.id;
+    if (!bookItemId) return;
+    (async () => {
+      const target = await resolveEbookTarget(bookItemId);
+      if (!target) {
+        Alert.alert("No ebook available", "This book doesn't have an ebook edition in your library.");
+        return;
+      }
+      const frac = readingFractionForAudioPosition(st.position, st.duration);
+      const jump = canJumpToFraction(target.ebookFormat);
+      Alert.alert(
+        "Read from here?",
+        jump
+          ? `Open the ebook at about ${Math.round(frac * 100)}%? Position matching is approximate.`
+          : "This ebook format can't jump to a position — it will open at your last reading spot.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Read",
+            onPress: () => {
+              st.pause().catch(() => {});
+              st.setPlayerExpanded(false);
+              setTimeout(() => {
+                if (navigationRef.isReady()) {
+                  (navigationRef.navigate as any)("Reader", {
+                    itemId: target.itemId,
+                    ebookFormat: target.ebookFormat,
+                    title: target.title || st.currentSession?.displayTitle,
+                    ...(jump ? { initialFraction: frac } : {}),
+                  });
+                }
+              }, 300);
+            },
+          },
+        ]
+      );
+    })();
+  };
 
   // On expand, move screen-reader focus to the Collapse button once the
   // spring settles — otherwise TalkBack keeps focus on the (now covered and
@@ -894,6 +946,23 @@ export default function PlayerBottomSheet() {
                   >
                     <Icon name="book" size={22} color={colors.onSecondaryContainer} />
                   </Pressable>
+                  {!currentSession?.episodeId ? (
+                    <Pressable
+                      onPress={readFromHere}
+                      accessibilityRole="button"
+                      accessibilityLabel="Read from here"
+                      style={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: 28,
+                        backgroundColor: colors.secondaryContainer,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Icon name="auto-stories" size={22} color={colors.onSecondaryContainer} />
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     onPress={() => {
                       // The ONLY other way to dismiss a session was swiping the

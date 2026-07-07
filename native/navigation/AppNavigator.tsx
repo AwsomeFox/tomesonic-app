@@ -21,7 +21,6 @@ import AuthorsScreen from "../screens/AuthorsScreen";
 import AuthorDetailScreen from "../screens/AuthorDetailScreen";
 import CollectionDetailScreen from "../screens/CollectionDetailScreen";
 import PlaylistDetailScreen from "../screens/PlaylistDetailScreen";
-import SearchScreen from "../screens/SearchScreen";
 import ItemDetailScreen from "../screens/ItemDetailScreen";
 import SettingsScreen from "../screens/SettingsScreen";
 import AccountScreen from "../screens/AccountScreen";
@@ -167,7 +166,6 @@ export default function AppNavigator() {
             <Stack.Screen name="AuthorDetail" component={AuthorDetailScreen} />
             <Stack.Screen name="CollectionDetail" component={CollectionDetailScreen} />
             <Stack.Screen name="PlaylistDetail" component={PlaylistDetailScreen} />
-            <Stack.Screen name="Search" component={SearchScreen} />
             <Stack.Screen name="LatestEpisodes" component={LatestEpisodesScreen} />
             <Stack.Screen name="Settings" component={SettingsScreen} />
             <Stack.Screen name="Account" component={AccountScreen} />

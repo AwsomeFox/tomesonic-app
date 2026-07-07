@@ -167,6 +167,30 @@ export default function RmabRequestsScreen({ navigation }: any) {
           keyExtractor={(r: any, i) => String(r?.id ?? i)}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
           contentContainerStyle={{ paddingBottom: 32 }}
+          // A failed refresh with a list already showing was silent — the
+          // stale statuses just sat there looking current.
+          ListHeaderComponent={
+            error && (requests?.length ?? 0) > 0 ? (
+              <View
+                accessibilityLiveRegion="polite"
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginHorizontal: 16,
+                  marginBottom: 8,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  backgroundColor: colors.errorContainer,
+                  borderRadius: 12,
+                }}
+              >
+                <Icon name="warning" size={16} color={colors.onErrorContainer} />
+                <Text style={{ color: colors.onErrorContainer, fontSize: 13, marginLeft: 8, flex: 1 }}>
+                  Couldn't refresh — showing older statuses. Pull to retry.
+                </Text>
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             <View style={{ alignItems: "center", paddingTop: 64, paddingHorizontal: 32 }}>
               <Icon name="send" size={44} color={colors.onSurfaceVariant} />

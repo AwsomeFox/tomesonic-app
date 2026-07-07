@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import { useLibraryStore } from "../store/useLibraryStore";
 import Icon, { IconName } from "./Icon";
 import BottomSheet from "./BottomSheet";
@@ -108,6 +109,9 @@ export default function FilterModal({
 
   const [sublist, setSublist] = useState<string | null>(null);
   const [loadingData, setLoadingData] = useState(false);
+  // fetchLibraryDetails swallows errors (returns null) — without this flag a
+  // failed fetch rendered as "No genres items" with no way to retry.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const currentLibrary = libraries.find((l) => l.id === currentLibraryId);
   const isPodcast = currentLibrary?.mediaType === "podcast";
@@ -119,9 +123,10 @@ export default function FilterModal({
     if (!visible) return;
     if (!filterData && currentLibraryId && !loadingData) {
       setLoadingData(true);
-      Promise.resolve(fetchLibraryDetails(currentLibraryId)).finally(() =>
-        setLoadingData(false)
-      );
+      Promise.resolve(fetchLibraryDetails(currentLibraryId))
+        .then((data) => setLoadFailed(!data))
+        .catch(() => setLoadFailed(true))
+        .finally(() => setLoadingData(false));
     }
   }, [visible, filterData, currentLibraryId]);
 
@@ -311,6 +316,43 @@ export default function FilterModal({
                       >
                         <ActivityIndicator size="small" color={colors.primary} />
                       </View>
+                    ) : !sublistItems.length && loadFailed ? (
+                      <View key="__error" style={{ alignItems: "center", paddingVertical: 16 }}>
+                        <Text
+                          style={{
+                            color: colors.onSurfaceVariant,
+                            textAlign: "center",
+                            fontSize: 15,
+                          }}
+                        >
+                          Couldn't load filters — check the server connection.
+                        </Text>
+                        <Pressable
+                          onPress={() => {
+                            if (!currentLibraryId || loadingData) return;
+                            setLoadingData(true);
+                            Promise.resolve(fetchLibraryDetails(currentLibraryId))
+                              .then((data) => setLoadFailed(!data))
+                              .catch(() => setLoadFailed(true))
+                              .finally(() => setLoadingData(false));
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Retry loading filters"
+                          android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+                          style={{
+                            marginTop: 12,
+                            paddingHorizontal: 24,
+                            paddingVertical: 10,
+                            borderRadius: 24,
+                            overflow: "hidden",
+                            backgroundColor: colors.primary,
+                          }}
+                        >
+                          <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>
+                            Retry
+                          </Text>
+                        </Pressable>
+                      </View>
                     ) : !sublistItems.length ? (
                       <Text
                         key="__empty"
@@ -321,7 +363,7 @@ export default function FilterModal({
                           fontSize: 16,
                         }}
                       >
-                        No {sublist} items
+                        {`No ${sublist === "ebooks" ? "ebook filters" : sublist} yet`}
                       </Text>
                     ) : (
                       sublistItems.map((si) => {

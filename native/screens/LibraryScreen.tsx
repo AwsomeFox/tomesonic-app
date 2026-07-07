@@ -160,8 +160,27 @@ export default function LibraryScreen({ route, navigation }: any) {
           });
         }
         setTotal(data.total || 0);
-        setItems((prev) => (reset ? results : [...prev, ...results]));
+        setItems((prev) => {
+          if (reset) return results;
+          // Dedupe by id: the default addedAt-desc sort means a server-side
+          // add mid-scroll shifts page boundaries and re-serves rows.
+          const seen = new Set(prev.map((it: any) => it?.id).filter(Boolean));
+          return [...prev, ...results.filter((it: any) => !it?.id || !seen.has(it.id))];
+        });
         setPage(pageNum);
+        // "Hide non-audiobooks" can filter a FULL raw page down to nothing —
+        // content doesn't grow, so onEndReached never re-fires and load-more
+        // stalls (each scroll-wiggle advanced one page). Chain straight into
+        // the next page instead.
+        if (
+          !reset &&
+          rawResults.length > 0 &&
+          results.length === 0 &&
+          currentFetchId === fetchIdRef.current
+        ) {
+          isFetchingRef.current = false;
+          fetchItems(pageNum + 1);
+        }
       } catch (err) {
         if (currentFetchId === fetchIdRef.current) {
           console.error("[LibraryScreen] Failed to fetch items:", err);

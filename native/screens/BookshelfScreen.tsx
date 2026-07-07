@@ -339,10 +339,39 @@ export default function BookshelfScreen({ navigation }: any) {
       return ordered;
     };
 
+    // Fallback when the series-list fetch failed on a cold cache: the
+    // server's own continue-series shelf entities carry series ids, so the
+    // shelf can still render (single-cover cards) instead of vanishing.
+    const buildFromServerShelf = () => {
+      const cs = personalizedShelves.find((s: any) => s.id === "continue-series");
+      const ordered: any[] = [];
+      const seen = new Set<string>();
+      (cs?.entities || []).forEach((b: any) => {
+        const s = b?.media?.metadata?.series;
+        const so = Array.isArray(s) ? s[0] : s;
+        if (so?.id && !seen.has(so.id)) {
+          seen.add(so.id);
+          const cover = getCoverUrl(b?.id);
+          ordered.push({
+            id: so.id,
+            name: so.name || "",
+            books: [b],
+            covers: cover ? [cover] : [],
+            booksCount: 1,
+          });
+        }
+      });
+      return ordered;
+    };
+
     // Fully synchronous: the series list arrives via its own parallel fetch
     // above, so this just re-derives whenever any input changes.
-    if (personalizedShelves.length === 0 || !currentLibraryId || seriesList.length === 0) {
+    if (personalizedShelves.length === 0 || !currentLibraryId) {
       setContinueSeries([]);
+      return;
+    }
+    if (seriesList.length === 0) {
+      setContinueSeries(buildFromServerShelf());
       return;
     }
     setContinueSeries(buildFrom(seriesList));

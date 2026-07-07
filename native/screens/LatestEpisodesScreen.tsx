@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -30,6 +30,10 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     setStartingId(episode.id);
     try {
       await startPlayback(episode.libraryItemId, episode.id);
+    } catch (e) {
+      // Was an unhandled rejection — spinner cleared and nothing happened.
+      console.warn("[LatestEpisodes] play failed", e);
+      Alert.alert("Couldn't play episode", "Check your connection to the server and try again.");
     } finally {
       setStartingId(null);
     }

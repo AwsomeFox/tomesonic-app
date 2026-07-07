@@ -58,12 +58,15 @@ export default function DiscoverScreen({ navigation }: any) {
   const [bdError, setBdError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [lastLiked, setLastLiked] = useState<string | null>(null);
-  // A right-swipe whose POST failed — the old optimistic chip said
-  // "Requested" even when the request never reached the server.
-  const [swipeFailed, setSwipeFailed] = useState(false);
+  // A failed deck action (right-swipe POST or undo) — the old optimistic
+  // chip said "Requested" even when the request never reached the server,
+  // and a failed undo gave no feedback at all. Holds the chip's message.
+  const [failNotice, setFailNotice] = useState<string | null>(null);
 
   // ── Shelves (the user's configured home sections, in their order) ───────
-  const [shelves, setShelves] = useState<{ id: string; name: string; books: RmabBook[] | null }[]>([]);
+  const [shelves, setShelves] = useState<
+    { id: string; name: string; books: RmabBook[] | null; error?: boolean; load?: () => Promise<RmabBook[]> }[]
+  >([]);
 
   // ── Detail sheet ─────────────────────────────────────────────────────────
   const [detail, setDetail] = useState<RmabBook | null>(null);
@@ -164,7 +167,8 @@ export default function DiscoverScreen({ navigation }: any) {
       } catch {}
     }
     if (!aliveRef.current || loadId !== shelfLoadIdRef.current) return;
-    setShelves(plan.map((p) => ({ id: p.id, name: p.name, books: null })));
+    // Keep each shelf's load fn so a single failed shelf can retry itself.
+    setShelves(plan.map((p) => ({ id: p.id, name: p.name, books: null, load: p.load })));
     plan.forEach((p) =>
       p
         .load()
@@ -174,9 +178,27 @@ export default function DiscoverScreen({ navigation }: any) {
         })
         .catch(() => {
           if (!aliveRef.current || loadId !== shelfLoadIdRef.current) return;
-          setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books: [] } : s)));
+          // Failed ≠ empty: an empty shelf hides itself, a failed one shows
+          // an error row with a retry (retryShelf below).
+          setShelves((prev) => prev.map((s) => (s.id === p.id ? { ...s, books: [], error: true } : s)));
         })
     );
+  }, []);
+
+  // Retry a single failed shelf without reloading the whole screen.
+  const retryShelf = useCallback((shelf: { id: string; load?: () => Promise<RmabBook[]> }) => {
+    if (!shelf.load) return;
+    setShelves((prev) => prev.map((s) => (s.id === shelf.id ? { ...s, books: null, error: false } : s)));
+    shelf
+      .load()
+      .then((books) => {
+        if (!aliveRef.current) return;
+        setShelves((prev) => prev.map((s) => (s.id === shelf.id ? { ...s, books, error: false } : s)));
+      })
+      .catch(() => {
+        if (!aliveRef.current) return;
+        setShelves((prev) => prev.map((s) => (s.id === shelf.id ? { ...s, books: [], error: true } : s)));
+      });
   }, []);
 
   useEffect(() => {
@@ -230,7 +252,7 @@ export default function DiscoverScreen({ navigation }: any) {
         // swipe — the old optimistic chip claimed success for POSTs that
         // failed (offline, server error), silently losing the request.
         if (action === "right" && aliveRef.current) {
-          setSwipeFailed(false);
+          setFailNotice(null);
           // Keyed by the rec's stable id — duplicate titles must not clear
           // each other's chip.
           setLastLiked(rec.id);
@@ -243,10 +265,10 @@ export default function DiscoverScreen({ navigation }: any) {
         console.warn("[BookDate] swipe failed", e);
         if (action === "right" && aliveRef.current) {
           setLastLiked(null);
-          setSwipeFailed(true);
+          setFailNotice("Request didn't send — check your connection");
           if (likedTimerRef.current) clearTimeout(likedTimerRef.current);
           likedTimerRef.current = setTimeout(() => {
-            if (aliveRef.current) setSwipeFailed(false);
+            if (aliveRef.current) setFailNotice(null);
           }, 3200);
         }
       }
@@ -269,6 +291,15 @@ export default function DiscoverScreen({ navigation }: any) {
       }
     } catch (e) {
       console.warn("[BookDate] undo failed", e);
+      // Same failure chip as a failed swipe — a silent no-op read as "undo
+      // is broken" with no hint it was the network.
+      if (aliveRef.current) {
+        setFailNotice("Couldn't undo — check your connection");
+        if (likedTimerRef.current) clearTimeout(likedTimerRef.current);
+        likedTimerRef.current = setTimeout(() => {
+          if (aliveRef.current) setFailNotice(null);
+        }, 3200);
+      }
     } finally {
       if (aliveRef.current) setBusy(false);
     }
@@ -636,14 +667,14 @@ export default function DiscoverScreen({ navigation }: any) {
                     </Text>
                   </View>
                 ) : null}
-                {swipeFailed ? (
+                {failNotice ? (
                   <View
                     // Failure is exactly when feedback matters most — announce it
                     // assertively since the chip auto-dismisses. accessible marks
                     // it as one focusable element so the live region reliably fires.
                     accessible
                     accessibilityLiveRegion="assertive"
-                    accessibilityLabel="Request didn't send — check your connection"
+                    accessibilityLabel={failNotice}
                     style={{
                       position: "absolute",
                       top: 12,
@@ -660,7 +691,7 @@ export default function DiscoverScreen({ navigation }: any) {
                     <Text
                       style={{ color: colors.onErrorContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}
                     >
-                      Request didn't send — check your connection
+                      {failNotice}
                     </Text>
                   </View>
                 ) : null}
@@ -741,7 +772,15 @@ export default function DiscoverScreen({ navigation }: any) {
 
         {/* ── The user's configured home shelves ── */}
         {shelves.map((s) => (
-          <Shelf key={s.id} title={s.name} books={s.books} onPressBook={setDetail} colors={colors} />
+          <Shelf
+            key={s.id}
+            title={s.name}
+            books={s.books}
+            error={!!s.error}
+            onRetry={() => retryShelf(s)}
+            onPressBook={setDetail}
+            colors={colors}
+          />
         ))}
       </ScrollView>
 
@@ -772,15 +811,21 @@ export default function DiscoverScreen({ navigation }: any) {
 function Shelf({
   title,
   books,
+  error,
+  onRetry,
   onPressBook,
   colors,
 }: {
   title: string;
   books: RmabBook[] | null;
+  error?: boolean;
+  onRetry?: () => void;
   onPressBook: (b: RmabBook) => void;
   colors: any;
 }) {
-  if (books !== null && books.length === 0) return null;
+  // Empty hides itself; FAILED shows an inline error + retry (a vanished
+  // shelf read as "nothing here" when the fetch simply failed).
+  if (books !== null && books.length === 0 && !error) return null;
   return (
     <View style={{ marginTop: 20 }}>
       <Text
@@ -788,7 +833,28 @@ function Shelf({
       >
         {title}
       </Text>
-      {books === null ? (
+      {error && books !== null && books.length === 0 ? (
+        <View style={{ paddingHorizontal: 20, flexDirection: "row", alignItems: "center" }}>
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, flex: 1 }}>
+            Couldn't load this shelf.
+          </Text>
+          <Pressable
+            onPress={onRetry}
+            accessibilityRole="button"
+            accessibilityLabel={`Retry loading ${title}`}
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+            style={{
+              paddingHorizontal: 18,
+              paddingVertical: 8,
+              borderRadius: 24,
+              overflow: "hidden",
+              backgroundColor: colors.primary,
+            }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 13, fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : books === null ? (
         <View style={{ height: 150, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="small" color={colors.primary} />
         </View>

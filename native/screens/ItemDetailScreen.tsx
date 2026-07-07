@@ -436,6 +436,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   const playEpisode = async (episode: any) => {
     if (!episode?.id || startingEpisodeId || starting) return;
+    // Already the loaded session: resume/expand instead of churning a fresh
+    // /play (mirrors startAudio). The row used to be DISABLED in this state,
+    // so a paused episode had no resume affordance on its own page.
+    const st = usePlaybackStore.getState();
+    if (st.currentSession?.libraryItemId === itemId && st.currentSession?.episodeId === episode.id) {
+      if (!st.isPlaying) st.play().catch(() => {});
+      st.setPlayerExpanded(true);
+      return;
+    }
     setStartingEpisodeId(episode.id);
     try {
       await startPlayback(itemId, episode.id);
@@ -1399,9 +1408,13 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     </View>
                     <Pressable
                       onPress={() => playEpisode(episode)}
-                      disabled={!!startingEpisodeId || isThisPlaying}
+                      disabled={!!startingEpisodeId}
                       accessibilityRole="button"
-                      accessibilityLabel={`Play ${episode.title || "episode"}`}
+                      accessibilityLabel={
+                        isThisPlaying
+                          ? `Resume ${episode.title || "episode"}`
+                          : `Play ${episode.title || "episode"}`
+                      }
                       hitSlop={6}
                       style={{
                         width: 40,

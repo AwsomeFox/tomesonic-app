@@ -40,6 +40,9 @@ export default function ConnectScreen() {
   const [error, setError] = useState("");
   const [authMethods, setAuthMethods] = useState<string[]>([]);
   const [oauthButtonText, setOauthButtonText] = useState("Login with OpenID");
+  // From /status — persisted into the connection config so the Account
+  // screen's "Server version" line can actually render.
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
 
   const isLocalAuth = authMethods.includes("local") || authMethods.length === 0;
   const isOpenIDAuth = authMethods.includes("openid");
@@ -81,6 +84,7 @@ export default function ConnectScreen() {
         token,
         refreshToken,
         name: address.replace(/^https?:\/\//, ""),
+        ...(serverVersion ? { version: serverVersion } : {}),
       },
       user
     );
@@ -126,6 +130,7 @@ export default function ConnectScreen() {
       setOauthButtonText(
         statusRes.data.authFormData?.authOpenIDButtonText || "Login with OpenID"
       );
+      setServerVersion(statusRes.data.serverVersion || null);
       setAddress(cleanUrl);
       setShowAuthFields(true);
     } catch (err) {

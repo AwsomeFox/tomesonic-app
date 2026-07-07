@@ -213,6 +213,6 @@ describe("FilterModal", () => {
     seedLibrary({ filterData: { genres: [] } });
     await render(<FilterModal visible onClose={noop} filterBy="all" onChange={noop} />);
     await fireEvent.press(screen.getByText("Genre"));
-    expect(screen.getByText("No genres items")).toBeTruthy();
+    expect(screen.getByText("No genres yet")).toBeTruthy();
   });
 });
