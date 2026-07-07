@@ -41,7 +41,11 @@ function currentSid(): string | null {
     const { storageHelper } = require("./storage");
     const cfg = storageHelper.getServerConfig();
     if (!cfg?.token || !cfg?.userId) return null;
-    return `${(cfg.address || "").replace(/\/$/, "")}::${cfg.userId}`;
+    // Trim ALL trailing slashes (not just one) so the sid matches regardless of
+    // how the address was normalized — updateServerAddress/ConnectScreen strip
+    // /\/+$/; a config saved with several trailing slashes would otherwise stamp
+    // a different sid at enqueue vs flush and skip pending entries forever.
+    return `${(cfg.address || "").replace(/\/+$/, "")}::${cfg.userId}`;
   } catch {
     return null;
   }

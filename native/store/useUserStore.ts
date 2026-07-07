@@ -185,7 +185,11 @@ export const useUserStore = create<UserState>((set, get) => ({
       // in-memory progress map — bail and keep what we have.
       if (!Array.isArray(list)) return;
       const now = get().serverConnectionConfig;
-      if (now?.token !== sessionToken || now?.userId !== sessionUserId) return;
+      // Bail only on a LOGOUT (a token we HAD is now gone) or an ACCOUNT switch
+      // (userId changed) — NOT on a plain token change. A token rotation via
+      // /auth/refresh (which /api/me itself can trigger and replay) is the same
+      // account, and comparing tokens strictly would drop that valid refresh.
+      if ((sessionToken && !now?.token) || now?.userId !== sessionUserId) return;
       const next = indexMediaProgress(list);
       const prev = get().mediaProgress;
       // FRESHEST-WINS per entry: local writers (player tick, reader, finish
@@ -465,15 +469,22 @@ export const useUserStore = create<UserState>((set, get) => ({
           timeout: 15000,
         });
         const uid = res?.data?.id;
-        // Must be the SAME account. A different server that happens to accept
-        // the token (or a different user id) would leak this account's
-        // downloads/progress if we switched in place — send them to a full
-        // re-login instead.
-        if (uid && cur.userId && uid !== cur.userId) {
-          return {
-            ok: false,
-            error: "That server has a different account. Use Switch Server to log in there instead.",
-          };
+        // Must PROVE it's the SAME account before switching in place. When we
+        // know our userId, the probe must return a matching one — a 200 without
+        // an id (proxy error page / non-ABS response) must NOT be accepted, or
+        // we'd move the address without confirming the account and associate
+        // this account's downloads/progress with the wrong server.
+        if (cur.userId) {
+          if (!uid) {
+            // Not a trustworthy /api/me — try the next candidate scheme.
+            continue;
+          }
+          if (uid !== cur.userId) {
+            return {
+              ok: false,
+              error: "That server has a different account. Use Switch Server to log in there instead.",
+            };
+          }
         }
         picked = base;
         break;

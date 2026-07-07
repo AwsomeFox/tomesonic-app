@@ -314,22 +314,10 @@ export default function ReaderScreen({ route, navigation }: any) {
   // epub — the debounced onPageChanged sync alone is cancelled by the cleanup
   // clearing syncTimeoutRef, losing a page turn made within ~2s of leaving.
   const latestPdfProgressRef = useRef<{ page: number; fraction: number } | null>(null);
-  // In-place itemId changes update route params WITHOUT unmounting (see the
-  // unmountedRef re-arm), so these mount-seeded values must be re-seeded for
-  // the new book — otherwise the PDF opens at the previous book's page, a new
-  // Read-from-here fraction is ignored, and a stale PDF flush lands on B.
-  // Adjusting state during render (the sanctioned "props changed" pattern) so
-  // <Pdf page={pdfPage}> reads the correct page in the SAME render.
-  const prevReaderItemRef = useRef(itemId);
-  if (prevReaderItemRef.current !== itemId) {
-    prevReaderItemRef.current = itemId;
-    setPdfPage(Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
-    latestPdfProgressRef.current = null;
-    pendingJumpRef.current =
-      typeof initialFraction === "number" && Number.isFinite(initialFraction)
-        ? Math.max(0, Math.min(1, initialFraction))
-        : null;
-  }
+  // In-place itemId changes update route params WITHOUT unmounting, so these
+  // mount-seeded values must be re-seeded for the new book — the reseed lives in
+  // an effect (see below, keyed on itemId) rather than during render, so the
+  // previous book's flush effect can run its cleanup FIRST.
   // Bumped by the error-state Retry button to re-run the ebook load effect.
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -499,6 +487,27 @@ export default function ReaderScreen({ route, navigation }: any) {
         latestPdfProgressRef.current = null;
       }
     };
+  }, [itemId]);
+
+  // Re-seed the per-book PDF state when the itemId changes IN PLACE (route
+  // params swap without an unmount). Keyed on [itemId] and defined AFTER the
+  // flush effect above so, on a change, React runs that effect's cleanup FIRST
+  // (flushing book A's last page) before this clears latestPdfProgressRef and
+  // seeds book B — moving it out of the render body also removes the
+  // setState-during-render anti-pattern. Skips the mount run: the useState/
+  // useRef initializers already seed the first book.
+  const readerReseededRef = useRef(false);
+  useEffect(() => {
+    if (!readerReseededRef.current) {
+      readerReseededRef.current = true;
+      return;
+    }
+    setPdfPage(Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
+    latestPdfProgressRef.current = null;
+    pendingJumpRef.current =
+      typeof initialFraction === "number" && Number.isFinite(initialFraction)
+        ? Math.max(0, Math.min(1, initialFraction))
+        : null;
   }, [itemId]);
 
   // Load ebook contents and generate the HTML wrapper

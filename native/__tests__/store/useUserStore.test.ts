@@ -682,5 +682,14 @@ describe("useUserStore", () => {
       expect(res.ok).toBe(false);
       expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
     });
+
+    it("refuses a 200 that lacks a user id when the account has a known userId (proxy page)", async () => {
+      // A proxy/error page can 200 without an ABS user id — that must not count
+      // as proof of the same account, so the address is NOT switched.
+      mockAxiosGet.mockResolvedValue({ data: { app: "not-abs" } });
+      const res = await useUserStore.getState().updateServerAddress("https://proxy.example.com");
+      expect(res.ok).toBe(false);
+      expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
+    });
   });
 });
