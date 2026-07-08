@@ -391,30 +391,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
             <EmptyState
               icon="collections"
               title="No items yet"
-              message="Browse your library and use a book's “Add to…” option to add it here."
-              action={
-                <Pressable
-                  onPress={() => navigation.navigate("Library")}
-                  android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Add books"
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    paddingHorizontal: 20,
-                    paddingVertical: 10,
-                    borderRadius: 24,
-                    overflow: "hidden",
-                    backgroundColor: colors.primary,
-                  }}
-                >
-                  <Icon name="add" size={20} color={colors.onPrimary} />
-                  <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600", marginLeft: 6 }}>
-                    Add books
-                  </Text>
-                </Pressable>
-              }
+              message="Add books to this collection from a book's details screen."
             />
           )}
         </ScrollView>

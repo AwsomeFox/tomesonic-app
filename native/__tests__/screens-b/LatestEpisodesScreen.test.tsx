@@ -76,6 +76,7 @@ import LatestEpisodesScreen from "../../screens/LatestEpisodesScreen";
 import { api } from "../../utils/api";
 import { queueProgressPatch } from "../../utils/progressSync";
 import { downloader } from "../../utils/downloader";
+import { showAppDialog } from "../../store/useDialogStore";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -127,6 +128,8 @@ beforeEach(() => {
   usePlaybackStore.setState(initialPlayback, true);
   useDownloadStore.setState(initialDownloads, true);
   (downloader.downloadEpisode as jest.Mock).mockClear();
+  (downloader.downloadEpisode as jest.Mock).mockResolvedValue(undefined);
+  (showAppDialog as jest.Mock).mockClear();
   useUserStore.setState({
     serverConnectionConfig: { address: "https://abs.example.com", token: "tok" },
   } as any);
@@ -415,5 +418,161 @@ describe("LatestEpisodesScreen", () => {
     await fireEvent.press(screen.getByLabelText("Filter: Unplayed"));
     expect(screen.getByText("No episodes match this filter.")).toBeTruthy();
     expect(screen.getByText("0 Recent Episodes")).toBeTruthy();
+  });
+
+  it("pressing a completed download confirms then deletes via removeDownload", async () => {
+    const removeDownload = jest.fn();
+    useDownloadStore.setState({
+      removeDownload,
+      completedDownloads: {
+        "li1::ep1": { id: "li1::ep1", libraryItemId: "li1", episodeId: "ep1", title: "Fresh Episode" },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getByLabelText("Delete download of Fresh Episode"));
+
+    // A destructive confirm dialog — not an immediate delete.
+    expect(showAppDialog).toHaveBeenCalledTimes(1);
+    const dialog = (showAppDialog as jest.Mock).mock.calls[0][0];
+    expect(dialog.title).toBe("Delete download");
+    const deleteBtn = dialog.buttons.find((b: any) => b.style === "destructive");
+    expect(deleteBtn).toBeTruthy();
+    expect(removeDownload).not.toHaveBeenCalled();
+
+    // Confirming runs removeDownload with the composite key.
+    deleteBtn.onPress();
+    expect(removeDownload).toHaveBeenCalledWith("li1::ep1");
+  });
+
+  it("pressing a downloading episode cancels it via cancelDownload", async () => {
+    const cancelDownload = jest.fn();
+    useDownloadStore.setState({
+      cancelDownload,
+      activeDownloads: {
+        "li1::ep1": {
+          id: "li1::ep1",
+          libraryItemId: "li1",
+          episodeId: "ep1",
+          title: "Fresh Episode",
+          status: "downloading",
+          progress: 0.42,
+        },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(
+      screen.getByLabelText(/Cancel download of Fresh Episode, 42 percent complete/)
+    );
+
+    expect(cancelDownload).toHaveBeenCalledWith("li1::ep1");
+    // Cancel is offline-safe — no dialog, no download start.
+    expect(downloader.downloadEpisode).not.toHaveBeenCalled();
+  });
+
+  it("shows a retry affordance and retries via retryDownload for a failed download", async () => {
+    const retryDownload = jest.fn().mockResolvedValue(undefined);
+    useDownloadStore.setState({
+      retryDownload,
+      activeDownloads: {
+        "li1::ep1": {
+          id: "li1::ep1",
+          libraryItemId: "li1",
+          episodeId: "ep1",
+          title: "Fresh Episode",
+          status: "failed",
+          progress: 0,
+        },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // The failed state surfaces a "tap to retry" label...
+    const retryBtn = screen.getByLabelText("Download of Fresh Episode failed, tap to retry");
+    expect(retryBtn).toBeTruthy();
+
+    // ...and pressing it retries the same composite key.
+    await fireEvent.press(retryBtn);
+    expect(retryDownload).toHaveBeenCalledWith("li1::ep1");
+  });
+
+  it("shows a Download failed dialog when downloadEpisode rejects", async () => {
+    (downloader.downloadEpisode as jest.Mock).mockRejectedValue(new Error("boom"));
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getByLabelText("Download Fresh Episode"));
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Download failed" })
+      )
+    );
+  });
+
+  it("carries the podcast cover into the built libraryItem so a cover part is downloaded", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        episodes: [
+          {
+            id: "ep1",
+            libraryItemId: "li1",
+            title: "Fresh Episode",
+            podcast: { metadata: { title: "Great Show" }, coverPath: "/covers/great.jpg" },
+          },
+        ],
+      },
+    });
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getByLabelText("Download Fresh Episode"));
+
+    await waitFor(() =>
+      expect(downloader.downloadEpisode).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "li1",
+          media: expect.objectContaining({ coverPath: "/covers/great.jpg" }),
+        }),
+        expect.objectContaining({ id: "ep1" }),
+        expect.any(String),
+        expect.any(String)
+      )
+    );
+  });
+
+  it("renders the per-row podcast name without a hyperlink underline", async () => {
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    const name = screen.getByText("Great Show");
+    const style = Array.isArray(name.props.style)
+      ? Object.assign({}, ...name.props.style)
+      : name.props.style;
+    expect(style.textDecorationLine).toBeUndefined();
+  });
+
+  it("caps the download percent font scale so it can't clip at large text sizes", async () => {
+    useDownloadStore.setState({
+      activeDownloads: {
+        "li1::ep1": {
+          id: "li1::ep1",
+          libraryItemId: "li1",
+          episodeId: "ep1",
+          title: "Fresh Episode",
+          status: "downloading",
+          progress: 0.42,
+        },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    const pct = screen.getByText("42%");
+    expect(pct.props.maxFontSizeMultiplier).toBe(1.2);
   });
 });

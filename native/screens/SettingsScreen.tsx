@@ -289,6 +289,16 @@ export default function SettingsScreen({ navigation, route }: any) {
           onValueChange={(v) => set({ hideNonAudiobooksGlobal: v })}
           colors={colors}
         />
+        <Divider colors={colors} />
+
+        <ToggleRow
+          icon="explore"
+          title="Show Discover tab before connecting"
+          subtitle="Keep the Discover tab visible to explore and connect ReadMeABook"
+          value={settings.showDiscoverWhenDisconnected !== false}
+          onValueChange={(v) => set({ showDiscoverWhenDisconnected: v })}
+          colors={colors}
+        />
 
         {/* ── PLAYBACK SETTINGS ── */}
         <SectionHeader label="Playback Settings" colors={colors} />

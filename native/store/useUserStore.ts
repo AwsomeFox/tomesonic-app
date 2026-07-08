@@ -20,6 +20,10 @@ interface UserSettings {
   mobileSeriesOrderBy: string;
   mobileSeriesOrderDesc: boolean;
   hideNonAudiobooksGlobal: boolean;
+  // Show the Discover (ReadMeABook) bottom tab even before RMAB is connected —
+  // the tab then renders an informational "how to connect" promo. Default true;
+  // when false the tab is hidden until a full (jwt) RMAB connection exists.
+  showDiscoverWhenDisconnected: boolean;
   // Device settings (wired into the Settings screen).
   lockOrientation: boolean;
   hapticFeedback: HapticLevel;
@@ -88,6 +92,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   mobileSeriesOrderBy: "name",
   mobileSeriesOrderDesc: false,
   hideNonAudiobooksGlobal: false,
+  showDiscoverWhenDisconnected: true,
   lockOrientation: true,
   hapticFeedback: "medium",
   disableAutoRewind: false,

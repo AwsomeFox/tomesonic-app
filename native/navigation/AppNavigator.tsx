@@ -34,9 +34,25 @@ import { useRmabStore } from "../store/useRmabStore";
 import ReaderScreen from "../screens/ReaderScreen";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
+import { shouldShowDiscover } from "./discoverVisibility";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+
+/**
+ * Whether the Discover bottom tab should exist.
+ *
+ * - Fully connected (RMAB configured in jwt mode): always shown — BookDate +
+ *   discovery shelves work.
+ * - Not fully connected: shown by default so the tab can promote ReadMeABook
+ *   with a "how to connect" screen, UNLESS the user turned that off
+ *   (showDiscoverWhenDisconnected === false), which restores the old
+ *   hidden-until-connected behavior.
+ *
+ * The pure gating helper lives in ./discoverVisibility (a leaf module) so it can
+ * be unit-tested without importing this navigator's whole screen/store graph.
+ */
+export { shouldShowDiscover } from "./discoverVisibility";
 
 const TAB_ICONS: Record<string, IconName> = {
   Home: "home",
@@ -48,9 +64,13 @@ const TAB_ICONS: Record<string, IconName> = {
 function TabNavigator() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
-  // BookDate needs a JWT (login-token) RMAB session — API tokens can't hit
-  // its endpoints, so the tab only exists for full-access connections.
-  const showDiscover = useRmabStore((s) => s.configured && s.authMode === "jwt");
+  // BookDate needs a JWT (login-token) RMAB session — API tokens can't hit its
+  // endpoints, so the full discovery experience only works for full-access
+  // connections. When NOT fully connected, the tab still shows by default (its
+  // screen renders a "connect ReadMeABook" promo) unless the user hid it.
+  const rmabConnected = useRmabStore((s) => s.configured && s.authMode === "jwt");
+  const showDiscoverWhenDisconnected = useUserStore((s) => s.settings.showDiscoverWhenDisconnected);
+  const showDiscover = shouldShowDiscover(rmabConnected, showDiscoverWhenDisconnected);
 
   return (
     <Tab.Navigator

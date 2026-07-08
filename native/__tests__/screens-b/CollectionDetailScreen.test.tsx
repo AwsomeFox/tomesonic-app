@@ -219,20 +219,23 @@ describe("CollectionDetailScreen", () => {
     expect(screen.getByText("Empty Collection")).toBeTruthy(); // collage placeholder
   });
 
-  it("empty state offers an Add books CTA into the library browser", async () => {
+  it("empty state is message-only (no dead-end Add books CTA)", async () => {
     (api.get as jest.Mock).mockResolvedValue({
       data: { id: "col1", name: "Empty", books: [] },
     });
     const navigation = await renderCollection();
 
-    const addBooks = await screen.findByLabelText("Add books");
-    await fireEvent.press(addBooks);
-    // A freshly-created (empty) collection isn't a dead end — the CTA routes to
-    // the library browser where a book's "Add to…" sheet populates it.
-    expect(navigation.navigate).toHaveBeenCalledWith("Library");
+    // Matches PlaylistDetail: guide the user to a book's details screen rather
+    // than routing to a headerless Library that can't actually add anything.
+    expect(
+      await screen.findByText("Add books to this collection from a book's details screen.")
+    ).toBeTruthy();
+    // No "Add books" button, and nothing navigates to Library.
+    expect(screen.queryByLabelText("Add books")).toBeNull();
+    expect(navigation.navigate).not.toHaveBeenCalledWith("Library");
   });
 
-  it("does not show the Add books CTA once the collection has items", async () => {
+  it("does not show any Add books CTA once the collection has items", async () => {
     await renderCollection();
     await screen.findByText("Finished Book");
 

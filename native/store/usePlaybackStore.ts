@@ -131,36 +131,45 @@ let _lastStartKey = "";
 let _lastStartAt = 0;
 async function applyNowPlayingChapter(session: any, chapters: any[], chapterIndex: number) {
   if (!session) return;
-  if (chapterIndex === _lastMetaChapter) return;
   try {
-    const activeIndex = await TrackPlayer.getActiveTrackIndex();
+    const isChapterQueue = usePlaybackStore.getState().chapterQueue;
+    // Only a MULTI-FILE queue (one RNTP item per file) needs a native round-trip
+    // to learn the active FILE index. The common cases are derivable without the
+    // per-second bridge call: a chapter-queue's active item IS the current
+    // chapter, and a single-item session is always index 0. Casting can remap
+    // the local queue, so ask natively there too.
+    const trackCount = (session?.audioTracks || session?.tracks || []).length;
+    const needsNativeIndex = trackCount > 1 || usePlaybackStore.getState().isCasting;
+    const activeIndex = needsNativeIndex
+      ? await TrackPlayer.getActiveTrackIndex()
+      : isChapterQueue && chapterIndex >= 0
+      ? chapterIndex
+      : 0;
     if (activeIndex == null) return;
+    // Dedup native work when NOTHING moved. We must re-apply on a change to
+    // EITHER the chapter OR the active queue item: a MULTI-FILE book moves the
+    // inline cover bytes onto the active FILE item, whose index changes at file
+    // boundaries WITHOUT the chapter index necessarily changing (a chapterless
+    // multi-file book keeps chapterIndex=-1 across every file). Keying the
+    // dedup on chapterIndex alone stranded the bytes on file 0.
+    if (chapterIndex === _lastMetaChapter && activeIndex === _metaAppliedIndex) return;
     const book = session.displayTitle || "Audiobook";
     const author = session.displayAuthor || "";
-    // Chapter queue only: bytes live on the ACTIVE chapter item, so before we
-    // stamp them on the new one, strip them off the item we last stamped.
-    // Otherwise every chapter the user passes through keeps its ~40KB cover and
-    // the Timeline Media3 bundles to Android Auto eventually exceeds the ~1MB
-    // Binder limit (TransactionTooLargeException). Each chapter-queue item IS a
-    // chapter, so its intrinsic title = chapters[idx].title. Empty-string
-    // localArtwork also blocks the toMediaItem `localArtwork ?: artwork` byte
-    // fallback (matters for downloaded books whose artwork URI is local).
-    if (
-      usePlaybackStore.getState().chapterQueue &&
-      _metaAppliedIndex >= 0 &&
-      _metaAppliedIndex !== activeIndex
-    ) {
-      try {
-        const pch = chapters?.[_metaAppliedIndex];
-        const clearMeta: any = {
-          title: pch?.title || book,
-          artist: [book, author].filter(Boolean).join(" • "),
-          localArtwork: "",
-        };
-        if (session.coverUrl) clearMeta.artwork = session.coverUrl;
-        await TrackPlayer.updateMetadataForTrack(_metaAppliedIndex, clearMeta);
-      } catch {}
-    }
+    // Bytes live on the ACTIVE queue item ONLY — a chapter-queue item per
+    // chapter, a file item per file. If they lingered on every item the ~40KB
+    // cover on each of a long book's items would blow past Android Auto's ~1MB
+    // Binder limit when Media3 bundles the whole Timeline
+    // (TransactionTooLargeException → queue drops / controller crash). So on
+    // each chapter/file change we MOVE them: stamp the newly-active item, then
+    // strip the previously-active one. Empty-string localArtwork (not
+    // undefined) also blocks toMediaItem's `localArtwork ?: artwork` byte
+    // fallback so a LOCAL artwork URI can't re-inline bytes on the stripped
+    // item.
+    //
+    // SET-NEW-THEN-STRIP-OLD: stamping the new active item BEFORE clearing the
+    // old one leaves a momentary 2-item byte overlap (trivially under the
+    // Binder limit) instead of a window with zero bytes, which briefly blanked
+    // the compact card on every chapter/track change.
     const ch = chapters?.[chapterIndex];
     const title = ch?.title || book;
     const subtitle = ch ? [book, author].filter(Boolean).join(" • ") : author;
@@ -174,6 +183,23 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
       (session.coverUrl && !session.coverUrl.startsWith("http") ? session.coverUrl : undefined);
     if (localArt) meta.localArtwork = localArt;
     await TrackPlayer.updateMetadataForTrack(activeIndex, meta);
+    // Strip the previously-active item's bytes (both queue modes). A
+    // chapter-queue item's intrinsic title is its chapter; a file item's is the
+    // book title (that is how the file items were built at prepare).
+    if (_metaAppliedIndex >= 0 && _metaAppliedIndex !== activeIndex) {
+      try {
+        const prevTitle = isChapterQueue
+          ? chapters?.[_metaAppliedIndex]?.title || book
+          : book;
+        const clearMeta: any = {
+          title: prevTitle,
+          artist: [book, author].filter(Boolean).join(" • "),
+          localArtwork: "",
+        };
+        if (session.coverUrl) clearMeta.artwork = session.coverUrl;
+        await TrackPlayer.updateMetadataForTrack(_metaAppliedIndex, clearMeta);
+      } catch {}
+    }
     // Mark applied only AFTER the native call succeeds — marking up front
     // meant a throw here (track not ready yet) was never retried, leaving the
     // previous chapter's title stuck for the whole chapter.
@@ -393,8 +419,17 @@ function persistProgressSample(
     // only when the visible value ticks over (percent / minute / finished),
     // keeping the UI in sync without re-rendering the library list every tick.
     const roundedPct = Math.round((progressObj.progress || 0) * 100);
-    const remainingMin = Math.floor((bookDuration - absolutePosition) / 60);
-    const mirrorSig = `${progressMapKey}|${roundedPct}|${remainingMin}|${alreadyFinished ? 1 : 0}`;
+    const remainingSec = bookDuration - absolutePosition;
+    const remainingMin = Math.floor(remainingSec / 60);
+    // In the final minute BookProgressBadge switches from whole minutes to raw
+    // seconds ("Xs"), but the whole-minute bucket is a constant 0 there, so the
+    // throttle signature stopped changing and the badge froze at its last "Xs".
+    // Add a coarse ~15s sub-bucket for the last minute so the sub-minute
+    // countdown keeps updating (~every 15s) without reintroducing per-second
+    // mirror churn. Outside the last minute the bucket is a constant (-1) so it
+    // never affects the throttle.
+    const subMinBucket = remainingSec < 60 ? Math.floor(remainingSec / 15) : -1;
+    const mirrorSig = `${progressMapKey}|${roundedPct}|${remainingMin}|${subMinBucket}|${alreadyFinished ? 1 : 0}`;
     // Only throttle when the book duration is known: with an unknown (0)
     // duration the badge can't show a percent/remaining anyway, so the gate
     // would collapse every distinct position to one signature — keep the old
@@ -1641,7 +1676,23 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             duration: track.duration,
           };
           if (artworkUrl) t.artwork = artworkUrl;
-          if (carArtworkLocal) t.localArtwork = carArtworkLocal;
+          if (audioTracks.length > 1) {
+            // MULTI-FILE: NO inline bytes at build time (mirrors the
+            // chapter-queue branch). A downloaded book split into many per-file
+            // items would otherwise inline the ~40KB cover into EACH item's
+            // MediaMetadata; Media3 bundling the whole Timeline to Android Auto
+            // then blows past the ~1MB Binder limit (TransactionTooLargeException)
+            // → the queue drops / the controller crashes. Bytes live on the
+            // ACTIVE file item only, moved there per file boundary by
+            // applyNowPlayingChapter. Empty-string (not undefined) also blocks
+            // toMediaItem's `localArtwork ?: artwork` fallback so a LOCAL
+            // artwork URI can't inline bytes on the inactive file items.
+            t.localArtwork = "";
+          } else if (carArtworkLocal) {
+            // SINGLE FILE: only one queue item, so carrying the bytes at build
+            // is safe (no Timeline to overflow) — behavior unchanged.
+            t.localArtwork = carArtworkLocal;
+          }
           return t;
         });
       }
@@ -1966,6 +2017,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   pause: async () => {
     if (!get().currentSession) return;
     _lastPausedAt = Date.now();
+    // Reset the listening-time anchor so the FIRST sample after resume doesn't
+    // charge the whole paused gap as listened. Without this, _lastTickAt still
+    // held the pre-pause timestamp, and the next playing tick accrued up to
+    // MAX_TICK_DELTA_S (~2s) of not-actually-listened time per resume. It
+    // re-seeds on the next playing tick (persistProgressSample stamps it).
+    _lastTickAt = null;
     const { isCasting, castClient } = get();
     if (isCasting && castClient) {
       try { await castClient.pause(); } catch (e) { console.warn("[Cast] pause", e); }

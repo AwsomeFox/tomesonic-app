@@ -379,6 +379,21 @@ describe("ConnectScreen", () => {
       expect(screen.getByPlaceholderText("Username").props.value).toBe("bob");
     });
 
+    it("gives saved-server chips a hitSlop so the ~34dp chip stays tappable", async () => {
+      storage.set(
+        "savedServers",
+        JSON.stringify([
+          { address: "https://one.example.com", username: "alice", authMethod: "local" },
+        ])
+      );
+      await render(<ConnectScreen />);
+
+      const chip = screen.getByLabelText("Use saved server one.example.com");
+      // Matches the FilterChip/tab-pill treatment: extend the touch target
+      // vertically since the chip itself is under the 48dp minimum.
+      expect(chip.props.hitSlop).toEqual({ top: 8, bottom: 8 });
+    });
+
     it("persists the server (address/username/method, NO secrets) after a successful login", async () => {
       mockedGet.mockResolvedValue(absStatus());
       mockedPost.mockResolvedValue({

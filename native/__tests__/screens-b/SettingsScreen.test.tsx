@@ -135,6 +135,7 @@ describe("SettingsScreen", () => {
   it.each([
     ["Lock orientation", "lockOrientation", true, false] as const,
     ["Hide non-audiobooks globally", "hideNonAudiobooksGlobal", false, true] as const,
+    ["Show Discover tab before connecting", "showDiscoverWhenDisconnected", true, false] as const,
     ["Disable auto rewind", "disableAutoRewind", false, true] as const,
     ["Auto-download next in series", "autoDownloadNextInSeries", false, true] as const,
   ])("toggle '%s' flips settings.%s and persists it", async (label, key, initial, flipped) => {
