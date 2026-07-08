@@ -191,7 +191,8 @@ describe("connectWithOidc", () => {
     );
   });
 
-  it("clears everything when the fresh JWT can't authenticate", async () => {
+  it("clears everything when the fresh JWT is REJECTED (401) with no prior connection", async () => {
+    mockedRead.mockReturnValue(null); // first-time connect, nothing to restore
     mockedMe.mockRejectedValue({ response: { status: 401 } });
     const ok = await useRmabStore.getState().connectWithOidc(CFG as any);
     expect(ok).toBe(false);
@@ -199,6 +200,36 @@ describe("connectWithOidc", () => {
     const s = useRmabStore.getState();
     expect(s.configured).toBe(false);
     expect(s.connectError).toBeTruthy();
+  });
+
+  it("preserves an existing connection when an in-place re-login fails transiently", async () => {
+    const prev = {
+      url: "https://rmab.test",
+      accessToken: "old",
+      refreshToken: "oldr",
+      authProvider: "oidc",
+      user: { id: "u1", username: "tony" },
+    };
+    mockedRead.mockReturnValue(prev);
+    useRmabStore.setState({
+      configured: true,
+      serverUrl: "https://rmab.test",
+      username: "tony",
+      authMode: "jwt",
+      authProvider: "oidc",
+      sessionExpired: true,
+    } as any);
+    mockedMe.mockRejectedValue(new Error("ECONNRESET")); // transient — no response.status
+    const ok = await useRmabStore
+      .getState()
+      .connectWithOidc({ url: "https://rmab.test", accessToken: "new", refreshToken: "newr", user: null } as any);
+    expect(ok).toBe(false);
+    // Prior config restored (last write), the session left intact for a retry.
+    expect(mockedWrite).toHaveBeenLastCalledWith(prev);
+    const s = useRmabStore.getState();
+    expect(s.configured).toBe(true);
+    expect(s.serverUrl).toBe("https://rmab.test");
+    expect(s.sessionExpired).toBe(true);
   });
 });
 

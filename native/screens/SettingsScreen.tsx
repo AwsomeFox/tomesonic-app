@@ -122,7 +122,10 @@ export default function SettingsScreen({ navigation }: any) {
 
   // SSO only needs the server address — derive it from whichever field has a
   // usable URL. Show the button unless we've affirmatively learned OIDC is off.
-  const rmabSsoOrigin = rmabOrigin(rmabUrl) || rmabOrigin(rmabToken);
+  // The token field only contributes an origin when it's a login URL (has
+  // `token=`); a raw `rmab_…` API token would otherwise mis-parse as a bare
+  // host (`https://rmab_x`), wrongly showing SSO and probing a bogus origin.
+  const rmabSsoOrigin = rmabOrigin(rmabUrl) || (rmabTokenIsLoginUrl ? rmabOrigin(rmabToken) : null);
   const rmabShowSso = !!rmabSsoOrigin && (rmabProviders === null || rmabProviders.oidcEnabled);
   const rmabSsoLabel = rmabProviders?.name ? `Sign in with ${rmabProviders.name}` : 'Sign in with SSO';
 

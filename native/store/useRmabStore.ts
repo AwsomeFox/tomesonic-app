@@ -194,6 +194,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   },
 
   connectWithOidc: async (cfg) => {
+    // Snapshot any existing connection so a transient failure during an
+    // in-place re-login (session-expired banner) or account switch can be
+    // rolled back instead of disconnecting the user.
+    const prevCfg = readRmabConfig();
     set({ connecting: true, connectError: null });
     try {
       clearRmabCaches();
@@ -218,7 +222,19 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       });
       get().refreshPendingCount();
       return true;
-    } catch {
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const authRejected = status === 401 || status === 403;
+      // A transient failure (network / 5xx) on an in-place re-login must NOT
+      // disconnect an existing session — restore the prior config and leave the
+      // store as it was (still connected, still flagged expired for a retry).
+      // Only a first-time connect (no prior config) or a confirmed auth
+      // rejection wipes everything.
+      if (prevCfg && !authRejected) {
+        writeRmabConfig(prevCfg);
+        set({ connecting: false, connectError: "Couldn't reach the server — try again." });
+        return false;
+      }
       // A token that can't authenticate must leave no trace of a connection.
       writeRmabConfig(null);
       set({
