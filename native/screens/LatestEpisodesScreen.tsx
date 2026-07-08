@@ -50,9 +50,13 @@ export default function LatestEpisodesScreen({ navigation }: any) {
   const toggleEpisodeFinished = async (episode: any) => {
     const itemId = episode?.libraryItemId;
     const epId = episode?.id;
-    if (!itemId || !epId || episodeBusyRef.current[epId]) return;
-    episodeBusyRef.current[epId] = true;
+    if (!itemId || !epId) return;
+    // Key the busy flag by the SAME item+episode composite the endpoint and
+    // progress map use — episode ids aren't unique across podcasts, so keying
+    // by episode id alone could block toggling a different podcast's episode.
     const key = `${itemId}-${epId}`;
+    if (episodeBusyRef.current[key]) return;
+    episodeBusyRef.current[key] = true;
     const next = !useUserStore.getState().mediaProgress[key]?.isFinished;
     const applyLocally = () =>
       useUserStore.setState((s) => ({
@@ -78,7 +82,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
       queueProgressPatch(itemId, NaN, NaN, epId, { isFinished: next });
       applyLocally();
     } finally {
-      episodeBusyRef.current[epId] = false;
+      episodeBusyRef.current[key] = false;
     }
   };
 

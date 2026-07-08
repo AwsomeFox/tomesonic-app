@@ -202,9 +202,13 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const episodeBusyRef = React.useRef<Record<string, boolean>>({});
   const handleToggleEpisodeFinished = async (episode: any) => {
     const epId = episode?.id;
-    if (!item?.id || !epId || episodeBusyRef.current[epId]) return;
-    episodeBusyRef.current[epId] = true;
+    if (!item?.id || !epId) return;
+    // Key the busy flag by the item+episode composite (same as the endpoint and
+    // progress map) — episode ids aren't unique across items, so keying by
+    // episode id alone could block a different item's episode toggle.
     const key = `${item.id}-${epId}`;
+    if (episodeBusyRef.current[key]) return;
+    episodeBusyRef.current[key] = true;
     const next = !useUserStore.getState().mediaProgress[key]?.isFinished;
     const applyLocally = () =>
       useUserStore.setState((s) => ({
@@ -230,7 +234,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       queueProgressPatch(item.id, NaN, NaN, epId, { isFinished: next });
       applyLocally();
     } finally {
-      episodeBusyRef.current[epId] = false;
+      episodeBusyRef.current[key] = false;
     }
   };
 
