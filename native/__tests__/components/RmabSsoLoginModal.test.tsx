@@ -60,6 +60,18 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
+describe("user agent", () => {
+  it("presents a standard Chrome UA (no Android WebView 'wv' marker) so Google-federated sign-in isn't blocked", async () => {
+    const h = await renderModal();
+    const ua: string = h.props.userAgent;
+    expect(typeof ua).toBe("string");
+    expect(ua).toMatch(/Chrome\//);
+    // The default Android WebView UA carries a "; wv)" token that trips
+    // Google's disallowed_useragent block — ours must not.
+    expect(ua).not.toMatch(/;\s*wv\b/);
+  });
+});
+
 describe("onNavigationStateChange origin guard", () => {
   it("injects the capture JS when navigation lands on the EXACT RMAB origin", async () => {
     const h = await renderModal();

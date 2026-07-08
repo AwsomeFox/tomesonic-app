@@ -15,6 +15,17 @@ try {
   WebView = null;
 }
 
+// Google's OAuth screens reject the default Android WebView user-agent with
+// "Error 403: disallowed_useragent" (their "Use secure browsers" policy),
+// which breaks sign-in for any IdP that federates to Google (e.g. a
+// TrueNAS/Authentik provider configured with "Sign in with Google"). The
+// default Android WebView UA is flagged by its "; wv" marker; presenting a
+// standard Chrome mobile UA (no "wv") lets those federated flows proceed.
+// This is a pragmatic workaround — the fully robust path is the system
+// browser (Custom Tabs) with an app redirect, which needs RMAB server support.
+const SSO_USER_AGENT =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36";
+
 // Reads the JWT bundle RMAB leaves in the URL hash
 // (`#authData=<uri-encoded JSON>`) after a successful OIDC round-trip and posts
 // it back to RN. Injected ONLY on the RMAB origin (never on the IdP), and re-run
@@ -142,6 +153,10 @@ export default function RmabSsoLoginModal({
             <WebView
               ref={webRef}
               source={{ uri: loginUrl }}
+              // Present a real Chrome UA so Google-federated IdP sign-in isn't
+              // blocked as "disallowed_useragent" (see SSO_USER_AGENT above).
+              userAgent={SSO_USER_AGENT}
+              applicationNameForUserAgent="Chrome/125.0.0.0"
               onNavigationStateChange={onNavigationStateChange}
               onMessage={onMessage}
               sharedCookiesEnabled
