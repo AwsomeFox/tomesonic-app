@@ -19,7 +19,9 @@ import Icon from "../components/Icon";
 import Pressable from "../components/HintPressable";
 import TopAppBar from "../components/TopAppBar";
 import SearchContent from "../components/SearchContent";
+import ErrorState from "../components/ErrorState";
 import { useUiStore } from "../store/useUiStore";
+import { useUserStore } from "../store/useUserStore";
 import RmabBookDetailSheet from "../components/RmabBookDetailSheet";
 import BookdatePreferencesSheet from "../components/BookdatePreferencesSheet";
 import { useRmabStore } from "../store/useRmabStore";
@@ -205,6 +207,22 @@ export default function DiscoverScreen({ navigation }: any) {
     loadDeck();
     loadShelves();
   }, [loadDeck, loadShelves]);
+
+  // The active server can change in place (Account → Edit server address)
+  // WITHOUT remounting this screen, leaving the deck/shelves pointed at the old
+  // host. Re-fetch (bypassing the discovery cache, as pull-to-refresh does)
+  // whenever the server-config identity changes. The mount effect above still
+  // handles the first load; this only fires on a genuine change.
+  const serverAddress = useUserStore((s) => s.serverConnectionConfig?.address);
+  const prevServerAddressRef = useRef(serverAddress);
+  useEffect(() => {
+    if (prevServerAddressRef.current === serverAddress) return;
+    prevServerAddressRef.current = serverAddress;
+    clearRmabCaches();
+    setDeck(null);
+    loadDeck();
+    loadShelves();
+  }, [serverAddress, loadDeck, loadShelves]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -834,26 +852,11 @@ function Shelf({
         {title}
       </Text>
       {error && books !== null && books.length === 0 ? (
-        <View style={{ paddingHorizontal: 20, flexDirection: "row", alignItems: "center" }}>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, flex: 1 }}>
-            Couldn't load this shelf.
-          </Text>
-          <Pressable
-            onPress={onRetry}
-            accessibilityRole="button"
-            accessibilityLabel={`Retry loading ${title}`}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            style={{
-              paddingHorizontal: 18,
-              paddingVertical: 8,
-              borderRadius: 24,
-              overflow: "hidden",
-              backgroundColor: colors.primary,
-            }}
-          >
-            <Text style={{ color: colors.onPrimary, fontSize: 13, fontWeight: "600" }}>Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          style={{ paddingVertical: 24, paddingHorizontal: 20 }}
+          title="Couldn't load this shelf"
+          onRetry={onRetry}
+        />
       ) : books === null ? (
         <View style={{ height: 150, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="small" color={colors.primary} />

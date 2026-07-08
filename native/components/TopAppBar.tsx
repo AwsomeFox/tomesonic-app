@@ -11,6 +11,9 @@ import { useRmabStore } from "../store/useRmabStore";
 interface TopAppBarProps {
   navigation: any;
   showFilter?: boolean;
+  /** Badge the filter icon (a dot) when a non-default filter/sort is applied —
+   *  a persisted filter is otherwise invisible after a restart. */
+  filterActive?: boolean;
   showSort?: boolean;
   showDownload?: boolean;
   showBack?: boolean;
@@ -33,6 +36,7 @@ interface TopAppBarProps {
 export default function TopAppBar({
   navigation,
   showFilter,
+  filterActive,
   showSort,
   showDownload,
   showBack,
@@ -128,6 +132,7 @@ export default function TopAppBar({
             onChangeText={setSearchQuery}
             placeholder="Search library..."
             placeholderTextColor={colors.onSurfaceVariant}
+            accessibilityLabel="Search library"
             autoFocus
             returnKeyType="search"
             style={{
@@ -267,10 +272,30 @@ export default function TopAppBar({
           hitSlop={8}
           android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
           accessibilityRole="button"
-          accessibilityLabel="Filter"
+          // Reflect the active state in the label too — the dot alone is
+          // invisible to a screen reader.
+          accessibilityLabel={filterActive ? "Filter, active" : "Filter"}
           style={{ padding: 10 }}
         >
           <Icon name="filter" size={24} color={colors.onSurface} />
+          {filterActive ? (
+            <View
+              testID="filter-active-badge"
+              importantForAccessibility="no-hide-descendants"
+              accessibilityElementsHidden
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 8,
+                width: 9,
+                height: 9,
+                borderRadius: 5,
+                backgroundColor: colors.primary,
+                borderWidth: 1.5,
+                borderColor: colors.surface,
+              }}
+            />
+          ) : null}
         </Pressable>
       ) : null}
 

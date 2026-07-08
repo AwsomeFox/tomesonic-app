@@ -21,6 +21,8 @@ import { ListSkeleton } from "../components/Skeleton";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat } from "../utils/bookMatch";
 import FilterModal from "../components/FilterModal";
 import OrderModal from "../components/OrderModal";
+import ErrorState from "../components/ErrorState";
+import EmptyState from "../components/EmptyState";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -86,6 +88,11 @@ export default function LibraryScreen({ route, navigation }: any) {
   // would otherwise make onEndReached refetch empty pages on every scroll-end.
   const noMorePagesRef = useRef(false);
   const routeFilter = route.params?.filter;
+  // A shelf header on the Home tab can route here with a specific sort (e.g.
+  // Recently Added → addedAt desc). Like routeFilter, these seed the view
+  // without being persisted as the user's saved default.
+  const routeOrderBy = route.params?.orderBy;
+  const routeDescending = route.params?.descending;
 
   // Filter / sort state (raw query values matching the original app). Seeded
   // from the persisted mobile* settings so the user's sort/filter choices
@@ -93,8 +100,10 @@ export default function LibraryScreen({ route, navigation }: any) {
   const savedSettings = useUserStore.getState().settings;
   const updateUserSettings = useUserStore((s) => s.updateUserSettings);
   const [filterBy, setFilterBy] = useState(routeFilter || savedSettings?.mobileFilterBy || "all");
-  const [orderBy, setOrderBy] = useState(savedSettings?.mobileOrderBy || "addedAt");
-  const [descending, setDescending] = useState(savedSettings?.mobileOrderDesc ?? true);
+  const [orderBy, setOrderBy] = useState(routeOrderBy || savedSettings?.mobileOrderBy || "addedAt");
+  const [descending, setDescending] = useState(
+    routeDescending ?? savedSettings?.mobileOrderDesc ?? true
+  );
   const [filterOpen, setFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
 
@@ -103,6 +112,18 @@ export default function LibraryScreen({ route, navigation }: any) {
       setFilterBy(routeFilter);
     }
   }, [routeFilter]);
+
+  // A shelf tap re-navigates to this (already-mounted) tab with new sort
+  // params — apply them without persisting (a one-off view, like routeFilter).
+  useEffect(() => {
+    if (routeOrderBy) setOrderBy(routeOrderBy);
+    if (routeDescending !== undefined) setDescending(routeDescending);
+  }, [routeOrderBy, routeDescending]);
+
+  // Badge the filter icon when the view differs from the saved default sort or
+  // has an active filter — otherwise a persisted filter/sort is invisible.
+  const isDefaultSort = orderBy === "addedAt" && descending === true;
+  const filterActive = (!!filterBy && filterBy !== "all") || !isDefaultSort;
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -389,6 +410,7 @@ export default function LibraryScreen({ route, navigation }: any) {
         showBack={route.params?.showBack}
         title={route.params?.title}
         showFilter
+        filterActive={filterActive}
         showSort
         onFilter={() => setFilterOpen(true)}
         onSort={() => setSortOpen(true)}
@@ -428,58 +450,46 @@ export default function LibraryScreen({ route, navigation }: any) {
       ) : initialLoading ? (
         <ListSkeleton rows={9} />
       ) : loadError && items.length === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <Icon name="warning" size={48} color={colors.error} />
-          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
-            Couldn't load your library
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-            Check your connection to the server and try again.
-          </Text>
-          <Pressable
-            onPress={() => fetchItems(0, true)}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading library"
-            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
-          >
-            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          style={{ flex: 1 }}
+          title="Couldn't load your library"
+          message="Check your connection to the server and try again."
+          onRetry={() => fetchItems(0, true)}
+        />
       ) : items.length === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <Icon name="library" size={48} color={colors.onSurfaceVariant} />
-          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "bold", marginTop: 16, marginBottom: 8 }}>
-            No items found
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-            {filterBy && filterBy !== "all"
+        <EmptyState
+          style={{ flex: 1 }}
+          icon="library"
+          title="No items found"
+          message={
+            filterBy && filterBy !== "all"
               ? "Nothing in this library matches the current filter."
-              : "Your library is empty. Add some audiobooks to get started."}
-          </Text>
-          {filterBy && filterBy !== "all" && !routeFilter ? (
-            <Pressable
-              onPress={() => {
-                setFilterBy("all");
-                updateUserSettings({ mobileFilterBy: "all" }).catch(() => {});
-              }}
-              android_ripple={{ color: colors.surfaceContainerHighest }}
-              accessibilityRole="button"
-              accessibilityLabel="Clear filter"
-              style={{
-                marginTop: 20,
-                paddingHorizontal: 24,
-                paddingVertical: 10,
-                borderRadius: 24,
-                overflow: "hidden",
-                borderWidth: 1,
-                borderColor: colors.outline,
-              }}
-            >
-              <Text style={{ color: colors.primary, fontSize: 15, fontWeight: "600" }}>Clear filter</Text>
-            </Pressable>
-          ) : null}
-        </View>
+              : "Your library is empty. Add some audiobooks to get started."
+          }
+          action={
+            filterBy && filterBy !== "all" && !routeFilter ? (
+              <Pressable
+                onPress={() => {
+                  setFilterBy("all");
+                  updateUserSettings({ mobileFilterBy: "all" }).catch(() => {});
+                }}
+                android_ripple={{ color: colors.surfaceContainerHighest }}
+                accessibilityRole="button"
+                accessibilityLabel="Clear filter"
+                style={{
+                  paddingHorizontal: 24,
+                  paddingVertical: 10,
+                  borderRadius: 24,
+                  overflow: "hidden",
+                  borderWidth: 1,
+                  borderColor: colors.outline,
+                }}
+              >
+                <Text style={{ color: colors.primary, fontSize: 15, fontWeight: "600" }}>Clear filter</Text>
+              </Pressable>
+            ) : undefined
+          }
+        />
       ) : (
         <FlatList
           data={items}

@@ -36,10 +36,24 @@ export default function AccountScreen({ navigation }: any) {
     ? String(serverConnectionConfig.version).replace(/^v/, "")
     : "";
 
+  // OpenID/SSO accounts have no local password to change — the "Change
+  // Password" row would just 400. Gate on any openid signal persisted into the
+  // session config at login time. (No such field is written today; see the
+  // report note — until the login flow persists `authMethod`, this stays a
+  // no-op for local accounts, which is the safe default: the row keeps showing.)
+  const isOpenIdSession =
+    serverConnectionConfig?.authMethod === "openid" ||
+    serverConnectionConfig?.authMethod === "oauth" ||
+    serverConnectionConfig?.openid === true ||
+    serverConnectionConfig?.isOpenid === true;
+
   const handleSwitch = () => {
     Alert.alert(
       "Switch Server / User",
-      "Are you sure you want to log out of the current server? You will need to log in again.",
+      // Name the real consequence: logout wipes every downloaded book and the
+      // cached progress on this device (via removeAllDownloads), not just the
+      // session. Without this, "you'll need to log in again" hid a data-loss trap.
+      "Logging out deletes all downloaded books and cached progress on this device. You'll need to sign in again and re-download them.",
       [
         { text: "Cancel", style: "cancel" },
         { text: "Log Out", style: "destructive", onPress: () => logout() }
@@ -190,29 +204,32 @@ export default function AccountScreen({ navigation }: any) {
           </Text>
         ) : null}
 
-        {/* Change Password row */}
-        <Pressable
-          onPress={() => setShowPasswordModal(true)}
-          accessibilityRole="button"
-          accessibilityLabel="Change Password"
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            marginTop: 20,
-            paddingVertical: 14,
-            paddingHorizontal: 16,
-            borderRadius: 16,
-            backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
-            borderWidth: 1,
-            borderColor: colors.outlineVariant || colors.outline,
-          }}
-        >
-          <Icon name="lock" size={22} color={colors.primary} style={{ marginRight: 12 }} />
-          <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600", flex: 1 }}>
-            Change Password
-          </Text>
-          <Icon name="chevron-right" size={20} color={colors.onSurfaceVariant} />
-        </Pressable>
+        {/* Change Password row — hidden for OpenID/SSO sessions, which have no
+            local password (the row would just fail against /api/me/password). */}
+        {isOpenIdSession ? null : (
+          <Pressable
+            onPress={() => setShowPasswordModal(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Change Password"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginTop: 20,
+              paddingVertical: 14,
+              paddingHorizontal: 16,
+              borderRadius: 16,
+              backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
+              borderWidth: 1,
+              borderColor: colors.outlineVariant || colors.outline,
+            }}
+          >
+            <Icon name="lock" size={22} color={colors.primary} style={{ marginRight: 12 }} />
+            <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600", flex: 1 }}>
+              Change Password
+            </Text>
+            <Icon name="chevron-right" size={20} color={colors.onSurfaceVariant} />
+          </Pressable>
+        )}
 
         {/* Edit server address — same account moved (DNS/IP/proxy/scheme). This
             updates the address in place, keeping downloads + progress (unlike

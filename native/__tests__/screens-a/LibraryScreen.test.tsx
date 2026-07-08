@@ -318,7 +318,9 @@ describe("LibraryScreen", () => {
     await screen.findByText("Couldn't load your library");
 
     mockItemsPage([audioItem]);
-    await fireEvent.press(screen.getByLabelText("Retry loading library"));
+    // Now rendered via the shared ErrorState, whose canonical retry pill is
+    // simply labelled "Retry".
+    await fireEvent.press(screen.getByLabelText("Retry"));
     await screen.findByText("Audio Book One");
   });
 
