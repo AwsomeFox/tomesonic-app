@@ -130,7 +130,11 @@ export default function RmabSsoLoginModal({
           </Pressable>
         </View>
 
-        {WebView && loginUrl ? (
+        {!visible ? null : WebView && loginUrl ? (
+          // Gated on `visible` so the WebView UNMOUNTS on close — otherwise a
+          // hidden Modal keeps the finished /login#authData page alive and a
+          // reopen could re-post the stale token. Remounting reloads a fresh
+          // OIDC flow every time.
           <View style={{ flex: 1 }}>
             <WebView
               ref={webRef}
