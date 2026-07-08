@@ -37,10 +37,13 @@ const base64Encode = (input: string = '') => {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-// 2:3 book aspect (56×80) + radius 8, matching the Collection/Playlist detail
-// rows — a 72×72 square distorted the cover art.
-const COVER_WIDTH = 56;
-const COVER_HEIGHT = 80;
+// Square cover (72×72) + radius 8 — audiobook art is square (album-art style)
+// and the rest of the app (LibraryScreen list rows, BookCard) renders it
+// square. contentFit:"cover" means a square source fills exactly; a rare
+// portrait/ebook cover is center-cropped rather than the whole app disagreeing
+// on shape.
+const COVER_WIDTH = 72;
+const COVER_HEIGHT = 72;
 
 // Mirrors $elapsedPretty (see LibraryScreen / ItemDetailScreen).
 function elapsedPretty(seconds: number): string {

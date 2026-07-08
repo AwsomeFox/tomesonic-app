@@ -25,8 +25,11 @@ import RmabMissingSection from "../components/RmabMissingSection";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+// Square cover — audiobook art is square (album-art style), matching the rest
+// of the app (LibraryScreen rows, BookCard, SeriesDetail). contentFit:"cover"
+// fills a square source exactly; a rare portrait cover is center-cropped.
 const COVER_WIDTH = 80;
-const COVER_HEIGHT = 120;
+const COVER_HEIGHT = 80;
 
 interface AuthorBook {
   id: string;
