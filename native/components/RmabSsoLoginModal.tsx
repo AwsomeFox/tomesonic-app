@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, Modal, ActivityIndicator, StyleSheet } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Pressable from "./HintPressable";
@@ -48,6 +48,11 @@ export default function RmabSsoLoginModal({
   onError?: (message: string) => void;
 }) {
   const colors = useThemeColors();
+  // Root-provider insets via the hook — a native SafeAreaView inside a
+  // statusBarTranslucent Modal computes its OWN window and comes back 0 on
+  // Android edge-to-edge, clipping the header/content under the system bars
+  // (same reason BottomSheet avoids SafeAreaView-in-Modal).
+  const insets = useSafeAreaInsets();
   const webRef = useRef<any>(null);
   const [loading, setLoading] = useState(true);
   // Guard so the one-shot success fires exactly once per open (the capture JS
@@ -101,7 +106,7 @@ export default function RmabSsoLoginModal({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }}>
+      <View style={{ flex: 1, backgroundColor: colors.surface, paddingTop: insets.top, paddingBottom: insets.bottom }}>
         <View
           style={{
             flexDirection: "row",
@@ -157,7 +162,7 @@ export default function RmabSsoLoginModal({
             </Text>
           </View>
         )}
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 }

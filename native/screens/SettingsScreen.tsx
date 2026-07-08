@@ -120,13 +120,15 @@ export default function SettingsScreen({ navigation }: any) {
   // Probe the server's enabled providers when the sheet is open and we have an
   // address, so the SSO button reflects the real provider (and hides if off).
   React.useEffect(() => {
-    if (!rmabSheetOpen || !rmabSsoOrigin) {
-      setRmabProviders(null);
-      return;
-    }
+    // Clear stale provider state from a previous origin up front, then probe.
+    setRmabProviders(null);
+    if (!rmabSheetOpen || !rmabSsoOrigin) return;
     let cancelled = false;
     getRmabAuthProviders(rmabSsoOrigin).then((p) => {
-      if (!cancelled) setRmabProviders({ oidcEnabled: p.oidcEnabled, name: p.oidcProviderName });
+      // ONLY apply a real response — a null (network/404/etc) leaves providers
+      // unknown so the SSO button stays shown by default rather than hiding on
+      // a transient blip.
+      if (!cancelled && p) setRmabProviders({ oidcEnabled: p.oidcEnabled, name: p.oidcProviderName });
     });
     return () => {
       cancelled = true;

@@ -131,15 +131,17 @@ describe("OIDC / SSO helpers", () => {
     expect(() => parseRmabAuthData("https://rmab.test", raw)).toThrow();
   });
 
-  it("reports oidcEnabled + provider name, and never throws on a probe error", async () => {
+  it("reports oidcEnabled + provider name on success, and null (unknown) on a probe error", async () => {
     mockedGet.mockResolvedValueOnce({ data: { oidcProviderName: "Authentik", providers: ["oidc"] } });
     await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({
       oidcEnabled: true,
       oidcProviderName: "Authentik",
       localLoginDisabled: false,
     });
+    // A transient failure returns null — callers must treat that as "unknown",
+    // not "OIDC off", so the SSO button isn't hidden on a blip.
     mockedGet.mockRejectedValueOnce(new Error("network"));
-    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({ oidcEnabled: false });
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toBeNull();
   });
 });
 
