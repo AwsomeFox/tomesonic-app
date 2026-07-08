@@ -18,7 +18,10 @@ import { withAlpha } from '../theme/palette';
 import Icon, { IconName } from '../components/Icon';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
 import BottomSheet from '../components/BottomSheet';
+import RmabSsoLoginModal from '../components/RmabSsoLoginModal';
+import RmabSessionExpiredBanner from '../components/RmabSessionExpiredBanner';
 import { useRmabStore } from '../store/useRmabStore';
+import { getRmabAuthProviders, rmabOrigin, RmabConfig } from '../utils/rmab';
 import { haptic } from '../utils/haptics';
 
 import * as Application from 'expo-application';
@@ -52,7 +55,7 @@ const JUMP_OPTIONS: SelectOption[] = [5, 10, 15, 30, 45, 60].map((s) => ({
 }));
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-export default function SettingsScreen({ navigation }: any) {
+export default function SettingsScreen({ navigation, route }: any) {
   const colors = useThemeColors();
 
   const themeMode = useThemeStore((state) => state.mode);
@@ -80,10 +83,15 @@ export default function SettingsScreen({ navigation }: any) {
   const rmabConnecting = useRmabStore((s) => s.connecting);
   const rmabError = useRmabStore((s) => s.connectError);
   const rmabConnect = useRmabStore((s) => s.connect);
+  const rmabConnectWithOidc = useRmabStore((s) => s.connectWithOidc);
   const rmabDisconnect = useRmabStore((s) => s.disconnect);
   const [rmabSheetOpen, setRmabSheetOpen] = React.useState(false);
   const [rmabUrl, setRmabUrl] = React.useState('');
   const [rmabToken, setRmabToken] = React.useState('');
+  // SSO (OIDC) sign-in: a WebView flow that needs no admin-issued login token.
+  const [rmabSsoOpen, setRmabSsoOpen] = React.useState(false);
+  const [rmabSsoError, setRmabSsoError] = React.useState<string | null>(null);
+  const [rmabProviders, setRmabProviders] = React.useState<{ oidcEnabled: boolean; name?: string | null } | null>(null);
 
   // connect() accepts a one-time login URL (contains token=) pasted into
   // EITHER field, or a plain server URL plus a separate token — allow any
@@ -93,9 +101,77 @@ export default function SettingsScreen({ navigation }: any) {
     ? rmabUrl.includes('token=') || !!rmabToken.trim()
     : rmabTokenIsLoginUrl;
 
+  // Clear a prior SSO error when the connect sheet CLOSES, so it never lingers
+  // into a later open — but without wiping an error the deep-link below sets
+  // while opening (a clear-on-open effect would race and erase it).
+  React.useEffect(() => {
+    if (!rmabSheetOpen) setRmabSsoError(null);
+  }, [rmabSheetOpen]);
+
+  // Deep-link from the session-expired banner on Requests/Discover: open the
+  // connect sheet directly (a bare navigate would dump the user on Settings
+  // with no re-login UI) and surface any failure reason it forwarded.
+  React.useEffect(() => {
+    if (route?.params?.openRmabConnect) {
+      setRmabSheetOpen(true);
+      if (route.params.rmabConnectError) setRmabSsoError(route.params.rmabConnectError);
+      navigation.setParams({ openRmabConnect: undefined, rmabConnectError: undefined });
+    }
+  }, [route?.params?.openRmabConnect, route?.params?.rmabConnectError]);
+
   const onRmabConnect = async () => {
     if (!rmabCanSubmit) return;
+    // A token attempt supersedes any earlier SSO error (which otherwise masks
+    // the token result, since it takes display precedence).
+    setRmabSsoError(null);
     const ok = await rmabConnect(rmabUrl, rmabToken);
+    if (ok) {
+      setRmabSheetOpen(false);
+      setRmabUrl('');
+      setRmabToken('');
+    }
+  };
+
+  // SSO only needs the server address — derive it from whichever field has a
+  // usable URL. Show the button unless we've affirmatively learned OIDC is off.
+  // The token field only contributes an origin when it's a login URL (has
+  // `token=`); a raw `rmab_…` API token would otherwise mis-parse as a bare
+  // host (`https://rmab_x`), wrongly showing SSO and probing a bogus origin.
+  const rmabSsoOrigin = rmabOrigin(rmabUrl) || (rmabTokenIsLoginUrl ? rmabOrigin(rmabToken) : null);
+  const rmabShowSso = !!rmabSsoOrigin && (rmabProviders === null || rmabProviders.oidcEnabled);
+  const rmabSsoLabel = rmabProviders?.name ? `Sign in with ${rmabProviders.name}` : 'Sign in with SSO';
+
+  // Probe the server's enabled providers when the sheet is open and we have an
+  // address, so the SSO button reflects the real provider (and hides if off).
+  React.useEffect(() => {
+    // Clear stale provider state from a previous origin up front, then probe.
+    setRmabProviders(null);
+    if (!rmabSheetOpen || !rmabSsoOrigin) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    // Debounce: the origin recomputes on every keystroke while the user types
+    // the server address — wait for a pause so we fire ONE probe, not one per
+    // character. Cleanup both cancels the pending probe AND aborts an in-flight
+    // request (12s timeout) so a fast edit can't leave a request storm behind.
+    const timer = setTimeout(() => {
+      getRmabAuthProviders(rmabSsoOrigin, controller.signal).then((p) => {
+        // ONLY apply a real response — a null (network/404/aborted) leaves
+        // providers unknown so the SSO button stays shown by default rather
+        // than hiding on a transient blip.
+        if (!cancelled && p) setRmabProviders({ oidcEnabled: p.oidcEnabled, name: p.oidcProviderName });
+      });
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [rmabSheetOpen, rmabSsoOrigin]);
+
+  const onRmabSsoSuccess = async (cfg: RmabConfig) => {
+    setRmabSsoOpen(false);
+    setRmabSsoError(null);
+    const ok = await rmabConnectWithOidc(cfg);
     if (ok) {
       setRmabSheetOpen(false);
       setRmabUrl('');
@@ -277,6 +353,12 @@ export default function SettingsScreen({ navigation }: any) {
         <SectionHeader label="ReadMeABook" colors={colors} />
         {rmabConfigured ? (
           <>
+            <RmabSessionExpiredBanner
+              onManualReconnect={(msg) => {
+                if (msg) setRmabSsoError(msg);
+                setRmabSheetOpen(true);
+              }}
+            />
             <RowBase icon="globe" title="Server" subtitle={rmabServerUrl || ''} colors={colors} />
             <Divider colors={colors} />
             <RowBase
@@ -359,10 +441,52 @@ export default function SettingsScreen({ navigation }: any) {
               paddingVertical: 10,
             }}
           />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 14 }}>
-            Full access: paste the one-time login URL an admin generates under
-            Admin → Users → Edit permissions → Login Token. Everything below stays empty.
-          </Text>
+          {rmabShowSso ? (
+            <>
+              <Pressable
+                onPress={() => {
+                  setRmabSsoError(null);
+                  setRmabSsoOpen(true);
+                }}
+                accessibilityRole="button"
+                // Stable label for assistive tech / automation; the provider
+                // name (which varies per server) rides in the hint + visible text.
+                accessibilityLabel="Sign in with SSO"
+                accessibilityHint={rmabProviders?.name ? `Uses ${rmabProviders.name}` : undefined}
+                android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
+                style={{
+                  backgroundColor: colors.primaryContainer,
+                  height: 48,
+                  borderRadius: 24,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexDirection: 'row',
+                  marginTop: 12,
+                }}
+              >
+                <Icon name="account" size={18} color={colors.onPrimaryContainer} />
+                <Text style={{ color: colors.onPrimaryContainer, fontSize: 15, fontWeight: '600', marginLeft: 8 }}>
+                  {rmabSsoLabel}
+                </Text>
+              </Pressable>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 8, marginBottom: 14 }}>
+                Sign in with your normal account — no login URL from an admin needed.
+              </Text>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+                <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginHorizontal: 10 }}>
+                  or use a token
+                </Text>
+                <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
+              </View>
+            </>
+          ) : (
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 14 }}>
+              Full access: paste the one-time login URL an admin generates under
+              Admin → Users → Edit permissions → Login Token. Everything below stays empty.
+            </Text>
+          )}
 
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
             API token (optional)
@@ -389,7 +513,7 @@ export default function SettingsScreen({ navigation }: any) {
             API Tokens. Limited to search and requests.
           </Text>
 
-          {rmabError ? (
+          {rmabSsoError || rmabError ? (
             // Live region: a failed connect otherwise just leaves the sheet
             // open with no announcement.
             <Text
@@ -397,7 +521,7 @@ export default function SettingsScreen({ navigation }: any) {
               accessibilityLiveRegion="polite"
               style={{ color: colors.error, fontSize: 13, marginBottom: 4 }}
             >
-              {rmabError}
+              {rmabSsoError || rmabError}
             </Text>
           ) : null}
           <View style={{ alignItems: 'flex-end', marginTop: 8 }}>
@@ -428,6 +552,17 @@ export default function SettingsScreen({ navigation }: any) {
           </View>
         </View>
       </BottomSheet>
+
+      <RmabSsoLoginModal
+        visible={rmabSsoOpen}
+        serverUrl={rmabSsoOrigin || ''}
+        onClose={() => setRmabSsoOpen(false)}
+        onSuccess={onRmabSsoSuccess}
+        onError={(m) => {
+          setRmabSsoOpen(false);
+          setRmabSsoError(m);
+        }}
+      />
 
       <SettingSelectModal
         visible={openPicker === 'theme'}
