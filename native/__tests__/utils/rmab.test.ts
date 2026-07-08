@@ -101,11 +101,18 @@ describe("exchangeLoginToken", () => {
 });
 
 describe("OIDC / SSO helpers", () => {
-  it("derives an origin from a plain address, a bare host, and a login URL", () => {
+  it("derives an origin from a plain address, a bare host, a host:port, and a login URL", () => {
     expect(rmabOrigin("https://rmab.test/")).toBe("https://rmab.test");
     expect(rmabOrigin("rmab.test")).toBe("https://rmab.test");
+    expect(rmabOrigin("rmab.test:8080")).toBe("https://rmab.test:8080");
+    expect(rmabOrigin("http://rmab.test")).toBe("http://rmab.test");
     expect(rmabOrigin("https://rmab.test/auth/token/login?token=rmab_x")).toBe("https://rmab.test");
     expect(rmabOrigin("   ")).toBeNull();
+  });
+
+  it("rejects non-http(s) schemes so we never build a `null/api/...` URL", () => {
+    expect(rmabOrigin("file:///etc/passwd")).toBeNull();
+    expect(rmabOrigin("data:text/html,x")).toBeNull();
   });
 
   it("builds the OIDC login URL from any origin-ish input", () => {

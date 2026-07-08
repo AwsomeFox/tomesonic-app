@@ -101,8 +101,17 @@ export default function SettingsScreen({ navigation }: any) {
     ? rmabUrl.includes('token=') || !!rmabToken.trim()
     : rmabTokenIsLoginUrl;
 
+  // Clear a prior SSO error whenever the connect sheet (re)opens, so a stale
+  // failure never carries into a fresh attempt.
+  React.useEffect(() => {
+    if (rmabSheetOpen) setRmabSsoError(null);
+  }, [rmabSheetOpen]);
+
   const onRmabConnect = async () => {
     if (!rmabCanSubmit) return;
+    // A token attempt supersedes any earlier SSO error (which otherwise masks
+    // the token result, since it takes display precedence).
+    setRmabSsoError(null);
     const ok = await rmabConnect(rmabUrl, rmabToken);
     if (ok) {
       setRmabSheetOpen(false);

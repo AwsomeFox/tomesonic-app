@@ -139,9 +139,22 @@ export async function exchangeLoginToken(
 export function rmabOrigin(input: string): string | null {
   const v = (input || "").trim();
   if (!v) return null;
-  try { return new URL(v).origin; } catch {}
-  try { return new URL(`https://${v}`).origin; } catch {}
-  return null;
+  // Only real web origins. Non-http(s) schemes (file:, data:, blob:, …) parse
+  // fine but their `.origin` is the literal string "null", which would build
+  // bogus `null/api/...` requests and WebView navigations — reject them.
+  const toOrigin = (s: string): string | null => {
+    try {
+      const u = new URL(s);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+      return u.origin && u.origin !== "null" ? u.origin : null;
+    } catch {
+      return null;
+    }
+  };
+  // An explicit scheme (contains "://") must itself be http(s); a bare host or
+  // host:port gets https assumed. Keying on "://" avoids mangling e.g.
+  // file:///x into a bogus https://file via the fallback.
+  return v.includes("://") ? toOrigin(v) : toOrigin(`https://${v}`);
 }
 
 /** URL that kicks off RMAB's server-side OIDC redirect to the IdP. */
