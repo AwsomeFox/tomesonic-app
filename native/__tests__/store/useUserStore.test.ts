@@ -610,6 +610,39 @@ describe("useUserStore", () => {
     });
   });
 
+  describe("mediaProgress disk-mirror write-through (leading throttle + trailing flush)", () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("writes once on the leading edge and flushes the LATEST map after the window", () => {
+      jest.useFakeTimers();
+      // Push the fake clock well past any prior write window so the next
+      // mutation takes the leading edge instead of scheduling a trailing flush.
+      jest.advanceTimersByTime(5000);
+
+      const setCache = jest.spyOn(storageHelper, "setMediaProgressCache");
+
+      const map1 = { item1: { libraryItemId: "item1", currentTime: 10 } };
+      useUserStore.setState({ mediaProgress: map1 } as any);
+      // Leading edge: persisted immediately.
+      expect(setCache).toHaveBeenCalledTimes(1);
+      expect(setCache).toHaveBeenLastCalledWith(map1);
+
+      // A second quick mutation inside the 3s window does NOT write immediately.
+      const map2 = { item1: { libraryItemId: "item1", currentTime: 11 } };
+      useUserStore.setState({ mediaProgress: map2 } as any);
+      expect(setCache).toHaveBeenCalledTimes(1);
+
+      // After the window elapses the trailing flush persists the LATEST map.
+      jest.advanceTimersByTime(3000);
+      expect(setCache).toHaveBeenCalledTimes(2);
+      expect(setCache).toHaveBeenLastCalledWith(map2);
+
+      setCache.mockRestore();
+    });
+  });
+
   describe("loadEReaderDevices", () => {
     it("stores the devices from /api/authorize", async () => {
       jest.mocked(api.post).mockResolvedValue({

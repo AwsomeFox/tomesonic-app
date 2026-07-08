@@ -425,6 +425,75 @@ describe("response interceptor", () => {
     expect(storageHelper.getServerConfig()).toBeNull();
   });
 
+  // SECURITY: the refresh can take up to 20s. If the user switches accounts (or
+  // logs out) while it is in flight, the refreshed pair — built from the OLD
+  // session — must be DISCARDED, not written over the new session's config.
+  it("discards a refreshed pair when the stored config switched to a DIFFERENT user mid-refresh", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "r1",
+      userId: "u1",
+    });
+    useUserStore.setState({
+      serverConnectionConfig: { address: "http://abs.local", token: "u2-tok", userId: "u2" },
+    } as any);
+    const setSpy = jest.spyOn(storageHelper, "setServerConfig");
+    // The refresh resolves AFTER account u2 switched in: the stored config now
+    // belongs to a different user than the one this refresh was built for.
+    postSpy.mockImplementation(async () => {
+      storageHelper.setServerConfig({
+        address: "http://abs.local",
+        token: "u2-tok",
+        refreshToken: "u2-refresh",
+        userId: "u2",
+      });
+      return { status: 200, data: { user: { accessToken: "fresh", refreshToken: "r2" } } };
+    });
+
+    await responseHandler.rejected(make401());
+
+    // u1's refreshed pair must NOT have overwritten u2's stored config.
+    const stored = storageHelper.getServerConfig();
+    expect(stored).toMatchObject({ userId: "u2", token: "u2-tok" });
+    expect(setSpy).not.toHaveBeenCalledWith(expect.objectContaining({ token: "fresh" }));
+    // No user-store update with the discarded pair.
+    expect(useUserStore.getState().serverConnectionConfig).toMatchObject({ userId: "u2" });
+    expect(useUserStore.getState().serverConnectionConfig.token).not.toBe("fresh");
+    // No auto_creds mirror write carrying the discarded token.
+    const freshMirrorWrites = (FileSystem.writeAsStringAsync as jest.Mock).mock.calls.filter((c) =>
+      String(c[1]).includes('"token":"fresh"')
+    );
+    expect(freshMirrorWrites).toHaveLength(0);
+    setSpy.mockRestore();
+  });
+
+  it("discards a refreshed pair when the stored config was CLEARED (logout) mid-refresh", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "r1",
+      userId: "u1",
+    });
+    const setSpy = jest.spyOn(storageHelper, "setServerConfig");
+    // Logout clears the stored session while the refresh is in flight.
+    postSpy.mockImplementation(async () => {
+      storageHelper.clearServerConfig();
+      return { status: 200, data: { user: { accessToken: "fresh", refreshToken: "r2" } } };
+    });
+
+    await responseHandler.rejected(make401());
+
+    // The logged-out session must not be resurrected by the stale refresh.
+    expect(storageHelper.getServerConfig()).toBeNull();
+    expect(setSpy).not.toHaveBeenCalledWith(expect.objectContaining({ token: "fresh" }));
+    const freshMirrorWrites = (FileSystem.writeAsStringAsync as jest.Mock).mock.calls.filter((c) =>
+      String(c[1]).includes('"token":"fresh"')
+    );
+    expect(freshMirrorWrites).toHaveLength(0);
+    setSpy.mockRestore();
+  });
+
   it("rejects queued requests when the shared refresh fails", async () => {
     storageHelper.setServerConfig({
       address: "http://abs.local",

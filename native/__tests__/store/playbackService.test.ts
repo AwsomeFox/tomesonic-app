@@ -129,6 +129,51 @@ describe("playbackService remote events", () => {
     });
   });
 
+  describe("RemotePlayPause (the single toggle key — headset / AVRCP steering wheel)", () => {
+    it("pauses a live PLAYING session", async () => {
+      const a = spyActions();
+      usePlaybackStore.setState({ isPlaying: true } as any);
+      emit("remote-play-pause", {});
+      await flush();
+      expect(a.pause).toHaveBeenCalledTimes(1);
+      expect(a.play).not.toHaveBeenCalled();
+    });
+
+    it("plays a live PAUSED session", async () => {
+      const a = spyActions();
+      usePlaybackStore.setState({ isPlaying: false } as any);
+      emit("remote-play-pause", {});
+      await flush();
+      expect(a.play).toHaveBeenCalledTimes(1);
+      expect(a.pause).not.toHaveBeenCalled();
+    });
+
+    it("HEADLESS cold start: restores the last session, then plays it", async () => {
+      // BT toggle press before App.tsx ever mounted — no session loaded, so the
+      // handler must loadLastSession() first (mirrors RemotePlay's restore).
+      const a = spyActions();
+      usePlaybackStore.setState({ currentSession: null, isPlaying: false } as any);
+      a.loadLastSession.mockImplementation(async () => {
+        usePlaybackStore.setState({ currentSession: { id: "restored" } } as any);
+      });
+      emit("remote-play-pause", {});
+      await flush();
+      expect(a.loadLastSession).toHaveBeenCalledTimes(1);
+      expect(a.play).toHaveBeenCalledTimes(1);
+      expect(a.pause).not.toHaveBeenCalled();
+    });
+
+    it("HEADLESS cold start with nothing to restore stays a safe no-op", async () => {
+      const a = spyActions();
+      usePlaybackStore.setState({ currentSession: null } as any);
+      emit("remote-play-pause", {});
+      await flush();
+      expect(a.loadLastSession).toHaveBeenCalledTimes(1);
+      expect(a.play).not.toHaveBeenCalled();
+      expect(a.pause).not.toHaveBeenCalled();
+    });
+  });
+
   it("RemotePause routes to store.pause() (flushes the progress sync)", () => {
     const a = spyActions();
     emit("remote-pause");

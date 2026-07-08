@@ -756,6 +756,110 @@ describe("auto-download next in series (on finish)", () => {
     expect(mockedApiGet).not.toHaveBeenCalledWith("/api/items/s-book2?expanded=1");
   });
 
+  it("FALLBACK: with no strictly-next sequence, picks the first not-downloaded/not-active book", async () => {
+    // The finished book is the HIGHEST sequence, so no book has sequence >
+    // current — the strict-next find fails and the fallback kicks in:
+    // sorted.find(!completed && !active). s-book2 (seq 1) is already
+    // downloaded, so the fallback must skip it and choose s-book3 (seq 2).
+    enableAutoNext();
+    setConfig();
+    markBook1Downloaded();
+    useDownloadStore.setState({
+      completedDownloads: {
+        "s-book1": { id: "s-book1", title: "Series One" },
+        "s-book2": { id: "s-book2", title: "Series Two" },
+      },
+    } as any);
+    mockedApiGet.mockImplementation(async (url: any) => {
+      if (url === "/api/items/s-book1?expanded=1") {
+        return { data: { id: "s-book1", libraryId: "lib1", media: { metadata: { series: [{ id: "ser1", sequence: "3" }] } } } } as any;
+      }
+      if (url === "/api/libraries/lib1/series/ser1") {
+        return {
+          data: {
+            books: [
+              { id: "s-book1", media: { metadata: { series: [{ id: "ser1", sequence: "3" }] } } },
+              { id: "s-book2", media: { metadata: { series: [{ id: "ser1", sequence: "1" }] } } },
+              { id: "s-book3", media: { metadata: { series: [{ id: "ser1", sequence: "2" }] } } },
+            ],
+          },
+        } as any;
+      }
+      if (url === "/api/items/s-book3?expanded=1") {
+        return {
+          data: {
+            id: "s-book3",
+            libraryId: "lib1",
+            media: {
+              metadata: { title: "Series Three" },
+              tracks: [{ index: 1, contentUrl: "/api/items/s-book3/file/1", duration: 10 }],
+            },
+          },
+        } as any;
+      }
+      return { data: {} } as any;
+    });
+
+    await autoDownloadNextAfterFinish("s-book1");
+
+    // The already-downloaded s-book2 is skipped; s-book3 is fetched + downloaded.
+    expect(mockedApiGet).toHaveBeenCalledWith("/api/items/s-book3?expanded=1");
+    expect(mockedApiGet).not.toHaveBeenCalledWith("/api/items/s-book2?expanded=1");
+    expect(useDownloadStore.getState().completedDownloads["s-book3"]).toBeTruthy();
+    expect(useDownloadStore.getState().completedDownloads["s-book3"].title).toBe("Series Three");
+  });
+
+  it("RE-ENTRANCY: a second finish for the same item while one is in flight is a no-op", async () => {
+    enableAutoNext();
+    setConfig();
+    markBook1Downloaded();
+    const gate = deferred<void>();
+    let book1Fetches = 0;
+    mockedApiGet.mockImplementation(async (url: any) => {
+      if (url === "/api/items/s-book1?expanded=1") {
+        book1Fetches++;
+        await gate.promise; // hold the first run in flight (autoNextInFlight set)
+        return { data: { id: "s-book1", libraryId: "lib1", media: { metadata: { series: [{ id: "ser1", sequence: "1" }] } } } } as any;
+      }
+      if (url === "/api/libraries/lib1/series/ser1") {
+        return {
+          data: {
+            books: [
+              { id: "s-book1", media: { metadata: { series: [{ id: "ser1", sequence: "1" }] } } },
+              { id: "s-book2", media: { metadata: { series: [{ id: "ser1", sequence: "2" }] } } },
+            ],
+          },
+        } as any;
+      }
+      if (url === "/api/items/s-book2?expanded=1") {
+        return {
+          data: {
+            id: "s-book2",
+            libraryId: "lib1",
+            media: {
+              metadata: { title: "Series Two" },
+              tracks: [{ index: 1, contentUrl: "/api/items/s-book2/file/1", duration: 10 }],
+            },
+          },
+        } as any;
+      }
+      return { data: {} } as any;
+    });
+
+    const first = autoDownloadNextAfterFinish("s-book1");
+    await until(() => book1Fetches === 1);
+
+    // Second finish for the SAME item while the first is still awaiting: the
+    // autoNextInFlight guard must short-circuit it before any further fetch.
+    await autoDownloadNextAfterFinish("s-book1");
+    expect(book1Fetches).toBe(1);
+
+    gate.resolve();
+    await first;
+    // The single in-flight run still finishes normally.
+    expect(useDownloadStore.getState().completedDownloads["s-book2"]).toBeTruthy();
+  });
+
   it("never throws to the caller on error", async () => {
     enableAutoNext();
     setConfig();

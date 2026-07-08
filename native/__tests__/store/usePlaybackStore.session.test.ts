@@ -523,6 +523,47 @@ describe("usePlaybackStore sessions", () => {
       expect(usePlaybackStore.getState().position).toBe(222);
     });
 
+    it("hits the composite EPISODE progress endpoint for a restored podcast-episode session", async () => {
+      // Podcast progress is keyed per episode server-side, so an episode
+      // session must GET /api/me/progress/{itemId}/{episodeId}, not the
+      // item-only URL (which returns nothing useful for the episode).
+      storageHelper.setLastPlaybackSession({
+        ...serverSession({ episodeId: "ep1" }),
+        currentTime: 100,
+        updatedAt: BASE - 60_000,
+      });
+      mockGet.mockResolvedValue({ data: { currentTime: 100, lastUpdate: BASE - 120_000 } } as any);
+
+      await usePlaybackStore.getState().loadLastSession();
+
+      expect(mockGet).toHaveBeenCalledWith("/api/me/progress/item1/ep1");
+      expect(mockGet).not.toHaveBeenCalledWith("/api/me/progress/item1");
+    });
+
+    it("re-persists the adopted server position so prepare's freshest-wins can't reverse it", async () => {
+      // Server is fresher by >10s AND >2s ahead: the adopted position must be
+      // written back to the MMKV save, because preparePlaybackSession re-reads
+      // that save and would otherwise re-prefer the stale local one.
+      storageHelper.setLastPlaybackSession({
+        ...serverSession(),
+        currentTime: 100,
+        updatedAt: BASE - 60_000,
+      });
+      mockGet.mockResolvedValue({ data: { currentTime: 222, lastUpdate: BASE } } as any);
+      useUserStore.setState({
+        mediaProgress: { item1: { libraryItemId: "item1", currentTime: 222, lastUpdate: BASE } },
+      } as any);
+      const setLast = jest.spyOn(storageHelper, "setLastPlaybackSession");
+
+      await usePlaybackStore.getState().loadLastSession();
+
+      expect(setLast).toHaveBeenCalledWith(
+        expect.objectContaining({ currentTime: 222, updatedAt: BASE })
+      );
+      expect(usePlaybackStore.getState().position).toBe(222);
+      setLast.mockRestore();
+    });
+
     it("keeps the local position when the server progress is older", async () => {
       storageHelper.setLastPlaybackSession({
         ...serverSession(),
