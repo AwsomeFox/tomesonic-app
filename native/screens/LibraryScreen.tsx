@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -60,7 +60,19 @@ function formatAdded(ms?: number): string {
   )}:${pad(d.getMinutes())}`;
 }
 
-export default function LibraryScreen({ route, navigation }: any) {
+/**
+ * Imperative handle the Library-hub uses to drive the shared TopAppBar's
+ * filter/sort actions when this screen is embedded (the hub owns the bar).
+ */
+export interface LibraryScreenHandle {
+  openFilter: () => void;
+  openSort: () => void;
+}
+
+function LibraryScreen(
+  { route, navigation, embedded, onFilterActiveChange }: any,
+  ref: React.Ref<LibraryScreenHandle>
+) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
@@ -125,6 +137,24 @@ export default function LibraryScreen({ route, navigation }: any) {
   // filter/sort is invisible.
   const isDefaultSort = orderBy === "addedAt" && descending === true;
   const filterActive = (!!filterBy && filterBy !== "all") || !isDefaultSort;
+
+  // Let the Library-hub trigger this screen's own filter/sort sheets from the
+  // shared TopAppBar when embedded.
+  useImperativeHandle(
+    ref,
+    () => ({
+      openFilter: () => setFilterOpen(true),
+      openSort: () => setSortOpen(true),
+    }),
+    []
+  );
+
+  // When embedded, the hub owns the shared TopAppBar, so it needs to know when
+  // this screen's filter/sort differs from the default to show the active-filter
+  // badge on the Books segment. Push filterActive up whenever it changes.
+  useEffect(() => {
+    onFilterActiveChange?.(filterActive);
+  }, [filterActive, onFilterActiveChange]);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -401,22 +431,8 @@ export default function LibraryScreen({ route, navigation }: any) {
     );
   };
 
-  return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: colors.surface }}
-      edges={["top", "left", "right"]}
-    >
-      <TopAppBar
-        navigation={navigation}
-        showBack={route.params?.showBack}
-        title={route.params?.title}
-        showFilter
-        filterActive={filterActive}
-        showSort
-        onFilter={() => setFilterOpen(true)}
-        onSort={() => setSortOpen(true)}
-      />
-
+  const modals = (
+    <>
       <FilterModal
         visible={filterOpen}
         onClose={() => setFilterOpen(false)}
@@ -441,12 +457,18 @@ export default function LibraryScreen({ route, navigation }: any) {
           updateUserSettings({ mobileOrderBy: o, mobileOrderDesc: d }).catch(() => {});
         }}
       />
+    </>
+  );
 
+  const content = (
+    <>
       {/* The search overlay belongs to TAB instances only. This screen is ALSO
           registered on the root stack ("Library" + showBack) as the target of
           narrator/tag/genre taps — rendering the overlay there showed the
-          search results AGAIN instead of the filtered list you navigated to. */}
-      {isSearchActive && !route.params?.showBack ? (
+          search results AGAIN instead of the filtered list you navigated to.
+          When embedded in the Library-hub the hub owns the search overlay, so
+          this branch is suppressed there too. */}
+      {isSearchActive && !route.params?.showBack && !embedded ? (
         <SearchContent navigation={navigation} />
       ) : initialLoading ? (
         <ListSkeleton rows={9} />
@@ -514,6 +536,40 @@ export default function LibraryScreen({ route, navigation }: any) {
           }
         />
       )}
+    </>
+  );
+
+  // Embedded in the Library-hub: the hub provides the shared SafeAreaView +
+  // single TopAppBar (and drives filter/sort via the imperative handle), so we
+  // render just the modals + content body here.
+  if (embedded) {
+    return (
+      <View style={{ flex: 1 }}>
+        {modals}
+        {content}
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: colors.surface }}
+      edges={["top", "left", "right"]}
+    >
+      <TopAppBar
+        navigation={navigation}
+        showBack={route.params?.showBack}
+        title={route.params?.title}
+        showFilter
+        filterActive={filterActive}
+        showSort
+        onFilter={() => setFilterOpen(true)}
+        onSort={() => setSortOpen(true)}
+      />
+      {modals}
+      {content}
     </SafeAreaView>
   );
 }
+
+export default forwardRef(LibraryScreen);

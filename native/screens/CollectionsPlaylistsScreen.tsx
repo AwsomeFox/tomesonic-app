@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, forwardRef } from "react";
 import {
   View,
   Text,
@@ -34,7 +34,11 @@ type Tab = "collections" | "playlists";
 
 const ROW_COVER = 72;
 
-export default function CollectionsPlaylistsScreen({ navigation }: any) {
+// forwardRef only so the Library-hub can attach its shared content ref without
+// a "function components cannot be given refs" warning — this screen exposes no
+// TopAppBar-driven actions (its Collections/Playlists sub-tabs and create button
+// live in the body), so there is no imperative handle.
+function CollectionsPlaylistsScreen({ navigation, embedded }: any, _ref: React.Ref<unknown>) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
@@ -215,13 +219,10 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
 
   const data = activeTab === "collections" ? collections : playlists;
 
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
-      <TopAppBar navigation={navigation} />
-
-      {isSearchActive ? (
-        <SearchContent navigation={navigation} />
-      ) : (
+  const body =
+    isSearchActive && !embedded ? (
+      <SearchContent navigation={navigation} />
+    ) : (
         <>
           {/* Segmented toggle: Collections | Playlists (+ create button) */}
           <View
@@ -351,9 +352,10 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
         </ScrollView>
       )}
         </>
-      )}
+      );
 
-      {/* Create collection/playlist dialog */}
+  // Create collection/playlist dialog — always mounted (Modal is a portal).
+  const createModal = (
       <Modal
         visible={createOpen}
         transparent
@@ -450,9 +452,27 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
           </Pressable>
         </Pressable>
       </Modal>
+  );
+
+  if (embedded) {
+    return (
+      <View style={{ flex: 1 }}>
+        {body}
+        {createModal}
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
+      <TopAppBar navigation={navigation} />
+      {body}
+      {createModal}
     </SafeAreaView>
   );
 }
+
+export default forwardRef(CollectionsPlaylistsScreen);
 
 // Rounded square cover: single fills the square, otherwise a 2x2 collage over
 // a primary background (mirrors CollectionCover/PlaylistCover.vue).

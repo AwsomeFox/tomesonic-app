@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl, useWindowDimensions } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -59,7 +59,14 @@ interface Series {
   books: SeriesBook[];
 }
 
-export default function SeriesListScreen({ navigation }: any) {
+export interface SeriesListScreenHandle {
+  openSort: () => void;
+}
+
+function SeriesListScreen(
+  { navigation, embedded }: any,
+  ref: React.Ref<SeriesListScreenHandle>
+) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
@@ -87,6 +94,7 @@ export default function SeriesListScreen({ navigation }: any) {
     savedSettings?.mobileSeriesOrderDesc ?? false
   );
   const [sortOpen, setSortOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ openSort: () => setSortOpen(true) }), []);
   // Cover books fetched lazily per-series when the series payload omits `books`.
   const [coverBooksMap, setCoverBooksMap] = useState<Record<string, SeriesBook[]>>({});
   const fetchingCoversRef = useRef<Set<string>>(new Set());
@@ -379,28 +387,26 @@ export default function SeriesListScreen({ navigation }: any) {
     );
   };
 
-  return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: colors.surface }}
-      edges={["top", "left", "right"]}
-    >
-      <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
+  const modal = (
+    <OrderModal
+      visible={sortOpen}
+      onClose={() => setSortOpen(false)}
+      orderBy={orderBy}
+      descending={descending}
+      series
+      onChange={(o, d) => {
+        setOrderBy(o);
+        setDescending(d);
+        updateUserSettings({ mobileSeriesOrderBy: o, mobileSeriesOrderDesc: d }).catch(() => {});
+      }}
+    />
+  );
 
-      <OrderModal
-        visible={sortOpen}
-        onClose={() => setSortOpen(false)}
-        orderBy={orderBy}
-        descending={descending}
-        series
-        onChange={(o, d) => {
-          setOrderBy(o);
-          setDescending(d);
-          updateUserSettings({ mobileSeriesOrderBy: o, mobileSeriesOrderDesc: d }).catch(() => {});
-        }}
-      />
-
-      {/* Search overlay wins over every other state (matches LibraryScreen). */}
-      {isSearchActive ? (
+  const content = (
+    <>
+      {/* Search overlay wins over every other state (matches LibraryScreen).
+          Suppressed when embedded — the Library-hub owns the overlay. */}
+      {isSearchActive && !embedded ? (
         <SearchContent navigation={navigation} />
       ) : initialLoading ? (
         <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
@@ -442,6 +448,28 @@ export default function SeriesListScreen({ navigation }: any) {
           }
         />
       )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <View style={{ flex: 1 }}>
+        {modal}
+        {content}
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: colors.surface }}
+      edges={["top", "left", "right"]}
+    >
+      <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
+      {modal}
+      {content}
     </SafeAreaView>
   );
 }
+
+export default forwardRef(SeriesListScreen);
