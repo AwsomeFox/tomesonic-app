@@ -52,6 +52,15 @@ describe("formatBytes", () => {
     expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe("1.50 GB");
     expect(formatBytes(1024 * 1024 * 1024 * 1024)).toBe("1024.00 GB");
   });
+
+  it("promotes a value that rounds up to 1024 MB into GB (no '1024 MB')", () => {
+    // mb in [1023.5, 1024) would render "1024 MB" with the old raw `mb >= 1024`
+    // check — it must show GB instead.
+    expect(formatBytes(1023.5 * 1024 * 1024)).toBe("1.00 GB");
+    expect(formatBytes(1023.9 * 1024 * 1024)).toBe("1.00 GB");
+    // Just below the rounding boundary stays MB.
+    expect(formatBytes(1023.4 * 1024 * 1024)).toBe("1023 MB");
+  });
 });
 
 describe("remainingPretty", () => {

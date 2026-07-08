@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..b416eb2 100644
+index b495b5a..c4daab4 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -1437,7 +1437,7 @@ index b495b5a..b416eb2 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1386,45 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1386,60 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1455,18 +1455,33 @@ index b495b5a..b416eb2 100644
 +        // paused over the top. Reuse the browse tap-to-play channel: the JS
 +        // RemotePlayId handler runs the full startPlayback + seek, so the app
 +        // adopts the correct book at the LIVE absolute position, still playing.
-+        // Gated on playWhenReady so foregrounding a car session the user PAUSED
-+        // never auto-resumes it.
++        // Emit the handoff REGARDLESS of playWhenReady: a PAUSED cold-start car
++        // session was previously dropped (nothing emitted before fakePlayer
++        // release), and reconcileWithNativePlayer refuses a non-playing native
++        // session too, so a stale disk save got restored instead — losing the
++        // in-car position. Thread the paused state through a bundle flag so the
++        // JS handler starts the real session but does NOT auto-resume audio the
++        // user paused.
 +        try {
 +            if (::fakePlayer.isInitialized) {
 +                val mid = fakePlayer.currentMediaItem?.mediaId
-+                if (mid != null && mid.startsWith("play:") && fakePlayer.playWhenReady) {
++                if (mid != null && mid.startsWith("play:")) {
 +                    val relMs = fakePlayer.currentPosition.coerceAtLeast(0L)
-+                    val absSec = (absColdStartOffsetMs + relMs) / 1000.0
 +                    val raw = mid.removePrefix("play:").substringBefore("@@")
-+                    Timber.i("Handing off AA cold-start session %s @ %.1fs to JS", raw, absSec)
++                    val paused = !fakePlayer.playWhenReady
++                    // Only append the "@@<sec>" seek when fakePlayer actually
++                    // buffered a position (relMs > 0). At relMs==0 a multi-file
++                    // book's absColdStartOffsetMs would otherwise seed a bogus
++                    // start-of-file seek (absSec==startOffset) that overrides
++                    // startPlayback's correct server-resume position.
++                    val id = if (relMs > 0L) {
++                        val absSec = (absColdStartOffsetMs + relMs) / 1000.0
++                        "$raw@@$absSec"
++                    } else raw
++                    Timber.i("Handing off AA cold-start session %s (paused=%b) to JS", id, paused)
 +                    emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply {
-+                        putString("id", "$raw@@$absSec")
++                        putString("id", id)
++                        putBoolean("paused", paused)
 +                    })
 +                }
 +            }
@@ -1485,7 +1500,7 @@ index b495b5a..b416eb2 100644
          observeEvents()
      }
  
-@@ -293,9 +1507,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1522,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1497,7 +1512,7 @@ index b495b5a..b416eb2 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1520,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1535,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1559,7 +1574,7 @@ index b495b5a..b416eb2 100644
          }
      }
  
-@@ -449,6 +1697,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1712,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1570,7 +1585,7 @@ index b495b5a..b416eb2 100644
      }
  
      @MainThread
-@@ -515,6 +1767,29 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1782,29 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -1600,7 +1615,7 @@ index b495b5a..b416eb2 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +1992,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2007,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1609,7 +1624,7 @@ index b495b5a..b416eb2 100644
              return
          }
  
-@@ -780,8 +2055,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2070,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1625,7 +1640,7 @@ index b495b5a..b416eb2 100644
          return mediaSession
      }
  
-@@ -792,13 +2073,41 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2088,41 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1669,7 +1684,7 @@ index b495b5a..b416eb2 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2214,230 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2229,230 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1917,7 +1932,7 @@ index b495b5a..b416eb2 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2446,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2461,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -1947,7 +1962,7 @@ index b495b5a..b416eb2 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2478,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2493,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -1963,7 +1978,7 @@ index b495b5a..b416eb2 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2494,81 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2509,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -2002,12 +2017,15 @@ index b495b5a..b416eb2 100644
 +                    future.setException(UnsupportedOperationException("service unavailable"))
 +                }) {
 +                    try {
-+                        val itemId = absStr(
-+                            absReadMirror("widget_state.json")?.let { org.json.JSONObject(it) },
-+                            "itemId"
-+                        ) ?: ""
++                        val o = absReadMirror("widget_state.json")?.let { org.json.JSONObject(it) }
++                        val itemId = absStr(o, "itemId") ?: ""
++                        // Podcasts: thread the episodeId so the JS RemotePlayId
++                        // handler resolves /play/{episode}, not the item as a
++                        // whole (a plain itemId resumed the wrong content).
++                        val episodeId = absStr(o, "episodeId")
 +                        if (itemId.isNotEmpty()) {
-+                            emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply { putString("id", itemId) })
++                            val id = if (episodeId != null) "$itemId::$episodeId" else itemId
++                            emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply { putString("id", id) })
 +                        }
 +                    } catch (e: Exception) {
 +                        Timber.w(e, "resumption JS route failed")
@@ -2028,14 +2046,20 @@ index b495b5a..b416eb2 100644
 +                        future.setException(UnsupportedOperationException("no last session"))
 +                        return@absSubmitBrowse
 +                    }
++                    // Podcasts: resume the saved EPISODE (/play/{episode}), not
++                    // the item — a null episodeId hit /play/{item} and resumed
++                    // the wrong content. The mediaId carries "::episodeId" too so
++                    // a later JS handoff (setupPlayer) routes to the episode.
++                    val episodeId = absStr(o, "episodeId")
 +                    absRefreshDownloaded()
-+                    val resolved = absResolvePlayResumable(itemId, null, null)
++                    val resolved = absResolvePlayResumable(itemId, episodeId, null)
 +                    if (resolved == null) {
 +                        future.setException(UnsupportedOperationException("unresolvable last session"))
 +                        return@absSubmitBrowse
 +                    }
++                    val mediaId = if (episodeId != null) "play:$itemId::$episodeId" else "play:$itemId"
 +                    val item = absPlayableItem(
-+                        "play:$itemId", itemId,
++                        mediaId, itemId,
 +                        absStr(o, "title") ?: "Audiobook",
 +                        absStr(o, "author"), null
 +                    ).buildUpon().setUri(resolved.first).build()

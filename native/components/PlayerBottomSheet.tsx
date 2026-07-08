@@ -10,6 +10,7 @@ import {
   StyleSheet,
   AccessibilityInfo,
   findNodeHandle,
+  ActivityIndicator,
   Alert,
 } from "react-native";
 import { Image } from "expo-image";
@@ -150,6 +151,9 @@ export default function PlayerBottomSheet() {
   // which the scrubber needs — isolating those into a child is a further optimization.)
   const currentSession = usePlaybackStore((s) => s.currentSession);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
+  // Native stall indicator — a spinner overlays the play/pause control so a
+  // mid-stream buffer doesn't read as a frozen player under the pause glyph.
+  const isBuffering = usePlaybackStore((s) => s.isBuffering);
   const playPause = usePlaybackStore((s) => s.playPause);
   const position = usePlaybackStore((s) => s.position);
   const duration = usePlaybackStore((s) => s.duration);
@@ -1421,6 +1425,14 @@ export default function PlayerBottomSheet() {
             <Animated.View style={animatedPlayIconStyle}>
               <Icon name={isPlaying ? "pause" : "play"} size={30} color={colors.onPrimary} />
             </Animated.View>
+            {isBuffering ? (
+              <View
+                pointerEvents="none"
+                style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center" }]}
+              >
+                <ActivityIndicator testID="buffering-indicator" size="small" color={colors.onPrimary} />
+              </View>
+            ) : null}
           </Pressable>
         </Animated.View>
 

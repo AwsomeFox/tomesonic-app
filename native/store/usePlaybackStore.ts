@@ -710,6 +710,11 @@ export interface SleepTimerState {
 interface PlaybackState {
   currentSession: any | null;
   isPlaying: boolean;
+  // True while the native player is stalled (Buffering/Loading) — the progress
+  // interval folds those states into "playing", so without this a mid-stream
+  // stall showed the pause glyph over a frozen scrubber (looked hung). Set from
+  // the TrackPlayer PlaybackState events observed in playbackService.
+  isBuffering: boolean;
   isInitialized: boolean;
   playbackSpeed: number;
   duration: number;
@@ -776,6 +781,7 @@ let sleepTimerInterval: ReturnType<typeof setInterval> | null = null;
 export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   currentSession: null,
   isPlaying: false,
+  isBuffering: false,
   isInitialized: false,
   playbackSpeed: 1.0,
   duration: 0,
@@ -1639,7 +1645,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
       // Mirror the current book to the home-screen resume widget and to the
       // native Media3 service (itemId powers Android Auto's resume card).
-      writeWidgetState({ title: bookTitle, author: bookAuthor, itemId: libraryItemId || undefined });
+      // episodeId is persisted too so onPlaybackResumption resumes the right
+      // PODCAST EPISODE (/play/{episode}) rather than the item as a whole.
+      writeWidgetState({
+        title: bookTitle,
+        author: bookAuthor,
+        itemId: libraryItemId || undefined,
+        episodeId: session.episodeId || undefined,
+      });
 
       // If the now-playing cover is a REMOTE url, cache it to a local file so
       // Android Auto's compact player (home card / mini bar) — which only reads
@@ -1744,10 +1757,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     if (get().sleepTimer) _sleepLastTickAt = Date.now();
     if (isCasting && castClient) {
       try { await castClient.play(); } catch (e) { console.warn("[Cast] play", e); }
+      // closePlayback may have landed during the awaits above — flipping
+      // isPlaying:true on a torn-down (null) session would strand the flag true
+      // with nothing to ever clear it.
+      if (!get().currentSession) return;
       set({ isPlaying: true });
       return;
     }
     await TrackPlayer.play();
+    if (!get().currentSession) return;
     set({ isPlaying: true });
   },
 
@@ -2030,7 +2048,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try { await castClient.setPlaybackRate(speed); } catch (e) { console.warn("[Cast] rate", e); }
     } else {
       if (!get().isInitialized) return;
-      await TrackPlayer.setRate(speed);
+      // Mirror the cast branch's guard: setRate can reject on a not-yet-ready
+      // player, and an unobserved rejection here became an unhandled promise
+      // rejection — the rest (persist + store update) should still run.
+      try { await TrackPlayer.setRate(speed); } catch (e) { console.warn("[PlaybackStore] setRate", e); }
     }
 
     // Persist globally so the next book (and Android Auto resume) restores it.
@@ -2109,6 +2130,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // background playback both re-anchor correctly.
         const { chapters } = get();
         const position = await getLiveAbsolutePosition(get);
+        // cancelSleepTimer may have landed DURING the await above — it clears
+        // the interval and nulls sleepTimer. Without this re-check the parked
+        // callback would fall through and `set({ sleepTimer: {...} })` below,
+        // rewriting a non-null timer with the interval already gone → a stuck
+        // timer that never counts down.
+        if (!get().sleepTimer) return;
         const liveIdx = chapters?.length
           ? chapters.findIndex((c: any) => position >= (c.start || 0) && position < (c.end || 0))
           : -1;
@@ -2250,6 +2277,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({
       currentSession: null,
       isPlaying: false,
+      isBuffering: false,
       duration: 0,
       position: 0,
       chapters: [],

@@ -102,6 +102,11 @@ export async function playbackService() {
     const st = usePlaybackStore.getState();
     if (!st.currentSession || st.isCasting) return;
     const s = event?.state;
+    // Expose the stall state so the UI can show a spinner over the play/pause
+    // control: the progress interval folds Buffering/Loading into "playing", so
+    // a stalled stream otherwise shows the pause glyph over a frozen scrubber.
+    const buffering = s === State.Buffering || s === State.Loading;
+    if (buffering !== st.isBuffering) usePlaybackStore.setState({ isBuffering: buffering });
     if (s === State.Playing) {
       if (!st.isPlaying) usePlaybackStore.setState({ isPlaying: true });
     } else if (
@@ -206,8 +211,13 @@ export async function playbackService() {
     const raw = String(event?.id ?? "");
     console.log(`[PlaybackService] RemotePlayId ${raw}`);
     if (!raw) return;
-    // A "@@<seconds>" suffix (from the Android Auto Bookmarks row) means: start
-    // this book, then seek to the bookmark's time.
+    // A PAUSED cold-start handoff: the native setupPlayer hand-off (adopting an
+    // Android Auto session the user had PAUSED before opening the app) tags the
+    // payload so we start the real JS session but DON'T auto-resume audio the
+    // user paused. Playing handoffs and browse taps omit the flag.
+    const paused = event?.paused === true;
+    // A "@@<seconds>" suffix (from the Android Auto Bookmarks row, or the
+    // native handoff's live position) means: start this book, then seek to it.
     const [main, bookmarkTime] = raw.split("@@");
     const [itemId, episodeId] = main.split("::");
     try {
@@ -216,6 +226,8 @@ export async function playbackService() {
         const t = Number(bookmarkTime);
         if (!isNaN(t) && t > 0) await usePlaybackStore.getState().seek(t);
       }
+      // startPlayback always begins playing; a paused handoff must land paused.
+      if (ok && paused) await usePlaybackStore.getState().pause();
     } catch (e) {
       console.log("[PlaybackService] RemotePlayId failed", e);
     }

@@ -232,5 +232,33 @@ describe("usePlaybackStore sleep timer", () => {
       usePlaybackStore.getState().cancelSleepTimer();
       expect(TrackPlayer.setVolume).toHaveBeenCalledWith(1);
     });
+
+    it("a cancel landing DURING the async EOC tick does not resurrect the timer (S1)", async () => {
+      setup({ position: 50, currentChapterIndex: 0 });
+      usePlaybackStore.getState().setSleepTimer(0, true);
+      expect(usePlaybackStore.getState().sleepTimer).not.toBeNull();
+
+      // The EOC tick awaits getLiveAbsolutePosition (→ getProgress). Cancel the
+      // timer WHILE that await is in flight: the interval is cleared and
+      // sleepTimer nulled. Without the post-await re-check, the parked callback
+      // would fall through and `set({ sleepTimer })` a non-null timer with the
+      // interval already gone → a stuck timer that never counts down.
+      jest.mocked(TrackPlayer.getProgress).mockImplementation(async () => {
+        usePlaybackStore.getState().cancelSleepTimer();
+        return { position: 60, duration: 300, buffered: 0 } as any;
+      });
+
+      await tick(1000);
+
+      expect(usePlaybackStore.getState().sleepTimer).toBeNull();
+      // No residual ticking either.
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({
+        position: 60,
+        duration: 300,
+        buffered: 0,
+      } as any);
+      await tick(3000);
+      expect(usePlaybackStore.getState().sleepTimer).toBeNull();
+    });
   });
 });

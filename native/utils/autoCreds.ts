@@ -33,7 +33,10 @@ export interface AutoDownloadEntry {
 const WIDGET_STATE_PATH = `${FileSystem.documentDirectory}widget_state.json`;
 
 export async function writeWidgetState(
-  state: { title?: string; author?: string; itemId?: string } | null
+  // episodeId is REQUIRED for podcasts: the native media3 onPlaybackResumption
+  // path (AA resume card / BT / headset resume) reads it back so a podcast
+  // resumes the right episode (/play/{episode}) instead of the item as a whole.
+  state: { title?: string; author?: string; itemId?: string; episodeId?: string } | null
 ) {
   try {
     if (state && state.title) {
