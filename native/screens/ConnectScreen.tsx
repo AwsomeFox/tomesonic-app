@@ -199,8 +199,20 @@ export default function ConnectScreen() {
       }
       await finishLogin(user);
     } catch (err: any) {
-      if (err?.response?.status === 401) {
+      // Differentiate the failure so the message is actionable: only an auth
+      // rejection means "check your credentials". A network/timeout, rate
+      // limit, or server error are NOT the user's password being wrong.
+      const status = err?.response?.status;
+      if (status === 401 || status === 403) {
         setError("Invalid username or password.");
+      } else if (!err?.response) {
+        // No HTTP response — request never reached the server (offline,
+        // timeout, DNS/refused, wrong address).
+        setError("Couldn't reach the server. Check the address and your connection.");
+      } else if (status === 429) {
+        setError("Too many attempts. Please wait a moment and try again.");
+      } else if (status >= 500) {
+        setError("The server had a problem. Please try again.");
       } else {
         setError("Authentication failed. Please check your credentials.");
       }

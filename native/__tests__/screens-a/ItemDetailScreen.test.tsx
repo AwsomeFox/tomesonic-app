@@ -452,6 +452,34 @@ describe("ItemDetailScreen", () => {
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
   });
 
+  it("podcast: filters episodes by Unplayed / In-Progress against the progress map", async () => {
+    routeApi(podcastItem);
+    // ep1 in-progress; ep2 has no progress → unplayed.
+    useUserStore.setState({
+      mediaProgress: {
+        "pod1-ep1": { libraryItemId: "pod1", episodeId: "ep1", progress: 0.5, isFinished: false },
+      },
+    } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+    expect(screen.getByText("Episode One")).toBeTruthy();
+    expect(screen.getByText("Episode Two")).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Filter: Unplayed"));
+    expect(screen.queryByText("Episode One")).toBeNull();
+    expect(screen.getByText("Episode Two")).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Filter: In-Progress"));
+    expect(screen.getByText("Episode One")).toBeTruthy();
+    expect(screen.queryByText("Episode Two")).toBeNull();
+
+    await fireEvent.press(screen.getByLabelText("Filter: All"));
+    expect(screen.getByText("Episode One")).toBeTruthy();
+    expect(screen.getByText("Episode Two")).toBeTruthy();
+  });
+
   it("podcast with no episodes: shows an empty state and disables the Play button", async () => {
     const emptyPodcast = {
       ...podcastItem,

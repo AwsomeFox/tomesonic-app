@@ -488,6 +488,34 @@ describe("usePlaybackStore sessions", () => {
       expect(mockGet).not.toHaveBeenCalled();
     });
 
+    it("bails if a book was tapped during the freshness GET (TOCTOU — must not clobber the live session)", async () => {
+      // The top-of-function live-session guard runs BEFORE the up-to-3s
+      // server-progress GET. A cold-start user tapping a book in that window
+      // starts a real session while loadLastSession is blocked; restoring the
+      // saved session over it would TrackPlayer.reset() the live queue and
+      // re-prepare it paused. Simulate the tap landing as the GET resolves.
+      storageHelper.setLastPlaybackSession({
+        ...serverSession(),
+        currentTime: 100,
+        updatedAt: BASE - 60_000,
+      });
+      mockGet.mockImplementation(async () => {
+        usePlaybackStore.setState({
+          currentSession: { id: "tapped-sess", libraryItemId: "tapped" },
+          isPlaying: true,
+          position: 42,
+        } as any);
+        return { data: { currentTime: 222, lastUpdate: BASE } } as any;
+      });
+
+      await usePlaybackStore.getState().loadLastSession();
+
+      const s = usePlaybackStore.getState();
+      expect(s.currentSession.id).toBe("tapped-sess"); // freshly tapped session untouched
+      expect(s.position).toBe(42);
+      expect(TrackPlayer.reset).not.toHaveBeenCalled(); // saved session never prepared
+    });
+
     it("restores the saved session paused", async () => {
       storageHelper.setLastPlaybackSession({
         ...serverSession(),

@@ -471,6 +471,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // Render cap only (the array is already in memory) — "Show more" pages in
   // the next batch; a hard cap left episodes 101+ of large feeds unreachable.
   const [episodeLimit, setEpisodeLimit] = useState(EPISODE_CAP);
+  // Episode list filter/sort — All / Unplayed / In-Progress against the shared
+  // per-episode progress map, plus a newest↔oldest toggle.
+  const [episodeFilter, setEpisodeFilter] = useState<"all" | "unplayed" | "in-progress">("all");
+  const [episodeSort, setEpisodeSort] = useState<"newest" | "oldest">("newest");
   const episodes: any[] = React.useMemo(() => {
     if (!isPodcastItem) return [];
     // filter(Boolean): a null entry in the feed-derived episodes array threw
@@ -479,6 +483,63 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     eps.sort((a: any, b: any) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0));
     return eps;
   }, [isPodcastItem, item]);
+
+  // Filtered/sorted view of `episodes` (which is already newest-first). The
+  // header count still reflects the full total; only the rendered list changes.
+  const displayEpisodes: any[] = React.useMemo(() => {
+    const decorated = episodes.map((ep: any) => {
+      const p = progressMap[`${itemId}-${ep.id}`];
+      const finished = !!p?.isFinished;
+      const fraction = Math.max(0, Math.min(1, Number(p?.progress || 0)));
+      return { ep, finished, fraction };
+    });
+    const filtered = decorated.filter(({ finished, fraction }) => {
+      if (episodeFilter === "unplayed") return !finished && fraction === 0;
+      if (episodeFilter === "in-progress") return !finished && fraction > 0;
+      return true;
+    });
+    const ordered = episodeSort === "newest" ? filtered : [...filtered].reverse();
+    return ordered.map((d) => d.ep);
+  }, [episodes, progressMap, itemId, episodeFilter, episodeSort]);
+
+  const EpisodeFilterChip = ({
+    label,
+    value,
+  }: {
+    label: string;
+    value: "all" | "unplayed" | "in-progress";
+  }) => {
+    const active = episodeFilter === value;
+    return (
+      <Pressable
+        onPress={() => setEpisodeFilter(value)}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        accessibilityLabel={`Filter: ${label}`}
+        style={{
+          paddingHorizontal: 14,
+          height: 34,
+          borderRadius: 17,
+          alignItems: "center",
+          justifyContent: "center",
+          marginRight: 8,
+          backgroundColor: active ? colors.secondaryContainer : "transparent",
+          borderWidth: 1,
+          borderColor: active ? colors.secondaryContainer : colors.outlineVariant,
+        }}
+      >
+        <Text
+          style={{
+            color: active ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+            fontSize: 13,
+            fontWeight: "600",
+          }}
+        >
+          {label}
+        </Text>
+      </Pressable>
+    );
+  };
 
   const playEpisode = async (episode: any) => {
     if (!episode?.id || startingEpisodeId || starting) return;
@@ -1419,7 +1480,39 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               >
                 {episodes.length} {episodes.length === 1 ? "Episode" : "Episodes"}
               </Text>
-              {episodes.slice(0, episodeLimit).map((episode) => {
+
+              {/* Filter (All / Unplayed / In-Progress) + newest↔oldest sort. */}
+              <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", marginTop: 4, marginBottom: 8 }}>
+                <EpisodeFilterChip label="All" value="all" />
+                <EpisodeFilterChip label="Unplayed" value="unplayed" />
+                <EpisodeFilterChip label="In-Progress" value="in-progress" />
+                <Pressable
+                  onPress={() => setEpisodeSort((s) => (s === "newest" ? "oldest" : "newest"))}
+                  accessibilityRole="button"
+                  accessibilityLabel={episodeSort === "newest" ? "Sort oldest first" : "Sort newest first"}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingHorizontal: 14,
+                    height: 34,
+                    borderRadius: 17,
+                    borderWidth: 1,
+                    borderColor: colors.outlineVariant,
+                  }}
+                >
+                  <Icon name="sort" size={16} color={colors.onSurfaceVariant} style={{ marginRight: 6 }} />
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600" }}>
+                    {episodeSort === "newest" ? "Newest" : "Oldest"}
+                  </Text>
+                </Pressable>
+              </View>
+
+              {displayEpisodes.length === 0 ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", paddingVertical: 24 }}>
+                  No episodes match this filter.
+                </Text>
+              ) : null}
+              {displayEpisodes.slice(0, episodeLimit).map((episode) => {
                 const epProgress = progressMap[`${itemId}-${episode.id}`];
                 const epFinished = !!epProgress?.isFinished;
                 const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
@@ -1538,12 +1631,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   </View>
                 );
               })}
-              {episodes.length > episodeLimit ? (
+              {displayEpisodes.length > episodeLimit ? (
                 <Pressable
                   onPress={() => setEpisodeLimit((n) => n + EPISODE_CAP)}
                   android_ripple={{ color: colors.surfaceContainerHighest }}
                   accessibilityRole="button"
-                  accessibilityLabel={`Show more episodes, ${episodes.length - episodeLimit} remaining`}
+                  accessibilityLabel={`Show more episodes, ${displayEpisodes.length - episodeLimit} remaining`}
                   style={{
                     marginTop: 10,
                     paddingVertical: 12,
@@ -1554,7 +1647,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   }}
                 >
                   <Text style={{ color: colors.primary, fontSize: 14, fontWeight: "600" }}>
-                    Show more ({episodes.length - episodeLimit} remaining)
+                    Show more ({displayEpisodes.length - episodeLimit} remaining)
                   </Text>
                 </Pressable>
               ) : null}

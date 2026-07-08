@@ -48,6 +48,12 @@ let progressInterval: ReturnType<typeof setInterval> | null = null;
 const SYNC_INTERVAL_MS = 15000;
 const LOCAL_SAVE_INTERVAL_MS = 5000;
 const MAX_TICK_DELTA_S = 2;
+// Native PlaybackProgressUpdated events are delivered slightly out of band, so
+// one can still be in flight when the user pauses. Within this window after a
+// local pause(), such a straggler is ignored so it can't re-stamp updatedAt /
+// accrue listening time / flip isPlaying back to true on a book the user just
+// paused (poisoning freshest-wins). See _lastPausedAt.
+const PAUSE_STRAGGLER_WINDOW_MS = 2000;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
 function autoRewindSeconds(pausedForMs: number): number {
@@ -428,6 +434,15 @@ export function onNativeProgressSample(e: {
     // progress events (paused handoff item) must not clobber the mirror.
     if (!currentSession || st.isCasting) return;
     if (!Number.isFinite(e?.position) || e.position < 0) return;
+    // A native progress sample that arrives right after a local pause() is a
+    // straggler for audio that has already stopped — accepting it would
+    // hard-set isPlaying:true and accrue listening time + re-stamp updatedAt on
+    // a paused book (matches the paused-tick-must-not-restamp gate in
+    // persistProgressSample). Ignore samples inside the post-pause window.
+    // play() clears _lastPausedAt, so real resumes are unaffected.
+    if (_lastPausedAt != null && Date.now() - _lastPausedAt < PAUSE_STRAGGLER_WINDOW_MS) {
+      return;
+    }
 
     const chapters = st.chapters;
     let absolutePosition = e.position;
@@ -844,6 +859,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // Cross-device freshness: if another device listened further since this
       // local save, prefer the server's position. Best-effort and capped at
       // 3s so a slow/unreachable server never delays app startup.
+      // Snapshot the session generation BEFORE the up-to-3s await below: a user
+      // tapping a book during cold start starts a real session (bumping
+      // _sessionGen and setting currentSession) while we're blocked here.
+      const genBeforeFetch = _sessionGen;
       try {
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
@@ -882,6 +901,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
       } catch {
         // Offline / timeout — the local save stands.
+      }
+      // TOCTOU: the currentSession check at the top of loadLastSession ran
+      // BEFORE the freshness GET above. A book tapped during that up-to-3s
+      // window already prepared a LIVE session — restoring the saved session
+      // over it would TrackPlayer.reset() the live queue and re-prepare it
+      // paused (the exact clobber the top guard exists to prevent). Re-check
+      // both the live session and the generation before preparing.
+      if (get().currentSession || _sessionGen !== genBeforeFetch) {
+        console.log(
+          "[PlaybackStore] Live session started during restore — skipping saved-session restore."
+        );
+        return;
       }
       try {
         const ok = await get().preparePlaybackSession(session, false);
@@ -1016,7 +1047,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
           let absolutePosition: number;
           let bookDuration: number;
+          // `isPlayerPlaying` is the FOLDED UI flag (Playing OR Buffering OR
+          // Loading) written to isPlaying — a transient stall must not flip the
+          // mini-player/notification to the pause glyph, freeze the scrubber,
+          // or disarm this tick. `isPlayingStrict` is true ONLY for real
+          // Playing and gates listening-time accrual / persistence so a stall
+          // never accrues time or re-stamps updatedAt.
           let isPlayerPlaying: boolean;
+          let isPlayingStrict: boolean;
           let chapterIndex = -1;
 
           if (casting) {
@@ -1029,6 +1067,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             absolutePosition = get().position;
             bookDuration = get().duration;
             isPlayerPlaying = get().isPlaying;
+            isPlayingStrict = get().isPlaying;
             for (let i = 0; i < chapters.length; i++) {
               if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
                 chapterIndex = i;
@@ -1051,7 +1090,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             if (!state) return;
             const progress = await TrackPlayer.getProgress();
             const playerState = await TrackPlayer.getPlaybackState();
-            isPlayerPlaying = playerState.state === State.Playing;
+            isPlayingStrict = playerState.state === State.Playing;
+            // Fold Buffering/Loading into the playing UI flag (see comment at
+            // the isBuffering field): a mid-stream stall keeps the play glyph
+            // and a live scrubber instead of looking hung.
+            isPlayerPlaying =
+              isPlayingStrict ||
+              playerState.state === State.Buffering ||
+              playerState.state === State.Loading;
 
             // Translate the player position to an ABSOLUTE book position. With a
             // chapter queue each item is clipped, so the raw position is
@@ -1105,11 +1151,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           }
 
           if (get().currentSession !== tickSession) return;
+          // Accrual/persistence gate on STRICT Playing — a Buffering/Loading
+          // tick advances the UI flag above but must NOT accrue listening time
+          // or re-stamp updatedAt (that would poison freshest-wins).
           persistProgressSample(
             get().currentSession,
             absolutePosition,
             bookDuration,
-            isPlayerPlaying
+            isPlayingStrict
           );
         } catch (e) {
           // Player might not be active/loaded

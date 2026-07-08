@@ -9,6 +9,40 @@ import { RmabBook, resolveRmabUrl } from "../utils/rmab";
 import RmabBookDetailSheet from "./RmabBookDetailSheet";
 import Pressable from "./HintPressable";
 
+// Terminal/negative request outcomes. These must NOT suppress the Request
+// button — the user should be able to retry straight from the discovery
+// surface — and they render an error-styled chip rather than a neutral
+// "Requested" one so a failed/denied request never reads as still-pending.
+const NEGATIVE_STATUSES = new Set([
+  "failed",
+  "error",
+  "denied",
+  "rejected",
+  "cancelled",
+  "canceled",
+]);
+
+/** Chip label + color role for a book's current request status. */
+function requestChipMeta(
+  status: string,
+  colors: any
+): { label: string; bg: string; fg: string; negative: boolean } {
+  switch ((status || "").toLowerCase()) {
+    case "failed":
+    case "error":
+      return { label: "Failed", bg: colors.errorContainer, fg: colors.onErrorContainer, negative: true };
+    case "denied":
+      return { label: "Denied", bg: colors.errorContainer, fg: colors.onErrorContainer, negative: true };
+    case "rejected":
+      return { label: "Rejected", bg: colors.errorContainer, fg: colors.onErrorContainer, negative: true };
+    case "cancelled":
+    case "canceled":
+      return { label: "Cancelled", bg: colors.errorContainer, fg: colors.onErrorContainer, negative: true };
+    default:
+      return { label: "Requested", bg: colors.surfaceContainerHigh, fg: colors.onSurfaceVariant, negative: false };
+  }
+}
+
 /**
  * "Missing from your library" — books ReadMeABook knows about (Audible
  * catalog) that aren't in the linked library, each with a one-tap Request
@@ -212,51 +246,72 @@ export default function RmabMissingSection({
                 </Text>
               </View>
             </Pressable>
-            {status ? (
-              <View
-                style={{
-                  backgroundColor: colors.surfaceContainerHigh,
-                  borderRadius: 12,
-                  paddingHorizontal: 10,
-                  paddingVertical: 5,
-                }}
-              >
-                <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontWeight: "600" }}>
-                  Requested
-                </Text>
-              </View>
-            ) : (
-              <Pressable
-                onPress={() => onRequest(book)}
-                // Requests are deliberately SERIALIZED: everything disables
-                // while one is in flight (the notice line reports per-request
-                // outcomes), the active row keeps full opacity to show its
-                // spinner, and the rest dim.
-                disabled={!!requesting}
-                accessibilityRole="button"
-                accessibilityLabel={`Request ${book.title}`}
-                style={{
-                  backgroundColor: colors.primaryContainer,
-                  borderRadius: 16,
-                  paddingHorizontal: 12,
-                  height: 32,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  opacity: requesting && requesting !== book.asin ? 0.5 : 1,
-                }}
-              >
-                {requesting === book.asin ? (
-                  <ActivityIndicator size="small" color={colors.onPrimaryContainer} />
-                ) : (
-                  <>
-                    <Icon name="add" size={16} color={colors.onPrimaryContainer} />
-                    <Text style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 4 }}>
-                      Request
-                    </Text>
-                  </>
-                )}
-              </Pressable>
-            )}
+            {(() => {
+              const meta = status ? requestChipMeta(status, colors) : null;
+              // A negative/terminal status shows its error chip AND keeps the
+              // Request button so the user can retry from here; only a
+              // pending/approved/available status suppresses the button.
+              const showChip = !!meta;
+              const showRequest = !meta || meta.negative;
+              return (
+                <>
+                  {showChip ? (
+                    <View
+                      style={{
+                        backgroundColor: meta!.bg,
+                        // Match the Request pill's radius/height so completing
+                        // (or reverting) a request doesn't jump the shape.
+                        borderRadius: 16,
+                        height: 32,
+                        paddingHorizontal: 12,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Text style={{ color: meta!.fg, fontSize: 12, fontWeight: "600" }}>
+                        {meta!.label}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {showRequest ? (
+                    <Pressable
+                      onPress={() => onRequest(book)}
+                      // Requests are deliberately SERIALIZED: everything disables
+                      // while one is in flight (the notice line reports per-request
+                      // outcomes), the active row keeps full opacity to show its
+                      // spinner, and the rest dim.
+                      disabled={!!requesting}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        meta?.negative ? `Retry request ${book.title}` : `Request ${book.title}`
+                      }
+                      style={{
+                        // Sit beside the error chip when both are present.
+                        marginLeft: showChip ? 8 : 0,
+                        backgroundColor: colors.primaryContainer,
+                        borderRadius: 16,
+                        paddingHorizontal: 12,
+                        height: 32,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        opacity: requesting && requesting !== book.asin ? 0.5 : 1,
+                      }}
+                    >
+                      {requesting === book.asin ? (
+                        <ActivityIndicator size="small" color={colors.onPrimaryContainer} />
+                      ) : (
+                        <>
+                          <Icon name="add" size={16} color={colors.onPrimaryContainer} />
+                          <Text style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 4 }}>
+                            {meta?.negative ? "Retry" : "Request"}
+                          </Text>
+                        </>
+                      )}
+                    </Pressable>
+                  ) : null}
+                </>
+              );
+            })()}
           </View>
         );
       })}
@@ -278,7 +333,13 @@ export default function RmabMissingSection({
         book={detail}
         onClose={() => setDetail(null)}
         onRequest={(b) => onRequest(b)}
-        requested={!!(detail && (requestedAsins[detail.asin] || detail.requestStatus))}
+        requested={(() => {
+          if (!detail) return false;
+          const s = requestedAsins[detail.asin] || detail.requestStatus;
+          // A terminal/negative outcome is NOT "requested" — leave the sheet's
+          // Request action available so a retry is possible from there too.
+          return !!s && !NEGATIVE_STATUSES.has(String(s).toLowerCase());
+        })()}
         requesting={!!(detail && requesting === detail.asin)}
         notice={notice}
       />

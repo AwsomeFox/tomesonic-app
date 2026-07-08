@@ -60,10 +60,18 @@ jest.mock("react-native-reanimated", () => {
   };
 });
 
+// Real utils/rmab except getRmabAuthProviders — the SSO probe must be
+// controllable while rmabOrigin (which drives the gating) stays genuine.
+jest.mock("../../utils/rmab", () => {
+  const actual = jest.requireActual("../../utils/rmab");
+  return { ...actual, getRmabAuthProviders: jest.fn() };
+});
+
 import React from "react";
 import { Linking } from "react-native";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 import SettingsScreen from "../../screens/SettingsScreen";
+import { getRmabAuthProviders } from "../../utils/rmab";
 import { useUserStore } from "../../store/useUserStore";
 import { useThemeStore } from "../../store/useThemeStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -244,6 +252,61 @@ describe("SettingsScreen", () => {
       expect(screen.getByText("My Requests")).toBeTruthy();
       expect(screen.getByText("Disconnect")).toBeTruthy();
       expect(screen.queryByText("Connect ReadMeABook")).toBeNull();
+    });
+  });
+
+  describe("ReadMeABook SSO button gating", () => {
+    // Open the connect sheet and type an address into the URL field.
+    async function openSheetWithUrl(url: string) {
+      await renderSettings();
+      await fireEvent.press(screen.getByLabelText(/^Connect ReadMeABook/));
+      await fireEvent.changeText(
+        screen.getByLabelText("ReadMeABook server URL or login URL"),
+        url
+      );
+    }
+
+    it("shows SSO while providers are still UNKNOWN (null) — never hidden on a transient blip", async () => {
+      // A null probe result must leave the button shown by default.
+      (getRmabAuthProviders as jest.Mock).mockResolvedValue(null);
+      await openSheetWithUrl("https://rmab.test");
+      expect(await screen.findByLabelText("Sign in with SSO")).toBeTruthy();
+      // Default label until a provider name is known.
+      expect(screen.getByText("Sign in with SSO")).toBeTruthy();
+    });
+
+    it("shows SSO labeled with the provider name once OIDC is confirmed enabled", async () => {
+      (getRmabAuthProviders as jest.Mock).mockResolvedValue({
+        oidcEnabled: true,
+        oidcProviderName: "Authentik",
+      });
+      await openSheetWithUrl("https://rmab.test");
+      // The debounced probe resolves and interpolates the provider name.
+      await waitFor(() => expect(screen.getByText("Sign in with Authentik")).toBeTruthy());
+      expect(screen.getByLabelText("Sign in with SSO")).toBeTruthy();
+    });
+
+    it("hides SSO once OIDC is affirmatively OFF", async () => {
+      (getRmabAuthProviders as jest.Mock).mockResolvedValue({
+        oidcEnabled: false,
+        oidcProviderName: null,
+      });
+      await openSheetWithUrl("https://rmab.test");
+      await waitFor(() => expect(screen.queryByLabelText("Sign in with SSO")).toBeNull());
+    });
+
+    it("does NOT show SSO for a bare rmab_ API token that isn't an origin", async () => {
+      (getRmabAuthProviders as jest.Mock).mockResolvedValue({ oidcEnabled: true });
+      await renderSettings();
+      await fireEvent.press(screen.getByLabelText(/^Connect ReadMeABook/));
+      // A raw API token in the token field (URL left empty) yields no origin,
+      // so the SSO button must stay hidden and the probe must not fire.
+      await fireEvent.changeText(
+        screen.getByLabelText("ReadMeABook API token (optional)"),
+        "rmab_abc123"
+      );
+      expect(screen.queryByLabelText("Sign in with SSO")).toBeNull();
+      expect(getRmabAuthProviders).not.toHaveBeenCalled();
     });
   });
 });

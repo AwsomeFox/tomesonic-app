@@ -40,6 +40,10 @@ export default function RmabSessionExpiredBanner({
 
   return (
     <View
+      // Announce the banner to assistive tech the moment it mounts on session
+      // expiry, so a screen-reader user learns the session died rather than
+      // discovering it only when a later action silently fails.
+      accessibilityLiveRegion="polite"
       style={{
         flexDirection: "row",
         alignItems: "center",
@@ -64,6 +68,9 @@ export default function RmabSessionExpiredBanner({
         onPress={onPress}
         accessibilityRole="button"
         accessibilityLabel="Sign in again to ReadMeABook"
+        // The pill is only 36px tall — extend the touch target past its bounds
+        // so the tap doesn't require pixel-precise aim.
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         android_ripple={{ color: withAlpha(colors.onPrimary, 0.13) }}
         style={{
           backgroundColor: colors.primary,

@@ -56,6 +56,15 @@ jest.mock("../../components/SearchContent", () => {
   return { __esModule: true, default: () => React.createElement(Text, null, "SEARCH_OVERLAY") };
 });
 
+// Connectivity signal (same hook BookshelfScreen/OfflineBanner consume). Default
+// online; individual tests flip it to exercise the offline fallback.
+let mockIsConnected = true;
+jest.mock("../../hooks/useNetworkStatus", () => ({
+  __esModule: true,
+  useNetworkStatus: () => ({ isConnected: mockIsConnected, isInternetReachable: mockIsConnected }),
+  default: () => ({ isConnected: mockIsConnected, isInternetReachable: mockIsConnected }),
+}));
+
 const mockOpenFilter = jest.fn();
 const mockOpenSort = jest.fn();
 const mockScrollToTop: Record<string, jest.Mock> = {
@@ -221,6 +230,7 @@ function layerDisplay(key: string): string | undefined {
 beforeEach(() => {
   useUiStore.setState(initialUi, true);
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
+  mockIsConnected = true;
 });
 
 describe("LibraryHubScreen", () => {
@@ -440,5 +450,32 @@ describe("LibraryHubScreen", () => {
     await fireEvent.press(screen.getByText("Playlists"));
     await fireEvent.press(screen.getByLabelText("Create new playlist"));
     expect(mockOpenCreate.playlists).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an offline notice instead of the facets when offline", async () => {
+    mockIsConnected = false;
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+
+    // Offline CTA is shown; the server-backed facets are not rendered (no failing
+    // fetches).
+    expect(screen.getByText("You're offline")).toBeTruthy();
+    expect(screen.getByLabelText("Open Downloads")).toBeTruthy();
+    expect(screen.queryByText(/BOOKS_BODY/)).toBeNull();
+  });
+
+  it("the offline notice navigates to the Downloads screen", async () => {
+    mockIsConnected = false;
+    const navigation = makeNavigation();
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={navigation} />);
+
+    await fireEvent.press(screen.getByLabelText("Open Downloads"));
+    expect(navigation.navigate).toHaveBeenCalledWith("Downloads");
+  });
+
+  it("renders the facets normally when back online", async () => {
+    mockIsConnected = true;
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+    expect(screen.queryByText("You're offline")).toBeNull();
   });
 });

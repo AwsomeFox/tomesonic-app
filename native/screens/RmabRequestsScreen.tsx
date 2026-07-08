@@ -33,7 +33,16 @@ function statusMeta(status: string, colors: any): { label: string; bg: string; f
       return { label: "Processing", bg: colors.secondaryContainer, fg: colors.onSecondaryContainer };
     case "failed":
     case "error":
-      return { label: "Failed", bg: colors.errorContainer || "#F9DEDC", fg: colors.error };
+      return { label: "Failed", bg: colors.errorContainer, fg: colors.onErrorContainer };
+    // Terminal/negative outcomes must NOT fall through to the neutral
+    // "Requested" default — they read as still-in-progress otherwise.
+    case "denied":
+      return { label: "Denied", bg: colors.errorContainer, fg: colors.onErrorContainer };
+    case "rejected":
+      return { label: "Rejected", bg: colors.errorContainer, fg: colors.onErrorContainer };
+    case "cancelled":
+    case "canceled":
+      return { label: "Cancelled", bg: colors.errorContainer, fg: colors.onErrorContainer };
     case "pending_approval":
     case "awaiting_approval":
       return { label: "Awaiting approval", bg: colors.surfaceContainerHigh, fg: colors.onSurfaceVariant };
@@ -118,7 +127,12 @@ export default function RmabRequestsScreen({ navigation }: any) {
     }
   };
 
+  // Guards a focus/mount refetch against stacking a second in-flight load on
+  // top of one already running (rapid tab switches, a resume landing mid-load).
+  const loadingRef = React.useRef(false);
   const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       setError(false);
       // /api/requests returns the caller's own requests — and for admins,
@@ -129,12 +143,31 @@ export default function RmabRequestsScreen({ navigation }: any) {
       console.warn("[RMAB] requests load failed", e);
       setError(true);
       setRequests((prev) => prev ?? []);
+    } finally {
+      loadingRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Re-fetch when the screen regains focus (returning from another screen, or
+  // the app resuming) so a since-fulfilled/denied status appears without a
+  // manual pull-to-refresh. The initial mount already loads via the effect
+  // above, so skip the first focus event to avoid a duplicate startup fetch;
+  // the loadingRef guard covers any overlap regardless.
+  const firstFocusRef = React.useRef(true);
+  useEffect(() => {
+    const unsubscribe = navigation?.addListener?.("focus", () => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
+      load();
+    });
+    return unsubscribe;
+  }, [navigation, load]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..d5d5d14 100644
+index b495b5a..8c5126e 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -198,7 +198,7 @@ index b495b5a..d5d5d14 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -61,7 +63,19 @@ class MusicService : HeadlessJsMediaService() {
+@@ -61,7 +63,22 @@ class MusicService : HeadlessJsMediaService() {
      private lateinit var player: QueuedAudioPlayer
      private val binder = MusicBinder()
      private val scope = MainScope()
@@ -214,11 +214,14 @@ index b495b5a..d5d5d14 100644
 +    // live session. absColdStartOffsetMs is the chosen track's startOffset:
 +    // fakePlayer.currentPosition is track-relative (multi-file books), so the
 +    // absolute book position handed off to JS = offset + currentPosition.
-+    private var absColdStartOffsetMs: Long = 0L
++    // Written on browse-pool threads (absResolveOfflinePlay / online resolve),
++    // read on the main thread during the fakePlayer->JS handoff — @Volatile so
++    // the reader sees the writer's value without a data race.
++    @Volatile private var absColdStartOffsetMs: Long = 0L
      private lateinit var mediaSession: MediaLibrarySession
      private var progressUpdateJob: Job? = null
      private var sessionCommands: SessionCommands? = null
-@@ -79,10 +93,13 @@ class MusicService : HeadlessJsMediaService() {
+@@ -79,10 +96,13 @@ class MusicService : HeadlessJsMediaService() {
      }
  
      fun getBitmapLoader(): BitmapLoader {
@@ -232,7 +235,7 @@ index b495b5a..d5d5d14 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +114,1205 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +117,1237 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -334,30 +337,47 @@ index b495b5a..d5d5d14 100644
 +     * field is missing/empty; never throws.
 +     */
 +    private fun purgeStaleSessionRegistrations() {
++        // Only touch sessions this process created — same prefix the service
++        // stamps onto its own session ids in onCreate (see the id builder). A
++        // released() session from an unrelated app/library MediaSession sharing
++        // this process must NOT be force-released out from under its owner.
++        val ourPrefix = "rntp.session." + android.os.Process.myPid() + "."
 +        try {
 +            val cls = Class.forName("androidx.media3.session.MediaSession")
 +            val field = cls.getDeclaredField("SESSION_ID_TO_SESSION_MAP")
 +            field.isAccessible = true
 +            val map = field.get(null) as? MutableMap<*, *>
 +            if (map != null && map.isNotEmpty()) {
-+                Timber.w("Purging %d stale MediaSession registration(s): %s", map.size, map.keys)
-+                // Actually RELEASE the old sessions, not just drop them from the
-+                // static map — otherwise the previous session's framework
-+                // MediaSession stays "active", so Android Auto sees two active
-+                // sessions from this app and keeps re-resolving/rebuilding the
-+                // now-playing template (queue scroll resets). onCreate runs before
-+                // we build our own session, so the map only holds stale ones here.
-+                for (s in map.values.toList()) {
-+                    try {
-+                        s?.javaClass?.getMethod("release")?.invoke(s)
-+                    } catch (e: Throwable) {
-+                        Timber.w("release() on stale session failed: %s", e.message)
++                // Filter to our own stale registrations by id key prefix.
++                val ourKeys = map.keys.filter { (it as? String)?.startsWith(ourPrefix) == true }
++                if (ourKeys.isNotEmpty()) {
++                    Timber.w("Purging %d stale MediaSession registration(s): %s", ourKeys.size, ourKeys)
++                    // Actually RELEASE the old sessions, not just drop them from
++                    // the static map — otherwise the previous session's framework
++                    // MediaSession stays "active", so Android Auto sees two active
++                    // sessions from this app and keeps re-resolving/rebuilding the
++                    // now-playing template (queue scroll resets). Iterate + remove
++                    // via the entry iterator (the map is star-projected, so keyed
++                    // get/remove don't type-check).
++                    val iter = map.entries.iterator()
++                    while (iter.hasNext()) {
++                        val entry = iter.next()
++                        if ((entry.key as? String)?.startsWith(ourPrefix) != true) continue
++                        val s = entry.value
++                        try {
++                            s?.javaClass?.getMethod("release")?.invoke(s)
++                        } catch (e: Throwable) {
++                            Timber.w("release() on stale session failed: %s", e.message)
++                        }
++                        iter.remove()
 +                    }
 +                }
-+                map.clear()
 +            }
 +        } catch (e: Throwable) {
-+            Timber.w("purgeStaleSessionRegistrations no-op: %s", e.message)
++            // The reflected private field was renamed/removed on a Media3 bump,
++            // or access was denied. Surface it loudly (was a silent no-op) so the
++            // "Session ID must be unique" guard's failure is observable in logs.
++            Timber.e(e, "purgeStaleSessionRegistrations failed (reflection broken?): %s", e.message)
 +        }
 +    }
 +
@@ -701,20 +721,29 @@ index b495b5a..d5d5d14 100644
 +            // Seed the flag from current state so a cold start in the garage
 +            // (no signal) immediately browses offline.
 +            absNetworkAvailable = cm.activeNetwork?.let { n ->
-+                cm.getNetworkCapabilities(n)
-+                    ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++                cm.getNetworkCapabilities(n)?.let { c ->
++                    c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                        c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
++                } == true
 +            } ?: false
 +            val cb = object : android.net.ConnectivityManager.NetworkCallback() {
 +                // A network becoming the default does NOT mean it reaches the
 +                // internet — a captive-portal Wi-Fi or a no-service cellular
-+                // attach both fire onAvailable. Marking browse ONLINE for those
-+                // pins Android Auto to the online tree, whose server fetches then
-+                // hang/fail. Gate on the actual INTERNET capability (mirroring
-+                // the onLost check); onCapabilitiesChanged flips it once the link
-+                // validates (captive portal signed in, or service comes up).
++                // attach both fire onAvailable, and both advertise
++                // NET_CAPABILITY_INTERNET even though no traffic actually flows.
++                // Marking browse ONLINE for those pins Android Auto to the online
++                // tree, whose server fetches then hang/fail (15-45s spinner).
++                // Require the framework to have actually VALIDATED the link (a
++                // real reachability probe succeeded) in addition to INTERNET, so
++                // captive-portal/dead-zone attaches count as offline and we
++                // surface downloaded books instead. onCapabilitiesChanged flips
++                // it once the link validates (captive portal signed in, or
++                // service comes up).
 +                private fun hasInternet(n: android.net.Network): Boolean =
-+                    cm.getNetworkCapabilities(n)
-+                        ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++                    cm.getNetworkCapabilities(n)?.let { c ->
++                        c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                            c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
++                    } == true
 +
 +                override fun onAvailable(network: android.net.Network) {
 +                    val was = absNetworkAvailable
@@ -727,7 +756,8 @@ index b495b5a..d5d5d14 100644
 +                    network: android.net.Network,
 +                    caps: android.net.NetworkCapabilities
 +                ) {
-+                    val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
++                    val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 +                    if (up != absNetworkAvailable) {
 +                        absNetworkAvailable = up
 +                        absNotifyBrowseChanged(if (up) "internet validated" else "internet dropped")
@@ -735,12 +765,14 @@ index b495b5a..d5d5d14 100644
 +                }
 +                override fun onLost(network: android.net.Network) {
 +                    val cmNow = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-+                    // Same INTERNET-capability check as the seed above — a
++                    // Same INTERNET+VALIDATED check as the seed above — a
 +                    // lingering captive-portal/no-internet transport must not
 +                    // keep browse pinned to online mode.
 +                    val stillUp = cmNow.activeNetwork?.let { n ->
-+                        cmNow.getNetworkCapabilities(n)
-+                            ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++                        cmNow.getNetworkCapabilities(n)?.let { c ->
++                            c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                                c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
++                        } == true
 +                    } ?: false
 +                    val was = absNetworkAvailable
 +                    absNetworkAvailable = stillUp
@@ -1393,9 +1425,12 @@ index b495b5a..d5d5d14 100644
 +            val (_, start, dur) = t
 +            if (target >= start && (dur <= 0.0 || target < start + dur)) { chosen = t; break }
 +        }
-+        val folder = d.folder.trimEnd('/')
-+        val base = if (folder.startsWith("file://")) folder else "file://$folder"
-+        val url = "$base/${chosen.first}"
++        // Build a properly percent-encoded file:// URI. Raw string concat broke
++        // on spaces / # / % / ? in the folder path or filename (ExoPlayer then
++        // failed to open the URI). Strip any existing file:// prefix to get a
++        // filesystem path, then let Uri.fromFile encode each segment.
++        val folderPath = d.folder.trimEnd('/').removePrefix("file://")
++        val url = Uri.fromFile(java.io.File(folderPath, chosen.first)).toString()
 +        val within = (target - chosen.second).coerceAtLeast(0.0)
 +        Timber.i("AA offline play: %s -> %s @%ds", itemId, chosen.first, within.toLong())
 +        // Remember the chosen track's offset (Triple.second = startOffset) so a
@@ -1451,7 +1486,7 @@ index b495b5a..d5d5d14 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1400,60 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1435,60 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1514,7 +1549,7 @@ index b495b5a..d5d5d14 100644
          observeEvents()
      }
  
-@@ -293,9 +1536,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1571,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1526,7 +1561,7 @@ index b495b5a..d5d5d14 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1549,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1584,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1588,7 +1623,7 @@ index b495b5a..d5d5d14 100644
          }
      }
  
-@@ -449,6 +1726,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1761,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1599,7 +1634,7 @@ index b495b5a..d5d5d14 100644
      }
  
      @MainThread
-@@ -515,6 +1796,29 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1831,29 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -1629,7 +1664,7 @@ index b495b5a..d5d5d14 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2021,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2056,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1638,7 +1673,7 @@ index b495b5a..d5d5d14 100644
              return
          }
  
-@@ -780,8 +2084,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2119,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1654,7 +1689,7 @@ index b495b5a..d5d5d14 100644
          return mediaSession
      }
  
-@@ -792,13 +2102,41 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2137,41 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1698,7 +1733,7 @@ index b495b5a..d5d5d14 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2243,230 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2278,239 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1816,7 +1851,16 @@ index b495b5a..d5d5d14 100644
 +                future.set(LibraryResult.ofItemList(ImmutableList.of<MediaItem>(), params))
 +            }) {
 +                val children = try { absLoadChildren(parentId) } catch (e: Exception) { Timber.w(e, "absLoadChildren failed"); emptyList() }
-+                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
++                // Honor the requested page window. Returning the full list for
++                // every page made paginating head units append the same rows
++                // repeatedly (duplicate entries). Slice to [page*pageSize, end);
++                // a page past the end yields an empty list (not out-of-range).
++                val from = (page.toLong() * pageSize.toLong())
++                    .coerceIn(0L, children.size.toLong()).toInt()
++                val to = (from.toLong() + pageSize.toLong())
++                    .coerceIn(from.toLong(), children.size.toLong()).toInt()
++                val window = children.subList(from, to)
++                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(window), params))
 +            }
 +            return future
 +        }
@@ -1946,7 +1990,7 @@ index b495b5a..d5d5d14 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2475,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2519,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -1976,7 +2020,7 @@ index b495b5a..d5d5d14 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2507,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2551,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -1992,7 +2036,7 @@ index b495b5a..d5d5d14 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2523,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2567,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  

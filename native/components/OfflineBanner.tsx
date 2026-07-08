@@ -21,9 +21,11 @@ import Icon from "./Icon";
 export default function OfflineBanner() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
-  const { isConnected } = useNetworkStatus();
+  const { isOffline } = useNetworkStatus();
 
-  if (isConnected) return null;
+  // Gate on the derived "effectively offline" signal (debounced; also true for
+  // a captive portal / server-down-but-Wi-Fi-up), not device isConnected alone.
+  if (!isOffline) return null;
 
   return (
     <View

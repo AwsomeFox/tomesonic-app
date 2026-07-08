@@ -123,6 +123,9 @@ export default function RmabSsoLoginModal({
             onPress={onClose}
             accessibilityRole="button"
             accessibilityLabel="Cancel sign-in"
+            // Small text button (paddingVertical 4) — grow the touch target so
+            // cancelling doesn't demand a precise tap on the label.
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
             android_ripple={{ color: withAlpha(colors.onSurface, 0.13), borderless: true }}
             style={{ paddingHorizontal: 8, paddingVertical: 4 }}
           >
@@ -148,6 +151,13 @@ export default function RmabSsoLoginModal({
             />
             {loading ? (
               <View
+                // A bare ActivityIndicator is invisible to assistive tech —
+                // announce it as a live progress indicator so a screen-reader
+                // user knows sign-in is loading rather than facing silence.
+                accessible
+                accessibilityRole="progressbar"
+                accessibilityLabel="Loading sign-in"
+                accessibilityLiveRegion="polite"
                 style={[
                   StyleSheet.absoluteFill,
                   { alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },

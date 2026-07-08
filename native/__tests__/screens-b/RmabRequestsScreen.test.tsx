@@ -2,7 +2,7 @@ jest.mock("../../utils/audible", () => ({
   audibleBookDetails: jest.fn().mockResolvedValue(null),
 }));
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 
 jest.mock("../../utils/rmab", () => ({
   listMyRequests: jest.fn(),
@@ -85,6 +85,58 @@ describe("RmabRequestsScreen", () => {
     await render(<RmabRequestsScreen navigation={navigation} />);
 
     expect(await screen.findByText("Couldn't load requests")).toBeTruthy();
+  });
+
+  it("maps terminal/negative statuses to error chips, never the neutral 'Requested' default", async () => {
+    mockedList.mockResolvedValue([
+      { id: "d1", title: "Denied Book", author: "A", status: "denied" },
+      { id: "d2", title: "Rejected Book", author: "A", status: "rejected" },
+      { id: "d3", title: "Cancelled Book", author: "A", status: "cancelled" },
+      { id: "d4", title: "Failed Book", author: "A", status: "failed" },
+    ]);
+    await render(<RmabRequestsScreen navigation={navigation} />);
+    await screen.findByText("Denied Book");
+
+    expect(screen.getByText("Denied")).toBeTruthy();
+    expect(screen.getByText("Rejected")).toBeTruthy();
+    expect(screen.getByText("Cancelled")).toBeTruthy();
+    expect(screen.getByText("Failed")).toBeTruthy();
+    // The negative statuses must NOT fall through to the "Requested" default.
+    expect(screen.queryByText("Requested")).toBeNull();
+  });
+
+  it("still shows 'Requested' for a genuinely unrecognized/pending status", async () => {
+    mockedList.mockResolvedValue([{ id: "u1", title: "Odd Book", author: "A", status: "queued" }]);
+    await render(<RmabRequestsScreen navigation={navigation} />);
+    await screen.findByText("Odd Book");
+    expect(screen.getByText("Requested")).toBeTruthy();
+  });
+
+  it("re-fetches when the screen regains focus (skipping the initial focus event)", async () => {
+    let focusCb: (() => void) | undefined;
+    const focusNav = {
+      goBack: jest.fn(),
+      addListener: jest.fn((event: string, cb: () => void) => {
+        if (event === "focus") focusCb = cb;
+        return jest.fn();
+      }),
+    };
+    await render(<RmabRequestsScreen navigation={focusNav} />);
+    await screen.findByText("Book A");
+    // Initial mount load only.
+    expect(mockedList).toHaveBeenCalledTimes(1);
+
+    // First focus event (initial mount) is skipped — no extra fetch.
+    await act(async () => {
+      await focusCb!();
+    });
+    expect(mockedList).toHaveBeenCalledTimes(1);
+
+    // A subsequent focus refetches so fulfilled/denied statuses appear.
+    await act(async () => {
+      await focusCb!();
+    });
+    await waitFor(() => expect(mockedList).toHaveBeenCalledTimes(2));
   });
 
   it("delete requires a second confirming tap", async () => {

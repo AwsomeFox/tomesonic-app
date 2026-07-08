@@ -4,7 +4,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
 import Icon, { IconName } from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import SearchContent from "../components/SearchContent";
+import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { useUiStore } from "../store/useUiStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { storageHelper } from "../utils/storage";
@@ -69,6 +71,10 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
+  // Same connectivity signal BookshelfScreen/OfflineBanner consume. The hub's
+  // facets all fetch from the server, so offline there's nothing to browse —
+  // point the user at their downloaded content instead of firing failing fetches.
+  const { isConnected } = useNetworkStatus();
 
   const params = route?.params || {};
 
@@ -385,6 +391,47 @@ export default function LibraryHubScreen({ route, navigation }: any) {
       />
 
       <View style={{ flex: 1 }}>
+        {/* Offline fallback: the library facets browse the server, so offline
+            there's nothing to load. Show a clear notice + a jump to the
+            downloaded content instead of rendering facets that only fire
+            failing fetches. */}
+        {!isConnected ? (
+          <EmptyState
+            style={{ flex: 1 }}
+            icon="cloud-off"
+            title="You're offline"
+            message="Browsing the library needs a connection. Your downloaded books are always available offline."
+            action={
+              <Pressable
+                onPress={() => navigation?.navigate?.("Downloads")}
+                android_ripple={{ color: colors.surfaceContainerHighest }}
+                accessibilityRole="button"
+                accessibilityLabel="Open Downloads"
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingVertical: 12,
+                  paddingHorizontal: 24,
+                  borderRadius: 20,
+                  backgroundColor: colors.primaryContainer,
+                }}
+              >
+                <Icon name="download" size={18} color={colors.onPrimaryContainer} />
+                <Text
+                  style={{
+                    color: colors.onPrimaryContainer,
+                    fontSize: 14,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
+                  Open Downloads
+                </Text>
+              </Pressable>
+            }
+          />
+        ) : (
+          <>
         {/* Keep-alive facet layers: every visited segment stays mounted; only
             the active one is shown. */}
         {SEGMENTS.map((seg) => {
@@ -431,6 +478,10 @@ export default function LibraryHubScreen({ route, navigation }: any) {
               justifyContent: "center",
               backgroundColor: colors.secondaryContainer,
               elevation: 3,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 3,
             }}
           >
             <Icon name="chevron-up" size={26} color={colors.onSecondaryContainer} />
@@ -458,11 +509,17 @@ export default function LibraryHubScreen({ route, navigation }: any) {
               justifyContent: "center",
               backgroundColor: colors.primaryContainer,
               elevation: 3,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 3,
             }}
           >
             <Icon name="add" size={26} color={colors.onPrimaryContainer} />
           </Pressable>
         ) : null}
+          </>
+        )}
       </View>
     </SafeAreaView>
   );

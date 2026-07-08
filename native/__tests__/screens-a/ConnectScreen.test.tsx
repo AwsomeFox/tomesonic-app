@@ -227,6 +227,59 @@ describe("ConnectScreen", () => {
     await screen.findByText("Invalid username or password.");
   });
 
+  it("treats a 403 like a credentials rejection", async () => {
+    mockedGet.mockResolvedValue(absStatus());
+    mockedPost.mockRejectedValue({ response: { status: 403 } });
+    await render(<ConnectScreen />);
+    await connect();
+    await screen.findByPlaceholderText("Username");
+
+    await fireEvent.changeText(screen.getByPlaceholderText("Username"), "bob");
+    await fireEvent.changeText(screen.getByPlaceholderText("Password"), "wrong");
+    await fireEvent.press(screen.getByText("Submit"));
+    await screen.findByText("Invalid username or password.");
+  });
+
+  it("distinguishes a network/timeout failure from bad credentials", async () => {
+    mockedGet.mockResolvedValue(absStatus());
+    // Axios timeout / connection error carries no `response`.
+    mockedPost.mockRejectedValue(new Error("timeout of 15000ms exceeded"));
+    await render(<ConnectScreen />);
+    await connect();
+    await screen.findByPlaceholderText("Username");
+
+    await fireEvent.changeText(screen.getByPlaceholderText("Username"), "bob");
+    await fireEvent.changeText(screen.getByPlaceholderText("Password"), "hunter2");
+    await fireEvent.press(screen.getByText("Submit"));
+    await screen.findByText("Couldn't reach the server. Check the address and your connection.");
+  });
+
+  it("distinguishes a 5xx server error from bad credentials", async () => {
+    mockedGet.mockResolvedValue(absStatus());
+    mockedPost.mockRejectedValue({ response: { status: 502 } });
+    await render(<ConnectScreen />);
+    await connect();
+    await screen.findByPlaceholderText("Username");
+
+    await fireEvent.changeText(screen.getByPlaceholderText("Username"), "bob");
+    await fireEvent.changeText(screen.getByPlaceholderText("Password"), "hunter2");
+    await fireEvent.press(screen.getByText("Submit"));
+    await screen.findByText("The server had a problem. Please try again.");
+  });
+
+  it("distinguishes a 429 rate limit from bad credentials", async () => {
+    mockedGet.mockResolvedValue(absStatus());
+    mockedPost.mockRejectedValue({ response: { status: 429 } });
+    await render(<ConnectScreen />);
+    await connect();
+    await screen.findByPlaceholderText("Username");
+
+    await fireEvent.changeText(screen.getByPlaceholderText("Username"), "bob");
+    await fireEvent.changeText(screen.getByPlaceholderText("Password"), "hunter2");
+    await fireEvent.press(screen.getByText("Submit"));
+    await screen.findByText("Too many attempts. Please wait a moment and try again.");
+  });
+
   it("OpenID-only server hides local fields and runs the OAuth flow", async () => {
     mockedGet.mockResolvedValue(
       absStatus({ authMethods: ["openid"], authFormData: { authOpenIDButtonText: "SSO Login" } })

@@ -192,6 +192,52 @@ describe("usePlaybackStore 1s progress loop", () => {
     expect(second.timeListened).toBe(15);
   });
 
+  describe("Buffering/Loading stall", () => {
+    it("folds a mid-stream Buffering tick into the playing UI flag (no pause glyph, scrubber keeps moving)", async () => {
+      await startLoop();
+      playerPos = 10;
+      await tick(1000);
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+
+      // The stream stalls: RNTP reports Buffering on this tick. A strict
+      // `state === Playing` check would flip isPlaying:false → mini-player /
+      // notification show the pause glyph over a frozen scrubber (looked hung)
+      // and this tick would disarm itself (the paused early-return).
+      jest.mocked(TrackPlayer.getPlaybackState).mockResolvedValue({ state: State.Buffering } as any);
+      playerPos = 11;
+      await tick(1000);
+
+      const s = usePlaybackStore.getState();
+      expect(s.isPlaying).toBe(true); // folded — stays "playing"
+      expect(s.position).toBe(11); // scrubber still advances
+
+      // A subsequent Loading tick is folded too.
+      jest.mocked(TrackPlayer.getPlaybackState).mockResolvedValue({ state: State.Loading } as any);
+      playerPos = 12;
+      await tick(1000);
+      expect(usePlaybackStore.getState().isPlaying).toBe(true);
+    });
+
+    it("accrues no listening time and never re-stamps progress while Buffering (strict-Playing gate)", async () => {
+      await startLoop();
+      playerPos = 10;
+      await tick(1000); // Playing baseline — nothing listened yet
+      await tick(1000); // 1s real listening → first sync
+      expect(syncProgress).toHaveBeenCalledTimes(1);
+      const savedBefore = persistedSession().currentTime;
+
+      // Long buffering stretch: the UI flag stays "playing" (previous test) but
+      // accrual/persistence must NOT run — buffering seconds aren't listening,
+      // and a re-stamped updatedAt would poison freshest-wins.
+      jest.mocked(TrackPlayer.getPlaybackState).mockResolvedValue({ state: State.Buffering } as any);
+      playerPos = 50;
+      await tick(20000); // >15s — WOULD cross the sync window if it accrued
+
+      expect(syncProgress).toHaveBeenCalledTimes(1); // no extra sync
+      expect(persistedSession().currentTime).toBe(savedBefore); // no MMKV re-stamp
+    });
+  });
+
   it("accrues no listening time while paused", async () => {
     await startLoop();
     jest.mocked(TrackPlayer.getPlaybackState).mockResolvedValue({ state: State.Paused } as any);

@@ -126,6 +126,40 @@ describe("onNativeProgressSample (background-proof persistence)", () => {
     expect(savedSession()).toBeNull(); // no write
   });
 
+  it("ignores a straggler sample right after a local pause (must not re-stamp a paused book)", async () => {
+    await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
+    onNativeProgressSample({ position: 100, duration: 3600, track: 0 });
+    expect(savedSession()?.currentTime).toBe(100);
+
+    // User pauses locally — records _lastPausedAt.
+    await usePlaybackStore.getState().pause();
+    expect(usePlaybackStore.getState().isPlaying).toBe(false);
+
+    // A native PlaybackProgressUpdated for already-stopped audio lands moments
+    // later (events are delivered slightly out of band). Accepting it would
+    // hard-set isPlaying:true, accrue listening time and re-stamp updatedAt on
+    // a paused book — poisoning freshest-wins.
+    jest.setSystemTime(BASE + 500);
+    onNativeProgressSample({ position: 5000, duration: 3600, track: 0 });
+
+    const s = usePlaybackStore.getState();
+    expect(s.isPlaying).toBe(false); // NOT flipped back to playing
+    expect(s.position).not.toBe(5000); // straggler position not adopted
+    expect(savedSession()?.currentTime).not.toBe(5000); // not re-stamped
+  });
+
+  it("accepts native samples again once the post-pause window has elapsed", async () => {
+    await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
+    await usePlaybackStore.getState().pause();
+
+    // Past the short straggler window — the guard is bounded so it never
+    // permanently silences the background persistence path.
+    jest.setSystemTime(BASE + 3000);
+    onNativeProgressSample({ position: 1500, duration: 3600, track: 0 });
+
+    expect(usePlaybackStore.getState().position).toBe(1500);
+  });
+
   it("ignores bogus samples (NaN/negative) and no-session states", async () => {
     usePlaybackStore.setState({ currentSession: null } as any);
     expect(() => onNativeProgressSample({ position: 10, duration: 100, track: 0 })).not.toThrow();

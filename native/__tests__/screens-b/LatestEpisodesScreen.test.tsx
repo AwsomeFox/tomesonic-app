@@ -246,4 +246,64 @@ describe("LatestEpisodesScreen", () => {
     await fireEvent.press(screen.getByLabelText("Go back"));
     expect(navigation.goBack).toHaveBeenCalled();
   });
+
+  it("filters the list by Unplayed / In-Progress against the progress map", async () => {
+    // ep1 (li1) is in-progress; ep2 (li2) has no progress → unplayed.
+    useUserStore.setState({
+      mediaProgress: {
+        "li1-ep1": { libraryItemId: "li1", episodeId: "ep1", progress: 0.4, isFinished: false },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // Unplayed → only the untouched episode remains.
+    await fireEvent.press(screen.getByLabelText("Filter: Unplayed"));
+    expect(screen.queryByText("Fresh Episode")).toBeNull();
+    expect(screen.getByText("Short Episode")).toBeTruthy();
+
+    // In-Progress → only the partially-played episode remains.
+    await fireEvent.press(screen.getByLabelText("Filter: In-Progress"));
+    expect(screen.getByText("Fresh Episode")).toBeTruthy();
+    expect(screen.queryByText("Short Episode")).toBeNull();
+
+    // Back to All → both return.
+    await fireEvent.press(screen.getByLabelText("Filter: All"));
+    expect(screen.getByText("Fresh Episode")).toBeTruthy();
+    expect(screen.getByText("Short Episode")).toBeTruthy();
+  });
+
+  it("sort toggle flips between newest and oldest", async () => {
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // Default is newest-first.
+    expect(screen.getByLabelText("Sort oldest first")).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Sort oldest first"));
+    // Label flips; both episodes still render.
+    expect(screen.getByLabelText("Sort newest first")).toBeTruthy();
+    expect(screen.getByText("Fresh Episode")).toBeTruthy();
+    expect(screen.getByText("Short Episode")).toBeTruthy();
+  });
+
+  it("re-tapping the currently-playing episode resumes instead of starting a new session", async () => {
+    const play = jest.fn().mockResolvedValue(undefined);
+    const setPlayerExpanded = jest.fn();
+    usePlaybackStore.setState({
+      startPlayback,
+      currentSession: { libraryItemId: "li1", episodeId: "ep1" },
+      isPlaying: false,
+      play,
+      setPlayerExpanded,
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getByLabelText("Play Fresh Episode"));
+
+    // No fresh /play — resume/expand the existing session instead.
+    expect(startPlayback).not.toHaveBeenCalled();
+    expect(play).toHaveBeenCalled();
+    expect(setPlayerExpanded).toHaveBeenCalledWith(true);
+  });
 });

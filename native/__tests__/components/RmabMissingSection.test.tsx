@@ -77,6 +77,59 @@ describe("RmabMissingSection", () => {
     await screen.findByText("Requested");
   });
 
+  it("a failed/denied request shows an error chip AND re-shows the Request button for retry", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    await render(
+      <RmabMissingSection
+        fetchMissing={jest.fn().mockResolvedValue([
+          { asin: "D1", title: "Denied Book", author: "A", isAvailable: false, requestStatus: "denied" },
+          { asin: "F1", title: "Failed Book", author: "A", isAvailable: false, requestStatus: "failed" },
+        ])}
+      />
+    );
+    await screen.findByText("Denied Book");
+
+    // Error-styled chips with terminal labels — never a neutral "Requested".
+    expect(screen.getByText("Denied")).toBeTruthy();
+    expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.queryByText("Requested")).toBeNull();
+    // The Request button is re-shown so the user can retry from here.
+    expect(screen.getByLabelText("Retry request Denied Book")).toBeTruthy();
+    expect(screen.getByLabelText("Retry request Failed Book")).toBeTruthy();
+  });
+
+  it("retrying a failed request re-posts it", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    (createRequest as jest.Mock).mockResolvedValue({ id: "req1" });
+    await render(
+      <RmabMissingSection
+        fetchMissing={jest.fn().mockResolvedValue([
+          { asin: "F1", title: "Failed Book", author: "A", isAvailable: false, requestStatus: "failed" },
+        ])}
+      />
+    );
+    await screen.findByText("Failed Book");
+    await fireEvent.press(screen.getByLabelText("Retry request Failed Book"));
+    await waitFor(() => expect(createRequest).toHaveBeenCalled());
+    expect((createRequest as jest.Mock).mock.calls[0][0]).toMatchObject({ asin: "F1" });
+  });
+
+  it("a pending/approved status keeps the neutral 'Requested' chip and suppresses the button", async () => {
+    useRmabStore.setState({ configured: true } as any);
+    await render(
+      <RmabMissingSection
+        fetchMissing={jest.fn().mockResolvedValue([
+          { asin: "P1", title: "Pending Book", author: "A", isAvailable: false, requestStatus: "pending" },
+        ])}
+      />
+    );
+    await screen.findByText("Pending Book");
+    expect(screen.getByText("Requested")).toBeTruthy();
+    // No Request/Retry button while the request is still in progress.
+    expect(screen.queryByLabelText("Request Pending Book")).toBeNull();
+    expect(screen.queryByLabelText("Retry request Pending Book")).toBeNull();
+  });
+
   it("surfaces duplicate-request notices from the server", async () => {
     useRmabStore.setState({ configured: true } as any);
     (createRequest as jest.Mock).mockRejectedValue({

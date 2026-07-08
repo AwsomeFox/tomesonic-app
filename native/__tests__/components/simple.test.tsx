@@ -184,6 +184,15 @@ describe("Skeleton family", () => {
 describe("OfflineBanner", () => {
   const addListener = NetInfo.addEventListener as jest.Mock;
 
+  // The banner now gates on the hook's derived, DEBOUNCED `isOffline` and seeds
+  // it from the persisted last-status — so clear that persisted key between
+  // cases (a prior offline case would otherwise seed the next render offline).
+  beforeEach(() => {
+    try {
+      require("../../utils/storage").storage.remove("lastNetworkStatus");
+    } catch {}
+  });
+
   it("renders nothing while connected", async () => {
     addListener.mockImplementation((cb: any) => {
       cb({ isConnected: true, isInternetReachable: true });
@@ -194,25 +203,39 @@ describe("OfflineBanner", () => {
   });
 
   it("shows the banner when the connection drops, hides when it returns", async () => {
-    let listener: any;
-    addListener.mockImplementation((cb: any) => {
-      listener = cb;
-      return jest.fn();
-    });
-    await render(<OfflineBanner />);
-    expect(screen.toJSON()).toBeNull(); // default is online
+    jest.useFakeTimers();
+    try {
+      let listener: any;
+      addListener.mockImplementation((cb: any) => {
+        listener = cb;
+        return jest.fn();
+      });
+      await render(<OfflineBanner />);
+      expect(screen.toJSON()).toBeNull(); // default is online
 
-    await act(async () => {
-      listener({ isConnected: false, isInternetReachable: false });
-    });
-    expect(
-      screen.getByText("No internet connection — showing downloaded content")
-    ).toBeTruthy();
+      // The offline transition is debounced (~500ms) so a brief reachability
+      // blip can't flap the UI. First flush the status update so the debounce
+      // effect schedules its timer, THEN advance past it to commit the flip.
+      await act(async () => {
+        listener({ isConnected: false, isInternetReachable: false });
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(600);
+      });
+      expect(
+        screen.getByText("No internet connection — showing downloaded content")
+      ).toBeTruthy();
 
-    await act(async () => {
-      listener({ isConnected: true, isInternetReachable: true });
-    });
-    expect(screen.toJSON()).toBeNull();
+      await act(async () => {
+        listener({ isConnected: true, isInternetReachable: true });
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(600);
+      });
+      expect(screen.toJSON()).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("defaults to online when netinfo state fields are missing", async () => {
@@ -225,6 +248,8 @@ describe("OfflineBanner", () => {
     await act(async () => {
       listener({});
     });
+    // Missing fields → isConnected coerces to true and reachability is UNKNOWN
+    // (not an explicit false), so the app stays optimistically online.
     expect(screen.toJSON()).toBeNull();
   });
 });

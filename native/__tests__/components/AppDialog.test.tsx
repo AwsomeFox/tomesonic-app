@@ -5,6 +5,7 @@
  * dismisses the dialog, and destructive buttons render in the error color.
  */
 import React from "react";
+import { AccessibilityInfo } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import AppDialog from "../../components/AppDialog";
 import { showAppDialog, useDialogStore } from "../../store/useDialogStore";
@@ -84,5 +85,81 @@ describe("AppDialog", () => {
     expect(screen.getByText("Cancel").props.style.color).toBe(colors.primary);
     // Sanity: the two roles are visually distinct.
     expect(colors.error).not.toBe(colors.primary);
+  });
+
+  // ── Cancelable / dismissal semantics (QA finding: previously untested) ──
+
+  it("scrim tap dismisses the dialog when cancelable is not false", async () => {
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({ title: "Confirm", message: "Body", buttons: [{ text: "OK" }] });
+    });
+    await screen.findByText("Confirm");
+
+    fireEvent.press(screen.getByTestId("app-dialog-scrim", { includeHiddenElements: true }));
+
+    expect(useDialogStore.getState().current).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Confirm")).toBeNull());
+  });
+
+  it("scrim tap is a no-op when cancelable is false", async () => {
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({
+        title: "Confirm",
+        message: "Body",
+        cancelable: false,
+        buttons: [{ text: "OK" }],
+      });
+    });
+    await screen.findByText("Confirm");
+
+    fireEvent.press(screen.getByTestId("app-dialog-scrim", { includeHiddenElements: true }));
+
+    // Non-cancelable dialog must survive an outside tap.
+    expect(useDialogStore.getState().current).not.toBeNull();
+    expect(screen.getByText("Confirm")).toBeTruthy();
+  });
+
+  it("hardware back (onRequestClose) dismisses when cancelable is not false", async () => {
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({ title: "Confirm", buttons: [{ text: "OK" }] });
+    });
+    await screen.findByText("Confirm");
+
+    fireEvent(screen.getByTestId("app-dialog-modal"), "requestClose");
+
+    expect(useDialogStore.getState().current).toBeNull();
+    await waitFor(() => expect(screen.queryByText("Confirm")).toBeNull());
+  });
+
+  it("hardware back (onRequestClose) is swallowed when cancelable is false", async () => {
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({ title: "Confirm", cancelable: false, buttons: [{ text: "OK" }] });
+    });
+    await screen.findByText("Confirm");
+
+    fireEvent(screen.getByTestId("app-dialog-modal"), "requestClose");
+
+    // Back is swallowed — the dialog stays up.
+    expect(useDialogStore.getState().current).not.toBeNull();
+    expect(screen.getByText("Confirm")).toBeTruthy();
+  });
+
+  it("announces the dialog to the screen reader when it opens", async () => {
+    const announce = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
+    announce.mockClear();
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({ title: "Delete?", message: "Are you sure?", buttons: [{ text: "OK" }] });
+    });
+    await screen.findByText("Delete?");
+
+    await waitFor(() =>
+      expect(announce).toHaveBeenCalledWith("Delete?. Are you sure?")
+    );
+    announce.mockRestore();
   });
 });

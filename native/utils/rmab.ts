@@ -240,9 +240,14 @@ let _refreshInFlight: { key: string; promise: Promise<RmabConfig> } | null = nul
 function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
   const key = `${cfg.url}::${cfg.refreshToken || ""}`;
   if (_refreshInFlight && _refreshInFlight.key === key) return _refreshInFlight.promise;
+  // Guard OUTSIDE the single-flight promise: a synchronous "no refresh token"
+  // throw inside the IIFE would run its finally before `_refreshInFlight` is
+  // assigned below, leaving a permanently-rejected in-flight promise installed
+  // (every later refresh for this key would return the dead rejection). Rejecting
+  // here — before registration — keeps that state clean.
+  if (!cfg.refreshToken) return Promise.reject(new Error("No refresh token"));
   const promise = (async () => {
     try {
-      if (!cfg.refreshToken) throw new Error("No refresh token");
       const res = await axios.post(
         `${cfg.url}/api/auth/refresh`,
         { refreshToken: cfg.refreshToken },

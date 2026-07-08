@@ -216,13 +216,19 @@ describe("AuthorDetailScreen", () => {
     expect(navigation.goBack).toHaveBeenCalled();
   });
 
-  it("shows the empty state when the author has no books", async () => {
+  it("shows the shared EmptyState when the author has no books", async () => {
     (api.get as jest.Mock).mockResolvedValue({
       data: { ...AUTHOR, libraryItems: [], description: null },
     });
     await renderAuthor();
 
+    // Shared <EmptyState> renders both the title and its supporting message.
     expect(await screen.findByText("No books by this author")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Books appear here once this library has titles matched to this author."
+      )
+    ).toBeTruthy();
     expect(screen.getByText("0 books")).toBeTruthy();
   });
 

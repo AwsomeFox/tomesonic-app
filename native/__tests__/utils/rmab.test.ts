@@ -155,6 +155,25 @@ describe("OIDC / SSO helpers", () => {
     mockedGet.mockRejectedValueOnce(new Error("network"));
     await expect(getRmabAuthProviders("https://rmab.test")).resolves.toBeNull();
   });
+
+  it("recognizes OBJECT-form providers ({type} or {id}) and surfaces localLoginDisabled", async () => {
+    // providers as objects tagged by `type`.
+    mockedGet.mockResolvedValueOnce({
+      data: { providers: [{ type: "oidc" }], localLoginDisabled: true },
+    });
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({
+      oidcEnabled: true,
+      oidcProviderName: null,
+      localLoginDisabled: true,
+    });
+    // ...or tagged by `id`.
+    mockedGet.mockResolvedValueOnce({ data: { providers: [{ id: "oidc" }] } });
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({
+      oidcEnabled: true,
+      oidcProviderName: null,
+      localLoginDisabled: false,
+    });
+  });
 });
 
 describe("session-expiry signal", () => {
