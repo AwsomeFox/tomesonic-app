@@ -138,6 +138,11 @@ describe("OIDC / SSO helpers", () => {
     expect(() => parseRmabAuthData("https://rmab.test", raw)).toThrow();
   });
 
+  it("throws when the server URL isn't a valid http(s) origin", () => {
+    const raw = encodeURIComponent(JSON.stringify({ accessToken: "a", refreshToken: "r" }));
+    expect(() => parseRmabAuthData("file:///x", raw)).toThrow();
+  });
+
   it("reports oidcEnabled + provider name on success, and null (unknown) on a probe error", async () => {
     mockedGet.mockResolvedValueOnce({ data: { oidcProviderName: "Authentik", providers: ["oidc"] } });
     await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({

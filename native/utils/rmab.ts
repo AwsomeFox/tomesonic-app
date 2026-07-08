@@ -201,7 +201,11 @@ export async function getRmabAuthProviders(
  *  The value is URI-encoded JSON: { accessToken, refreshToken, user }. Throws if
  *  it can't be parsed or is missing the token pair. */
 export function parseRmabAuthData(input: string, rawAuthData: string): RmabConfig {
-  const base = rmabOrigin(input) || normalize(input);
+  // Require a valid http(s) origin — this is the OIDC finish path, so a
+  // malformed or non-http(s) input must fail loudly rather than build a broken
+  // `${cfg.url}/api/...` base from a raw string.
+  const base = rmabOrigin(input);
+  if (!base) throw new Error("Invalid ReadMeABook server URL");
   let decoded = rawAuthData;
   // location.hash gives the value still percent-encoded; one decode yields JSON.
   try { decoded = decodeURIComponent(rawAuthData); } catch {}
