@@ -24,6 +24,11 @@ import {
   listMyRequests,
   getMe,
   clearRmabCaches,
+  rmabOrigin,
+  rmabOidcLoginUrl,
+  parseRmabAuthData,
+  getRmabAuthProviders,
+  setRmabSessionExpiredHandler,
 } from "../../utils/rmab";
 import { secureStorage } from "../../utils/storage";
 
@@ -92,6 +97,81 @@ describe("exchangeLoginToken", () => {
     mockedPost.mockResolvedValue({ data: { error: "Invalid token" } });
     mockedGet.mockRejectedValue({ response: { status: 401 } });
     await expect(exchangeLoginToken("https://rmab.test", "bad")).rejects.toBeTruthy();
+  });
+});
+
+describe("OIDC / SSO helpers", () => {
+  it("derives an origin from a plain address, a bare host, and a login URL", () => {
+    expect(rmabOrigin("https://rmab.test/")).toBe("https://rmab.test");
+    expect(rmabOrigin("rmab.test")).toBe("https://rmab.test");
+    expect(rmabOrigin("https://rmab.test/auth/token/login?token=rmab_x")).toBe("https://rmab.test");
+    expect(rmabOrigin("   ")).toBeNull();
+  });
+
+  it("builds the OIDC login URL from any origin-ish input", () => {
+    expect(rmabOidcLoginUrl("rmab.test")).toBe("https://rmab.test/api/auth/oidc/login");
+    expect(rmabOidcLoginUrl("")).toBeNull();
+  });
+
+  it("parses the URI-encoded #authData bundle into an oidc JWT config", () => {
+    const raw = encodeURIComponent(
+      JSON.stringify({ accessToken: "a", refreshToken: "r", user: { id: "u1", username: "tony", role: "user" } })
+    );
+    expect(parseRmabAuthData("https://rmab.test/", raw)).toEqual({
+      url: "https://rmab.test",
+      accessToken: "a",
+      refreshToken: "r",
+      authProvider: "oidc",
+      user: { id: "u1", username: "tony", role: "user" },
+    });
+  });
+
+  it("throws when the authData bundle is missing a token", () => {
+    const raw = encodeURIComponent(JSON.stringify({ accessToken: "a", user: {} }));
+    expect(() => parseRmabAuthData("https://rmab.test", raw)).toThrow();
+  });
+
+  it("reports oidcEnabled + provider name, and never throws on a probe error", async () => {
+    mockedGet.mockResolvedValueOnce({ data: { oidcProviderName: "Authentik", providers: ["oidc"] } });
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({
+      oidcEnabled: true,
+      oidcProviderName: "Authentik",
+      localLoginDisabled: false,
+    });
+    mockedGet.mockRejectedValueOnce(new Error("network"));
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({ oidcEnabled: false });
+  });
+});
+
+describe("session-expiry signal", () => {
+  let handler: jest.Mock;
+  beforeEach(() => {
+    handler = jest.fn();
+    setRmabSessionExpiredHandler(handler);
+    writeRmabConfig(CONFIG);
+  });
+  afterEach(() => setRmabSessionExpiredHandler(null));
+
+  it("fires when the refresh token itself is rejected (401)", async () => {
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    mockedPost.mockRejectedValue({ response: { status: 401 } }); // /api/auth/refresh
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire when the refresh merely fails on a network blip", async () => {
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    mockedPost.mockRejectedValue(new Error("ECONNRESET")); // no response.status
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("fires immediately for a rejected static API token (no refresh path)", async () => {
+    writeRmabConfig({ url: "https://rmab.test", apiToken: "rmab_x", user: { id: "u1" } });
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(mockedPost).not.toHaveBeenCalled();
   });
 });
 

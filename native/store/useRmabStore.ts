@@ -8,7 +8,9 @@ import {
   createRequest,
   getPendingApprovalCount,
   clearRmabCaches,
+  setRmabSessionExpiredHandler,
   RmabBook,
+  RmabConfig,
 } from "../utils/rmab";
 
 /**
@@ -26,6 +28,11 @@ interface RmabState {
   // RMAB role of the connected account. Manage actions (approve/delete) are
   // server-enforced to admin JWT sessions.
   isAdmin: boolean;
+  // How the session was established — routes the re-login prompt (SSO vs token).
+  authProvider: "oidc" | "loginToken" | "apiToken" | null;
+  // True once the refresh token is rejected — the session can't self-recover,
+  // so the UI shows a re-login banner instead of silently failing every call.
+  sessionExpired: boolean;
   // Requests awaiting admin approval — drives the account-menu badge.
   pendingApprovalCount: number;
   connecting: boolean;
@@ -37,6 +44,12 @@ interface RmabState {
 
   initialize: () => void;
   connect: (url: string, loginToken: string) => Promise<boolean>;
+  // Finish an SSO/OIDC sign-in: the WebView flow already produced a JWT config
+  // (accessToken/refreshToken/user) from the IdP round-trip; validate + persist.
+  connectWithOidc: (cfg: RmabConfig) => Promise<boolean>;
+  // Flag the current session as expired (fired from rmab.ts when the refresh
+  // token is rejected). Keeps serverUrl/authProvider so re-login is one tap.
+  markSessionExpired: () => void;
   disconnect: () => void;
   requestBook: (book: RmabBook) => Promise<{ ok: boolean; message?: string }>;
   noteRequestStatus: (asin: string, status: string) => void;
@@ -50,12 +63,17 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   username: null,
   authMode: null,
   isAdmin: false,
+  authProvider: null,
+  sessionExpired: false,
   pendingApprovalCount: 0,
   connecting: false,
   connectError: null,
   requestedAsins: {},
 
   initialize: () => {
+    // Arm the session-expiry signal exactly once, regardless of whether we're
+    // connected yet — a connect established later still needs it wired.
+    setRmabSessionExpiredHandler(() => useRmabStore.getState().markSessionExpired());
     const cfg = readRmabConfig();
     if (cfg) {
       // Requested-state is persisted: Audible-sourced series/author rows carry
@@ -82,6 +100,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         username: cfg.user?.username || null,
         authMode: rmabAuthMode(cfg),
         isAdmin: cfg.user?.role === "admin",
+        // Older configs predate authProvider — infer so re-login still routes.
+        authProvider: cfg.authProvider ?? (cfg.apiToken ? "apiToken" : "loginToken"),
+        sessionExpired: false,
         requestedAsins,
       });
       get().refreshPendingCount();
@@ -121,7 +142,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       }
       // Token from the explicit API-token field (no token= URL): try the
       // static interpretation first; login URLs go JWT-first.
-      const cfg = await exchangeLoginToken(effUrl, effToken, { preferApiToken: !urlish });
+      const exchanged = await exchangeLoginToken(effUrl, effToken, { preferApiToken: !urlish });
+      // Record how we authenticated so a later expiry routes re-login correctly.
+      const provider: RmabConfig["authProvider"] = exchanged.apiToken ? "apiToken" : "loginToken";
+      const cfg: RmabConfig = { ...exchanged, authProvider: provider };
       clearRmabCaches();
       writeRmabConfig(cfg);
       // Round-trip an authed call so a pasted token that exchanged but can't
@@ -133,6 +157,8 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         username: cfg.user?.username || null,
         authMode: rmabAuthMode(cfg),
         isAdmin: cfg.user?.role === "admin",
+        authProvider: provider,
+        sessionExpired: false,
         connecting: false,
         // Fresh session — optimistic "Requested" chips from a previous
         // server/user don't apply here.
@@ -152,6 +178,8 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         username: null,
         authMode: null,
         isAdmin: false,
+        authProvider: null,
+        sessionExpired: false,
         pendingApprovalCount: 0,
         requestedAsins: {},
         connectError:
@@ -163,6 +191,58 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       });
       return false;
     }
+  },
+
+  connectWithOidc: async (cfg) => {
+    set({ connecting: true, connectError: null });
+    try {
+      clearRmabCaches();
+      const withProvider: RmabConfig = { ...cfg, authProvider: "oidc" };
+      writeRmabConfig(withProvider);
+      // Round-trip /auth/me to prove the JWT works AND get the authoritative
+      // role/username (the OIDC payload's role can lag a just-changed claim).
+      const me = await getMe();
+      const user = me?.user || me || withProvider.user || null;
+      const full: RmabConfig = { ...withProvider, user };
+      writeRmabConfig(full);
+      set({
+        configured: true,
+        serverUrl: full.url,
+        username: full.user?.username || null,
+        authMode: rmabAuthMode(full), // always "jwt" for SSO — full API access
+        isAdmin: full.user?.role === "admin",
+        authProvider: "oidc",
+        sessionExpired: false,
+        connecting: false,
+        requestedAsins: {},
+      });
+      get().refreshPendingCount();
+      return true;
+    } catch {
+      // A token that can't authenticate must leave no trace of a connection.
+      writeRmabConfig(null);
+      set({
+        connecting: false,
+        configured: false,
+        serverUrl: null,
+        username: null,
+        authMode: null,
+        isAdmin: false,
+        authProvider: null,
+        sessionExpired: false,
+        pendingApprovalCount: 0,
+        requestedAsins: {},
+        connectError: "SSO sign-in failed — please try again.",
+      });
+      return false;
+    }
+  },
+
+  markSessionExpired: () => {
+    // Idempotent, and only meaningful for a live connection: never flip a
+    // fresh/disconnected store into an expired state, and don't re-notify.
+    if (!get().configured || get().sessionExpired) return;
+    set({ sessionExpired: true, pendingApprovalCount: 0 });
   },
 
   disconnect: () => {
@@ -178,6 +258,8 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       username: null,
       authMode: null,
       isAdmin: false,
+      authProvider: null,
+      sessionExpired: false,
       pendingApprovalCount: 0,
       connectError: null,
       requestedAsins: {},

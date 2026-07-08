@@ -9,6 +9,7 @@ jest.mock("../../utils/rmab", () => ({
   getPendingApprovalCount: jest.fn().mockResolvedValue(0),
   listMyRequests: jest.fn().mockResolvedValue([]),
   clearRmabCaches: jest.fn(),
+  setRmabSessionExpiredHandler: jest.fn(),
 }));
 
 import { useRmabStore } from "../../store/useRmabStore";
@@ -66,11 +67,13 @@ describe("connect", () => {
     mockedMe.mockResolvedValue({ user: {} });
     const ok = await useRmabStore.getState().connect("https://rmab.test", "tok");
     expect(ok).toBe(true);
-    expect(mockedWrite).toHaveBeenCalledWith(CFG);
+    // Persisted with the provider tag so a later expiry routes re-login correctly.
+    expect(mockedWrite).toHaveBeenCalledWith({ ...CFG, authProvider: "loginToken" });
     const s = useRmabStore.getState();
     expect(s.configured).toBe(true);
     expect(s.username).toBe("tony");
     expect(s.authMode).toBe("jwt");
+    expect(s.authProvider).toBe("loginToken");
     expect(s.connectError).toBeNull();
   });
 
@@ -167,6 +170,66 @@ describe("connect", () => {
     const ok = await useRmabStore.getState().connect("https://rmab.test", "tok");
     expect(ok).toBe(true);
     expect(useRmabStore.getState().requestedAsins).toEqual({});
+  });
+});
+
+describe("connectWithOidc", () => {
+  it("persists the SSO config, adopts the role from /auth/me, marks it jwt + oidc", async () => {
+    mockedMe.mockResolvedValue({ user: { id: "u1", username: "tony", role: "admin" } });
+    const ok = await useRmabStore.getState().connectWithOidc(CFG as any);
+    expect(ok).toBe(true);
+    const s = useRmabStore.getState();
+    expect(s.configured).toBe(true);
+    expect(s.authMode).toBe("jwt");
+    expect(s.authProvider).toBe("oidc");
+    expect(s.isAdmin).toBe(true);
+    expect(s.username).toBe("tony");
+    expect(s.sessionExpired).toBe(false);
+    // The persisted config carries authProvider so re-login routes to SSO later.
+    expect(mockedWrite).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: "https://rmab.test", authProvider: "oidc" })
+    );
+  });
+
+  it("clears everything when the fresh JWT can't authenticate", async () => {
+    mockedMe.mockRejectedValue({ response: { status: 401 } });
+    const ok = await useRmabStore.getState().connectWithOidc(CFG as any);
+    expect(ok).toBe(false);
+    expect(mockedWrite).toHaveBeenLastCalledWith(null);
+    const s = useRmabStore.getState();
+    expect(s.configured).toBe(false);
+    expect(s.connectError).toBeTruthy();
+  });
+});
+
+describe("markSessionExpired", () => {
+  it("flags a live session as expired and drops the approval badge", () => {
+    useRmabStore.setState({ configured: true, sessionExpired: false, pendingApprovalCount: 3 } as any);
+    useRmabStore.getState().markSessionExpired();
+    const s = useRmabStore.getState();
+    expect(s.sessionExpired).toBe(true);
+    expect(s.pendingApprovalCount).toBe(0);
+  });
+
+  it("is a no-op when not configured (never expires a fresh/disconnected store)", () => {
+    useRmabStore.setState({ configured: false, sessionExpired: false } as any);
+    useRmabStore.getState().markSessionExpired();
+    expect(useRmabStore.getState().sessionExpired).toBe(false);
+  });
+
+  it("registers itself as the rmab.ts session-expiry handler on initialize", () => {
+    const { setRmabSessionExpiredHandler } = require("../../utils/rmab");
+    mockedRead.mockReturnValue(null);
+    useRmabStore.getState().initialize();
+    expect(setRmabSessionExpiredHandler).toHaveBeenCalledWith(expect.any(Function));
+  });
+
+  it("a successful reconnect clears the expired flag", async () => {
+    useRmabStore.setState({ configured: true, sessionExpired: true } as any);
+    mockedExchange.mockResolvedValue(CFG);
+    mockedMe.mockResolvedValue({ user: {} });
+    await useRmabStore.getState().connect("https://rmab.test", "tok");
+    expect(useRmabStore.getState().sessionExpired).toBe(false);
   });
 });
 
