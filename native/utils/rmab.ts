@@ -264,13 +264,21 @@ async function rmabRequest<T = any>(
   try {
     return (await doCall(cfg)).data;
   } catch (e: any) {
-    if (e?.response?.status !== 401) throw e;
-    // Static API tokens don't refresh — a 401 means the token was revoked or
-    // is otherwise dead, so the saved credential needs re-entering.
+    const status = e?.response?.status;
+    // Static API tokens don't refresh. A 401 (revoked/expired) OR 403
+    // (forbidden) means the saved token no longer works, so surface the
+    // re-login prompt — matching how connect()/exchangeLoginToken treat both
+    // as auth-shaped. apiToken sessions are gated to allowlisted endpoints
+    // (discovery needs jwt), so a 403 here is a dead token, not a routine
+    // allowlist bounce.
     if (cfg.apiToken) {
-      notifyRmabSessionExpired();
+      if (status === 401 || status === 403) notifyRmabSessionExpired();
       throw e;
     }
+    // JWT: only a 401 is recoverable via refresh. A 403 is a genuine
+    // permission boundary (e.g. a non-admin hitting an admin route), not
+    // expiry — real JWT expiry surfaces as a 401 here or a rejected refresh.
+    if (status !== 401) throw e;
     try {
       cfg = await refreshAccessToken(cfg);
     } catch (refreshErr: any) {

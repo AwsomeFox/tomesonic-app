@@ -173,6 +173,20 @@ describe("session-expiry signal", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(mockedPost).not.toHaveBeenCalled();
   });
+
+  it("fires for a FORBIDDEN (403) static API token too", async () => {
+    writeRmabConfig({ url: "https://rmab.test", apiToken: "rmab_x", user: { id: "u1" } });
+    mockedRequest.mockRejectedValue({ response: { status: 403 } });
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT treat a 403 on a JWT call as expiry (genuine permission boundary)", async () => {
+    mockedRequest.mockRejectedValue({ response: { status: 403 } });
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).not.toHaveBeenCalled();
+    expect(mockedPost).not.toHaveBeenCalled(); // no refresh attempt on a 403
+  });
 });
 
 describe("authed requests", () => {
