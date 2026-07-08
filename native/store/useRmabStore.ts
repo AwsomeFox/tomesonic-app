@@ -40,9 +40,9 @@ interface RmabState {
   // available (fulfilled) or newly failed since the last poll — the non-admin
   // analogue of pendingApprovalCount. Accumulates across polls until a screen
   // consumes it via clearMyRequestUpdates().
-  // TODO(screen): surface these on Requests/Discover (e.g. a "1 book ready"
-  // banner or badge) and call clearMyRequestUpdates() once shown. No screen
-  // reads this yet — it's store-only for now.
+  // Surfaced by RmabRequestsScreen: a focus/foreground trigger drives
+  // refreshMyRequestStatuses() (see below), and the screen renders a live-region
+  // banner from these counts, then calls clearMyRequestUpdates() once shown.
   myRequestUpdates: { fulfilled: number; failed: number };
   connecting: boolean;
   connectError: string | null;
@@ -118,6 +118,12 @@ function clearPersistedMyRequestStatuses() {
     storage.remove(MY_REQUEST_STATUS_KEY);
   } catch {}
 }
+
+// Debounce guard: focus/foreground triggers can fire refreshMyRequestStatuses in
+// quick succession (tab switch + resume). Two concurrent polls would each diff
+// the SAME baseline and double-count a single transition, so collapse overlap to
+// one in-flight poll. Module-level (not store state) — it's plumbing, not UI.
+let myRequestStatusInFlight = false;
 
 export const useRmabStore = create<RmabState>((set, get) => ({
   configured: false,
@@ -379,6 +385,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     // non-admin gap-filler. (Any authMode works — listMyRequests is allowlisted
     // for API tokens too.)
     if (!configured || isAdmin) return;
+    // Collapse overlapping focus/foreground triggers to a single poll so two
+    // diffs can't both fire against the same baseline and double-count.
+    if (myRequestStatusInFlight) return;
+    myRequestStatusInFlight = true;
     try {
       const { listMyRequests } = require("../utils/rmab");
       const requests = await listMyRequests();
@@ -428,6 +438,8 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     } catch {
       // Offline / server error — leave the last baseline and counts intact;
       // the next successful poll picks up from there.
+    } finally {
+      myRequestStatusInFlight = false;
     }
   },
 
