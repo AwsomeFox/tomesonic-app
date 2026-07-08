@@ -410,7 +410,13 @@ export function pendingBookmarkRenamesFor(libraryItemId: string): { time: number
           return null;
         }
       })
-      .filter(Boolean);
+      // Only well-formed entries: a finite numeric `time` and a string `title`.
+      // A corrupt blob (missing/invalid fields) would otherwise reach the UI
+      // merge and produce an undefined title or a NaN time comparison.
+      .filter(
+        (b: any): b is { time: number; title: string } =>
+          !!b && Number.isFinite(b.time) && typeof b.title === "string"
+      );
   } catch {
     return [];
   }

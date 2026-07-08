@@ -169,7 +169,14 @@ function armShakeListener() {
   disarmShakeListener();
   if (!getSleepShakeToExtend()) return;
   try {
-    const sensors = require("expo-sensors");
+    // Metro statically resolves string-literal require() at BUNDLE time (even
+    // inside try/catch) and fails the build if the module isn't installed. Build
+    // the name at runtime so Metro treats it as a dynamic require it can't
+    // resolve — it emits a runtime-throwing stub instead, which the catch below
+    // turns into the intended no-op. Lets the feature light up if expo-sensors
+    // is later added, without breaking the build while it's absent.
+    const _mod = ["expo", "sensors"].join("-");
+    const sensors = require(_mod);
     const Accelerometer = sensors?.Accelerometer;
     if (!Accelerometer?.addListener) return;
     Accelerometer.setUpdateInterval?.(250);

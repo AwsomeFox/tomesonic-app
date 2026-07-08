@@ -32,7 +32,12 @@ try { Sharing = require("expo-sharing"); } catch (e) { Sharing = null; }
 // TTS is optional: expo-speech is NOT a project dependency, so the read-aloud
 // control degrades to a "not available" state rather than adding a native dep.
 let Speech: any = null;
-try { Speech = require("expo-speech"); } catch (e) { Speech = null; }
+// Build the name at runtime: Metro statically resolves string-literal require()
+// at BUNDLE time (even inside try/catch) and would fail the build because
+// expo-speech isn't installed. A computed name is treated as an unresolvable
+// dynamic require (runtime-throwing stub), which the catch turns into the
+// intended "TTS unavailable" no-op — and lights up if the dep is later added.
+try { Speech = require(["expo", "speech"].join("-")); } catch (e) { Speech = null; }
 
 // Cap for inlining the ebook as base64 into the WebView. Most ebooks are 1–5MB;
 // beyond this the bridge transfer gets heavy, so we offer "open externally".

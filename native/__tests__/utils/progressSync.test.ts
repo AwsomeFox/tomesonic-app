@@ -888,6 +888,18 @@ describe("bookmark rename queue", () => {
     expect(pendingBookmarkRenamesFor("other")).toEqual([]);
   });
 
+  it("pendingBookmarkRenamesFor drops corrupt blobs (missing/invalid time or title)", () => {
+    queueBookmarkRename("li1", 42, "good");
+    // Hand-write malformed entries under the rename prefix (a truncated/corrupt
+    // MMKV blob) — these must not reach the UI merge.
+    storage.set("pendingBookmarkRename_li1_10", JSON.stringify({ libraryItemId: "li1", time: 10 })); // no title
+    storage.set("pendingBookmarkRename_li1_20", JSON.stringify({ libraryItemId: "li1", title: "x" })); // no time
+    storage.set("pendingBookmarkRename_li1_30", JSON.stringify({ libraryItemId: "li1", time: "nope", title: "x" }));
+    expect(pendingBookmarkRenamesFor("li1")).toEqual([
+      { libraryItemId: "li1", time: 42, title: "good" },
+    ]);
+  });
+
   it("ignores invalid renames (empty id, negative or non-finite time)", () => {
     queueBookmarkRename("", 5, "x");
     queueBookmarkRename("li1", -1, "x");
