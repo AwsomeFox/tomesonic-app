@@ -46,7 +46,7 @@ jest.mock("../../utils/downloader", () => ({
 
 import ItemDetailScreen from "../../screens/ItemDetailScreen";
 import { api } from "../../utils/api";
-import { queueFinishedPatch } from "../../utils/progressSync";
+import { queueFinishedPatch, queueProgressPatch } from "../../utils/progressSync";
 import { downloader } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -445,6 +445,61 @@ describe("ItemDetailScreen", () => {
 
     await fireEvent.press(screen.getByLabelText("Play Episode One"));
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
+  });
+
+  it("podcast: hides the item-level Mark as finished button (episodes track their own progress)", async () => {
+    routeApi(podcastItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+    // An item-level isFinished PATCH would write a bogus podcast-item entry.
+    expect(screen.queryByLabelText("Mark as finished")).toBeNull();
+    expect(screen.queryByLabelText("Mark as not finished")).toBeNull();
+  });
+
+  it("podcast: per-episode mark finished PATCHes the episode-scoped endpoint and updates the map", async () => {
+    routeApi(podcastItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+
+    // Episodes render newest-first (ep2 published later than ep1), so the first
+    // toggle belongs to ep2.
+    const toggles = screen.getAllByLabelText("Mark episode finished");
+    expect(toggles.length).toBe(2);
+    await fireEvent.press(toggles[0]);
+
+    await waitFor(() =>
+      expect(mockedPatch).toHaveBeenCalledWith("/api/me/progress/pod1/ep2", { isFinished: true })
+    );
+    // Episode-scoped map key updates so the row flips immediately.
+    expect(useUserStore.getState().mediaProgress["pod1-ep2"].isFinished).toBe(true);
+    // No item-level write.
+    expect(mockedPatch).not.toHaveBeenCalledWith("/api/me/progress/pod1", expect.anything());
+  });
+
+  it("podcast: episode mark finished queues an episode-scoped patch when offline", async () => {
+    routeApi(podcastItem);
+    mockedPatch.mockRejectedValue(new Error("Network Error"));
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+
+    await fireEvent.press(screen.getAllByLabelText("Mark episode finished")[0]);
+
+    await waitFor(() =>
+      expect(queueProgressPatch).toHaveBeenCalledWith(
+        "pod1",
+        expect.anything(),
+        expect.anything(),
+        "ep2",
+        { isFinished: true }
+      )
+    );
+    expect(useUserStore.getState().mediaProgress["pod1-ep2"].isFinished).toBe(true);
   });
 
   it("shows the error state and recovers via Retry", async () => {
