@@ -192,7 +192,8 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
         },
         timeout: TIMEOUT,
       });
-      for (const p of res.data?.products || []) {
+      const products = res.data?.products || [];
+      for (const p of products) {
         const names = (p.authors || []).map((a: any) => a?.name).filter(Boolean);
         // A keyword hit with no author overlap (or no listed authors) is noise.
         if (!names.some((n: string) => authorsMatch(n, name))) continue;
@@ -202,6 +203,10 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
           out.push(mapped);
         }
       }
+      // The fallback is a single un-paginated page capped at 50; a full page
+      // means more matches likely exist, so flag partiality (same contract as
+      // the primary path) rather than presenting a truncated backlist as whole.
+      if (products.length >= 50) (out as any).partial = true;
     } catch {
       // Keep the empty primary result on a fallback failure.
     }

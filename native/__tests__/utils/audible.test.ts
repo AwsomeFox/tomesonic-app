@@ -158,6 +158,21 @@ describe("audibleAuthorBooks keyword fallback", () => {
     const books = await audibleAuthorBooks("Jane");
     expect(books).toEqual([]);
   });
+
+  it("flags the keyword fallback as partial when it returns a full 50-row page", async () => {
+    const full = Array.from({ length: 50 }, (_, i) => ({
+      asin: `K${i}`,
+      title: `Book ${i}`,
+      authors: [{ name: "Jane Author" }],
+    }));
+    mockedGet
+      .mockResolvedValueOnce({ data: { products: [] } }) // author= empty → fallback
+      .mockResolvedValueOnce({ data: { products: full } });
+    const books = await audibleAuthorBooks("Jane Author");
+    expect(books.length).toBe(50);
+    // A capped fallback page must not present itself as the complete backlist.
+    expect((books as any).partial).toBe(true);
+  });
 });
 
 describe("audibleAuthorBooks pagination", () => {
