@@ -72,10 +72,12 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
-  // Same connectivity signal BookshelfScreen/OfflineBanner consume. The hub's
-  // facets all fetch from the server, so offline there's nothing to browse —
-  // point the user at their downloaded content instead of firing failing fetches.
-  const { isConnected } = useNetworkStatus();
+  // Same DERIVED offline signal BookshelfScreen/OfflineBanner consume — true
+  // for a captive portal / connected-but-unreachable network too, not just a
+  // dropped radio. The hub's facets all fetch from the server, so offline
+  // there's nothing to browse — point the user at their downloaded content
+  // instead of firing failing fetches.
+  const { isOffline } = useNetworkStatus();
 
   const params = route?.params || {};
 
@@ -363,7 +365,7 @@ export default function LibraryHubScreen({ route, navigation }: any) {
             there's nothing to load. Show a clear notice + a jump to the
             downloaded content instead of rendering facets that only fire
             failing fetches. */}
-        {!isConnected ? (
+        {isOffline ? (
           <EmptyState
             style={{ flex: 1 }}
             icon="cloud-off"

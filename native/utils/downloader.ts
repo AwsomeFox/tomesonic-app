@@ -462,7 +462,14 @@ export const downloader = {
     // file endpoint (mirrors the book track path).
     const audioTrack = episode.audioTrack || {};
     const audioFile = episode.audioFile || {};
-    const rel: string = audioTrack.contentUrl || `/api/items/${libraryItemId}/file/${audioFile.ino || ""}`;
+    // Bail if the episode has NO real audio source: without a contentUrl or a
+    // file ino the fallback would be `/api/items/:id/file/` (empty ino), and
+    // absoluteUrl() always returns a non-empty string so the later `p.url`
+    // guard wouldn't catch it — the download would 404 an invalid endpoint.
+    if (!audioTrack.contentUrl && !audioFile.ino) {
+      throw new Error("This episode has no downloadable audio file.");
+    }
+    const rel: string = audioTrack.contentUrl || `/api/items/${libraryItemId}/file/${audioFile.ino}`;
     const trackUrl = absoluteUrl(rel, serverAddress, token);
     const ext = String(audioTrack.metadata?.ext || audioFile.metadata?.ext || "mp3").replace(/^\./, "");
     const audioSize =

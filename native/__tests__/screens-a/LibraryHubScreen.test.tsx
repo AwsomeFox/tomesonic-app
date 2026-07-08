@@ -58,12 +58,18 @@ jest.mock("../../components/SearchContent", () => {
 });
 
 // Connectivity signal (same hook BookshelfScreen/OfflineBanner consume). Default
-// online; individual tests flip it to exercise the offline fallback.
+// online; individual tests flip it to exercise the offline fallback. The hub
+// gates on the derived `isOffline`, so expose it (mirrors isEffectivelyOffline).
 let mockIsConnected = true;
+const mockNetStatus = () => ({
+  isConnected: mockIsConnected,
+  isInternetReachable: mockIsConnected,
+  isOffline: !mockIsConnected,
+});
 jest.mock("../../hooks/useNetworkStatus", () => ({
   __esModule: true,
-  useNetworkStatus: () => ({ isConnected: mockIsConnected, isInternetReachable: mockIsConnected }),
-  default: () => ({ isConnected: mockIsConnected, isInternetReachable: mockIsConnected }),
+  useNetworkStatus: () => mockNetStatus(),
+  default: () => mockNetStatus(),
 }));
 
 const mockOpenFilter = jest.fn();

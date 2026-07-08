@@ -322,6 +322,18 @@ describe("downloadEpisode — podcast episode downloads", () => {
     expect(notifications.start).not.toHaveBeenCalled();
     expect(resumables).toHaveLength(0);
   });
+
+  it("throws (no invalid /file/ request) when the episode has no contentUrl or ino", async () => {
+    // No audioTrack.contentUrl and no audioFile.ino → the ino fallback would be
+    // an invalid `/api/items/pod1/file/` endpoint; bail loudly instead so the
+    // caller can surface the error rather than 404-ing a download.
+    const noAudio = { id: "ep1", title: "Episode One", duration: 1800 };
+    await expect(
+      downloader.downloadEpisode(podcastItem(), noAudio, SERVER, TOKEN)
+    ).rejects.toThrow(/no downloadable audio/i);
+    expect(notifications.start).not.toHaveBeenCalled();
+    expect(useDownloadStore.getState().completedDownloads["pod1::ep1"]).toBeUndefined();
+  });
 });
 
 describe("downloadBook — duplicate-start guard", () => {
