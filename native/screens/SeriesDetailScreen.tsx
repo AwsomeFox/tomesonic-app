@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, FlatList, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -15,6 +15,8 @@ import Icon from "../components/Icon";
 import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
+import ErrorState from "../components/ErrorState";
+import EmptyState from "../components/EmptyState";
 import RmabMissingSection from "../components/RmabMissingSection";
 
 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
@@ -166,6 +168,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
 
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
@@ -177,10 +180,12 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
   };
 
-  useEffect(() => {
-    const fetchSeriesDetail = async () => {
+  const loadSeries = React.useCallback(
+    async (isRefresh = false) => {
       if (!seriesId || !currentLibraryId) return;
-      setLoading(true);
+      // Pull-to-refresh keeps the list on screen (no skeleton flip).
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
       setError(null);
 
       try {
@@ -247,12 +252,16 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         console.error("[SeriesDetailScreen] Failed to fetch series books:", err);
         setError("Failed to load series.");
       } finally {
-        setLoading(false);
+        if (isRefresh) setRefreshing(false);
+        else setLoading(false);
       }
-    };
+    },
+    [seriesId, currentLibraryId, seriesName]
+  );
 
-    fetchSeriesDetail();
-  }, [seriesId, currentLibraryId, retryTick]);
+  useEffect(() => {
+    loadSeries();
+  }, [loadSeries, retryTick]);
 
   // "Hide non-audiobooks": ebook-only rows are dropped when the setting is on.
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
@@ -426,6 +435,11 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
             <Pressable
               onPress={() => handlePlay(nextUnfinished)}
               disabled={!!startingId}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !!startingId, busy: !!startingId }}
+              accessibilityLabel={
+                startingId ? "Starting playback" : anyProgress ? "Continue" : "Play all"
+              }
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -457,6 +471,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       {series?.description ? (
         <Pressable
           onPress={() => setDescriptionExpanded((v) => !v)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: descriptionExpanded }}
+          accessibilityLabel={descriptionExpanded ? "Collapse description" : "Expand description"}
           style={{ paddingHorizontal: 16, paddingBottom: 12 }}
         >
           <Text
@@ -508,30 +525,18 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       {loading ? (
         <ListSkeleton rows={7} thumb={72} />
       ) : error ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          {/* colors.error to match the Collection/Playlist detail siblings. */}
-          <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
-          <Pressable
-            onPress={() => setRetryTick((t) => t + 1)}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading series"
-            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
-          >
-            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          message={error}
+          onRetry={() => setRetryTick((t) => t + 1)}
+          style={{ flex: 1 }}
+        />
       ) : bookCount === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <Icon name="series" size={48} color={colors.onSurfaceVariant} />
-          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "700", marginTop: 16, textAlign: "center" }}>
-            No books in this series
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, marginTop: 8, textAlign: "center" }}>
-            Books in this series will appear here once they're in your library.
-          </Text>
-        </View>
+        <EmptyState
+          icon="series"
+          title="No books in this series"
+          message="Books in this series will appear here once they're in your library."
+          style={{ flex: 1 }}
+        />
       ) : (
         <FlatList
           data={books}
@@ -543,6 +548,14 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           }
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => loadSeries(true)}
+              colors={[colors.primary]}
+              progressBackgroundColor={colors.surfaceContainerHigh}
+            />
+          }
         />
       )}
     </SafeAreaView>

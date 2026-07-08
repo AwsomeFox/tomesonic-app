@@ -447,6 +447,27 @@ describe("ItemDetailScreen", () => {
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
   });
 
+  it("podcast with no episodes: shows an empty state and disables the Play button", async () => {
+    const emptyPodcast = {
+      ...podcastItem,
+      id: "pod-empty",
+      media: { episodes: [], metadata: { title: "Silent Podcast" } },
+    };
+    routeApi(emptyPodcast);
+    const startPlayback = jest.fn().mockResolvedValue(true);
+    usePlaybackStore.setState({ startPlayback } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod-empty" } }} navigation={makeNavigation()} />
+    );
+
+    expect(await screen.findByText("No episodes available yet")).toBeTruthy();
+    // A prominent Play button that does nothing is worse than a disabled one.
+    const playBtn = screen.getByLabelText("Play");
+    expect(playBtn).toBeDisabled();
+    await fireEvent.press(playBtn);
+    expect(startPlayback).not.toHaveBeenCalled();
+  });
+
   it("podcast: hides the item-level Mark as finished button (episodes track their own progress)", async () => {
     routeApi(podcastItem);
     await render(

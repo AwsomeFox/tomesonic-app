@@ -223,7 +223,7 @@ describe("CollectionDetailScreen", () => {
     await renderCollection({});
 
     expect(await screen.findByText("No collection ID provided.")).toBeTruthy();
-    expect(screen.queryByLabelText("Retry loading collection")).toBeNull();
+    expect(screen.queryByLabelText("Retry")).toBeNull();
     expect(api.get).not.toHaveBeenCalled();
   });
 
@@ -234,7 +234,7 @@ describe("CollectionDetailScreen", () => {
     expect(await screen.findByText("Failed to load collection.")).toBeTruthy();
 
     (api.get as jest.Mock).mockResolvedValue({ data: COLLECTION });
-    await fireEvent.press(screen.getByLabelText("Retry loading collection"));
+    await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Finished Book")).toBeTruthy();
   });

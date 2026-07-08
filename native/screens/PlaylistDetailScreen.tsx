@@ -12,6 +12,7 @@ import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
 import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
@@ -329,21 +330,11 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
       {loading ? (
         <ListSkeleton rows={7} thumb={64} />
       ) : error ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="warning" size={40} color={colors.error} style={{ marginBottom: 12 }} />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>{error}</Text>
-          {playlistId ? (
-            <Pressable
-              onPress={() => setRetryTick((t) => t + 1)}
-              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-              accessibilityRole="button"
-              accessibilityLabel="Retry loading playlist"
-              style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
-            >
-              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        <ErrorState
+          message={error}
+          onRetry={playlistId ? () => setRetryTick((t) => t + 1) : undefined}
+          style={{ flex: 1 }}
+        />
       ) : playlist ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}>
           {/* Detail header: collage + title + count + Play all */}
@@ -361,6 +352,9 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
                 <Pressable
                   onPress={handlePlayAll}
                   disabled={starting}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: starting, busy: starting }}
+                  accessibilityLabel={starting ? "Starting playback" : "Play all"}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",

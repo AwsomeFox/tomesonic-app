@@ -10,6 +10,8 @@ import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import ErrorState from "../components/ErrorState";
+import EmptyState from "../components/EmptyState";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { downloader } from "../utils/downloader";
 import { storage } from "../utils/storage";
@@ -527,6 +529,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const handlePlay = () => startAudio(itemId);
 
   const hasAudioMedia = selfHasAudio || !!audioCounterpartId;
+  // A podcast with no episodes has a Play button (selfHasAudio is forced true
+  // for podcasts) that computes no episode and no-ops — disable it and show an
+  // empty state instead of a prominent button that does nothing.
+  const isPodcastEmpty = isPodcastItem && episodes.length === 0;
   const onPlayPress = () => {
     if (isPodcastItem) {
       // A podcast ITEM has no playable tracks — /play without an episodeId
@@ -737,27 +743,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : error ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="warning" size={40} color={colors.error} />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 12 }}>{error}</Text>
-          {itemId ? (
-            <Pressable
-              onPress={loadItem}
-              accessibilityRole="button"
-              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-              style={{
-                marginTop: 20,
-                backgroundColor: colors.primary,
-                paddingHorizontal: 24,
-                paddingVertical: 10,
-                borderRadius: 24,
-                overflow: "hidden",
-              }}
-            >
-              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        <ErrorState
+          message={error}
+          onRetry={itemId ? loadItem : undefined}
+          style={{ flex: 1 }}
+        />
       ) : item ? (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 120 : 48 }}>
           {/* Centered cover with progress bar on its bottom edge */}
@@ -821,8 +811,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             {hasAudioMedia ? (
               <Pressable
                 onPress={onPlayPress}
-                disabled={starting}
+                disabled={starting || isPodcastEmpty}
                 accessibilityRole="button"
+                accessibilityState={{ disabled: starting || isPodcastEmpty, busy: starting }}
                 accessibilityLabel={!isFinished && audioProgressFraction > 0 ? "Continue listening" : "Play"}
                 android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
                 style={{
@@ -838,7 +829,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   // wide when sharing the row with a Read button).
                   paddingHorizontal: 16,
                   marginRight: canRead ? 8 : 0,
-                  opacity: starting ? 0.6 : 1,
+                  opacity: starting || isPodcastEmpty ? 0.6 : 1,
                 }}
               >
                 {starting ? (
@@ -1405,6 +1396,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 </Pressable>
               ) : null}
             </View>
+          ) : null}
+
+          {/* Podcast with no episodes: the Play button above is disabled, so
+              disclose why here instead of leaving a silent dead control. */}
+          {isPodcastEmpty ? (
+            <EmptyState
+              icon="podcast"
+              title="No episodes available yet"
+              message="Episodes will appear here once this podcast has published them."
+              style={{ marginTop: 8 }}
+            />
           ) : null}
 
           {/* Podcast episodes */}

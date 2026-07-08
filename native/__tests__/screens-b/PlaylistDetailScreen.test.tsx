@@ -209,7 +209,7 @@ describe("PlaylistDetailScreen", () => {
     await renderPlaylist({});
 
     expect(await screen.findByText("No playlist ID provided.")).toBeTruthy();
-    expect(screen.queryByLabelText("Retry loading playlist")).toBeNull();
+    expect(screen.queryByLabelText("Retry")).toBeNull();
     expect(api.get).not.toHaveBeenCalled();
   });
 
@@ -220,7 +220,7 @@ describe("PlaylistDetailScreen", () => {
     expect(await screen.findByText("Failed to load playlist.")).toBeTruthy();
 
     (api.get as jest.Mock).mockResolvedValue({ data: PLAYLIST });
-    await fireEvent.press(screen.getByLabelText("Retry loading playlist"));
+    await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Audiobook One")).toBeTruthy();
   });

@@ -211,7 +211,7 @@ describe("AuthorDetailScreen", () => {
     expect(await screen.findByText("Couldn't load author")).toBeTruthy();
 
     (api.get as jest.Mock).mockResolvedValue({ data: AUTHOR });
-    await fireEvent.press(screen.getByLabelText("Retry loading author"));
+    await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Audio Novel")).toBeTruthy();
   });
