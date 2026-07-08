@@ -24,6 +24,7 @@ import { useUiStore } from "../store/useUiStore";
 import { useUserStore } from "../store/useUserStore";
 import RmabBookDetailSheet from "../components/RmabBookDetailSheet";
 import BookdatePreferencesSheet from "../components/BookdatePreferencesSheet";
+import RmabSessionExpiredBanner from "../components/RmabSessionExpiredBanner";
 import { useRmabStore } from "../store/useRmabStore";
 import {
   getBookdateRecommendations,
@@ -413,6 +414,9 @@ export default function DiscoverScreen({ navigation }: any) {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       <TopAppBar navigation={navigation} />
+      <RmabSessionExpiredBanner
+        onManualReconnect={(msg) => navigation.navigate("Settings", { openRmabConnect: true, rmabConnectError: msg })}
+      />
       <ScrollView
         contentContainerStyle={{ paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}

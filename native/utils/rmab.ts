@@ -26,6 +26,9 @@ export interface RmabConfig {
   /** Static rmab_ API token mode — allowlisted endpoints only
    *  (auth/me, audiobooks/search, requests). */
   apiToken?: string;
+  /** How the session was established — drives re-login routing when it
+   *  expires ('oidc' → SSO WebView, else → the token connect sheet). */
+  authProvider?: "oidc" | "loginToken" | "apiToken";
   user?: { id: string; username?: string; role?: string } | null;
 }
 
@@ -124,6 +127,108 @@ export async function exchangeLoginToken(
   throw lastAuthError || new Error("Authentication failed");
 }
 
+// --- OIDC / SSO sign-in (no admin-issued login token needed) -------------
+// RMAB's OIDC flow is browser-oriented: /api/auth/oidc/login redirects to the
+// IdP (e.g. Authentik), and after auth the callback leaves the JWT pair in the
+// final URL hash — `#authData=<uri-encoded JSON {accessToken,refreshToken,user}>`
+// — plus a JS-readable accessToken cookie. A WebView drives the flow and reads
+// that hash; these helpers build the URL, probe providers, and parse the result.
+
+/** Derive the server origin from whatever the user typed — a plain address, or
+ *  a one-time login URL that carries `?token=`. Assumes https for a bare host. */
+export function rmabOrigin(input: string): string | null {
+  const v = (input || "").trim();
+  if (!v) return null;
+  // Only real web origins. Non-http(s) schemes (file:, data:, blob:, …) parse
+  // fine but their `.origin` is the literal string "null", which would build
+  // bogus `null/api/...` requests and WebView navigations — reject them.
+  const toOrigin = (s: string): string | null => {
+    try {
+      const u = new URL(s);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+      return u.origin && u.origin !== "null" ? u.origin : null;
+    } catch {
+      return null;
+    }
+  };
+  // An explicit scheme (contains "://") must itself be http(s); a bare host or
+  // host:port gets https assumed. Keying on "://" avoids mangling e.g.
+  // file:///x into a bogus https://file via the fallback.
+  return v.includes("://") ? toOrigin(v) : toOrigin(`https://${v}`);
+}
+
+/** URL that kicks off RMAB's server-side OIDC redirect to the IdP. */
+export function rmabOidcLoginUrl(input: string): string | null {
+  const o = rmabOrigin(input);
+  return o ? `${o}/api/auth/oidc/login` : null;
+}
+
+export interface RmabAuthProviders {
+  oidcEnabled: boolean;
+  oidcProviderName?: string | null;
+  localLoginDisabled?: boolean;
+}
+
+/** Best-effort probe of a server's enabled auth providers, so the connect UI
+ *  can label the SSO button with the real provider name (e.g. Authentik) and
+ *  hide it when OIDC is off. Never throws — returns `null` when it couldn't
+ *  determine (no usable origin, network error, non-2xx). Callers must treat
+ *  null as "unknown", NOT "OIDC off", so a transient blip doesn't hide SSO. */
+export async function getRmabAuthProviders(
+  input: string,
+  signal?: AbortSignal
+): Promise<RmabAuthProviders | null> {
+  const o = rmabOrigin(input);
+  if (!o) return null;
+  try {
+    const res = await axios.get(`${o}/api/auth/providers`, { timeout: 12000, signal });
+    const d = res.data || {};
+    const list: any[] = Array.isArray(d.providers) ? d.providers : [];
+    const oidcEnabled =
+      !!d.oidcProviderName ||
+      list.some((p) => (typeof p === "string" ? p === "oidc" : p?.type === "oidc" || p?.id === "oidc"));
+    return {
+      oidcEnabled,
+      oidcProviderName: d.oidcProviderName ?? null,
+      localLoginDisabled: !!d.localLoginDisabled,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Turn the `#authData=` payload RMAB leaves after OIDC into a JWT-mode config.
+ *  The value is URI-encoded JSON: { accessToken, refreshToken, user }. Throws if
+ *  it can't be parsed or is missing the token pair. */
+export function parseRmabAuthData(input: string, rawAuthData: string): RmabConfig {
+  // Require a valid http(s) origin — this is the OIDC finish path, so a
+  // malformed or non-http(s) input must fail loudly rather than build a broken
+  // `${cfg.url}/api/...` base from a raw string.
+  const base = rmabOrigin(input);
+  if (!base) throw new Error("Invalid ReadMeABook server URL");
+  let decoded = rawAuthData;
+  // location.hash gives the value still percent-encoded; one decode yields JSON.
+  try { decoded = decodeURIComponent(rawAuthData); } catch {}
+  const data = JSON.parse(decoded);
+  const accessToken = data?.accessToken;
+  const refreshToken = data?.refreshToken;
+  if (!accessToken || !refreshToken) throw new Error("Sign-in response missing tokens");
+  return { url: base, accessToken, refreshToken, authProvider: "oidc", user: data?.user || null };
+}
+
+// --- Session-expiry signal ----------------------------------------------
+// When the (non-rotating, ~7-day) refresh token is finally rejected there's no
+// silent recovery — the user must sign in again. rmab.ts stays store-free, so
+// it fires a registered callback (the store flips a `sessionExpired` flag that
+// drives the re-login banner) rather than importing the store directly.
+let _onSessionExpired: (() => void) | null = null;
+export function setRmabSessionExpiredHandler(fn: (() => void) | null) {
+  _onSessionExpired = fn;
+}
+function notifyRmabSessionExpired() {
+  try { _onSessionExpired?.(); } catch {}
+}
+
 // Single-flight: Discover fires several RMAB calls in parallel, and after
 // access-token expiry every one 401s at once — without coordination each
 // POSTed its own /api/auth/refresh (redundant storm; harmless only because
@@ -132,47 +237,17 @@ export async function exchangeLoginToken(
 // shares a stale refresh with a different connection.
 let _refreshInFlight: { key: string; promise: Promise<RmabConfig> } | null = null;
 
-// A definitively-rejected refresh means the whole session is unrecoverable —
-// but the store still reads `configured: true`, so the Discover tab stays up
-// and every call keeps failing. The store registers a teardown here (mirror of
-// the main api's forceLogout) so the connection is dropped and the user is
-// prompted to reconnect.
-let _onSessionDead: (() => void) | null = null;
-export function setRmabSessionDeadHandler(fn: (() => void) | null) {
-  _onSessionDead = fn;
-}
-
 function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
   const key = `${cfg.url}::${cfg.refreshToken || ""}`;
   if (_refreshInFlight && _refreshInFlight.key === key) return _refreshInFlight.promise;
   const promise = (async () => {
     try {
       if (!cfg.refreshToken) throw new Error("No refresh token");
-      let res;
-      try {
-        res = await axios.post(
-          `${cfg.url}/api/auth/refresh`,
-          { refreshToken: cfg.refreshToken },
-          { timeout: 15000 }
-        );
-      } catch (e: any) {
-        // A 400/401/403 from /api/auth/refresh means the refresh token itself
-        // is dead — no future call can recover. Clear the persisted config and
-        // fire the dead-session teardown so the store disconnects (Discover
-        // hides). Guarded to the CURRENT stored connection so a disconnect /
-        // reconnect landing mid-flight isn't torn down by a stale refresh.
-        const status = e?.response?.status;
-        if (status === 400 || status === 401 || status === 403) {
-          const current = readRmabConfig();
-          if (current && current.url === cfg.url && current.refreshToken === cfg.refreshToken) {
-            writeRmabConfig(null);
-            try {
-              _onSessionDead?.();
-            } catch {}
-          }
-        }
-        throw e;
-      }
+      const res = await axios.post(
+        `${cfg.url}/api/auth/refresh`,
+        { refreshToken: cfg.refreshToken },
+        { timeout: 15000 }
+      );
       const accessToken = res.data?.accessToken;
       if (!accessToken) throw new Error("Refresh failed");
       const next = { ...cfg, accessToken };
@@ -212,9 +287,30 @@ async function rmabRequest<T = any>(
   try {
     return (await doCall(cfg)).data;
   } catch (e: any) {
-    // Static API tokens don't refresh — a 401 there is terminal.
-    if (e?.response?.status !== 401 || cfg.apiToken) throw e;
-    cfg = await refreshAccessToken(cfg);
+    const status = e?.response?.status;
+    // Static API tokens don't refresh. A 401 (revoked/expired) OR 403
+    // (forbidden) means the saved token no longer works, so surface the
+    // re-login prompt — matching how connect()/exchangeLoginToken treat both
+    // as auth-shaped. apiToken sessions are gated to allowlisted endpoints
+    // (discovery needs jwt), so a 403 here is a dead token, not a routine
+    // allowlist bounce.
+    if (cfg.apiToken) {
+      if (status === 401 || status === 403) notifyRmabSessionExpired();
+      throw e;
+    }
+    // JWT: only a 401 is recoverable via refresh. A 403 is a genuine
+    // permission boundary (e.g. a non-admin hitting an admin route), not
+    // expiry — real JWT expiry surfaces as a 401 here or a rejected refresh.
+    if (status !== 401) throw e;
+    try {
+      cfg = await refreshAccessToken(cfg);
+    } catch (refreshErr: any) {
+      // Only a REJECTED refresh token (401/403) means the session is truly
+      // over — a network blip must not nuke a still-valid session.
+      const rs = refreshErr?.response?.status;
+      if (rs === 401 || rs === 403) notifyRmabSessionExpired();
+      throw refreshErr;
+    }
     return (await doCall(cfg)).data;
   }
 }

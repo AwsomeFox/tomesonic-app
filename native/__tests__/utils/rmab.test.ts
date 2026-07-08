@@ -24,7 +24,11 @@ import {
   listMyRequests,
   getMe,
   clearRmabCaches,
-  setRmabSessionDeadHandler,
+  rmabOrigin,
+  rmabOidcLoginUrl,
+  parseRmabAuthData,
+  getRmabAuthProviders,
+  setRmabSessionExpiredHandler,
 } from "../../utils/rmab";
 import { secureStorage } from "../../utils/storage";
 
@@ -93,6 +97,109 @@ describe("exchangeLoginToken", () => {
     mockedPost.mockResolvedValue({ data: { error: "Invalid token" } });
     mockedGet.mockRejectedValue({ response: { status: 401 } });
     await expect(exchangeLoginToken("https://rmab.test", "bad")).rejects.toBeTruthy();
+  });
+});
+
+describe("OIDC / SSO helpers", () => {
+  it("derives an origin from a plain address, a bare host, a host:port, and a login URL", () => {
+    expect(rmabOrigin("https://rmab.test/")).toBe("https://rmab.test");
+    expect(rmabOrigin("rmab.test")).toBe("https://rmab.test");
+    expect(rmabOrigin("rmab.test:8080")).toBe("https://rmab.test:8080");
+    expect(rmabOrigin("http://rmab.test")).toBe("http://rmab.test");
+    expect(rmabOrigin("https://rmab.test/auth/token/login?token=rmab_x")).toBe("https://rmab.test");
+    expect(rmabOrigin("   ")).toBeNull();
+  });
+
+  it("rejects non-http(s) schemes so we never build a `null/api/...` URL", () => {
+    expect(rmabOrigin("file:///etc/passwd")).toBeNull();
+    expect(rmabOrigin("data:text/html,x")).toBeNull();
+  });
+
+  it("builds the OIDC login URL from any origin-ish input", () => {
+    expect(rmabOidcLoginUrl("rmab.test")).toBe("https://rmab.test/api/auth/oidc/login");
+    expect(rmabOidcLoginUrl("")).toBeNull();
+  });
+
+  it("parses the URI-encoded #authData bundle into an oidc JWT config", () => {
+    const raw = encodeURIComponent(
+      JSON.stringify({ accessToken: "a", refreshToken: "r", user: { id: "u1", username: "tony", role: "user" } })
+    );
+    expect(parseRmabAuthData("https://rmab.test/", raw)).toEqual({
+      url: "https://rmab.test",
+      accessToken: "a",
+      refreshToken: "r",
+      authProvider: "oidc",
+      user: { id: "u1", username: "tony", role: "user" },
+    });
+  });
+
+  it("throws when the authData bundle is missing a token", () => {
+    const raw = encodeURIComponent(JSON.stringify({ accessToken: "a", user: {} }));
+    expect(() => parseRmabAuthData("https://rmab.test", raw)).toThrow();
+  });
+
+  it("throws when the server URL isn't a valid http(s) origin", () => {
+    const raw = encodeURIComponent(JSON.stringify({ accessToken: "a", refreshToken: "r" }));
+    expect(() => parseRmabAuthData("file:///x", raw)).toThrow();
+  });
+
+  it("reports oidcEnabled + provider name on success, and null (unknown) on a probe error", async () => {
+    mockedGet.mockResolvedValueOnce({ data: { oidcProviderName: "Authentik", providers: ["oidc"] } });
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({
+      oidcEnabled: true,
+      oidcProviderName: "Authentik",
+      localLoginDisabled: false,
+    });
+    // A transient failure returns null — callers must treat that as "unknown",
+    // not "OIDC off", so the SSO button isn't hidden on a blip.
+    mockedGet.mockRejectedValueOnce(new Error("network"));
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toBeNull();
+  });
+});
+
+describe("session-expiry signal", () => {
+  let handler: jest.Mock;
+  beforeEach(() => {
+    handler = jest.fn();
+    setRmabSessionExpiredHandler(handler);
+    writeRmabConfig(CONFIG);
+  });
+  afterEach(() => setRmabSessionExpiredHandler(null));
+
+  it("fires when the refresh token itself is rejected (401)", async () => {
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    mockedPost.mockRejectedValue({ response: { status: 401 } }); // /api/auth/refresh
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT fire when the refresh merely fails on a network blip", async () => {
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    mockedPost.mockRejectedValue(new Error("ECONNRESET")); // no response.status
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("fires immediately for a rejected static API token (no refresh path)", async () => {
+    writeRmabConfig({ url: "https://rmab.test", apiToken: "rmab_x", user: { id: "u1" } });
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(mockedPost).not.toHaveBeenCalled();
+  });
+
+  it("fires for a FORBIDDEN (403) static API token too", async () => {
+    writeRmabConfig({ url: "https://rmab.test", apiToken: "rmab_x", user: { id: "u1" } });
+    mockedRequest.mockRejectedValue({ response: { status: 403 } });
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT treat a 403 on a JWT call as expiry (genuine permission boundary)", async () => {
+    mockedRequest.mockRejectedValue({ response: { status: 403 } });
+    await expect(getMe()).rejects.toBeTruthy();
+    expect(handler).not.toHaveBeenCalled();
+    expect(mockedPost).not.toHaveBeenCalled(); // no refresh attempt on a 403
   });
 });
 
@@ -221,65 +328,6 @@ describe("authed requests", () => {
     await call;
 
     expect(readRmabConfig()).toEqual(newCfg);
-  });
-});
-
-describe("dead-session self-heal (definitive refresh rejection)", () => {
-  beforeEach(() => {
-    writeRmabConfig(CONFIG);
-    setRmabSessionDeadHandler(null);
-  });
-  afterEach(() => setRmabSessionDeadHandler(null));
-
-  it("a 401 from /api/auth/refresh clears the config and fires the dead-session handler", async () => {
-    const onDead = jest.fn();
-    setRmabSessionDeadHandler(onDead);
-    // The request 401s → triggers refresh; the refresh ITSELF 401s (the
-    // refresh token is dead) → the session is unrecoverable.
-    mockedRequest.mockRejectedValue({ response: { status: 401 } });
-    mockedPost.mockRejectedValue({ response: { status: 401 } });
-
-    await expect(searchBooks("dune")).rejects.toBeTruthy();
-
-    expect(mockedPost).toHaveBeenCalledWith(
-      "https://rmab.test/api/auth/refresh",
-      { refreshToken: "ref1" },
-      expect.any(Object)
-    );
-    // Config wiped + teardown fired so the Discover tab drops.
-    expect(readRmabConfig()).toBeNull();
-    expect(onDead).toHaveBeenCalledTimes(1);
-  });
-
-  it("a NON-auth refresh failure (5xx) leaves the session intact (transient)", async () => {
-    const onDead = jest.fn();
-    setRmabSessionDeadHandler(onDead);
-    mockedRequest.mockRejectedValue({ response: { status: 401 } });
-    mockedPost.mockRejectedValue({ response: { status: 500 } });
-
-    await expect(searchBooks("dune")).rejects.toBeTruthy();
-    expect(readRmabConfig()).not.toBeNull();
-    expect(onDead).not.toHaveBeenCalled();
-  });
-
-  it("does not tear down a DIFFERENT connection that reconnected mid-refresh", async () => {
-    const onDead = jest.fn();
-    setRmabSessionDeadHandler(onDead);
-    mockedRequest.mockRejectedValue({ response: { status: 401 } });
-    // The refresh 401s only after a reconnect to a different server landed.
-    let releaseRefresh: (v: any) => void = () => {};
-    mockedPost.mockImplementation(() => new Promise((_res, rej) => (releaseRefresh = rej)));
-
-    const call = searchBooks("dune");
-    await new Promise((r) => setTimeout(r, 0));
-    const newCfg = { url: "https://other.test", accessToken: "oa", refreshToken: "or", user: null };
-    writeRmabConfig(newCfg);
-    releaseRefresh({ response: { status: 401 } });
-    await expect(call).rejects.toBeTruthy();
-
-    // The new connection survives — the stale refresh must not clear it.
-    expect(readRmabConfig()).toEqual(newCfg);
-    expect(onDead).not.toHaveBeenCalled();
   });
 });
 

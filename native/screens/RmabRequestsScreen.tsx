@@ -9,6 +9,7 @@ import EmptyState from "../components/EmptyState";
 import { listMyRequests, deleteRequest, approveRequest, resolveRmabUrl } from "../utils/rmab";
 import BottomSheet from "../components/BottomSheet";
 import BookDescription from "../components/BookDescription";
+import RmabSessionExpiredBanner from "../components/RmabSessionExpiredBanner";
 import { useRmabStore } from "../store/useRmabStore";
 import { showAppDialog } from "../store/useDialogStore";
 import Pressable from "../components/HintPressable";
@@ -158,6 +159,10 @@ export default function RmabRequestsScreen({ navigation }: any) {
         </TouchableOpacity>
         <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "600" }}>{canManage ? "Requests" : "My Requests"}</Text>
       </View>
+
+      <RmabSessionExpiredBanner
+        onManualReconnect={(msg) => navigation.navigate("Settings", { openRmabConnect: true, rmabConnectError: msg })}
+      />
 
       {requests === null ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
