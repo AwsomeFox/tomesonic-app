@@ -133,6 +133,10 @@ describe("CollectionsPlaylistsScreen", () => {
     // Both sub-tabs are present as tabs (the standalone toggle reaches Playlists).
     const tabs = screen.getAllByRole("tab");
     expect(tabs.length).toBe(2);
+    // The row wrapping the tabs exposes itself as a tablist for assistive tech.
+    // (A tablist container isn't an accessibility leaf, so getByRole can't reach
+    // it — assert the role on the tabs' shared parent instead.)
+    expect(tabs[0].parent?.props.accessibilityRole).toBe("tablist");
     expect(screen.getByLabelText("Create new collection")).toBeTruthy();
   });
 
@@ -180,9 +184,35 @@ describe("CollectionsPlaylistsScreen", () => {
     await renderScreen();
 
     expect(await screen.findByText("No collections yet")).toBeTruthy();
+    // Copy points at the inline create button now that the tab can create.
+    expect(
+      screen.getByText(
+        "Tap + to create your first collection, or they'll appear here once created on the server."
+      )
+    ).toBeTruthy();
 
     await fireEvent.press(screen.getByText("Playlists"));
     expect(await screen.findByText("No playlists yet")).toBeTruthy();
+  });
+
+  it("keeps the skeleton (not the empty state) until the library id hydrates", async () => {
+    // Cold start: currentLibraryId hasn't hydrated yet. fetchData no-ops
+    // without it, so falling through to EmptyState would flash "No collections
+    // yet" — the screen must stay in a loading state instead.
+    mockGets({ collections: [], playlists: [] });
+    useLibraryStore.setState({ currentLibraryId: undefined } as any);
+    await renderScreen();
+    await act(async () => {});
+
+    expect(screen.queryByText("No collections yet")).toBeNull();
+    // No library id -> no fetch was attempted for it.
+    expect(api.get).not.toHaveBeenCalledWith("/api/libraries/undefined/collections");
+
+    // Once the id hydrates, the real (empty) state resolves.
+    await act(async () => {
+      useLibraryStore.setState({ currentLibraryId: "lib1" } as any);
+    });
+    expect(await screen.findByText("No collections yet")).toBeTruthy();
   });
 
   it("creates a new collection through the dialog and refetches", async () => {
