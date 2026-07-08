@@ -494,6 +494,46 @@ describe("response interceptor", () => {
     setSpy.mockRestore();
   });
 
+  // REGRESSION (A2): an in-place updateServerAddress (same account) can land
+  // while a refresh is in flight, so the captured config's address no longer
+  // matches the current one. The identity guard keys on userId ONLY, so the
+  // freshly-rotated (and soon-ONLY-valid) pair is applied — onto the NEW
+  // address — instead of being thrown away.
+  it("tolerates an address change mid-refresh: applies the rotated pair on the NEW address (same user)", async () => {
+    storageHelper.setServerConfig({
+      address: "http://old.local",
+      token: "stale",
+      refreshToken: "r1",
+      userId: "u1",
+    });
+    useUserStore.setState({
+      serverConnectionConfig: { address: "http://old.local", token: "stale", userId: "u1" },
+    } as any);
+    // The refresh resolves AFTER the address moved (same account) — its config
+    // was built from the OLD address.
+    postSpy.mockImplementation(async () => {
+      storageHelper.setServerConfig({
+        address: "http://new.local",
+        token: "stale",
+        refreshToken: "r1",
+        userId: "u1",
+      });
+      return { status: 200, data: { user: { accessToken: "fresh", refreshToken: "r2" } } };
+    });
+
+    await responseHandler.rejected(make401());
+
+    const stored = storageHelper.getServerConfig();
+    // The rotated pair was NOT discarded...
+    expect(stored).toMatchObject({ token: "fresh", refreshToken: "r2", userId: "u1" });
+    // ...and the NEW address was preserved (not reverted to the captured old one).
+    expect(stored.address).toBe("http://new.local");
+    expect(useUserStore.getState().serverConnectionConfig).toMatchObject({
+      token: "fresh",
+      address: "http://new.local",
+    });
+  });
+
   it("rejects queued requests when the shared refresh fails", async () => {
     storageHelper.setServerConfig({
       address: "http://abs.local",

@@ -330,6 +330,46 @@ describe("useUserStore", () => {
       expect(useUserStore.getState().mediaProgress).toBe(before);
     });
 
+    // REGRESSION (compare fix): `merged` is built in server-key order while
+    // `prev` is in local-write order. A JSON.stringify compare reported
+    // identical maps as DIFFERENT whenever the key order diverged, re-rendering
+    // every card on every Home/Stats focus. The order-independent key-count +
+    // per-entry shallow compare skips the setState for equal-but-reordered maps.
+    it("skips setState for identical maps in a DIFFERENT key order (order-independent compare)", async () => {
+      const a = { libraryItemId: "a", currentTime: 1, lastUpdate: 1000 };
+      const b = { libraryItemId: "b", currentTime: 2, lastUpdate: 1000 };
+      // prev in local-write order a,b.
+      useUserStore.setState({ mediaProgress: { a, b } } as any);
+      const before = useUserStore.getState().mediaProgress;
+      // Server returns the SAME data in reverse order (b before a) as fresh
+      // objects — JSON.stringify would have flagged this as changed.
+      mockGet.mockResolvedValue({
+        data: {
+          mediaProgress: [
+            { libraryItemId: "b", currentTime: 2, lastUpdate: 1000 },
+            { libraryItemId: "a", currentTime: 1, lastUpdate: 1000 },
+          ],
+        },
+      } as any);
+
+      await useUserStore.getState().loadMediaProgress();
+      // Same object identity — setState was skipped despite the key-order flip.
+      expect(useUserStore.getState().mediaProgress).toBe(before);
+    });
+
+    it("still writes when an entry's VALUE changed (shallow compare catches it)", async () => {
+      const a = { libraryItemId: "a", currentTime: 1, lastUpdate: 1000 };
+      useUserStore.setState({ mediaProgress: { a } } as any);
+      const before = useUserStore.getState().mediaProgress;
+      mockGet.mockResolvedValue({
+        data: { mediaProgress: [{ libraryItemId: "a", currentTime: 7, lastUpdate: 2000 }] },
+      } as any);
+
+      await useUserStore.getState().loadMediaProgress();
+      expect(useUserStore.getState().mediaProgress).not.toBe(before);
+      expect(useUserStore.getState().mediaProgress["a"].currentTime).toBe(7);
+    });
+
     it("leaves state untouched when the fetch fails", async () => {
       const before = { item1: { libraryItemId: "item1", currentTime: 1 } };
       useUserStore.setState({ mediaProgress: before } as any);
