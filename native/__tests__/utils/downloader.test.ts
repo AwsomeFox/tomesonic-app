@@ -661,6 +661,53 @@ describe("auto-download next in series (on finish)", () => {
     expect(useDownloadStore.getState().completedDownloads["s-book3"]).toBeFalsy();
   });
 
+  it("resolves each candidate's sequence by the REQUESTED series id, not series[0]", async () => {
+    enableAutoNext();
+    setConfig();
+    markBook1Downloaded();
+    // s-book2 belongs to TWO series: its series[0] is an UNRELATED series
+    // (sequence 5) while its ser1 sequence is 2 — the true next after book 1.
+    // s-book3 is ser1 sequence 3. Reading series[0] would sort/pick book 3
+    // (unrelated seq 5 vs book3's 3) and wrongly skip book 2.
+    mockedApiGet.mockImplementation(async (url: any) => {
+      if (url === "/api/items/s-book1?expanded=1") {
+        return { data: { id: "s-book1", libraryId: "lib1", media: { metadata: { series: [{ id: "ser1", sequence: "1" }] } } } } as any;
+      }
+      if (url === "/api/libraries/lib1/series/ser1") {
+        return {
+          data: {
+            books: [
+              { id: "s-book1", media: { metadata: { series: [{ id: "ser1", sequence: "1" }] } } },
+              { id: "s-book2", media: { metadata: { series: [{ id: "otherSer", sequence: "5" }, { id: "ser1", sequence: "2" }] } } },
+              { id: "s-book3", media: { metadata: { series: [{ id: "ser1", sequence: "3" }] } } },
+            ],
+          },
+        } as any;
+      }
+      if (url === "/api/items/s-book2?expanded=1") {
+        return {
+          data: {
+            id: "s-book2",
+            libraryId: "lib1",
+            media: {
+              metadata: { title: "Series Two" },
+              tracks: [{ index: 1, contentUrl: "/api/items/s-book2/file/1", duration: 10 }],
+            },
+          },
+        } as any;
+      }
+      return { data: {} } as any;
+    });
+
+    await autoDownloadNextAfterFinish("s-book1");
+
+    // Correct next (ser1 seq 2) is book 2 — not book 3.
+    expect(mockedApiGet).toHaveBeenCalledWith("/api/items/s-book2?expanded=1");
+    expect(mockedApiGet).not.toHaveBeenCalledWith("/api/items/s-book3?expanded=1");
+    expect(useDownloadStore.getState().completedDownloads["s-book2"]).toBeTruthy();
+    expect(useDownloadStore.getState().completedDownloads["s-book3"]).toBeFalsy();
+  });
+
   it("does NOT trigger on download completion (no cascade)", async () => {
     enableAutoNext();
     setConfig();

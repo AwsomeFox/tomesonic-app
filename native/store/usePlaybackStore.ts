@@ -698,6 +698,15 @@ export async function reconcileWithNativePlayer(): Promise<boolean> {
   }
 }
 
+/** Shared shape of the active sleep-timer state (null when no timer runs). */
+export interface SleepTimerState {
+  endOfChapter: boolean;
+  remaining: number; // seconds left, or seconds until end of chapter
+  // Chapter the end-of-chapter timer was armed in — lets the tick detect
+  // the boundary crossing even if a tick lands just past it.
+  chapterIdx?: number;
+}
+
 interface PlaybackState {
   currentSession: any | null;
   isPlaying: boolean;
@@ -724,13 +733,7 @@ interface PlaybackState {
   setCastSeekHandler: (fn: ((absSeconds: number) => Promise<void>) | null) => void;
 
   // Sleep timer
-  sleepTimer: {
-    endOfChapter: boolean;
-    remaining: number; // seconds left, or seconds until end of chapter
-    // Chapter the end-of-chapter timer was armed in — lets the tick detect
-    // the boundary crossing even if a tick lands just past it.
-    chapterIdx?: number;
-  } | null;
+  sleepTimer: SleepTimerState | null;
 
   // Actions
   initializePlayer: () => Promise<void>;

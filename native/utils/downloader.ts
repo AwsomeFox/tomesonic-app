@@ -210,14 +210,20 @@ export async function autoDownloadNextAfterFinish(libraryItemId: string) {
 
     const { completedDownloads, activeDownloads } = useDownloadStore.getState();
 
+    // A book can belong to MULTIPLE series, so series[0] may be a DIFFERENT
+    // series than the one we're following — resolve each candidate's sequence
+    // by matching the REQUESTED series id, not by blindly reading series[0].
+    const sequenceInSeries = (b: any) =>
+      parseFloat((b?.media?.metadata?.series || []).find((s: any) => s?.id === series.id)?.sequence);
+
     // Prefer the book whose sequence is strictly next after the current one;
     // fall back to the first book not yet downloaded/downloading.
     const sorted = books
       .filter(b => b.id !== libraryItemId)
-      .sort((a, b) => (parseFloat(a?.media?.metadata?.series?.[0]?.sequence) || 0) - (parseFloat(b?.media?.metadata?.series?.[0]?.sequence) || 0));
+      .sort((a, b) => (sequenceInSeries(a) || 0) - (sequenceInSeries(b) || 0));
 
     let next = sorted.find(b => {
-      const seq = parseFloat(b?.media?.metadata?.series?.[0]?.sequence);
+      const seq = sequenceInSeries(b);
       return !isNaN(currentSequence) && !isNaN(seq) && seq > currentSequence;
     });
     if (!next) {
