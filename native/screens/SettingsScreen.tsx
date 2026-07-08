@@ -124,14 +124,23 @@ export default function SettingsScreen({ navigation }: any) {
     setRmabProviders(null);
     if (!rmabSheetOpen || !rmabSsoOrigin) return;
     let cancelled = false;
-    getRmabAuthProviders(rmabSsoOrigin).then((p) => {
-      // ONLY apply a real response — a null (network/404/etc) leaves providers
-      // unknown so the SSO button stays shown by default rather than hiding on
-      // a transient blip.
-      if (!cancelled && p) setRmabProviders({ oidcEnabled: p.oidcEnabled, name: p.oidcProviderName });
-    });
+    const controller = new AbortController();
+    // Debounce: the origin recomputes on every keystroke while the user types
+    // the server address — wait for a pause so we fire ONE probe, not one per
+    // character. Cleanup both cancels the pending probe AND aborts an in-flight
+    // request (12s timeout) so a fast edit can't leave a request storm behind.
+    const timer = setTimeout(() => {
+      getRmabAuthProviders(rmabSsoOrigin, controller.signal).then((p) => {
+        // ONLY apply a real response — a null (network/404/aborted) leaves
+        // providers unknown so the SSO button stays shown by default rather
+        // than hiding on a transient blip.
+        if (!cancelled && p) setRmabProviders({ oidcEnabled: p.oidcEnabled, name: p.oidcProviderName });
+      });
+    }, 450);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
     };
   }, [rmabSheetOpen, rmabSsoOrigin]);
 

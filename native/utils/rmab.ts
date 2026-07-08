@@ -161,11 +161,14 @@ export interface RmabAuthProviders {
  *  hide it when OIDC is off. Never throws — returns `null` when it couldn't
  *  determine (no usable origin, network error, non-2xx). Callers must treat
  *  null as "unknown", NOT "OIDC off", so a transient blip doesn't hide SSO. */
-export async function getRmabAuthProviders(input: string): Promise<RmabAuthProviders | null> {
+export async function getRmabAuthProviders(
+  input: string,
+  signal?: AbortSignal
+): Promise<RmabAuthProviders | null> {
   const o = rmabOrigin(input);
   if (!o) return null;
   try {
-    const res = await axios.get(`${o}/api/auth/providers`, { timeout: 12000 });
+    const res = await axios.get(`${o}/api/auth/providers`, { timeout: 12000, signal });
     const d = res.data || {};
     const list: any[] = Array.isArray(d.providers) ? d.providers : [];
     const oidcEnabled =
