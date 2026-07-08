@@ -21,7 +21,7 @@ import BottomSheet from '../components/BottomSheet';
 import RmabSsoLoginModal from '../components/RmabSsoLoginModal';
 import RmabSessionExpiredBanner from '../components/RmabSessionExpiredBanner';
 import { useRmabStore } from '../store/useRmabStore';
-import { getRmabAuthProviders, rmabOrigin } from '../utils/rmab';
+import { getRmabAuthProviders, rmabOrigin, RmabConfig } from '../utils/rmab';
 import { haptic } from '../utils/haptics';
 
 import * as Application from 'expo-application';
@@ -133,7 +133,7 @@ export default function SettingsScreen({ navigation }: any) {
     };
   }, [rmabSheetOpen, rmabSsoOrigin]);
 
-  const onRmabSsoSuccess = async (cfg: any) => {
+  const onRmabSsoSuccess = async (cfg: RmabConfig) => {
     setRmabSsoOpen(false);
     setRmabSsoError(null);
     const ok = await rmabConnectWithOidc(cfg);
@@ -409,7 +409,10 @@ export default function SettingsScreen({ navigation }: any) {
                   setRmabSsoOpen(true);
                 }}
                 accessibilityRole="button"
-                accessibilityLabel={rmabSsoLabel}
+                // Stable label for assistive tech / automation; the provider
+                // name (which varies per server) rides in the hint + visible text.
+                accessibilityLabel="Sign in with SSO"
+                accessibilityHint={rmabProviders?.name ? `Uses ${rmabProviders.name}` : undefined}
                 android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
                 style={{
                   backgroundColor: colors.primaryContainer,

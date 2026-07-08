@@ -65,10 +65,17 @@ export default function RmabSsoLoginModal({
   }, [visible]);
 
   const onNavigationStateChange = (nav: any) => {
-    const url: string = nav?.url || "";
-    // Only probe for the token once we're back on the RMAB origin — never run
-    // the capture on IdP pages, so their cookies/URLs are never read.
-    if (origin && url.indexOf(origin) === 0) {
+    // Compare EXACT origins — a prefix check (indexOf === 0) would also match a
+    // look-alike host like `https://rmab.test.evil.com`, injecting on the wrong
+    // origin. Parse the nav URL's origin and require an exact match, so the
+    // capture only ever runs once we're genuinely back on the RMAB server (never
+    // on the IdP). This is also the ONLY place we inject — there's no blanket
+    // injectedJavaScript that would run on every IdP page in the redirect chain.
+    let navOrigin: string | null = null;
+    try {
+      navOrigin = new URL(nav?.url || "").origin;
+    } catch {}
+    if (origin && navOrigin === origin) {
       webRef.current?.injectJavaScript(CAPTURE_JS);
     }
   };
@@ -125,7 +132,6 @@ export default function RmabSsoLoginModal({
               source={{ uri: loginUrl }}
               onNavigationStateChange={onNavigationStateChange}
               onMessage={onMessage}
-              injectedJavaScript={CAPTURE_JS}
               sharedCookiesEnabled
               thirdPartyCookiesEnabled
               onLoadEnd={() => setLoading(false)}
