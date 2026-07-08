@@ -13,20 +13,23 @@ import Animated from "react-native-reanimated";
 import { listRowEnter } from "../theme/motion";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
-import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import { isEbookOnly, authorsMatch } from "../utils/bookMatch";
 import { useRmabStore } from "../store/useRmabStore";
 import BookProgressBadge, { bookStatusA11yLabel } from "../components/BookProgressBadge";
 import Skeleton, { ListSkeleton } from "../components/Skeleton";
 import ErrorState from "../components/ErrorState";
+import EmptyState from "../components/EmptyState";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import RmabMissingSection from "../components/RmabMissingSection";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+// Square cover — audiobook art is square (album-art style), matching the rest
+// of the app (LibraryScreen rows, BookCard, SeriesDetail). contentFit:"cover"
+// fills a square source exactly; a rare portrait cover is center-cropped.
 const COVER_WIDTH = 80;
-const COVER_HEIGHT = 120;
+const COVER_HEIGHT = 80;
 
 interface AuthorBook {
   id: string;
@@ -351,11 +354,11 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
       <View
         style={{
           paddingHorizontal: 16,
-          paddingVertical: 12,
+          paddingVertical: 14,
           flexDirection: "row",
           alignItems: "center",
           borderBottomWidth: 1,
-          borderBottomColor: withAlpha(colors.outlineVariant, 0.5),
+          borderBottomColor: colors.outlineVariant,
         }}
       >
         <Pressable
@@ -364,14 +367,14 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
           accessibilityRole="button"
           accessibilityLabel="Back"
-          style={{ marginRight: 8, padding: 6, borderRadius: 20 }}
+          style={{ marginRight: 12, padding: 8, borderRadius: 20 }}
         >
-          <Icon name="back" size={24} color={colors.onSurface} />
+          <Icon name="back" size={20} color={colors.onSurface} />
         </Pressable>
         <Text
           accessibilityRole="header"
           numberOfLines={1}
-          style={{ color: colors.onSurface, fontSize: 18, fontWeight: "bold", flex: 1 }}
+          style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700", flex: 1 }}
         >
           {author?.name || authorName || "Author"}
         </Text>
@@ -385,7 +388,10 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
             <Skeleton width={180} height={20} radius={6} />
             <Skeleton width={80} height={13} radius={5} style={{ marginTop: 8 }} />
           </View>
-          <ListSkeleton rows={4} thumb={80} />
+          {/* ListSkeleton only draws square thumbs; align to the real card
+              cover WIDTH (COVER_WIDTH) so the horizontal reflow on load is
+              minimized (the portrait height can't be matched here). */}
+          <ListSkeleton rows={4} thumb={COVER_WIDTH} />
         </View>
       ) : loadError && !author ? (
         <ErrorState
@@ -400,15 +406,11 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           renderItem={null as any}
           ListHeaderComponent={renderHeader}
           ListEmptyComponent={
-            <View style={{ alignItems: "center", paddingVertical: 40, paddingHorizontal: 32 }}>
-              <Icon name="book" size={44} color={colors.onSurfaceVariant} />
-              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 16 }}>
-                No books by this author
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, textAlign: "center", marginTop: 8 }}>
-                Books appear here once this library has titles matched to this author.
-              </Text>
-            </View>
+            <EmptyState
+              icon="book"
+              title="No books by this author"
+              message="Books appear here once this library has titles matched to this author."
+            />
           }
           // Owning nothing by this author should still surface discovery/Request
           // — the missing-books section renders in the empty state too.

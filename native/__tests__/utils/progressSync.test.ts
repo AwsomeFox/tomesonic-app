@@ -13,7 +13,11 @@ import {
   pendingBookmarkDeletionsFor,
   recordLocalListening,
   hasAnyPendingSyncs,
+  syncBothProgressFraction,
+  reconcileLinkedProgress,
+  isProgressLinked,
 } from "../../utils/progressSync";
+import { useUserStore } from "../../store/useUserStore";
 
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -1195,5 +1199,118 @@ describe("monotonic stamp cross-restart seeding", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+// --- Cross-medium progress sync (listening ↔ reading) -----------------------
+// NOTE: a test above calls jest.resetModules() without restoring, so this block
+// captures a CONSISTENT fresh module set (progressSync + useUserStore + storage
+// resolved from the same registry) in beforeEach — otherwise progressSync's
+// lazy require of useUserStore would diverge from the store we assert against.
+describe("syncBothProgressFraction / reconcileLinkedProgress", () => {
+  const ITEM = "li1";
+  let ps: any;
+  let store: any;
+  let freshStorage: any;
+  const readBody = (item: string) => {
+    const raw = freshStorage.getString(`pendingPatch_${item}`);
+    return raw ? JSON.parse(raw).body : null;
+  };
+  const freshPatchKeys = () =>
+    freshStorage.getAllKeys().filter((k: string) => k.startsWith("pendingPatch_"));
+
+  beforeEach(() => {
+    jest.resetModules();
+    ps = require("../../utils/progressSync");
+    store = require("../../store/useUserStore").useUserStore;
+    const s = require("../../utils/storage");
+    freshStorage = s.storage;
+    freshStorage.getAllKeys().forEach((k: string) => freshStorage.remove(k));
+    s.storageHelper.setServerConfig({ address: "http://abs.local", token: "tok" });
+    // api is mocked (hoisted) but a reset registry hands out a fresh mock object.
+    require("../../utils/api").api.patch.mockRejectedValue(new Error("Network Error"));
+    store.setState({
+      mediaProgress: {},
+      settings: { ...store.getState().settings, linkedProgress: {} },
+    });
+  });
+
+  it("writes BOTH media to the target fraction and preserves the CFI (offline → queued)", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: {
+          libraryItemId: ITEM,
+          progress: 0.2,
+          ebookProgress: 0.2,
+          ebookLocation: "epubcfi(/6/4)",
+          duration: 3600,
+        },
+      },
+    });
+    ps.syncBothProgressFraction(ITEM, 0.5, { duration: 3600, ebookLocation: "epubcfi(/6/4)" });
+    const body = readBody(ITEM);
+    // Audio: currentTime = fraction*duration, plus the derived progress.
+    expect(body.currentTime).toBe(1800);
+    expect(body.duration).toBe(3600);
+    expect(body.progress).toBe(0.5);
+    // Ebook: fraction only, CFI preserved (page NOT recomputed from a fraction).
+    expect(body.ebookProgress).toBe(0.5);
+    expect(body.ebookLocation).toBe("epubcfi(/6/4)");
+    // In-memory map updated immediately for the UI.
+    const p = store.getState().mediaProgress[ITEM];
+    expect(p.progress).toBe(0.5);
+    expect(p.ebookProgress).toBe(0.5);
+  });
+
+  it("does NOT write ebookLocation when none is known (never clobbers a server CFI)", () => {
+    ps.syncBothProgressFraction(ITEM, 0.4, { duration: 1000, ebookLocation: "" });
+    const body = readBody(ITEM);
+    expect(body.ebookProgress).toBe(0.4);
+    expect("ebookLocation" in body).toBe(false);
+  });
+
+  it("reconcileLinkedProgress is a no-op when the item is NOT linked", () => {
+    store.setState({
+      mediaProgress: { [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0.1, duration: 3600 } },
+    });
+    expect(ps.isProgressLinked(ITEM)).toBe(false);
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(false);
+    expect(freshPatchKeys()).toHaveLength(0);
+  });
+
+  it("locked reconcile pulls the lagging medium UP to the furthest fraction (never backward)", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 0.3, ebookProgress: 0.7, ebookLocation: "epubcfi(/6/9)", duration: 3600 },
+      },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(true);
+    const p = store.getState().mediaProgress[ITEM];
+    // Furthest = 0.7 (the ebook); audio moves FORWARD to match, ebook unchanged.
+    expect(p.progress).toBe(0.7);
+    expect(p.ebookProgress).toBe(0.7);
+    expect(readBody(ITEM).ebookLocation).toBe("epubcfi(/6/9)");
+  });
+
+  it("locked reconcile is a no-op when the two are already aligned", () => {
+    store.setState({
+      mediaProgress: { [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0.5, duration: 3600 } },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(false);
+    expect(freshPatchKeys()).toHaveLength(0);
+  });
+
+  it("locked reconcile honors a fresh hint over the stored map (a just-closed audio position)", () => {
+    store.setState({
+      mediaProgress: { [ITEM]: { libraryItemId: ITEM, progress: 0.1, ebookProgress: 0.2, duration: 3600 } },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    // Audio just closed at 0.8 (not yet in the map) → both reconcile to 0.8.
+    expect(ps.reconcileLinkedProgress(ITEM, { audioFraction: 0.8, duration: 3600 })).toBe(true);
+    const p = store.getState().mediaProgress[ITEM];
+    expect(p.progress).toBeCloseTo(0.8, 5);
+    expect(p.ebookProgress).toBeCloseTo(0.8, 5);
   });
 });

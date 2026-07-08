@@ -154,13 +154,13 @@ describe("AccountScreen", () => {
     expect(alertSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Switch Server / User",
-        // The body must name the real data-loss consequence: logout wipes all
-        // downloaded books, not just the session.
-        message: expect.stringMatching(/deletes all downloaded books/i),
+        // Downloads are now namespaced + retained across a switch, so the body
+        // must reassure (not threaten data loss): downloads stay and reappear.
+        message: expect.stringMatching(/stay on this device|reappear/i),
         buttons: expect.any(Array),
       })
     );
-    expect(alertSpy.mock.calls[0][0].message).toMatch(/re-download/i);
+    expect(alertSpy.mock.calls[0][0].message).not.toMatch(/deletes all downloaded books/i);
 
     const buttons = alertSpy.mock.calls[0][0].buttons;
     const logOutBtn = buttons.find((b: any) => b.text === "Log Out");

@@ -1,6 +1,6 @@
-import { renderHook, act } from "@testing-library/react-native";
+import { renderHook, act, waitFor } from "@testing-library/react-native";
 import NetInfo from "@react-native-community/netinfo";
-import { useNetworkStatus } from "../../hooks/useNetworkStatus";
+import { useNetworkStatus, isEffectivelyOffline } from "../../hooks/useNetworkStatus";
 import { storage } from "../../utils/storage";
 
 describe("useNetworkStatus", () => {
@@ -15,7 +15,7 @@ describe("useNetworkStatus", () => {
 
     const { result, unmount } = await renderHook(() => useNetworkStatus());
 
-    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+    expect(result.current).toMatchObject({ isConnected: true, isInternetReachable: true });
     expect(NetInfo.addEventListener).toHaveBeenCalledTimes(1);
 
     await unmount();
@@ -34,12 +34,12 @@ describe("useNetworkStatus", () => {
     await act(async () => {
       listener({ isConnected: false, isInternetReachable: false });
     });
-    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+    expect(result.current).toMatchObject({ isConnected: false, isInternetReachable: false });
 
     await act(async () => {
       listener({ isConnected: true, isInternetReachable: true });
     });
-    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+    expect(result.current).toMatchObject({ isConnected: true, isInternetReachable: true });
   });
 
   it("treats missing fields as online (nullish fallback)", async () => {
@@ -54,7 +54,7 @@ describe("useNetworkStatus", () => {
     await act(async () => {
       listener({ isConnected: null, isInternetReachable: undefined });
     });
-    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+    expect(result.current).toMatchObject({ isConnected: true, isInternetReachable: true });
   });
 
   it("unknown reachability inherits the connection state (offline + null ≠ reachable)", async () => {
@@ -71,7 +71,7 @@ describe("useNetworkStatus", () => {
     await act(async () => {
       listener({ isConnected: false, isInternetReachable: null });
     });
-    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+    expect(result.current).toMatchObject({ isConnected: false, isInternetReachable: false });
     expect(JSON.parse(storage.getString("lastNetworkStatus")!)).toEqual({
       isConnected: false,
       isInternetReachable: false,
@@ -85,7 +85,7 @@ describe("useNetworkStatus", () => {
 
     const { result } = await renderHook(() => useNetworkStatus());
 
-    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+    expect(result.current).toMatchObject({ isConnected: false, isInternetReachable: false });
   });
 
   it("falls back to isConnected when the persisted entry lacks isInternetReachable", async () => {
@@ -94,7 +94,7 @@ describe("useNetworkStatus", () => {
 
     const { result } = await renderHook(() => useNetworkStatus());
 
-    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+    expect(result.current).toMatchObject({ isConnected: false, isInternetReachable: false });
   });
 
   it("defaults to online when nothing is persisted", async () => {
@@ -102,7 +102,7 @@ describe("useNetworkStatus", () => {
 
     const { result } = await renderHook(() => useNetworkStatus());
 
-    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+    expect(result.current).toMatchObject({ isConnected: true, isInternetReachable: true });
   });
 
   it("ignores a corrupt persisted entry and defaults to online", async () => {
@@ -111,7 +111,7 @@ describe("useNetworkStatus", () => {
 
     const { result } = await renderHook(() => useNetworkStatus());
 
-    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+    expect(result.current).toMatchObject({ isConnected: true, isInternetReachable: true });
   });
 
   it("ignores a persisted entry with a non-boolean isConnected and defaults to online", async () => {
@@ -120,7 +120,7 @@ describe("useNetworkStatus", () => {
 
     const { result } = await renderHook(() => useNetworkStatus());
 
-    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+    expect(result.current).toMatchObject({ isConnected: true, isInternetReachable: true });
   });
 
   it("persists each NetInfo event to storage as well as updating state", async () => {
@@ -135,7 +135,7 @@ describe("useNetworkStatus", () => {
     await act(async () => {
       listener({ isConnected: false, isInternetReachable: false });
     });
-    expect(result.current).toEqual({ isConnected: false, isInternetReachable: false });
+    expect(result.current).toMatchObject({ isConnected: false, isInternetReachable: false });
     expect(JSON.parse(storage.getString("lastNetworkStatus")!)).toEqual({
       isConnected: false,
       isInternetReachable: false,
@@ -156,8 +156,72 @@ describe("useNetworkStatus", () => {
     });
 
     const { result, unmount } = await renderHook(() => useNetworkStatus());
-    expect(result.current).toEqual({ isConnected: true, isInternetReachable: true });
+    expect(result.current).toMatchObject({ isConnected: true, isInternetReachable: true });
     // Unmount must not throw even though there is no unsubscribe handle.
     await unmount();
+  });
+
+  describe("isEffectivelyOffline derived signal", () => {
+    it("treats an EXPLICIT unreachable (false) as offline, but UNKNOWN (null/undefined) as NOT offline", () => {
+      // Explicit false → offline (captive portal / server-down-but-Wi-Fi-up).
+      expect(isEffectivelyOffline({ isConnected: true, isInternetReachable: false })).toBe(true);
+      // No device connection → offline regardless of reachability.
+      expect(isEffectivelyOffline({ isConnected: false, isInternetReachable: true })).toBe(true);
+      // UNKNOWN reachability must NOT be treated as offline while connected.
+      expect(isEffectivelyOffline({ isConnected: true, isInternetReachable: null })).toBe(false);
+      expect(isEffectivelyOffline({ isConnected: true, isInternetReachable: undefined })).toBe(false);
+      // Fully online.
+      expect(isEffectivelyOffline({ isConnected: true, isInternetReachable: true })).toBe(false);
+    });
+
+    it("isOffline is false on the online default and true when seeded from persisted offline", async () => {
+      jest.mocked(NetInfo.addEventListener).mockReturnValue(jest.fn());
+      const online = await renderHook(() => useNetworkStatus());
+      expect(online.result.current.isOffline).toBe(false);
+
+      storage.set("lastNetworkStatus", '{"isConnected":false,"isInternetReachable":false}');
+      const offline = await renderHook(() => useNetworkStatus());
+      // Seeded synchronously so a cold offline start renders offline immediately.
+      expect(offline.result.current.isOffline).toBe(true);
+    });
+
+    it("flips isOffline once a live-connection-but-unreachable state holds (debounced)", async () => {
+      let listener: (state: any) => void = () => {};
+      jest.mocked(NetInfo.addEventListener).mockImplementation((cb: any) => {
+        listener = cb;
+        return jest.fn();
+      });
+
+      const { result } = await renderHook(() => useNetworkStatus());
+      expect(result.current.isOffline).toBe(false);
+
+      // Wi-Fi still up (isConnected true) but the internet is explicitly
+      // unreachable — the raw fields update immediately, isOffline after debounce.
+      await act(async () => {
+        listener({ isConnected: true, isInternetReachable: false });
+      });
+      expect(result.current.isConnected).toBe(true);
+      expect(result.current.isInternetReachable).toBe(false);
+
+      await waitFor(() => expect(result.current.isOffline).toBe(true), { timeout: 2000 });
+    });
+
+    it("does NOT mark isOffline for a connected device with UNKNOWN reachability", async () => {
+      let listener: (state: any) => void = () => {};
+      jest.mocked(NetInfo.addEventListener).mockImplementation((cb: any) => {
+        listener = cb;
+        return jest.fn();
+      });
+
+      const { result } = await renderHook(() => useNetworkStatus());
+      // null reachability while connected coalesces to the connection state
+      // (true) — must stay online, never flip to offline.
+      await act(async () => {
+        listener({ isConnected: true, isInternetReachable: null });
+      });
+      // Give any (unwanted) debounce timer a chance to fire.
+      await new Promise((r) => setTimeout(r, 700));
+      expect(result.current.isOffline).toBe(false);
+    });
   });
 });

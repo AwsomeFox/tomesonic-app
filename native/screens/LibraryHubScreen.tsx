@@ -4,22 +4,22 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
 import Icon, { IconName } from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import SearchContent from "../components/SearchContent";
+import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { useUiStore } from "../store/useUiStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { storageHelper } from "../utils/storage";
 import LibraryScreen, { LibraryScreenHandle } from "./LibraryScreen";
 import SeriesListScreen, { SeriesListScreenHandle } from "./SeriesListScreen";
-import CollectionsPlaylistsScreen, {
-  CollectionsPlaylistsScreenHandle,
-} from "./CollectionsPlaylistsScreen";
 import AuthorsScreen, { AuthorsScreenHandle } from "./AuthorsScreen";
 
 /**
  * LibraryHubScreen — Material 3 "Library" destination that consolidates the
- * library-browse facets (Books · Series · Collections · Playlists · Authors)
- * behind a single bottom-tab entry with a segmented pill control. This keeps the
- * bottom bar at Home · Library · [Discover] (≤5 M3 destinations) instead of
+ * core library-browse facets (Books · Series · Authors) behind a single
+ * bottom-tab entry with a segmented pill control. Collections + Playlists live
+ * in their own "Collections" bottom tab. This keeps the bottom bar at
+ * Home · Library · Collections · [Discover] (≤5 M3 destinations) instead of
  * repeating the "browse the library" job across many tabs.
  *
  * The hub owns the shared chrome — one SafeAreaView + one TopAppBar — and the
@@ -37,13 +37,11 @@ import AuthorsScreen, { AuthorsScreenHandle } from "./AuthorsScreen";
  * a non-sticky header so it scrolls away with the content (collapsing header).
  */
 
-export type LibrarySegment = "books" | "series" | "collections" | "playlists" | "authors";
+export type LibrarySegment = "books" | "series" | "authors";
 
 const SEGMENTS: { key: LibrarySegment; label: string; icon: IconName }[] = [
   { key: "books", label: "Books", icon: "book" },
   { key: "series", label: "Series", icon: "series" },
-  { key: "collections", label: "Collections", icon: "collections" },
-  { key: "playlists", label: "Playlists", icon: "list" },
   { key: "authors", label: "Authors", icon: "authors" },
 ];
 
@@ -61,6 +59,11 @@ const ABSOLUTE_FILL = {
   bottom: 0,
 };
 
+// Only books/series/authors are valid now that Collections + Playlists moved to
+// their own bottom tab. A persisted or deep-linked "collections"/"playlists"
+// (from before the split) no longer matches VALID_SEGMENTS, so it normalizes to
+// null and the caller falls back to Books — the hub never renders a removed
+// segment.
 function normalizeSegment(value: any): LibrarySegment | null {
   return VALID_SEGMENTS.includes(value) ? (value as LibrarySegment) : null;
 }
@@ -69,6 +72,12 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
+  // Same DERIVED offline signal BookshelfScreen/OfflineBanner consume — true
+  // for a captive portal / connected-but-unreachable network too, not just a
+  // dropped radio. The hub's facets all fetch from the server, so offline
+  // there's nothing to browse — point the user at their downloaded content
+  // instead of firing failing fetches.
+  const { isOffline } = useNetworkStatus();
 
   const params = route?.params || {};
 
@@ -140,20 +149,10 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   // is active.
   const booksRef = useRef<LibraryScreenHandle>(null);
   const seriesRef = useRef<SeriesListScreenHandle>(null);
-  const collectionsRef = useRef<CollectionsPlaylistsScreenHandle>(null);
-  const playlistsRef = useRef<CollectionsPlaylistsScreenHandle>(null);
   const authorsRef = useRef<AuthorsScreenHandle>(null);
 
   const refFor = (key: LibrarySegment) =>
-    key === "books"
-      ? booksRef
-      : key === "series"
-      ? seriesRef
-      : key === "collections"
-      ? collectionsRef
-      : key === "playlists"
-      ? playlistsRef
-      : authorsRef;
+    key === "books" ? booksRef : key === "series" ? seriesRef : authorsRef;
 
   // Lazy-mount then keep-alive: mount a facet the first time its segment is
   // activated, and never unmount it afterwards. Mutating the ref during render
@@ -213,8 +212,8 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   }, [navigation]);
 
   // Contextual TopAppBar affordances per active segment (mirrors each facet's
-  // standalone bar): Books = filter + sort, Series/Authors = sort, Collections/
-  // Playlists = none. Search is global and always available.
+  // standalone bar): Books = filter + sort, Series/Authors = sort. Search is
+  // global and always available.
   const showFilter = segment === "books";
   const showSort = segment === "books" || segment === "series" || segment === "authors";
 
@@ -234,8 +233,8 @@ export default function LibraryHubScreen({ route, navigation }: any) {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        // A little trailing peek so the last pill ("Authors") is partly visible,
-        // hinting the row scrolls.
+        // A little trailing peek so the last pill is partly visible, hinting the
+        // row scrolls.
         contentContainerStyle={{ flexGrow: 1, paddingRight: 16 }}
       >
         <View
@@ -330,28 +329,6 @@ export default function LibraryHubScreen({ route, navigation }: any) {
             onScroll={onScroll}
           />
         );
-      case "collections":
-        return (
-          <CollectionsPlaylistsScreen
-            ref={collectionsRef}
-            embedded
-            mode="collections"
-            navigation={navigation}
-            listHeader={listHeader}
-            onScroll={onScroll}
-          />
-        );
-      case "playlists":
-        return (
-          <CollectionsPlaylistsScreen
-            ref={playlistsRef}
-            embedded
-            mode="playlists"
-            navigation={navigation}
-            listHeader={listHeader}
-            onScroll={onScroll}
-          />
-        );
       case "authors":
         return (
           <AuthorsScreen
@@ -367,7 +344,6 @@ export default function LibraryHubScreen({ route, navigation }: any) {
     }
   };
 
-  const showCreateFab = segment === "collections" || segment === "playlists";
   const fabBottom = hasSession ? 100 : 32;
 
   return (
@@ -385,6 +361,47 @@ export default function LibraryHubScreen({ route, navigation }: any) {
       />
 
       <View style={{ flex: 1 }}>
+        {/* Offline fallback: the library facets browse the server, so offline
+            there's nothing to load. Show a clear notice + a jump to the
+            downloaded content instead of rendering facets that only fire
+            failing fetches. */}
+        {isOffline ? (
+          <EmptyState
+            style={{ flex: 1 }}
+            icon="cloud-off"
+            title="You're offline"
+            message="Browsing the library needs a connection. Your downloaded books are always available offline."
+            action={
+              <Pressable
+                onPress={() => navigation?.navigate?.("Downloads")}
+                android_ripple={{ color: colors.surfaceContainerHighest }}
+                accessibilityRole="button"
+                accessibilityLabel="Open Downloads"
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingVertical: 12,
+                  paddingHorizontal: 24,
+                  borderRadius: 20,
+                  backgroundColor: colors.primaryContainer,
+                }}
+              >
+                <Icon name="download" size={18} color={colors.onPrimaryContainer} />
+                <Text
+                  style={{
+                    color: colors.onPrimaryContainer,
+                    fontSize: 14,
+                    fontWeight: "600",
+                    marginLeft: 8,
+                  }}
+                >
+                  Open Downloads
+                </Text>
+              </Pressable>
+            }
+          />
+        ) : (
+          <>
         {/* Keep-alive facet layers: every visited segment stays mounted; only
             the active one is shown. */}
         {SEGMENTS.map((seg) => {
@@ -412,8 +429,7 @@ export default function LibraryHubScreen({ route, navigation }: any) {
           </View>
         ) : null}
 
-        {/* Scroll-to-top FAB — appears once the active list is scrolled down.
-            Staggered above the create FAB when both are visible. */}
+        {/* Scroll-to-top FAB — appears once the active list is scrolled down. */}
         {!isSearchActive && showScrollTop ? (
           <Pressable
             onPress={scrollActiveToTop}
@@ -423,7 +439,7 @@ export default function LibraryHubScreen({ route, navigation }: any) {
             style={{
               position: "absolute",
               right: 16,
-              bottom: showCreateFab ? fabBottom + 68 : fabBottom,
+              bottom: fabBottom,
               width: 48,
               height: 48,
               borderRadius: 16,
@@ -431,38 +447,17 @@ export default function LibraryHubScreen({ route, navigation }: any) {
               justifyContent: "center",
               backgroundColor: colors.secondaryContainer,
               elevation: 3,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.2,
+              shadowRadius: 3,
             }}
           >
             <Icon name="chevron-up" size={26} color={colors.onSecondaryContainer} />
           </Pressable>
         ) : null}
-
-        {/* Create FAB — Material 3 primaryContainer FAB, only on the
-            collections/playlists segments, above the mini-player. */}
-        {!isSearchActive && showCreateFab ? (
-          <Pressable
-            onPress={() =>
-              (segment === "collections" ? collectionsRef : playlistsRef).current?.openCreate?.()
-            }
-            android_ripple={{ color: colors.surfaceContainerHighest }}
-            accessibilityRole="button"
-            accessibilityLabel={`Create new ${segment === "collections" ? "collection" : "playlist"}`}
-            style={{
-              position: "absolute",
-              right: 16,
-              bottom: fabBottom,
-              width: 56,
-              height: 56,
-              borderRadius: 16,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: colors.primaryContainer,
-              elevation: 3,
-            }}
-          >
-            <Icon name="add" size={26} color={colors.onPrimaryContainer} />
-          </Pressable>
-        ) : null}
+          </>
+        )}
       </View>
     </SafeAreaView>
   );

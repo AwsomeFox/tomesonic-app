@@ -29,6 +29,10 @@ const mockPlaybackGetState = jest.mocked(usePlaybackStore.getState);
 const initial = useDownloadStore.getState();
 const flush = () => new Promise((r) => setImmediate(r));
 
+// Two distinct account namespaces (`${serverAddress}::${userId}`).
+const SESSION_A = "https://a.example.com::userA";
+const SESSION_B = "https://b.example.com::userB";
+
 function baseItem(over: Partial<DownloadItem> = {}): DownloadItem {
   return {
     id: "item1",
@@ -52,6 +56,10 @@ describe("useDownloadStore", () => {
     dbStorage.getAllKeys().forEach((k) => dbStorage.remove(k));
     storage.getAllKeys().forEach((k) => storage.remove(k));
     secureStorage.getAllKeys().forEach((k) => secureStorage.remove(k));
+    // Downloads are namespaced by session key. Establish a current account so
+    // loadDownloadsFromDb has a namespace to load into (legacy/untagged rows are
+    // migrated into it). Multi-session behavior is covered in its own describe.
+    storageHelper.setLastSessionKey(SESSION_A);
     useDownloadStore.setState(initial, true);
     useDownloadStore.setState({ activeDownloads: {}, completedDownloads: {} });
   });
@@ -237,6 +245,28 @@ describe("useDownloadStore", () => {
         idempotent: true,
       });
     });
+
+    it("removes a podcast-episode download by its composite key", async () => {
+      const ep = baseItem({
+        id: "pod1::ep1",
+        libraryItemId: "pod1",
+        episodeId: "ep1",
+        status: "completed",
+        localFolderPath: "file:///downloads/pod1::ep1/",
+      });
+      db.saveDownloadItem(ep);
+      db.saveLocalLibraryItem({ id: "pod1::ep1", libraryItemId: "pod1", episodeId: "ep1" });
+      useDownloadStore.setState({ completedDownloads: { "pod1::ep1": ep } });
+
+      await useDownloadStore.getState().removeDownload("pod1::ep1");
+
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/pod1::ep1/", {
+        idempotent: true,
+      });
+      expect(useDownloadStore.getState().completedDownloads["pod1::ep1"]).toBeUndefined();
+      expect(db.getAllDownloads()).toHaveLength(0);
+      expect(db.getLocalLibraryItem("pod1::ep1")).toBeNull();
+    });
   });
 
   describe("removeDownload live-playback handoff", () => {
@@ -278,6 +308,57 @@ describe("useDownloadStore", () => {
 
       expect(closePlayback).toHaveBeenCalledTimes(1);
       expect(startPlayback).not.toHaveBeenCalled();
+    });
+
+    it("swaps a playing EPISODE session (composite key) to streaming with its episodeId", async () => {
+      const ep = baseItem({
+        id: "pod1::ep1",
+        libraryItemId: "pod1",
+        episodeId: "ep1",
+        status: "completed",
+        localFolderPath: "file:///downloads/pod1::ep1/",
+      });
+      useDownloadStore.setState({ completedDownloads: { "pod1::ep1": ep } });
+      const startPlayback = jest.fn().mockResolvedValue(true);
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      mockPlaybackGetState.mockReturnValue({
+        currentSession: { libraryItemId: "pod1", episodeId: "ep1" },
+        isPlaying: true,
+        startPlayback,
+        closePlayback,
+      } as any);
+
+      await useDownloadStore.getState().removeDownload("pod1::ep1");
+
+      // Restarts the SAME episode streaming (bare id + episodeId), not the
+      // composite key, and matched despite the session key differing from id.
+      expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1");
+      expect(closePlayback).not.toHaveBeenCalled();
+    });
+
+    it("does not touch playback when deleting a different episode of the loaded podcast", async () => {
+      const ep2 = baseItem({
+        id: "pod1::ep2",
+        libraryItemId: "pod1",
+        episodeId: "ep2",
+        status: "completed",
+        localFolderPath: "file:///downloads/pod1::ep2/",
+      });
+      useDownloadStore.setState({ completedDownloads: { "pod1::ep2": ep2 } });
+      const startPlayback = jest.fn().mockResolvedValue(true);
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      // ep1 is playing; we delete ep2 — same podcast, different episode.
+      mockPlaybackGetState.mockReturnValue({
+        currentSession: { libraryItemId: "pod1", episodeId: "ep1" },
+        isPlaying: true,
+        startPlayback,
+        closePlayback,
+      } as any);
+
+      await useDownloadStore.getState().removeDownload("pod1::ep2");
+
+      expect(startPlayback).not.toHaveBeenCalled();
+      expect(closePlayback).not.toHaveBeenCalled();
     });
 
     it("leaves playback untouched when a different book is loaded", async () => {
@@ -523,6 +604,160 @@ describe("useDownloadStore", () => {
       expect(item.parts).toEqual([]);
       // The recovered failed state is persisted back to the DB.
       expect(db.getAllDownloads()[0].status).toBe("failed");
+    });
+  });
+
+  describe("multi-server download namespacing", () => {
+    it("stamps new downloads with the current session key (startDownload)", () => {
+      useDownloadStore.getState().startDownload(
+        { id: "n1", libraryItemId: "n1", title: "New", author: "A", coverUrl: "c" } as any,
+        [{ id: "track_0", filename: "a.mp3", url: "u", fileSize: 10 }] as any
+      );
+      expect(useDownloadStore.getState().activeDownloads["n1"].sessionKey).toBe(SESSION_A);
+      // Persisted with the stamp so a later reload keeps it in this namespace.
+      expect(db.getAllDownloads()[0].sessionKey).toBe(SESSION_A);
+    });
+
+    it("MIGRATION: adopts legacy un-namespaced rows into the current session and persists the stamp", () => {
+      // A pre-namespacing row has no sessionKey.
+      const legacy = baseItem({ id: "legacy1", status: "completed" });
+      delete (legacy as any).sessionKey;
+      db.saveDownloadItem(legacy);
+      expect(db.getAllDownloads()[0].sessionKey).toBeUndefined();
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      // Surfaced under the current account...
+      expect(useDownloadStore.getState().completedDownloads["legacy1"]).toBeTruthy();
+      // ...and the DB row is now stamped, so the migration is one-time.
+      expect(db.getAllDownloads()[0].sessionKey).toBe(SESSION_A);
+    });
+
+    it("surfaces ONLY the current session's downloads, leaving another account's rows on disk", () => {
+      db.saveDownloadItem(baseItem({ id: "aBook", status: "completed", sessionKey: SESSION_A }));
+      db.saveDownloadItem(baseItem({ id: "bBook", status: "completed", sessionKey: SESSION_B }));
+
+      // Current account is A.
+      useDownloadStore.getState().loadDownloadsFromDb();
+      expect(useDownloadStore.getState().completedDownloads["aBook"]).toBeTruthy();
+      expect(useDownloadStore.getState().completedDownloads["bBook"]).toBeUndefined();
+      // B's row is untouched on disk — not surfaced, not deleted.
+      expect(db.getAllDownloads().find((d) => d.id === "bBook")).toBeTruthy();
+    });
+
+    it("A→B→A retains both accounts' downloads with NO re-download (re-adopts from disk)", () => {
+      // Account A downloaded aBook; account B downloaded bBook (both on disk).
+      db.saveDownloadItem(baseItem({ id: "aBook", status: "completed", sessionKey: SESSION_A }));
+      db.saveDownloadItem(baseItem({ id: "bBook", status: "completed", sessionKey: SESSION_B }));
+
+      // On A: only A's download shows.
+      storageHelper.setLastSessionKey(SESSION_A);
+      useDownloadStore.getState().loadDownloadsFromDb();
+      expect(Object.keys(useDownloadStore.getState().completedDownloads)).toEqual(["aBook"]);
+
+      // Switch to B (stop surfacing A) then load B's namespace.
+      useDownloadStore.getState().deactivateDownloadsForSwitch();
+      storageHelper.setLastSessionKey(SESSION_B);
+      useDownloadStore.getState().loadDownloadsFromDb();
+      expect(Object.keys(useDownloadStore.getState().completedDownloads)).toEqual(["bBook"]);
+
+      // Back to A — aBook re-adopted from disk (never deleted, never re-downloaded).
+      useDownloadStore.getState().deactivateDownloadsForSwitch();
+      storageHelper.setLastSessionKey(SESSION_A);
+      useDownloadStore.getState().loadDownloadsFromDb();
+      expect(Object.keys(useDownloadStore.getState().completedDownloads)).toEqual(["aBook"]);
+
+      // BOTH accounts' rows survived the whole dance — nothing was wiped.
+      const ids = db.getAllDownloads().map((d) => d.id).sort();
+      expect(ids).toEqual(["aBook", "bBook"]);
+      // No files were deleted across the switches.
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+    });
+
+    it("logged out (no session): surfaces nothing and does NOT migrate legacy rows", () => {
+      const legacy = baseItem({ id: "legacy1", status: "completed" });
+      delete (legacy as any).sessionKey;
+      db.saveDownloadItem(legacy);
+      storageHelper.removeLastSessionKey();
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      expect(useDownloadStore.getState().completedDownloads).toEqual({});
+      // Legacy row left untagged for the next login to adopt.
+      expect(db.getAllDownloads()[0].sessionKey).toBeUndefined();
+    });
+
+    it("falls back to the live server config when no lastSessionKey is stamped", () => {
+      storageHelper.removeLastSessionKey();
+      storageHelper.setServerConfig({ address: "https://c.example.com/", userId: "userC" });
+      db.saveDownloadItem(baseItem({ id: "cBook", status: "completed" })); // untagged
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      // Migrated into the derived namespace so the download is never stranded.
+      expect(useDownloadStore.getState().completedDownloads["cBook"]).toBeTruthy();
+      expect(db.getAllDownloads()[0].sessionKey).toBe("https://c.example.com::userC");
+    });
+
+    it("a config MISSING userId does NOT migrate into an ambiguous `address::` namespace", () => {
+      storageHelper.removeLastSessionKey();
+      // Older/half-populated config with no userId — deriving `${address}::`
+      // would be an ambiguous namespace that could strand downloads later.
+      storageHelper.setServerConfig({ address: "https://d.example.com/" } as any);
+      const legacy = baseItem({ id: "dBook", status: "completed" });
+      delete (legacy as any).sessionKey;
+      db.saveDownloadItem(legacy);
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      // Deferred: nothing surfaced, and the legacy row is left UNSTAMPED for a
+      // real (userId-bearing) session to adopt — never stamped `address::`.
+      expect(useDownloadStore.getState().completedDownloads).toEqual({});
+      expect(db.getAllDownloads()[0].sessionKey).toBeUndefined();
+    });
+
+    describe("deactivateDownloadsForSwitch", () => {
+      it("empties both maps and aborts in-flight parts WITHOUT deleting files or DB rows", async () => {
+        const done = baseItem({ id: "done1", status: "completed", sessionKey: SESSION_A });
+        const act = baseItem({ id: "act1", status: "downloading", sessionKey: SESSION_A });
+        db.saveDownloadItem(done);
+        db.saveDownloadItem(act);
+        useDownloadStore.setState({
+          completedDownloads: { done1: done },
+          activeDownloads: { act1: act },
+        });
+
+        await useDownloadStore.getState().deactivateDownloadsForSwitch();
+
+        // In-flight download stopped so it can't 401 under the next account.
+        expect(downloader.abortBookParts).toHaveBeenCalledWith("act1");
+        // Maps emptied (stop surfacing)...
+        expect(useDownloadStore.getState().completedDownloads).toEqual({});
+        expect(useDownloadStore.getState().activeDownloads).toEqual({});
+        // ...but NOTHING deleted: files stay, DB rows stay for re-adoption.
+        expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+        expect(db.getAllDownloads().map((d) => d.id).sort()).toEqual(["act1", "done1"]);
+      });
+
+      it("resolves safely with nothing active", async () => {
+        await useDownloadStore.getState().deactivateDownloadsForSwitch();
+        expect(downloader.abortBookParts).not.toHaveBeenCalled();
+        expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      });
+    });
+
+    it("removeAllDownloads clears only the CURRENT account, leaving another account's downloads intact", async () => {
+      db.saveDownloadItem(baseItem({ id: "aBook", status: "completed", sessionKey: SESSION_A }));
+      db.saveDownloadItem(baseItem({ id: "bBook", status: "completed", sessionKey: SESSION_B }));
+
+      // Current account is A: its downloads are loaded into the store.
+      useDownloadStore.getState().loadDownloadsFromDb();
+      await useDownloadStore.getState().removeAllDownloads();
+
+      // A's download is gone (row + files)...
+      expect(db.getAllDownloads().find((d) => d.id === "aBook")).toBeFalsy();
+      // ...but B's row is untouched (removeAllDownloads only sees the loaded set).
+      expect(db.getAllDownloads().find((d) => d.id === "bBook")).toBeTruthy();
     });
   });
 

@@ -1,6 +1,20 @@
 import { create } from "zustand";
 import * as FileSystem from "expo-file-system/legacy";
 import { db } from "../utils/db";
+import { storageHelper } from "../utils/storage";
+
+/**
+ * Canonical download-store key for a podcast episode. Books key by bare
+ * libraryItemId; episodes need per-episode entries under one podcast, so they
+ * key by this composite. The bare libraryItemId is used verbatim as the prefix
+ * so the on-device folder ("<id>_<title>") and its ownership checks
+ * (sweepOrphanFolders / abortBookParts, which match `${id}_`) keep working
+ * unchanged. Callers store episodeId separately on the item and never parse
+ * this back apart.
+ */
+export function episodeDownloadKey(libraryItemId: string, episodeId: string): string {
+  return `${libraryItemId}::${episodeId}`;
+}
 
 export interface DownloadPart {
   id: string;
@@ -14,8 +28,23 @@ export interface DownloadPart {
 }
 
 export interface DownloadItem {
-  id: string; // libraryItemId (or episodeId)
+  // Book downloads key by bare libraryItemId; podcast-episode downloads key by
+  // the composite `${libraryItemId}::${episodeId}` (see episodeDownloadKey) so a
+  // single podcast can have many independently-downloaded episodes.
+  id: string;
   libraryItemId: string;
+  // Set only for podcast-episode downloads — lets the offline session builder,
+  // Downloads screen and mark-as-downloaded checks resolve the episode without
+  // parsing the composite id.
+  episodeId?: string;
+  // The server/account this download belongs to: `${serverAddress}::${userId}`
+  // (the same "session key" useUserStore derives). Downloads are NAMESPACED by
+  // session so switching servers/accounts no longer wipes the departing
+  // account's offline library — each account only surfaces its own downloads,
+  // and returning to an account RE-ADOPTS its files instead of re-downloading.
+  // Legacy rows written before namespacing have no sessionKey; they are migrated
+  // into the current session on first load (see loadDownloadsFromDb).
+  sessionKey?: string;
   title: string;
   author: string;
   coverUrl: string;
@@ -58,6 +87,32 @@ function folderForItem(item?: DownloadItem | null): string | null {
   return null;
 }
 
+/**
+ * The download namespace for the CURRENT account: `${serverAddress}::${userId}`.
+ * Prefers the durable lastSessionKey (it survives a forced 401 logout, so a
+ * later re-login re-adopts the SAME namespace and its files); falls back to
+ * deriving the key from the live server config so a logged-in user whose key
+ * hasn't been stamped yet still gets a stable namespace and never has downloads
+ * stranded. The config fallback requires BOTH address AND userId — a config
+ * missing userId (an older persisted config, or a half-populated one) would
+ * yield an ambiguous `${address}::` namespace that could permanently
+ * strand/mis-scope downloads, so we return null and defer until a real
+ * lastSessionKey/userId exists rather than stamp into that ambiguous key.
+ * Returns null when fully logged out (no config) or userId-less — in which case
+ * loadDownloadsFromDb surfaces nothing (and migration/stamping is deferred).
+ */
+function currentSessionKey(): string | null {
+  try {
+    const k = storageHelper.getLastSessionKey();
+    if (k) return k;
+    const cfg = storageHelper.getServerConfig();
+    if (cfg?.address && cfg?.userId) {
+      return `${String(cfg.address).replace(/\/$/, "")}::${cfg.userId}`;
+    }
+  } catch {}
+  return null;
+}
+
 interface DownloadState {
   activeDownloads: Record<string, DownloadItem>;
   completedDownloads: Record<string, DownloadItem>;
@@ -77,6 +132,9 @@ interface DownloadState {
   // Re-drive a failed download from its saved parts (resumes, doesn't restart from scratch).
   retryDownload: (id: string) => Promise<void>;
   removeAllDownloads: () => Promise<void>;
+  // Session switch / logout: stop surfacing the departing account's downloads
+  // WITHOUT deleting any files or DB rows (see the action for details).
+  deactivateDownloadsForSwitch: () => Promise<void>;
   // True once loadDownloadsFromDb has hydrated — offline UI gates its
   // "No downloaded books" empty state on this to avoid a scary flash before
   // the DB read lands on cold start.
@@ -89,12 +147,34 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   downloadsLoaded: false,
 
   loadDownloadsFromDb: () => {
+    // Downloads are NAMESPACED by session key: surface ONLY the current
+    // account's downloads. A different account's rows stay on disk untouched so
+    // switching back re-adopts them. Legacy rows written before namespacing
+    // carry no sessionKey and are MIGRATED into the current session here (their
+    // files were downloaded by this device's only account before multi-server
+    // support existed), so existing users never lose their current downloads.
+    const sessionKey = currentSessionKey();
     const list = db.getAllDownloads();
     const active: Record<string, DownloadItem> = {};
     const completed: Record<string, DownloadItem> = {};
     const liveActive = get().activeDownloads;
 
-    list.forEach(item => {
+    list.forEach(rawItem => {
+      // Logged out (no session): surface nothing, and DON'T migrate legacy rows
+      // to a null namespace — leave them untagged for the next login to adopt.
+      if (!sessionKey) return;
+      let item = rawItem;
+      if (item.sessionKey == null) {
+        // MIGRATION: adopt this legacy (un-namespaced) download into the
+        // current account and persist the stamp so it happens exactly once.
+        item = { ...item, sessionKey };
+        db.saveDownloadItem(item);
+      } else if (item.sessionKey !== sessionKey) {
+        // Belongs to another account on this device — leave its files + row on
+        // disk; just don't surface it under the current account.
+        return;
+      }
+
       if (item.status === "completed") {
         completed[item.id] = item;
       } else if (item.status === "downloading" || item.status === "pending") {
@@ -155,6 +235,10 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       progress: 0,
       status: "pending",
       error: undefined, // a fresh start clears any stale failure reason
+      // Tag with the current account so this download is namespaced from the
+      // start (survives a switch away-and-back without re-downloading). Keep an
+      // explicit sessionKey on the item if a caller already supplied one.
+      sessionKey: item.sessionKey ?? currentSessionKey() ?? undefined,
       parts: parts.map(p => ({ ...p, bytesDownloaded: 0, completed: false })),
     };
 
@@ -412,10 +496,17 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     try {
       const { usePlaybackStore } = require("./usePlaybackStore");
       const st = usePlaybackStore.getState();
-      if (st.currentSession?.libraryItemId === id) {
+      // The loaded session's download key is the composite for an episode,
+      // bare libraryItemId for a book — build it the same way the deleted id
+      // was so an episode delete matches its own playing session (and never a
+      // sibling episode of the same podcast).
+      const sessionKey = st.currentSession?.episodeId
+        ? episodeDownloadKey(st.currentSession.libraryItemId, st.currentSession.episodeId)
+        : st.currentSession?.libraryItemId;
+      if (sessionKey === id) {
         if (st.isPlaying) {
           const ok = await st
-            .startPlayback(id, st.currentSession.episodeId || undefined)
+            .startPlayback(st.currentSession.libraryItemId, st.currentSession.episodeId || undefined)
             .catch(() => false);
           if (!ok) await st.closePlayback().catch(() => {});
         } else {
@@ -467,11 +558,39 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       } catch {}
       delete _lastDbSaveAt[id];
     }
-    // Sweep anything the id list missed (orphan folders from older installs);
-    // the store was emptied above, so every leftover folder reads as orphaned.
+    // Sweep anything the id list missed (orphan folders from older installs).
+    // sweepOrphanFolders is namespace-aware (it checks ownership against EVERY
+    // session's DB rows), so it only reclaims folders that no account owns —
+    // another account's folders are never deleted here.
     try {
       const { downloader } = require("../utils/downloader");
       await downloader.sweepOrphanFolders?.();
+    } catch {}
+  },
+
+  // Session switch / logout: STOP SURFACING the departing account's downloads
+  // WITHOUT deleting anything. Aborts any in-flight native download parts (they
+  // would 401 under the next account's credentials) and empties the in-memory
+  // maps — but LEAVES every file and DB row on disk, tagged with their own
+  // sessionKey — so returning to this account re-adopts them (loadDownloadsFromDb)
+  // instead of re-downloading. This replaces the old removeAllDownloads() call
+  // on the logout/switch path, which wiped a two-server user's whole offline
+  // library on every toggle. removeAllDownloads() stays for an explicit
+  // "clear downloads" user action.
+  deactivateDownloadsForSwitch: async () => {
+    const activeIds = Object.keys(get().activeDownloads);
+    // Empty the maps FIRST (synchronously) so any in-flight loop winds down
+    // quietly — it checks its store entry after each part — instead of throwing
+    // into failDownload (same ordering rationale as removeAllDownloads).
+    set({ activeDownloads: {}, completedDownloads: {} });
+    if (!activeIds.length) return;
+    try {
+      const { downloader } = require("../utils/downloader");
+      for (const id of activeIds) {
+        try {
+          await downloader.abortBookParts(id);
+        } catch {}
+      }
     } catch {}
   },
 
@@ -555,6 +674,12 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     const entries = items
       // Audio downloads only — ebook-only downloads can't play in the car.
       .filter((d: any) => d?.meta?.tracks?.length)
+      // Episode downloads are excluded from the car mirror for now: every
+      // episode of one podcast shares a libraryItemId, so emitting them here
+      // would collide on the browse id and mis-resolve resume positions
+      // (episode progress lives under a composite key). Books never set
+      // episodeId, so their mirror is unchanged.
+      .filter((d: any) => !d?.episodeId)
       .map((d: any) => ({
         id: d.libraryItemId || d.id,
         title: d.title || "Audiobook",

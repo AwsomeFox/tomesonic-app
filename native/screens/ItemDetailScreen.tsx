@@ -4,7 +4,12 @@ import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
-import { queueFinishedPatch, queueProgressPatch } from "../utils/progressSync";
+import {
+  queueFinishedPatch,
+  queueProgressPatch,
+  syncBothProgressFraction,
+  reconcileLinkedProgress,
+} from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { showAppDialog } from "../store/useDialogStore";
@@ -13,7 +18,7 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
-import { useDownloadStore } from "../store/useDownloadStore";
+import { useDownloadStore, episodeDownloadKey } from "../store/useDownloadStore";
 import { downloader } from "../utils/downloader";
 import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
@@ -90,6 +95,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     };
   }, []);
   const ereaderDevices = useUserStore((s) => s.ereaderDevices);
+  // Per-item "Link reading & listening" lock — subscribe to the map so the
+  // toggle reflects/persists per book (see useUserStore settings.linkedProgress).
+  const linkedProgressMap = useUserStore((s) => s.settings.linkedProgress);
+  const setProgressLinked = useUserStore((s) => s.setProgressLinked);
+  const isLinked = !!(itemId && linkedProgressMap?.[itemId]);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const currentSession = usePlaybackStore((state) => state.currentSession);
@@ -274,6 +284,42 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     }
   };
 
+  // Per-episode download control. Episodes are stored under the composite
+  // `${itemId}::${episodeId}` key (episodeDownloadKey); the four states mirror
+  // the book download button (download / cancel / retry / delete).
+  const handleEpisodeDownloadPress = async (episode: any) => {
+    if (!item?.id || !episode?.id) return;
+    const key = episodeDownloadKey(item.id, episode.id);
+    const active = useDownloadStore.getState().activeDownloads[key];
+    const completed = useDownloadStore.getState().completedDownloads[key];
+    if (completed && !active) {
+      // A completed download must go through removeDownload (deletes files);
+      // destructive, so confirm first.
+      showAppDialog({
+        title: "Delete download",
+        message: `Remove "${episode.title || "this episode"}" from this device? You can download it again later.`,
+        buttons: [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: () => removeDownload(key) },
+        ],
+      });
+    } else if (active?.status === "downloading" || active?.status === "pending") {
+      cancelDownload(key);
+    } else if (active?.status === "failed") {
+      useDownloadStore.getState().retryDownload(key);
+    } else {
+      try {
+        await downloader.downloadEpisode(item, episode, serverAddress, token);
+      } catch (err) {
+        console.warn("[ItemDetail] Episode download failed:", err);
+        showAppDialog({
+          title: "Download failed",
+          message: "Couldn't start the download. Check your connection and free space, then try again.",
+        });
+      }
+    }
+  };
+
   const refetchItem = async () => {
     if (!itemId) return;
     try {
@@ -366,6 +412,64 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     ? 100
     : Math.min(99, Math.max(1, Math.round(ebookProgressFraction * 100)));
 
+  // Both progress rows are showing AND they disagree by a meaningful margin —
+  // the trigger for the manual "Sync progress" action and the lock toggle's
+  // "these have drifted" case. |Δ| >= 2 percentage points.
+  const bothProgressRows = showAudioRow && showEbookRow;
+  const progressDrifted = bothProgressRows && Math.abs(audioPct - ebookPct) >= 2;
+  // Target for a sync/reconcile = the FURTHEST-along position (max fraction), so
+  // neither medium is ever moved backward.
+  const syncTargetFraction = Math.max(audioProgressFraction, ebookProgressFraction);
+  const syncTargetPct = Math.max(audioPct, ebookPct);
+
+  // Manual "Sync progress": reconcile both media to the furthest spot. Writes
+  // BOTH — audio via a currentTime = fraction*duration patch, ebook via its
+  // fraction (the exact page can't be repositioned from a fraction, so only the
+  // ebook PERCENTAGE moves; the CFI is preserved). Offline-safe (patches queue).
+  const handleSyncProgress = () => {
+    if (!item?.id) return;
+    showAppDialog({
+      title: "Sync progress",
+      message:
+        `Listening ${audioPct}% · Reading ${ebookPct}%.\n\n` +
+        `Bring both to the furthest spot (${syncTargetPct}%)? The ebook's exact ` +
+        `page stays put — only its percentage moves.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: `Sync to ${syncTargetPct}%`,
+          onPress: () => {
+            syncBothProgressFraction(item.id, syncTargetFraction, {
+              duration,
+              ebookLocation: progress?.ebookLocation || "",
+            });
+            showAppDialog({
+              title: "Progress synced",
+              message: `Listening and reading are now both at ${syncTargetPct}%.`,
+            });
+          },
+        },
+      ],
+    });
+  };
+
+  // Lock toggle: persist the per-item link and, when turning it ON, reconcile
+  // immediately (the focus effect below only runs on load/focus, not on this
+  // in-place toggle press).
+  const handleToggleLink = () => {
+    if (!item?.id) return;
+    const next = !isLinked;
+    setProgressLinked(item.id, next);
+    if (next && !isCurrentlyPlaying) {
+      reconcileLinkedProgress(item.id, {
+        audioFraction: audioProgressFraction,
+        ebookFraction: ebookProgressFraction,
+        duration,
+        ebookLocation: progress?.ebookLocation || "",
+      });
+    }
+  };
+
   const chapters = item?.media?.chapters || [];
   const hasChapters = chapters.length > 0;
   const isCurrentlyPlaying = currentSession?.libraryItemId === itemId;
@@ -376,6 +480,33 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const playerChapters = usePlaybackStore((s) => s.chapters);
   const displayChapters =
     isCurrentlyPlaying && playerChapters.length ? playerChapters : chapters;
+
+  // LOCK reconciliation at the ItemDetail transition boundary: on load AND on
+  // every focus (returning from the reader/player), pull the lagging medium up
+  // to the furthest position when this item is linked. FRACTION-ONLY — see
+  // reconcileLinkedProgress. Skipped while THIS item is the live audio session
+  // (the 1s tick owns the audio position; that session reconciles when it
+  // CLOSES instead — see usePlaybackStore). No-op unless locked, so it's inert
+  // for every audio-only / ebook-only / unlinked book.
+  useEffect(() => {
+    if (!itemId) return;
+    const run = () => {
+      if (usePlaybackStore.getState().currentSession?.libraryItemId === itemId) return;
+      // Read the freshest progress from the store (the reader/player wrote it),
+      // falling back to the loaded item's snapshot on a cold direct-open.
+      const p =
+        useUserStore.getState().mediaProgress[itemId] || item?.userMediaProgress || {};
+      reconcileLinkedProgress(itemId, {
+        audioFraction: Number(p.progress) || 0,
+        ebookFraction: Number(p.ebookProgress) || 0,
+        duration,
+        ebookLocation: p.ebookLocation || "",
+      });
+    };
+    run();
+    const unsub = navigation?.addListener?.("focus", run);
+    return () => unsub?.();
+  }, [itemId, isLinked, duration, item?.id]);
 
   // What media this exact item has, and what a matched sibling item supplies.
   // Podcasts carry episodes (not tracks), so hasAudio() would be false — treat
@@ -471,6 +602,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // Render cap only (the array is already in memory) — "Show more" pages in
   // the next batch; a hard cap left episodes 101+ of large feeds unreachable.
   const [episodeLimit, setEpisodeLimit] = useState(EPISODE_CAP);
+  // Episode list filter/sort — All / Unplayed / In-Progress against the shared
+  // per-episode progress map, plus a newest↔oldest toggle.
+  const [episodeFilter, setEpisodeFilter] = useState<"all" | "unplayed" | "in-progress">("all");
+  const [episodeSort, setEpisodeSort] = useState<"newest" | "oldest">("newest");
   const episodes: any[] = React.useMemo(() => {
     if (!isPodcastItem) return [];
     // filter(Boolean): a null entry in the feed-derived episodes array threw
@@ -479,6 +614,63 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     eps.sort((a: any, b: any) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0));
     return eps;
   }, [isPodcastItem, item]);
+
+  // Filtered/sorted view of `episodes` (which is already newest-first). The
+  // header count still reflects the full total; only the rendered list changes.
+  const displayEpisodes: any[] = React.useMemo(() => {
+    const decorated = episodes.map((ep: any) => {
+      const p = progressMap[`${itemId}-${ep.id}`];
+      const finished = !!p?.isFinished;
+      const fraction = Math.max(0, Math.min(1, Number(p?.progress || 0)));
+      return { ep, finished, fraction };
+    });
+    const filtered = decorated.filter(({ finished, fraction }) => {
+      if (episodeFilter === "unplayed") return !finished && fraction === 0;
+      if (episodeFilter === "in-progress") return !finished && fraction > 0;
+      return true;
+    });
+    const ordered = episodeSort === "newest" ? filtered : [...filtered].reverse();
+    return ordered.map((d) => d.ep);
+  }, [episodes, progressMap, itemId, episodeFilter, episodeSort]);
+
+  const EpisodeFilterChip = ({
+    label,
+    value,
+  }: {
+    label: string;
+    value: "all" | "unplayed" | "in-progress";
+  }) => {
+    const active = episodeFilter === value;
+    return (
+      <Pressable
+        onPress={() => setEpisodeFilter(value)}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        accessibilityLabel={`Filter: ${label}`}
+        style={{
+          paddingHorizontal: 14,
+          height: 34,
+          borderRadius: 17,
+          alignItems: "center",
+          justifyContent: "center",
+          marginRight: 8,
+          backgroundColor: active ? colors.secondaryContainer : "transparent",
+          borderWidth: 1,
+          borderColor: active ? colors.secondaryContainer : colors.outlineVariant,
+        }}
+      >
+        <Text
+          style={{
+            color: active ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+            fontSize: 13,
+            fontWeight: "600",
+          }}
+        >
+          {label}
+        </Text>
+      </Pressable>
+    );
+  };
 
   const playEpisode = async (episode: any) => {
     if (!episode?.id || startingEpisodeId || starting) return;
@@ -1100,23 +1292,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             ) : null}
           </View>
 
-          {/* Podcasts have no Download button (the downloader handles book
-              tracks, not episodes) — say so, so its absence doesn't read as a
-              bug. Episodes stream and can be added to playlists for later. */}
-          {isPodcastItem ? (
-            <Text
-              accessibilityRole="text"
-              style={{
-                color: colors.onSurfaceVariant,
-                fontSize: 13,
-                textAlign: "center",
-                paddingHorizontal: 32,
-                marginTop: 12,
-              }}
-            >
-              Podcast episodes stream and aren't downloaded for offline playback.
-            </Text>
-          ) : null}
+          {/* Podcasts have no item-level Download button (there's no
+              item-level audio to grab). Each episode carries its own download
+              control in the episode list below. */}
 
           {/* Your Progress card — one icon-labeled row per format so listening
               and reading progress can never be mistaken for each other. */}
@@ -1231,6 +1409,106 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                         }}
                       />
                     </View>
+                  </View>
+                ) : null}
+
+                {/* Cross-medium controls — only when BOTH progress rows show
+                    (inert for audio-only / ebook-only items). */}
+                {bothProgressRows ? (
+                  <View style={{ rowGap: 12 }}>
+                    {/* "Sync progress" — appears only when the two have DRIFTED
+                        (|Δ| >= 2 pts). Reconciles both to the furthest spot;
+                        fraction-only (the ebook page isn't repositioned). */}
+                    {progressDrifted ? (
+                      <Pressable
+                        onPress={handleSyncProgress}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Sync progress to ${syncTargetPct} percent`}
+                        android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
+                        style={{
+                          alignSelf: "flex-start",
+                          flexDirection: "row",
+                          alignItems: "center",
+                          height: 40,
+                          paddingHorizontal: 16,
+                          borderRadius: 20,
+                          overflow: "hidden",
+                          backgroundColor: colors.secondaryContainer,
+                        }}
+                      >
+                        <Icon name="refresh" size={18} color={colors.onSecondaryContainer} />
+                        <Text
+                          style={{
+                            color: colors.onSecondaryContainer,
+                            fontSize: 14,
+                            fontWeight: "600",
+                            marginLeft: 8,
+                          }}
+                        >
+                          Sync progress
+                        </Text>
+                      </Pressable>
+                    ) : null}
+
+                    {/* "Link reading & listening" lock — persisted per item. */}
+                    <Pressable
+                      onPress={handleToggleLink}
+                      accessibilityRole="switch"
+                      accessibilityLabel="Link reading and listening"
+                      accessibilityState={{ checked: isLinked }}
+                      android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
+                      style={{ flexDirection: "row", alignItems: "center" }}
+                    >
+                      <View
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 15,
+                          backgroundColor: isLinked
+                            ? colors.primaryContainer
+                            : colors.secondaryContainer,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          marginRight: 10,
+                        }}
+                      >
+                        <Icon
+                          name="lock"
+                          size={16}
+                          color={isLinked ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                          style={{ opacity: isLinked ? 1 : 0.5 }}
+                        />
+                      </View>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={{ color: colors.onSurface, fontSize: 14, fontWeight: "600" }}>
+                          Link reading &amp; listening
+                        </Text>
+                        <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+                          Keep both at the furthest spot (by percentage)
+                        </Text>
+                      </View>
+                      {/* M3-ish track/thumb toggle. */}
+                      <View
+                        style={{
+                          width: 44,
+                          height: 26,
+                          borderRadius: 13,
+                          padding: 3,
+                          justifyContent: "center",
+                          backgroundColor: isLinked ? colors.primary : colors.surfaceContainerHighest,
+                          alignItems: isLinked ? "flex-end" : "flex-start",
+                        }}
+                      >
+                        <View
+                          style={{
+                            width: 20,
+                            height: 20,
+                            borderRadius: 10,
+                            backgroundColor: isLinked ? colors.onPrimary : colors.outline,
+                          }}
+                        />
+                      </View>
+                    </Pressable>
                   </View>
                 ) : null}
               </View>
@@ -1419,7 +1697,39 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               >
                 {episodes.length} {episodes.length === 1 ? "Episode" : "Episodes"}
               </Text>
-              {episodes.slice(0, episodeLimit).map((episode) => {
+
+              {/* Filter (All / Unplayed / In-Progress) + newest↔oldest sort. */}
+              <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", marginTop: 4, marginBottom: 8 }}>
+                <EpisodeFilterChip label="All" value="all" />
+                <EpisodeFilterChip label="Unplayed" value="unplayed" />
+                <EpisodeFilterChip label="In-Progress" value="in-progress" />
+                <Pressable
+                  onPress={() => setEpisodeSort((s) => (s === "newest" ? "oldest" : "newest"))}
+                  accessibilityRole="button"
+                  accessibilityLabel={episodeSort === "newest" ? "Sort oldest first" : "Sort newest first"}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingHorizontal: 14,
+                    height: 34,
+                    borderRadius: 17,
+                    borderWidth: 1,
+                    borderColor: colors.outlineVariant,
+                  }}
+                >
+                  <Icon name="sort" size={16} color={colors.onSurfaceVariant} style={{ marginRight: 6 }} />
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600" }}>
+                    {episodeSort === "newest" ? "Newest" : "Oldest"}
+                  </Text>
+                </Pressable>
+              </View>
+
+              {displayEpisodes.length === 0 ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", paddingVertical: 24 }}>
+                  No episodes match this filter.
+                </Text>
+              ) : null}
+              {displayEpisodes.slice(0, episodeLimit).map((episode) => {
                 const epProgress = progressMap[`${itemId}-${episode.id}`];
                 const epFinished = !!epProgress?.isFinished;
                 const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
@@ -1437,6 +1747,16 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 const subtitleStr = [pubDate, durationStr].filter(Boolean).join(" · ");
                 const isThisPlaying =
                   currentSession?.libraryItemId === itemId && currentSession?.episodeId === episode.id;
+                // Per-episode offline download state (composite-keyed).
+                const epDlKey = episodeDownloadKey(itemId, episode.id);
+                const epActiveDl = activeDownloads[epDlKey];
+                const epDownloaded = !!(completedDownloads[epDlKey] && !epActiveDl);
+                const epDownloading = epActiveDl?.status === "downloading" || epActiveDl?.status === "pending";
+                const epDownloadFailed = epActiveDl?.status === "failed";
+                const epDownloadPct =
+                  epActiveDl && Number.isFinite(epActiveDl.progress)
+                    ? Math.round(epActiveDl.progress * 100)
+                    : 0;
                 return (
                   <View
                     key={episode.id}
@@ -1479,6 +1799,54 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                         </View>
                       ) : null}
                     </View>
+                    {/* Per-episode download control — mirrors the book download
+                        button's four states (download / downloading% / retry /
+                        delete) but scoped to this episode's composite key. */}
+                    <Pressable
+                      onPress={() => handleEpisodeDownloadPress(episode)}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        epDownloaded
+                          ? `Delete download of ${episode.title || "episode"}`
+                          : epDownloading
+                          ? `Cancel download of ${episode.title || "episode"}, ${epDownloadPct} percent complete`
+                          : epDownloadFailed
+                          ? `Download of ${episode.title || "episode"} failed, tap to retry`
+                          : `Download ${episode.title || "episode"}`
+                      }
+                      hitSlop={6}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 20,
+                        marginRight: 8,
+                        backgroundColor:
+                          epDownloaded || epDownloadFailed
+                            ? withAlpha(colors.error, 0.1)
+                            : colors.secondaryContainer,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderWidth: epDownloaded || epDownloadFailed ? 1 : 0,
+                        borderColor: epDownloaded || epDownloadFailed ? colors.error : "transparent",
+                      }}
+                    >
+                      {epDownloading ? (
+                        <View style={{ alignItems: "center", justifyContent: "center" }}>
+                          <ActivityIndicator size="small" color={colors.primary} />
+                          <Text style={{ fontSize: 9, color: colors.onSurface, marginTop: 1, fontWeight: "800" }}>
+                            {epDownloadPct}%
+                          </Text>
+                        </View>
+                      ) : epDownloadFailed ? (
+                        <Icon name="refresh" size={18} color={colors.error} />
+                      ) : (
+                        <Icon
+                          name={epDownloaded ? "trash" : "download"}
+                          size={18}
+                          color={epDownloaded ? colors.error : colors.onSecondaryContainer}
+                        />
+                      )}
+                    </Pressable>
                     {/* Per-episode finished toggle — PATCHes the episode-scoped
                         endpoint and updates the `${itemId}-${episodeId}` map key. */}
                     <Pressable
@@ -1538,12 +1906,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   </View>
                 );
               })}
-              {episodes.length > episodeLimit ? (
+              {displayEpisodes.length > episodeLimit ? (
                 <Pressable
                   onPress={() => setEpisodeLimit((n) => n + EPISODE_CAP)}
                   android_ripple={{ color: colors.surfaceContainerHighest }}
                   accessibilityRole="button"
-                  accessibilityLabel={`Show more episodes, ${episodes.length - episodeLimit} remaining`}
+                  accessibilityLabel={`Show more episodes, ${displayEpisodes.length - episodeLimit} remaining`}
                   style={{
                     marginTop: 10,
                     paddingVertical: 12,
@@ -1554,7 +1922,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   }}
                 >
                   <Text style={{ color: colors.primary, fontSize: 14, fontWeight: "600" }}>
-                    Show more ({episodes.length - episodeLimit} remaining)
+                    Show more ({displayEpisodes.length - episodeLimit} remaining)
                   </Text>
                 </Pressable>
               ) : null}

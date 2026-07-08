@@ -172,7 +172,7 @@ export default function BottomSheet({
         style={[
           StyleSheet.absoluteFill,
           {
-            backgroundColor: hideBackdrop ? "transparent" : "rgba(0,0,0,0.45)",
+            backgroundColor: hideBackdrop ? "transparent" : "rgba(0,0,0,0.5)",
             opacity: backdrop,
           },
         ]}

@@ -240,9 +240,14 @@ let _refreshInFlight: { key: string; promise: Promise<RmabConfig> } | null = nul
 function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
   const key = `${cfg.url}::${cfg.refreshToken || ""}`;
   if (_refreshInFlight && _refreshInFlight.key === key) return _refreshInFlight.promise;
+  // Guard OUTSIDE the single-flight promise: a synchronous "no refresh token"
+  // throw inside the IIFE would run its finally before `_refreshInFlight` is
+  // assigned below, leaving a permanently-rejected in-flight promise installed
+  // (every later refresh for this key would return the dead rejection). Rejecting
+  // here — before registration — keeps that state clean.
+  if (!cfg.refreshToken) return Promise.reject(new Error("No refresh token"));
   const promise = (async () => {
     try {
-      if (!cfg.refreshToken) throw new Error("No refresh token");
       const res = await axios.post(
         `${cfg.url}/api/auth/refresh`,
         { refreshToken: cfg.refreshToken },
@@ -269,7 +274,7 @@ function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
 
 /** Authenticated request with a single 401 → refresh → retry. */
 async function rmabRequest<T = any>(
-  method: "get" | "post" | "put" | "delete",
+  method: "get" | "post" | "put" | "patch" | "delete",
   path: string,
   data?: any,
   timeout = 20000
@@ -545,6 +550,28 @@ export async function getPendingApprovalCount(): Promise<number> {
 /** Admin-only (server-enforced): remove a request entirely. */
 export async function deleteRequest(id: string): Promise<void> {
   await rmabRequest("delete", `/api/requests/${id}`);
+}
+
+/**
+ * Requester self-cancel — a normal (non-admin) user withdrawing their OWN
+ * pending request. This is NOT deleteRequest: that DELETE route is admin-only
+ * (server returns 403 "Admin access required" for non-admins). The server
+ * instead exposes cancellation as `PATCH /api/requests/:id` with
+ * `{ action: "cancel" }`, whose authorization allows the owner OR an admin
+ * (`record.userId === req.user.id || req.user.role === 'admin'`), so a normal
+ * user can cancel their own request. Verified against the RMAB server
+ * (src/app/api/requests/[id]/route.ts).
+ *
+ * Server-enforced behavior the caller must handle gracefully:
+ *  - 403 → the request isn't the caller's (or the server predates this route).
+ *  - 400 → status isn't cancellable. The server only cancels while the request
+ *    is in CANCELLABLE_STATUSES: pending, searching, downloading,
+ *    awaiting_search, awaiting_approval, awaiting_release. A terminal/fulfilled
+ *    request returns `{ error: 'ValidationError', message: 'Cannot cancel...' }`.
+ *  - 200 → `{ success: true, request, message: 'Request cancelled successfully' }`.
+ */
+export async function cancelRequest(id: string): Promise<void> {
+  await rmabRequest("patch", `/api/requests/${id}`, { action: "cancel" });
 }
 
 /** Admin-only: act on an awaiting-approval request. */

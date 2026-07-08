@@ -44,12 +44,14 @@ jest.mock("axios", () => {
   return mockAxios;
 });
 
+import * as FileSystem from "expo-file-system/legacy";
 import axios from "axios";
 import { api } from "../../utils/api";
 import { readAutoCreds, writeAutoCreds } from "../../utils/autoCreds";
 import { downloader } from "../../utils/downloader";
 import { clearAllPending } from "../../utils/progressSync";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
+import { db, dbStorage } from "../../utils/db";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
@@ -66,6 +68,9 @@ const mockGet = jest.mocked(api.get);
 function clearStorage() {
   storage.getAllKeys().forEach((k) => storage.remove(k));
   secureStorage.getAllKeys().forEach((k) => secureStorage.remove(k));
+  // Downloads are namespaced by session in the DB now; login/logout touch it
+  // (loadDownloadsFromDb re-adopts, deactivate aborts) — clear it between tests.
+  dbStorage.getAllKeys().forEach((k) => dbStorage.remove(k));
 }
 
 describe("useUserStore", () => {
@@ -441,39 +446,57 @@ describe("useUserStore", () => {
       expect(map["pod1-ep2"].progress).toBe(0.7);
     });
 
-    it("wipes downloads, the progress disk cache, and reader keys when switching accounts", async () => {
+    it("RETAINS the departing account's downloads on disk when switching accounts (no wipe), surfaces only B's", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       storageHelper.setMediaProgressCache({ item1: { libraryItemId: "item1", currentTime: 10 } });
       storage.set("ebookCfi_item1", "epubcfi(/6/4!/4/2)");
       storage.set("pdfPage_item1", "12");
       storage.set("last_interaction_item1", "listen");
+      // A completed download AND an in-flight one, both belonging to account A,
+      // persisted to the DB (as real downloads are).
+      const aDone = {
+        id: "item1",
+        libraryItemId: "item1",
+        status: "completed",
+        localFolderPath: "file:///downloads/item1/",
+        parts: [],
+        sessionKey: "https://a.example.com::userA",
+      } as any;
+      const aActive = {
+        id: "item2",
+        libraryItemId: "item2",
+        status: "downloading",
+        localFolderPath: "file:///downloads/item2/",
+        parts: [],
+        sessionKey: "https://a.example.com::userA",
+      } as any;
+      db.saveDownloadItem(aDone);
+      db.saveDownloadItem(aActive);
       useDownloadStore.setState({
-        completedDownloads: {
-          item1: {
-            id: "item1",
-            libraryItemId: "item1",
-            status: "completed",
-            localFolderPath: "file:///downloads/item1/",
-            parts: [],
-          } as any,
-        },
+        completedDownloads: { item1: aDone },
+        activeDownloads: { item2: aActive },
       });
 
       await useUserStore.getState().login(CONFIG_B, { id: "userB" });
 
-      // The previous account's downloads are gone (files aborted + store emptied).
-      expect(downloader.abortBookParts).toHaveBeenCalledWith("item1");
+      // In-flight download is stopped (would 401 under B) — but NOT deleted.
+      expect(downloader.abortBookParts).toHaveBeenCalledWith("item2");
+      // A's files were never deleted on the switch.
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      // A's rows survive on disk for re-adoption when the user returns.
+      const ids = db.getAllDownloads().map((d) => d.id).sort();
+      expect(ids).toEqual(["item1", "item2"]);
+      // The store now surfaces only account B's downloads (none here).
       expect(useDownloadStore.getState().completedDownloads).toEqual({});
       expect(useDownloadStore.getState().activeDownloads).toEqual({});
-      // Disk progress cache does not carry over to the new account.
-      expect(storageHelper.getMediaProgressCache()).toEqual({});
-      // Per-item reader/interaction keys are wiped.
+      // Per-item reader/interaction keys are still wiped (item ids collide on a
+      // shared server — unchanged behavior).
       expect(storage.getString("ebookCfi_item1")).toBeUndefined();
       expect(storage.getString("pdfPage_item1")).toBeUndefined();
       expect(storage.getString("last_interaction_item1")).toBeUndefined();
     });
 
-    it("keeps downloads, the progress cache, and reader keys on same-account re-login", async () => {
+    it("RE-ADOPTS the account's downloads on same-account re-login (no re-download)", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       storageHelper.setMediaProgressCache({ item1: { libraryItemId: "item1", currentTime: 10 } });
       storage.set("ebookCfi_item1", "epubcfi(/6/4!/4/2)");
@@ -485,19 +508,57 @@ describe("useUserStore", () => {
         status: "completed",
         localFolderPath: "file:///downloads/item1/",
         parts: [],
+        sessionKey: "https://a.example.com::userA",
       } as any;
+      db.saveDownloadItem(dl);
       useDownloadStore.setState({ completedDownloads: { item1: dl } });
 
       await useUserStore.getState().login(CONFIG_A, { id: "userA" });
 
       expect(downloader.abortBookParts).not.toHaveBeenCalled();
-      expect(useDownloadStore.getState().completedDownloads["item1"]).toBe(dl);
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      // Re-surfaced from its namespace (re-adopted from the DB, same data).
+      expect(useDownloadStore.getState().completedDownloads["item1"]).toMatchObject({
+        id: "item1",
+        status: "completed",
+      });
       expect(storageHelper.getMediaProgressCache()).toEqual({
         item1: { libraryItemId: "item1", currentTime: 10 },
       });
       expect(storage.getString("ebookCfi_item1")).toBe("epubcfi(/6/4!/4/2)");
       expect(storage.getString("pdfPage_item1")).toBe("12");
       expect(storage.getString("last_interaction_item1")).toBe("listen");
+    });
+
+    it("switch A→B→A retains BOTH accounts' downloads end-to-end (no re-download)", async () => {
+      // A's book and B's book both already on disk (previously downloaded).
+      db.saveDownloadItem({
+        id: "aBook", libraryItemId: "aBook", status: "completed", parts: [],
+        localFolderPath: "file:///downloads/aBook/", sessionKey: "https://a.example.com::userA",
+      } as any);
+      db.saveDownloadItem({
+        id: "bBook", libraryItemId: "bBook", status: "completed", parts: [],
+        localFolderPath: "file:///downloads/bBook/", sessionKey: "https://b.example.com::userB",
+      } as any);
+
+      // Start on A.
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      useDownloadStore.getState().loadDownloadsFromDb();
+      expect(Object.keys(useDownloadStore.getState().completedDownloads)).toEqual(["aBook"]);
+
+      // Switch A→B (real logout, then login to B).
+      await useUserStore.getState().logout();
+      await useUserStore.getState().login(CONFIG_B, { id: "userB" });
+      expect(Object.keys(useDownloadStore.getState().completedDownloads)).toEqual(["bBook"]);
+
+      // Switch B→A — A's download re-adopted from disk.
+      await useUserStore.getState().logout();
+      await useUserStore.getState().login(CONFIG_A, { id: "userA" });
+      expect(Object.keys(useDownloadStore.getState().completedDownloads)).toEqual(["aBook"]);
+
+      // Nothing was ever deleted; both rows survive.
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      expect(db.getAllDownloads().map((d) => d.id).sort()).toEqual(["aBook", "bBook"]);
     });
   });
 
@@ -528,31 +589,26 @@ describe("useUserStore", () => {
       expect(s.mediaProgress).toEqual({});
     });
 
-    it("removes all downloads and wipes reader keys", async () => {
+    it("stops surfacing downloads (aborts in-flight) but RETAINS files on disk, and wipes reader keys", async () => {
       useUserStore.setState({
         user: { id: "userA" },
         serverConnectionConfig: { address: "https://a.example.com", token: "tokA" },
       } as any);
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
       jest.mocked(api.post).mockResolvedValue({} as any);
+      const done = {
+        id: "item1", libraryItemId: "item1", status: "completed", parts: [],
+        localFolderPath: "file:///downloads/item1/", sessionKey: "https://a.example.com::userA",
+      } as any;
+      const active = {
+        id: "item2", libraryItemId: "item2", status: "downloading", parts: [],
+        localFolderPath: "file:///downloads/item2/", sessionKey: "https://a.example.com::userA",
+      } as any;
+      db.saveDownloadItem(done);
+      db.saveDownloadItem(active);
       useDownloadStore.setState({
-        completedDownloads: {
-          item1: {
-            id: "item1",
-            libraryItemId: "item1",
-            status: "completed",
-            localFolderPath: "file:///downloads/item1/",
-            parts: [],
-          } as any,
-        },
-        activeDownloads: {
-          item2: {
-            id: "item2",
-            libraryItemId: "item2",
-            status: "downloading",
-            localFolderPath: "file:///downloads/item2/",
-            parts: [],
-          } as any,
-        },
+        completedDownloads: { item1: done },
+        activeDownloads: { item2: active },
       });
       storage.set("ebookCfi_item1", "epubcfi(/6/4!/4/2)");
       storage.set("pdfPage_item1", "12");
@@ -560,11 +616,15 @@ describe("useUserStore", () => {
 
       await useUserStore.getState().logout();
 
-      // Both completed AND in-flight downloads are gone.
-      expect(downloader.abortBookParts).toHaveBeenCalledWith("item1");
+      // In-flight download is aborted (no dangling 401s)...
       expect(downloader.abortBookParts).toHaveBeenCalledWith("item2");
+      // ...the store stops surfacing everything...
       expect(useDownloadStore.getState().completedDownloads).toEqual({});
       expect(useDownloadStore.getState().activeDownloads).toEqual({});
+      // ...but the files + DB rows are RETAINED for re-adoption (a "Switch
+      // Server/User" is a switch, not a data wipe).
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      expect(db.getAllDownloads().map((d) => d.id).sort()).toEqual(["item1", "item2"]);
       // Per-item reader/interaction keys wiped.
       expect(storage.getString("ebookCfi_item1")).toBeUndefined();
       expect(storage.getString("pdfPage_item1")).toBeUndefined();
@@ -790,6 +850,26 @@ describe("useUserStore", () => {
       const res = await useUserStore.getState().updateServerAddress("https://proxy.example.com");
       expect(res.ok).toBe(false);
       expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
+    });
+  });
+
+  describe("per-item progress link (Link reading & listening)", () => {
+    it("persists the lock per item and reflects it via isProgressLinked", async () => {
+      expect(useUserStore.getState().isProgressLinked("book1")).toBe(false);
+
+      await useUserStore.getState().setProgressLinked("book1", true);
+      expect(useUserStore.getState().isProgressLinked("book1")).toBe(true);
+      // Written through to persisted settings (survives a reload).
+      expect(storageHelper.getUserSettings()?.linkedProgress?.book1).toBe(true);
+      // Scoped per item — a different book stays unlinked.
+      expect(useUserStore.getState().isProgressLinked("book2")).toBe(false);
+    });
+
+    it("unlinking removes the entry rather than storing a false (map stays small)", async () => {
+      await useUserStore.getState().setProgressLinked("book1", true);
+      await useUserStore.getState().setProgressLinked("book1", false);
+      expect(useUserStore.getState().isProgressLinked("book1")).toBe(false);
+      expect("book1" in (useUserStore.getState().settings.linkedProgress || {})).toBe(false);
     });
   });
 });

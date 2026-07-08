@@ -6,6 +6,7 @@ import {
   rmabAuthMode,
   getMe,
   createRequest,
+  cancelRequest,
   getPendingApprovalCount,
   clearRmabCaches,
   setRmabSessionExpiredHandler,
@@ -35,6 +36,14 @@ interface RmabState {
   sessionExpired: boolean;
   // Requests awaiting admin approval — drives the account-menu badge.
   pendingApprovalCount: number;
+  // PO4: for NON-admins, how many of the user's OWN requests newly became
+  // available (fulfilled) or newly failed since the last poll — the non-admin
+  // analogue of pendingApprovalCount. Accumulates across polls until a screen
+  // consumes it via clearMyRequestUpdates().
+  // TODO(screen): surface these on Requests/Discover (e.g. a "1 book ready"
+  // banner or badge) and call clearMyRequestUpdates() once shown. No screen
+  // reads this yet — it's store-only for now.
+  myRequestUpdates: { fulfilled: number; failed: number };
   connecting: boolean;
   connectError: string | null;
   // asin -> local request status ("pending" right after a request here, or
@@ -52,9 +61,22 @@ interface RmabState {
   markSessionExpired: () => void;
   disconnect: () => void;
   requestBook: (book: RmabBook) => Promise<{ ok: boolean; message?: string }>;
+  // Requester self-cancel: withdraw one of the user's OWN pending requests
+  // (PATCH /api/requests/:id {action:"cancel"}). Clears the optimistic chip for
+  // `asin` so discovery re-shows "Request", and pre-records the cancellation in
+  // the fulfillment-poll baseline so it isn't later surfaced as a "failed"
+  // request. Returns { ok:false, message } for graceful UI handling (403 = the
+  // server doesn't allow it; 400 = no longer cancellable).
+  cancelMyRequest: (requestId: string, asin?: string) => Promise<{ ok: boolean; message?: string }>;
   noteRequestStatus: (asin: string, status: string) => void;
   reconcileRequestedAsins: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
+  // PO4: non-admin fulfillment awareness. Polls listMyRequests(), diffs against
+  // a persisted status snapshot, and accumulates newly-fulfilled/newly-failed
+  // counts into myRequestUpdates. No-op for admins (they use pendingApprovalCount).
+  refreshMyRequestStatuses: () => Promise<void>;
+  // Reset the myRequestUpdates counters once a screen has surfaced them.
+  clearMyRequestUpdates: () => void;
 }
 
 // A fresh-session reset (connect / reconnect / disconnect) must also drop the
@@ -67,6 +89,36 @@ function clearPersistedRequestedAsins() {
   } catch {}
 }
 
+// --- PO4: fulfillment awareness for NON-admins --------------------------
+// Admins learn of activity through the pending-approval badge; non-admins get
+// nothing (refreshPendingCount 403s / returns 0 for them), so a request quietly
+// finishing (or failing) is invisible. refreshMyRequestStatuses diffs each poll
+// of listMyRequests() against a persisted per-request status snapshot and
+// surfaces how many of MY requests newly became available or newly failed.
+const MY_REQUEST_STATUS_KEY = "rmab_myRequestStatuses";
+const FULFILLED_STATUSES = new Set([
+  "available",
+  "completed",
+  "fulfilled",
+  "downloaded",
+  "imported",
+  "done",
+]);
+const FAILED_STATUSES = new Set(["failed", "error", "denied", "rejected", "cancelled"]);
+const normStatus = (s?: unknown) => (typeof s === "string" ? s.toLowerCase().trim() : "");
+const isFulfilled = (s?: unknown) => FULFILLED_STATUSES.has(normStatus(s));
+const isFailed = (s?: unknown) => FAILED_STATUSES.has(normStatus(s));
+
+// A fresh session must not diff a new account's requests against the previous
+// one's snapshot (nor keep a stale updates count) — drop the baseline on
+// connect / reconnect / disconnect.
+function clearPersistedMyRequestStatuses() {
+  try {
+    const { storage } = require("../utils/storage");
+    storage.remove(MY_REQUEST_STATUS_KEY);
+  } catch {}
+}
+
 export const useRmabStore = create<RmabState>((set, get) => ({
   configured: false,
   serverUrl: null,
@@ -76,6 +128,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   authProvider: null,
   sessionExpired: false,
   pendingApprovalCount: 0,
+  myRequestUpdates: { fulfilled: 0, failed: 0 },
   connecting: false,
   connectError: null,
   requestedAsins: {},
@@ -116,6 +169,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         requestedAsins,
       });
       get().refreshPendingCount();
+      // Non-admin analogue of the pending badge: seed/diff the request-status
+      // snapshot so fulfilled/failed requests surface (no-op for admins).
+      get().refreshMyRequestStatuses();
       // Drop chips for requests the server has since cleared (best-effort).
       get().reconcileRequestedAsins();
     }
@@ -162,6 +218,9 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       // authenticate (clock skew, revoked session) fails HERE, not later.
       await getMe();
       clearPersistedRequestedAsins();
+      // Fresh session — don't diff a new account's requests against the old
+      // baseline, and drop any un-consumed updates count.
+      clearPersistedMyRequestStatuses();
       set({
         configured: true,
         serverUrl: cfg.url,
@@ -171,6 +230,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         authProvider: provider,
         sessionExpired: false,
         connecting: false,
+        myRequestUpdates: { fulfilled: 0, failed: 0 },
         // Fresh session — optimistic "Requested" chips from a previous
         // server/user don't apply here.
         requestedAsins: {},
@@ -192,6 +252,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         authProvider: null,
         sessionExpired: false,
         pendingApprovalCount: 0,
+        myRequestUpdates: { fulfilled: 0, failed: 0 },
         requestedAsins: {},
         connectError:
           status === 401 || status === 400 || status === 403
@@ -221,6 +282,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       const full: RmabConfig = { ...withProvider, user };
       writeRmabConfig(full);
       clearPersistedRequestedAsins();
+      clearPersistedMyRequestStatuses();
       set({
         configured: true,
         serverUrl: full.url,
@@ -230,6 +292,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         authProvider: "oidc",
         sessionExpired: false,
         connecting: false,
+        myRequestUpdates: { fulfilled: 0, failed: 0 },
         requestedAsins: {},
       });
       get().refreshPendingCount();
@@ -259,6 +322,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
         authProvider: null,
         sessionExpired: false,
         pendingApprovalCount: 0,
+        myRequestUpdates: { fulfilled: 0, failed: 0 },
         requestedAsins: {},
         connectError: "SSO sign-in failed — please try again.",
       });
@@ -277,15 +341,17 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     clearRmabCaches();
     writeRmabConfig(null);
     clearPersistedRequestedAsins();
+    clearPersistedMyRequestStatuses();
     set({
       configured: false,
       serverUrl: null,
       username: null,
       authMode: null,
-      isAdmin: false,
       authProvider: null,
+      isAdmin: false,
       sessionExpired: false,
       pendingApprovalCount: 0,
+      myRequestUpdates: { fulfilled: 0, failed: 0 },
       connectError: null,
       requestedAsins: {},
     });
@@ -305,6 +371,69 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     } catch {
       // Badge is best-effort; keep the last known count.
     }
+  },
+
+  refreshMyRequestStatuses: async () => {
+    const { configured, isAdmin } = get();
+    // Admins already see activity via pendingApprovalCount; this is the
+    // non-admin gap-filler. (Any authMode works — listMyRequests is allowlisted
+    // for API tokens too.)
+    if (!configured || isAdmin) return;
+    try {
+      const { listMyRequests } = require("../utils/rmab");
+      const requests = await listMyRequests();
+      // Key by request id (stable across status changes), falling back to the
+      // book asin when the server omits an id.
+      const current: Record<string, string> = {};
+      for (const r of requests || []) {
+        const key =
+          r?.id != null ? String(r.id) : r?.audiobook?.asin || r?.asin || null;
+        if (key) current[key] = normStatus(r?.status);
+      }
+      const { storage } = require("../utils/storage");
+      const rawPrev = storage.getString(MY_REQUEST_STATUS_KEY);
+      // First observation just seeds the baseline — without this every
+      // pre-existing fulfilled/failed request would surface as "new" on the
+      // first poll after connecting.
+      if (rawPrev == null) {
+        storage.set(MY_REQUEST_STATUS_KEY, JSON.stringify(current));
+        return;
+      }
+      let prev: Record<string, string> = {};
+      try {
+        const p = JSON.parse(rawPrev);
+        if (p && typeof p === "object" && !Array.isArray(p)) prev = p;
+      } catch {}
+      let fulfilled = 0;
+      let failed = 0;
+      for (const [key, status] of Object.entries(current)) {
+        const before = prev[key];
+        if (before === status) continue; // unchanged since last poll
+        // Only count a genuine TRANSITION into the state, so a request already
+        // fulfilled/failed at the last snapshot isn't recounted.
+        if (isFulfilled(status) && !isFulfilled(before)) fulfilled++;
+        else if (isFailed(status) && !isFailed(before)) failed++;
+      }
+      // Persist the new baseline even when nothing was newly countable, so a
+      // pending→approved move is recorded and can't re-trigger later.
+      storage.set(MY_REQUEST_STATUS_KEY, JSON.stringify(current));
+      if (fulfilled || failed) {
+        set((s) => ({
+          myRequestUpdates: {
+            fulfilled: s.myRequestUpdates.fulfilled + fulfilled,
+            failed: s.myRequestUpdates.failed + failed,
+          },
+        }));
+      }
+    } catch {
+      // Offline / server error — leave the last baseline and counts intact;
+      // the next successful poll picks up from there.
+    }
+  },
+
+  clearMyRequestUpdates: () => {
+    const u = get().myRequestUpdates;
+    if (u.fulfilled || u.failed) set({ myRequestUpdates: { fulfilled: 0, failed: 0 } });
   },
 
   requestBook: async (book) => {
@@ -333,6 +462,68 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       const detail = err || e?.response?.data?.message || e?.message;
       return { ok: false, message: detail ? `Request failed: ${detail}` : "Request failed" };
     }
+  },
+
+  cancelMyRequest: async (requestId, asin) => {
+    try {
+      await cancelRequest(requestId);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (!e?.response) {
+        return { ok: false, message: "You're offline — try again when connected" };
+      }
+      // The DELETE route is admin-only; if THIS server also gates the cancel
+      // route (or the request isn't the caller's), it 403s — say so plainly.
+      if (status === 403) {
+        return { ok: false, message: "This server doesn't allow cancelling your own requests" };
+      }
+      // Status moved past the cancellable window between render and tap.
+      if (status === 400) {
+        const detail = e?.response?.data?.message;
+        return { ok: false, message: detail || "This request can no longer be cancelled" };
+      }
+      if (status === 401) {
+        return { ok: false, message: "Session expired — reconnect ReadMeABook in Settings" };
+      }
+      const detail = e?.response?.data?.message || e?.response?.data?.error || e?.message;
+      return { ok: false, message: detail ? `Couldn't cancel: ${detail}` : "Couldn't cancel the request" };
+    }
+    // Success: drop the optimistic "Requested" chip for this book so the
+    // Discover/search UI re-shows a "Request" button. Functional set + persist,
+    // mirroring noteRequestStatus; a no-op (asin not present) returns the same
+    // state ref so subscribers don't needlessly re-render.
+    if (asin && typeof asin === "string") {
+      let merged: Record<string, string> | null = null;
+      set((state) => {
+        if (!Object.prototype.hasOwnProperty.call(state.requestedAsins, asin)) return state;
+        const next = { ...state.requestedAsins };
+        delete next[asin];
+        merged = next;
+        return { requestedAsins: next };
+      });
+      if (merged) {
+        try {
+          const { storage } = require("../utils/storage");
+          storage.set("rmab_requestedAsins", JSON.stringify(merged));
+        } catch {}
+      }
+    }
+    // Pre-empt the non-admin fulfillment poller: a cancelled request reads as a
+    // FAILED_STATUS, so without recording it in the baseline the next
+    // refreshMyRequestStatuses() would diff (pending → cancelled) and wrongly
+    // nag the user that their OWN just-cancelled request "failed".
+    try {
+      const { storage } = require("../utils/storage");
+      const raw = storage.getString(MY_REQUEST_STATUS_KEY);
+      if (raw != null) {
+        const snap = JSON.parse(raw);
+        if (snap && typeof snap === "object" && !Array.isArray(snap)) {
+          snap[String(requestId)] = "cancelled";
+          storage.set(MY_REQUEST_STATUS_KEY, JSON.stringify(snap));
+        }
+      }
+    } catch {}
+    return { ok: true };
   },
 
   // Functional set: concurrent requestBook calls each merge into the latest

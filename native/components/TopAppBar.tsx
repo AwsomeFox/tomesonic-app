@@ -366,7 +366,7 @@ export default function TopAppBar({
               borderColor: colors.surface,
             }}
           >
-            <Text style={{ color: colors.onError || "#fff", fontSize: 10, fontWeight: "700" }}>
+            <Text style={{ color: colors.onError, fontSize: 10, fontWeight: "700" }}>
               {pendingApprovals > 9 ? "9+" : pendingApprovals}
             </Text>
           </View>
@@ -467,7 +467,7 @@ export default function TopAppBar({
                       justifyContent: "center",
                     }}
                   >
-                    <Text style={{ color: colors.onError || "#fff", fontSize: 11, fontWeight: "700" }}>
+                    <Text style={{ color: colors.onError, fontSize: 11, fontWeight: "700" }}>
                       {pendingApprovals > 9 ? "9+" : pendingApprovals}
                     </Text>
                   </View>

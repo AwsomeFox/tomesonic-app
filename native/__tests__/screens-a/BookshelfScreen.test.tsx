@@ -100,7 +100,7 @@ jest.mock("../../utils/progressSync", () => ({
 }));
 // Controllable connectivity per test.
 jest.mock("../../hooks/useNetworkStatus", () => {
-  const useNetworkStatus = jest.fn(() => ({ isConnected: true, isInternetReachable: true }));
+  const useNetworkStatus = jest.fn(() => ({ isConnected: true, isInternetReachable: true, isOffline: false }));
   return { useNetworkStatus, default: useNetworkStatus };
 });
 
@@ -189,7 +189,7 @@ beforeEach(() => {
   usePlaybackStore.setState(initialPlayback, true);
   useUiStore.setState(initialUi, true);
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
-  mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true });
+  mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true, isOffline: false });
   // Series-list revalidation fetch (parallel effect) — empty by default.
   mockedGet.mockResolvedValue({ data: { results: [] } });
   mockedPost.mockResolvedValue({ data: { libraryItems: [] } });
@@ -225,7 +225,7 @@ describe("BookshelfScreen offline", () => {
     } as any);
 
   it("renders the downloaded list and opens ebook-only rows in the Reader", async () => {
-    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
     seedOnline(baseShelves);
     seedDownloads();
     const navigation = makeNavigation();
@@ -244,7 +244,7 @@ describe("BookshelfScreen offline", () => {
   });
 
   it("starts playback for downloaded audio rows", async () => {
-    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
     seedOnline(baseShelves);
     seedDownloads();
     const startPlayback = jest.fn().mockResolvedValue(true);
@@ -258,7 +258,7 @@ describe("BookshelfScreen offline", () => {
   });
 
   it("shows the offline empty state when nothing is downloaded", async () => {
-    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
     seedOnline(baseShelves);
     useDownloadStore.setState({ downloadsLoaded: true } as any);
     const navigation = makeNavigation();
@@ -267,7 +267,7 @@ describe("BookshelfScreen offline", () => {
   });
 
   it("holds a blank placeholder until downloads hydrate — no premature empty state", async () => {
-    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
     seedOnline(baseShelves);
     // downloadsLoaded stays false: the DB hydration hasn't landed yet.
     const navigation = makeNavigation();
@@ -284,14 +284,14 @@ describe("BookshelfScreen offline", () => {
   });
 
   it("coming back online flushes queued syncs and refreshes the shelves", async () => {
-    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false });
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
     seedOnline(baseShelves);
     const loadShelves = useLibraryStore.getState().loadPersonalizedShelves as jest.Mock;
     const navigation = makeNavigation();
     await render(<BookshelfScreen navigation={navigation} />);
     await screen.findByText("Available Offline");
 
-    mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true });
+    mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true, isOffline: false });
     await screen.rerender(<BookshelfScreen navigation={navigation} />);
 
     await waitFor(() => {
@@ -313,6 +313,33 @@ describe("BookshelfScreen online", () => {
     expect(screen.getAllByText("Ebook Only Book").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByLabelText("Author: Alice Author")).toBeTruthy();
     expect(screen.getByLabelText("Series: Cool Series")).toBeTruthy();
+  });
+
+  it("shows a Latest Episodes entry point for a podcast library and navigates to it", async () => {
+    seedOnline(baseShelves);
+    // The current library is a podcast library — the recent-episodes screen is
+    // otherwise unreachable, so an entry point must appear.
+    useLibraryStore.setState({
+      libraries: [{ id: "lib1", name: "Pods", mediaType: "podcast" }],
+    } as any);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    const entry = await screen.findByLabelText("Latest Episodes");
+    await fireEvent.press(entry);
+    expect(navigation.navigate).toHaveBeenCalledWith("LatestEpisodes");
+  });
+
+  it("hides the Latest Episodes entry point for a non-podcast (book) library", async () => {
+    seedOnline(baseShelves);
+    useLibraryStore.setState({
+      libraries: [{ id: "lib1", name: "Books", mediaType: "book" }],
+    } as any);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.queryByLabelText("Latest Episodes")).toBeNull();
   });
 
   it("book card tap navigates to ItemDetail", async () => {

@@ -10,7 +10,7 @@ import { showAppDialog } from "../store/useDialogStore";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import { api } from "../utils/api";
-import { queueEbookProgressPatch } from "../utils/progressSync";
+import { queueEbookProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { FOLIATE_BUNDLE } from "../utils/foliateBundle";
@@ -470,6 +470,13 @@ export default function ReaderScreen({ route, navigation }: any) {
           // server (and Storyteller/other devices) when connectivity returns.
           queueEbookProgressPatch(itemId, cfi, fraction, fraction >= 0.99);
         });
+        // LOCK: the reader for this item just flushed its final reading
+        // position — if the user linked its progresses, pull the AUDIO up to
+        // this reading fraction (furthest-wins, fraction-only; see
+        // reconcileLinkedProgress). No-op unless locked.
+        try {
+          reconcileLinkedProgress(itemId, { ebookFraction: fraction });
+        } catch {}
         // The snapshot belongs to THIS itemId. Clearing it stops an in-place
         // book change from flushing book A's cfi onto book B's server record
         // (which could even one-way auto-finish B).
@@ -486,6 +493,11 @@ export default function ReaderScreen({ route, navigation }: any) {
             ...(fraction >= 0.99 ? { isFinished: true } : {}),
           })
           .catch(() => queueEbookProgressPatch(itemId, String(page), fraction, fraction >= 0.99));
+        // LOCK: reconcile the audio up to this reading fraction when linked
+        // (fraction-only, furthest-wins). No-op unless locked.
+        try {
+          reconcileLinkedProgress(itemId, { ebookFraction: fraction });
+        } catch {}
         latestPdfProgressRef.current = null;
       }
     };

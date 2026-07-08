@@ -8,6 +8,7 @@ import axios from "axios";
 import {
   exchangeLoginToken,
   deleteRequest,
+  cancelRequest,
   approveRequest,
   resolveRmabUrl,
   getBookdatePreferences,
@@ -154,6 +155,25 @@ describe("OIDC / SSO helpers", () => {
     // not "OIDC off", so the SSO button isn't hidden on a blip.
     mockedGet.mockRejectedValueOnce(new Error("network"));
     await expect(getRmabAuthProviders("https://rmab.test")).resolves.toBeNull();
+  });
+
+  it("recognizes OBJECT-form providers ({type} or {id}) and surfaces localLoginDisabled", async () => {
+    // providers as objects tagged by `type`.
+    mockedGet.mockResolvedValueOnce({
+      data: { providers: [{ type: "oidc" }], localLoginDisabled: true },
+    });
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({
+      oidcEnabled: true,
+      oidcProviderName: null,
+      localLoginDisabled: true,
+    });
+    // ...or tagged by `id`.
+    mockedGet.mockResolvedValueOnce({ data: { providers: [{ id: "oidc" }] } });
+    await expect(getRmabAuthProviders("https://rmab.test")).resolves.toEqual({
+      oidcEnabled: true,
+      oidcProviderName: null,
+      localLoginDisabled: false,
+    });
   });
 });
 
@@ -463,6 +483,18 @@ describe("endpoint wrappers", () => {
     await deleteRequest("req9");
     expect(mockedRequest).toHaveBeenCalledWith(
       expect.objectContaining({ method: "delete", url: "https://rmab.test/api/requests/req9" })
+    );
+  });
+
+  it("cancelRequest PATCHes the request with the cancel action (owner-permitted route, not admin DELETE)", async () => {
+    mockedRequest.mockResolvedValue({ data: { success: true, message: "Request cancelled successfully" } });
+    await cancelRequest("req9");
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "patch",
+        url: "https://rmab.test/api/requests/req9",
+        data: { action: "cancel" },
+      })
     );
   });
 

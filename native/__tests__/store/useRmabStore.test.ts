@@ -6,6 +6,7 @@ jest.mock("../../utils/rmab", () => ({
   rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
   getMe: jest.fn(),
   createRequest: jest.fn(),
+  cancelRequest: jest.fn(),
   getPendingApprovalCount: jest.fn().mockResolvedValue(0),
   listMyRequests: jest.fn().mockResolvedValue([]),
   clearRmabCaches: jest.fn(),
@@ -19,6 +20,7 @@ import {
   writeRmabConfig,
   getMe,
   createRequest,
+  cancelRequest,
 } from "../../utils/rmab";
 // Real in-memory MMKV (see jest.setup.ts) — the store lazy-requires this same
 // module to persist requested-state.
@@ -30,6 +32,7 @@ const mockedRead = readRmabConfig as jest.Mock;
 const mockedWrite = writeRmabConfig as jest.Mock;
 const mockedMe = getMe as jest.Mock;
 const mockedCreate = createRequest as jest.Mock;
+const mockedCancel = cancelRequest as jest.Mock;
 
 const CFG = {
   url: "https://rmab.test",
@@ -102,6 +105,13 @@ describe("connect", () => {
     expect(ok).toBe(false);
     expect(mockedExchange).not.toHaveBeenCalled();
     expect(useRmabStore.getState().connectError).toBe("Paste a login URL, or add an API token");
+  });
+
+  it("empty server URL (with a non-URL token) asks for the address, no network call", async () => {
+    const ok = await useRmabStore.getState().connect("", "sometoken");
+    expect(ok).toBe(false);
+    expect(mockedExchange).not.toHaveBeenCalled();
+    expect(useRmabStore.getState().connectError).toBe("Enter your server's address");
   });
 
   it("an rmab_ API token connects in limited apiToken mode", async () => {
@@ -238,6 +248,42 @@ describe("connectWithOidc", () => {
     expect(s.configured).toBe(true);
     expect(s.serverUrl).toBe("https://rmab.test");
     expect(s.sessionExpired).toBe(true);
+  });
+
+  it("wipes fully when an in-place re-login is auth-REJECTED (403) despite a prior connection", async () => {
+    // Distinct from the transient case (which restores) and the no-prior case
+    // (which also wipes): here a connection EXISTS but the fresh JWT is refused,
+    // so the session is genuinely over — nothing may survive, config wiped last.
+    const prev = {
+      url: "https://rmab.test",
+      accessToken: "old",
+      refreshToken: "oldr",
+      authProvider: "oidc",
+      user: { id: "u1", username: "tony" },
+    };
+    mockedRead.mockReturnValue(prev);
+    useRmabStore.setState({
+      configured: true,
+      serverUrl: "https://rmab.test",
+      username: "tony",
+      authMode: "jwt",
+      authProvider: "oidc",
+      isAdmin: true,
+      sessionExpired: true,
+    } as any);
+    mockedMe.mockRejectedValue({ response: { status: 403 } });
+    const ok = await useRmabStore
+      .getState()
+      .connectWithOidc({ url: "https://rmab.test", accessToken: "new", refreshToken: "newr", user: null } as any);
+    expect(ok).toBe(false);
+    // No restore — the LAST write is the wipe.
+    expect(mockedWrite).toHaveBeenLastCalledWith(null);
+    const s = useRmabStore.getState();
+    expect(s.configured).toBe(false);
+    expect(s.serverUrl).toBeNull();
+    expect(s.username).toBeNull();
+    expect(s.isAdmin).toBe(false);
+    expect(s.connectError).toBeTruthy();
   });
 });
 
@@ -392,6 +438,77 @@ describe("requestBook", () => {
   });
 });
 
+describe("cancelMyRequest (requester self-cancel)", () => {
+  beforeEach(() => {
+    storage.remove("rmab_myRequestStatuses");
+    mockedCancel.mockReset();
+  });
+
+  it("cancels, clears the requestedAsins chip, and persists the drop", async () => {
+    mockedCancel.mockResolvedValue(undefined);
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { B01: "pending", B02: "pending" },
+    } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({ ok: true });
+    expect(mockedCancel).toHaveBeenCalledWith("r1");
+    // B01's chip is gone (discovery re-shows "Request"); B02 untouched.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B02: "pending" });
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ B02: "pending" });
+  });
+
+  it("records the cancellation in the fulfillment baseline so the poller won't call it 'failed'", async () => {
+    mockedCancel.mockResolvedValue(undefined);
+    // A pending baseline for this request already exists.
+    storage.set("rmab_myRequestStatuses", JSON.stringify({ r1: "pending" }));
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+
+    await useRmabStore.getState().cancelMyRequest("r1", "B01");
+    // Baseline now reads cancelled, so the next diff sees no pending→failed jump.
+    expect(JSON.parse(storage.getString("rmab_myRequestStatuses")!)).toEqual({ r1: "cancelled" });
+
+    const { listMyRequests } = require("../../utils/rmab");
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "r1", status: "cancelled" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
+
+  it("a 403 surfaces a 'server doesn't allow it' message and leaves the chip intact (revert-safe)", async () => {
+    mockedCancel.mockRejectedValue({ response: { status: 403 } });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({
+      ok: false,
+      message: "This server doesn't allow cancelling your own requests",
+    });
+    // No local mutation on failure — the caller reverts its own row from this.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("a 400 (no longer cancellable) surfaces the server's detail without touching state", async () => {
+    mockedCancel.mockRejectedValue({
+      response: { status: 400, data: { message: "Cannot cancel request with status: available" } },
+    });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({ ok: false, message: "Cannot cancel request with status: available" });
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("an offline failure reads as offline", async () => {
+    mockedCancel.mockRejectedValue(new Error("Network Error"));
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+    expect(res).toEqual({ ok: false, message: "You're offline — try again when connected" });
+  });
+});
+
 describe("requested-state persistence (survives restarts)", () => {
   it("noteRequestStatus mirrors the full map to storage", () => {
     useRmabStore.getState().noteRequestStatus("B01", "pending");
@@ -516,5 +633,97 @@ describe("prototype-pollution hardening", () => {
     expect(map.B01).toBe("pending");
     expect(map.B02).toBeUndefined(); // non-string dropped
     expect(({} as any).polluted).toBeUndefined();
+  });
+});
+
+// PO4: non-admins never learned a request was fulfilled (refreshPendingCount
+// returns 0 for them). refreshMyRequestStatuses diffs listMyRequests() against a
+// persisted status snapshot and surfaces newly-fulfilled / newly-failed counts.
+describe("refreshMyRequestStatuses (non-admin fulfillment awareness)", () => {
+  const { listMyRequests } = require("../../utils/rmab");
+
+  beforeEach(() => {
+    storage.remove("rmab_myRequestStatuses");
+    (listMyRequests as jest.Mock).mockReset();
+  });
+
+  it("seeds a baseline on the first poll WITHOUT reporting pre-existing states", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([
+      { id: "1", status: "available" },
+      { id: "2", status: "pending" },
+    ]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    // Nothing "new" on the first observation.
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+    expect(JSON.parse(storage.getString("rmab_myRequestStatuses")!)).toEqual({
+      "1": "available",
+      "2": "pending",
+    });
+  });
+
+  it("counts a newly-fulfilled and a newly-failed request, and won't double-count", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([
+      { id: "1", status: "pending" },
+      { id: "2", status: "pending" },
+    ]);
+    await useRmabStore.getState().refreshMyRequestStatuses(); // baseline
+
+    (listMyRequests as jest.Mock).mockResolvedValue([
+      { id: "1", status: "available" }, // fulfilled
+      { id: "2", status: "failed" }, // failed
+    ]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 1 });
+
+    // A repeat poll with the SAME states adds nothing (transition-only counting).
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 1 });
+  });
+
+  it("accumulates across polls and clearMyRequestUpdates resets it", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "pending" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses(); // baseline
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "completed" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
+
+    useRmabStore.getState().clearMyRequestUpdates();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
+
+  it("keys by book asin when the server omits a request id", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ audiobook: { asin: "B01" }, status: "pending" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    (listMyRequests as jest.Mock).mockResolvedValue([{ audiobook: { asin: "B01" }, status: "available" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
+  });
+
+  it("is a no-op for admins (they use pendingApprovalCount) and when unconfigured", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: true } as any);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(listMyRequests).not.toHaveBeenCalled();
+
+    useRmabStore.setState({ configured: false, isAdmin: false } as any);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(listMyRequests).not.toHaveBeenCalled();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
+
+  it("keeps the baseline and counts intact when the fetch fails (self-corrects later)", async () => {
+    useRmabStore.setState({
+      configured: true,
+      isAdmin: false,
+      myRequestUpdates: { fulfilled: 1, failed: 0 },
+    } as any);
+    storage.set("rmab_myRequestStatuses", JSON.stringify({ "1": "pending" }));
+    (listMyRequests as jest.Mock).mockRejectedValue(new Error("offline"));
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
+    expect(JSON.parse(storage.getString("rmab_myRequestStatuses")!)).toEqual({ "1": "pending" });
   });
 });

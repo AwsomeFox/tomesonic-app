@@ -51,7 +51,13 @@ export default function BookshelfScreen({ navigation }: any) {
   const { serverConnectionConfig } = useUserStore();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
-  const { personalizedShelves, loadPersonalizedShelves, currentLibraryId, loadLibraries, shelvesLoadError } = useLibraryStore();
+  const { personalizedShelves, loadPersonalizedShelves, currentLibraryId, loadLibraries, shelvesLoadError, libraries } = useLibraryStore();
+  // A podcast library gets a "Latest Episodes" entry point (the recent-episodes
+  // screen is otherwise unreachable — nothing else navigates to it).
+  const isPodcastLibrary = React.useMemo(
+    () => libraries.some((l: any) => l.id === currentLibraryId && l.mediaType === "podcast"),
+    [libraries, currentLibraryId]
+  );
   // Continue Reading is cached per library (stale-while-revalidate, like the
   // shelves) so it renders on the first frame instead of popping in after the
   // per-item fetches finish.
@@ -73,7 +79,11 @@ export default function BookshelfScreen({ navigation }: any) {
   // MMKV cache, so the `shelves.length === 0` half of the gate skips it.
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const { isConnected } = useNetworkStatus();
+  // `isOffline` is the derived, debounced "effectively offline" signal (also
+  // true for a captive portal / reachable-Wi-Fi-but-unreachable-server), which
+  // the whole-screen offline gating below relies on so those cases actually
+  // show the downloaded library instead of hanging on failed fetches.
+  const { isOffline } = useNetworkStatus();
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const downloadsLoaded = useDownloadStore((s) => s.downloadsLoaded);
@@ -178,14 +188,14 @@ export default function BookshelfScreen({ navigation }: any) {
   // so the transition back is seamless (no manual pull-to-refresh needed).
   const wasOffline = React.useRef(false);
   useEffect(() => {
-    if (!isConnected) {
+    if (isOffline) {
       wasOffline.current = true;
     } else if (wasOffline.current) {
       wasOffline.current = false;
       flushPendingSyncs().catch(() => {});
       onRefresh();
     }
-  }, [isConnected]);
+  }, [isOffline]);
 
   // Library switch: swap Continue Reading to the new library's cache right
   // away (matches how the store swaps the shelves cache).
@@ -680,8 +690,8 @@ export default function BookshelfScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
-      <TopAppBar navigation={navigation} hideSearch={!isConnected} />
-      {!isConnected ? (
+      <TopAppBar navigation={navigation} hideSearch={isOffline} />
+      {isOffline ? (
         // Offline: the server is unreachable, so show the on-device library.
         // Covers come from the locally-downloaded cover file, playback falls
         // back to the offline local-session path automatically.
@@ -783,6 +793,51 @@ export default function BookshelfScreen({ navigation }: any) {
             />
           }
         >
+          {/* Podcast libraries: entry point to the recent-episodes screen,
+              which nothing else navigates to. Gated to podcast libraries so a
+              book library never shows a dead "Latest Episodes" affordance. */}
+          {isPodcastLibrary ? (
+            <Pressable
+              onPress={() => navigation.navigate("LatestEpisodes")}
+              android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
+              accessibilityRole="button"
+              accessibilityLabel="Latest Episodes"
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginHorizontal: 16,
+                marginBottom: 8,
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                borderRadius: 20,
+                overflow: "hidden",
+                backgroundColor: colors.secondaryContainer,
+              }}
+            >
+              <View
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  backgroundColor: withAlpha(colors.onSecondaryContainer, 0.12),
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginRight: 14,
+                }}
+              >
+                <Icon name="podcast" size={22} color={colors.onSecondaryContainer} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.onSecondaryContainer, fontSize: 16, fontWeight: "700" }}>
+                  Latest Episodes
+                </Text>
+                <Text style={{ color: colors.onSecondaryContainer, fontSize: 13, marginTop: 2, opacity: 0.8 }}>
+                  Recent episodes across this library's podcasts
+                </Text>
+              </View>
+              <Icon name="chevron-right" size={24} color={colors.onSecondaryContainer} />
+            </Pressable>
+          ) : null}
           {/* Loaded but nothing to shelve (fresh/empty library): a real empty
               state instead of a blank scroll area. RefreshControl stays live
               (flexGrow centers this within the scrollable viewport). */}

@@ -30,9 +30,25 @@ export default function LatestEpisodesScreen({ navigation }: any) {
   // double-taps can't start two sessions.
   const [startingId, setStartingId] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  // Episode list filter/sort — All / Unplayed / In-Progress against the shared
+  // per-episode progress map, plus a newest↔oldest toggle.
+  const [episodeFilter, setEpisodeFilter] = useState<"all" | "unplayed" | "in-progress">("all");
+  const [episodeSort, setEpisodeSort] = useState<"newest" | "oldest">("newest");
 
   const playEpisode = async (episode: any) => {
     if (!episode?.libraryItemId || !episode?.id || startingId) return;
+    // Already the loaded session's episode: resume/expand instead of churning a
+    // fresh /play (server session churn + a possible backward jump to the
+    // last-synced position). Mirrors ItemDetail's playEpisode short-circuit.
+    const st = usePlaybackStore.getState();
+    if (
+      st.currentSession?.libraryItemId === episode.libraryItemId &&
+      st.currentSession?.episodeId === episode.id
+    ) {
+      if (!st.isPlaying) st.play?.().catch(() => {});
+      st.setPlayerExpanded?.(true);
+      return;
+    }
     setStartingId(episode.id);
     try {
       await startPlayback(episode.libraryItemId, episode.id);
@@ -142,6 +158,69 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     const minutes = Math.floor((seconds % 3600) / 60);
     if (hours > 0) return `${hours}h ${minutes}m`;
     return `${minutes}m`;
+  };
+
+  // Apply the filter/sort to the fetched episodes. Progress lives in the shared
+  // map keyed `${libraryItemId}-${episode.id}` (same source the rows read).
+  const visibleEpisodes = React.useMemo(() => {
+    const decorated = episodes.map((ep: any) => {
+      const p = progressMap[`${ep.libraryItemId}-${ep.id}`];
+      const finished = !!p?.isFinished;
+      const fraction = Math.max(0, Math.min(1, Number(p?.progress || 0)));
+      return { ep, finished, fraction };
+    });
+    const filtered = decorated.filter(({ finished, fraction }) => {
+      if (episodeFilter === "unplayed") return !finished && fraction === 0;
+      if (episodeFilter === "in-progress") return !finished && fraction > 0;
+      return true;
+    });
+    const ms = (ep: any) => {
+      const t = ep?.pubDate ? new Date(ep.pubDate).getTime() : NaN;
+      return Number.isFinite(t) ? t : 0;
+    };
+    filtered.sort((a, b) =>
+      episodeSort === "newest" ? ms(b.ep) - ms(a.ep) : ms(a.ep) - ms(b.ep)
+    );
+    return filtered.map((d) => d.ep);
+  }, [episodes, progressMap, episodeFilter, episodeSort]);
+
+  const FilterChip = ({
+    label,
+    value,
+  }: {
+    label: string;
+    value: "all" | "unplayed" | "in-progress";
+  }) => {
+    const active = episodeFilter === value;
+    return (
+      <Pressable
+        onPress={() => setEpisodeFilter(value)}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        accessibilityLabel={`Filter: ${label}`}
+        style={{
+          paddingHorizontal: 14,
+          height: 34,
+          borderRadius: 17,
+          alignItems: "center",
+          justifyContent: "center",
+          marginRight: 8,
+          backgroundColor: active ? colors.secondaryContainer : "transparent",
+          borderWidth: 1,
+          borderColor: active ? colors.secondaryContainer : colors.outlineVariant,
+        }}
+      >
+        <Text
+          style={{
+            color: active ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+            fontSize: 13,
+            fontWeight: "600",
+          }}
+        >
+          {label}
+        </Text>
+      </Pressable>
+    );
   };
 
   const renderEpisodeRow = (episode: any, index: number) => {
@@ -405,7 +484,45 @@ export default function LatestEpisodesScreen({ navigation }: any) {
             </Text>
           </View>
 
-          {episodes.map((episode, index) => renderEpisodeRow(episode, index))}
+          {/* Filter (All / Unplayed / In-Progress) + newest↔oldest sort. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8, alignItems: "center" }}
+          >
+            <FilterChip label="All" value="all" />
+            <FilterChip label="Unplayed" value="unplayed" />
+            <FilterChip label="In-Progress" value="in-progress" />
+            <Pressable
+              onPress={() => setEpisodeSort((s) => (s === "newest" ? "oldest" : "newest"))}
+              accessibilityRole="button"
+              accessibilityLabel={episodeSort === "newest" ? "Sort oldest first" : "Sort newest first"}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                paddingHorizontal: 14,
+                height: 34,
+                borderRadius: 17,
+                marginLeft: 4,
+                backgroundColor: "transparent",
+                borderWidth: 1,
+                borderColor: colors.outlineVariant,
+              }}
+            >
+              <Icon name="sort" size={16} color={colors.onSurfaceVariant} style={{ marginRight: 6 }} />
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600" }}>
+                {episodeSort === "newest" ? "Newest" : "Oldest"}
+              </Text>
+            </Pressable>
+          </ScrollView>
+
+          {visibleEpisodes.length === 0 ? (
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", paddingVertical: 40, paddingHorizontal: 32 }}>
+              No episodes match this filter.
+            </Text>
+          ) : (
+            visibleEpisodes.map((episode, index) => renderEpisodeRow(episode, index))
+          )}
         </ScrollView>
       )}
     </SafeAreaView>

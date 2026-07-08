@@ -1,8 +1,8 @@
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-index 5a1b2bf..9f41d74 100644
+index 5a1b2bf..84f8b59 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-@@ -14,7 +14,11 @@ open class AudioItem(
+@@ -14,7 +14,18 @@ open class AudioItem(
      open val artwork: String? = null,
      open val duration: Long? = null,
      open val options: AudioItemOptions? = null,
@@ -11,11 +11,18 @@ index 5a1b2bf..9f41d74 100644
 +    // Chapter-as-queue support: when set, the underlying file is clipped to this
 +    // window so one physical audio file can back many chapter queue items.
 +    open val clipStartMs: Long? = null,
-+    open val clipEndMs: Long? = null
++    open val clipEndMs: Long? = null,
++    // A LOCAL cover file (file:// or bare path) used ONLY to inline artworkData
++    // bytes for surfaces that can't resolve a URI (Android Auto compact card /
++    // queue rows). Kept SEPARATE from `artwork` so the full now-playing card's
++    // artworkUri can stay a car-loadable http(s) URL — the car process cannot
++    // read this app's private storage — while the compact card still gets
++    // bytes. Falls back to `artwork` when null (single-source callers).
++    open val localArtwork: String? = null
  ) {
      fun toMediaItem(): MediaItem {
          val extras = Bundle().apply {
-@@ -30,24 +34,70 @@ open class AudioItem(
+@@ -30,24 +41,72 @@ open class AudioItem(
              putString("type", type.toString())
              putString("uri", audioUrl)
          }
@@ -27,12 +34,14 @@ index 5a1b2bf..9f41d74 100644
              .setExtras(extras)
 -            .build()
 -        return MediaItem.Builder()
-+        // Android Auto's QUEUE view builds row icons ONLY from inline
-+        // artworkData (media3's legacy stub never loads artworkUri for queue
-+        // items, and the car process can't read app-private file:// paths
-+        // anyway). Local covers get inlined as scaled bytes; http artwork
-+        // keeps the URI, which the queue's iconUri path can fetch.
-+        localArtworkBytes(artwork)?.let {
++        // Android Auto's QUEUE rows and the COMPACT now-playing card build their
++        // icon ONLY from inline artworkData (media3's legacy stub never loads
++        // artworkUri for those, and the car process can't read app-private
++        // file:// paths anyway). Inline bytes from the dedicated local cover
++        // (preferred) or, for single-source callers, from `artwork` itself when
++        // it's a local path. An http `artwork` keeps only the URI — which the
++        // full now-playing card resolves in the car process.
++        localArtworkBytes(localArtwork ?: artwork)?.let {
 +            mdBuilder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
 +        }
 +        val mediaMetadata = mdBuilder.build()
@@ -131,31 +140,45 @@ index f8b9ca1..30df26d 100644
  
      private fun createDashSource(mediaItem: MediaItem, factory: DataSource.Factory?): MediaSource {
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
-index 6527258..f9a0254 100644
+index 6527258..325e717 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
-@@ -25,6 +25,9 @@ class Track
+@@ -25,9 +25,22 @@ class Track
      var originalItem: Bundle
      var headers: HashMap<String, String>? = null
      val queueId: Long
 +    // Chapter-as-queue: optional clip window (ms) into the underlying audio file.
 +    var clipStartMs: Long? = null
 +    var clipEndMs: Long? = null
++    // Optional LOCAL cover path (file:// or bare) whose bytes are inlined as
++    // artworkData for Android Auto's compact card / queue rows, kept separate
++    // from the (possibly http) `artwork` URI shown on the full now-playing card.
++    var localArtwork: String? = null
  
      override fun setMetadata(context: Context, bundle: Bundle?, ratingType: Int) {
          super.setMetadata(context, bundle, ratingType)
-@@ -42,7 +45,9 @@ class Track
++        // Re-read on every metadata update (a now-playing push can swap in a
++        // freshly-cached local cover) — but only when the key is present, so a
++        // title-only update doesn't clobber the existing cover to null.
++        if (bundle?.containsKey("localArtwork") == true) {
++            localArtwork = bundle.getString("localArtwork")
++        }
+         originalItem.putAll(bundle)
+     }
+ 
+@@ -42,7 +55,10 @@ class Track
              artwork = artwork.toString(),
              duration = duration,
              options = AudioItemOptions(headers, userAgent, resourceId),
 -            mediaId = mediaId
 +            mediaId = mediaId,
 +            clipStartMs = clipStartMs,
-+            clipEndMs = clipEndMs
++            clipEndMs = clipEndMs,
++            localArtwork = localArtwork
          )
      }
  
-@@ -74,6 +79,8 @@ class Track
+@@ -74,6 +90,8 @@ class Track
                  headers!![header] = httpHeaders.getString(header)!!
              }
          }
@@ -165,10 +188,10 @@ index 6527258..f9a0254 100644
          queueId = System.currentTimeMillis()
      }
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
-index d6e3483..8cccb17 100644
+index d6e3483..7c8675f 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
-@@ -14,5 +14,7 @@ data class TrackAudioItem(
+@@ -14,5 +14,8 @@ data class TrackAudioItem(
      override val artwork: String? = null,
      override val duration: Long? = null,
      override val options: AudioItemOptions? = null,
@@ -177,11 +200,12 @@ index d6e3483..8cccb17 100644
 \ No newline at end of file
 +    override val mediaId: String? = null,
 +    override val clipStartMs: Long? = null,
-+    override val clipEndMs: Long? = null
-+): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
++    override val clipEndMs: Long? = null,
++    override val localArtwork: String? = null
++): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..d5d5d14 100644
+index b495b5a..65d88f1 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -198,7 +222,7 @@ index b495b5a..d5d5d14 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -61,7 +63,19 @@ class MusicService : HeadlessJsMediaService() {
+@@ -61,7 +63,51 @@ class MusicService : HeadlessJsMediaService() {
      private lateinit var player: QueuedAudioPlayer
      private val binder = MusicBinder()
      private val scope = MainScope()
@@ -214,11 +238,43 @@ index b495b5a..d5d5d14 100644
 +    // live session. absColdStartOffsetMs is the chosen track's startOffset:
 +    // fakePlayer.currentPosition is track-relative (multi-file books), so the
 +    // absolute book position handed off to JS = offset + currentPosition.
-+    private var absColdStartOffsetMs: Long = 0L
++    // Written on browse-pool threads (absResolveOfflinePlay / online resolve),
++    // read on the main thread during the fakePlayer->JS handoff — @Volatile so
++    // the reader sees the writer's value without a data race.
++    @Volatile private var absColdStartOffsetMs: Long = 0L
++    // ===== JS-dead Android Auto progress persistence =====
++    // A cold-start (JS not attached) session plays on fakePlayer, so JS's
++    // progress sync loop never runs: NO listening progress reached the server
++    // or disk until the setupPlayer handoff — which only fires if JS eventually
++    // boots. A user who plays entirely from Android Auto lost everything (the
++    // next app open restored a STALE disk save and the book snapped back, e.g.
++    // ~40 min gone). This lightweight native persister mirrors the JS sync loop
++    // for the cold-start window: every ~20s it POSTs the live absolute position
++    // to the ABS session-sync endpoint (POST /api/session/{id}/sync, same shape
++    // as utils/progressSync.ts) so loadLastSession's "server is fresher" check
++    // adopts it on the next open, AND refreshes the local widget_state.json
++    // mirror. It runs ONLY while reactContext == null; the setupPlayer handoff /
++    // any JS attach cancels it so the JS loop stays the single writer (the guard
++    // against a double-sync race). Session id/item/duration are captured on the
++    // browse-pool thread during resolve; read on the main thread by the tick —
++    // @Volatile so the reader sees the writer's value without a data race.
++    @Volatile private var absColdStartSessionId: String? = null
++    @Volatile private var absColdStartItemId: String? = null
++    @Volatile private var absColdStartEpisodeId: String? = null
++    @Volatile private var absColdStartDurationSec: Double = 0.0
++    // Persister loop runs on the main looper (cheap position reads must be on
++    // the player's thread); each tick offloads the network POST + file write to
++    // the browse pool so no IO touches the main thread.
++    private val ABS_PERSIST_INTERVAL_MS = 20_000L
++    private var absPersistHandler: android.os.Handler? = null
++    private var absPersistTick: Runnable? = null
++    // Last absolute position we synced, to derive timeListened between ticks
++    // (delta, clamped so a seek doesn't bank bogus listened seconds). -1 = none.
++    private var absPersistLastSyncedSec: Double = -1.0
      private lateinit var mediaSession: MediaLibrarySession
      private var progressUpdateJob: Job? = null
      private var sessionCommands: SessionCommands? = null
-@@ -79,10 +93,13 @@ class MusicService : HeadlessJsMediaService() {
+@@ -79,10 +125,13 @@ class MusicService : HeadlessJsMediaService() {
      }
  
      fun getBitmapLoader(): BitmapLoader {
@@ -232,7 +288,7 @@ index b495b5a..d5d5d14 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +114,1205 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +146,1264 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -255,6 +311,16 @@ index b495b5a..d5d5d14 100644
 +            )
 +            .setHandleAudioBecomingNoisy(true)
 +            .build()
++        // Drive the JS-dead progress persister off fakePlayer's play/pause. Only
++        // meaningful while JS is asleep (reactContext == null); once JS attaches,
++        // setupPlayer releases fakePlayer and the JS sync loop takes over.
++        fakePlayer.addListener(object : Player.Listener {
++            override fun onIsPlayingChanged(isPlaying: Boolean) {
++                if (reactContext != null) return
++                if (isPlaying) absStartColdStartPersister()
++                else absStopColdStartPersister(finalFlush = true)
++            }
++        })
          val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
              flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
              // Add the Uri data so apps can identify that it was a notification click
@@ -275,15 +341,7 @@ index b495b5a..d5d5d14 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -334,30 +392,47 @@ index b495b5a..d5d5d14 100644
 +     * field is missing/empty; never throws.
 +     */
 +    private fun purgeStaleSessionRegistrations() {
++        // Only touch sessions this process created — same prefix the service
++        // stamps onto its own session ids in onCreate (see the id builder). A
++        // released() session from an unrelated app/library MediaSession sharing
++        // this process must NOT be force-released out from under its owner.
++        val ourPrefix = "rntp.session." + android.os.Process.myPid() + "."
 +        try {
 +            val cls = Class.forName("androidx.media3.session.MediaSession")
 +            val field = cls.getDeclaredField("SESSION_ID_TO_SESSION_MAP")
 +            field.isAccessible = true
 +            val map = field.get(null) as? MutableMap<*, *>
 +            if (map != null && map.isNotEmpty()) {
-+                Timber.w("Purging %d stale MediaSession registration(s): %s", map.size, map.keys)
-+                // Actually RELEASE the old sessions, not just drop them from the
-+                // static map — otherwise the previous session's framework
-+                // MediaSession stays "active", so Android Auto sees two active
-+                // sessions from this app and keeps re-resolving/rebuilding the
-+                // now-playing template (queue scroll resets). onCreate runs before
-+                // we build our own session, so the map only holds stale ones here.
-+                for (s in map.values.toList()) {
-+                    try {
-+                        s?.javaClass?.getMethod("release")?.invoke(s)
-+                    } catch (e: Throwable) {
-+                        Timber.w("release() on stale session failed: %s", e.message)
++                // Filter to our own stale registrations by id key prefix.
++                val ourKeys = map.keys.filter { (it as? String)?.startsWith(ourPrefix) == true }
++                if (ourKeys.isNotEmpty()) {
++                    Timber.w("Purging %d stale MediaSession registration(s): %s", ourKeys.size, ourKeys)
++                    // Actually RELEASE the old sessions, not just drop them from
++                    // the static map — otherwise the previous session's framework
++                    // MediaSession stays "active", so Android Auto sees two active
++                    // sessions from this app and keeps re-resolving/rebuilding the
++                    // now-playing template (queue scroll resets). Iterate + remove
++                    // via the entry iterator (the map is star-projected, so keyed
++                    // get/remove don't type-check).
++                    val iter = map.entries.iterator()
++                    while (iter.hasNext()) {
++                        val entry = iter.next()
++                        if ((entry.key as? String)?.startsWith(ourPrefix) != true) continue
++                        val s = entry.value
++                        try {
++                            s?.javaClass?.getMethod("release")?.invoke(s)
++                        } catch (e: Throwable) {
++                            Timber.w("release() on stale session failed: %s", e.message)
++                        }
++                        iter.remove()
 +                    }
 +                }
-+                map.clear()
 +            }
 +        } catch (e: Throwable) {
-+            Timber.w("purgeStaleSessionRegistrations no-op: %s", e.message)
++            // The reflected private field was renamed/removed on a Media3 bump,
++            // or access was denied. Surface it loudly (was a silent no-op) so the
++            // "Session ID must be unique" guard's failure is observable in logs.
++            Timber.e(e, "purgeStaleSessionRegistrations failed (reflection broken?): %s", e.message)
 +        }
 +    }
 +
@@ -701,20 +776,29 @@ index b495b5a..d5d5d14 100644
 +            // Seed the flag from current state so a cold start in the garage
 +            // (no signal) immediately browses offline.
 +            absNetworkAvailable = cm.activeNetwork?.let { n ->
-+                cm.getNetworkCapabilities(n)
-+                    ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++                cm.getNetworkCapabilities(n)?.let { c ->
++                    c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                        c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
++                } == true
 +            } ?: false
 +            val cb = object : android.net.ConnectivityManager.NetworkCallback() {
 +                // A network becoming the default does NOT mean it reaches the
 +                // internet — a captive-portal Wi-Fi or a no-service cellular
-+                // attach both fire onAvailable. Marking browse ONLINE for those
-+                // pins Android Auto to the online tree, whose server fetches then
-+                // hang/fail. Gate on the actual INTERNET capability (mirroring
-+                // the onLost check); onCapabilitiesChanged flips it once the link
-+                // validates (captive portal signed in, or service comes up).
++                // attach both fire onAvailable, and both advertise
++                // NET_CAPABILITY_INTERNET even though no traffic actually flows.
++                // Marking browse ONLINE for those pins Android Auto to the online
++                // tree, whose server fetches then hang/fail (15-45s spinner).
++                // Require the framework to have actually VALIDATED the link (a
++                // real reachability probe succeeded) in addition to INTERNET, so
++                // captive-portal/dead-zone attaches count as offline and we
++                // surface downloaded books instead. onCapabilitiesChanged flips
++                // it once the link validates (captive portal signed in, or
++                // service comes up).
 +                private fun hasInternet(n: android.net.Network): Boolean =
-+                    cm.getNetworkCapabilities(n)
-+                        ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++                    cm.getNetworkCapabilities(n)?.let { c ->
++                        c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                            c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
++                    } == true
 +
 +                override fun onAvailable(network: android.net.Network) {
 +                    val was = absNetworkAvailable
@@ -727,7 +811,8 @@ index b495b5a..d5d5d14 100644
 +                    network: android.net.Network,
 +                    caps: android.net.NetworkCapabilities
 +                ) {
-+                    val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
++                    val up = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 +                    if (up != absNetworkAvailable) {
 +                        absNetworkAvailable = up
 +                        absNotifyBrowseChanged(if (up) "internet validated" else "internet dropped")
@@ -735,12 +820,14 @@ index b495b5a..d5d5d14 100644
 +                }
 +                override fun onLost(network: android.net.Network) {
 +                    val cmNow = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-+                    // Same INTERNET-capability check as the seed above — a
++                    // Same INTERNET+VALIDATED check as the seed above — a
 +                    // lingering captive-portal/no-internet transport must not
 +                    // keep browse pinned to online mode.
 +                    val stillUp = cmNow.activeNetwork?.let { n ->
-+                        cmNow.getNetworkCapabilities(n)
-+                            ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
++                        cmNow.getNetworkCapabilities(n)?.let { c ->
++                            c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
++                                c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
++                        } == true
 +                    } ?: false
 +                    val was = absNetworkAvailable
 +                    absNetworkAvailable = stillUp
@@ -1047,7 +1134,15 @@ index b495b5a..d5d5d14 100644
 +            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
 +            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
 +            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +    }
 +
 +    // Continue Series: one browsable folder per series you're ACTIVE in —
@@ -1393,15 +1488,23 @@ index b495b5a..d5d5d14 100644
 +            val (_, start, dur) = t
 +            if (target >= start && (dur <= 0.0 || target < start + dur)) { chosen = t; break }
 +        }
-+        val folder = d.folder.trimEnd('/')
-+        val base = if (folder.startsWith("file://")) folder else "file://$folder"
-+        val url = "$base/${chosen.first}"
++        // Build a properly percent-encoded file:// URI. Raw string concat broke
++        // on spaces / # / % / ? in the folder path or filename (ExoPlayer then
++        // failed to open the URI). Strip any existing file:// prefix to get a
++        // filesystem path, then let Uri.fromFile encode each segment.
++        val folderPath = d.folder.trimEnd('/').removePrefix("file://")
++        val url = Uri.fromFile(java.io.File(folderPath, chosen.first)).toString()
 +        val within = (target - chosen.second).coerceAtLeast(0.0)
 +        Timber.i("AA offline play: %s -> %s @%ds", itemId, chosen.first, within.toLong())
 +        // Remember the chosen track's offset (Triple.second = startOffset) so a
 +        // later JS handoff (setupPlayer) can turn fakePlayer's track-relative
 +        // position back into absolute book seconds — mirrors the online branch.
 +        absColdStartOffsetMs = (chosen.second * 1000).toLong()
++        // Offline: no server session to sync (the persister will still refresh
++        // the local widget_state.json mirror). Record item/duration anyway.
++        absColdStartSessionId = null
++        absColdStartItemId = itemId
++        absColdStartDurationSec = d.duration
 +        return Pair(url, (within * 1000).toLong())
 +    }
 +
@@ -1414,6 +1517,13 @@ index b495b5a..d5d5d14 100644
 +        // offline path below); the online multi-file branch overwrites it with
 +        // the chosen track's real startOffset before returning.
 +        absColdStartOffsetMs = 0L
++        // Reset the persister's session identity for this resolve; the online
++        // branch below fills in the server session id + duration (the offline
++        // branch sets item/duration and leaves the session id null).
++        absColdStartSessionId = null
++        absColdStartItemId = itemId
++        absColdStartEpisodeId = episodeId
++        absColdStartDurationSec = 0.0
 +        // Offline (or the server unreachable below): play the downloaded copy.
 +        if (!absOnline() && episodeId == null) {
 +            absResolveOfflinePlay(itemId, overrideSec)?.let { return it }
@@ -1425,6 +1535,11 @@ index b495b5a..d5d5d14 100644
 +        val json = org.json.JSONObject(body)
 +        val tracks = json.optJSONArray("audioTracks") ?: return null
 +        if (tracks.length() == 0) return null
++        // The /play response IS an open ABS playback session — capture its id +
++        // total duration so the JS-dead persister can POST progress to
++        // /api/session/{id}/sync while fakePlayer plays (see the persister).
++        absColdStartSessionId = json.optString("id").ifEmpty { null }
++        absColdStartDurationSec = json.optDouble("duration", 0.0)
 +        val target = overrideSec ?: json.optDouble("currentTime", 0.0)
 +        // Find the track whose window contains the target position; fall back
 +        // to the first track (single-file books, or target beyond the end).
@@ -1451,7 +1566,7 @@ index b495b5a..d5d5d14 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1400,60 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1491,65 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1476,6 +1591,11 @@ index b495b5a..d5d5d14 100644
 +        // in-car position. Thread the paused state through a bundle flag so the
 +        // JS handler starts the real session but does NOT auto-resume audio the
 +        // user paused.
++        // JS is now attaching — stop the native cold-start persister so it can't
++        // double-write against the JS sync loop. No final flush: the handoff
++        // below hands the live absolute position straight to JS, which starts
++        // its own session and syncs from there.
++        absStopColdStartPersister(finalFlush = false)
 +        try {
 +            if (::fakePlayer.isInitialized) {
 +                val mid = fakePlayer.currentMediaItem?.mediaId
@@ -1514,7 +1634,7 @@ index b495b5a..d5d5d14 100644
          observeEvents()
      }
  
-@@ -293,9 +1536,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1632,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1526,7 +1646,7 @@ index b495b5a..d5d5d14 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1549,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1645,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1588,7 +1708,7 @@ index b495b5a..d5d5d14 100644
          }
      }
  
-@@ -449,6 +1726,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1822,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1599,7 +1719,7 @@ index b495b5a..d5d5d14 100644
      }
  
      @MainThread
-@@ -515,6 +1796,29 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1892,154 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -1626,10 +1746,135 @@ index b495b5a..d5d5d14 100644
 +        } catch (e: Exception) {
 +            Timber.w(e, "resume widget refresh failed")
 +        }
++    }
++
++    // ===== JS-dead Android Auto progress persister =====
++    // Start the periodic native progress persister for a cold-start session.
++    // Main-thread only (invoked from fakePlayer's onIsPlayingChanged). No-op if
++    // JS is attached (its sync loop owns progress), if fakePlayer isn't on a
++    // "play:" cold-start item, or if the loop is already running.
++    @MainThread
++    private fun absStartColdStartPersister() {
++        if (reactContext != null) return
++        if (!::fakePlayer.isInitialized) return
++        if (absPersistTick != null) return
++        val mid = fakePlayer.currentMediaItem?.mediaId ?: return
++        if (!mid.startsWith("play:")) return
++        absPersistLastSyncedSec = -1.0
++        val handler = android.os.Handler(android.os.Looper.getMainLooper())
++        val tick = object : Runnable {
++            override fun run() {
++                absPersistTickOnce(finalFlush = false)
++                // Reschedule only if still running (a tick may have self-cancelled
++                // on JS attach). absPersistHandler is nulled by stop().
++                absPersistHandler?.postDelayed(this, ABS_PERSIST_INTERVAL_MS)
++            }
++        }
++        absPersistHandler = handler
++        absPersistTick = tick
++        // First persist after one interval — position is ~0 at play start.
++        handler.postDelayed(tick, ABS_PERSIST_INTERVAL_MS)
++        Timber.i("AA cold-start progress persister started (session=%s)", absColdStartSessionId)
++    }
++
++    // Stop the persister. finalFlush=true does one last synchronous snapshot +
++    // offloaded write (pause/stop path) so the newest position lands; the JS
++    // handoff path passes false because the handoff itself carries the live
++    // position to JS. Idempotent and main-thread only.
++    @MainThread
++    private fun absStopColdStartPersister(finalFlush: Boolean) {
++        val handler = absPersistHandler
++        val tick = absPersistTick
++        if (handler != null && tick != null) handler.removeCallbacks(tick)
++        val wasRunning = absPersistTick != null
++        absPersistHandler = null
++        absPersistTick = null
++        if (finalFlush && wasRunning) absPersistTickOnce(finalFlush = true)
++    }
++
++    // One persist tick: snapshot the live absolute position on the main thread,
++    // then offload the server sync + local mirror write to the browse pool.
++    @MainThread
++    private fun absPersistTickOnce(finalFlush: Boolean) {
++        // JS attached between ticks: the JS sync loop is now the single writer —
++        // self-cancel so we never double-write against it.
++        if (reactContext != null) { absStopColdStartPersister(finalFlush = false); return }
++        if (!::fakePlayer.isInitialized) return
++        val mid = fakePlayer.currentMediaItem?.mediaId ?: return
++        if (!mid.startsWith("play:")) return
++        val relMs = fakePlayer.currentPosition.coerceAtLeast(0L)
++        // Nothing buffered yet (relMs==0): a bogus start-of-file position would
++        // otherwise overwrite the real server progress. Skip until we have one.
++        if (relMs <= 0L) return
++        val absSec = (absColdStartOffsetMs + relMs) / 1000.0
++        val sessionId = absColdStartSessionId
++        val itemId = absColdStartItemId
++        val durationSec = absColdStartDurationSec
++        // timeListened = forward delta since the last sync, clamped so a manual
++        // seek forward doesn't bank listened seconds it didn't actually play.
++        val prev = absPersistLastSyncedSec
++        val maxStep = (ABS_PERSIST_INTERVAL_MS / 1000.0) * 4
++        val listened = if (prev < 0.0) 0.0 else (absSec - prev).let { if (it > 0.0 && it <= maxStep) it else 0.0 }
++        absPersistLastSyncedSec = absSec
++        val task = Runnable {
++            try {
++                // (a) Server sync — mirrors utils/progressSync.ts's payload shape.
++                // Missing session id (offline resolve) or offline: skip the POST,
++                // still do the local write below. absPost self-heals a 401 by
++                // refreshing the token.
++                if (sessionId != null && absOnline()) {
++                    val body = org.json.JSONObject().apply {
++                        put("currentTime", absSec)
++                        put("timeListened", listened)
++                        put("duration", durationSec)
++                    }.toString()
++                    absPost("/api/session/$sessionId/sync", body)
++                }
++                // (b) Local mirror — keep widget_state.json's currentTime fresh so
++                // the home-screen resume widget isn't stale. Only touches an entry
++                // already pointing at THIS item (never fabricates one).
++                absWriteWidgetProgress(itemId, absSec)
++            } catch (e: Exception) {
++                Timber.w(e, "AA cold-start persist tick failed")
++            }
++        }
++        try {
++            absBrowseExecutor.execute(task)
++        } catch (e: java.util.concurrent.RejectedExecutionException) {
++            // Pool shut down (teardown racing a final flush) — drop this tick.
++            Timber.w(e, "persist tick rejected (pool shut down)")
++        }
++    }
++
++    // Merge a fresh currentTime into widget_state.json without disturbing the
++    // itemId/title/author JS wrote there. Atomic temp+rename (same swap JS uses)
++    // so onPlaybackResumption never reads a torn file. Off the main thread.
++    private fun absWriteWidgetProgress(itemId: String?, currentTimeSec: Double) {
++        if (itemId == null) return
++        try {
++            val o = absReadMirror("widget_state.json")?.let {
++                try { org.json.JSONObject(it) } catch (_: Exception) { null }
++            } ?: return
++            // Guard: only update the mirror when it already describes THIS item.
++            // A cold start of a DIFFERENT book than the last-mirrored one must not
++            // stamp its position onto the wrong widget entry.
++            if (o.optString("itemId") != itemId) return
++            o.put("currentTime", currentTimeSec)
++            val f = java.io.File(filesDir, "widget_state.json")
++            val tmp = java.io.File(filesDir, "widget_state.json.tmp")
++            tmp.writeText(o.toString())
++            try {
++                android.system.Os.rename(tmp.absolutePath, f.absolutePath)
++            } catch (re: Exception) {
++                f.writeText(o.toString()); tmp.delete()
++            }
++        } catch (e: Exception) {
++            Timber.w(e, "widget progress mirror write failed")
++        }
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2021,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2242,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1638,7 +1883,7 @@ index b495b5a..d5d5d14 100644
              return
          }
  
-@@ -780,8 +2084,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2305,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1654,7 +1899,7 @@ index b495b5a..d5d5d14 100644
          return mediaSession
      }
  
-@@ -792,13 +2102,41 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2323,45 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1663,6 +1908,10 @@ index b495b5a..d5d5d14 100644
 +        // Flag teardown FIRST so any in-flight browse-pool task or posted browse
 +        // refresh that lands after the release below skips its session touch.
 +        absDestroyed = true
++        // Stop the JS-dead progress persister before the pool is shut down. A
++        // final flush here would race absBrowseExecutor.shutdown() below (and
++        // pause already flushed the newest position), so cancel without one.
++        absStopColdStartPersister(finalFlush = false)
 +        // Always release the session — even if the player was never initialized
 +        // (e.g. Android Auto browsed/connected but playback never started). The
 +        // original guard skipped release in that case, leaking the framework
@@ -1698,7 +1947,7 @@ index b495b5a..d5d5d14 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2243,230 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2468,239 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1758,7 +2007,7 @@ index b495b5a..d5d5d14 100644
 +                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
 +                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
 +                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
-+            }
+             }
 +            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
 +            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
 +        }
@@ -1816,7 +2065,16 @@ index b495b5a..d5d5d14 100644
 +                future.set(LibraryResult.ofItemList(ImmutableList.of<MediaItem>(), params))
 +            }) {
 +                val children = try { absLoadChildren(parentId) } catch (e: Exception) { Timber.w(e, "absLoadChildren failed"); emptyList() }
-+                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(children), params))
++                // Honor the requested page window. Returning the full list for
++                // every page made paginating head units append the same rows
++                // repeatedly (duplicate entries). Slice to [page*pageSize, end);
++                // a page past the end yields an empty list (not out-of-range).
++                val from = (page.toLong() * pageSize.toLong())
++                    .coerceIn(0L, children.size.toLong()).toInt()
++                val to = (from.toLong() + pageSize.toLong())
++                    .coerceIn(from.toLong(), children.size.toLong()).toInt()
++                val window = children.subList(from, to)
++                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(window), params))
 +            }
 +            return future
 +        }
@@ -1923,7 +2181,7 @@ index b495b5a..d5d5d14 100644
 +                Timber.i("AA onAddMediaItems -> routing to JS remote-play-id=%s", raw)
 +                scope.launch { emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply { putString("id", raw) }) }
 +                return Futures.immediateFuture(mutableListOf())
-             }
++            }
 +            // Cold start (JS not ready): resolve natively so playback still works.
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MutableList<MediaItem>>()
 +            absSubmitBrowse(onReject = {
@@ -1946,7 +2204,7 @@ index b495b5a..d5d5d14 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2475,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2709,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -1976,7 +2234,7 @@ index b495b5a..d5d5d14 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2507,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2741,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -1992,7 +2250,7 @@ index b495b5a..d5d5d14 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2523,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2757,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  

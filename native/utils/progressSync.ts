@@ -574,6 +574,149 @@ export function queueEbookProgressPatch(
   });
 }
 
+// --- Cross-medium progress sync (listening ↔ reading) -----------------------
+// A book with BOTH an audiobook and an ebook tracks its two progresses
+// independently: the player writes currentTime/progress, the reader writes
+// ebookLocation/ebookProgress. They drift apart. These helpers reconcile them.
+//
+// FRACTION-ONLY, by necessity. There is NO audio-timestamp ↔ ebook-CFI mapping
+// (ABS itself only stores fractions), so:
+//   • audio → fraction f is clean/exact-ish: currentTime = f * duration.
+//   • ebook → fraction f writes ebookProgress = f, but the reader's exact PAGE
+//     cannot be set — a CFI can't be derived from a fraction. The existing CFI
+//     (ebookLocation) is PRESERVED, so only the PERCENTAGE moves, not the page.
+// Both "Sync progress" (manual) and the "Link reading & listening" lock use
+// this, and both are therefore percentage-level reconciliations.
+
+function clamp01(n: any): number {
+  return Math.max(0, Math.min(1, Number(n) || 0));
+}
+
+// Difference below which the two media are treated as already aligned — avoids
+// pointless writes (and a reconcile that fights an in-flight rounding jitter).
+const LINK_EPSILON = 0.005;
+
+/** True when the user has locked this item's two progresses together (per-item
+ *  toggle persisted in useUserStore settings). Lazy require: circular import. */
+export function isProgressLinked(libraryItemId: string): boolean {
+  try {
+    const { useUserStore } = require("../store/useUserStore");
+    return !!useUserStore.getState().settings?.linkedProgress?.[libraryItemId];
+  } catch {
+    return false;
+  }
+}
+
+/** Current in-memory media-progress entry for an item (lazy require). */
+function getProgressEntry(libraryItemId: string): any {
+  try {
+    const { useUserStore } = require("../store/useUserStore");
+    return useUserStore.getState().mediaProgress?.[libraryItemId] || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write BOTH media of `libraryItemId` to `targetFraction`. Queues a combined
+ * media-progress PATCH (audio currentTime + ebookProgress land in one body) and
+ * reflects the change in the in-memory map immediately so the Your Progress
+ * rows update without waiting for a refetch. Offline-safe: the writes queue and
+ * flush when connectivity returns (this reuses the same durable queue as every
+ * other offline write). FRACTION-ONLY — see the header above; the ebook page is
+ * NOT repositioned, only its percentage.
+ */
+export function syncBothProgressFraction(
+  libraryItemId: string,
+  targetFraction: number,
+  opts?: { duration?: number; ebookLocation?: string }
+): void {
+  if (!libraryItemId) return;
+  const f = clamp01(targetFraction);
+  const duration = Number(opts?.duration) || 0;
+  const finished = f >= 0.99;
+
+  // AUDIO → currentTime = f * duration (exact-ish). Skip when the duration is
+  // unknown — a timestamp can't be placed without it, but the ebook side still
+  // syncs. queueProgressPatch also writes `progress` = currentTime/duration.
+  if (duration > 0) {
+    queueProgressPatch(libraryItemId, f * duration, duration, null);
+  }
+
+  // EBOOK → fraction only. The CFI can't be derived from a fraction, so the
+  // EXISTING page is preserved: include ebookLocation ONLY when we have one
+  // (writing "" would clobber a real server CFI). Merges into the SAME pending
+  // PATCH as the audio fields above → one combined body.
+  const ebookFields: Record<string, any> = { ebookProgress: f };
+  if (opts?.ebookLocation) ebookFields.ebookLocation = opts.ebookLocation;
+  if (finished) ebookFields.isFinished = true;
+  mergePendingPatch(libraryItemId, null, ebookFields);
+
+  // Reflect in the in-memory map now (freshest-wins keeps it until the queued
+  // PATCH lands and the server's lastUpdate moves past this write).
+  try {
+    const { useUserStore } = require("../store/useUserStore");
+    const now = Date.now();
+    useUserStore.setState((s: any) => {
+      const prev = s.mediaProgress?.[libraryItemId] || {};
+      const next: any = {
+        ...prev,
+        libraryItemId,
+        ebookProgress: f,
+        updatedAt: now,
+      };
+      if (duration > 0) {
+        next.currentTime = f * duration;
+        next.duration = duration;
+        next.progress = f;
+      }
+      if (finished) next.isFinished = true;
+      return { mediaProgress: { ...s.mediaProgress, [libraryItemId]: next } };
+    });
+  } catch {}
+
+  // Opportunistically deliver — if we're online, the combined PATCH lands now.
+  flushPendingSyncs().catch(() => {});
+}
+
+/**
+ * When this item's progresses are LOCKED, reconcile them to their FURTHEST
+ * position (furthest-wins, so reading/listening never moves BACKWARD). No-op
+ * when unlocked, when the two are already aligned, or when the item id is
+ * missing — so it's safe to call unconditionally at any transition boundary
+ * (ItemDetail focus, audio session close, reader flush). `hint` supplies a
+ * just-updated fraction for one medium that may not be in the map yet (the
+ * closing audio position / the reader's final fraction). FRACTION-ONLY.
+ * Returns true when a reconciling write was made.
+ */
+export function reconcileLinkedProgress(
+  libraryItemId: string,
+  hint?: {
+    audioFraction?: number;
+    ebookFraction?: number;
+    duration?: number;
+    ebookLocation?: string;
+  }
+): boolean {
+  if (!libraryItemId || !isProgressLinked(libraryItemId)) return false;
+  const prog = getProgressEntry(libraryItemId) || {};
+  const duration = Number(hint?.duration) || Number(prog.duration) || 0;
+  const audioFraction = clamp01(
+    hint?.audioFraction != null ? hint.audioFraction : prog.progress
+  );
+  const ebookFraction = clamp01(
+    hint?.ebookFraction != null ? hint.ebookFraction : prog.ebookProgress
+  );
+  if (Math.abs(audioFraction - ebookFraction) < LINK_EPSILON) return false;
+  const target = Math.max(audioFraction, ebookFraction);
+  syncBothProgressFraction(libraryItemId, target, {
+    duration,
+    // Preserve whatever CFI/page the reader last wrote.
+    ebookLocation: hint?.ebookLocation ?? prog.ebookLocation ?? "",
+  });
+  return true;
+}
+
 async function flushPendingPatches(): Promise<void> {
   const keys = storage.getAllKeys().filter((k) => k.startsWith(PATCH_PREFIX));
   for (const key of keys) {

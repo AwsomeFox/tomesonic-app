@@ -1,7 +1,8 @@
 // SDK 54+ moved the classic download API (documentDirectory /
 // createDownloadResumable / DownloadResumable) to the /legacy entry point.
 import * as FileSystem from "expo-file-system/legacy";
-import { useDownloadStore, DownloadItem, DownloadPart } from "../store/useDownloadStore";
+import { useDownloadStore, DownloadItem, DownloadPart, episodeDownloadKey } from "../store/useDownloadStore";
+import { db } from "./db";
 import { downloadNotifications } from "./downloadNotifications";
 import { absoluteUrl, coverUrl as buildCoverUrl } from "./urls";
 import { api } from "./api";
@@ -412,6 +413,155 @@ export const downloader = {
   },
 
   /**
+   * Downloads a SINGLE podcast episode for offline playback. Mirrors downloadBook
+   * as closely as possible but for one episode: the store entry is keyed by the
+   * composite `${libraryItemId}::${episodeId}` (episodeDownloadKey), carries a
+   * single audio "track_0" part (+ the podcast cover), and records the same
+   * playback meta shape a book uses so the offline session builder resolves it
+   * identically. Duplicate-start/cancel/fail/retry all flow through the shared
+   * infrastructure (runningBooks guard, downloadPartWithAuthRetry, the store's
+   * resumeDownload), so a failed episode retries and cancels exactly like a book.
+   */
+  downloadEpisode: async (libraryItem: any, episode: any, serverAddress: string, token: string) => {
+    const libraryItemId = libraryItem?.id;
+    const episodeId = episode?.id;
+    if (!libraryItemId || !episodeId) {
+      console.warn("[Downloader] downloadEpisode called without item/episode id");
+      return;
+    }
+    const id = episodeDownloadKey(libraryItemId, episodeId);
+
+    // Duplicate-start guard (double tap / retry-while-running), same as downloadBook.
+    if (runningBooks.has(id)) {
+      console.log("[Downloader] Download already running for", id, "— ignoring duplicate start");
+      return;
+    }
+
+    const media = libraryItem.media || {};
+    const metadata = media.metadata || {};
+    const podcastTitle = metadata.title || "Podcast";
+    const title = episode.title || podcastTitle;
+    const author = metadata.author || metadata.authorName || podcastTitle;
+
+    const partsToDownload: any[] = [];
+
+    // Podcast cover (best-effort; skipped when the URL can't be built).
+    const coverPath = media.coverPath;
+    const coverDownloadUrl = coverPath ? buildCoverUrl(libraryItemId, serverAddress, token) : null;
+    if (coverDownloadUrl) {
+      partsToDownload.push({
+        id: "cover",
+        filename: `cover.${coverPath.split(".").pop() || "jpg"}`,
+        url: coverDownloadUrl,
+        fileSize: 0, // dynamic
+      });
+    }
+
+    // The single episode audio file. Prefer the direct-play contentUrl the
+    // server exposes on the episode's audioTrack; fall back to the ino-based
+    // file endpoint (mirrors the book track path).
+    const audioTrack = episode.audioTrack || {};
+    const audioFile = episode.audioFile || {};
+    // Bail if the episode has NO real audio source: without a contentUrl or a
+    // file ino the fallback would be `/api/items/:id/file/` (empty ino), and
+    // absoluteUrl() always returns a non-empty string so the later `p.url`
+    // guard wouldn't catch it — the download would 404 an invalid endpoint.
+    if (!audioTrack.contentUrl && !audioFile.ino) {
+      throw new Error("This episode has no downloadable audio file.");
+    }
+    const rel: string = audioTrack.contentUrl || `/api/items/${libraryItemId}/file/${audioFile.ino}`;
+    const trackUrl = absoluteUrl(rel, serverAddress, token);
+    const ext = String(audioTrack.metadata?.ext || audioFile.metadata?.ext || "mp3").replace(/^\./, "");
+    const audioSize =
+      audioTrack.metadata?.size || audioFile.metadata?.size || audioFile.fileSize || audioFile.size || 0;
+    partsToDownload.push({
+      id: "track_0",
+      filename: `track_0.${ext}`,
+      url: trackUrl,
+      fileSize: audioSize,
+    });
+
+    // Nothing but a (possibly-skipped) cover means no audio — bail rather than
+    // record a playable-looking entry with no track.
+    if (!partsToDownload.some((p) => p.id === "track_0" && p.url)) {
+      console.warn("[Downloader] Episode has no audio to download:", id);
+      return;
+    }
+
+    // Single-track playback meta, same shape a book records (offline builder
+    // maps meta.tracks -> local file paths by filename).
+    const duration =
+      Number(episode.duration) || Number(audioFile.duration) || Number(audioTrack.duration) || 0;
+    const meta = {
+      duration,
+      chapters: episode.chapters || [],
+      tracks: [{ index: 0, filename: `track_0.${ext}`, duration, startOffset: 0 }],
+    };
+
+    const localFolderPath = bookFolderPath(id, title);
+
+    useDownloadStore.getState().startDownload(
+      {
+        id,
+        libraryItemId,
+        episodeId,
+        title,
+        author,
+        coverUrl: coverDownloadUrl || "",
+        localFolderPath,
+        meta,
+      },
+      partsToDownload.map((p) => ({
+        id: p.id,
+        filename: p.filename,
+        url: p.url,
+        fileSize: p.fileSize,
+      }))
+    );
+    downloadNotifications.start(id, title);
+
+    const runId = (bookRunSeq[id] = (bookRunSeq[id] || 0) + 1);
+    const isCurrent = () => bookRunSeq[id] === runId;
+    runningBooks.add(id);
+
+    try {
+      await assertEnoughFreeSpace(partsToDownload);
+
+      const dirInfo = await FileSystem.getInfoAsync(localFolderPath);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(localFolderPath, { intermediates: true });
+      }
+
+      for (const part of partsToDownload) {
+        if (!isCurrent()) return;
+        if (!useDownloadStore.getState().activeDownloads[id]) {
+          downloadNotifications.clear(id);
+          return;
+        }
+        const destPath = `${localFolderPath}${part.filename}`;
+        await downloadPartWithAuthRetry(id, title, part, destPath, token);
+      }
+      if (!isCurrent()) return;
+      if (!useDownloadStore.getState().activeDownloads[id]) {
+        downloadNotifications.clear(id);
+        return;
+      }
+
+      useDownloadStore.getState().completeDownload(id, localFolderPath);
+      downloadNotifications.complete(id, title);
+      console.log(`[Downloader] Episode download completed: ${title}`);
+      runningBooks.delete(id);
+    } catch (err: any) {
+      if (!isCurrent()) return;
+      console.error(`[Downloader] Episode download failed for ${title}:`, err);
+      useDownloadStore.getState().failDownload(id, friendlyError(err));
+      downloadNotifications.clear(id);
+    } finally {
+      if (isCurrent()) runningBooks.delete(id);
+    }
+  },
+
+  /**
    * Re-drives a previously-started DownloadItem (from a failed/cancelled/interrupted
    * state), skipping parts already marked completed and reusing the existing folder.
    * Used by useDownloadStore.retryDownload — we don't have the original libraryItem
@@ -494,6 +644,13 @@ export const downloader = {
    * is re-checked against the LIVE store right before each delete so a
    * download started while the sweep is in flight can't lose its folder
    * (startDownload registers the item before any file is written).
+   *
+   * NAMESPACE-AWARE: downloads now belong to per-account namespaces, so the
+   * in-memory store only holds the CURRENT account's downloads. Ownership is
+   * therefore checked against EVERY session's DB rows (db.getAllDownloads),
+   * not just the live store — otherwise a sweep run under account A would
+   * delete account B's on-device folders. A folder is orphaned only when NO
+   * account (and no in-flight download) owns it.
    */
   sweepOrphanFolders: async () => {
     try {
@@ -501,10 +658,20 @@ export const downloader = {
       const rootInfo = await FileSystem.getInfoAsync(root);
       if (!rootInfo.exists) return;
       const entries = await FileSystem.readDirectoryAsync(root);
+      // Ids owned by ANY account's persisted download rows (all namespaces).
+      let dbIds: string[] = [];
+      try {
+        dbIds = db.getAllDownloads().map((d: any) => d.id).filter(Boolean);
+      } catch {}
       for (const name of entries) {
         const { activeDownloads, completedDownloads } = useDownloadStore.getState();
         const ownedBy = (ids: string[]) => ids.some(id => name === id || name.startsWith(`${id}_`));
-        if (ownedBy(Object.keys(activeDownloads)) || ownedBy(Object.keys(completedDownloads))) continue;
+        if (
+          ownedBy(dbIds) ||
+          ownedBy(Object.keys(activeDownloads)) ||
+          ownedBy(Object.keys(completedDownloads))
+        )
+          continue;
         console.log("[Downloader] Removing orphaned download folder:", name);
         try {
           await FileSystem.deleteAsync(`${root}${name}`, { idempotent: true });

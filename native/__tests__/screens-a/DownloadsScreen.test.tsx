@@ -163,7 +163,9 @@ describe("DownloadsScreen", () => {
     await render(<DownloadsScreen navigation={navigation} />);
 
     await fireEvent.press(screen.getByLabelText("Play Audio DL"));
-    await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("b1"));
+    // Books carry no episodeId — the second arg is undefined (episode rows pass
+    // their episodeId so the right episode plays offline).
+    await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("b1", undefined));
 
     await fireEvent.press(screen.getByLabelText("Read Ebook DL"));
     expect(navigation.navigate).toHaveBeenCalledWith("Reader", {
@@ -171,6 +173,30 @@ describe("DownloadsScreen", () => {
       ebookFormat: "epub",
       title: "Ebook DL",
     });
+  });
+
+  it("plays a downloaded podcast episode with its libraryItemId + episodeId", async () => {
+    const episodeDownload = {
+      id: "pod1::ep1",
+      libraryItemId: "pod1",
+      episodeId: "ep1",
+      title: "Episode DL",
+      author: "Podcaster",
+      coverUrl: "",
+      status: "completed" as const,
+      progress: 1,
+      parts: [
+        { id: "track_0", filename: "track_0.mp3", url: "", fileSize: 5 * MB, bytesDownloaded: 5 * MB, completed: true, localFilePath: "file:///dl/pod1::ep1/track_0.mp3" },
+      ],
+      meta: { duration: 1800, chapters: [], tracks: [{ index: 0, filename: "track_0.mp3", duration: 1800, startOffset: 0 }] },
+    };
+    seed({ completedDownloads: { "pod1::ep1": episodeDownload }, activeDownloads: {} });
+    const startPlayback = jest.fn().mockResolvedValue(true);
+    usePlaybackStore.setState({ startPlayback } as any);
+    await render(<DownloadsScreen navigation={makeNavigation()} />);
+
+    await fireEvent.press(screen.getByLabelText("Play Episode DL"));
+    await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
   });
 
   it("delete goes through a confirm dialog before removeDownload", async () => {

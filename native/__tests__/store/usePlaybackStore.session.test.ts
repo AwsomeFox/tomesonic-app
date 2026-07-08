@@ -9,6 +9,7 @@ jest.mock("../../utils/progressSync", () => ({
   queueEbookProgressPatch: jest.fn(),
   flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
   clearAllPending: jest.fn(),
+  reconcileLinkedProgress: jest.fn(),
 }));
 jest.mock("../../utils/autoCreds", () => ({
   writeAutoCreds: jest.fn().mockResolvedValue(undefined),
@@ -24,6 +25,7 @@ import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
+import { reconcileLinkedProgress } from "../../utils/progressSync";
 
 const initialPlayback = usePlaybackStore.getState();
 const initialUser = useUserStore.getState();
@@ -432,11 +434,53 @@ describe("usePlaybackStore sessions", () => {
         expect(TrackPlayer.add).not.toHaveBeenCalled();
       });
 
-      it("does not fall back for podcast episodes", async () => {
+      it("does not fall back for a non-downloaded podcast episode", async () => {
+        // Only the BOOK-style bare-key download exists — an episode play must
+        // not resolve it (episodes live under the composite key).
         mockPost.mockRejectedValue(new Error("Network Error"));
         useDownloadStore.setState({ completedDownloads: { item1: downloaded } });
         const ok = await usePlaybackStore.getState().startPlayback("item1", "ep1");
         expect(ok).toBe(false);
+      });
+
+      it("builds a local session from a DOWNLOADED episode (composite key)", async () => {
+        // Past the 2s duplicate-start window: a sibling test starts the same
+        // item1/ep1 at BASE, and the dedupe guard is module-scoped (not store
+        // state) so it survives the per-test reset.
+        jest.setSystemTime(BASE + 10_000);
+        mockPost.mockRejectedValue(new Error("Network Error"));
+        const epDownload = {
+          id: "item1::ep1",
+          libraryItemId: "item1",
+          episodeId: "ep1",
+          title: "Episode One",
+          author: "Podcaster",
+          coverUrl: "file:///downloads/item1::ep1/cover.jpg",
+          status: "completed",
+          localFolderPath: "file:///downloads/item1::ep1/",
+          parts: [{ id: "track_0", filename: "track_0.mp3", localFilePath: "/x/track_0.mp3" }],
+          meta: {
+            duration: 1800,
+            chapters: [],
+            tracks: [{ index: 0, filename: "track_0.mp3", duration: 1800, startOffset: 0 }],
+          },
+        } as any;
+        useDownloadStore.setState({ completedDownloads: { "item1::ep1": epDownload } });
+        // Episode progress lives under the composite `${itemId}-${episodeId}` key.
+        useUserStore.setState({
+          mediaProgress: { "item1-ep1": { libraryItemId: "item1", episodeId: "ep1", currentTime: 90 } },
+        } as any);
+
+        const ok = await usePlaybackStore.getState().startPlayback("item1", "ep1");
+
+        expect(ok).toBe(true);
+        const s = usePlaybackStore.getState();
+        expect(s.currentSession.id).toBe("local_item1::ep1");
+        expect(s.currentSession.episodeId).toBe("ep1");
+        expect(s.duration).toBe(1800);
+        expect(s.position).toBe(90); // resumes from the composite-keyed progress
+        // Queue built from the on-device episode file.
+        expect(addedTracks()[0].url).toBe("file:///downloads/item1::ep1/track_0.mp3");
       });
 
       it("returns false when nothing is downloaded", async () => {
@@ -486,6 +530,34 @@ describe("usePlaybackStore sessions", () => {
       expect(s.position).toBe(555);
       expect(TrackPlayer.reset).not.toHaveBeenCalled();
       expect(mockGet).not.toHaveBeenCalled();
+    });
+
+    it("bails if a book was tapped during the freshness GET (TOCTOU — must not clobber the live session)", async () => {
+      // The top-of-function live-session guard runs BEFORE the up-to-3s
+      // server-progress GET. A cold-start user tapping a book in that window
+      // starts a real session while loadLastSession is blocked; restoring the
+      // saved session over it would TrackPlayer.reset() the live queue and
+      // re-prepare it paused. Simulate the tap landing as the GET resolves.
+      storageHelper.setLastPlaybackSession({
+        ...serverSession(),
+        currentTime: 100,
+        updatedAt: BASE - 60_000,
+      });
+      mockGet.mockImplementation(async () => {
+        usePlaybackStore.setState({
+          currentSession: { id: "tapped-sess", libraryItemId: "tapped" },
+          isPlaying: true,
+          position: 42,
+        } as any);
+        return { data: { currentTime: 222, lastUpdate: BASE } } as any;
+      });
+
+      await usePlaybackStore.getState().loadLastSession();
+
+      const s = usePlaybackStore.getState();
+      expect(s.currentSession.id).toBe("tapped-sess"); // freshly tapped session untouched
+      expect(s.position).toBe(42);
+      expect(TrackPlayer.reset).not.toHaveBeenCalled(); // saved session never prepared
     });
 
     it("restores the saved session paused", async () => {
@@ -574,6 +646,52 @@ describe("usePlaybackStore sessions", () => {
 
       await usePlaybackStore.getState().loadLastSession();
       expect(usePlaybackStore.getState().position).toBe(100);
+    });
+  });
+
+  // LOCK ("Link reading & listening"): closing an audio session for a linked
+  // item reconciles the OTHER medium up to the just-closed listening position.
+  // The gating/furthest-wins logic is unit-tested in progressSync; here we only
+  // assert the WIRING at the close boundary.
+  describe("lock reconciliation on audio session close", () => {
+    it("reconciles the ebook to the final audio fraction on closePlayback", async () => {
+      (reconcileLinkedProgress as jest.Mock).mockClear();
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockResolvedValue({ position: 150, duration: 300, buffered: 0 } as any);
+      usePlaybackStore.setState({
+        isInitialized: true,
+        currentSession: { id: "sess1", libraryItemId: "item1" },
+        duration: 300,
+        position: 150,
+        isPlaying: true,
+      } as any);
+
+      await usePlaybackStore.getState().closePlayback();
+
+      // 150 / 300 = 0.5, with the duration carried for the audio currentTime write.
+      expect(reconcileLinkedProgress).toHaveBeenCalledWith(
+        "item1",
+        expect.objectContaining({ audioFraction: 0.5, duration: 300 })
+      );
+    });
+
+    it("does NOT reconcile for a podcast episode session (books only)", async () => {
+      (reconcileLinkedProgress as jest.Mock).mockClear();
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockResolvedValue({ position: 30, duration: 300, buffered: 0 } as any);
+      usePlaybackStore.setState({
+        isInitialized: true,
+        currentSession: { id: "sess2", libraryItemId: "pod1", episodeId: "ep1" },
+        duration: 300,
+        position: 30,
+        isPlaying: true,
+      } as any);
+
+      await usePlaybackStore.getState().closePlayback();
+
+      expect(reconcileLinkedProgress).not.toHaveBeenCalled();
     });
   });
 });

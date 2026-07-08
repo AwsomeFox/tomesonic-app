@@ -13,7 +13,7 @@ import { usePlaybackStore } from "../store/usePlaybackStore";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
-import BookProgressBadge from "../components/BookProgressBadge";
+import BookProgressBadge, { bookStatusA11yLabel } from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
@@ -37,10 +37,13 @@ const base64Encode = (input: string = '') => {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-// 2:3 book aspect (56×80) + radius 8, matching the Collection/Playlist detail
-// rows — a 72×72 square distorted the cover art.
-const COVER_WIDTH = 56;
-const COVER_HEIGHT = 80;
+// Square cover (72×72) + radius 8 — audiobook art is square (album-art style)
+// and the rest of the app (LibraryScreen list rows, BookCard) renders it
+// square. contentFit:"cover" means a square source fills exactly; a rare
+// portrait/ebook cover is center-cropped rather than the whole app disagreeing
+// on shape.
+const COVER_WIDTH = 72;
+const COVER_HEIGHT = 72;
 
 // Mirrors $elapsedPretty (see LibraryScreen / ItemDetailScreen).
 function elapsedPretty(seconds: number): string {
@@ -383,12 +386,27 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       sequence != null && sequence !== "" ? `#${sequence} ${rawTitle}` : rawTitle;
 
     const startingThis = startingId === item.id;
+    const downloaded = (item as any).isLocal || !!(item as any).localLibraryItem;
+
+    // The accessible parent row collapses the nested play button, so TalkBack
+    // can't reach the primary Play action through it. Give the row an explicit
+    // composed label (title + author + progress status) AND expose play as an
+    // accessibility action so the primary action stays reachable; the visible
+    // nested button remains the pointer path for sighted users.
+    const rowA11yLabel = [title, author, bookStatusA11yLabel(item, progressMap, downloaded)]
+      .filter(Boolean)
+      .join(". ");
 
     return (
       <AnimatedPressable
         entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
         accessibilityRole="button"
+        accessibilityLabel={rowA11yLabel}
+        accessibilityActions={[{ name: "play", label: isEbookOnly(item) ? "Read" : "Play" }]}
+        onAccessibilityAction={(e) => {
+          if (e.nativeEvent.actionName === "play") handlePlay(item);
+        }}
         android_ripple={{ color: colors.surfaceContainerHighest }}
         style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 8 }}
       >
@@ -587,7 +605,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
       </View>
 
       {loading ? (
-        <ListSkeleton rows={7} thumb={72} />
+        <ListSkeleton rows={7} thumb={COVER_WIDTH} />
       ) : error ? (
         <ErrorState
           message={error}
@@ -646,7 +664,7 @@ function SeriesCollage({ covers, size, colors }: { covers: string[]; size: numbe
           {covers.slice(0, 4).map((uri, idx) => (
             <Image
               key={idx}
-              source={{ uri }}
+              source={coverSource(uri)}
               style={{ width: size / 2, height: covers.length <= 2 ? size : size / 2 }}
               contentFit="cover"
             />

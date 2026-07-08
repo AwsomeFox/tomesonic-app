@@ -64,7 +64,7 @@ export default function ResultBurst({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const bg = ok ? colors.primaryContainer : colors.errorContainer || "#F9DEDC";
+  const bg = ok ? colors.primaryContainer : colors.errorContainer;
   const fg = ok ? colors.onPrimaryContainer : colors.error;
 
   return (

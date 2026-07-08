@@ -1420,6 +1420,7 @@ export default function PlayerBottomSheet() {
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={isPlaying ? "Pause" : "Play"}
+            accessibilityState={{ busy: isBuffering }}
             style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}
           >
             <Animated.View style={animatedPlayIconStyle}>
@@ -1522,7 +1523,7 @@ export default function PlayerBottomSheet() {
             <Pressable onPress={() => { haptic(); seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
               <Icon name={jumpIconName("back", jumpBackSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
-            <Pressable onPress={() => { haptic(); playPause(); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
+            <Pressable onPress={() => { haptic(); playPause(); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
               <Icon name={isPlaying ? "pause" : "play"} size={30} color={colors.onPrimary} />
             </Pressable>
             <Pressable onPress={() => { haptic(); seekForward(jumpFwdSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
@@ -1652,7 +1653,7 @@ export default function PlayerBottomSheet() {
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 12 }}>
                   <CircleButton icon="skip-previous" iconSize={22} onPress={() => { haptic(); previousChapter(); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
                   <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { haptic(); seekBackward(jumpBackSecs); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
-                  <Pressable onPress={() => { haptic(); playPause(); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                  <Pressable onPress={() => { haptic(); playPause(); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
                     <Icon name={isPlaying ? "pause" : "play"} size={36} color={colors.onPrimary} />
                   </Pressable>
                   <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { haptic(); seekForward(jumpFwdSecs); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />

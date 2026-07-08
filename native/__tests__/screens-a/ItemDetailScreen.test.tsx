@@ -33,10 +33,13 @@ jest.mock("../../utils/progressSync", () => ({
   clearAllPending: jest.fn(),
   syncProgress: jest.fn().mockResolvedValue(undefined),
   closeSession: jest.fn().mockResolvedValue(undefined),
+  syncBothProgressFraction: jest.fn(),
+  reconcileLinkedProgress: jest.fn(),
 }));
 jest.mock("../../utils/downloader", () => ({
   downloader: {
     downloadBook: jest.fn().mockResolvedValue(undefined),
+    downloadEpisode: jest.fn().mockResolvedValue(undefined),
     resumeDownload: jest.fn().mockResolvedValue(undefined),
     abortBookParts: jest.fn().mockResolvedValue(undefined),
     sweepOrphanFolders: jest.fn().mockResolvedValue(undefined),
@@ -49,7 +52,12 @@ jest.mock("../../store/useDialogStore", () => ({
 import ItemDetailScreen from "../../screens/ItemDetailScreen";
 import { showAppDialog } from "../../store/useDialogStore";
 import { api } from "../../utils/api";
-import { queueFinishedPatch, queueProgressPatch } from "../../utils/progressSync";
+import {
+  queueFinishedPatch,
+  queueProgressPatch,
+  syncBothProgressFraction,
+  reconcileLinkedProgress,
+} from "../../utils/progressSync";
 import { downloader } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -444,12 +452,86 @@ describe("ItemDetailScreen", () => {
     expect(screen.getByText("Episode One")).toBeTruthy();
     expect(screen.getByText("Episode Two")).toBeTruthy();
 
-    // No Download button for podcasts, and a note explaining why (not a bug).
+    // No item-level Download button for podcasts (no item-level audio), and the
+    // old "aren't downloaded" note is gone now that episodes download per-row.
     expect(screen.queryByLabelText("Download")).toBeNull();
-    expect(screen.getByText(/Podcast episodes stream and aren't downloaded/)).toBeTruthy();
+    expect(screen.queryByText(/aren't downloaded/)).toBeNull();
+    // Each episode carries its own download control instead.
+    expect(screen.getByLabelText("Download Episode One")).toBeTruthy();
+    expect(screen.getByLabelText("Download Episode Two")).toBeTruthy();
 
     await fireEvent.press(screen.getByLabelText("Play Episode One"));
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
+  });
+
+  it("podcast: per-episode download button triggers downloadEpisode and reflects downloaded/downloading state", async () => {
+    routeApi(podcastItem);
+    // ep1 already downloaded (composite key); ep2 mid-download.
+    useDownloadStore.setState({
+      completedDownloads: {
+        "pod1::ep1": { id: "pod1::ep1", libraryItemId: "pod1", episodeId: "ep1", title: "Episode One" },
+      },
+      activeDownloads: {
+        "pod1::ep2": {
+          id: "pod1::ep2",
+          libraryItemId: "pod1",
+          episodeId: "ep2",
+          title: "Episode Two",
+          status: "downloading",
+          progress: 0.42,
+        },
+      },
+    } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+
+    // ep1 downloaded → delete affordance; ep2 downloading → cancel affordance.
+    expect(screen.getByLabelText("Delete download of Episode One")).toBeTruthy();
+    expect(screen.getByLabelText(/Cancel download of Episode Two, 42 percent complete/)).toBeTruthy();
+
+    // A NOT-downloaded episode would show a plain Download control — swap the
+    // store to a clean slate and verify pressing it drives downloadEpisode.
+    useDownloadStore.setState({ completedDownloads: {}, activeDownloads: {} } as any);
+    await waitFor(() => expect(screen.getByLabelText("Download Episode One")).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText("Download Episode One"));
+    await waitFor(() =>
+      expect(downloader.downloadEpisode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "pod1" }),
+        expect.objectContaining({ id: "ep1" }),
+        expect.any(String),
+        expect.any(String)
+      )
+    );
+  });
+
+  it("podcast: filters episodes by Unplayed / In-Progress against the progress map", async () => {
+    routeApi(podcastItem);
+    // ep1 in-progress; ep2 has no progress → unplayed.
+    useUserStore.setState({
+      mediaProgress: {
+        "pod1-ep1": { libraryItemId: "pod1", episodeId: "ep1", progress: 0.5, isFinished: false },
+      },
+    } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+    expect(screen.getByText("Episode One")).toBeTruthy();
+    expect(screen.getByText("Episode Two")).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Filter: Unplayed"));
+    expect(screen.queryByText("Episode One")).toBeNull();
+    expect(screen.getByText("Episode Two")).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Filter: In-Progress"));
+    expect(screen.getByText("Episode One")).toBeTruthy();
+    expect(screen.queryByText("Episode Two")).toBeNull();
+
+    await fireEvent.press(screen.getByLabelText("Filter: All"));
+    expect(screen.getByText("Episode One")).toBeTruthy();
+    expect(screen.getByText("Episode Two")).toBeTruthy();
   });
 
   it("podcast with no episodes: shows an empty state and disables the Play button", async () => {
@@ -715,5 +797,97 @@ describe("request the other format via ReadMeABook", () => {
     );
     await screen.findAllByText("Silmarillion Reader");
     expect(screen.queryByLabelText("Request audiobook edition")).toBeNull();
+  });
+});
+
+// --- Cross-medium progress: Sync button + Link (lock) toggle ----------------
+describe("ItemDetailScreen — sync progress + link toggle", () => {
+  /** Both-format item whose two progresses are within the 2pt threshold. */
+  const alignedItem = {
+    ...bothFormatItem,
+    userMediaProgress: {
+      ...bothFormatItem.userMediaProgress,
+      progress: 0.5,
+      ebookProgress: 0.49, // 50% vs 49% → below the |Δ|>=2 drift threshold
+    },
+  };
+
+  it("shows the Sync progress action ONLY when both rows show and they differ", async () => {
+    routeApi(bothFormatItem); // audio 50% vs ebook 25% → drifted
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.getByText("Sync progress")).toBeTruthy();
+    // The lock toggle is always present on both-format items.
+    expect(screen.getByLabelText("Link reading and listening")).toBeTruthy();
+  });
+
+  it("hides the Sync progress action when the two progresses are aligned (<2pt)", async () => {
+    routeApi(alignedItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByText("Sync progress")).toBeNull();
+    // Toggle still offered (linking a currently-aligned book is valid).
+    expect(screen.getByLabelText("Link reading and listening")).toBeTruthy();
+  });
+
+  it("is inert for a single-format (audio-only) item: no Sync button, no Link toggle", async () => {
+    routeApi(audioOnlyItem); // no counterpart searchBooks → only the Listening row
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByText("Sync progress")).toBeNull();
+    expect(screen.queryByLabelText("Link reading and listening")).toBeNull();
+  });
+
+  it("confirming Sync writes BOTH media to the max fraction (0.5)", async () => {
+    (syncBothProgressFraction as jest.Mock).mockClear();
+    (showAppDialog as jest.Mock).mockClear();
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Sync progress");
+
+    await fireEvent.press(screen.getByText("Sync progress"));
+    // First dialog is the reconcile confirmation naming both percentages.
+    const opts = (showAppDialog as jest.Mock).mock.calls[0][0];
+    expect(opts.title).toBe("Sync progress");
+    expect(opts.message).toContain("Listening 50%");
+    expect(opts.message).toContain("Reading 25%");
+    const confirmBtn = opts.buttons.find((b: any) => /Sync to 50%/.test(b.text));
+    expect(confirmBtn).toBeTruthy();
+
+    confirmBtn.onPress();
+    // Furthest-along fraction (max of 0.5 audio / 0.25 ebook), duration passed
+    // for the audio currentTime = fraction*duration write.
+    expect(syncBothProgressFraction).toHaveBeenCalledWith(
+      "item1",
+      0.5,
+      expect.objectContaining({ duration: 3600 })
+    );
+  });
+
+  it("the Link toggle persists the per-item lock (and unlinks it)", async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    const toggle = await screen.findByLabelText("Link reading and listening");
+    expect(useUserStore.getState().settings.linkedProgress?.item1).toBeFalsy();
+
+    await fireEvent.press(toggle);
+    await waitFor(() =>
+      expect(useUserStore.getState().settings.linkedProgress?.item1).toBe(true)
+    );
+
+    await fireEvent.press(screen.getByLabelText("Link reading and listening"));
+    await waitFor(() =>
+      expect(useUserStore.getState().settings.linkedProgress?.item1).toBeFalsy()
+    );
   });
 });

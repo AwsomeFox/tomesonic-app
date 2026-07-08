@@ -275,6 +275,36 @@ describe("SeriesDetailScreen", () => {
     expect(startPlayback).toHaveBeenCalledWith("b2");
   });
 
+  it("exposes play as a row accessibility action so TalkBack can reach it", async () => {
+    await renderSeries();
+    await screen.findByText("#2 Beta");
+
+    // The accessible row's own label composes title + author + status; the
+    // nested Play button collapses under it, so the row carries a "play"
+    // accessibility action as the assistive-tech path to the primary action.
+    const betaRow = screen.getByLabelText(/^#2 Beta/);
+    expect(betaRow.props.accessibilityActions).toEqual([{ name: "play", label: "Play" }]);
+
+    fireEvent(betaRow, "accessibilityAction", { nativeEvent: { actionName: "play" } });
+    // Beta is a real audiobook → the row action plays it.
+    expect(startPlayback).toHaveBeenCalledWith("b2");
+  });
+
+  it("row play action routes ebook-only rows to the Reader (labeled Read)", async () => {
+    const navigation = await renderSeries();
+    await screen.findByText("#3 Gamma");
+
+    const gammaRow = screen.getByLabelText(/^#3 Gamma/);
+    expect(gammaRow.props.accessibilityActions).toEqual([{ name: "play", label: "Read" }]);
+
+    fireEvent(gammaRow, "accessibilityAction", { nativeEvent: { actionName: "play" } });
+    expect(navigation.navigate).toHaveBeenCalledWith("Reader", {
+      itemId: "b3",
+      ebookFormat: "epub",
+      title: "Gamma",
+    });
+  });
+
   it("row tap opens the item detail", async () => {
     const navigation = await renderSeries();
     await screen.findByText("#1 Alpha");

@@ -3,7 +3,7 @@ import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react
 import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
-import { syncProgress, closeSession, queueProgressPatch } from "../utils/progressSync";
+import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
 import { writeWidgetState } from "../utils/autoCreds";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -48,6 +48,12 @@ let progressInterval: ReturnType<typeof setInterval> | null = null;
 const SYNC_INTERVAL_MS = 15000;
 const LOCAL_SAVE_INTERVAL_MS = 5000;
 const MAX_TICK_DELTA_S = 2;
+// Native PlaybackProgressUpdated events are delivered slightly out of band, so
+// one can still be in flight when the user pauses. Within this window after a
+// local pause(), such a straggler is ignored so it can't re-stamp updatedAt /
+// accrue listening time / flip isPlaying back to true on a book the user just
+// paused (poisoning freshest-wins). See _lastPausedAt.
+const PAUSE_STRAGGLER_WINDOW_MS = 2000;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
 function autoRewindSeconds(pausedForMs: number): number {
@@ -126,7 +132,14 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     const title = ch?.title || book;
     const subtitle = ch ? [book, author].filter(Boolean).join(" • ") : author;
     const meta: any = { title, artist: subtitle };
+    // artwork = the full card's artworkUri (unchanged). localArtwork = the
+    // LOCAL cover file whose bytes the native layer inlines as artworkData for
+    // the compact card — kept separate so the artworkUri is never disturbed.
     if (session.coverUrl) meta.artwork = session.coverUrl;
+    const localArt =
+      session.carArtworkLocal ||
+      (session.coverUrl && !session.coverUrl.startsWith("http") ? session.coverUrl : undefined);
+    if (localArt) meta.localArtwork = localArt;
     await TrackPlayer.updateMetadataForTrack(activeIndex, meta);
     // Mark applied only AFTER the native call succeeds — marking up front
     // meant a throw here (track not ready yet) was never retried, leaving the
@@ -160,6 +173,10 @@ export async function restoreLocalNowPlayingMeta() {
       artist: [book, author].filter(Boolean).join(" • "),
     };
     if (s.coverUrl) meta.artwork = s.coverUrl;
+    const localArt =
+      s.carArtworkLocal ||
+      (s.coverUrl && !s.coverUrl.startsWith("http") ? s.coverUrl : undefined);
+    if (localArt) meta.localArtwork = localArt;
     await TrackPlayer.updateMetadataForTrack(idx, meta);
   } catch {}
 }
@@ -208,12 +225,16 @@ export function refreshNowPlayingArtwork() {
 // image wasn't among the downloaded parts — whose cover is an http URL shows a
 // BLANK tile in the car's small player even though the big player has art.
 //
-// Fix: fetch the cover to a local cache file once, then re-point the live
-// session's coverUrl at that file. The next metadata push (forced via
+// Fix: fetch the cover to a local cache file once, then point the session's
+// carArtworkLocal at that file. The next metadata push (forced via
 // _lastMetaChapter) rebuilds the track through toMediaItem, which inlines the
-// local file's bytes as artworkData — lighting up the compact card. The full
-// player is unaffected (same image). Best-effort: any failure just leaves the
-// remote URL in place, exactly as before.
+// local file's bytes as artworkData (via the track's `localArtwork`) — lighting
+// up the compact card. Crucially we do NOT re-point coverUrl: that is the
+// artworkUri the FULL now-playing card depends on, and the OLD code overwrote
+// it with this private cache path — which the car can't read, blanking the
+// compact card's URI path (and needlessly disturbing the big player). Keeping
+// coverUrl as the http URL leaves the full card untouched. Best-effort: any
+// failure just leaves the remote URL in place, exactly as before.
 async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: number) {
   try {
     if (!itemId || !url || !url.startsWith("http")) return;
@@ -234,8 +255,8 @@ async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: num
     const st = usePlaybackStore.getState();
     const s = st.currentSession;
     if (!s || (s.libraryItemId || s.libraryItem?.id) !== itemId) return;
-    if (s.coverUrl === path) return;
-    usePlaybackStore.setState({ currentSession: { ...s, coverUrl: path } });
+    if (s.carArtworkLocal === path) return;
+    usePlaybackStore.setState({ currentSession: { ...s, carArtworkLocal: path } });
     // Push the new (local) artwork onto the ACTIVE track now. The 1s tick only
     // re-pushes metadata for single-track books; chapter-queue books title each
     // item individually and the tick skips them, so relying on the tick alone
@@ -428,6 +449,15 @@ export function onNativeProgressSample(e: {
     // progress events (paused handoff item) must not clobber the mirror.
     if (!currentSession || st.isCasting) return;
     if (!Number.isFinite(e?.position) || e.position < 0) return;
+    // A native progress sample that arrives right after a local pause() is a
+    // straggler for audio that has already stopped — accepting it would
+    // hard-set isPlaying:true and accrue listening time + re-stamp updatedAt on
+    // a paused book (matches the paused-tick-must-not-restamp gate in
+    // persistProgressSample). Ignore samples inside the post-pause window.
+    // play() clears _lastPausedAt, so real resumes are unaffected.
+    if (_lastPausedAt != null && Date.now() - _lastPausedAt < PAUSE_STRAGGLER_WINDOW_MS) {
+      return;
+    }
 
     const chapters = st.chapters;
     let absolutePosition = e.position;
@@ -844,6 +874,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // Cross-device freshness: if another device listened further since this
       // local save, prefer the server's position. Best-effort and capped at
       // 3s so a slow/unreachable server never delays app startup.
+      // Snapshot the session generation BEFORE the up-to-3s await below: a user
+      // tapping a book during cold start starts a real session (bumping
+      // _sessionGen and setting currentSession) while we're blocked here.
+      const genBeforeFetch = _sessionGen;
       try {
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
@@ -882,6 +916,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
       } catch {
         // Offline / timeout — the local save stands.
+      }
+      // TOCTOU: the currentSession check at the top of loadLastSession ran
+      // BEFORE the freshness GET above. A book tapped during that up-to-3s
+      // window already prepared a LIVE session — restoring the saved session
+      // over it would TrackPlayer.reset() the live queue and re-prepare it
+      // paused (the exact clobber the top guard exists to prevent). Re-check
+      // both the live session and the generation before preparing.
+      if (get().currentSession || _sessionGen !== genBeforeFetch) {
+        console.log(
+          "[PlaybackStore] Live session started during restore — skipping saved-session restore."
+        );
+        return;
       }
       try {
         const ok = await get().preparePlaybackSession(session, false);
@@ -1016,7 +1062,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
           let absolutePosition: number;
           let bookDuration: number;
+          // `isPlayerPlaying` is the FOLDED UI flag (Playing OR Buffering OR
+          // Loading) written to isPlaying — a transient stall must not flip the
+          // mini-player/notification to the pause glyph, freeze the scrubber,
+          // or disarm this tick. `isPlayingStrict` is true ONLY for real
+          // Playing and gates listening-time accrual / persistence so a stall
+          // never accrues time or re-stamps updatedAt.
           let isPlayerPlaying: boolean;
+          let isPlayingStrict: boolean;
           let chapterIndex = -1;
 
           if (casting) {
@@ -1029,6 +1082,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             absolutePosition = get().position;
             bookDuration = get().duration;
             isPlayerPlaying = get().isPlaying;
+            isPlayingStrict = get().isPlaying;
             for (let i = 0; i < chapters.length; i++) {
               if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
                 chapterIndex = i;
@@ -1051,7 +1105,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             if (!state) return;
             const progress = await TrackPlayer.getProgress();
             const playerState = await TrackPlayer.getPlaybackState();
-            isPlayerPlaying = playerState.state === State.Playing;
+            isPlayingStrict = playerState.state === State.Playing;
+            // Fold Buffering/Loading into the playing UI flag (see comment at
+            // the isBuffering field): a mid-stream stall keeps the play glyph
+            // and a live scrubber instead of looking hung.
+            isPlayerPlaying =
+              isPlayingStrict ||
+              playerState.state === State.Buffering ||
+              playerState.state === State.Loading;
 
             // Translate the player position to an ABSOLUTE book position. With a
             // chapter queue each item is clipped, so the raw position is
@@ -1105,11 +1166,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           }
 
           if (get().currentSession !== tickSession) return;
+          // Accrual/persistence gate on STRICT Playing — a Buffering/Loading
+          // tick advances the UI flag above but must NOT accrue listening time
+          // or re-stamp updatedAt (that would poison freshest-wins).
           persistProgressSample(
             get().currentSession,
             absolutePosition,
             bookDuration,
-            isPlayerPlaying
+            isPlayingStrict
           );
         } catch (e) {
           // Player might not be active/loaded
@@ -1180,16 +1244,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // Offline fallback: if this book is downloaded (with playback meta), build
       // a local session from the on-device files so it plays without the server.
       try {
-        const { useDownloadStore } = require("./useDownloadStore");
-        const dl = useDownloadStore.getState().completedDownloads[itemId];
+        const { useDownloadStore, episodeDownloadKey } = require("./useDownloadStore");
+        // Podcast episodes are downloaded under the composite key; books under
+        // the bare libraryItemId. Resolve whichever this play is for.
+        const downloadKey = episodeId ? episodeDownloadKey(itemId, episodeId) : itemId;
+        const dl = useDownloadStore.getState().completedDownloads[downloadKey];
         // Requires actual AUDIO tracks — an ebook-only download has meta but an
         // empty tracks list, and "playing" it would reset the player into an
-        // empty queue (the reader is its playback surface, not us).
-        if (dl?.meta?.tracks?.length && dl.localFolderPath && !episodeId) {
-          const lastLocal = useUserStore.getState().getMediaProgress(itemId);
+        // empty queue (the reader is its playback surface, not us). A
+        // non-downloaded episode simply has no entry here and keeps streaming.
+        if (dl?.meta?.tracks?.length && dl.localFolderPath) {
+          const lastLocal = useUserStore.getState().getMediaProgress(itemId, episodeId);
           const localSession = {
-            id: `local_${itemId}`,
+            id: episodeId ? `local_${downloadKey}` : `local_${itemId}`,
             libraryItemId: itemId,
+            episodeId: episodeId || undefined,
             displayTitle: dl.title,
             displayAuthor: dl.author,
             duration: dl.meta.duration || 0,
@@ -1253,6 +1322,20 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         libraryItemId: prevSession.libraryItemId,
         episodeId: prevSession.episodeId || undefined,
       }).catch(() => {});
+      // LOCK: an audio session for this item just closed — if the user linked
+      // its progresses, pull the EBOOK up to this listening position
+      // (furthest-wins, fraction-only; see reconcileLinkedProgress). No-op
+      // unless locked, and never for podcast episodes. Guarded so a failure
+      // here can't disturb the session switch.
+      try {
+        const prevDur = get().duration;
+        if (!prevSession.episodeId && prevSession.libraryItemId) {
+          reconcileLinkedProgress(prevSession.libraryItemId, {
+            audioFraction: prevDur > 0 ? prevPos / prevDur : 0,
+            duration: prevDur,
+          });
+        }
+      } catch {}
       if (stale()) return false;
     }
 
@@ -1296,14 +1379,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         ? useDownloadStore.getState().completedDownloads[libraryItemId]
         : null;
 
-      // Notification artwork. Media3 fetches this URL NATIVELY (no axios
-      // interceptor, no token refresh), so a cover URL with a stale baked-in
-      // token silently 401s → no album art. Priority:
+      // Now-playing artwork. The FULL now-playing card resolves the artworkUri
+      // (via the app's BitmapLoader, which loads http AND local file:// — it
+      // works today and MUST NOT change). Media3 fetches artworkUri NATIVELY
+      // (no axios interceptor / token refresh), so http URLs are built with the
+      // CURRENT token; a stale baked-in one would 401 → no art. Priority:
       //  1. the downloaded cover FILE (token-proof, offline-proof),
       //  2. a URL built fresh with the CURRENT token,
-      //  3. the session's own coverUrl with its (possibly rotated-out) token
-      //     replaced by the current one — restored MMKV sessions carry the
-      //     token that was current when they were saved.
+      //  3. the session's own coverUrl with its token refreshed.
       const localCover = (download?.parts || []).find((p: any) => p.id === "cover")
         ?.localFilePath as string | undefined;
       const freshenToken = (url?: string | null) =>
@@ -1316,6 +1399,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           ? `${serverAddress}/api/items/${libraryItemId}/cover?width=800&format=webp&token=${token}`
           : undefined) ||
         freshenToken(session.coverUrl);
+      // SEPARATE bytes source for Android Auto's COMPACT surfaces (home-screen
+      // media card + mini control bar). Those never render from a remote
+      // artworkUri; they need inline artworkData bytes, which the native layer
+      // (AudioItem.toMediaItem) decodes from a LOCAL cover file. Carried as the
+      // track's `localArtwork` so it feeds artworkData WITHOUT touching the
+      // artworkUri the full card depends on. A downloaded book already has the
+      // file; a streaming book gets one cached lazily (cacheNowPlayingCoverLocally).
+      const carArtworkLocal =
+        localCover || (artworkUrl && !artworkUrl.startsWith("http") ? artworkUrl : undefined);
       const localFolder = download?.localFolderPath;
       const localForTrack = (track: any, idx: number): string | null => {
         if (!download) return null;
@@ -1441,6 +1533,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             clipEndMs: Math.round(((ch.end || 0) - startOffset) * 1000),
           };
           if (artworkUrl) t.artwork = artworkUrl;
+          if (carArtworkLocal) t.localArtwork = carArtworkLocal;
           return t;
         });
       } else {
@@ -1464,6 +1557,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             duration: track.duration,
           };
           if (artworkUrl) t.artwork = artworkUrl;
+          if (carArtworkLocal) t.localArtwork = carArtworkLocal;
           return t;
         });
       }
@@ -1637,7 +1731,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // Persist the resolved cover URL on the session so the Player and
         // MiniPlayer can render artwork (the raw session has no coverUrl).
         // currentTime reflects the RECONCILED position (see freshest-wins above).
-        currentSession: { ...session, currentTime: startAbs, coverUrl: artworkUrl || session.coverUrl || "" },
+        currentSession: {
+          ...session,
+          currentTime: startAbs,
+          coverUrl: artworkUrl || session.coverUrl || "",
+          // Local cover file whose bytes light Android Auto's COMPACT surfaces
+          // (see the artwork comment above). Kept separate from coverUrl so the
+          // full card's artworkUri is never re-pointed at a private path.
+          carArtworkLocal: carArtworkLocal || undefined,
+        },
         playbackSpeed,
         chapters,
         chapterQueue,
@@ -1657,12 +1759,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         episodeId: session.episodeId || undefined,
       });
 
-      // If the now-playing cover is a REMOTE url, cache it to a local file so
-      // Android Auto's compact player (home card / mini bar) — which only reads
-      // inline artwork bytes — gets a bitmap. Fire-and-forget; leaves the remote
-      // url in place on failure. Local-file covers already inline their bytes.
+      // If the now-playing cover is a REMOTE url (streaming, or a downloaded
+      // book whose cover image wasn't among the downloaded parts), cache it to a
+      // local file so Android Auto's compact player (home card / mini bar) —
+      // which only reads inline artwork bytes — gets a bitmap. This populates
+      // carArtworkLocal WITHOUT re-pointing coverUrl, so the full card's
+      // artworkUri stays the (working) http url. Fire-and-forget; leaves the
+      // remote url in place on failure. Downloaded local covers already inline.
       const coverForCache = artworkUrl || session.coverUrl || "";
-      if (libraryItemId && coverForCache.startsWith("http")) {
+      if (libraryItemId && !carArtworkLocal && coverForCache.startsWith("http")) {
         cacheNowPlayingCoverLocally(libraryItemId, coverForCache, gen);
       }
 
@@ -2250,6 +2355,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         libraryItemId: session.libraryItemId,
         episodeId: session.episodeId || undefined,
       }).catch(() => {});
+      // LOCK: playback for this item was just dismissed — reconcile the ebook
+      // up to this final listening position when linked (furthest-wins,
+      // fraction-only). No-op unless locked; skipped for podcast episodes.
+      try {
+        const closeDur = get().duration;
+        if (!session.episodeId && session.libraryItemId) {
+          reconcileLinkedProgress(session.libraryItemId, {
+            audioFraction: closeDur > 0 ? closeAt / closeDur : 0,
+            duration: closeDur,
+          });
+        }
+      } catch {}
     }
 
     // If casting, stop the receiver's playback too — otherwise dismissing
