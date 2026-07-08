@@ -61,19 +61,30 @@ jest.mock("../../utils/api", () => ({
 jest.mock("../../utils/progressSync", () => ({
   queueProgressPatch: jest.fn(),
 }));
+jest.mock("../../utils/downloader", () => ({
+  downloader: {
+    downloadEpisode: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+jest.mock("../../store/useDialogStore", () => ({
+  showAppDialog: jest.fn(),
+}));
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 import LatestEpisodesScreen from "../../screens/LatestEpisodesScreen";
 import { api } from "../../utils/api";
 import { queueProgressPatch } from "../../utils/progressSync";
+import { downloader } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useDownloadStore } from "../../store/useDownloadStore";
 
 const initialUser = useUserStore.getState();
 const initialLibrary = useLibraryStore.getState();
 const initialPlayback = usePlaybackStore.getState();
+const initialDownloads = useDownloadStore.getState();
 
 const EPISODES = [
   {
@@ -114,6 +125,8 @@ beforeEach(() => {
   useUserStore.setState(initialUser, true);
   useLibraryStore.setState(initialLibrary, true);
   usePlaybackStore.setState(initialPlayback, true);
+  useDownloadStore.setState(initialDownloads, true);
+  (downloader.downloadEpisode as jest.Mock).mockClear();
   useUserStore.setState({
     serverConnectionConfig: { address: "https://abs.example.com", token: "tok" },
   } as any);
@@ -299,11 +312,97 @@ describe("LatestEpisodesScreen", () => {
     await renderEpisodes();
     await screen.findByText("Fresh Episode");
 
-    await fireEvent.press(screen.getByLabelText("Play Fresh Episode"));
+    // The now-playing episode's Play button flips to a "Resume" affordance.
+    await fireEvent.press(screen.getByLabelText("Resume Fresh Episode"));
 
     // No fresh /play — resume/expand the existing session instead.
     expect(startPlayback).not.toHaveBeenCalled();
     expect(play).toHaveBeenCalled();
     expect(setPlayerExpanded).toHaveBeenCalledWith(true);
+  });
+
+  it("play button shows a now-playing (Resume) state for the loaded session's episode", async () => {
+    usePlaybackStore.setState({
+      startPlayback,
+      currentSession: { libraryItemId: "li1", episodeId: "ep1" },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // ep1 is the session → "Resume"; ep2 is not → plain "Play".
+    expect(screen.getByLabelText("Resume Fresh Episode")).toBeTruthy();
+    expect(screen.getByLabelText("Play Short Episode")).toBeTruthy();
+    expect(screen.queryByLabelText("Play Fresh Episode")).toBeNull();
+  });
+
+  it("per-episode download button drives downloader.downloadEpisode with a built libraryItem", async () => {
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getByLabelText("Download Fresh Episode"));
+
+    await waitFor(() =>
+      expect(downloader.downloadEpisode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "li1" }),
+        expect.objectContaining({ id: "ep1" }),
+        expect.any(String),
+        expect.any(String)
+      )
+    );
+  });
+
+  it("download button reflects downloaded (delete) and downloading (cancel %) states", async () => {
+    useDownloadStore.setState({
+      completedDownloads: {
+        "li1::ep1": { id: "li1::ep1", libraryItemId: "li1", episodeId: "ep1", title: "Fresh Episode" },
+      },
+      activeDownloads: {
+        "li2::ep2": {
+          id: "li2::ep2",
+          libraryItemId: "li2",
+          episodeId: "ep2",
+          title: "Short Episode",
+          status: "downloading",
+          progress: 0.42,
+        },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    expect(screen.getByLabelText("Delete download of Fresh Episode")).toBeTruthy();
+    expect(
+      screen.getByLabelText(/Cancel download of Short Episode, 42 percent complete/)
+    ).toBeTruthy();
+  });
+
+  it("header count and empty-state reflect the active filter, not the raw fetch count", async () => {
+    // ep1 in-progress, ep2 unplayed.
+    useUserStore.setState({
+      mediaProgress: {
+        "li1-ep1": { libraryItemId: "li1", episodeId: "ep1", progress: 0.4, isFinished: false },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // Both visible → "2 Recent Episodes".
+    expect(screen.getByText("2 Recent Episodes")).toBeTruthy();
+
+    // In-Progress → only ep1 → count drops to 1 (singular).
+    await fireEvent.press(screen.getByLabelText("Filter: In-Progress"));
+    expect(screen.getByText("1 Recent Episode")).toBeTruthy();
+    expect(screen.queryByText("2 Recent Episodes")).toBeNull();
+
+    // A filter with no matches → the empty-state line renders.
+    useUserStore.setState({
+      mediaProgress: {
+        "li1-ep1": { libraryItemId: "li1", episodeId: "ep1", isFinished: true },
+        "li2-ep2": { libraryItemId: "li2", episodeId: "ep2", isFinished: true },
+      },
+    } as any);
+    await fireEvent.press(screen.getByLabelText("Filter: Unplayed"));
+    expect(screen.getByText("No episodes match this filter.")).toBeTruthy();
+    expect(screen.getByText("0 Recent Episodes")).toBeTruthy();
   });
 });
