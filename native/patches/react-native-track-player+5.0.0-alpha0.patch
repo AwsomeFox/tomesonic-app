@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..585a5ed 100644
+index b495b5a..b416eb2 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -198,7 +198,7 @@ index b495b5a..585a5ed 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -61,6 +63,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -61,7 +63,19 @@ class MusicService : HeadlessJsMediaService() {
      private lateinit var player: QueuedAudioPlayer
      private val binder = MusicBinder()
      private val scope = MainScope()
@@ -207,9 +207,18 @@ index b495b5a..585a5ed 100644
 +    // their session touch instead of crashing on a released MediaLibrarySession.
 +    @Volatile private var absDestroyed = false
      private lateinit var fakePlayer: ExoPlayer
++    // A JS-dead Android Auto cold start plays on fakePlayer with a "play:<id>"
++    // mediaId (see onSetMediaItems / onPlaybackResumption). When JS later comes
++    // alive, setupPlayer releases fakePlayer — which used to silently stop the
++    // car's audio and let the app restore a STALE disk save paused over the
++    // live session. absColdStartOffsetMs is the chosen track's startOffset:
++    // fakePlayer.currentPosition is track-relative (multi-file books), so the
++    // absolute book position handed off to JS = offset + currentPosition.
++    private var absColdStartOffsetMs: Long = 0L
      private lateinit var mediaSession: MediaLibrarySession
      private var progressUpdateJob: Job? = null
-@@ -79,10 +85,13 @@ class MusicService : HeadlessJsMediaService() {
+     private var sessionCommands: SessionCommands? = null
+@@ -79,10 +93,13 @@ class MusicService : HeadlessJsMediaService() {
      }
  
      fun getBitmapLoader(): BitmapLoader {
@@ -223,7 +232,7 @@ index b495b5a..585a5ed 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +106,1183 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +114,1191 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -1387,6 +1396,10 @@ index b495b5a..585a5ed 100644
 +        episodeId: String?,
 +        overrideSec: Double?
 +    ): Pair<String, Long>? {
++        // Default the handoff offset to 0 (correct for single-file books and the
++        // offline path below); the online multi-file branch overwrites it with
++        // the chosen track's real startOffset before returning.
++        absColdStartOffsetMs = 0L
 +        // Offline (or the server unreachable below): play the downloaded copy.
 +        if (!absOnline() && episodeId == null) {
 +            absResolveOfflinePlay(itemId, overrideSec)?.let { return it }
@@ -1416,11 +1429,15 @@ index b495b5a..585a5ed 100644
 +        val full = if (rel.startsWith("http")) rel else "${creds.server}$rel"
 +        val url = if (full.contains("token=")) full else full + (if (full.contains("?")) "&" else "?") + "token=${creds.token}"
 +        val withinSec = (target - chosen.optDouble("startOffset", 0.0)).coerceAtLeast(0.0)
++        // Remember the chosen track's offset so a later JS handoff (setupPlayer)
++        // can turn fakePlayer's track-relative position back into absolute book
++        // seconds.
++        absColdStartOffsetMs = (chosen.optDouble("startOffset", 0.0) * 1000).toLong()
 +        return Pair(url, (withinSec * 1000).toLong())
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1370,21 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1386,45 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1432,6 +1449,30 @@ index b495b5a..585a5ed 100644
 +            wakeMode = playerOptions?.let { BundleUtils.getIntOrNull(it, WAKE_MODE) } ?: 0
          )
          player = QueuedAudioPlayer(this@MusicService, options)
++        // Hand a live JS-dead Android Auto session off to JS BEFORE tearing down
++        // fakePlayer. Without this, the app opening mid-drive silently stopped
++        // the car's audio (fakePlayer.release) and restored a stale disk save
++        // paused over the top. Reuse the browse tap-to-play channel: the JS
++        // RemotePlayId handler runs the full startPlayback + seek, so the app
++        // adopts the correct book at the LIVE absolute position, still playing.
++        // Gated on playWhenReady so foregrounding a car session the user PAUSED
++        // never auto-resumes it.
++        try {
++            if (::fakePlayer.isInitialized) {
++                val mid = fakePlayer.currentMediaItem?.mediaId
++                if (mid != null && mid.startsWith("play:") && fakePlayer.playWhenReady) {
++                    val relMs = fakePlayer.currentPosition.coerceAtLeast(0L)
++                    val absSec = (absColdStartOffsetMs + relMs) / 1000.0
++                    val raw = mid.removePrefix("play:").substringBefore("@@")
++                    Timber.i("Handing off AA cold-start session %s @ %.1fs to JS", raw, absSec)
++                    emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply {
++                        putString("id", "$raw@@$absSec")
++                    })
++                }
++            }
++        } catch (e: Exception) {
++            Timber.w(e, "AA cold-start handoff failed")
++        }
          fakePlayer.release()
 -        mediaSession.player = player.forwardingPlayer
 +        // Degraded onCreate (no session built): the service already stopSelf'd;
@@ -1444,7 +1485,7 @@ index b495b5a..585a5ed 100644
          observeEvents()
      }
  
-@@ -293,9 +1467,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1507,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1456,7 +1497,7 @@ index b495b5a..585a5ed 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1480,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1520,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1518,7 +1559,7 @@ index b495b5a..585a5ed 100644
          }
      }
  
-@@ -449,6 +1657,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1697,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1529,7 +1570,7 @@ index b495b5a..585a5ed 100644
      }
  
      @MainThread
-@@ -515,6 +1727,29 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1767,29 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -1559,7 +1600,7 @@ index b495b5a..585a5ed 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +1952,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +1992,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1568,7 +1609,7 @@ index b495b5a..585a5ed 100644
              return
          }
  
-@@ -780,8 +2015,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2055,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1584,7 +1625,7 @@ index b495b5a..585a5ed 100644
          return mediaSession
      }
  
-@@ -792,13 +2033,41 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2073,41 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1628,7 +1669,7 @@ index b495b5a..585a5ed 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2174,230 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2214,230 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1778,7 +1819,7 @@ index b495b5a..585a5ed 100644
 +                } finally {
 +                    future.set(LibraryResult.ofVoid(params))
 +                }
-             }
++            }
 +            return future
 +        }
 +
@@ -1853,7 +1894,7 @@ index b495b5a..585a5ed 100644
 +                Timber.i("AA onAddMediaItems -> routing to JS remote-play-id=%s", raw)
 +                scope.launch { emit(MusicEvents.BUTTON_PLAY_FROM_ID, Bundle().apply { putString("id", raw) }) }
 +                return Futures.immediateFuture(mutableListOf())
-+            }
+             }
 +            // Cold start (JS not ready): resolve natively so playback still works.
 +            val future = com.google.common.util.concurrent.SettableFuture.create<MutableList<MediaItem>>()
 +            absSubmitBrowse(onReject = {
@@ -1876,7 +1917,7 @@ index b495b5a..585a5ed 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2406,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2446,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -1906,7 +1947,7 @@ index b495b5a..585a5ed 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2438,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2478,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -1922,7 +1963,7 @@ index b495b5a..585a5ed 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2454,81 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2494,81 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  

@@ -4,6 +4,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import BottomSheet from "./BottomSheet";
 import Pressable from "./HintPressable";
+import type { SleepTimerState } from "../store/usePlaybackStore";
 
 const TIMEOUTS = [5, 10, 15, 30, 45, 60];
 
@@ -11,7 +12,7 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   /** Active timer state from the store, or null when no timer is running. */
-  timer: { endOfChapter: boolean; remaining: number } | null;
+  timer: SleepTimerState | null;
   /** Whether a current chapter exists (enables the End of chapter option). */
   hasChapter: boolean;
   onSet: (seconds: number, endOfChapter?: boolean) => void;

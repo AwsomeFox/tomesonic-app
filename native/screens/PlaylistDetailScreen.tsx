@@ -11,6 +11,7 @@ import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
 import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
@@ -399,15 +400,11 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
           {items.length > 0 ? (
             items.map((item, index) => renderPlaylistItem(item, index))
           ) : (
-            <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 60, paddingHorizontal: 32 }}>
-              <Icon name="list" size={48} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
-              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "700", marginBottom: 4 }}>
-                No items yet
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
-                Add books to this playlist from a book's details screen.
-              </Text>
-            </View>
+            <EmptyState
+              icon="list"
+              title="No items yet"
+              message="Add books to this playlist from a book's details screen."
+            />
           )}
         </ScrollView>
       ) : null}

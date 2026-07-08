@@ -21,6 +21,7 @@ import TopAppBar from "../components/TopAppBar";
 import OrderModal, { SortItem } from "../components/OrderModal";
 import { GridSkeleton } from "../components/Skeleton";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import { useUiStore } from "../store/useUiStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import SearchContent from "../components/SearchContent";
@@ -406,36 +407,12 @@ export default function AuthorsScreen({ navigation }: any) {
           </Pressable>
         </View>
       ) : authors.length === 0 ? (
-        <View
-          style={{
-            flex: 1,
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 32,
-          }}
-        >
-          <Icon name="authors" size={56} color={colors.onSurfaceVariant} />
-          <Text
-            style={{
-              color: colors.onSurface,
-              fontSize: 18,
-              fontWeight: "bold",
-              marginTop: 16,
-              marginBottom: 8,
-            }}
-          >
-            No authors found
-          </Text>
-          <Text
-            style={{
-              color: colors.onSurfaceVariant,
-              fontSize: 14,
-              textAlign: "center",
-            }}
-          >
-            No authors have been added to this library yet.
-          </Text>
-        </View>
+        <EmptyState
+          style={{ flex: 1 }}
+          icon="authors"
+          title="No authors found"
+          message="No authors have been added to this library yet."
+        />
       ) : (
         <FlatList
           key={`authors-grid-${numColumns}`}

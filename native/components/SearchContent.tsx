@@ -177,6 +177,7 @@ export default function SearchContent({ navigation }: { navigation: any }) {
 
   const renderSectionHeader = (title: string) => (
     <Text
+      accessibilityRole="header"
       style={{
         color: colors.onSurface,
         fontSize: 14,
@@ -279,6 +280,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         key={series.id || index}
         entering={listRowEnter(index)}
         android_ripple={{ color: colors.surfaceContainerHighest }}
+        accessibilityRole="button"
+        accessibilityLabel={`${series.name || "Untitled Series"}, ${count} ${
+          count === 1 ? "book" : "books"
+        }`}
         onPress={() =>
           rootNav.navigate("SeriesDetail", { seriesId: series.id })
         }
@@ -357,6 +362,8 @@ export default function SearchContent({ navigation }: { navigation: any }) {
       key={key}
       entering={listRowEnter(index)}
       android_ripple={{ color: colors.surfaceContainerHighest }}
+      accessibilityRole="button"
+      accessibilityLabel={`${name}${subtitle ? ", " + subtitle : ""}`}
       onPress={onPress}
       style={{
         flexDirection: "row",
@@ -411,6 +418,8 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         key={name || index}
         entering={listRowEnter(index)}
         android_ripple={{ color: colors.surfaceContainerHighest }}
+        accessibilityRole="button"
+        accessibilityLabel={`Tag: ${name}`}
         onPress={() =>
           // Filter values are base64-$encode'd (ABS convention) — a plain
           // URI-encoded name fails the server's base64 decode and matches nothing.

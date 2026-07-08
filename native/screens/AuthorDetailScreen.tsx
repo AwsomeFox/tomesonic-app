@@ -16,7 +16,7 @@ import { useUserStore } from "../store/useUserStore";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import { isEbookOnly } from "../utils/bookMatch";
-import BookProgressBadge from "../components/BookProgressBadge";
+import BookProgressBadge, { bookStatusA11yLabel } from "../components/BookProgressBadge";
 import Skeleton, { ListSkeleton } from "../components/Skeleton";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import RmabMissingSection from "../components/RmabMissingSection";
@@ -49,6 +49,9 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const { authorId, authorName } = route.params || {};
   const { serverConnectionConfig } = useUserStore();
+  // Same progress map the badge reads, so the card's spoken label can fold in
+  // the badge's Finished / remaining / Downloaded state (BookCard pattern).
+  const mediaProgress = useUserStore((s) => s.mediaProgress);
 
   const [author, setAuthor] = useState<AuthorData | null>(null);
 
@@ -135,12 +138,17 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     const coverUri = getCoverUrl(item.id);
     const title = item.media?.metadata?.title || "Untitled";
     const subtitle = item.media?.metadata?.subtitle || "";
+    const downloaded = (item as any).isLocal || !!(item as any).localLibraryItem;
 
     return (
       <AnimatedPressable
         entering={listRowEnter(index)}
         onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
         android_ripple={{ color: colors.surfaceContainerHighest }}
+        accessibilityRole="button"
+        accessibilityLabel={[title, subtitle, bookStatusA11yLabel(item, mediaProgress, downloaded)]
+          .filter(Boolean)
+          .join(". ")}
         style={{
           flexDirection: "row",
           backgroundColor: colors.surfaceContainer,
@@ -213,7 +221,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           <BookProgressBadge
             itemId={item.id}
             item={item}
-            downloaded={(item as any).isLocal || !!(item as any).localLibraryItem}
+            downloaded={downloaded}
             style={{ marginTop: 4 }}
           />
         </View>
@@ -253,6 +261,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           )}
         </View>
         <Text
+          accessibilityRole="header"
           style={{
             color: colors.onSurface,
             fontSize: 22,
@@ -276,6 +285,9 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
         {author?.description ? (
           <Pressable
             onPress={() => setDescExpanded((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={descExpanded ? "Show less" : "Show more"}
+            accessibilityState={{ expanded: descExpanded }}
             style={{ paddingHorizontal: 24, marginTop: 12 }}
           >
             <Text
@@ -323,6 +335,7 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           <Icon name="back" size={24} color={colors.onSurface} />
         </Pressable>
         <Text
+          accessibilityRole="header"
           numberOfLines={1}
           style={{ color: colors.onSurface, fontSize: 18, fontWeight: "bold", flex: 1 }}
         >

@@ -4,7 +4,7 @@ import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
-import { queueFinishedPatch } from "../utils/progressSync";
+import { queueFinishedPatch, queueProgressPatch } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -192,6 +192,49 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       applyLocally();
     } finally {
       finishBusyRef.current = false;
+    }
+  };
+
+  // Per-episode finished toggle. Episode progress is ITS OWN entry, keyed
+  // `${itemId}-${episodeId}` (the /api/me convention) and PATCHed to the
+  // episode-scoped endpoint — an item-level write would pollute the map with a
+  // bogus podcast-item progress entry (see usePlaybackStore's per-tick note).
+  const episodeBusyRef = React.useRef<Record<string, boolean>>({});
+  const handleToggleEpisodeFinished = async (episode: any) => {
+    const epId = episode?.id;
+    if (!item?.id || !epId) return;
+    // Key the busy flag by the item+episode composite (same as the endpoint and
+    // progress map) — episode ids aren't unique across items, so keying by
+    // episode id alone could block a different item's episode toggle.
+    const key = `${item.id}-${epId}`;
+    if (episodeBusyRef.current[key]) return;
+    episodeBusyRef.current[key] = true;
+    const next = !useUserStore.getState().mediaProgress[key]?.isFinished;
+    const applyLocally = () =>
+      useUserStore.setState((s) => ({
+        mediaProgress: {
+          ...s.mediaProgress,
+          [key]: {
+            ...s.mediaProgress[key],
+            libraryItemId: item.id,
+            episodeId: epId,
+            isFinished: next,
+            updatedAt: Date.now(),
+          },
+        },
+      }));
+    try {
+      await api.patch(`/api/me/progress/${item.id}/${epId}`, { isFinished: next });
+      applyLocally();
+    } catch (err) {
+      // Offline — queue an episode-scoped PATCH (non-finite position drops the
+      // audio fields but still delivers the isFinished toggle) and reflect it
+      // locally; flushPendingSyncs delivers it when the server is reachable.
+      console.warn("[ItemDetail] Episode finished-toggle failed — queueing:", err);
+      queueProgressPatch(item.id, NaN, NaN, epId, { isFinished: next });
+      applyLocally();
+    } finally {
+      episodeBusyRef.current[key] = false;
     }
   };
 
@@ -1005,35 +1048,41 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               </Pressable>
             ) : null}
 
-            {/* Mark as Finished/Unfinished Button */}
-            <Pressable
-              onPress={handleToggleFinished}
-              accessibilityRole="button"
-              accessibilityLabel={isFinished ? "Mark as not finished" : "Mark as finished"}
-              accessibilityState={{ selected: isFinished }}
-              android_ripple={{
-                color: withAlpha(
-                  isFinished ? colors.onPrimaryContainer : colors.onSecondaryContainer,
-                  0.15
-                ),
-              }}
-              style={{
-                width: 52,
-                height: 52,
-                borderRadius: 26,
-                overflow: "hidden",
-                backgroundColor: isFinished ? colors.primaryContainer : colors.secondaryContainer,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Icon
-                name="check"
-                size={22}
-                color={isFinished ? colors.onPrimaryContainer : colors.onSecondaryContainer}
-                style={{ opacity: isFinished ? 1 : 0.45 }}
-              />
-            </Pressable>
+            {/* Mark as Finished/Unfinished Button. Books only: a podcast ITEM
+                has no item-level progress (each EPISODE tracks its own), so an
+                item-level isFinished PATCH here writes a bogus podcast-item
+                entry (see usePlaybackStore's per-tick note). Episodes get their
+                own per-row finished toggle below. */}
+            {!isPodcastItem ? (
+              <Pressable
+                onPress={handleToggleFinished}
+                accessibilityRole="button"
+                accessibilityLabel={isFinished ? "Mark as not finished" : "Mark as finished"}
+                accessibilityState={{ selected: isFinished }}
+                android_ripple={{
+                  color: withAlpha(
+                    isFinished ? colors.onPrimaryContainer : colors.onSecondaryContainer,
+                    0.15
+                  ),
+                }}
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  overflow: "hidden",
+                  backgroundColor: isFinished ? colors.primaryContainer : colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon
+                  name="check"
+                  size={22}
+                  color={isFinished ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                  style={{ opacity: isFinished ? 1 : 0.45 }}
+                />
+              </Pressable>
+            ) : null}
 
             {/* Add to collection / playlist. Books only: ABS collections are
                 book-only and playlists hold EPISODES for podcasts — adding a
@@ -1361,7 +1410,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           {/* Podcast episodes */}
           {isPodcastItem && episodes.length > 0 ? (
             <View style={{ paddingHorizontal: 20, marginTop: 24 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginBottom: 4 }}>
+              <Text
+                accessibilityRole="header"
+                style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginBottom: 4 }}
+              >
                 {episodes.length} {episodes.length === 1 ? "Episode" : "Episodes"}
               </Text>
               {episodes.slice(0, episodeLimit).map((episode) => {
@@ -1424,6 +1476,33 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                         </View>
                       ) : null}
                     </View>
+                    {/* Per-episode finished toggle — PATCHes the episode-scoped
+                        endpoint and updates the `${itemId}-${episodeId}` map key. */}
+                    <Pressable
+                      onPress={() => handleToggleEpisodeFinished(episode)}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        epFinished ? "Mark episode not finished" : "Mark episode finished"
+                      }
+                      accessibilityState={{ selected: epFinished }}
+                      hitSlop={6}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 20,
+                        marginRight: 8,
+                        backgroundColor: epFinished ? colors.primaryContainer : colors.secondaryContainer,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Icon
+                        name="check"
+                        size={20}
+                        color={epFinished ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                        style={{ opacity: epFinished ? 1 : 0.45 }}
+                      />
+                    </Pressable>
                     <Pressable
                       onPress={() => playEpisode(episode)}
                       disabled={!!startingEpisodeId}

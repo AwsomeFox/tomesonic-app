@@ -121,7 +121,16 @@ function TabNavigator() {
 
 export default function AppNavigator() {
   const user = useUserStore((state) => state.user);
+  const isInitialized = useUserStore((state) => state.isInitialized);
   const colors = useThemeColors();
+
+  // Until the user store has hydrated from MMKV, `user` is still its default
+  // null — rendering the Connect screen here would flash the login UI for a
+  // frame on every authenticated launch. Hold a neutral splash (the themed
+  // surface, same as the native splash) until initialize() has run.
+  if (!isInitialized) {
+    return <View style={{ flex: 1, backgroundColor: colors.surface }} />;
+  }
 
   const navTheme = {
     ...(colors.isDark ? DarkTheme : DefaultTheme),

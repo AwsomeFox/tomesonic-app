@@ -14,6 +14,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
 import { GridSkeleton } from "../components/Skeleton";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import OrderModal from "../components/OrderModal";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
@@ -422,15 +423,12 @@ export default function SeriesListScreen({ navigation }: any) {
           </Pressable>
         </View>
       ) : seriesList.length === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <Icon name="series" size={48} color={colors.onSurfaceVariant} />
-          <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "bold", marginTop: 16, marginBottom: 8 }}>
-            No series found
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-            No series have been created in this library yet.
-          </Text>
-        </View>
+        <EmptyState
+          style={{ flex: 1 }}
+          icon="series"
+          title="No series found"
+          message="No series have been created in this library yet."
+        />
       ) : (
         /* Grid — flex flex-wrap justify-center, p-4 */
         <FlatList

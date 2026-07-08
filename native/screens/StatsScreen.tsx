@@ -3,13 +3,15 @@ import {
   View,
   Text,
   ScrollView,
-  TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '../utils/api';
 import { useThemeColors } from '../theme/useThemeColors';
+import { withAlpha } from '../theme/palette';
 import Icon from '../components/Icon';
+import HintPressable from '../components/HintPressable';
+import EmptyState from '../components/EmptyState';
 import { useUserStore } from '../store/useUserStore';
 import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -210,15 +212,19 @@ export default function StatsScreen({ navigation }: any) {
           paddingHorizontal: 16,
         }}
       >
-        <TouchableOpacity
+        <HintPressable
           onPress={() => navigation.goBack()}
           style={{ paddingRight: 16, paddingVertical: 4 }}
+          android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
-        </TouchableOpacity>
-        <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: '600' }}>
+        </HintPressable>
+        <Text
+          accessibilityRole="header"
+          style={{ color: colors.onSurface, fontSize: 22, fontWeight: '600' }}
+        >
           Your Stats
         </Text>
       </View>
@@ -236,20 +242,22 @@ export default function StatsScreen({ navigation }: any) {
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: 'center', marginBottom: 16 }}>
             {error}
           </Text>
-          <TouchableOpacity
+          <HintPressable
             onPress={loadStats}
             accessibilityRole="button"
             accessibilityLabel="Retry loading stats"
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
             style={{
               backgroundColor: colors.primary,
               paddingHorizontal: 24,
               paddingVertical: 10,
               // Match the app-wide pill retry buttons (was an 8px outlier).
               borderRadius: 24,
+              overflow: 'hidden',
             }}
           >
             <Text style={{ color: colors.onPrimary, fontWeight: '600', fontSize: 14 }}>Retry</Text>
-          </TouchableOpacity>
+          </HintPressable>
         </View>
       ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 40 }}>
@@ -270,6 +278,7 @@ export default function StatsScreen({ navigation }: any) {
 
           {/* Chart heading */}
           <Text
+            accessibilityRole="header"
             style={{
               color: colors.onSurface,
               fontSize: 24,
@@ -315,6 +324,7 @@ export default function StatsScreen({ navigation }: any) {
 
           {/* Recent Sessions */}
           <Text
+            accessibilityRole="header"
             style={{
               color: colors.onSurface,
               fontSize: 24,
@@ -362,9 +372,7 @@ export default function StatsScreen({ navigation }: any) {
                 </View>
               ))
             ) : (
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, paddingVertical: 16 }}>
-                No listening sessions yet
-              </Text>
+              <EmptyState icon="clock" title="No listening sessions yet" />
             )}
           </View>
         </ScrollView>

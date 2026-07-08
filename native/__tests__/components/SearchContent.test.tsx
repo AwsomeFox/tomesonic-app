@@ -414,6 +414,33 @@ describe("SearchContent — result sections", () => {
   });
 });
 
+describe("SearchContent — accessibility roles/labels", () => {
+  it("marks section headers with the header role", async () => {
+    await renderSearch("saga");
+    expect(screen.getByRole("header", { name: "Books" })).toBeTruthy();
+    expect(screen.getByRole("header", { name: "Series" })).toBeTruthy();
+    expect(screen.getByRole("header", { name: "Authors" })).toBeTruthy();
+    expect(screen.getByRole("header", { name: "Narrators" })).toBeTruthy();
+    expect(screen.getByRole("header", { name: "Tags" })).toBeTruthy();
+  });
+
+  it("gives series, person, and tag rows a button role and consolidated label", async () => {
+    await renderSearch("saga");
+    // Series → "<name>, <count> books"
+    const series = screen.getByLabelText("The Saga, 2 books");
+    expect(series.props.accessibilityRole).toBe("button");
+    // Author (person) → "<name>, <subtitle>"
+    const author = screen.getByLabelText("Brandon Sanderson, 12 Books");
+    expect(author.props.accessibilityRole).toBe("button");
+    // Narrator (person) → "<name>, <subtitle>"
+    const narrator = screen.getByLabelText("Ray Porter, 3 Books");
+    expect(narrator.props.accessibilityRole).toBe("button");
+    // Tag → "Tag: <name>"
+    const tag = screen.getByLabelText("Tag: favorites");
+    expect(tag.props.accessibilityRole).toBe("button");
+  });
+});
+
 describe("SearchContent — tap routing (always via the ROOT stack)", () => {
   it("book row → parent ItemDetail", async () => {
     const { navigation, parent } = await renderSearch("hobbit");

@@ -22,6 +22,7 @@ import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import { ListSkeleton } from "../components/Skeleton";
 import { useUiStore } from "../store/useUiStore";
 import SearchContent from "../components/SearchContent";
@@ -347,21 +348,16 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
           {data.length > 0 ? (
             data.map((item, index) => renderRow(item, index))
           ) : (
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-              <Icon
-                name={activeTab === "collections" ? "collections" : "list"}
-                size={48}
-                color={colors.onSurfaceVariant}
-              />
-              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
-                No {activeTab} yet
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-                {activeTab === "collections"
+            <EmptyState
+              style={{ flex: 1 }}
+              icon={activeTab === "collections" ? "collections" : "list"}
+              title={`No ${activeTab} yet`}
+              message={
+                activeTab === "collections"
                   ? "Collections you create on the server will show up here."
-                  : "Playlists you create will show up here."}
-              </Text>
-            </View>
+                  : "Playlists you create will show up here."
+              }
+            />
           )}
         </ScrollView>
       )}

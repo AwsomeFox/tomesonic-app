@@ -154,6 +154,33 @@ describe("useUserStore", () => {
       await useUserStore.getState().initialize();
       expect(useUserStore.getState().user).toEqual({ id: "keep" });
     });
+
+    it("seeds user + isInitialized synchronously, before the auto_creds read resolves", async () => {
+      storageHelper.setServerConfig({
+        address: "https://abs.example.com",
+        token: "tok",
+        userId: "u1",
+        username: "tony",
+      });
+      // Defer readAutoCreds so we can observe state BETWEEN the sync seed and
+      // the async token adoption — this is the login-flash window.
+      let resolveCreds: (v: any) => void = () => {};
+      jest.mocked(readAutoCreds).mockReturnValue(
+        new Promise((r) => {
+          resolveCreds = r;
+        }) as any
+      );
+
+      const pending = useUserStore.getState().initialize();
+      // Synchronously (no await yet) the user must already be populated so the
+      // navigator lands on Home, never flashing Connect.
+      const mid = useUserStore.getState();
+      expect(mid.isInitialized).toBe(true);
+      expect(mid.user).toEqual({ id: "u1", username: "tony" });
+
+      resolveCreds(null);
+      await pending;
+    });
   });
 
   describe("updateUserSettings", () => {
@@ -580,6 +607,39 @@ describe("useUserStore", () => {
       expect(rmab.requestedAsins).toEqual({ B01: "pending" });
       expect(secureStorage.getString("rmab_config")).toBeDefined();
       expect(storage.getString("rmab_requestedAsins")).toBeDefined();
+    });
+  });
+
+  describe("mediaProgress disk-mirror write-through (leading throttle + trailing flush)", () => {
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("writes once on the leading edge and flushes the LATEST map after the window", () => {
+      jest.useFakeTimers();
+      // Push the fake clock well past any prior write window so the next
+      // mutation takes the leading edge instead of scheduling a trailing flush.
+      jest.advanceTimersByTime(5000);
+
+      const setCache = jest.spyOn(storageHelper, "setMediaProgressCache");
+
+      const map1 = { item1: { libraryItemId: "item1", currentTime: 10 } };
+      useUserStore.setState({ mediaProgress: map1 } as any);
+      // Leading edge: persisted immediately.
+      expect(setCache).toHaveBeenCalledTimes(1);
+      expect(setCache).toHaveBeenLastCalledWith(map1);
+
+      // A second quick mutation inside the 3s window does NOT write immediately.
+      const map2 = { item1: { libraryItemId: "item1", currentTime: 11 } };
+      useUserStore.setState({ mediaProgress: map2 } as any);
+      expect(setCache).toHaveBeenCalledTimes(1);
+
+      // After the window elapses the trailing flush persists the LATEST map.
+      jest.advanceTimersByTime(3000);
+      expect(setCache).toHaveBeenCalledTimes(2);
+      expect(setCache).toHaveBeenLastCalledWith(map2);
+
+      setCache.mockRestore();
     });
   });
 

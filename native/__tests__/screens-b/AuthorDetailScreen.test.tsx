@@ -153,6 +153,31 @@ describe("AuthorDetailScreen", () => {
     ).toBeUndefined();
   });
 
+  it("gives book cards a button role and a title/subtitle label", async () => {
+    await renderAuthor();
+    await screen.findByText("Audio Novel");
+
+    // No subtitle → just the title.
+    const audio = screen.getByLabelText("Audio Novel");
+    expect(audio.props.accessibilityRole).toBe("button");
+    // Title + subtitle folded together (BookCard pattern).
+    const ebook = screen.getByLabelText("Ebook Novel. A Subtitle");
+    expect(ebook.props.accessibilityRole).toBe("button");
+  });
+
+  it("gives the description toggle a button role and expanded state", async () => {
+    await renderAuthor();
+    await screen.findByText("Writes sweeping sagas across many worlds.");
+
+    const toggle = screen.getByLabelText("Show more");
+    expect(toggle.props.accessibilityRole).toBe("button");
+    expect(toggle.props.accessibilityState).toEqual({ expanded: false });
+
+    await fireEvent.press(toggle);
+    const expanded = screen.getByLabelText("Show less");
+    expect(expanded.props.accessibilityState).toEqual({ expanded: true });
+  });
+
   it("book card tap opens the item detail", async () => {
     const navigation = await renderAuthor();
     await screen.findByText("Audio Novel");

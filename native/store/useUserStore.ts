@@ -105,6 +105,28 @@ export const useUserStore = create<UserState>((set, get) => ({
     // Only restore an authenticated session when we have a saved server + token.
     const hasSession = !!(savedConfig?.address && savedConfig?.token);
 
+    // Seed the session SYNCHRONOUSLY (before any await) so the navigator never
+    // sees a null `user` for a logged-in launch. The token-adoption below reads
+    // a file (await), and if we deferred `user` past it, AppNavigator would
+    // paint the Connect/login screen for a tick before flipping to Home on
+    // every authenticated cold start. Everything needed to seed `user` —
+    // userId/username — is already in the synchronously-read savedConfig; the
+    // async adoption only ever swaps the token, never the identity.
+    set({
+      user: hasSession
+        ? { id: savedConfig.userId, username: savedConfig.username }
+        : null,
+      serverConnectionConfig: savedConfig || null,
+      settings: savedSettings ? { ...DEFAULT_SETTINGS, ...savedSettings } : DEFAULT_SETTINGS,
+      // Seed progress from the DISK cache so an offline cold start still
+      // resumes every book at its real position (and keeps offline-finished
+      // flags) instead of starting from an empty map until /api/me answers.
+      ...(hasSession ? { mediaProgress: storageHelper.getMediaProgressCache() } : {}),
+      isInitialized: true,
+    });
+
+    if (!hasSession) return;
+
     // The native Android Auto service refreshes tokens itself while the JS app
     // is dead, and ABS ROTATES refresh tokens (the previous one dies ~60s
     // after a refresh) — so after a drive, auto_creds.json can hold the ONLY
@@ -113,46 +135,32 @@ export const useUserStore = create<UserState>((set, get) => ({
     // clobbering the file with stale tokens below (which would force a logout
     // on the first 401).
     let config = savedConfig;
-    if (hasSession) {
-      try {
-        const fileCreds = await readAutoCreds();
-        const host = savedConfig.address.replace(/\/$/, "");
-        if (fileCreds && fileCreds.server === host && fileCreds.token && fileCreds.token !== savedConfig.token) {
-          config = {
-            ...savedConfig,
-            token: fileCreds.token,
-            refreshToken: fileCreds.refreshToken || savedConfig.refreshToken,
-          };
-          storageHelper.setServerConfig(config);
-        }
-      } catch {}
-      // Track the session identity so login() can tell same-account re-login
-      // apart from an account/server switch even across forced logouts.
-      storageHelper.setLastSessionKey(
-        `${savedConfig.address.replace(/\/$/, "")}::${savedConfig.userId || ""}`
-      );
-    }
-
-    set({
-      user: hasSession
-        ? { id: config.userId, username: config.username }
-        : null,
-      serverConnectionConfig: config || null,
-      settings: savedSettings ? { ...DEFAULT_SETTINGS, ...savedSettings } : DEFAULT_SETTINGS,
-      // Seed progress from the DISK cache so an offline cold start still
-      // resumes every book at its real position (and keeps offline-finished
-      // flags) instead of starting from an empty map until /api/me answers.
-      ...(hasSession ? { mediaProgress: storageHelper.getMediaProgressCache() } : {}),
-      isInitialized: true,
-    });
+    try {
+      const fileCreds = await readAutoCreds();
+      const host = savedConfig.address.replace(/\/$/, "");
+      if (fileCreds && fileCreds.server === host && fileCreds.token && fileCreds.token !== savedConfig.token) {
+        config = {
+          ...savedConfig,
+          token: fileCreds.token,
+          refreshToken: fileCreds.refreshToken || savedConfig.refreshToken,
+        };
+        // Persist + push the adopted token into the store (the sync seed above
+        // used the saved token; this swaps in the fresher file token).
+        storageHelper.setServerConfig(config);
+        set({ serverConnectionConfig: config });
+      }
+    } catch {}
+    // Track the session identity so login() can tell same-account re-login
+    // apart from an account/server switch even across forced logouts.
+    storageHelper.setLastSessionKey(
+      `${savedConfig.address.replace(/\/$/, "")}::${savedConfig.userId || ""}`
+    );
     // Mirror creds for the native Android Auto browse service.
     // trustTokens: the adoption above already made `config` at least as fresh
     // as the file.
-    if (hasSession) {
-      writeAutoCreds(config.address, config.token, useLibraryStore.getState().currentLibraryId, config.refreshToken, true);
-      // Fire-and-forget: e-reader devices only gate a secondary action.
-      get().loadEReaderDevices();
-    }
+    writeAutoCreds(config.address, config.token, useLibraryStore.getState().currentLibraryId, config.refreshToken, true);
+    // Fire-and-forget: e-reader devices only gate a secondary action.
+    get().loadEReaderDevices();
   },
 
   setUser: (user) => set({ user }),

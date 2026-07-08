@@ -58,11 +58,15 @@ jest.mock("react-native-reanimated", () => {
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
+jest.mock("../../utils/progressSync", () => ({
+  queueProgressPatch: jest.fn(),
+}));
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 import LatestEpisodesScreen from "../../screens/LatestEpisodesScreen";
 import { api } from "../../utils/api";
+import { queueProgressPatch } from "../../utils/progressSync";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -117,6 +121,7 @@ beforeEach(() => {
   startPlayback = jest.fn().mockResolvedValue(true);
   usePlaybackStore.setState({ startPlayback, currentSession: null } as any);
   (api.get as jest.Mock).mockResolvedValue({ data: { episodes: EPISODES } });
+  (api.patch as jest.Mock).mockResolvedValue({ data: {} });
 });
 
 describe("LatestEpisodesScreen", () => {
@@ -146,6 +151,70 @@ describe("LatestEpisodesScreen", () => {
 
     await fireEvent.press(screen.getByText("Fresh Episode"));
     expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "li1" });
+  });
+
+  it("keeps both the open-podcast control and the Play button reachable (not collapsed)", async () => {
+    const navigation = await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // The cover/text block is its OWN labelled button (so TalkBack can't collapse
+    // the row and hide the Play button)...
+    const openBtn = screen.getByLabelText("Fresh Episode, Great Show");
+    await fireEvent.press(openBtn);
+    expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "li1" });
+
+    // ...and the Play button is a separate, independently reachable node.
+    await fireEvent.press(screen.getByLabelText("Play Fresh Episode"));
+    expect(startPlayback).toHaveBeenCalledWith("li1", "ep1");
+  });
+
+  it("renders played state: in-progress bar and Finished/dimming from the progress map", async () => {
+    useUserStore.setState({
+      mediaProgress: {
+        "li1-ep1": { libraryItemId: "li1", episodeId: "ep1", progress: 0.4, isFinished: false },
+        "li2-ep2": { libraryItemId: "li2", episodeId: "ep2", isFinished: true },
+      },
+    } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // Finished episode shows the "· Finished" marker and its toggle reads unfinish.
+    expect(screen.getByText("· Finished")).toBeTruthy();
+    expect(screen.getByLabelText("Mark episode not finished")).toBeTruthy();
+    // Unfinished-but-started episode still offers "Mark episode finished".
+    expect(screen.getByLabelText("Mark episode finished")).toBeTruthy();
+  });
+
+  it("per-episode mark finished PATCHes the episode-scoped endpoint and updates the map", async () => {
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // Fresh Episode (ep1 / li1) is first; toggle it finished.
+    await fireEvent.press(screen.getAllByLabelText("Mark episode finished")[0]);
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/li1/ep1", { isFinished: true })
+    );
+    expect(useUserStore.getState().mediaProgress["li1-ep1"].isFinished).toBe(true);
+  });
+
+  it("queues an episode-scoped patch when the mark-finished PATCH fails offline", async () => {
+    (api.patch as jest.Mock).mockRejectedValue(new Error("Network Error"));
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getAllByLabelText("Mark episode finished")[0]);
+
+    await waitFor(() =>
+      expect(queueProgressPatch).toHaveBeenCalledWith(
+        "li1",
+        expect.anything(),
+        expect.anything(),
+        "ep1",
+        { isFinished: true }
+      )
+    );
+    expect(useUserStore.getState().mediaProgress["li1-ep1"].isFinished).toBe(true);
   });
 
   it("errors when no library is selected (no fetch)", async () => {

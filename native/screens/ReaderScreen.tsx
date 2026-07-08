@@ -308,7 +308,7 @@ export default function ReaderScreen({ route, navigation }: any) {
   // page state so the footer prev/next buttons (a11y: PDF page turns are
   // otherwise scroll-only) can drive it and an in-place book change re-seeds it.
   const pdfPageKey = `pdfPage_${itemId}`;
-  const [pdfPage, setPdfPage] = useState<number>(() => Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
+  const [pdfPage, setPdfPage] = useState<number>(() => Math.max(1, storage.getNumber(pdfPageKey) || 1));
   const [pdfProgress, setPdfProgress] = useState<{ page: number; pages: number } | null>(null);
   // The last PDF position, flushed on unmount like latestProgressRef does for
   // epub — the debounced onPageChanged sync alone is cancelled by the cleanup
@@ -502,7 +502,7 @@ export default function ReaderScreen({ route, navigation }: any) {
       readerReseededRef.current = true;
       return;
     }
-    setPdfPage(Math.max(1, storage.getNumber(`pdfPage_${itemId}`) || 1));
+    setPdfPage(Math.max(1, storage.getNumber(pdfPageKey) || 1));
     latestPdfProgressRef.current = null;
     pendingJumpRef.current =
       typeof initialFraction === "number" && Number.isFinite(initialFraction)
@@ -1182,6 +1182,7 @@ export default function ReaderScreen({ route, navigation }: any) {
               <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Table of Contents</Text>
               <Pressable
                 onPress={() => setShowToc(false)}
+                hitSlop={8}
                 style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }}
                 accessibilityRole="button"
                 accessibilityLabel="Close table of contents"
@@ -1214,6 +1215,7 @@ export default function ReaderScreen({ route, navigation }: any) {
               <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Reading Settings</Text>
               <Pressable
                 onPress={() => setShowSettings(false)}
+                hitSlop={8}
                 style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" }}
                 accessibilityRole="button"
                 accessibilityLabel="Close reading settings"

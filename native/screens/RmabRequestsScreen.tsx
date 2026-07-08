@@ -271,6 +271,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     <Pressable
                       onPress={() => onApprove(id, "approve")}
                       disabled={acting === id}
+                      hitSlop={8}
                       accessibilityRole="button"
                       accessibilityLabel={`Approve ${item?.title || "request"}`}
                       android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.13) }}
@@ -290,6 +291,7 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     <Pressable
                       onPress={() => onApprove(id, "deny")}
                       disabled={acting === id}
+                      hitSlop={8}
                       accessibilityRole="button"
                       accessibilityLabel={`Deny ${item?.title || "request"}`}
                       android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13) }}

@@ -5,6 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { formatBytes } from "../utils/format";
@@ -95,28 +96,6 @@ export default function DownloadsScreen({ navigation }: any) {
     </View>
   );
 
-  const EmptyState = ({ icon, title, label }: { icon: any; title: string; label: string }) => (
-    <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 80, paddingHorizontal: 32 }}>
-      <View
-        style={{
-          width: 72,
-          height: 72,
-          borderRadius: 36,
-          backgroundColor: colors.secondaryContainer,
-          alignItems: "center",
-          justifyContent: "center",
-          marginBottom: 16,
-        }}
-      >
-        <Icon name={icon} size={36} color={colors.onSecondaryContainer} />
-      </View>
-      <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600" }}>{title}</Text>
-      <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>
-        {label}
-      </Text>
-    </View>
-  );
-
   const Tab = ({ tab, label }: { tab: "completed" | "active"; label: string }) => {
     const selected = activeTab === tab;
     return (
@@ -163,12 +142,18 @@ export default function DownloadsScreen({ navigation }: any) {
           onPress={() => navigation.goBack()}
           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
           hitSlop={8}
+          android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </Pressable>
-        <Text style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700", marginLeft: 4 }}>Downloads</Text>
+        <Text
+          accessibilityRole="header"
+          style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700", marginLeft: 4 }}
+        >
+          Downloads
+        </Text>
       </View>
 
       {/* Tabs */}
@@ -252,6 +237,7 @@ export default function DownloadsScreen({ navigation }: any) {
                   accessibilityRole="button"
                   accessibilityLabel="Delete all downloads"
                   hitSlop={8}
+                  android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
                   style={{ padding: 8 }}
                 >
                   <Icon name="trash" size={20} color={colors.error} />
@@ -263,13 +249,14 @@ export default function DownloadsScreen({ navigation }: any) {
             <EmptyState
               icon="download"
               title="No downloads yet"
-              label="Downloaded books play offline. Download one from its details page."
+              message="Downloaded books play offline. Download one from its details page."
             />
           }
           renderItem={({ item }) => (
             <Pressable
               onPress={() => handlePlayOffline(item)}
               accessibilityRole="button"
+              android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -278,6 +265,7 @@ export default function DownloadsScreen({ navigation }: any) {
                 backgroundColor: colors.surfaceContainer,
                 borderRadius: 16,
                 marginBottom: 12,
+                overflow: "hidden",
               }}
             >
               <Cover uri={coverOf(item)} />
@@ -304,6 +292,7 @@ export default function DownloadsScreen({ navigation }: any) {
                   marginRight: 4,
                 }}
                 hitSlop={6}
+                android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
                 accessibilityRole="button"
                 accessibilityLabel={isEbookOnly(item) ? `Read ${item.title}` : `Play ${item.title}`}
               >
@@ -325,6 +314,7 @@ export default function DownloadsScreen({ navigation }: any) {
                 }
                 style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                 hitSlop={6}
+                android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
                 accessibilityRole="button"
                 accessibilityLabel={`Delete download of ${item.title}`}
               >
@@ -342,7 +332,7 @@ export default function DownloadsScreen({ navigation }: any) {
             <EmptyState
               icon="cloud"
               title="Nothing downloading"
-              label="Active and failed downloads show up here while they run."
+              message="Active and failed downloads show up here while they run."
             />
           }
           renderItem={({ item }) => (
@@ -388,6 +378,7 @@ export default function DownloadsScreen({ navigation }: any) {
                     onPress={() => retryDownload(item.id)}
                     style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                     hitSlop={6}
+                    android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
                     accessibilityRole="button"
                     accessibilityLabel={`Retry download of ${item.title}`}
                   >
@@ -415,6 +406,7 @@ export default function DownloadsScreen({ navigation }: any) {
                   }}
                   style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                   hitSlop={6}
+                  android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
                   accessibilityRole="button"
                   accessibilityLabel={`Cancel download of ${item.title}`}
                 >

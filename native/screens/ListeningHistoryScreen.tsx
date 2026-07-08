@@ -7,6 +7,7 @@ import { storageHelper } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 
 /** Formats seconds listened as "Xh Ym" / "Xm" / "Xs", mirroring the
  *  remainingPretty conventions (a 40-second session must not read "0m"). */
@@ -151,12 +152,16 @@ export default function ListeningHistoryScreen({ navigation }: any) {
           onPress={() => navigation.goBack()}
           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
           hitSlop={8}
+          android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </Pressable>
-        <Text style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700", marginLeft: 4 }}>
+        <Text
+          accessibilityRole="header"
+          style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700", marginLeft: 4 }}
+        >
           Listening History
         </Text>
       </View>
@@ -211,27 +216,11 @@ export default function ListeningHistoryScreen({ navigation }: any) {
             />
           }
           ListEmptyComponent={
-            <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 80 }}>
-              <View
-                style={{
-                  width: 72,
-                  height: 72,
-                  borderRadius: 36,
-                  backgroundColor: colors.secondaryContainer,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  marginBottom: 16,
-                }}
-              >
-                <Icon name="clock" size={36} color={colors.onSecondaryContainer} />
-              </View>
-              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600" }}>
-                No listening history yet
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>
-                Sessions appear here as you listen.
-              </Text>
-            </View>
+            <EmptyState
+              icon="clock"
+              title="No listening history yet"
+              message="Sessions appear here as you listen."
+            />
           }
           renderItem={({ item }) => {
             const uri = coverUri(item?.libraryItemId);
@@ -245,6 +234,8 @@ export default function ListeningHistoryScreen({ navigation }: any) {
                   navigation.navigate("ItemDetail", { itemId: item.libraryItemId })
                 }
                 accessibilityRole="button"
+                accessibilityLabel={`${item?.displayTitle || "Untitled"}, ${item?.displayAuthor || ""}, ${subtitle}`}
+                android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
@@ -253,6 +244,7 @@ export default function ListeningHistoryScreen({ navigation }: any) {
                   backgroundColor: colors.surfaceContainer,
                   borderRadius: 16,
                   marginBottom: 12,
+                  overflow: "hidden",
                 }}
               >
                 <View
