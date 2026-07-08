@@ -270,7 +270,10 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           return Number.isNaN(n) ? raw.toLowerCase() : String(n);
         };
 
-        const groups = new Map<string, SeriesBook>();
+        // Track each collapsed sequence's chosen representative together with
+        // its slot in `deduped`, so replacing a worse pick is O(1) instead of
+        // an indexOf scan.
+        const groups = new Map<string, { book: SeriesBook; index: number }>();
         const deduped: SeriesBook[] = [];
         for (const b of books) {
           const key = seqKey(b);
@@ -280,18 +283,17 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           }
           const current = groups.get(key);
           if (!current) {
-            groups.set(key, b);
+            groups.set(key, { book: b, index: deduped.length });
             deduped.push(b);
             continue;
           }
           // A better representative replaces the one already placed.
           const sc = repScore(b);
-          const scCur = repScore(current);
-          const better = sc !== scCur ? sc > scCur : recency(b) > recency(current);
+          const scCur = repScore(current.book);
+          const better = sc !== scCur ? sc > scCur : recency(b) > recency(current.book);
           if (better) {
-            groups.set(key, b);
-            const idx = deduped.indexOf(current);
-            if (idx >= 0) deduped[idx] = b;
+            deduped[current.index] = b;
+            current.book = b;
           }
         }
         books.length = 0;

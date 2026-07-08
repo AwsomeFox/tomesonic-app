@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, Pressable, BackHandler } from "react-native";
+import { View, Text, Pressable, Modal } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { useDialogStore, AppDialogButton } from "../store/useDialogStore";
@@ -10,23 +10,16 @@ import { useDialogStore, AppDialogButton } from "../store/useDialogStore";
  * showAppDialog() sets a dialog, then shows an M3 basic dialog: a scrim, a 28dp
  * rounded surfaceContainerHigh container, a headline + supporting text, and a
  * trailing row of text buttons (destructive actions use the error color).
+ *
+ * The whole thing lives inside a transparent RN <Modal> so it renders in its
+ * own window above the app root — otherwise a dialog raised from within a
+ * bottom sheet (BottomSheet / BookmarksModal both use RN Modal) would be hidden
+ * behind that sheet's separate window. onRequestClose handles hardware back.
  */
 export default function AppDialog() {
   const colors = useThemeColors();
   const dialog = useDialogStore((s) => s.current);
   const dismiss = useDialogStore((s) => s.dismiss);
-
-  // Hardware back dismisses a cancelable dialog (matching Alert), and is
-  // swallowed while a non-cancelable one is up so back can't fall through to
-  // the navigator underneath.
-  React.useEffect(() => {
-    if (!dialog) return;
-    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (dialog.cancelable !== false) dismiss();
-      return true;
-    });
-    return () => sub.remove();
-  }, [dialog, dismiss]);
 
   if (!dialog) return null;
 
@@ -38,40 +31,53 @@ export default function AppDialog() {
   const buttonColor = (b: AppDialogButton) =>
     b.style === "destructive" ? colors.error : colors.primary;
 
+  // Hardware back / gesture: dismiss when cancelable, otherwise swallow so back
+  // can't fall through to the navigator underneath.
+  const onRequestClose = () => {
+    if (dialog.cancelable !== false) dismiss();
+  };
+
   return (
-    <View
-      style={{
-        ...({ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 } as const),
-        alignItems: "center",
-        justifyContent: "center",
-        paddingHorizontal: 24,
-      }}
+    <Modal
+      transparent
+      visible
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onRequestClose}
     >
-      {/* Scrim — tap to dismiss when cancelable. */}
-      <Pressable
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-        onPress={() => {
-          if (dialog.cancelable !== false) dismiss();
-        }}
-        style={{
-          ...({ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 } as const),
-          backgroundColor: "rgba(0, 0, 0, 0.5)",
-        }}
-      />
       <View
-        accessibilityViewIsModal
         style={{
-          width: "100%",
-          maxWidth: 360,
-          backgroundColor: colors.surfaceContainerHigh,
-          borderRadius: 28,
-          paddingTop: 24,
+          flex: 1,
+          alignItems: "center",
+          justifyContent: "center",
           paddingHorizontal: 24,
-          paddingBottom: 18,
-          elevation: 6,
         }}
       >
+        {/* Scrim — tap to dismiss when cancelable. */}
+        <Pressable
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          onPress={() => {
+            if (dialog.cancelable !== false) dismiss();
+          }}
+          style={{
+            ...({ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 } as const),
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+          }}
+        />
+        <View
+          accessibilityViewIsModal
+          style={{
+            width: "100%",
+            maxWidth: 360,
+            backgroundColor: colors.surfaceContainerHigh,
+            borderRadius: 28,
+            paddingTop: 24,
+            paddingHorizontal: 24,
+            paddingBottom: 18,
+            elevation: 6,
+          }}
+        >
         {dialog.title ? (
           <Text
             accessibilityRole="header"
@@ -98,8 +104,9 @@ export default function AppDialog() {
               <Text style={{ color: buttonColor(b), fontSize: 14, fontWeight: "600" }}>{b.text}</Text>
             </Pressable>
           ))}
+          </View>
         </View>
       </View>
-    </View>
+    </Modal>
   );
 }
