@@ -7,12 +7,15 @@ appId: com.tomesonic.app
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
-# Library tab renders rows.
+# The Library tab is a hub with Books/Series/Collections/Authors segments; pick
+# Books explicitly (it remembers the last segment across flows) so the book rows
+# are shown, then switch to the Series segment.
 - tapOn: "Library"
+- tapOn: "Books"
 - extendedWaitUntil:
     visible: ".*(Play|Read) .*"
     timeout: 20000
-# Series tab -> first series -> detail must offer Play/Continue (audio rows).
+# Series segment -> first series -> detail must offer Play/Continue (audio rows).
 - tapOn: "Series"
 - extendedWaitUntil:
     visible: "Series: .*"
