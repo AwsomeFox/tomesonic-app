@@ -1,9 +1,10 @@
 /**
  * LibraryHubScreen — the consolidated "Library" destination. Verifies the
- * segmented pill control (Books · Series · Collections · Playlists · Authors),
- * that facets stay MOUNTED across segment switches and the search toggle (no
- * unmount / page-0 refetch, scroll preserved), that a Books deep-link seed is
- * cleared once consumed, and the scroll-to-top / create FAB + tab-press wiring.
+ * segmented pill control (Books · Series · Authors — Collections + Playlists now
+ * live in their own bottom tab), that facets stay MOUNTED across segment
+ * switches and the search toggle (no unmount / page-0 refetch, scroll
+ * preserved), that a Books deep-link seed is cleared once consumed, and the
+ * scroll-to-top FAB + tab-press wiring.
  *
  * The facet screens are mocked to lightweight markers that render the hub's
  * pill row (passed down as `listHeader`) plus a body marker, so the test targets
@@ -70,19 +71,11 @@ const mockOpenSort = jest.fn();
 const mockScrollToTop: Record<string, jest.Mock> = {
   books: jest.fn(),
   series: jest.fn(),
-  collections: jest.fn(),
-  playlists: jest.fn(),
   authors: jest.fn(),
-};
-const mockOpenCreate: Record<string, jest.Mock> = {
-  collections: jest.fn(),
-  playlists: jest.fn(),
 };
 const mockMount: Record<string, jest.Mock> = {
   books: jest.fn(),
   series: jest.fn(),
-  collections: jest.fn(),
-  playlists: jest.fn(),
   authors: jest.fn(),
 };
 
@@ -155,28 +148,6 @@ jest.mock("../../screens/SeriesListScreen", () => {
   };
 });
 
-jest.mock("../../screens/CollectionsPlaylistsScreen", () => {
-  const React = require("react");
-  const { Text } = require("react-native");
-  return {
-    __esModule: true,
-    default: React.forwardRef((props: any, ref: any) => {
-      const mode = props.mode;
-      React.useImperativeHandle(ref, () => ({
-        scrollToTop: mockScrollToTop[mode],
-        openCreate: mockOpenCreate[mode],
-      }));
-      React.useEffect(() => {
-        mockMount[mode]();
-      }, [mode]);
-      return React.createElement(React.Fragment, null, [
-        React.createElement(React.Fragment, { key: "h" }, props.listHeader),
-        React.createElement(Text, { key: "b" }, `COLLECTIONS_BODY mode=${mode}`),
-      ]);
-    }),
-  };
-});
-
 jest.mock("../../screens/AuthorsScreen", () => {
   const React = require("react");
   const { Text } = require("react-native");
@@ -234,15 +205,17 @@ beforeEach(() => {
 });
 
 describe("LibraryHubScreen", () => {
-  it("renders all five segments and defaults to the Books facet", async () => {
+  it("renders the three segments and defaults to the Books facet", async () => {
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
 
     // Segment labels (the pill row is rendered by the active facet's header).
     expect(screen.getByText("Books")).toBeTruthy();
     expect(screen.getByText("Series")).toBeTruthy();
-    expect(screen.getByText("Collections")).toBeTruthy();
-    expect(screen.getByText("Playlists")).toBeTruthy();
     expect(screen.getByText("Authors")).toBeTruthy();
+
+    // Collections + Playlists moved to their own bottom tab — not segments here.
+    expect(screen.queryByText("Collections")).toBeNull();
+    expect(screen.queryByText("Playlists")).toBeNull();
 
     // Default body is Books; other facets are lazy (not mounted yet).
     expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
@@ -271,14 +244,21 @@ describe("LibraryHubScreen", () => {
     expect(layerDisplay("series")).toBe("none");
   });
 
-  it("promotes Playlists to a top-level segment", async () => {
+  it("normalizes a persisted collections/playlists segment (pre-split) to Books", async () => {
+    // A value left over from when Collections/Playlists were hub segments is no
+    // longer valid → normalizeSegment returns null → the hub falls back to Books
+    // instead of trying to render a removed segment.
+    storageHelper.setLibraryHubSegment("collections");
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+    expect(screen.queryByText("Collections")).toBeNull();
+  });
 
-    await fireEvent.press(screen.getByText("Playlists"));
-    expect(screen.getByText("COLLECTIONS_BODY mode=playlists")).toBeTruthy();
-
-    await fireEvent.press(screen.getByText("Collections"));
-    expect(screen.getByText("COLLECTIONS_BODY mode=collections")).toBeTruthy();
+  it("normalizes a collections/playlists deep-link segment param to Books", async () => {
+    await render(
+      <LibraryHubScreen route={{ params: { segment: "playlists" } }} navigation={makeNavigation()} />
+    );
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
   });
 
   it("persists the selected segment to storage", async () => {
@@ -439,17 +419,16 @@ describe("LibraryHubScreen", () => {
     expect(mockScrollToTop.books).toHaveBeenCalled();
   });
 
-  it("shows a create FAB only on the collections/playlists segments", async () => {
+  it("no longer renders a create FAB (creation moved to the Collections tab)", async () => {
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
     expect(screen.queryByLabelText("Create new collection")).toBeNull();
+    expect(screen.queryByLabelText("Create new playlist")).toBeNull();
 
-    await fireEvent.press(screen.getByText("Collections"));
-    await fireEvent.press(screen.getByLabelText("Create new collection"));
-    expect(mockOpenCreate.collections).toHaveBeenCalledTimes(1);
-
-    await fireEvent.press(screen.getByText("Playlists"));
-    await fireEvent.press(screen.getByLabelText("Create new playlist"));
-    expect(mockOpenCreate.playlists).toHaveBeenCalledTimes(1);
+    // Switching between the remaining facets never surfaces a create FAB.
+    await fireEvent.press(screen.getByText("Series"));
+    expect(screen.queryByLabelText("Create new collection")).toBeNull();
+    await fireEvent.press(screen.getByText("Authors"));
+    expect(screen.queryByLabelText("Create new playlist")).toBeNull();
   });
 
   it("shows an offline notice instead of the facets when offline", async () => {

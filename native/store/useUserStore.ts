@@ -335,13 +335,18 @@ export const useUserStore = create<UserState>((set, get) => ({
       storageHelper.removeLastPlaybackSession();
       // A forced 401 logout leaves the disk progress cache in place (same
       // account re-login must keep it) — but a DIFFERENT account/server must
-      // not inherit it, nor the previous user's downloads or reader keys.
+      // not inherit it, nor the previous user's reader keys.
       storageHelper.removeMediaProgressCache();
+      // Downloads are NAMESPACED by session key now, so switching accounts must
+      // NOT delete the departing account's offline library (a two-server user
+      // would re-download everything on every toggle). Just stop surfacing +
+      // stop any in-flight parts; the files stay on disk and are re-adopted by
+      // loadDownloadsFromDb below when we return to this account.
       try {
         const { useDownloadStore } = require("./useDownloadStore");
-        await useDownloadStore.getState().removeAllDownloads();
+        await useDownloadStore.getState().deactivateDownloadsForSwitch();
       } catch (e) {
-        console.warn("[UserStore] downloads wipe on account switch failed", e);
+        console.warn("[UserStore] downloads deactivate on account switch failed", e);
       }
       // The RMAB connection is per-person (it can carry ADMIN rights over the
       // request queue) — a different ABS account must not inherit it.
@@ -384,6 +389,17 @@ export const useUserStore = create<UserState>((set, get) => ({
       // Seed progress from the login payload; refreshed later via loadMediaProgress.
       mediaProgress: indexMediaProgress(user?.mediaProgress || []),
     });
+    // Re-surface THIS account's downloads from its namespace — re-adopting any
+    // files that survived a previous stint on this account instead of
+    // re-downloading them. A first-ever login for this account loads nothing
+    // (and drives the one-time migration of any pre-namespacing legacy rows
+    // into this account). The other account's downloads stay on disk untouched.
+    try {
+      const { useDownloadStore } = require("./useDownloadStore");
+      useDownloadStore.getState().loadDownloadsFromDb();
+    } catch (e) {
+      console.warn("[UserStore] loadDownloadsFromDb on login failed", e);
+    }
     // Fresh login = fresh session: fetch the e-reader devices now — the
     // initialize() path only covers restored sessions, so without this a
     // first login never showed "Send to device" until an app restart.
@@ -404,15 +420,18 @@ export const useUserStore = create<UserState>((set, get) => ({
       const { clearAllPending } = require("../utils/progressSync");
       clearAllPending();
     } catch {}
-    // Downloads are keyed by bare libraryItemId with no account scoping —
-    // without this wipe the next account inherits (and can play) the previous
-    // user's downloaded books, and in-flight downloads keep running into 401s
-    // after the credentials below are gone.
+    // Downloads are NAMESPACED by session key. "Switch Server/User" routes
+    // through logout, and a switch must RETAIN both accounts' downloads — so we
+    // do NOT delete the departing account's files here. Just stop surfacing them
+    // and abort any in-flight parts (they'd 401 once the credentials below are
+    // gone); the files stay on disk, tagged with this account's sessionKey, and
+    // are re-adopted when the user signs back in. (Explicit "clear downloads"
+    // remains available via removeAllDownloads.)
     try {
       const { useDownloadStore } = require("./useDownloadStore");
-      await useDownloadStore.getState().removeAllDownloads();
+      await useDownloadStore.getState().deactivateDownloadsForSwitch();
     } catch (e) {
-      console.warn("[UserStore] downloads wipe on logout failed", e);
+      console.warn("[UserStore] downloads deactivate on logout failed", e);
     }
     // RMAB rides the ABS identity on this device: whoever logs in next must
     // not inherit the previous person's connection (which can carry ADMIN

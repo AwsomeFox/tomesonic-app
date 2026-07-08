@@ -50,13 +50,13 @@ export default function AccountScreen({ navigation }: any) {
   const handleSwitch = () => {
     showAppDialog({
       title: "Switch Server / User",
-      // Name the real consequence: logout wipes every downloaded book and the
-      // cached progress on this device (via removeAllDownloads), not just the
-      // session. Without this, "you'll need to log in again" hid a data-loss trap.
-      message: "Logging out deletes all downloaded books and cached progress on this device. You'll need to sign in again and re-download them.",
+      // Downloads are now namespaced per account and RETAINED on logout/switch
+      // (re-adopted when you sign back into the same server + user), so this is
+      // no longer a data-loss action — just a session change.
+      message: "You'll be signed out and can connect to a different server or account. Your downloaded books stay on this device and reappear when you sign back into this account.",
       buttons: [
         { text: "Cancel", style: "cancel" },
-        { text: "Log Out", style: "destructive", onPress: () => logout() }
+        { text: "Log Out", onPress: () => logout() }
       ]
     });
   };

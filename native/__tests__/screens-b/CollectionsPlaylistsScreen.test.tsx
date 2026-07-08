@@ -123,6 +123,19 @@ beforeEach(() => {
 });
 
 describe("CollectionsPlaylistsScreen", () => {
+  it("renders as a standalone bottom tab with its own sub-selector + create FAB", async () => {
+    // As mounted by the new "Collections" bottom tab (no embedded/mode props),
+    // the screen owns its Collections|Playlists sub-selector and inline create
+    // button, and no hub list header is involved.
+    await renderScreen();
+    await screen.findByText("Favorites");
+
+    // Both sub-tabs are present as tabs (the standalone toggle reaches Playlists).
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.length).toBe(2);
+    expect(screen.getByLabelText("Create new collection")).toBeTruthy();
+  });
+
   it("loads and renders collections by default", async () => {
     await renderScreen();
 

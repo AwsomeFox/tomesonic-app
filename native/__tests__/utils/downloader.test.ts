@@ -639,6 +639,35 @@ describe("sweepOrphanFolders", () => {
     expect(folderDeletes[0][1]).toEqual({ idempotent: true });
   });
 
+  it("does NOT delete folders owned by ANOTHER account's DB rows (namespace-aware)", async () => {
+    // The in-memory store only holds the CURRENT account's downloads, but a
+    // folder owned by a DIFFERENT account's persisted row must never be swept.
+    const { db } = require("../../utils/db");
+    db.saveDownloadItem({
+      id: "bBook",
+      libraryItemId: "bBook",
+      status: "completed",
+      parts: [],
+      sessionKey: "https://b.example.com::userB",
+    });
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValue([
+      "bBook_Family_Book", // owned by account B's DB row — must survive
+      "orphan_folder", // owned by nobody — must be deleted
+    ]);
+    // Current account's store is empty (switched away from A, on B's namespace
+    // but bBook isn't loaded in memory in this test).
+    useDownloadStore.setState({ activeDownloads: {}, completedDownloads: {} } as any);
+
+    await downloader.sweepOrphanFolders();
+
+    const folderDeletes = (FileSystem.deleteAsync as jest.Mock).mock.calls.filter(
+      (c) => !String(c[0]).includes("auto_downloads")
+    );
+    expect(folderDeletes).toHaveLength(1);
+    expect(folderDeletes[0][0]).toBe("file:///test-documents/downloads/orphan_folder");
+  });
+
   it("does nothing when the downloads root doesn't exist", async () => {
     (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: false });
     await downloader.sweepOrphanFolders();

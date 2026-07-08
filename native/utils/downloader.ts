@@ -2,6 +2,7 @@
 // createDownloadResumable / DownloadResumable) to the /legacy entry point.
 import * as FileSystem from "expo-file-system/legacy";
 import { useDownloadStore, DownloadItem, DownloadPart, episodeDownloadKey } from "../store/useDownloadStore";
+import { db } from "./db";
 import { downloadNotifications } from "./downloadNotifications";
 import { absoluteUrl, coverUrl as buildCoverUrl } from "./urls";
 import { api } from "./api";
@@ -636,6 +637,13 @@ export const downloader = {
    * is re-checked against the LIVE store right before each delete so a
    * download started while the sweep is in flight can't lose its folder
    * (startDownload registers the item before any file is written).
+   *
+   * NAMESPACE-AWARE: downloads now belong to per-account namespaces, so the
+   * in-memory store only holds the CURRENT account's downloads. Ownership is
+   * therefore checked against EVERY session's DB rows (db.getAllDownloads),
+   * not just the live store — otherwise a sweep run under account A would
+   * delete account B's on-device folders. A folder is orphaned only when NO
+   * account (and no in-flight download) owns it.
    */
   sweepOrphanFolders: async () => {
     try {
@@ -643,10 +651,20 @@ export const downloader = {
       const rootInfo = await FileSystem.getInfoAsync(root);
       if (!rootInfo.exists) return;
       const entries = await FileSystem.readDirectoryAsync(root);
+      // Ids owned by ANY account's persisted download rows (all namespaces).
+      let dbIds: string[] = [];
+      try {
+        dbIds = db.getAllDownloads().map((d: any) => d.id).filter(Boolean);
+      } catch {}
       for (const name of entries) {
         const { activeDownloads, completedDownloads } = useDownloadStore.getState();
         const ownedBy = (ids: string[]) => ids.some(id => name === id || name.startsWith(`${id}_`));
-        if (ownedBy(Object.keys(activeDownloads)) || ownedBy(Object.keys(completedDownloads))) continue;
+        if (
+          ownedBy(dbIds) ||
+          ownedBy(Object.keys(activeDownloads)) ||
+          ownedBy(Object.keys(completedDownloads))
+        )
+          continue;
         console.log("[Downloader] Removing orphaned download folder:", name);
         try {
           await FileSystem.deleteAsync(`${root}${name}`, { idempotent: true });
