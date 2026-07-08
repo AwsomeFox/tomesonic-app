@@ -24,6 +24,15 @@ let _lastTickAt: number | null = null;
 let _lastSyncAt = 0;
 // Throttle the MMKV setLastPlaybackSession write (currently called every tick).
 let _lastLocalSaveAt = 0;
+// Signature of the LAST mediaProgress display-mirror write. The mirror map is
+// consumed only by library/shelf badges (percent / remaining-time), so we skip
+// the per-tick setState unless the DISPLAYED value actually changes — the
+// rounded percent, the whole remaining-minute, or the finished flag. Writing a
+// fresh map reference every 1s tick re-rendered every subscriber (the whole
+// Books list, kept mounted behind every screen) once a second and stole frames
+// from animations; now the mirror writes ~once per percent or per minute. The
+// finish / server-sync / MMKV paths are SEPARATE and unaffected by this gate.
+let _lastMirrorSig: string | null = null;
 // Session id that has already been marked finished server-side, so we don't
 // re-fire the PATCH every tick once the book is done.
 let _finishedSessionId: string | null = null;
@@ -345,15 +354,32 @@ function persistProgressSample(
       isFinished: alreadyFinished,
       updatedAt: now,
     };
-    useUserStore.setState({
-      mediaProgress: {
-        ...useUserStore.getState().mediaProgress,
-        [progressMapKey]: {
-          ...useUserStore.getState().mediaProgress[progressMapKey],
-          ...progressObj,
+    // Skip the mirror write when nothing the badge DISPLAYS has changed. The
+    // badge shows a rounded percent OR a whole remaining-minute (see
+    // BookProgressBadge), so gate on exactly those + the finished flag. A book
+    // playing for an hour used to rewrite this map ~3600 times; now it writes
+    // only when the visible value ticks over (percent / minute / finished),
+    // keeping the UI in sync without re-rendering the library list every tick.
+    const roundedPct = Math.round((progressObj.progress || 0) * 100);
+    const remainingMin = Math.floor((bookDuration - absolutePosition) / 60);
+    const mirrorSig = `${progressMapKey}|${roundedPct}|${remainingMin}|${alreadyFinished ? 1 : 0}`;
+    // Only throttle when the book duration is known: with an unknown (0)
+    // duration the badge can't show a percent/remaining anyway, so the gate
+    // would collapse every distinct position to one signature — keep the old
+    // always-write behavior there. Otherwise skip the write when nothing the
+    // badge displays changed.
+    if (bookDuration <= 0 || mirrorSig !== _lastMirrorSig) {
+      _lastMirrorSig = mirrorSig;
+      useUserStore.setState({
+        mediaProgress: {
+          ...useUserStore.getState().mediaProgress,
+          [progressMapKey]: {
+            ...useUserStore.getState().mediaProgress[progressMapKey],
+            ...progressObj,
+          },
         },
-      },
-    });
+      });
+    }
 
     // Periodic server sync — every ~15s of accumulated listening.
     if (currentSession.id && now - _lastSyncAt >= SYNC_INTERVAL_MS && _timeListenedAccum > 0) {
@@ -415,6 +441,9 @@ function persistProgressSample(
           },
         },
       });
+      // Finish is a significant event: force the next display-mirror tick to
+      // re-write so the throttle gate can't suppress a stale in-progress value.
+      _lastMirrorSig = null;
       // Finishing a downloaded book is the trigger for auto-download-next-in-
       // series (only for books, not podcast episodes) — one book, opt-in, gated
       // on this one being downloaded. Fire-and-forget; never block persistence.
@@ -1373,10 +1402,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       const libraryItemId = session.libraryItemId || session.libraryItem?.id;
 
       // Prefer the locally-downloaded file when available so downloaded books
-      // play the local copy (faster / offline) instead of streaming.
-      const { useDownloadStore } = require("./useDownloadStore");
-      const download = libraryItemId
-        ? useDownloadStore.getState().completedDownloads[libraryItemId]
+      // play the local copy (faster / offline) instead of streaming. Podcast
+      // EPISODES are stored under the composite `episodeDownloadKey(itemId,
+      // episodeId)` (books under the bare libraryItemId) — mirror how
+      // startPlayback resolves them, else a downloaded episode would always
+      // stream and its offline cover would be blank.
+      const { useDownloadStore, episodeDownloadKey } = require("./useDownloadStore");
+      const downloadKey = libraryItemId
+        ? session.episodeId
+          ? episodeDownloadKey(libraryItemId, session.episodeId)
+          : libraryItemId
+        : null;
+      const download = downloadKey
+        ? useDownloadStore.getState().completedDownloads[downloadKey]
         : null;
 
       // Now-playing artwork. The FULL now-playing card resolves the artworkUri
@@ -1680,6 +1718,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       _lastTickAt = null;
       _lastSyncAt = 0;
       _lastLocalSaveAt = 0;
+      _lastMirrorSig = null;
       _finishedSessionId = null;
       _trackOffsets = trackOffsets;
       // The previous book's pause stamp must not apply its auto-rewind to
@@ -2390,6 +2429,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _lastTickAt = null;
     _lastSyncAt = 0;
     _lastLocalSaveAt = 0;
+    _lastMirrorSig = null;
     _finishedSessionId = null;
     _lastPausedAt = null;
     _preparedToken = null;

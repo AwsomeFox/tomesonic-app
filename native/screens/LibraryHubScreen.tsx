@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, Pressable, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -13,6 +13,15 @@ import { storageHelper } from "../utils/storage";
 import LibraryScreen, { LibraryScreenHandle } from "./LibraryScreen";
 import SeriesListScreen, { SeriesListScreenHandle } from "./SeriesListScreen";
 import AuthorsScreen, { AuthorsScreenHandle } from "./AuthorsScreen";
+
+// Memoized facet wrappers: crossing the scroll-to-top threshold flips
+// setShowScrollTop and re-renders the hub, which would otherwise reconcile
+// every kept-alive facet subtree with fresh props. With stable props (see the
+// memoized pillRow, route and callbacks below) these bail out of re-rendering
+// unless their own inputs actually change.
+const MemoLibraryScreen = React.memo(LibraryScreen);
+const MemoSeriesListScreen = React.memo(SeriesListScreen);
+const MemoAuthorsScreen = React.memo(AuthorsScreen);
 
 /**
  * LibraryHubScreen — Material 3 "Library" destination that consolidates the
@@ -169,19 +178,36 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   // reflects the retained position of whichever facet is now active).
   const scrollOffsets = useRef<Record<string, number>>({});
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const handleFacetScroll = (key: LibrarySegment) => (y: number) => {
-    scrollOffsets.current[key] = y;
-    if (key === segmentRef.current) setShowScrollTop(y > SCROLL_TOP_THRESHOLD);
-  };
+  // Stable per-facet scroll handlers. The previous handleFacetScroll(key)
+  // allocated a fresh closure per facet on every hub render (including each time
+  // the scroll-to-top threshold toggled setShowScrollTop), changing the onScroll
+  // prop and re-rendering every mounted facet. These read only refs + the stable
+  // setter, so they never need to change.
+  const onScrollHandlers = useMemo(() => {
+    const make = (key: LibrarySegment) => (y: number) => {
+      scrollOffsets.current[key] = y;
+      if (key === segmentRef.current) setShowScrollTop(y > SCROLL_TOP_THRESHOLD);
+    };
+    return {
+      books: make("books"),
+      series: make("series"),
+      authors: make("authors"),
+    } as Record<LibrarySegment, (y: number) => void>;
+  }, []);
 
-  const selectSegment = (next: LibrarySegment) => {
-    if (next === segment) return;
+  const selectSegment = useCallback((next: LibrarySegment) => {
+    if (next === segmentRef.current) return;
     setSegment(next);
     // A manual segment switch drops any pending Books deep-link seed.
     setBooksSeed(undefined);
     setShowScrollTop((scrollOffsets.current[next] || 0) > SCROLL_TOP_THRESHOLD);
     storageHelper.setLibraryHubSegment(next);
-  };
+  }, []);
+
+  // Stable Books-facet props so the memoized facet doesn't re-render when only
+  // the hub's scroll-to-top state changes.
+  const onBooksSeedConsumed = useCallback(() => setBooksSeed(undefined), []);
+  const booksRoute = useMemo(() => ({ params: booksSeed || {} }), [booksSeed]);
 
   // Resync the scroll-to-top FAB to the active facet's retained offset whenever
   // `segment` changes — by tap, deep-link seed, or an explicit `segment` param.
@@ -228,7 +254,10 @@ export default function LibraryHubScreen({ route, navigation }: any) {
 
   // The segment pill row. Passed down to (only) the active facet as its list
   // header so it collapses away with the content (M3 collapsing header).
-  const pillRow = (
+  // Memoized so an unrelated hub re-render (e.g. the scroll-to-top FAB toggling)
+  // doesn't recreate it and, through it, re-render the active facet's header.
+  const pillRow = useMemo(
+    () => (
     <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 }}>
       <ScrollView
         horizontal
@@ -297,6 +326,8 @@ export default function LibraryHubScreen({ route, navigation }: any) {
         </View>
       </ScrollView>
     </View>
+    ),
+    [colors, segment, selectSegment]
   );
 
   const renderFacet = (key: LibrarySegment) => {
@@ -304,24 +335,24 @@ export default function LibraryHubScreen({ route, navigation }: any) {
     // Only the active facet receives the pill row (a single visible copy) and
     // reports scroll — inactive layers are hidden anyway.
     const listHeader = active ? pillRow : undefined;
-    const onScroll = handleFacetScroll(key);
+    const onScroll = onScrollHandlers[key];
     switch (key) {
       case "books":
         return (
-          <LibraryScreen
+          <MemoLibraryScreen
             ref={booksRef}
             embedded
             navigation={navigation}
-            route={{ params: booksSeed || {} }}
+            route={booksRoute}
             onFilterActiveChange={setBooksFilterActive}
-            onSeedConsumed={() => setBooksSeed(undefined)}
+            onSeedConsumed={onBooksSeedConsumed}
             listHeader={listHeader}
             onScroll={onScroll}
           />
         );
       case "series":
         return (
-          <SeriesListScreen
+          <MemoSeriesListScreen
             ref={seriesRef}
             embedded
             navigation={navigation}
@@ -331,7 +362,7 @@ export default function LibraryHubScreen({ route, navigation }: any) {
         );
       case "authors":
         return (
-          <AuthorsScreen
+          <MemoAuthorsScreen
             ref={authorsRef}
             embedded
             navigation={navigation}
