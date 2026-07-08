@@ -16,9 +16,23 @@ import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import TopAppBar from "../../components/TopAppBar";
 import { useUiStore } from "../../store/useUiStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
+import { useDownloadStore } from "../../store/useDownloadStore";
 
 const uiInitial = useUiStore.getState();
 const libraryInitial = useLibraryStore.getState();
+
+// A minimal in-flight DownloadItem for the account-menu badge tests.
+const activeItem = (id: string) =>
+  ({
+    id,
+    libraryItemId: id,
+    title: id,
+    author: "",
+    coverUrl: "",
+    progress: 0.5,
+    status: "downloading",
+    parts: [],
+  }) as any;
 
 function makeNav() {
   const navigation: any = {
@@ -40,6 +54,8 @@ beforeEach(() => {
     ],
     currentLibraryId: "lib1",
   } as any);
+  // No in-flight downloads by default — badge tests opt in explicitly.
+  useDownloadStore.setState({ activeDownloads: {} } as any);
 });
 
 describe("TopAppBar — default (tab) mode", () => {
@@ -189,6 +205,45 @@ describe("TopAppBar — default (tab) mode", () => {
     await fireEvent.press(screen.getByLabelText("Account menu"));
     await fireEvent.press(screen.getByText("Settings"));
     expect(navigation.navigate).toHaveBeenCalledWith("Settings");
+  });
+
+  it("account menu navigates to Downloads (its only home after the nav split)", async () => {
+    const navigation = makeNav();
+    await render(<TopAppBar navigation={navigation} />);
+    await fireEvent.press(screen.getByLabelText("Account menu"));
+    await fireEvent.press(screen.getByText("Downloads"));
+    expect(navigation.navigate).toHaveBeenCalledWith("Downloads");
+  });
+
+  it("shows no active-download badge/indicator when nothing is downloading", async () => {
+    await render(<TopAppBar navigation={makeNav()} />);
+    // No dot on the account icon.
+    expect(
+      screen.queryByTestId("account-download-indicator", { includeHiddenElements: true })
+    ).toBeNull();
+    // And no count badge on the (opened) Downloads menu row.
+    await fireEvent.press(screen.getByLabelText("Account menu"));
+    expect(screen.getByText("Downloads")).toBeTruthy();
+    expect(screen.queryByTestId("downloads-active-badge")).toBeNull();
+    // Plain "Downloads" label, no count.
+    expect(screen.getByLabelText("Downloads")).toBeTruthy();
+  });
+
+  it("badges the account icon and the Downloads menu row when a download is in flight", async () => {
+    useDownloadStore.setState({ activeDownloads: { a1: activeItem("a1"), a2: activeItem("a2") } } as any);
+    await render(<TopAppBar navigation={makeNav()} />);
+
+    // Indicator dot on the account icon (decorative, hidden from a11y tree)...
+    expect(
+      screen.getByTestId("account-download-indicator", { includeHiddenElements: true })
+    ).toBeTruthy();
+    // ...and the count is surfaced in the button's accessible label.
+    expect(screen.getByLabelText(/2 downloads in progress/)).toBeTruthy();
+
+    // The menu row carries the count badge and a labelled affordance.
+    await fireEvent.press(screen.getByLabelText(/Account menu/));
+    expect(screen.getByTestId("downloads-active-badge")).toBeTruthy();
+    expect(screen.getByLabelText("Downloads, 2 in progress")).toBeTruthy();
   });
 });
 

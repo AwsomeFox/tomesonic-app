@@ -414,6 +414,35 @@ describe("useDownloadStore", () => {
       expect(downloader.resumeDownload).not.toHaveBeenCalled();
       expect(useDownloadStore.getState().activeDownloads["item1"].status).toBe("downloading");
     });
+
+    it("marks the download failed (not stuck pending) when resumeDownload rejects mid-resume", async () => {
+      // The retry flips the row to "pending" first; if the resume then rejects,
+      // the catch MUST failDownload so the row lands on "failed" with the reason
+      // surfaced — otherwise it's stuck pending forever with no retry affordance.
+      storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+      (downloader.resumeDownload as jest.Mock).mockRejectedValueOnce(new Error("Connection lost"));
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem({ status: "failed", error: "Interrupted" }) } });
+
+      await useDownloadStore.getState().retryDownload("item1");
+
+      const failed = useDownloadStore.getState().activeDownloads["item1"];
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toBe("Connection lost"); // the reject message, surfaced
+      // Parts survive so a subsequent retry can still resume.
+      expect(failed.parts).toHaveLength(2);
+    });
+
+    it("falls back to a generic message when the resume rejection carries none", async () => {
+      storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+      (downloader.resumeDownload as jest.Mock).mockRejectedValueOnce(new Error(""));
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem({ status: "failed" }) } });
+
+      await useDownloadStore.getState().retryDownload("item1");
+
+      const failed = useDownloadStore.getState().activeDownloads["item1"];
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toBe("Retry failed");
+    });
   });
 
   describe("removeAllDownloads", () => {
@@ -924,6 +953,40 @@ describe("useDownloadStore", () => {
       const entries = m.writeAutoDownloads.mock.calls.at(-1)![0];
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({ id: "book1" });
+    });
+
+    it("excludes podcast EPISODES from the car mirror, mirroring only books", () => {
+      // Every episode of one podcast shares a libraryItemId, so emitting them
+      // would collide on the browse id and mis-resolve resume positions
+      // (episode progress lives under a composite key). A completed episode with
+      // playable tracks must still be dropped; the book alongside it stays.
+      const m = loadFresh();
+      const episode: DownloadItem = {
+        ...baseItem({
+          id: "pod1::ep1",
+          libraryItemId: "pod1",
+          episodeId: "ep1",
+          status: "completed",
+          progress: 1,
+        }),
+        meta: {
+          duration: 1800,
+          chapters: [],
+          tracks: [{ index: 0, filename: "ep.m4b", duration: 1800, startOffset: 0 }],
+        },
+      };
+
+      m.store.setState({
+        completedDownloads: { book1: audioItem("book1"), "pod1::ep1": episode },
+      });
+
+      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      const entries = m.writeAutoDownloads.mock.calls.at(-1)![0];
+      // ONLY the book — the episode is omitted despite being a completed, fully
+      // downloaded audio item.
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ id: "book1" });
+      expect(entries.find((e: any) => e.id === "pod1")).toBeUndefined();
     });
   });
 });

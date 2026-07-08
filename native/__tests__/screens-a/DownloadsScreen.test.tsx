@@ -199,6 +199,47 @@ describe("DownloadsScreen", () => {
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
   });
 
+  it("tags episode rows and groups them under their podcast (books stay up top)", async () => {
+    const mkEpisode = (episodeId: string, title: string) => ({
+      id: `pod1::${episodeId}`,
+      libraryItemId: "pod1",
+      episodeId,
+      title,
+      author: "My Podcast",
+      coverUrl: "",
+      status: "completed" as const,
+      progress: 1,
+      parts: [
+        { id: "track_0", filename: "t.mp3", url: "", fileSize: 2 * MB, bytesDownloaded: 2 * MB, completed: true, localFilePath: "file:///dl/x/t.mp3" },
+      ],
+      meta: { duration: 900, chapters: [], tracks: [{ index: 0, filename: "t.mp3", duration: 900, startOffset: 0 }] },
+    });
+    seed({
+      completedDownloads: {
+        // Deliberately out of order in the map; the screen must group + sort.
+        "pod1::ep2": mkEpisode("ep2", "Beta Episode"),
+        b1: audioDownload, // a book (no episodeId)
+        "pod1::ep1": mkEpisode("ep1", "Alpha Episode"),
+      },
+      activeDownloads: {},
+    });
+    await render(<DownloadsScreen navigation={makeNavigation()} />);
+
+    // Both episode rows carry the scannable "Episode" tag; the book does not.
+    const tags = screen.getAllByLabelText("Podcast episode");
+    expect(tags).toHaveLength(2);
+    expect(screen.getByText("Audio DL")).toBeTruthy(); // book still rendered
+
+    // Grouping/order: book first (prefix 0), then the two episodes clustered
+    // under the podcast, alphabetized by episode title (Alpha before Beta).
+    const titleNodes = screen.getAllByText(/Audio DL|Alpha Episode|Beta Episode/);
+    expect(titleNodes.map((n) => n.props.children)).toEqual([
+      "Audio DL",
+      "Alpha Episode",
+      "Beta Episode",
+    ]);
+  });
+
   it("delete goes through a confirm dialog before removeDownload", async () => {
     seed();
     const removeDownload = useDownloadStore.getState().removeDownload as jest.Mock;
