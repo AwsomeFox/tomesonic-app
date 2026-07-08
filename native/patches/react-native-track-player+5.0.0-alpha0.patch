@@ -181,7 +181,7 @@ index d6e3483..8cccb17 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..c4daab4 100644
+index b495b5a..d5d5d14 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -232,7 +232,7 @@ index b495b5a..c4daab4 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +114,1191 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +114,1205 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -470,6 +470,16 @@ index b495b5a..c4daab4 100644
 +                    f.writeText(o.toString()); tmp.delete()
 +                }
 +            } catch (e: Exception) { Timber.w(e, "absRefreshToken persist failed") }
++            // Cached browse/search MediaItems embed the OLD token in their online
++            // cover URIs (?token=...); drop them so the car re-fetches tiles with
++            // the fresh token instead of rendering 401/blank covers until they age
++            // out. (Connectivity flips already clear these, but a token rotation
++            // does not, so clear here too.) ConcurrentHashMap.clear() is safe from
++            // this background thread; absNotifyBrowseChanged posts the browse
++            // refresh onto the main thread (mediaSession is main-thread-only).
++            absChildrenCache.clear()
++            absSearchCache.clear()
++            absNotifyBrowseChanged("token refresh")
 +            Timber.i("absRefreshToken: refreshed access token natively")
 +            newToken
 +        } catch (e: Exception) { Timber.w(e, "absRefreshToken failed"); null }
@@ -790,7 +800,7 @@ index b495b5a..c4daab4 100644
 +            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
 +            android.graphics.BitmapFactory.decodeFile(path, bounds)
 +            var sample = 1
-+            while (bounds.outWidth / (sample * 2) >= 512) sample *= 2
++            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 512) sample *= 2
 +            val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
 +            val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return null
 +            val out = java.io.ByteArrayOutputStream()
@@ -1388,6 +1398,10 @@ index b495b5a..c4daab4 100644
 +        val url = "$base/${chosen.first}"
 +        val within = (target - chosen.second).coerceAtLeast(0.0)
 +        Timber.i("AA offline play: %s -> %s @%ds", itemId, chosen.first, within.toLong())
++        // Remember the chosen track's offset (Triple.second = startOffset) so a
++        // later JS handoff (setupPlayer) can turn fakePlayer's track-relative
++        // position back into absolute book seconds — mirrors the online branch.
++        absColdStartOffsetMs = (chosen.second * 1000).toLong()
 +        return Pair(url, (within * 1000).toLong())
 +    }
 +
@@ -1437,7 +1451,7 @@ index b495b5a..c4daab4 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1386,60 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1400,60 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1500,7 +1514,7 @@ index b495b5a..c4daab4 100644
          observeEvents()
      }
  
-@@ -293,9 +1522,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1536,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1512,7 +1526,7 @@ index b495b5a..c4daab4 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1535,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1549,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1574,7 +1588,7 @@ index b495b5a..c4daab4 100644
          }
      }
  
-@@ -449,6 +1712,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1726,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1585,7 +1599,7 @@ index b495b5a..c4daab4 100644
      }
  
      @MainThread
-@@ -515,6 +1782,29 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1796,29 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -1615,7 +1629,7 @@ index b495b5a..c4daab4 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2007,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2021,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1624,7 +1638,7 @@ index b495b5a..c4daab4 100644
              return
          }
  
-@@ -780,8 +2070,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2084,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1640,7 +1654,7 @@ index b495b5a..c4daab4 100644
          return mediaSession
      }
  
-@@ -792,13 +2088,41 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2102,41 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1684,7 +1698,7 @@ index b495b5a..c4daab4 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2229,230 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2243,230 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -1932,7 +1946,7 @@ index b495b5a..c4daab4 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2461,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2475,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -1962,7 +1976,7 @@ index b495b5a..c4daab4 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2493,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2507,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -1978,7 +1992,7 @@ index b495b5a..c4daab4 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2509,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2523,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
