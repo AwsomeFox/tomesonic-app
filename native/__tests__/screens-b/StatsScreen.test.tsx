@@ -83,6 +83,7 @@ import { hasAnyPendingSyncs } from "../../utils/progressSync";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { storage } from "../../utils/storage";
 
 const mockedNet = useNetworkStatus as jest.Mock;
 const mockedPending = hasAnyPendingSyncs as jest.Mock;
@@ -131,6 +132,11 @@ beforeEach(() => {
   // 25-hour day exactly once. In non-DST timezones this is a plain Monday and
   // the math is identical.
   jest.setSystemTime(new Date(2025, 10, 3, 15, 30, 0));
+
+  // Goal keys live in a module-singleton MMKV; clear them so one test's saved
+  // goal can't leak into the next.
+  storage.remove("listeningGoalMinutes");
+  storage.remove("listeningGoalPeriod");
 
   useUserStore.setState(initialUser, true);
   usePlaybackStore.setState(initialPlayback, true);
@@ -355,5 +361,75 @@ describe("StatsScreen", () => {
 
     await fireEvent.press(screen.getByLabelText("Go back"));
     expect(navigation.goBack).toHaveBeenCalled();
+  });
+
+  it("surfaces the streak prominently as a banner", async () => {
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    // Streak is 3 (today + DST day + 2 days ago) — shown as a headline banner.
+    expect(screen.getByText("3-day streak")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Current streak: 3 days in a row")
+    ).toBeTruthy();
+  });
+
+  it("navigates to the Year in Review with the current year", async () => {
+    const navigation = await renderStats();
+    await screen.findByText("Your Year in Audio");
+
+    // Faked clock is Nov 2025 -> year 2025.
+    await fireEvent.press(screen.getByLabelText("Your 2025 in Audio"));
+    expect(navigation.navigate).toHaveBeenCalledWith("YearInReview", { year: 2025 });
+  });
+
+  it("shows a set-a-goal affordance, then persists the goal and shows progress", async () => {
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    // No goal yet -> affordance visible, no goal persisted.
+    expect(screen.getByLabelText("Set a listening goal")).toBeTruthy();
+    expect(storage.getNumber("listeningGoalMinutes")).toBeUndefined();
+
+    await fireEvent.press(screen.getByLabelText("Set a listening goal"));
+    // Default draft is 30 minutes / daily.
+    await fireEvent.press(screen.getByLabelText("Save goal"));
+
+    // Persisted to MMKV under the owned keys.
+    expect(storage.getNumber("listeningGoalMinutes")).toBe(30);
+    expect(storage.getString("listeningGoalPeriod")).toBe("daily");
+
+    // Progress computed from today's minutes (600s -> 10 min) vs the 30 goal.
+    expect(screen.getByText("Daily goal")).toBeTruthy();
+    expect(screen.getByText("10 / 30 min")).toBeTruthy();
+  });
+
+  it("loads a persisted weekly goal and computes progress from the payload", async () => {
+    storage.set("listeningGoalMinutes", 40);
+    storage.set("listeningGoalPeriod", "weekly");
+
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    // weekMinutes = 36 (10+20+5+1) vs a 40-minute weekly goal.
+    expect(screen.getByText("Weekly goal")).toBeTruthy();
+    expect(screen.getByText("36 / 40 min")).toBeTruthy();
+  });
+
+  it("marks the goal met and can remove it", async () => {
+    storage.set("listeningGoalMinutes", 5);
+    storage.set("listeningGoalPeriod", "daily");
+
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    // today 10 min >= 5 -> met.
+    expect(screen.getByText("10 / 5 min — goal met!")).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Edit listening goal"));
+    await fireEvent.press(screen.getByLabelText("Remove goal"));
+
+    expect(storage.getNumber("listeningGoalMinutes")).toBeUndefined();
+    expect(screen.getByLabelText("Set a listening goal")).toBeTruthy();
   });
 });

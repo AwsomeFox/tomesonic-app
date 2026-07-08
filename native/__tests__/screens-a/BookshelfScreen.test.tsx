@@ -114,6 +114,7 @@ import { useDownloadStore } from "../../store/useDownloadStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUiStore } from "../../store/useUiStore";
 import { storage } from "../../utils/storage";
+import { encodeFilterValue } from "../../components/FilterModal";
 
 const mockedGet = api.get as jest.Mock;
 const mockedPost = api.post as jest.Mock;
@@ -598,5 +599,70 @@ describe("BookshelfScreen online", () => {
       focusHandler();
     });
     expect(loadMediaProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("has a Browse genres entry point that navigates to the GenreBrowse screen", async () => {
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    const entry = await screen.findByLabelText("Browse genres");
+    await fireEvent.press(entry);
+    expect(navigation.navigate).toHaveBeenCalledWith("GenreBrowse");
+  });
+
+  it("builds a 'Because you listened' affinity shelf, excluding books already read", async () => {
+    const sciFiRead = {
+      id: "read1",
+      mediaType: "book",
+      media: { metadata: { title: "Read SciFi", authorName: "A", genres: ["Sci-Fi"] } },
+    };
+    const recNew = {
+      id: "rec1",
+      mediaType: "book",
+      media: { metadata: { title: "New SciFi", authorName: "B" } },
+    };
+    const recFinished = {
+      id: "rec2",
+      mediaType: "book",
+      media: { metadata: { title: "Done SciFi", authorName: "C" } },
+    };
+    seedOnline([{ id: "recently-added", label: "Recently Added", type: "book", entities: [sciFiRead] }], {
+      // A started book (drives the "Sci-Fi" affinity) and an already-finished
+      // recommendation candidate (must be filtered back out of the shelf).
+      read1: { libraryItemId: "read1", progress: 0.5 },
+      rec2: { libraryItemId: "rec2", isFinished: true },
+    });
+    mockedGet.mockImplementation((url: string) => {
+      if (url.includes("filter=genres.")) {
+        return Promise.resolve({ data: { results: [recNew, recFinished] } });
+      }
+      return Promise.resolve({ data: { results: [] } });
+    });
+
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Because you listened");
+    // Coverless cards render the title twice (placeholder + meta panel).
+    expect(screen.getAllByText("New SciFi").length).toBeGreaterThanOrEqual(1);
+    // The finished candidate is excluded from the recommendation.
+    expect(screen.queryByText("Done SciFi")).toBeNull();
+    // The query uses the base64-encoded top genre.
+    expect(mockedGet).toHaveBeenCalledWith(
+      expect.stringContaining(`filter=genres.${encodeFilterValue("Sci-Fi")}`)
+    );
+  });
+
+  it("skips the affinity shelf when there is no genre affinity (no started books with genres)", async () => {
+    // baseShelves items carry no genres and there's no progress → no affinity.
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.queryByText("Because you listened")).toBeNull();
+    // Never issues a genre-affinity query when there's nothing to base it on.
+    expect(mockedGet).not.toHaveBeenCalledWith(expect.stringContaining("filter=genres."));
   });
 });

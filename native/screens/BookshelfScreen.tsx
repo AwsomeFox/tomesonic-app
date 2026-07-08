@@ -40,6 +40,9 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 // pressable — the call site also requires the row to overflow (see `showSeeAll`);
 // a null return is what unconditionally leaves a header non-pressable.
 function shelfToLibraryParams(shelf: any): Record<string, any> | null {
+  // Synthetic shelves (e.g. the "Because you listened" affinity shelf) can
+  // carry an explicit destination — honor it before the id/type heuristics.
+  if (shelf?.libParams) return shelf.libParams;
   // Series/author shelves (incl. the transformed "Continue Series") open the
   // matching browse segment rather than a books filter.
   if (shelf?.type === "series") return { segment: "series" };
@@ -89,6 +92,12 @@ export default function BookshelfScreen({ navigation }: any) {
   const [continueReadingItems, setContinueReadingItems] = useState<any[]>(() =>
     readContinueReadingCache(useLibraryStore.getState().currentLibraryId)
   );
+  // "Because you listened": a client-side genre-affinity shelf. Derived from the
+  // genres of the books the user has finished/started (tallied over the loaded
+  // shelves + Continue Reading), then a single items query for the top genre,
+  // with already-finished/in-progress items filtered back out. Null whenever
+  // there's no affinity/data or we're offline — the shelf is purely additive.
+  const [affinityShelf, setAffinityShelf] = useState<any | null>(null);
   // Starts true so the very first frame of a fresh install shows the skeleton
   // (not an empty screen). Warm starts hydrate shelves synchronously from the
   // MMKV cache, so the `shelves.length === 0` half of the gate skips it.
@@ -195,6 +204,81 @@ export default function BookshelfScreen({ navigation }: any) {
     }
   };
 
+  // "Started/finished" test used both for building affinity (which genres the
+  // user engages with) and for excluding books they've already touched from the
+  // recommendation.
+  const hasProgress = (p: any) =>
+    !!p && (p.isFinished || Number(p.progress || 0) > 0 || Number(p.ebookProgress || 0) > 0);
+
+  // Build the "Because you listened" shelf. Resilient by design: any missing
+  // piece (offline, no affinity, empty/failed query) just clears the shelf.
+  const loadAffinity = async () => {
+    const libId = currentLibraryId;
+    if (!libId) return;
+    const libStillCurrent = () => useLibraryStore.getState().currentLibraryId === libId;
+    // Offline (or the "audiobooks only" setting) → no recommendation shelf.
+    if (isOffline || useUserStore.getState().settings?.hideNonAudiobooksGlobal) {
+      if (libStillCurrent()) setAffinityShelf(null);
+      return;
+    }
+    try {
+      const mp = useUserStore.getState().mediaProgress || {};
+      // Tally genres over every book the user has engaged with that we already
+      // have metadata for (the loaded shelves + the Continue Reading batch).
+      const genreCounts = new Map<string, number>();
+      const consider = (item: any) => {
+        const id = item?.id;
+        if (!id || !hasProgress(mp[id])) return;
+        const genres = item?.media?.metadata?.genres;
+        if (!Array.isArray(genres)) return;
+        for (const g of genres) {
+          if (typeof g === "string" && g.trim()) genreCounts.set(g, (genreCounts.get(g) || 0) + 1);
+        }
+      };
+      const shelves = useLibraryStore.getState().personalizedShelves || [];
+      shelves.forEach((sh: any) => (Array.isArray(sh?.entities) ? sh.entities : []).forEach(consider));
+      continueReadingItems.forEach(consider);
+
+      if (genreCounts.size === 0) {
+        if (libStillCurrent()) setAffinityShelf(null);
+        return;
+      }
+      // Top genre by engagement (ties broken alphabetically for stability).
+      const topGenre = Array.from(genreCounts.entries()).sort(
+        (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+      )[0][0];
+
+      const res = await api.get(
+        `/api/libraries/${libId}/items?filter=genres.${encodeFilterValue(topGenre)}&minified=1&limit=24`
+      );
+      if (!libStillCurrent()) return;
+      const results = Array.isArray(res.data?.results) ? res.data.results : [];
+      // Exclude books already finished/in-progress — the shelf is for what's
+      // NEXT, not a re-run of the reading history it was derived from.
+      const mpNow = useUserStore.getState().mediaProgress || {};
+      const filtered = results.filter(
+        (it: any) => it && it.id && !hasProgress(mpNow[it.id])
+      );
+      if (filtered.length === 0) {
+        if (libStillCurrent()) setAffinityShelf(null);
+        return;
+      }
+      if (libStillCurrent()) {
+        setAffinityShelf({
+          id: "because-you-listened",
+          label: "Because you listened",
+          type: "book",
+          entities: filtered,
+          // See-all opens the full genre list (same destination as a genre chip).
+          libParams: { filter: `genres.${encodeFilterValue(topGenre)}`, showBack: true, title: topGenre },
+        });
+      }
+    } catch {
+      // Older server without the filter, transient failure, etc. — stay silent.
+      if (libStillCurrent()) setAffinityShelf(null);
+    }
+  };
+
   // Bumped by pull-to-refresh so the series-list effect below revalidates too
   // (otherwise Continue Series folders keep stale covers/counts).
   const [seriesRefreshTick, setSeriesRefreshTick] = useState(0);
@@ -211,6 +295,7 @@ export default function BookshelfScreen({ navigation }: any) {
       await loadLibraries(true).catch(() => {});
       await Promise.all([loadPersonalizedShelves(true), loadMediaProgress()]);
       await loadContinueReading();
+      loadAffinity();
     } finally {
       setRefreshing(false);
     }
@@ -236,6 +321,9 @@ export default function BookshelfScreen({ navigation }: any) {
     if (prevLibraryRef.current !== currentLibraryId) {
       prevLibraryRef.current = currentLibraryId;
       setContinueReadingItems(readContinueReadingCache(currentLibraryId));
+      // The affinity shelf is a per-library recommendation — never carry the
+      // old library's genre picks under the new library's header.
+      setAffinityShelf(null);
     }
   }, [currentLibraryId]);
 
@@ -255,6 +343,9 @@ export default function BookshelfScreen({ navigation }: any) {
         const progressPromise = loadMediaProgress();
         progressPromise.then(() => loadContinueReading()).catch(() => {});
         await Promise.all([loadPersonalizedShelves(), progressPromise]);
+        // Affinity needs both the shelves (for genres) and progress — run it
+        // once both have landed. It's fire-and-forget and never gates the UI.
+        loadAffinity();
         await librariesPromise;
       } else {
         // True first run: discover libraries first (sets currentLibraryId,
@@ -278,6 +369,7 @@ export default function BookshelfScreen({ navigation }: any) {
       }
       loadMediaProgress().then(() => {
         loadContinueReading();
+        loadAffinity();
       });
     });
     return unsubscribe;
@@ -508,6 +600,11 @@ export default function BookshelfScreen({ navigation }: any) {
         type: "book",
         entities: continueReadingItems,
       });
+    }
+    // "Because you listened" is purely additive — appended last so it never
+    // displaces an existing shelf. Only shown once it has recommendations.
+    if (affinityShelf && Array.isArray(affinityShelf.entities) && affinityShelf.entities.length > 0) {
+      displayShelves.push(affinityShelf);
     }
   }
 
@@ -870,6 +967,50 @@ export default function BookshelfScreen({ navigation }: any) {
               <Icon name="chevron-right" size={24} color={colors.onSecondaryContainer} />
             </Pressable>
           ) : null}
+          {/* Browse genres/tags entry point — opens the searchable genre list
+              (the only navigation to it). Kept lightweight (a bordered row, not
+              a filled card) so it reads as a secondary browse affordance next
+              to the personalized shelves below. */}
+          <Pressable
+            onPress={() => navigation.navigate("GenreBrowse")}
+            android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
+            accessibilityRole="button"
+            accessibilityLabel="Browse genres"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginHorizontal: 16,
+              marginBottom: 8,
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: colors.outlineVariant,
+            }}
+          >
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: colors.surfaceContainerHighest,
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: 14,
+              }}
+            >
+              <Icon name="explore" size={20} color={colors.onSurface} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>
+                Browse genres
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 1 }}>
+                Explore this library by genre and tag
+              </Text>
+            </View>
+            <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
           {/* Loaded but nothing to shelve (fresh/empty library): a real empty
               state instead of a blank scroll area. RefreshControl stays live
               (flexGrow centers this within the scrollable viewport). */}

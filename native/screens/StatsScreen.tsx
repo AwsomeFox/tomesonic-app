@@ -17,6 +17,29 @@ import { useUserStore } from '../store/useUserStore';
 import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hasAnyPendingSyncs } from '../utils/progressSync';
+import { storage } from '../utils/storage';
+
+// MMKV keys owned by this screen for the local listening goal.
+const GOAL_MINUTES_KEY = 'listeningGoalMinutes';
+const GOAL_PERIOD_KEY = 'listeningGoalPeriod';
+type GoalPeriod = 'daily' | 'weekly';
+
+// new Date() can be faked/garbage in tests — derive the calendar year/month
+// defensively so the seasonal banner + Year-in-Review link never NaN out.
+function currentYearSafe(): number {
+  try {
+    const y = new Date().getFullYear();
+    if (Number.isFinite(y) && y >= 1970 && y <= 3000) return y;
+  } catch {}
+  return 2024;
+}
+function currentMonthSafe(): number {
+  try {
+    const m = new Date().getMonth();
+    if (Number.isFinite(m) && m >= 0 && m <= 11) return m;
+  } catch {}
+  return -1;
+}
 
 // Gold accent for the data-viz line, matching the original app's `yellow-400`.
 // The original app is dark-first — against a LIGHT surface yellow-400 is
@@ -126,6 +149,49 @@ export default function StatsScreen({ navigation }: any) {
   const [pendingSync, setPendingSync] = useState(false);
   const { isConnected } = useNetworkStatus();
 
+  // Local listening goal (persisted to MMKV). Default: no goal set.
+  const [goalMinutes, setGoalMinutes] = useState<number | null>(null);
+  const [goalPeriod, setGoalPeriod] = useState<GoalPeriod>('daily');
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [draftMinutes, setDraftMinutes] = useState(30);
+  const [draftPeriod, setDraftPeriod] = useState<GoalPeriod>('daily');
+
+  // Load the saved goal once on mount.
+  useEffect(() => {
+    try {
+      const savedMin = storage.getNumber(GOAL_MINUTES_KEY);
+      const savedPeriod = storage.getString(GOAL_PERIOD_KEY);
+      if (typeof savedMin === 'number' && savedMin > 0) setGoalMinutes(savedMin);
+      if (savedPeriod === 'weekly' || savedPeriod === 'daily') setGoalPeriod(savedPeriod);
+    } catch {}
+  }, []);
+
+  function openGoalEditor() {
+    setDraftMinutes(goalMinutes && goalMinutes > 0 ? goalMinutes : 30);
+    setDraftPeriod(goalPeriod);
+    setEditingGoal(true);
+  }
+
+  function saveGoal() {
+    const mins = Math.max(5, Math.round(draftMinutes));
+    try {
+      storage.set(GOAL_MINUTES_KEY, mins);
+      storage.set(GOAL_PERIOD_KEY, draftPeriod);
+    } catch {}
+    setGoalMinutes(mins);
+    setGoalPeriod(draftPeriod);
+    setEditingGoal(false);
+  }
+
+  function removeGoal() {
+    try {
+      storage.remove(GOAL_MINUTES_KEY);
+      storage.remove(GOAL_PERIOD_KEY);
+    } catch {}
+    setGoalMinutes(null);
+    setEditingGoal(false);
+  }
+
   // 'focus' fires on the initial mount too, so this both loads the screen and
   // refreshes it when the user comes back — a listening session that ended
   // since the last visit (or the mini player playing on top) shows up.
@@ -201,6 +267,18 @@ export default function StatsScreen({ navigation }: any) {
     daysInARow++;
   }
 
+  // Goal progress, computed from the existing listening-stats payload.
+  const todayMinutes = stats ? Math.round((stats.today || 0) / 60) : 0;
+  const goalCurrent = goalPeriod === 'weekly' ? weekMinutes : todayMinutes;
+  const goalPct =
+    goalMinutes && goalMinutes > 0 ? Math.min(1, goalCurrent / goalMinutes) : 0;
+  const goalMet = !!goalMinutes && goalCurrent >= goalMinutes;
+
+  // Seasonal Year-in-Review banner (Dec/Jan), reachable year-round otherwise.
+  const month = currentMonthSafe();
+  const seasonal = month === 11 || month === 0;
+  const reviewYear = currentYearSafe();
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={['top', 'left', 'right']}>
       {/* Header */}
@@ -256,6 +334,281 @@ export default function StatsScreen({ navigation }: any) {
             <StatTotal value={formatNumber(itemsFinished)} label="Items Finished" />
             <StatTotal value={formatNumber(daysListened)} label="Days Listened" />
             <StatTotal value={formatNumber(minutesListening)} label="Minutes Listening" />
+          </View>
+
+          {/* Prominent streak banner */}
+          {daysInARow > 0 && (
+            <View
+              accessible
+              accessibilityLabel={`Current streak: ${daysInARow} ${daysInARow === 1 ? 'day' : 'days'} in a row`}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginHorizontal: 20,
+                marginBottom: 20,
+                paddingVertical: 12,
+                paddingHorizontal: 16,
+                borderRadius: 14,
+                backgroundColor: colors.secondaryContainer,
+              }}
+            >
+              <Icon name="headphones" size={22} color={colors.onSecondaryContainer} />
+              <Text
+                style={{
+                  color: colors.onSecondaryContainer,
+                  fontSize: 15,
+                  fontWeight: '700',
+                  marginLeft: 10,
+                }}
+              >
+                {daysInARow}-day streak
+              </Text>
+              <Text
+                style={{ color: colors.onSecondaryContainer, fontSize: 13, marginLeft: 8, flex: 1 }}
+                numberOfLines={1}
+              >
+                {daysInARow === 1 ? 'Keep it going!' : 'days in a row'}
+              </Text>
+            </View>
+          )}
+
+          {/* Year in Review entry — highlighted in Dec/Jan, reachable year-round */}
+          <HintPressable
+            onPress={() => navigation.navigate('YearInReview', { year: reviewYear })}
+            accessibilityRole="button"
+            accessibilityLabel={`Your ${reviewYear} in Audio`}
+            android_ripple={{ color: withAlpha(colors.onPrimaryContainer, 0.12) }}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              marginHorizontal: 20,
+              marginBottom: 20,
+              paddingVertical: 14,
+              paddingHorizontal: 16,
+              borderRadius: 14,
+              backgroundColor: seasonal ? colors.primaryContainer : colors.surfaceContainerHigh,
+            }}
+          >
+            <Icon
+              name="calendar"
+              size={22}
+              color={seasonal ? colors.onPrimaryContainer : colors.onSurface}
+            />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text
+                style={{
+                  color: seasonal ? colors.onPrimaryContainer : colors.onSurface,
+                  fontSize: 16,
+                  fontWeight: '700',
+                }}
+              >
+                Your Year in Audio
+              </Text>
+              <Text
+                style={{
+                  color: seasonal ? colors.onPrimaryContainer : colors.onSurfaceVariant,
+                  fontSize: 13,
+                  marginTop: 2,
+                }}
+                numberOfLines={1}
+              >
+                {seasonal ? `${reviewYear} wrapped — see your highlights` : `Look back on ${reviewYear}`}
+              </Text>
+            </View>
+            <Icon
+              name="chevron-right"
+              size={22}
+              color={seasonal ? colors.onPrimaryContainer : colors.onSurfaceVariant}
+            />
+          </HintPressable>
+
+          {/* Listening goal */}
+          <View
+            style={{
+              marginHorizontal: 20,
+              marginBottom: 24,
+              paddingVertical: 14,
+              paddingHorizontal: 16,
+              borderRadius: 14,
+              backgroundColor: colors.surfaceContainerHigh,
+            }}
+          >
+            {goalMinutes && !editingGoal ? (
+              <>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                  <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: '700', flex: 1 }}>
+                    {goalPeriod === 'weekly' ? 'Weekly goal' : 'Daily goal'}
+                  </Text>
+                  <HintPressable
+                    onPress={openGoalEditor}
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit listening goal"
+                    android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 20 }}
+                    style={{ padding: 4 }}
+                  >
+                    <Icon name="edit" size={18} color={colors.onSurfaceVariant} />
+                  </HintPressable>
+                </View>
+                <Text
+                  accessibilityLabel={`Goal progress: ${goalCurrent} of ${goalMinutes} minutes${goalMet ? ', goal met' : ''}`}
+                  style={{ color: colors.onSurfaceVariant, fontSize: 13, marginBottom: 8 }}
+                >
+                  {goalCurrent} / {goalMinutes} min{goalMet ? ' — goal met!' : ''}
+                </Text>
+                {/* Progress bar */}
+                <View
+                  style={{
+                    height: 10,
+                    borderRadius: 5,
+                    backgroundColor: colors.surfaceContainerHighest,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <View
+                    style={{
+                      width: `${Math.round(goalPct * 100)}%`,
+                      height: '100%',
+                      borderRadius: 5,
+                      backgroundColor: goalMet ? colors.success : colors.primary,
+                    }}
+                  />
+                </View>
+              </>
+            ) : editingGoal ? (
+              <>
+                <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: '700', marginBottom: 12 }}>
+                  Set a listening goal
+                </Text>
+                {/* Period toggle */}
+                <View style={{ flexDirection: 'row', marginBottom: 14 }}>
+                  {(['daily', 'weekly'] as GoalPeriod[]).map((p) => {
+                    const active = draftPeriod === p;
+                    return (
+                      <HintPressable
+                        key={p}
+                        onPress={() => setDraftPeriod(p)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${p === 'daily' ? 'Daily' : 'Weekly'} goal${active ? ', selected' : ''}`}
+                        style={{
+                          flex: 1,
+                          paddingVertical: 8,
+                          marginRight: p === 'daily' ? 8 : 0,
+                          borderRadius: 10,
+                          alignItems: 'center',
+                          backgroundColor: active ? colors.primary : colors.surfaceContainerHighest,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: active ? colors.onPrimary : colors.onSurface,
+                            fontSize: 14,
+                            fontWeight: '600',
+                          }}
+                        >
+                          {p === 'daily' ? 'Daily' : 'Weekly'}
+                        </Text>
+                      </HintPressable>
+                    );
+                  })}
+                </View>
+                {/* Minutes stepper */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                  <HintPressable
+                    onPress={() => setDraftMinutes((m) => Math.max(5, m - 5))}
+                    accessibilityRole="button"
+                    accessibilityLabel="Decrease goal by 5 minutes"
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 20,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: colors.surfaceContainerHighest,
+                    }}
+                  >
+                    <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: '700' }}>−</Text>
+                  </HintPressable>
+                  <View style={{ flex: 1, alignItems: 'center' }}>
+                    <Text
+                      accessibilityLabel={`${draftMinutes} minutes`}
+                      style={{ color: colors.onSurface, fontSize: 24, fontWeight: '800' }}
+                    >
+                      {draftMinutes} min
+                    </Text>
+                  </View>
+                  <HintPressable
+                    onPress={() => setDraftMinutes((m) => m + 5)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Increase goal by 5 minutes"
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 20,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: colors.surfaceContainerHighest,
+                    }}
+                  >
+                    <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: '700' }}>+</Text>
+                  </HintPressable>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <HintPressable
+                    onPress={saveGoal}
+                    accessibilityRole="button"
+                    accessibilityLabel="Save goal"
+                    style={{
+                      flex: 1,
+                      paddingVertical: 12,
+                      borderRadius: 22,
+                      alignItems: 'center',
+                      backgroundColor: colors.primary,
+                    }}
+                  >
+                    <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: '600' }}>Save</Text>
+                  </HintPressable>
+                  {goalMinutes ? (
+                    <HintPressable
+                      onPress={removeGoal}
+                      accessibilityRole="button"
+                      accessibilityLabel="Remove goal"
+                      style={{ marginLeft: 12, paddingVertical: 12, paddingHorizontal: 16 }}
+                    >
+                      <Text style={{ color: colors.error, fontSize: 15, fontWeight: '600' }}>Remove</Text>
+                    </HintPressable>
+                  ) : (
+                    <HintPressable
+                      onPress={() => setEditingGoal(false)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Cancel"
+                      style={{ marginLeft: 12, paddingVertical: 12, paddingHorizontal: 16 }}
+                    >
+                      <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, fontWeight: '600' }}>
+                        Cancel
+                      </Text>
+                    </HintPressable>
+                  )}
+                </View>
+              </>
+            ) : (
+              <HintPressable
+                onPress={openGoalEditor}
+                accessibilityRole="button"
+                accessibilityLabel="Set a listening goal"
+                style={{ flexDirection: 'row', alignItems: 'center' }}
+              >
+                <Icon name="add" size={22} color={colors.primary} />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: '700' }}>
+                    Set a listening goal
+                  </Text>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+                    Track daily or weekly minutes
+                  </Text>
+                </View>
+                <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+              </HintPressable>
+            )}
           </View>
 
           {/* Chart heading */}

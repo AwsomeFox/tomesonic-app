@@ -98,7 +98,7 @@ jest.mock(
 );
 
 import React from "react";
-import { Linking } from "react-native";
+import { Linking, Share } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
@@ -109,6 +109,7 @@ import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
+import { useDialogStore } from "../../store/useDialogStore";
 
 const initialUser = useUserStore.getState();
 const initialPlayback = usePlaybackStore.getState();
@@ -738,5 +739,240 @@ describe("ReaderScreen (unsupported formats)", () => {
       unmount();
     });
     expect(deactivateKeepAwake).toHaveBeenCalledWith("reader");
+  });
+});
+
+function sendMsg(webProps: any, payload: any) {
+  webProps.onMessage({ nativeEvent: { data: JSON.stringify(payload) } });
+}
+
+describe("ReaderScreen (reader features)", () => {
+  it("emits every new live-injection hook and the selection/annotation wiring in the HTML", async () => {
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+
+    // Theme / margin / flow live hooks.
+    expect(html).toContain("window.setReaderTheme");
+    expect(html).toContain("window.setReaderMargin");
+    expect(html).toContain("window.setReaderFlow");
+    // Search + goToSearchResult.
+    expect(html).toContain("window.search");
+    expect(html).toContain("window.goToSearchResult");
+    expect(html).toContain("view.search");
+    // Highlights (foliate annotation API).
+    expect(html).toContain("window.addHighlight");
+    expect(html).toContain("window.removeHighlight");
+    expect(html).toContain("view.addAnnotation");
+    expect(html).toContain("draw-annotation");
+    // Selection reporting + TTS text extraction.
+    expect(html).toContain("type: 'selection'");
+    expect(html).toContain("window.getReaderText");
+  });
+
+  it("defaults theme/margin/flow into the HTML and bakes stored preferences", async () => {
+    // Defaults: 16px margin, paginated flow.
+    await renderReader();
+    await readyWebView();
+    let html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    expect(html).toContain('"16px"');
+    expect(html).toContain("'paginated'");
+  });
+
+  it("bakes a stored sepia theme, wide margin, and scrolled flow into the HTML", async () => {
+    storage.set("reader_theme", "sepia");
+    storage.set("reader_margin", 32);
+    storage.set("reader_flow", "scrolled");
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    // Sepia bg/fg baked as the initial theme colors.
+    expect(html).toContain("#f4ecd8");
+    expect(html).toContain("#5b4636");
+    // Wide margin + scrolled flow.
+    expect(html).toContain('"32px"');
+    expect(html).toContain('"scrolled"');
+  });
+
+  it("theme/margin/layout controls persist to MMKV and inject live", async () => {
+    await renderReader();
+    await readyWebView();
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+
+    await fireEvent.press(screen.getByLabelText("Sepia theme"));
+    expect(storage.getString("reader_theme")).toBe("sepia");
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("window.setReaderTheme")
+    );
+
+    await fireEvent.press(screen.getByLabelText("Wide margins"));
+    expect(storage.getNumber("reader_margin")).toBe(32);
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("window.setReaderMargin && window.setReaderMargin(32)")
+    );
+
+    await fireEvent.press(screen.getByLabelText("Scrolled layout"));
+    expect(storage.getString("reader_flow")).toBe("scrolled");
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining('window.setReaderFlow && window.setReaderFlow("scrolled")')
+    );
+  });
+
+  it("shows a time-left estimate from a persisted reading speed", async () => {
+    // 0.01 of the book per minute -> 50% remaining ≈ 50 min.
+    storage.set(`reader_speed_${ITEM}`, 0.01);
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await act(async () => {
+      sendLocation(webProps, { ...LOCATION, fraction: 0.5 });
+    });
+
+    expect(screen.getByText("~50 min left in book")).toBeTruthy();
+  });
+
+  it("keeps the time-left estimate hidden until a speed sample exists", async () => {
+    await renderReader();
+    const webProps = await readyWebView();
+    await act(async () => {
+      sendLocation(webProps, { ...LOCATION, fraction: 0.3 });
+    });
+    expect(screen.queryByText(/min left in book/)).toBeNull();
+  });
+
+  it("runs an in-book search, lists results, and navigates to a match's CFI", async () => {
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Search in book"));
+    await act(async () => {
+      fireEvent.changeText(screen.getByLabelText("Search query"), "dragons");
+    });
+    (global as any).__injectJS.mockClear();
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Run search"));
+    });
+
+    // Query is JSON-escaped into the injected search call.
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining('window.search(\"dragons\")')
+    );
+
+    // Results stream back via postMessage.
+    await act(async () => {
+      sendMsg(webProps, { type: "searchResult", cfi: "epubcfi(/6/4!/2)", excerpt: "here be dragons", label: "Chapter 3" });
+      sendMsg(webProps, { type: "searchDone" });
+    });
+    expect(screen.getByText("here be dragons")).toBeTruthy();
+
+    // Tapping a result injects goToSearchResult with the escaped CFI.
+    (global as any).__injectJS.mockClear();
+    await fireEvent.press(screen.getByText("here be dragons"));
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining('window.goToSearchResult && window.goToSearchResult("epubcfi(/6/4!/2)")')
+    );
+  });
+
+  it("gates the search UI off when the bundle reports no search API", async () => {
+    await renderReader();
+    const webProps = await readyWebView();
+    await act(async () => {
+      sendMsg(webProps, { type: "ready", search: false });
+    });
+
+    await fireEvent.press(screen.getByLabelText("Search in book"));
+    expect(screen.getByText("Search isn't available for this book.")).toBeTruthy();
+    expect(screen.queryByLabelText("Search query")).toBeNull();
+  });
+
+  it("opens the selection action sheet and looks a word up via the OS", async () => {
+    const openSpy = jest.spyOn(Linking, "openURL").mockResolvedValue(undefined as any);
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await act(async () => {
+      sendMsg(webProps, { type: "selection", text: "petrichor", cfi: "epubcfi(/6/4!/8,/1:0,/1:9)" });
+    });
+
+    expect(screen.getByText('"petrichor"')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText("Look up"));
+    await waitFor(() =>
+      expect(openSpy).toHaveBeenCalledWith(expect.stringContaining("define%20petrichor"))
+    );
+  });
+
+  it("highlights a selection: persists to MMKV, injects the annotation, and lists/deletes it", async () => {
+    await renderReader();
+    const webProps = await readyWebView();
+
+    const cfi = "epubcfi(/6/4!/8,/1:0,/1:9)";
+    await act(async () => {
+      sendMsg(webProps, { type: "selection", text: "the quick brown fox", cfi });
+    });
+
+    (global as any).__injectJS.mockClear();
+    await fireEvent.press(screen.getByLabelText("Highlight"));
+
+    // Persisted locally, keyed by item.
+    const stored = JSON.parse(storage.getString(`reader_highlights_${ITEM}`) as string);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ cfi, text: "the quick brown fox" });
+    // Drawn via the foliate annotation API.
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("window.addHighlight")
+    );
+
+    // Appears in the highlights sheet; deleting removes it + un-draws it.
+    await fireEvent.press(screen.getByLabelText("Highlights"));
+    expect(screen.getByText("the quick brown fox")).toBeTruthy();
+    (global as any).__injectJS.mockClear();
+    await fireEvent.press(screen.getByLabelText("Delete highlight"));
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("window.removeHighlight")
+    );
+    expect(JSON.parse(storage.getString(`reader_highlights_${ITEM}`) as string)).toHaveLength(0);
+  });
+
+  it("re-applies stored highlights via the annotation API on WebView ready", async () => {
+    storage.set(
+      `reader_highlights_${ITEM}`,
+      JSON.stringify([{ cfi: "epubcfi(/6/2!/4)", text: "old", color: "rgba(255,213,0,.4)", at: 1 }])
+    );
+    await renderReader();
+    const webProps = await readyWebView();
+
+    (global as any).__injectJS.mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ready", search: true });
+    });
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining('window.addHighlight && window.addHighlight("epubcfi(/6/2!/4)"')
+    );
+  });
+
+  it("shares the selected text as a quote (text-only, no native deps)", async () => {
+    const shareSpy = jest.spyOn(Share, "share").mockResolvedValue({ action: "sharedAction" } as any);
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await act(async () => {
+      sendMsg(webProps, { type: "selection", text: "to be or not to be", cfi: "epubcfi(x)" });
+    });
+    await fireEvent.press(screen.getByLabelText("Share quote"));
+
+    await waitFor(() =>
+      expect(shareSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("to be or not to be") })
+      )
+    );
+  });
+
+  it("read-aloud reports 'not available' when expo-speech is absent from the build", async () => {
+    useDialogStore.setState({ current: null } as any);
+    await renderReader();
+    await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Read aloud"));
+    expect(useDialogStore.getState().current?.title).toBe("Read-aloud unavailable");
   });
 });

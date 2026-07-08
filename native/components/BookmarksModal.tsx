@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, TextInput } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { showAppDialog } from "../store/useDialogStore";
 import Icon from "./Icon";
@@ -10,6 +10,8 @@ import {
   removePendingBookmark,
   queueBookmarkDeletion,
   pendingBookmarkDeletionsFor,
+  queueBookmarkRename,
+  pendingBookmarkRenamesFor,
 } from "../utils/progressSync";
 import BottomSheet from "./BottomSheet";
 import Pressable from "./HintPressable";
@@ -49,10 +51,32 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
   const colors = useThemeColors();
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(false);
+  // Title typed into the "add bookmark" field (blank → timestamp default, so
+  // the add behavior is unchanged when left empty).
+  const [newTitle, setNewTitle] = useState("");
+  // Which bookmark row is being renamed (its `time`), and the in-progress title.
+  const [editingTime, setEditingTime] = useState<number | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
   // Which item the current `bookmarks` state belongs to — the modal stays
   // mounted across book switches, so an offline load must not merge the new
   // item's queued bookmarks into (or silently keep) the PREVIOUS item's list.
   const loadedForRef = React.useRef<string | null>(null);
+
+  // Apply any queued-offline renames over a list's titles (matched by floored
+  // time), so an offline rename shows immediately and survives a reload before
+  // it flushes — mirrors the pending create/delete merge behavior.
+  const applyRenames = useCallback(
+    (list: Bookmark[]): Bookmark[] => {
+      if (!libraryItemId) return list;
+      const renames = pendingBookmarkRenamesFor(libraryItemId);
+      if (!renames.length) return list;
+      return list.map((b) => {
+        const rn = renames.find((r) => Math.floor(r.time) === Math.floor(b.time));
+        return rn ? { ...b, title: rn.title } : b;
+      });
+    },
+    [libraryItemId]
+  );
 
   const loadBookmarks = useCallback(async () => {
     if (!libraryItemId) {
@@ -76,7 +100,7 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
       const pending = pendingBookmarksFor(libraryItemId)
         .filter((p) => !server.some((s) => Math.floor(s.time) === p.time))
         .map((p) => ({ libraryItemId, title: p.title, time: p.time }));
-      setBookmarks([...server, ...pending].sort((a, b) => a.time - b.time));
+      setBookmarks(applyRenames([...server, ...pending]).sort((a, b) => a.time - b.time));
       loadedForRef.current = libraryItemId;
     } catch (e) {
       // Offline / local item: show the queued bookmarks so they aren't
@@ -97,13 +121,13 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
         for (const p of pending) {
           if (!merged.some((b) => Math.floor(b.time) === p.time)) merged.push(p);
         }
-        return merged.sort((a, b) => a.time - b.time);
+        return applyRenames(merged).sort((a, b) => a.time - b.time);
       });
       loadedForRef.current = libraryItemId;
     } finally {
       setLoading(false);
     }
-  }, [libraryItemId]);
+  }, [libraryItemId, applyRenames]);
 
   useEffect(() => {
     if (visible) loadBookmarks();
@@ -113,10 +137,13 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
 
   const addBookmark = async () => {
     const time = Math.floor(currentTime);
-    const title = new Date().toLocaleString();
+    // A typed title wins; a blank field falls back to the timestamp string, so
+    // the auto-named behavior is unchanged when the user adds without typing.
+    const title = newTitle.trim() || new Date().toLocaleString();
     const local: Bookmark = { libraryItemId, title, time };
     // Optimistic local insert (also the fallback when offline).
     setBookmarks((prev) => [...prev, local].sort((a, b) => a.time - b.time));
+    setNewTitle("");
     if (!libraryItemId) return;
     try {
       await api.post(`/api/me/item/${libraryItemId}/bookmark`, { title, time });
@@ -125,6 +152,29 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
       // Offline: queue it durably — the optimistic row alone died with the
       // modal, silently losing the bookmark. Flushed with the sync queues.
       queueBookmark(libraryItemId, time, title);
+    }
+  };
+
+  const startRename = (bm: Bookmark) => {
+    setEditingTime(bm.time);
+    setEditingTitle(bm.title);
+  };
+
+  const performRename = async (bm: Bookmark, rawTitle: string) => {
+    // Blank falls back to the existing title (a rename never blanks a bookmark).
+    const title = rawTitle.trim() || bm.title;
+    // Optimistic local update (also the fallback when offline).
+    setBookmarks((prev) => prev.map((b) => (b.time === bm.time ? { ...b, title } : b)));
+    setEditingTime(null);
+    setEditingTitle("");
+    if (!libraryItemId) return;
+    try {
+      // Server matches the bookmark by its exact time and updates the title.
+      await api.patch(`/api/me/item/${libraryItemId}/bookmark`, { time: bm.time, title });
+    } catch (e) {
+      // Offline: queue the rename so it replays on reconnect — a swallowed
+      // rename otherwise reverted to the server title on the next load.
+      queueBookmarkRename(libraryItemId, bm.time, title);
     }
   };
 
@@ -176,6 +226,48 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
               <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ paddingHorizontal: 16 }}>
                 {bookmarks.map((bm) => {
                   const active = Math.floor(bm.time) === Math.floor(currentTime);
+                  // Inline rename mode: swap the seek row for a title editor so
+                  // the user can rename without leaving the sheet.
+                  if (editingTime === bm.time) {
+                    return (
+                      <View
+                        key={bm.time}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          paddingHorizontal: 16,
+                          height: 56,
+                          borderRadius: 20,
+                          backgroundColor: colors.secondaryContainer,
+                        }}
+                      >
+                        <TextInput
+                          value={editingTitle}
+                          onChangeText={setEditingTitle}
+                          autoFocus
+                          placeholder={fmt(bm.time)}
+                          placeholderTextColor={colors.onSurfaceVariant}
+                          accessibilityLabel="Edit bookmark title"
+                          onSubmitEditing={() => performRename(bm, editingTitle)}
+                          style={{
+                            flex: 1,
+                            fontSize: 16,
+                            color: colors.onSecondaryContainer,
+                            paddingVertical: 0,
+                          }}
+                        />
+                        <Pressable
+                          onPress={() => performRename(bm, editingTitle)}
+                          hitSlop={12}
+                          accessibilityRole="button"
+                          accessibilityLabel="Save bookmark title"
+                          style={{ padding: 4, marginLeft: 8 }}
+                        >
+                          <Icon name="check" size={20} color={colors.primary} />
+                        </Pressable>
+                      </View>
+                    );
+                  }
                   return (
                     <Pressable
                       key={bm.time}
@@ -186,11 +278,16 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
                       accessibilityRole="button"
                       accessibilityLabel={`Bookmark ${bm.title}, ${fmt(bm.time)}`}
                       // The row is one accessible button (its children collapse
-                      // into it), so the nested trash Pressable is unreachable by
-                      // TalkBack — expose deletion as a custom a11y action instead.
-                      accessibilityActions={[{ name: "delete", label: "Delete bookmark" }]}
+                      // into it), so the nested trash/edit Pressables are
+                      // unreachable by TalkBack — expose them as custom a11y
+                      // actions instead.
+                      accessibilityActions={[
+                        { name: "rename", label: "Rename bookmark" },
+                        { name: "delete", label: "Delete bookmark" },
+                      ]}
                       onAccessibilityAction={(e) => {
                         if (e.nativeEvent.actionName === "delete") deleteBookmark(bm);
+                        if (e.nativeEvent.actionName === "rename") startRename(bm);
                       }}
                       style={{
                         flexDirection: "row",
@@ -218,11 +315,20 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
                         {fmt(bm.time)}
                       </Text>
                       <Pressable
+                        onPress={() => startRename(bm)}
+                        hitSlop={12}
+                        accessibilityRole="button"
+                        accessibilityLabel="Rename bookmark"
+                        style={{ padding: 4 }}
+                      >
+                        <Icon name="edit" size={20} color={colors.onSurfaceVariant} />
+                      </Pressable>
+                      <Pressable
                         onPress={() => deleteBookmark(bm)}
                         hitSlop={12}
                         accessibilityRole="button"
                         accessibilityLabel="Delete bookmark"
-                        style={{ padding: 4 }}
+                        style={{ padding: 4, marginLeft: 4 }}
                       >
                         <Icon name="trash" size={20} color={colors.onSurfaceVariant} />
                       </Pressable>
@@ -234,25 +340,47 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
 
             {/* Add bookmark at current time */}
             {!alreadyBookmarked ? (
-              <Pressable
-                onPress={addBookmark}
-                accessibilityRole="button"
-                accessibilityLabel={`Add bookmark at ${fmt(currentTime)}`}
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  backgroundColor: colors.primaryContainer,
-                  paddingHorizontal: 20,
-                  paddingVertical: 16,
-                  marginTop: 8,
-                }}
-              >
-                <Icon name="bookmark" size={22} color={colors.onPrimaryContainer} />
-                <Text style={{ flex: 1, fontSize: 15, fontWeight: "500", color: colors.onPrimaryContainer, paddingLeft: 10 }}>
-                  Add bookmark at current time
-                </Text>
-                <Text style={{ fontFamily: "monospace", fontSize: 13, color: colors.onPrimaryContainer }}>{fmt(currentTime)}</Text>
-              </Pressable>
+              <View style={{ marginTop: 8 }}>
+                {/* Optional title — blank falls back to a timestamp, so adding
+                    without typing keeps the original auto-named behavior. */}
+                <TextInput
+                  value={newTitle}
+                  onChangeText={setNewTitle}
+                  placeholder="Bookmark title (optional)"
+                  placeholderTextColor={colors.onSurfaceVariant}
+                  accessibilityLabel="Bookmark title"
+                  onSubmitEditing={addBookmark}
+                  style={{
+                    marginHorizontal: 20,
+                    marginBottom: 8,
+                    paddingHorizontal: 16,
+                    height: 44,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: colors.outlineVariant,
+                    color: colors.onSurface,
+                    fontSize: 15,
+                  }}
+                />
+                <Pressable
+                  onPress={addBookmark}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add bookmark at ${fmt(currentTime)}`}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: colors.primaryContainer,
+                    paddingHorizontal: 20,
+                    paddingVertical: 16,
+                  }}
+                >
+                  <Icon name="bookmark" size={22} color={colors.onPrimaryContainer} />
+                  <Text style={{ flex: 1, fontSize: 15, fontWeight: "500", color: colors.onPrimaryContainer, paddingLeft: 10 }}>
+                    Add bookmark at current time
+                  </Text>
+                  <Text style={{ fontFamily: "monospace", fontSize: 13, color: colors.onPrimaryContainer }}>{fmt(currentTime)}</Text>
+                </Pressable>
+              </View>
             ) : null}
     </BottomSheet>
   );

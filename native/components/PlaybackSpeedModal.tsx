@@ -15,10 +15,69 @@ interface Props {
   onClose: () => void;
   speed: number;
   onChange: (speed: number) => void;
+  /** "Remember speed per book" toggle state (omit to hide the row). */
+  rememberPerBook?: boolean;
+  onToggleRememberPerBook?: (value: boolean) => void;
 }
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
+}
+
+// Minimal M3-style inline switch row, self-contained so the modal stays
+// standalone. The row itself is the accessible switch.
+function ToggleRow({
+  label,
+  value,
+  onValueChange,
+  colors,
+}: {
+  label: string;
+  value: boolean;
+  onValueChange: (v: boolean) => void;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  return (
+    <Pressable
+      onPress={() => onValueChange(!value)}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+      accessibilityLabel={label}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        paddingHorizontal: 24,
+        paddingVertical: 14,
+      }}
+    >
+      <Text style={{ flex: 1, fontSize: 16, color: colors.onSurface, marginRight: 16 }}>
+        {label}
+      </Text>
+      <View
+        importantForAccessibility="no-hide-descendants"
+        accessibilityElementsHidden
+        style={{
+          width: 48,
+          height: 28,
+          borderRadius: 14,
+          padding: 3,
+          backgroundColor: value ? colors.primary : colors.surfaceVariant,
+          alignItems: value ? "flex-end" : "flex-start",
+          justifyContent: "center",
+        }}
+      >
+        <View
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+            backgroundColor: value ? colors.onPrimary : colors.outline,
+          }}
+        />
+      </View>
+    </Pressable>
+  );
 }
 
 /**
@@ -26,7 +85,14 @@ function round2(n: number) {
  * (0.5x-3.0x, 0.05 steps) plus quick-pick chips. Mirrors the original
  * PlaybackSpeedModal.vue, adapted to the RN player's Material You styling.
  */
-export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }: Props) {
+export default function PlaybackSpeedModal({
+  visible,
+  onClose,
+  speed,
+  onChange,
+  rememberPerBook,
+  onToggleRememberPerBook,
+}: Props) {
   const colors = useThemeColors();
 
   const canDecrement = round2(speed - STEP) >= MIN_SPEED;
@@ -133,6 +199,18 @@ export default function PlaybackSpeedModal({ visible, onClose, speed, onChange }
                 );
               })}
             </View>
+
+            {/* Per-book speed memory toggle */}
+            {onToggleRememberPerBook ? (
+              <View style={{ borderTopWidth: 1, borderTopColor: colors.outlineVariant, paddingBottom: 8 }}>
+                <ToggleRow
+                  label="Remember speed per book"
+                  value={!!rememberPerBook}
+                  onValueChange={onToggleRememberPerBook}
+                  colors={colors}
+                />
+              </View>
+            ) : null}
     </BottomSheet>
   );
 }

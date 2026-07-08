@@ -374,6 +374,76 @@ async function flushPendingBookmarkDeletions(): Promise<void> {
   }
 }
 
+// Offline RENAME of a bookmark. The server matches the bookmark by its exact
+// `time` and updates the `title` (PATCH /api/me/item/{id}/bookmark {time,title}).
+// A rename that failed offline was swallowed — the new title silently reverted
+// to the server copy on the next load. Mirrors the create/delete queues.
+const BOOKMARK_RENAME_PREFIX = "pendingBookmarkRename_";
+
+export function queueBookmarkRename(libraryItemId: string, time: number, title: string) {
+  try {
+    if (!libraryItemId || !Number.isFinite(time) || time < 0) return;
+    // Key floored (dedupe per second, matching create/delete keying) but store
+    // the RAW time: the PATCH matches the server bookmark by its exact time, so
+    // replaying a fractional-time rename with a floored value would miss it.
+    storage.set(
+      `${BOOKMARK_RENAME_PREFIX}${libraryItemId}_${Math.floor(time)}`,
+      JSON.stringify({ libraryItemId, time: Number(time), title })
+    );
+  } catch (e) {
+    appLogger.warn(`Failed to queue bookmark rename: ${e}`, "ProgressSync");
+  }
+}
+
+/** Pending (queued-offline) renames for an item — the bookmark list applies
+ *  these over the server/queued titles so an offline rename shows immediately
+ *  and survives a reload before it flushes. */
+export function pendingBookmarkRenamesFor(libraryItemId: string): { time: number; title: string }[] {
+  try {
+    return storage
+      .getAllKeys()
+      .filter((k) => k.startsWith(`${BOOKMARK_RENAME_PREFIX}${libraryItemId}_`))
+      .map((k) => {
+        try {
+          return JSON.parse(storage.getString(k) || "");
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function flushPendingBookmarkRenames(): Promise<void> {
+  const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_RENAME_PREFIX));
+  for (const key of keys) {
+    let b: any = null;
+    try {
+      const raw = storage.getString(key);
+      b = raw ? JSON.parse(raw) : null;
+    } catch {}
+    if (!b?.libraryItemId || !Number.isFinite(b?.time)) {
+      try {
+        storage.remove(key);
+      } catch {}
+      continue;
+    }
+    try {
+      await api.patch(`/api/me/item/${b.libraryItemId}/bookmark`, {
+        time: b.time,
+        title: b.title,
+      });
+      storage.remove(key);
+    } catch (e: any) {
+      // Item/bookmark gone server-side — the rename can never land.
+      if (e?.response?.status === 404) storage.remove(key);
+      // Otherwise still offline — keep it queued.
+    }
+  }
+}
+
 async function flushPendingBookmarks(): Promise<void> {
   const keys = storage.getAllKeys().filter((k) => k.startsWith(BOOKMARK_PREFIX));
   for (const key of keys) {
@@ -816,6 +886,10 @@ export function flushPendingSyncs(): Promise<void> {
       // Deletions-first is correct for every coexisting pair.
       await flushPendingBookmarkDeletions();
       await flushPendingBookmarks();
+      // Renames LAST: a create + rename queued for the same bookmark (bookmark
+      // a spot offline, then rename it) must POST the create first so the
+      // PATCH's time-match finds a server bookmark to rename.
+      await flushPendingBookmarkRenames();
       const keys = storage.getAllKeys().filter((k) => k.startsWith(PENDING_PREFIX));
       for (const key of keys) {
         const sessionId = key.slice(PENDING_PREFIX.length);
@@ -969,6 +1043,7 @@ export function clearAllPending() {
           k.startsWith(PATCH_PREFIX) ||
           k.startsWith(BOOKMARK_PREFIX) ||
           k.startsWith(BOOKMARK_DELETE_PREFIX) ||
+          k.startsWith(BOOKMARK_RENAME_PREFIX) ||
           k.startsWith(LOCAL_SESSION_PREFIX)
       )
       .forEach((k) => storage.remove(k));

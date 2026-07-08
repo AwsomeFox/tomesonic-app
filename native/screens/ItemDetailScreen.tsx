@@ -11,6 +11,7 @@ import {
   reconcileLinkedProgress,
 } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
+import { useFavoritesStore } from "../store/useFavoritesStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { showAppDialog } from "../store/useDialogStore";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -100,6 +101,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const linkedProgressMap = useUserStore((s) => s.settings.linkedProgress);
   const setProgressLinked = useUserStore((s) => s.setProgressLinked);
   const isLinked = !!(itemId && linkedProgressMap?.[itemId]);
+
+  // Local "Want to Read" / favorites overlay (no server flag exists). Subscribe
+  // to the list so the heart reflects/persists the toggle across screens.
+  const isFavorite = useFavoritesStore((s) => (itemId ? s.favorites.includes(itemId) : false));
+  const toggleFavorite = useFavoritesStore((s) => s.toggleFavorite);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const currentSession = usePlaybackStore((state) => state.currentSession);
@@ -1102,6 +1108,37 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               columnGap: 12,
             }}
           >
+            {/* "Want to Read" / favorite toggle — a device-local overlay (ABS
+                has no server favorites flag). Available for any item. */}
+            <Pressable
+              onPress={() => item?.id && toggleFavorite(item.id)}
+              accessibilityRole="button"
+              accessibilityLabel={isFavorite ? "Remove from Want to Read" : "Add to Want to Read"}
+              accessibilityState={{ selected: isFavorite }}
+              android_ripple={{
+                color: withAlpha(
+                  isFavorite ? colors.onPrimaryContainer : colors.onSecondaryContainer,
+                  0.15
+                ),
+              }}
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: 26,
+                overflow: "hidden",
+                backgroundColor: isFavorite ? colors.primaryContainer : colors.secondaryContainer,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon
+                name="heart"
+                size={22}
+                color={isFavorite ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                style={{ opacity: isFavorite ? 1 : 0.45 }}
+              />
+            </Pressable>
+
             {/* Download Button — for items with their own audio or ebook.
                 Hidden for podcasts: the downloader handles book tracks, not
                 episodes, so the button would silently no-op there. */}

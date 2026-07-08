@@ -60,6 +60,7 @@ import {
 } from "../../utils/progressSync";
 import { downloader } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
+import { useFavoritesStore } from "../../store/useFavoritesStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
@@ -202,6 +203,7 @@ beforeEach(() => {
     serverConnectionConfig: { address: "https://abs.test", token: "tok" },
   } as any);
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
+  useFavoritesStore.setState({ favorites: [] });
   mockedPatch.mockResolvedValue({ data: {} });
 });
 
@@ -648,6 +650,42 @@ describe("ItemDetailScreen", () => {
     await screen.findByText(
       "You're offline. This book is downloaded — you can keep listening from the Downloads tab."
     );
+  });
+
+  it("shows and toggles the Want to Read (favorite) control, persisting to the store", async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    // Starts un-favorited.
+    const addBtn = screen.getByLabelText("Add to Want to Read");
+    expect(useFavoritesStore.getState().isFavorite("item1")).toBe(false);
+
+    await fireEvent.press(addBtn);
+
+    // Store reflects the toggle and the control flips to the "remove" state.
+    await waitFor(() => expect(useFavoritesStore.getState().isFavorite("item1")).toBe(true));
+    expect(screen.getByLabelText("Remove from Want to Read")).toBeTruthy();
+    expect(screen.queryByLabelText("Add to Want to Read")).toBeNull();
+
+    // Persisted under the store's own MMKV key.
+    expect(JSON.parse(storage.getString("favorites") || "[]")).toContain("item1");
+
+    // Toggling again removes it.
+    await fireEvent.press(screen.getByLabelText("Remove from Want to Read"));
+    await waitFor(() => expect(useFavoritesStore.getState().isFavorite("item1")).toBe(false));
+  });
+
+  it("reflects an already-favorited item on load", async () => {
+    useFavoritesStore.setState({ favorites: ["item1"] });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.getByLabelText("Remove from Want to Read")).toBeTruthy();
   });
 
   it("shows an error when no itemId is provided", async () => {

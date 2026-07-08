@@ -11,6 +11,8 @@ import {
   queueBookmark,
   queueBookmarkDeletion,
   pendingBookmarkDeletionsFor,
+  queueBookmarkRename,
+  pendingBookmarkRenamesFor,
   recordLocalListening,
   hasAnyPendingSyncs,
   syncBothProgressFraction,
@@ -61,6 +63,8 @@ const bookmarkDeleteKeys = () =>
 // "pendingBookmarkDelete_*" does NOT match the "pendingBookmark_" prefix
 // (the char after "pendingBookmark" is "D", not "_"), so this is create-only.
 const bookmarkKeys = () => storage.getAllKeys().filter((k) => k.startsWith("pendingBookmark_"));
+const bookmarkRenameKeys = () =>
+  storage.getAllKeys().filter((k) => k.startsWith("pendingBookmarkRename_"));
 const localSessionKeys = () =>
   storage.getAllKeys().filter((k) => k.startsWith("pendingLocalSession_"));
 
@@ -869,6 +873,106 @@ describe("bookmark deletion queue", () => {
     // Both queues drained.
     expect(bookmarkDeleteKeys()).toHaveLength(0);
     expect(bookmarkKeys()).toHaveLength(0);
+  });
+});
+
+describe("bookmark rename queue", () => {
+  it("queueBookmarkRename keys floored but stores the RAW time + title; pendingBookmarkRenamesFor scopes by item", () => {
+    queueBookmarkRename("li1", 90.7, "Best quote");
+    queueBookmarkRename("li2", 30, "Chapter");
+    // Key floored (dedupe per second)...
+    expect(bookmarkRenameKeys()).toContain("pendingBookmarkRename_li1_90");
+    // ...but the stored time is exact (the PATCH matches the server bookmark by time).
+    expect(pendingBookmarkRenamesFor("li1")).toEqual([{ libraryItemId: "li1", time: 90.7, title: "Best quote" }]);
+    expect(pendingBookmarkRenamesFor("li2")).toEqual([{ libraryItemId: "li2", time: 30, title: "Chapter" }]);
+    expect(pendingBookmarkRenamesFor("other")).toEqual([]);
+  });
+
+  it("ignores invalid renames (empty id, negative or non-finite time)", () => {
+    queueBookmarkRename("", 5, "x");
+    queueBookmarkRename("li1", -1, "x");
+    queueBookmarkRename("li1", NaN, "x");
+    queueBookmarkRename("li1", Infinity, "x");
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+  });
+
+  it("does NOT match the create-only prefix (pendingBookmark_)", () => {
+    queueBookmarkRename("li1", 42, "renamed");
+    // The rename key must not be swept up by the create queue's prefix filter.
+    expect(bookmarkKeys()).toHaveLength(0);
+    expect(bookmarkRenameKeys()).toHaveLength(1);
+  });
+
+  it("flushPendingSyncs PATCHes each queued rename with { time, title } and clears on success", async () => {
+    queueBookmarkRename("li1", 90.7, "Best quote");
+    queueBookmarkRename("li1", 30, "Intro");
+    await flushPendingSyncs();
+    expect(mockedPatch).toHaveBeenCalledWith("/api/me/item/li1/bookmark", {
+      time: 90.7,
+      title: "Best quote",
+    });
+    expect(mockedPatch).toHaveBeenCalledWith("/api/me/item/li1/bookmark", {
+      time: 30,
+      title: "Intro",
+    });
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+    expect(pendingBookmarkRenamesFor("li1")).toEqual([]);
+  });
+
+  it("keeps the entry on network failure and delivers it on the next flush", async () => {
+    queueBookmarkRename("li1", 42, "renamed");
+    mockedPatch.mockRejectedValue(errNetwork());
+    await flushPendingSyncs();
+    expect(pendingBookmarkRenamesFor("li1")).toEqual([{ libraryItemId: "li1", time: 42, title: "renamed" }]);
+
+    mockedPatch.mockResolvedValue({ data: {} } as any);
+    await flushPendingSyncs();
+    expect(mockedPatch).toHaveBeenLastCalledWith("/api/me/item/li1/bookmark", { time: 42, title: "renamed" });
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+  });
+
+  it("drops the entry on 404 (bookmark/item gone server-side)", async () => {
+    queueBookmarkRename("li1", 42, "renamed");
+    mockedPatch.mockRejectedValue(err404());
+    await flushPendingSyncs();
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+  });
+
+  it("drops corrupt rename entries without calling the API", async () => {
+    storage.set("pendingBookmarkRename_bad", "{not json");
+    await flushPendingSyncs();
+    expect(mockedPatch).not.toHaveBeenCalled();
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+  });
+
+  it("flushes a create BEFORE its rename so the PATCH's time-match finds a server bookmark", async () => {
+    // Bookmark a spot offline, then rename it offline. The create must POST
+    // first, otherwise the rename PATCH would target a bookmark that doesn't
+    // exist server-side yet.
+    queueBookmark("li1", 42, "original");
+    queueBookmarkRename("li1", 42, "renamed");
+
+    await flushPendingSyncs();
+
+    expect(mockedPost).toHaveBeenCalledWith("/api/me/item/li1/bookmark", { title: "original", time: 42 });
+    expect(mockedPatch).toHaveBeenCalledWith("/api/me/item/li1/bookmark", { time: 42, title: "renamed" });
+    // The create POST lands strictly before the rename PATCH.
+    expect(mockedPost.mock.invocationCallOrder[0]).toBeLessThan(
+      mockedPatch.mock.invocationCallOrder[0]
+    );
+    expect(bookmarkKeys()).toHaveLength(0);
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+  });
+
+  it("clearAllPending wipes queued bookmark renames on logout", () => {
+    queueBookmarkRename("li1", 42, "renamed");
+    queueBookmarkRename("li2", 7, "x");
+    expect(bookmarkRenameKeys()).toHaveLength(2);
+
+    clearAllPending();
+
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+    expect(pendingBookmarkRenamesFor("li1")).toEqual([]);
   });
 });
 

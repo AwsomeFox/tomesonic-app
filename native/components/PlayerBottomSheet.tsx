@@ -31,6 +31,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { navigationRef } from "../navigation/navigationRef";
 import Icon from "./Icon";
+import BottomSheet from "./BottomSheet";
 import PlaybackSpeedModal from "./PlaybackSpeedModal";
 import SleepTimerModal from "./SleepTimerModal";
 import BookmarksModal from "./BookmarksModal";
@@ -171,6 +172,18 @@ export default function PlayerBottomSheet() {
   const sleepTimer = usePlaybackStore((s) => s.sleepTimer);
   const setSleepTimer = usePlaybackStore((s) => s.setSleepTimer);
   const cancelSleepTimer = usePlaybackStore((s) => s.cancelSleepTimer);
+  // Per-book speed memory + sleep-timer extras (settings surfaced in modals).
+  const rememberSpeedPerBook = usePlaybackStore((s) => s.rememberSpeedPerBook);
+  const setRememberSpeedPerBook = usePlaybackStore((s) => s.setRememberSpeedPerBook);
+  const sleepRewindOnWake = usePlaybackStore((s) => s.sleepRewindOnWake);
+  const setSleepRewindOnWake = usePlaybackStore((s) => s.setSleepRewindOnWake);
+  const sleepShakeToExtend = usePlaybackStore((s) => s.sleepShakeToExtend);
+  const setSleepShakeToExtend = usePlaybackStore((s) => s.setSleepShakeToExtend);
+  // Cross-book play queue.
+  const queue = usePlaybackStore((s) => s.queue);
+  const removeFromQueue = usePlaybackStore((s) => s.removeFromQueue);
+  const clearQueue = usePlaybackStore((s) => s.clearQueue);
+  const playNextInQueue = usePlaybackStore((s) => s.playNextInQueue);
   const isPlayerExpanded = usePlaybackStore((s) => s.isPlayerExpanded);
   const setPlayerExpanded = usePlaybackStore((s) => s.setPlayerExpanded);
   // In-app jump buttons honor the Settings jump intervals — amount AND icon
@@ -251,6 +264,7 @@ export default function PlayerBottomSheet() {
   const [showSpeed, setShowSpeed] = useState(false);
   const [showSleepTimer, setShowSleepTimer] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
 
   const playProgress = useSharedValue(isPlaying ? 1 : 0);
 
@@ -1220,6 +1234,32 @@ export default function PlayerBottomSheet() {
                 >
                   <Icon name="bookmark" size={22} color={colors.onSecondaryContainer} />
                 </Pressable>
+                <Pressable
+                  onPress={() => { haptic(); setShowQueue(true); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"}
+                  style={{
+                    minWidth: 56,
+                    paddingHorizontal: queue.length ? 16 : 0,
+                    height: 56,
+                    borderRadius: 28,
+                    backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Icon
+                    name="playlist-add"
+                    size={22}
+                    color={queue.length ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                  />
+                  {queue.length ? (
+                    <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 14, fontWeight: "600", marginLeft: 8 }}>
+                      {queue.length}
+                    </Text>
+                  ) : null}
+                </Pressable>
               </View>
             </ScrollView>
         </Animated.View>
@@ -1671,6 +1711,10 @@ export default function PlayerBottomSheet() {
                   <Pressable onPress={() => { haptic(); setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="bookmark" size={20} color={colors.onSecondaryContainer} />
                   </Pressable>
+                  <Pressable onPress={() => { haptic(); setShowQueue(true); }} accessibilityRole="button" accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"} style={{ minWidth: 48, paddingHorizontal: queue.length ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                    <Icon name="playlist-add" size={20} color={queue.length ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
+                    {queue.length ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}>{queue.length}</Text> : null}
+                  </Pressable>
                 </View>
               </View>
             </View>
@@ -1693,6 +1737,8 @@ export default function PlayerBottomSheet() {
         onClose={() => setShowSpeed(false)}
         speed={playbackSpeed}
         onChange={setPlaybackSpeed}
+        rememberPerBook={rememberSpeedPerBook}
+        onToggleRememberPerBook={setRememberSpeedPerBook}
       />
 
       <SleepTimerModal
@@ -1711,6 +1757,10 @@ export default function PlayerBottomSheet() {
           }
         }}
         onCancel={cancelSleepTimer}
+        rewindOnWake={sleepRewindOnWake}
+        onToggleRewindOnWake={setSleepRewindOnWake}
+        shakeToExtend={sleepShakeToExtend}
+        onToggleShakeToExtend={setSleepShakeToExtend}
       />
 
       <BookmarksModal
@@ -1720,6 +1770,70 @@ export default function PlayerBottomSheet() {
         currentTime={position}
         onSeek={seek}
       />
+
+      {/* Cross-book play queue */}
+      <BottomSheet visible={showQueue} onClose={() => setShowQueue(false)}>
+        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
+          <Icon name="playlist-add" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
+          <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Up Next</Text>
+          {queue.length ? (
+            <Pressable
+              onPress={() => clearQueue()}
+              accessibilityRole="button"
+              accessibilityLabel="Clear queue"
+              hitSlop={8}
+              style={{ paddingHorizontal: 8, paddingVertical: 4 }}
+            >
+              <Text style={{ color: colors.primary, fontSize: 15, fontWeight: "600" }}>Clear</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        {queue.length === 0 ? (
+          <View style={{ paddingHorizontal: 24, paddingVertical: 24 }}>
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
+              No books queued. When this book finishes, playback stops unless a queued book or a next-in-series book is available.
+            </Text>
+          </View>
+        ) : (
+          <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ paddingBottom: 16 }}>
+            {queue.map((item, idx) => (
+              <View
+                key={`${item.libraryItemId}:${item.episodeId || ""}`}
+                style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10 }}
+              >
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 16 }}>
+                    {item.title || item.libraryItemId}
+                  </Text>
+                  {item.author ? (
+                    <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 1 }}>
+                      {item.author}
+                    </Text>
+                  ) : null}
+                </View>
+                {idx === 0 ? (
+                  <Pressable
+                    onPress={() => { haptic(); setShowQueue(false); playNextInQueue().catch(() => {}); }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Play ${item.title || "next book"} now`}
+                    style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center", marginRight: 4 }}
+                  >
+                    <Icon name="play" size={20} color={colors.onSecondaryContainer} />
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => { haptic(); removeFromQueue(item.libraryItemId); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${item.title || "book"} from queue`}
+                  style={{ width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Icon name="close" size={20} color={colors.onSurfaceVariant} />
+                </Pressable>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </BottomSheet>
 
       <Confetti visible={showConfetti} onDone={() => setShowConfetti(false)} />
     </View>

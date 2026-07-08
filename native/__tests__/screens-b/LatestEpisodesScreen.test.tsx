@@ -161,6 +161,19 @@ describe("LatestEpisodesScreen", () => {
     expect(startPlayback).toHaveBeenCalledWith("li1", "ep1");
   });
 
+  it("per-row podcast settings button opens PodcastSettings for that podcast", async () => {
+    const navigation = await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // Additive per-podcast entry point — the list spans many podcasts, so the
+    // settings affordance is per-row, carrying that episode's libraryItemId.
+    await fireEvent.press(screen.getByLabelText("Podcast settings for Great Show"));
+    expect(navigation.navigate).toHaveBeenCalledWith("PodcastSettings", {
+      libraryItemId: "li1",
+      podcastTitle: "Great Show",
+    });
+  });
+
   it("row tap opens the podcast's item detail", async () => {
     const navigation = await renderEpisodes();
     await screen.findByText("Fresh Episode");
