@@ -856,6 +856,7 @@ function Shelf({
           style={{ paddingVertical: 24, paddingHorizontal: 20 }}
           title="Couldn't load this shelf"
           onRetry={onRetry}
+          retryLabel={`Retry ${title}`}
         />
       ) : books === null ? (
         <View style={{ height: 150, alignItems: "center", justifyContent: "center" }}>

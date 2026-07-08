@@ -37,10 +37,10 @@ export default function AccountScreen({ navigation }: any) {
     : "";
 
   // OpenID/SSO accounts have no local password to change — the "Change
-  // Password" row would just 400. Gate on any openid signal persisted into the
-  // session config at login time. (No such field is written today; see the
-  // report note — until the login flow persists `authMethod`, this stays a
-  // no-op for local accounts, which is the safe default: the row keeps showing.)
+  // Password" row would just 400. ConnectScreen.finishLogin persists
+  // `authMethod` ("local" | "openid") into the session config at login, so we
+  // gate on that (plus a couple of tolerant fallbacks). Absent any openid
+  // signal we default to showing the row (the safe local-account default).
   const isOpenIdSession =
     serverConnectionConfig?.authMethod === "openid" ||
     serverConnectionConfig?.authMethod === "oauth" ||

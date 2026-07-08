@@ -120,8 +120,9 @@ export default function LibraryScreen({ route, navigation }: any) {
     if (routeDescending !== undefined) setDescending(routeDescending);
   }, [routeOrderBy, routeDescending]);
 
-  // Badge the filter icon when the view differs from the saved default sort or
-  // has an active filter — otherwise a persisted filter/sort is invisible.
+  // Badge the filter icon when the view differs from the app default sort
+  // (addedAt, descending) or has an active filter — otherwise a persisted
+  // filter/sort is invisible.
   const isDefaultSort = orderBy === "addedAt" && descending === true;
   const filterActive = (!!filterBy && filterBy !== "all") || !isDefaultSort;
 
