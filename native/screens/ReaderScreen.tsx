@@ -55,7 +55,8 @@ function ebookHtml(
   mimeHint: string,
   fontSize: number,
   fontFamily: string,
-  lineHeight: number
+  lineHeight: number,
+  pageCurl: boolean
 ): string {
   // Compute the filename extension for foliate-js format detection
   const ext = mimeHint === "application/epub+zip" ? ".epub" : mimeHint === "application/x-mobipocket-ebook" ? ".mobi" : ".azw3";
@@ -207,20 +208,113 @@ ${FOLIATE_BUNDLE}
       window.goToFraction = (f) => { try { view.goToFraction(f); } catch(e) {} };
       window.setReaderStyles = (css) => { try { view.renderer.setStyles(css); } catch(e) {} };
 
-      // Touch gestures on the outer container — swipe and tap zones
-      var sx = 0, sy = 0, st = 0;
-      document.addEventListener('touchstart', function(e) {
-        var t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY; st = Date.now();
-      }, { passive: true });
-      document.addEventListener('touchend', function(e) {
+      // ---- Page-turn gestures: finger-follow curl + tap/swipe fallback ----
+      // When the curl is enabled the page tracks your finger and peels with a
+      // soft fold shadow, completing (or snapping back) on release. When it's
+      // off — or the OS asks for reduced motion — we keep the original discrete
+      // tap-zone / swipe behavior. The curl is a CSS transform on the foliate
+      // host + a gradient overlay at the fold; no snapshotting, so it can't get
+      // out of sync with the rendered content.
+      var curlEnabled = ${pageCurl ? "true" : "false"};
+      try {
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) curlEnabled = false;
+      } catch(e) {}
+      // Let RN flip it live (settings toggle) without reloading the book.
+      window.setPageCurl = function(v){ curlEnabled = !!v; };
+
+      var W = function(){ return window.innerWidth || 360; };
+      var TURN_MS = 200;
+      var drag = { active:false, decided:false, dir:0, sx:0, sy:0, st:0, animating:false };
+
+      // Fold shadow that tracks the lifting page edge.
+      var curlEl = document.createElement('div');
+      curlEl.id = 'pagecurl';
+      curlEl.style.cssText = 'position:fixed;top:0;bottom:0;width:56px;pointer-events:none;z-index:9;opacity:0;transition:opacity .12s;';
+      document.body.appendChild(curlEl);
+
+      function setPageX(px){ view.style.transform = px ? 'translateX(' + px + 'px)' : ''; }
+      function showCurl(px, progress){
+        var w = W();
+        var a = Math.min(0.38, 0.12 + progress * 0.32);
+        if (drag.dir < 0) {
+          var fold = w + px; // page moved left; fold at its right edge
+          curlEl.style.left = Math.max(-56, fold - 8) + 'px';
+          curlEl.style.background = 'linear-gradient(to right, rgba(0,0,0,' + a + '), rgba(0,0,0,0) 70%)';
+        } else {
+          curlEl.style.left = Math.min(w, px - 48) + 'px';
+          curlEl.style.background = 'linear-gradient(to left, rgba(0,0,0,' + a + '), rgba(0,0,0,0) 70%)';
+        }
+        curlEl.style.opacity = '1';
+      }
+      function hideCurl(){ curlEl.style.opacity = '0'; }
+
+      // Slide the current page fully off in the turn direction, then swap to the
+      // neighbor and reset. The uncovered strip is the page-colored background,
+      // reading as the blank margin of a turning leaf.
+      function finishTurn(dir){
+        if (drag.animating) return;
+        drag.animating = true;
+        var w = W();
+        view.style.transition = 'transform ' + TURN_MS + 'ms ease-out';
+        setPageX(dir < 0 ? -w : w);
+        hideCurl();
+        setTimeout(function(){
+          view.style.transition = '';
+          setPageX(0);
+          try { if (dir < 0) window.goNext(); else window.goPrev(); } catch(e) {}
+          drag.animating = false;
+        }, TURN_MS);
+      }
+      function snapBack(){
+        drag.animating = true;
+        view.style.transition = 'transform 160ms ease-out';
+        setPageX(0);
+        hideCurl();
+        setTimeout(function(){ view.style.transition = ''; drag.animating = false; }, 170);
+      }
+      // Discrete turn honoring the current mode (animated when the curl is on).
+      function turn(dir){ if (curlEnabled) finishTurn(dir); else if (dir < 0) window.goNext(); else window.goPrev(); }
+
+      document.addEventListener('touchstart', function(e){
+        if (drag.animating) return;
         var t = e.changedTouches[0];
-        var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
-        var w = window.innerWidth || 360;
-        if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 300) {
-          if (t.clientX < w * 0.3) window.goPrev();
-          else if (t.clientX > w * 0.7) window.goNext();
-        } else if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.2 && dt < 700) {
-          if (dx < 0) window.goNext(); else window.goPrev();
+        drag.active = true; drag.decided = false; drag.dir = 0;
+        drag.sx = t.clientX; drag.sy = t.clientY; drag.st = Date.now();
+      }, { passive: true });
+
+      document.addEventListener('touchmove', function(e){
+        if (!drag.active || drag.animating || !curlEnabled) return;
+        var t = e.changedTouches[0];
+        var dx = t.clientX - drag.sx, dy = t.clientY - drag.sy;
+        if (!drag.decided) {
+          if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+          // Vertical / long-press-drag (text selection) → not a page turn.
+          if (Math.abs(dx) <= Math.abs(dy) * 1.2) { drag.active = false; return; }
+          drag.decided = true; drag.dir = dx < 0 ? -1 : 1;
+        }
+        setPageX(dx);
+        showCurl(dx, Math.min(1, Math.abs(dx) / W()));
+        if (e.cancelable) e.preventDefault();
+      }, { passive: false });
+
+      document.addEventListener('touchend', function(e){
+        var t = e.changedTouches[0];
+        var dx = t.clientX - drag.sx, dy = t.clientY - drag.sy, dt = Date.now() - drag.st;
+        var wasDrag = drag.decided;
+        drag.active = false; drag.decided = false;
+        if (drag.animating) return;
+        if (wasDrag) {
+          var progress = Math.abs(dx) / W();
+          var fast = dt < 250 && Math.abs(dx) > 60;
+          if (progress > 0.25 || fast) finishTurn(drag.dir); else snapBack();
+          return;
+        }
+        var w = W();
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.2 && dt < 700) {
+          turn(dx < 0 ? -1 : 1);
+        } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 300) {
+          if (t.clientX < w * 0.3) turn(1);
+          else if (t.clientX > w * 0.7) turn(-1);
         }
       }, { passive: true });
 
@@ -382,6 +476,13 @@ export default function ReaderScreen({ route, navigation }: any) {
   const [fontSize, setFontSize] = useState(() => storage.getNumber("reader_font_size") || 100);
   const [fontFamily, setFontFamily] = useState<"serif" | "sans-serif">(() => (storage.getString("reader_font_family") as any) || "serif");
   const [lineHeight, setLineHeight] = useState(() => storage.getNumber("reader_line_height") || 1.5);
+  // Finger-follow page-curl turn animation. Defaults on; persisted so it's a
+  // one-time choice. `getBoolean` returns undefined until first set, so treat
+  // undefined as the default (true).
+  const [pageCurl, setPageCurl] = useState<boolean>(() => {
+    const v = storage.getBoolean("reader_page_curl");
+    return v === undefined ? true : v;
+  });
 
   // TOC and Progress Info States
   const [toc, setToc] = useState<any[]>([]);
@@ -428,6 +529,16 @@ export default function ReaderScreen({ route, navigation }: any) {
       webRef.current.injectJavaScript(`window.setReaderStyles && window.setReaderStyles(\`${cleanCSS}\`);true;`);
     }
   }, [fontSize, fontFamily, lineHeight, ebookStatus, bg, fg, accent]);
+
+  // Persist the page-curl preference and flip it live in the WebView (no reload).
+  useEffect(() => {
+    storage.set("reader_page_curl", pageCurl);
+    if (ebookStatus === "ready" && webRef.current) {
+      webRef.current.injectJavaScript(
+        `window.setPageCurl && window.setPageCurl(${pageCurl ? "true" : "false"});true;`
+      );
+    }
+  }, [pageCurl, ebookStatus]);
 
   useEffect(() => {
     if (itemId) {
@@ -581,7 +692,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             : localCfi || serverCfi;
 
         const mime = getMimeForFormat(format);
-        const htmlContent = ebookHtml(base64, bg, fg, accent, savedCfi, mime, fontSize, fontFamily, lineHeight);
+        const htmlContent = ebookHtml(base64, bg, fg, accent, savedCfi, mime, fontSize, fontFamily, lineHeight, pageCurl);
         const htmlPath = `${FileSystem.cacheDirectory}reader_${itemId}.html`;
         await FileSystem.writeAsStringAsync(htmlPath, htmlContent, {
           encoding: FileSystem.EncodingType.UTF8,
@@ -1336,6 +1447,32 @@ export default function ReaderScreen({ route, navigation }: any) {
                     }}
                   >
                     <Text style={{ color: lineHeight === item.val ? colors.onPrimary : colors.onSecondaryContainer, fontSize: 15, fontWeight: "600" }}>{item.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            {/* Page-turn animation (finger-follow curl) */}
+            <View style={{ marginTop: 12, marginBottom: 12 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Page Turn</Text>
+              <View style={{ flexDirection: "row", columnGap: 12 }}>
+                {[
+                  { label: "Curl", val: true },
+                  { label: "None", val: false },
+                ].map(item => (
+                  <Pressable
+                    key={item.label}
+                    onPress={() => setPageCurl(item.val)}
+                    accessibilityRole="button"
+                    accessibilityLabel={item.val ? "Page-turn curl animation" : "No page-turn animation"}
+                    accessibilityState={{ selected: pageCurl === item.val }}
+                    style={{
+                      flex: 1, height: 48, borderRadius: 12,
+                      backgroundColor: pageCurl === item.val ? colors.primary : colors.secondaryContainer,
+                      alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ color: pageCurl === item.val ? colors.onPrimary : colors.onSecondaryContainer, fontSize: 15, fontWeight: "600" }}>{item.label}</Text>
                   </Pressable>
                 ))}
               </View>

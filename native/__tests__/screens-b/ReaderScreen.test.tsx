@@ -523,6 +523,51 @@ describe("ReaderScreen (epub pipeline)", () => {
     expect(storage.getNumber("reader_line_height")).toBe(1.8);
   });
 
+  it("emits the finger-follow page-curl gesture code in the reader HTML by default", async () => {
+    await renderReader();
+    await readyWebView();
+
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    // Curl handlers + a live toggle hook are present, enabled by default.
+    expect(html).toContain("window.setPageCurl");
+    expect(html).toContain("function finishTurn");
+    expect(html).toContain("var curlEnabled = true");
+    // Still honors reduced-motion at runtime.
+    expect(html).toContain("prefers-reduced-motion");
+  });
+
+  it("bakes the curl OFF into the HTML when the user disabled it previously", async () => {
+    storage.set("reader_page_curl", false);
+    await renderReader();
+    await readyWebView();
+
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    expect(html).toContain("var curlEnabled = false");
+  });
+
+  it("toggling Page Turn persists the choice and flips it live in the WebView", async () => {
+    await renderReader();
+    await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+    // Default on.
+    expect(
+      screen.getByLabelText("Page-turn curl animation").props.accessibilityState?.selected
+    ).toBe(true);
+
+    await fireEvent.press(screen.getByLabelText("No page-turn animation"));
+    expect(storage.getBoolean("reader_page_curl")).toBe(false);
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("window.setPageCurl && window.setPageCurl(false)")
+    );
+
+    await fireEvent.press(screen.getByLabelText("Page-turn curl animation"));
+    expect(storage.getBoolean("reader_page_curl")).toBe(true);
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("window.setPageCurl && window.setPageCurl(true)")
+    );
+  });
+
   it("offers the share fallback when the ebook is too large to inline", async () => {
     jest
       .mocked(FileSystem.getInfoAsync)
