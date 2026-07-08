@@ -783,6 +783,22 @@ describe("useDownloadStore", () => {
         useDownloadStore.getState().remapSessionKey(SESSION_A, SESSION_A);
         expect(db.getAllDownloads().find((d) => d.id === "x")!.sessionKey).toBe(SESSION_A);
       });
+
+      it("does not churn in-memory state when no surfaced rows match oldKey", () => {
+        // Rows belong to SESSION_B; remapping OLD→NEW touches nothing in memory,
+        // so the map references must stay identical (no spurious set()/notify).
+        useDownloadStore.setState({
+          completedDownloads: { other: baseItem({ id: "other", status: "completed", sessionKey: SESSION_B }) },
+          activeDownloads: {},
+        });
+        const beforeCompleted = useDownloadStore.getState().completedDownloads;
+        const beforeActive = useDownloadStore.getState().activeDownloads;
+
+        useDownloadStore.getState().remapSessionKey(OLD, NEW);
+
+        expect(useDownloadStore.getState().completedDownloads).toBe(beforeCompleted);
+        expect(useDownloadStore.getState().activeDownloads).toBe(beforeActive);
+      });
     });
 
     describe("deactivateDownloadsForSwitch", () => {

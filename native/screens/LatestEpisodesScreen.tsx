@@ -146,6 +146,17 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     } else if (active?.status === "failed") {
       useDownloadStore.getState().retryDownload(key);
     } else {
+      // Starting a NEW download needs the server. Without a live connection
+      // serverAddress/token are "" and downloadEpisode would build a bad URL +
+      // empty bearer token and fail confusingly — surface a clear message
+      // instead. (Delete/cancel/retry above are offline-safe and stay reachable.)
+      if (!serverAddress || !token) {
+        showAppDialog({
+          title: "Not connected",
+          message: "Connect to your server before downloading episodes.",
+        });
+        return;
+      }
       const libraryItem = episode.libraryItem || {
         id: libraryItemId,
         media: episode.podcast || { metadata: { title: episode.podcastTitle || "" } },

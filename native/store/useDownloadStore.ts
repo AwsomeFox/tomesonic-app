@@ -618,28 +618,28 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       console.warn("[Downloads] remapSessionKey DB re-stamp failed", e);
     }
     // Re-stamp the in-memory maps so anything currently surfaced stays adopted
-    // under the new identity.
-    set(state => {
-      const remap = (m: Record<string, DownloadItem>) => {
-        let changed = false;
-        const next: Record<string, DownloadItem> = {};
-        for (const [id, it] of Object.entries(m)) {
-          if (it?.sessionKey === oldKey) {
-            next[id] = { ...it, sessionKey: newKey };
-            changed = true;
-          } else {
-            next[id] = it;
-          }
+    // under the new identity. Compute first and only call set() when something
+    // actually changed — a no-op set() (even returning {}) still merges into a
+    // fresh state object and notifies every subscriber for nothing.
+    const remap = (m: Record<string, DownloadItem>) => {
+      let changed = false;
+      const next: Record<string, DownloadItem> = {};
+      for (const [id, it] of Object.entries(m)) {
+        if (it?.sessionKey === oldKey) {
+          next[id] = { ...it, sessionKey: newKey };
+          changed = true;
+        } else {
+          next[id] = it;
         }
-        return changed ? next : m;
-      };
-      const activeDownloads = remap(state.activeDownloads);
-      const completedDownloads = remap(state.completedDownloads);
-      if (activeDownloads === state.activeDownloads && completedDownloads === state.completedDownloads) {
-        return {} as any;
       }
-      return { activeDownloads, completedDownloads };
-    });
+      return changed ? next : m;
+    };
+    const state = get();
+    const activeDownloads = remap(state.activeDownloads);
+    const completedDownloads = remap(state.completedDownloads);
+    if (activeDownloads !== state.activeDownloads || completedDownloads !== state.completedDownloads) {
+      set({ activeDownloads, completedDownloads });
+    }
   },
 
   retryDownload: async (id) => {

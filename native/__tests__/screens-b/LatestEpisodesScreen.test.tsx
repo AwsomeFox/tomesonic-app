@@ -351,6 +351,17 @@ describe("LatestEpisodesScreen", () => {
     );
   });
 
+  it("does NOT start a download (shows connect-first) when the server is not connected", async () => {
+    useUserStore.setState({ serverConnectionConfig: null } as any);
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getByLabelText("Download Fresh Episode"));
+
+    // No network call with an empty address/token — a clear message instead.
+    expect(downloader.downloadEpisode).not.toHaveBeenCalled();
+  });
+
   it("download button reflects downloaded (delete) and downloading (cancel %) states", async () => {
     useDownloadStore.setState({
       completedDownloads: {
