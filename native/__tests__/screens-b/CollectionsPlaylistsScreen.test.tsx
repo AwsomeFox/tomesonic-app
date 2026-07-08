@@ -250,7 +250,7 @@ describe("CollectionsPlaylistsScreen", () => {
     expect(await screen.findByText("Couldn't load collections")).toBeTruthy();
 
     mockGets();
-    await fireEvent.press(screen.getByLabelText("Retry loading collections"));
+    await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Favorites")).toBeTruthy();
   });

@@ -7,6 +7,7 @@ import { storageHelper, storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
+import ErrorState from "../components/ErrorState";
 import { api } from "../utils/api";
 import { queueEbookProgressPatch } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
@@ -825,56 +826,55 @@ export default function ReaderScreen({ route, navigation }: any) {
     showShare?: boolean;
     onRetry?: () => void;
   }) => (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32 }}>
-      <View
-        style={{
-          width: 72, height: 72, borderRadius: 36, backgroundColor: colors.secondaryContainer,
-          alignItems: "center", justifyContent: "center", marginBottom: 16,
-        }}
-      >
-        <Icon name="book" size={36} color={colors.onSecondaryContainer} />
-      </View>
-      <Text style={{ color: colors.onSurface, fontSize: 15, textAlign: "center", marginBottom: 20 }}>
-        {message}
-      </Text>
-      {onRetry ? (
-        <Pressable
-          onPress={onRetry}
-          accessibilityRole="button"
-          style={{
-            backgroundColor: colors.primary, paddingHorizontal: 24, height: 48, borderRadius: 24,
-            alignItems: "center", justifyContent: "center", flexDirection: "row", marginBottom: 12,
-          }}
-        >
-          <Icon name="refresh" size={20} color={colors.onPrimary} />
-          <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600", marginLeft: 8 }}>
-            Try again
-          </Text>
-        </Pressable>
-      ) : null}
-      {showShare ? (
-        <Pressable
-          onPress={openExternally}
-          accessibilityRole="button"
-          style={{
-            // Secondary action when Retry is present, primary otherwise.
-            backgroundColor: onRetry ? colors.secondaryContainer : colors.primary,
-            paddingHorizontal: 24, height: 48, borderRadius: 24,
-            alignItems: "center", justifyContent: "center", flexDirection: "row",
-          }}
-        >
-          <Icon name="share" size={20} color={onRetry ? colors.onSecondaryContainer : colors.onPrimary} />
-          <Text
-            style={{
-              color: onRetry ? colors.onSecondaryContainer : colors.onPrimary,
-              fontSize: 15, fontWeight: "600", marginLeft: 8,
-            }}
-          >
-            Open in another app
-          </Text>
-        </Pressable>
-      ) : null}
-    </View>
+    // Shared ErrorState treatment, but this is a book-open failure so it keeps
+    // the "book" glyph and its dual Try-again / Open-externally actions.
+    <ErrorState
+      style={{ flex: 1 }}
+      icon="book"
+      title="Can't open this book"
+      message={message}
+      action={
+        <View style={{ alignItems: "center" }}>
+          {onRetry ? (
+            <Pressable
+              onPress={onRetry}
+              accessibilityRole="button"
+              style={{
+                backgroundColor: colors.primary, paddingHorizontal: 24, height: 48, borderRadius: 24,
+                alignItems: "center", justifyContent: "center", flexDirection: "row", marginBottom: 12,
+              }}
+            >
+              <Icon name="refresh" size={20} color={colors.onPrimary} />
+              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600", marginLeft: 8 }}>
+                Try again
+              </Text>
+            </Pressable>
+          ) : null}
+          {showShare ? (
+            <Pressable
+              onPress={openExternally}
+              accessibilityRole="button"
+              style={{
+                // Secondary action when Retry is present, primary otherwise.
+                backgroundColor: onRetry ? colors.secondaryContainer : colors.primary,
+                paddingHorizontal: 24, height: 48, borderRadius: 24,
+                alignItems: "center", justifyContent: "center", flexDirection: "row",
+              }}
+            >
+              <Icon name="share" size={20} color={onRetry ? colors.onSecondaryContainer : colors.onPrimary} />
+              <Text
+                style={{
+                  color: onRetry ? colors.onSecondaryContainer : colors.onPrimary,
+                  fontSize: 15, fontWeight: "600", marginLeft: 8,
+                }}
+              >
+                Open in another app
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      }
+    />
   );
 
   // Recursive rendering helper for TOC hierarchical lists (subitems).

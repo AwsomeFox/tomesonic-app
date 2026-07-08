@@ -3,9 +3,10 @@ import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from "rea
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
-import { withAlpha } from "../theme/palette";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "../components/Icon";
+import ErrorState from "../components/ErrorState";
+import EmptyState from "../components/EmptyState";
 import { api } from "../utils/api";
 import { queueProgressPatch } from "../utils/progressSync";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -307,6 +308,10 @@ export default function LatestEpisodesScreen({ navigation }: any) {
             alignItems: "center",
             justifyContent: "center",
             marginLeft: 8,
+            // Another row is starting: this Play button is disabled, so dim it
+            // instead of sitting full-opacity yet dead (the tapped row keeps its
+            // spinner at full opacity).
+            opacity: startingId && startingId !== episode.id ? 0.5 : 1,
           }}
           hitSlop={6}
           accessibilityRole="button"
@@ -357,34 +362,19 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : error ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="warning" size={44} color={colors.onSurfaceVariant} style={{ marginBottom: 4 }} />
-          <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 12 }}>
-            Couldn't load episodes
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>{error}</Text>
-          {currentLibraryId ? (
-            <Pressable
-              onPress={() => setRetryTick((t) => t + 1)}
-              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-              accessibilityRole="button"
-              accessibilityLabel="Retry loading episodes"
-              style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
-            >
-              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        <ErrorState
+          style={{ flex: 1 }}
+          title="Couldn't load episodes"
+          message={error}
+          onRetry={currentLibraryId ? () => setRetryTick((t) => t + 1) : undefined}
+        />
       ) : episodes.length === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <Icon name="podcast" size={44} color={colors.onSurfaceVariant} style={{ marginBottom: 4 }} />
-          <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 12 }}>
-            No recent episodes
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center", marginTop: 8 }}>
-            New episodes from this library's podcasts will show up here.
-          </Text>
-        </View>
+        <EmptyState
+          style={{ flex: 1 }}
+          icon="podcast"
+          title="No recent episodes"
+          message="New episodes from this library's podcasts will show up here."
+        />
       ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32 }}>
           {/* Section header */}
