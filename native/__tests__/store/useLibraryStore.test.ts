@@ -117,6 +117,24 @@ describe("useLibraryStore", () => {
       expect(useLibraryStore.getState().personalizedShelves).toEqual([]);
       expect(storage.getString("shelvesCache_lib1")).toBeUndefined();
     });
+
+    // A reverse proxy / captive portal returns an HTML error page with HTTP
+    // 200 — axios hands it over as a STRING. Installing a non-array crashed
+    // Home (`.find` on a string): keep previous shelves, flag the soft error,
+    // and never poison the good cache.
+    it("keeps shelves and flags error without caching when the body is a non-array (proxy HTML)", async () => {
+      const existing = [{ id: "continue", entities: [{ id: "b1" }] }];
+      storage.set("shelvesCache_lib1", JSON.stringify(existing));
+      useLibraryStore.setState({ currentLibraryId: "lib1", personalizedShelves: existing } as any);
+      mockGet.mockResolvedValue({ data: "<html>captive portal</html>" } as any);
+
+      await useLibraryStore.getState().loadPersonalizedShelves();
+
+      expect(useLibraryStore.getState().personalizedShelves).toEqual(existing);
+      expect(useLibraryStore.getState().shelvesLoadError).toBe(true);
+      // The good cache is preserved, not overwritten with the HTML body.
+      expect(JSON.parse(storage.getString("shelvesCache_lib1")!)).toEqual(existing);
+    });
   });
 
   describe("setCurrentLibraryId", () => {
@@ -207,6 +225,19 @@ describe("useLibraryStore", () => {
       expect(ok).toBe(false);
       expect(useLibraryStore.getState().currentLibraryId).toBe("lib2");
       expect(useLibraryStore.getState().libraries).toEqual(LIBS);
+    });
+
+    // A non-array body (proxy error page served as 200) is a FAILED load, not
+    // "the server has zero libraries" — keep current state, return false.
+    it("treats a non-array (proxy HTML) libraries body as a failed load and keeps state", async () => {
+      useLibraryStore.setState({ libraries: LIBS, currentLibraryId: "lib2" } as any);
+      mockGet.mockResolvedValue({ data: "<html>captive portal</html>" } as any);
+
+      const ok = await useLibraryStore.getState().loadLibraries(true);
+
+      expect(ok).toBe(false);
+      expect(useLibraryStore.getState().libraries).toEqual(LIBS);
+      expect(useLibraryStore.getState().currentLibraryId).toBe("lib2");
     });
 
     it("persists the auto-picked library so it survives the next launch", async () => {
