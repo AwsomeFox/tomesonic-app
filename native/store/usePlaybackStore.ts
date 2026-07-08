@@ -137,6 +137,30 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     if (activeIndex == null) return;
     const book = session.displayTitle || "Audiobook";
     const author = session.displayAuthor || "";
+    // Chapter queue only: bytes live on the ACTIVE chapter item, so before we
+    // stamp them on the new one, strip them off the item we last stamped.
+    // Otherwise every chapter the user passes through keeps its ~40KB cover and
+    // the Timeline Media3 bundles to Android Auto eventually exceeds the ~1MB
+    // Binder limit (TransactionTooLargeException). Each chapter-queue item IS a
+    // chapter, so its intrinsic title = chapters[idx].title. Empty-string
+    // localArtwork also blocks the toMediaItem `localArtwork ?: artwork` byte
+    // fallback (matters for downloaded books whose artwork URI is local).
+    if (
+      usePlaybackStore.getState().chapterQueue &&
+      _metaAppliedIndex >= 0 &&
+      _metaAppliedIndex !== activeIndex
+    ) {
+      try {
+        const pch = chapters?.[_metaAppliedIndex];
+        const clearMeta: any = {
+          title: pch?.title || book,
+          artist: [book, author].filter(Boolean).join(" • "),
+          localArtwork: "",
+        };
+        if (session.coverUrl) clearMeta.artwork = session.coverUrl;
+        await TrackPlayer.updateMetadataForTrack(_metaAppliedIndex, clearMeta);
+      } catch {}
+    }
     const ch = chapters?.[chapterIndex];
     const title = ch?.title || book;
     const subtitle = ch ? [book, author].filter(Boolean).join(" • ") : author;
@@ -236,14 +260,23 @@ export function refreshNowPlayingArtwork() {
 //
 // Fix: fetch the cover to a local cache file once, then point the session's
 // carArtworkLocal at that file. The next metadata push (forced via
-// _lastMetaChapter) rebuilds the track through toMediaItem, which inlines the
-// local file's bytes as artworkData (via the track's `localArtwork`) — lighting
-// up the compact card. Crucially we do NOT re-point coverUrl: that is the
-// artworkUri the FULL now-playing card depends on, and the OLD code overwrote
-// it with this private cache path — which the car can't read, blanking the
-// compact card's URI path (and needlessly disturbing the big player). Keeping
-// coverUrl as the http URL leaves the full card untouched. Best-effort: any
-// failure just leaves the remote URL in place, exactly as before.
+// _lastMetaChapter) rebuilds the ACTIVE track through toMediaItem, which inlines
+// the local file's bytes as artworkData (via the track's `localArtwork`) —
+// lighting up the compact card. Crucially we do NOT re-point coverUrl: that is
+// the artworkUri the FULL now-playing card depends on, and the OLD code
+// overwrote it with this private cache path — which the car can't read, blanking
+// the compact card's URI path (and needlessly disturbing the big player).
+// Keeping coverUrl as the http URL leaves the full card untouched. Best-effort:
+// any failure just leaves the remote URL in place, exactly as before.
+//
+// TRADEOFF (deliberate): the inlined bytes are downsampled to <=512px (see
+// AudioItem.localArtworkBytes), so a single-file STREAMING book's FULL card,
+// were it to prefer the bytes, would show 512px art. Media3 keeps BOTH the http
+// artworkUri (high-res, resolved by the app's BitmapLoader on the full card) and
+// the bytes (compact card, which cannot resolve a URI) on the one active item —
+// the full card uses the URI, so it stays high-res. Bytes are placed on the
+// ACTIVE item ONLY (a chaptered book moves them per chapter); inactive queue
+// items carry no bytes, so a long book never exceeds the AA Binder limit.
 async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: number) {
   try {
     if (!itemId || !url || !url.startsWith("http")) return;
@@ -266,12 +299,11 @@ async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: num
     if (!s || (s.libraryItemId || s.libraryItem?.id) !== itemId) return;
     if (s.carArtworkLocal === path) return;
     usePlaybackStore.setState({ currentSession: { ...s, carArtworkLocal: path } });
-    // Push the new (local) artwork onto the ACTIVE track now. The 1s tick only
-    // re-pushes metadata for single-track books; chapter-queue books title each
-    // item individually and the tick skips them, so relying on the tick alone
-    // would leave a chapter-queue book's compact card blank. applyNowPlaying
-    // Chapter recomputes the correct title/artist for either mode (resetting
-    // _lastMetaChapter first so it isn't deduped away).
+    // Push the new (local) artwork onto the ACTIVE track now instead of waiting
+    // for the next tick. applyNowPlayingChapter stamps the bytes onto the active
+    // item (and the tick will keep moving them as chapters advance) for both
+    // single-track AND chapter-queue books, recomputing the correct title/artist
+    // for either mode (resetting _lastMetaChapter first so it isn't deduped away).
     _lastMetaChapter = -2;
     await applyNowPlayingChapter(
       usePlaybackStore.getState().currentSession,
@@ -1187,11 +1219,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
               currentChapterIndex: chapterIndex,
             });
 
-            // For the single-track fallback we push the chapter title to the
-            // now-playing metadata; the chapter queue already titles each item.
-            if (!chapterQueue) {
-              applyNowPlayingChapter(get().currentSession, chapters, chapterIndex);
-            }
+            // Single-track / multi-file books need the current chapter TITLE
+            // pushed to the now-playing metadata. Chapter-queue books already
+            // title each item, but they still call through here so the inline
+            // artwork bytes get MOVED onto the newly-active chapter item (and
+            // stripped off the previous one) — bytes live on the active item
+            // only to stay under Android Auto's Binder limit. Both are deduped
+            // by _lastMetaChapter so this only does native work on a real
+            // chapter change.
+            applyNowPlayingChapter(get().currentSession, chapters, chapterIndex);
           }
 
           if (get().currentSession !== tickSession) return;
@@ -1571,7 +1607,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             clipEndMs: Math.round(((ch.end || 0) - startOffset) * 1000),
           };
           if (artworkUrl) t.artwork = artworkUrl;
-          if (carArtworkLocal) t.localArtwork = carArtworkLocal;
+          // Byte inlining (artworkData) must NOT go on every chapter item. On a
+          // 100+ chapter book toMediaItem would inline the ~40KB cover into EACH
+          // item's MediaMetadata; when Media3 bundles the whole Timeline to
+          // Android Auto the payload blows past the ~1MB Binder limit
+          // (TransactionTooLargeException) → the queue drops / the controller
+          // crashes. Bytes live on the ACTIVE chapter item ONLY, moved there by
+          // applyNowPlayingChapter on each chapter change. An EMPTY-STRING
+          // localArtwork (not undefined) blocks the toMediaItem
+          // `localArtwork ?: artwork` fallback so a LOCAL artwork URI can't
+          // inline bytes on the inactive items either.
+          t.localArtwork = "";
           return t;
         });
       } else {
@@ -1709,6 +1755,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // now would fight the session being prepared.
       clearErrorRecovery();
       _lastMetaChapter = -2; // force a now-playing metadata refresh for the new book
+      _metaAppliedIndex = -1; // no prior chapter item to strip bytes from
       // A sleep timer from the previous book must not run against the new one
       // (end-of-chapter timers would pause the new book almost immediately).
       get().cancelSleepTimer();

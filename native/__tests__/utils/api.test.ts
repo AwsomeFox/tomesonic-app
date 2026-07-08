@@ -117,6 +117,25 @@ describe("response interceptor", () => {
     expect(storageHelper.getServerConfig()).toBeNull();
   });
 
+  // REGRESSION (Fix #5): forceLogout cleared config + the AA downloads file but
+  // never deactivated the download store, so it kept the signed-out account's
+  // items — and a later mediaProgress write could repopulate the AA file via the
+  // store subscription. forceLogout must stop surfacing them (like logout/login).
+  it("empties the download store on forced logout", async () => {
+    const { useDownloadStore } = require("../../store/useDownloadStore");
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "t" }); // no refreshToken → forceLogout
+    useUserStore.setState({ user: { id: "u1" } } as any);
+    useDownloadStore.setState({
+      completedDownloads: { item1: { id: "item1" } as any },
+      activeDownloads: { item2: { id: "item2" } as any },
+    });
+
+    await expect(responseHandler.rejected(make401())).rejects.toBeTruthy();
+
+    expect(useDownloadStore.getState().completedDownloads).toEqual({});
+    expect(useDownloadStore.getState().activeDownloads).toEqual({});
+  });
+
   // REGRESSION: a bare forceLogout left the live session's 1s tick + ~15s sync
   // running under the signed-out account, churning refresh→forceLogout. It must
   // stop playback (the way logout() does) so the session goes quiet.

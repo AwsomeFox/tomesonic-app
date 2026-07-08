@@ -714,6 +714,16 @@ export function reconcileLinkedProgress(
   );
   if (Math.abs(audioFraction - ebookFraction) < LINK_EPSILON) return false;
   const target = Math.max(audioFraction, ebookFraction);
+  // Never SILENTLY mark an UNSTARTED medium finished. Enabling the lock on a
+  // read-but-unlistened both-format book (ebook ~100%, audio ~0%) would
+  // otherwise reconcile to target 1.0 and PATCH the untouched audiobook as
+  // finished with no confirmation — destroying its "unstarted" state. When the
+  // lagging side hasn't been started (≈0) and the target is a finish (>=0.99),
+  // skip: there is nothing to link yet. Partial↔partial reconciles, and moving
+  // an unstarted side to a NON-finished percentage (e.g. listen-only sync of the
+  // ebook %), still proceed — this guards ONLY the destructive finish jump, so
+  // it fires on both the manual toggle-ON and its ItemDetail focus-effect re-run.
+  if (target >= 0.99 && Math.min(audioFraction, ebookFraction) < LINK_EPSILON) return false;
   // When the audio duration is unknown we can't place a timestamp, so the audio
   // fraction can NEVER advance. If the ebook is furthest (audio is the lagging
   // side that would need to move up), syncBothProgressFraction skips the audio
@@ -914,6 +924,37 @@ export function hasAnyPendingSyncs(): boolean {
   } catch {
     return false;
   }
+}
+
+// In-place server-address change (same account, moved DNS/IP/proxy/scheme).
+// Queued offline entries stamped their session identity (`address::userId`) at
+// enqueue time; when the address portion changes, that captured sid no longer
+// matches currentSid(), so every flush loop (pending syncs, patches, local
+// sessions) would SKIP these entries forever. Re-key each entry's sid from the
+// old identity to the new one so they flush under the moved session. Only the
+// `sid` stamp changes — positions/timeListened are untouched.
+export function remapPendingSids(oldSid: string, newSid: string) {
+  if (!oldSid || !newSid || oldSid === newSid) return;
+  try {
+    for (const k of storage.getAllKeys()) {
+      if (
+        !k.startsWith(PENDING_PREFIX) &&
+        !k.startsWith(PATCH_PREFIX) &&
+        !k.startsWith(LOCAL_SESSION_PREFIX)
+      ) {
+        continue;
+      }
+      try {
+        const raw = storage.getString(k);
+        if (!raw) continue;
+        const rec = JSON.parse(raw);
+        if (rec && typeof rec === "object" && rec.sid === oldSid) {
+          rec.sid = newSid;
+          storage.set(k, JSON.stringify(rec));
+        }
+      } catch {}
+    }
+  } catch {}
 }
 
 // Wipes all queued syncs/patches. Called on logout so a previous account's

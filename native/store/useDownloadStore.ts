@@ -135,6 +135,10 @@ interface DownloadState {
   // Session switch / logout: stop surfacing the departing account's downloads
   // WITHOUT deleting any files or DB rows (see the action for details).
   deactivateDownloadsForSwitch: () => Promise<void>;
+  // In-place server-address change (same account): re-stamp every download row
+  // whose sessionKey === oldKey to newKey (DB + in-memory) so the moved identity
+  // keeps adopting its files instead of orphaning them.
+  remapSessionKey: (oldKey: string, newKey: string) => void;
   // True once loadDownloadsFromDb has hydrated — offline UI gates its
   // "No downloaded books" empty state on this to avoid a scary flash before
   // the DB read lands on cold start.
@@ -594,6 +598,50 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     } catch {}
   },
 
+  // In-place server-address change (same account, moved DNS/IP/proxy/scheme).
+  // Downloads are NAMESPACED by `${address}::${userId}`, so when only the
+  // address portion changes, every row still carries the OLD sessionKey — and
+  // loadDownloadsFromDb would then filter them ALL out (they "vanish" though the
+  // files remain on disk). Re-stamp every row (and any live in-memory entry)
+  // whose sessionKey === oldKey to newKey, persisting each so the move is
+  // durable. Only the identity stamp changes; the local files stay valid.
+  remapSessionKey: (oldKey, newKey) => {
+    if (!oldKey || !newKey || oldKey === newKey) return;
+    // Re-stamp persisted DB rows.
+    try {
+      for (const row of db.getAllDownloads()) {
+        if (row?.sessionKey === oldKey) {
+          db.saveDownloadItem({ ...row, sessionKey: newKey });
+        }
+      }
+    } catch (e) {
+      console.warn("[Downloads] remapSessionKey DB re-stamp failed", e);
+    }
+    // Re-stamp the in-memory maps so anything currently surfaced stays adopted
+    // under the new identity.
+    set(state => {
+      const remap = (m: Record<string, DownloadItem>) => {
+        let changed = false;
+        const next: Record<string, DownloadItem> = {};
+        for (const [id, it] of Object.entries(m)) {
+          if (it?.sessionKey === oldKey) {
+            next[id] = { ...it, sessionKey: newKey };
+            changed = true;
+          } else {
+            next[id] = it;
+          }
+        }
+        return changed ? next : m;
+      };
+      const activeDownloads = remap(state.activeDownloads);
+      const completedDownloads = remap(state.completedDownloads);
+      if (activeDownloads === state.activeDownloads && completedDownloads === state.completedDownloads) {
+        return {} as any;
+      }
+      return { activeDownloads, completedDownloads };
+    });
+  },
+
   retryDownload: async (id) => {
     const item = get().activeDownloads[id];
     if (!item) return;
@@ -658,11 +706,21 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       }
       return Number(diskMap?.[id]?.currentTime) || 0;
     };
+    // The car mirror carries ONLY audio books: ebook-only downloads can't play
+    // there, and podcast EPISODES are excluded because every episode of one
+    // podcast shares a libraryItemId — emitting them would collide on the browse
+    // id and mis-resolve resume positions (episode progress lives under a
+    // composite key). Compute the dedup key over this SAME book-only set: keying
+    // it over ALL items pulled an episode's WRONG book-level progress into the
+    // key and re-emitted a redundant (identically-entried) write.
+    const bookItems = items
+      .filter((d: any) => d?.meta?.tracks?.length)
+      .filter((d: any) => !d?.episodeId);
     // Re-emit when the download SET changes or any resume position moves a
     // 15s bucket — the old ids-only key meant an hour of listening never
     // reached the car's cold-start resume file. 15s granularity keeps the
     // file writes rare while playing.
-    const key = items
+    const key = bookItems
       .map((d: any) => {
         const id = d.libraryItemId || d.id;
         return `${d.id}:${Math.floor(timeFor(id) / 15)}`;
@@ -671,15 +729,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
       .join(",");
     if (key === _lastKeys) return;
     _lastKeys = key;
-    const entries = items
-      // Audio downloads only — ebook-only downloads can't play in the car.
-      .filter((d: any) => d?.meta?.tracks?.length)
-      // Episode downloads are excluded from the car mirror for now: every
-      // episode of one podcast shares a libraryItemId, so emitting them here
-      // would collide on the browse id and mis-resolve resume positions
-      // (episode progress lives under a composite key). Books never set
-      // episodeId, so their mirror is unchanged.
-      .filter((d: any) => !d?.episodeId)
+    const entries = bookItems
       .map((d: any) => ({
         id: d.libraryItemId || d.id,
         title: d.title || "Audiobook",

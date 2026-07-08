@@ -49,6 +49,15 @@ const forceLogout = () => {
     writeAutoCreds(null, null, null).catch(() => {});
     writeWidgetState(null).catch(() => {});
     writeAutoDownloads([]).catch(() => {});
+    // Stop surfacing the signed-out account's downloads too (logout()/login()
+    // both do this via deactivateDownloadsForSwitch). Without it the store keeps
+    // the dead account's items, and a later mediaProgress write would repopulate
+    // the Android Auto downloads file via the store's subscription. Files + DB
+    // rows are left on disk for re-adoption on re-login (not deleted).
+    try {
+      const { useDownloadStore } = require("../store/useDownloadStore");
+      useDownloadStore.getState().deactivateDownloadsForSwitch().catch(() => {});
+    } catch {}
     const { useUserStore } = require("../store/useUserStore");
     const prevConfig = useUserStore.getState().serverConnectionConfig;
     // user === null drives the navigator back to the Connect screen. Keep only

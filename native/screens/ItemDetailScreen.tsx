@@ -461,6 +461,16 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     const next = !isLinked;
     setProgressLinked(item.id, next);
     if (next && !isCurrentlyPlaying) {
+      // Enabling the lock must NEVER silently mark an unstarted medium finished.
+      // For a read-but-unlistened both-format book (ebook ~100%, audio ~0%) an
+      // immediate furthest-wins reconcile would jump the untouched audiobook to
+      // "finished". When one side hasn't been started (≈0) there is nothing to
+      // link yet — skip the immediate reconcile; once BOTH sides have real
+      // progress the boundary reconcile keeps them aligned. (reconcileLinkedProgress
+      // itself also guards the destructive finish jump, so the focus-effect
+      // re-run triggered by this toggle is safe too.)
+      const LINK_MIN = 0.005;
+      if (audioProgressFraction < LINK_MIN || ebookProgressFraction < LINK_MIN) return;
       reconcileLinkedProgress(item.id, {
         audioFraction: audioProgressFraction,
         ebookFraction: ebookProgressFraction,

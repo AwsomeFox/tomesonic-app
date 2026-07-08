@@ -16,6 +16,7 @@ import {
   syncBothProgressFraction,
   reconcileLinkedProgress,
   isProgressLinked,
+  remapPendingSids,
 } from "../../utils/progressSync";
 import { useUserStore } from "../../store/useUserStore";
 
@@ -680,6 +681,51 @@ describe("clearAllPending", () => {
 
     expect(bookmarkDeleteKeys()).toHaveLength(0);
     expect(pendingBookmarkDeletionsFor("li1")).toEqual([]);
+  });
+});
+
+describe("remapPendingSids (in-place server-address change)", () => {
+  const OLD = "https://old.example.com::u1";
+  const NEW = "https://new.example.com::u1";
+
+  it("re-keys sids on pending syncs, patches, and local-session records old→new", () => {
+    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1", currentTime: 10, sid: OLD }));
+    storage.set(
+      "pendingPatch_li1",
+      JSON.stringify({ libraryItemId: "li1", body: { currentTime: 5 }, sid: OLD })
+    );
+    storage.set(
+      "pendingLocalSession_local_li1_2026-07-08",
+      JSON.stringify({ id: "local_li1_2026-07-08", libraryItemId: "li1", timeListening: 30, sid: OLD })
+    );
+
+    remapPendingSids(OLD, NEW);
+
+    expect(JSON.parse(storage.getString("pendingSync_s1")!).sid).toBe(NEW);
+    expect(JSON.parse(storage.getString("pendingPatch_li1")!).sid).toBe(NEW);
+    expect(
+      JSON.parse(storage.getString("pendingLocalSession_local_li1_2026-07-08")!).sid
+    ).toBe(NEW);
+  });
+
+  it("leaves entries stamped with a DIFFERENT sid untouched", () => {
+    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1", currentTime: 10, sid: OLD }));
+    storage.set(
+      "pendingSync_s2",
+      JSON.stringify({ sessionId: "s2", currentTime: 20, sid: "https://other::u2" })
+    );
+
+    remapPendingSids(OLD, NEW);
+
+    expect(JSON.parse(storage.getString("pendingSync_s1")!).sid).toBe(NEW);
+    // Another account's straggler keeps its own sid (never adopted here).
+    expect(JSON.parse(storage.getString("pendingSync_s2")!).sid).toBe("https://other::u2");
+  });
+
+  it("is a no-op when oldSid === newSid", () => {
+    storage.set("pendingSync_s1", JSON.stringify({ sessionId: "s1", currentTime: 10, sid: OLD }));
+    remapPendingSids(OLD, OLD);
+    expect(JSON.parse(storage.getString("pendingSync_s1")!).sid).toBe(OLD);
   });
 });
 
@@ -1371,6 +1417,50 @@ describe("syncBothProgressFraction / reconcileLinkedProgress", () => {
     expect(p.progress).toBe(0.7);
     expect(p.ebookProgress).toBe(0.7);
     expect(readBody(ITEM).ebookLocation).toBe("epubcfi(/6/9)");
+  });
+
+  // Fix #2: enabling the lock on a read-but-unlistened both-format book must NOT
+  // silently mark the untouched audiobook finished. reconcileLinkedProgress runs
+  // on the manual toggle-ON (directly AND via ItemDetail's focus-effect re-run),
+  // so the guard lives here: skip when the lagging side is unstarted (≈0) and the
+  // target is a finish (>=0.99).
+  it("does NOT silently finish an UNSTARTED audiobook when the lock is enabled (ebook 100%, audio 0%)", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 0, ebookProgress: 1.0, duration: 3600 },
+      },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+
+    // No reconciling write, no queued PATCH, and the audio stays UNstarted.
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(false);
+    expect(freshPatchKeys()).toHaveLength(0);
+    const p = store.getState().mediaProgress[ITEM];
+    expect(p.progress).toBe(0);
+    expect(p.isFinished).toBeUndefined();
+  });
+
+  it("also guards the reverse: enabling on read-0%/listened-100% does not finish the unopened ebook", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 1.0, ebookProgress: 0, duration: 3600 },
+      },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(false);
+    expect(freshPatchKeys()).toHaveLength(0);
+    expect(store.getState().mediaProgress[ITEM].ebookProgress).toBe(0);
+  });
+
+  it("STILL reconciles an unstarted side to a NON-finished percentage (listen-only linking works)", () => {
+    // Audio at 50%, ebook never opened (0). Target 0.5 is NOT a finish, so the
+    // ebook percentage still moves up — only the destructive finish jump is guarded.
+    store.setState({
+      mediaProgress: { [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0, duration: 3600 } },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(true);
+    expect(store.getState().mediaProgress[ITEM].ebookProgress).toBe(0.5);
   });
 
   it("locked reconcile is a no-op when the two are already aligned", () => {
