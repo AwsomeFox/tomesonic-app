@@ -852,4 +852,24 @@ describe("useUserStore", () => {
       expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
     });
   });
+
+  describe("per-item progress link (Link reading & listening)", () => {
+    it("persists the lock per item and reflects it via isProgressLinked", async () => {
+      expect(useUserStore.getState().isProgressLinked("book1")).toBe(false);
+
+      await useUserStore.getState().setProgressLinked("book1", true);
+      expect(useUserStore.getState().isProgressLinked("book1")).toBe(true);
+      // Written through to persisted settings (survives a reload).
+      expect(storageHelper.getUserSettings()?.linkedProgress?.book1).toBe(true);
+      // Scoped per item — a different book stays unlinked.
+      expect(useUserStore.getState().isProgressLinked("book2")).toBe(false);
+    });
+
+    it("unlinking removes the entry rather than storing a false (map stays small)", async () => {
+      await useUserStore.getState().setProgressLinked("book1", true);
+      await useUserStore.getState().setProgressLinked("book1", false);
+      expect(useUserStore.getState().isProgressLinked("book1")).toBe(false);
+      expect("book1" in (useUserStore.getState().settings.linkedProgress || {})).toBe(false);
+    });
+  });
 });

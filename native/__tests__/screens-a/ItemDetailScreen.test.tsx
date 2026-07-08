@@ -33,6 +33,8 @@ jest.mock("../../utils/progressSync", () => ({
   clearAllPending: jest.fn(),
   syncProgress: jest.fn().mockResolvedValue(undefined),
   closeSession: jest.fn().mockResolvedValue(undefined),
+  syncBothProgressFraction: jest.fn(),
+  reconcileLinkedProgress: jest.fn(),
 }));
 jest.mock("../../utils/downloader", () => ({
   downloader: {
@@ -50,7 +52,12 @@ jest.mock("../../store/useDialogStore", () => ({
 import ItemDetailScreen from "../../screens/ItemDetailScreen";
 import { showAppDialog } from "../../store/useDialogStore";
 import { api } from "../../utils/api";
-import { queueFinishedPatch, queueProgressPatch } from "../../utils/progressSync";
+import {
+  queueFinishedPatch,
+  queueProgressPatch,
+  syncBothProgressFraction,
+  reconcileLinkedProgress,
+} from "../../utils/progressSync";
 import { downloader } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -790,5 +797,97 @@ describe("request the other format via ReadMeABook", () => {
     );
     await screen.findAllByText("Silmarillion Reader");
     expect(screen.queryByLabelText("Request audiobook edition")).toBeNull();
+  });
+});
+
+// --- Cross-medium progress: Sync button + Link (lock) toggle ----------------
+describe("ItemDetailScreen — sync progress + link toggle", () => {
+  /** Both-format item whose two progresses are within the 2pt threshold. */
+  const alignedItem = {
+    ...bothFormatItem,
+    userMediaProgress: {
+      ...bothFormatItem.userMediaProgress,
+      progress: 0.5,
+      ebookProgress: 0.49, // 50% vs 49% → below the |Δ|>=2 drift threshold
+    },
+  };
+
+  it("shows the Sync progress action ONLY when both rows show and they differ", async () => {
+    routeApi(bothFormatItem); // audio 50% vs ebook 25% → drifted
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.getByText("Sync progress")).toBeTruthy();
+    // The lock toggle is always present on both-format items.
+    expect(screen.getByLabelText("Link reading and listening")).toBeTruthy();
+  });
+
+  it("hides the Sync progress action when the two progresses are aligned (<2pt)", async () => {
+    routeApi(alignedItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByText("Sync progress")).toBeNull();
+    // Toggle still offered (linking a currently-aligned book is valid).
+    expect(screen.getByLabelText("Link reading and listening")).toBeTruthy();
+  });
+
+  it("is inert for a single-format (audio-only) item: no Sync button, no Link toggle", async () => {
+    routeApi(audioOnlyItem); // no counterpart searchBooks → only the Listening row
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByText("Sync progress")).toBeNull();
+    expect(screen.queryByLabelText("Link reading and listening")).toBeNull();
+  });
+
+  it("confirming Sync writes BOTH media to the max fraction (0.5)", async () => {
+    (syncBothProgressFraction as jest.Mock).mockClear();
+    (showAppDialog as jest.Mock).mockClear();
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Sync progress");
+
+    await fireEvent.press(screen.getByText("Sync progress"));
+    // First dialog is the reconcile confirmation naming both percentages.
+    const opts = (showAppDialog as jest.Mock).mock.calls[0][0];
+    expect(opts.title).toBe("Sync progress");
+    expect(opts.message).toContain("Listening 50%");
+    expect(opts.message).toContain("Reading 25%");
+    const confirmBtn = opts.buttons.find((b: any) => /Sync to 50%/.test(b.text));
+    expect(confirmBtn).toBeTruthy();
+
+    confirmBtn.onPress();
+    // Furthest-along fraction (max of 0.5 audio / 0.25 ebook), duration passed
+    // for the audio currentTime = fraction*duration write.
+    expect(syncBothProgressFraction).toHaveBeenCalledWith(
+      "item1",
+      0.5,
+      expect.objectContaining({ duration: 3600 })
+    );
+  });
+
+  it("the Link toggle persists the per-item lock (and unlinks it)", async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    const toggle = await screen.findByLabelText("Link reading and listening");
+    expect(useUserStore.getState().settings.linkedProgress?.item1).toBeFalsy();
+
+    await fireEvent.press(toggle);
+    await waitFor(() =>
+      expect(useUserStore.getState().settings.linkedProgress?.item1).toBe(true)
+    );
+
+    await fireEvent.press(screen.getByLabelText("Link reading and listening"));
+    await waitFor(() =>
+      expect(useUserStore.getState().settings.linkedProgress?.item1).toBeFalsy()
+    );
   });
 });

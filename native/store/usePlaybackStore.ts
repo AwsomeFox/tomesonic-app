@@ -3,7 +3,7 @@ import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react
 import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
-import { syncProgress, closeSession, queueProgressPatch } from "../utils/progressSync";
+import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
 import { writeWidgetState } from "../utils/autoCreds";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -1307,6 +1307,20 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         libraryItemId: prevSession.libraryItemId,
         episodeId: prevSession.episodeId || undefined,
       }).catch(() => {});
+      // LOCK: an audio session for this item just closed — if the user linked
+      // its progresses, pull the EBOOK up to this listening position
+      // (furthest-wins, fraction-only; see reconcileLinkedProgress). No-op
+      // unless locked, and never for podcast episodes. Guarded so a failure
+      // here can't disturb the session switch.
+      try {
+        const prevDur = get().duration;
+        if (!prevSession.episodeId && prevSession.libraryItemId) {
+          reconcileLinkedProgress(prevSession.libraryItemId, {
+            audioFraction: prevDur > 0 ? prevPos / prevDur : 0,
+            duration: prevDur,
+          });
+        }
+      } catch {}
       if (stale()) return false;
     }
 
@@ -2304,6 +2318,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         libraryItemId: session.libraryItemId,
         episodeId: session.episodeId || undefined,
       }).catch(() => {});
+      // LOCK: playback for this item was just dismissed — reconcile the ebook
+      // up to this final listening position when linked (furthest-wins,
+      // fraction-only). No-op unless locked; skipped for podcast episodes.
+      try {
+        const closeDur = get().duration;
+        if (!session.episodeId && session.libraryItemId) {
+          reconcileLinkedProgress(session.libraryItemId, {
+            audioFraction: closeDur > 0 ? closeAt / closeDur : 0,
+            duration: closeDur,
+          });
+        }
+      } catch {}
     }
 
     // If casting, stop the receiver's playback too — otherwise dismissing

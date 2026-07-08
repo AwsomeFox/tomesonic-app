@@ -4,7 +4,12 @@ import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
-import { queueFinishedPatch, queueProgressPatch } from "../utils/progressSync";
+import {
+  queueFinishedPatch,
+  queueProgressPatch,
+  syncBothProgressFraction,
+  reconcileLinkedProgress,
+} from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { showAppDialog } from "../store/useDialogStore";
@@ -90,6 +95,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     };
   }, []);
   const ereaderDevices = useUserStore((s) => s.ereaderDevices);
+  // Per-item "Link reading & listening" lock — subscribe to the map so the
+  // toggle reflects/persists per book (see useUserStore settings.linkedProgress).
+  const linkedProgressMap = useUserStore((s) => s.settings.linkedProgress);
+  const setProgressLinked = useUserStore((s) => s.setProgressLinked);
+  const isLinked = !!(itemId && linkedProgressMap?.[itemId]);
 
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const currentSession = usePlaybackStore((state) => state.currentSession);
@@ -402,6 +412,64 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     ? 100
     : Math.min(99, Math.max(1, Math.round(ebookProgressFraction * 100)));
 
+  // Both progress rows are showing AND they disagree by a meaningful margin —
+  // the trigger for the manual "Sync progress" action and the lock toggle's
+  // "these have drifted" case. |Δ| >= 2 percentage points.
+  const bothProgressRows = showAudioRow && showEbookRow;
+  const progressDrifted = bothProgressRows && Math.abs(audioPct - ebookPct) >= 2;
+  // Target for a sync/reconcile = the FURTHEST-along position (max fraction), so
+  // neither medium is ever moved backward.
+  const syncTargetFraction = Math.max(audioProgressFraction, ebookProgressFraction);
+  const syncTargetPct = Math.max(audioPct, ebookPct);
+
+  // Manual "Sync progress": reconcile both media to the furthest spot. Writes
+  // BOTH — audio via a currentTime = fraction*duration patch, ebook via its
+  // fraction (the exact page can't be repositioned from a fraction, so only the
+  // ebook PERCENTAGE moves; the CFI is preserved). Offline-safe (patches queue).
+  const handleSyncProgress = () => {
+    if (!item?.id) return;
+    showAppDialog({
+      title: "Sync progress",
+      message:
+        `Listening ${audioPct}% · Reading ${ebookPct}%.\n\n` +
+        `Bring both to the furthest spot (${syncTargetPct}%)? The ebook's exact ` +
+        `page stays put — only its percentage moves.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: `Sync to ${syncTargetPct}%`,
+          onPress: () => {
+            syncBothProgressFraction(item.id, syncTargetFraction, {
+              duration,
+              ebookLocation: progress?.ebookLocation || "",
+            });
+            showAppDialog({
+              title: "Progress synced",
+              message: `Listening and reading are now both at ${syncTargetPct}%.`,
+            });
+          },
+        },
+      ],
+    });
+  };
+
+  // Lock toggle: persist the per-item link and, when turning it ON, reconcile
+  // immediately (the focus effect below only runs on load/focus, not on this
+  // in-place toggle press).
+  const handleToggleLink = () => {
+    if (!item?.id) return;
+    const next = !isLinked;
+    setProgressLinked(item.id, next);
+    if (next && !isCurrentlyPlaying) {
+      reconcileLinkedProgress(item.id, {
+        audioFraction: audioProgressFraction,
+        ebookFraction: ebookProgressFraction,
+        duration,
+        ebookLocation: progress?.ebookLocation || "",
+      });
+    }
+  };
+
   const chapters = item?.media?.chapters || [];
   const hasChapters = chapters.length > 0;
   const isCurrentlyPlaying = currentSession?.libraryItemId === itemId;
@@ -412,6 +480,33 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const playerChapters = usePlaybackStore((s) => s.chapters);
   const displayChapters =
     isCurrentlyPlaying && playerChapters.length ? playerChapters : chapters;
+
+  // LOCK reconciliation at the ItemDetail transition boundary: on load AND on
+  // every focus (returning from the reader/player), pull the lagging medium up
+  // to the furthest position when this item is linked. FRACTION-ONLY — see
+  // reconcileLinkedProgress. Skipped while THIS item is the live audio session
+  // (the 1s tick owns the audio position; that session reconciles when it
+  // CLOSES instead — see usePlaybackStore). No-op unless locked, so it's inert
+  // for every audio-only / ebook-only / unlinked book.
+  useEffect(() => {
+    if (!itemId) return;
+    const run = () => {
+      if (usePlaybackStore.getState().currentSession?.libraryItemId === itemId) return;
+      // Read the freshest progress from the store (the reader/player wrote it),
+      // falling back to the loaded item's snapshot on a cold direct-open.
+      const p =
+        useUserStore.getState().mediaProgress[itemId] || item?.userMediaProgress || {};
+      reconcileLinkedProgress(itemId, {
+        audioFraction: Number(p.progress) || 0,
+        ebookFraction: Number(p.ebookProgress) || 0,
+        duration,
+        ebookLocation: p.ebookLocation || "",
+      });
+    };
+    run();
+    const unsub = navigation?.addListener?.("focus", run);
+    return () => unsub?.();
+  }, [itemId, isLinked, duration, item?.id]);
 
   // What media this exact item has, and what a matched sibling item supplies.
   // Podcasts carry episodes (not tracks), so hasAudio() would be false — treat
@@ -1314,6 +1409,106 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                         }}
                       />
                     </View>
+                  </View>
+                ) : null}
+
+                {/* Cross-medium controls — only when BOTH progress rows show
+                    (inert for audio-only / ebook-only items). */}
+                {bothProgressRows ? (
+                  <View style={{ rowGap: 12 }}>
+                    {/* "Sync progress" — appears only when the two have DRIFTED
+                        (|Δ| >= 2 pts). Reconciles both to the furthest spot;
+                        fraction-only (the ebook page isn't repositioned). */}
+                    {progressDrifted ? (
+                      <Pressable
+                        onPress={handleSyncProgress}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Sync progress to ${syncTargetPct} percent`}
+                        android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
+                        style={{
+                          alignSelf: "flex-start",
+                          flexDirection: "row",
+                          alignItems: "center",
+                          height: 40,
+                          paddingHorizontal: 16,
+                          borderRadius: 20,
+                          overflow: "hidden",
+                          backgroundColor: colors.secondaryContainer,
+                        }}
+                      >
+                        <Icon name="refresh" size={18} color={colors.onSecondaryContainer} />
+                        <Text
+                          style={{
+                            color: colors.onSecondaryContainer,
+                            fontSize: 14,
+                            fontWeight: "600",
+                            marginLeft: 8,
+                          }}
+                        >
+                          Sync progress
+                        </Text>
+                      </Pressable>
+                    ) : null}
+
+                    {/* "Link reading & listening" lock — persisted per item. */}
+                    <Pressable
+                      onPress={handleToggleLink}
+                      accessibilityRole="switch"
+                      accessibilityLabel="Link reading and listening"
+                      accessibilityState={{ checked: isLinked }}
+                      android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
+                      style={{ flexDirection: "row", alignItems: "center" }}
+                    >
+                      <View
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: 15,
+                          backgroundColor: isLinked
+                            ? colors.primaryContainer
+                            : colors.secondaryContainer,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          marginRight: 10,
+                        }}
+                      >
+                        <Icon
+                          name="lock"
+                          size={16}
+                          color={isLinked ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                          style={{ opacity: isLinked ? 1 : 0.5 }}
+                        />
+                      </View>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={{ color: colors.onSurface, fontSize: 14, fontWeight: "600" }}>
+                          Link reading &amp; listening
+                        </Text>
+                        <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+                          Keep both at the furthest spot (by percentage)
+                        </Text>
+                      </View>
+                      {/* M3-ish track/thumb toggle. */}
+                      <View
+                        style={{
+                          width: 44,
+                          height: 26,
+                          borderRadius: 13,
+                          padding: 3,
+                          justifyContent: "center",
+                          backgroundColor: isLinked ? colors.primary : colors.surfaceContainerHighest,
+                          alignItems: isLinked ? "flex-end" : "flex-start",
+                        }}
+                      >
+                        <View
+                          style={{
+                            width: 20,
+                            height: 20,
+                            borderRadius: 10,
+                            backgroundColor: isLinked ? colors.onPrimary : colors.outline,
+                          }}
+                        />
+                      </View>
+                    </Pressable>
                   </View>
                 ) : null}
               </View>

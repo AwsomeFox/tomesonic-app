@@ -29,6 +29,11 @@ interface UserSettings {
   // When on, finishing a downloaded book auto-queues a download of the next
   // book in the same series.
   autoDownloadNextInSeries: boolean;
+  // Per-item "Link reading & listening" lock (itemId -> true). When set for a
+  // both-format book, its listening and reading progress are kept reconciled to
+  // the furthest position at transition boundaries (see progressSync's
+  // reconcileLinkedProgress). Keyed by libraryItemId; absent = unlocked.
+  linkedProgress: Record<string, boolean>;
 }
 
 interface UserState {
@@ -49,6 +54,9 @@ interface UserState {
   setUser: (user: any) => void;
   setServerConnectionConfig: (config: any) => void;
   updateUserSettings: (updates: Partial<UserSettings>) => Promise<void>;
+  // Per-item progress-link toggle (see UserSettings.linkedProgress).
+  isProgressLinked: (libraryItemId: string) => boolean;
+  setProgressLinked: (libraryItemId: string, linked: boolean) => Promise<void>;
   loadMediaProgress: () => Promise<void>;
   loadEReaderDevices: () => Promise<void>;
   getMediaProgress: (libraryItemId: string, episodeId?: string) => any | null;
@@ -86,6 +94,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   jumpForwardTime: 10,
   jumpBackwardTime: 10,
   autoDownloadNextInSeries: false,
+  linkedProgress: {},
 };
 
 export const useUserStore = create<UserState>((set, get) => ({
@@ -176,6 +185,19 @@ export const useUserStore = create<UserState>((set, get) => ({
     
     storageHelper.setUserSettings(newSettings);
     set({ settings: newSettings });
+  },
+
+  isProgressLinked: (libraryItemId) => !!get().settings.linkedProgress?.[libraryItemId],
+
+  setProgressLinked: async (libraryItemId, linked) => {
+    if (!libraryItemId) return;
+    const cur = get().settings.linkedProgress || {};
+    // Store only "on" entries — deleting on unlink keeps the persisted map from
+    // growing an entry per book the user ever toggled.
+    const next = { ...cur };
+    if (linked) next[libraryItemId] = true;
+    else delete next[libraryItemId];
+    await get().updateUserSettings({ linkedProgress: next });
   },
 
   loadMediaProgress: async () => {

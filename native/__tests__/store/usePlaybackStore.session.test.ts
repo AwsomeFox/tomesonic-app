@@ -9,6 +9,7 @@ jest.mock("../../utils/progressSync", () => ({
   queueEbookProgressPatch: jest.fn(),
   flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
   clearAllPending: jest.fn(),
+  reconcileLinkedProgress: jest.fn(),
 }));
 jest.mock("../../utils/autoCreds", () => ({
   writeAutoCreds: jest.fn().mockResolvedValue(undefined),
@@ -24,6 +25,7 @@ import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
+import { reconcileLinkedProgress } from "../../utils/progressSync";
 
 const initialPlayback = usePlaybackStore.getState();
 const initialUser = useUserStore.getState();
@@ -644,6 +646,52 @@ describe("usePlaybackStore sessions", () => {
 
       await usePlaybackStore.getState().loadLastSession();
       expect(usePlaybackStore.getState().position).toBe(100);
+    });
+  });
+
+  // LOCK ("Link reading & listening"): closing an audio session for a linked
+  // item reconciles the OTHER medium up to the just-closed listening position.
+  // The gating/furthest-wins logic is unit-tested in progressSync; here we only
+  // assert the WIRING at the close boundary.
+  describe("lock reconciliation on audio session close", () => {
+    it("reconciles the ebook to the final audio fraction on closePlayback", async () => {
+      (reconcileLinkedProgress as jest.Mock).mockClear();
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockResolvedValue({ position: 150, duration: 300, buffered: 0 } as any);
+      usePlaybackStore.setState({
+        isInitialized: true,
+        currentSession: { id: "sess1", libraryItemId: "item1" },
+        duration: 300,
+        position: 150,
+        isPlaying: true,
+      } as any);
+
+      await usePlaybackStore.getState().closePlayback();
+
+      // 150 / 300 = 0.5, with the duration carried for the audio currentTime write.
+      expect(reconcileLinkedProgress).toHaveBeenCalledWith(
+        "item1",
+        expect.objectContaining({ audioFraction: 0.5, duration: 300 })
+      );
+    });
+
+    it("does NOT reconcile for a podcast episode session (books only)", async () => {
+      (reconcileLinkedProgress as jest.Mock).mockClear();
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockResolvedValue({ position: 30, duration: 300, buffered: 0 } as any);
+      usePlaybackStore.setState({
+        isInitialized: true,
+        currentSession: { id: "sess2", libraryItemId: "pod1", episodeId: "ep1" },
+        duration: 300,
+        position: 30,
+        isPlaying: true,
+      } as any);
+
+      await usePlaybackStore.getState().closePlayback();
+
+      expect(reconcileLinkedProgress).not.toHaveBeenCalled();
     });
   });
 });
