@@ -487,4 +487,86 @@ describe("LibraryHubScreen", () => {
     expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
     expect(screen.queryByText("You're offline")).toBeNull();
   });
+
+  it("renders the 3 segment pills as an equal-width row with no horizontal ScrollView", async () => {
+    const view = await render(
+      <LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />
+    );
+
+    // Exactly three tab pills (Books · Series · Authors).
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(3);
+
+    // Every pill is equal-width (flex:1 / flexBasis:0) — none is content-sized —
+    // so the row can't reflow when a longer label is selected.
+    for (const tab of tabs) {
+      expect(tab.props.style.flex).toBe(1);
+      expect(tab.props.style.flexBasis).toBe(0);
+      // No leftover minWidth/flexGrow hacks from the old scroll case that could
+      // force overflow at 3-across.
+      expect(tab.props.style.minWidth).toBeUndefined();
+      expect(tab.props.style.flexGrow).toBeUndefined();
+    }
+
+    // The tablist is NOT wrapped in a horizontal ScrollView (vestigial from the
+    // 5-segment era) — no host component in the tree reports horizontal scroll.
+    const countHorizontal = (node: any): number => {
+      if (!node || typeof node !== "object") return 0;
+      let n = node.props?.horizontal === true ? 1 : 0;
+      const kids = Array.isArray(node) ? node : node.children;
+      if (Array.isArray(kids)) for (const c of kids) n += countHorizontal(c);
+      return n;
+    };
+    const tree = view.toJSON();
+    const roots = Array.isArray(tree) ? tree : [tree];
+    expect(roots.reduce((a: number, r: any) => a + countHorizontal(r), 0)).toBe(0);
+  });
+
+  it("keeps the pills equal-width when the longest label (Authors) is selected — no jump", async () => {
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+
+    const widthsFor = () =>
+      screen.getAllByRole("tab").map((t) => ({
+        flex: t.props.style.flex,
+        flexBasis: t.props.style.flexBasis,
+      }));
+
+    // Books selected (default): all three pills share identical flex sizing.
+    const booksState = widthsFor();
+    expect(booksState).toEqual([
+      { flex: 1, flexBasis: 0 },
+      { flex: 1, flexBasis: 0 },
+      { flex: 1, flexBasis: 0 },
+    ]);
+
+    // Selecting Authors (longest label + its checkmark) must not resize any
+    // pill — the flex sizing is byte-for-byte identical across states.
+    await fireEvent.press(screen.getByText("Authors"));
+    expect(widthsFor()).toEqual(booksState);
+  });
+
+  it("offline hides the facet layers from TalkBack and makes the overlay a modal live region", async () => {
+    mockIsConnected = false;
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+
+    // The (kept-mounted) facet layer is removed from the a11y tree while offline
+    // so TalkBack can't swipe into the covered facet rows underneath.
+    const booksLayer = screen.getByTestId("facet-layer-books", { includeHiddenElements: true });
+    expect(booksLayer.props.importantForAccessibility).toBe("no-hide-descendants");
+
+    // The overlay is a modal (iOS) AND a polite live region (announced on
+    // appear, covering Android TalkBack where accessibilityViewIsModal no-ops).
+    const overlay = screen.getByTestId("library-offline-overlay");
+    expect(overlay.props.accessibilityViewIsModal).toBe(true);
+    expect(overlay.props.accessibilityLiveRegion).toBe("polite");
+  });
+
+  it("restores the active facet layer to accessibility 'auto' when back online", async () => {
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    // Online: the active Books layer participates in the a11y tree normally.
+    const booksLayer = screen.getByTestId("facet-layer-books", { includeHiddenElements: true });
+    expect(booksLayer.props.importantForAccessibility).toBe("auto");
+    // No offline overlay to intercept the reader.
+    expect(screen.queryByTestId("library-offline-overlay")).toBeNull();
+  });
 });

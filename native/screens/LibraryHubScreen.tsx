@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, Pressable, ScrollView } from "react-native";
+import { View, Text, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
@@ -259,72 +259,69 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   const pillRow = useMemo(
     () => (
     <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 }}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        // A little trailing peek so the last pill is partly visible, hinting the
-        // row scrolls.
-        contentContainerStyle={{ flexGrow: 1, paddingRight: 16 }}
+      {/* A plain full-width row of 3 equal-width pills — no horizontal
+          ScrollView. Three segments fit any phone width (each flex:1 ≈ 120dp at
+          ~360dp, well above the 84dp min touch target), so the pills are exactly
+          equal width in every selection state and never resize/jump when the
+          longest label ("Authors") + its checkmark is selected. (A horizontal
+          ScrollView would size flex:1 children to content and cause that jump.) */}
+      <View
+        accessibilityRole="tablist"
+        style={{
+          flexDirection: "row",
+          borderWidth: 1,
+          borderColor: colors.outline,
+          borderRadius: 20,
+          overflow: "hidden",
+        }}
       >
-        <View
-          accessibilityRole="tablist"
-          style={{
-            flexDirection: "row",
-            flexGrow: 1,
-            borderWidth: 1,
-            borderColor: colors.outline,
-            borderRadius: 20,
-            overflow: "hidden",
-          }}
-        >
-          {SEGMENTS.map((seg, i) => {
-            const selected = segment === seg.key;
-            return (
-              <Pressable
-                key={seg.key}
-                onPress={() => selectSegment(seg.key)}
-                android_ripple={{ color: colors.surfaceContainerHighest }}
-                accessibilityRole="tab"
-                accessibilityState={{ selected }}
-                accessibilityLabel={seg.label}
-                // Pills are ~38-40dp tall (under the 48dp min touch target);
-                // extend the vertical hit area so they're comfortably tappable.
-                hitSlop={{ top: 6, bottom: 6 }}
+        {SEGMENTS.map((seg, i) => {
+          const selected = segment === seg.key;
+          return (
+            <Pressable
+              key={seg.key}
+              onPress={() => selectSegment(seg.key)}
+              android_ripple={{ color: colors.surfaceContainerHighest }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+              accessibilityLabel={seg.label}
+              // Pills are ~38-40dp tall (under the 48dp min touch target);
+              // extend the vertical hit area so they're comfortably tappable.
+              hitSlop={{ top: 6, bottom: 6 }}
+              style={{
+                flex: 1,
+                flexBasis: 0,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingVertical: 10,
+                paddingHorizontal: 8,
+                backgroundColor: selected ? colors.secondaryContainer : "transparent",
+                borderLeftWidth: i === 0 ? 0 : 1,
+                borderLeftColor: colors.outline,
+              }}
+            >
+              <Icon
+                name={selected ? "check" : seg.icon}
+                size={18}
+                color={selected ? colors.onSecondaryContainer : colors.onSurfaceVariant}
+              />
+              <Text
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.3}
                 style={{
-                  flex: 1,
-                  minWidth: 84,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingVertical: 10,
-                  paddingHorizontal: 8,
-                  backgroundColor: selected ? colors.secondaryContainer : "transparent",
-                  borderLeftWidth: i === 0 ? 0 : 1,
-                  borderLeftColor: colors.outline,
+                  color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                  fontSize: 14,
+                  fontWeight: "500",
+                  marginLeft: 8,
                 }}
               >
-                <Icon
-                  name={selected ? "check" : seg.icon}
-                  size={18}
-                  color={selected ? colors.onSecondaryContainer : colors.onSurfaceVariant}
-                />
-                <Text
-                  numberOfLines={1}
-                  maxFontSizeMultiplier={1.3}
-                  style={{
-                    color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
-                    fontSize: 14,
-                    fontWeight: "500",
-                    marginLeft: 8,
-                  }}
-                >
-                  {seg.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </ScrollView>
+                {seg.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
     ),
     [colors, segment, selectSegment]
@@ -407,6 +404,17 @@ export default function LibraryHubScreen({ route, navigation }: any) {
               // read `.style.display` directly.
               style={{ ...ABSOLUTE_FILL, display: active ? "flex" : "none" }}
               pointerEvents={active ? "auto" : "none"}
+              // While offline the overlay below covers every facet. Its
+              // accessibilityViewIsModal is iOS-only (a no-op for Android
+              // TalkBack), so ALSO drop the facets from the a11y tree here —
+              // otherwise a blind user swipes past the "You're offline" notice
+              // into the hidden facet list and taps dead rows. Mirrors the
+              // AppDialog/PlayerBottomSheet scrim pattern. Inactive layers are
+              // already hidden, so they stay "no-hide-descendants" regardless;
+              // the active layer returns to "auto" once back online.
+              importantForAccessibility={
+                isOffline || !active ? "no-hide-descendants" : "auto"
+              }
             >
               {renderFacet(seg.key)}
             </View>
@@ -458,13 +466,21 @@ export default function LibraryHubScreen({ route, navigation }: any) {
             an absolute-fill notice (mirroring the search overlay). When
             connectivity returns this layer is removed, revealing the facets with
             their state intact. pointerEvents="auto" + a solid surface background
-            block interaction with the facets beneath; accessibilityViewIsModal
-            keeps screen readers on the notice. */}
+            block interaction with the facets beneath. accessibilityViewIsModal
+            keeps iOS VoiceOver on the notice; because that prop is a no-op for
+            Android TalkBack we ALSO set importantForAccessibility="no-hide-
+            descendants" on the facet layers above so the hidden facets are
+            removed from the a11y tree there too. accessibilityLiveRegion="polite"
+            announces the notice when it appears, and the title carries a header
+            role. Mirrors the AppDialog/PlayerBottomSheet modal pattern. */}
         {isOffline ? (
           <View
+            testID="library-offline-overlay"
             style={{ ...ABSOLUTE_FILL, backgroundColor: colors.surface }}
             pointerEvents="auto"
             accessibilityViewIsModal
+            accessibilityLiveRegion="polite"
+            accessibilityRole="header"
           >
             <EmptyState
               style={{ flex: 1 }}
