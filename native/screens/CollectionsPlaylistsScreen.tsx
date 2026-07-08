@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, forwardRef } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -34,11 +34,11 @@ type Tab = "collections" | "playlists";
 
 const ROW_COVER = 72;
 
-// forwardRef only so the Library-hub can attach its shared content ref without
-// a "function components cannot be given refs" warning — this screen exposes no
-// TopAppBar-driven actions (its Collections/Playlists sub-tabs and create button
-// live in the body), so there is no imperative handle.
-function CollectionsPlaylistsScreen({ navigation, embedded }: any, _ref: React.Ref<unknown>) {
+// A plain component (no forwardRef): unlike the Books/Series/Authors facets,
+// this screen exposes no TopAppBar-driven actions to the Library hub — its
+// Collections/Playlists sub-tabs and create button live in the body — so the
+// hub renders it without a ref.
+function CollectionsPlaylistsScreen({ navigation, embedded }: any) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
@@ -472,7 +472,7 @@ function CollectionsPlaylistsScreen({ navigation, embedded }: any, _ref: React.R
   );
 }
 
-export default forwardRef(CollectionsPlaylistsScreen);
+export default CollectionsPlaylistsScreen;
 
 // Rounded square cover: single fills the square, otherwise a 2x2 collage over
 // a primary background (mirrors CollectionCover/PlaylistCover.vue).

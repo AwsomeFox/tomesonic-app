@@ -77,19 +77,32 @@ export default function LibraryHubScreen({ route, navigation }: any) {
 
   // A fresh navigation into this tab with new params re-selects Books + reseeds.
   useEffect(() => {
-    if (
+    const hadSeed =
       params.filter !== undefined ||
       params.orderBy !== undefined ||
-      params.descending !== undefined
-    ) {
+      params.descending !== undefined;
+    const hadSegment = normalizeSegment(params.segment) != null;
+    if (hadSeed) {
       setSegment("books");
       setBooksSeed({
         filter: params.filter,
         orderBy: params.orderBy,
         descending: params.descending,
       });
-    } else if (normalizeSegment(params.segment)) {
+    } else if (hadSegment) {
       setSegment(params.segment as LibrarySegment);
+    }
+    // Clear the consumed params. React Navigation MERGES tab params and keeps
+    // them sticky, so without this a one-off deep-link seed would keep forcing
+    // Books (and a lingering `filter` would override a later `segment` param) on
+    // every remount/revisit. Guarded — some tests mock navigation without it.
+    if ((hadSeed || hadSegment) && typeof navigation?.setParams === "function") {
+      navigation.setParams({
+        filter: undefined,
+        orderBy: undefined,
+        descending: undefined,
+        segment: undefined,
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.segment, params.filter, params.orderBy, params.descending]);

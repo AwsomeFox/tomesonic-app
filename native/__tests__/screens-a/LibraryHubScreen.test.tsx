@@ -189,6 +189,33 @@ describe("LibraryHubScreen", () => {
     ).toBeTruthy();
   });
 
+  it("clears consumed route params so a sticky seed can't re-force Books later", async () => {
+    // React Navigation merges + keeps tab params sticky; the hub must clear the
+    // ones it consumes, or a one-off deep-link seed would keep forcing Books
+    // (and override a later `segment` param) on every remount.
+    const navigation = makeNavigation();
+    navigation.setParams = jest.fn();
+    await render(
+      <LibraryHubScreen
+        route={{ params: { filter: "genres.QUJD", orderBy: "title", descending: false } }}
+        navigation={navigation}
+      />
+    );
+    expect(navigation.setParams).toHaveBeenCalledWith({
+      filter: undefined,
+      orderBy: undefined,
+      descending: undefined,
+      segment: undefined,
+    });
+  });
+
+  it("does not call setParams when there were no params to consume", async () => {
+    const navigation = makeNavigation();
+    navigation.setParams = jest.fn();
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={navigation} />);
+    expect(navigation.setParams).not.toHaveBeenCalled();
+  });
+
   it("contextual TopAppBar actions drive the active facet (Books filter, Series sort)", async () => {
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
     // Books: both filter + sort available
