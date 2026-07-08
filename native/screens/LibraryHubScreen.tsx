@@ -184,6 +184,16 @@ export default function LibraryHubScreen({ route, navigation }: any) {
     storageHelper.setLibraryHubSegment(next);
   };
 
+  // Resync the scroll-to-top FAB to the active facet's retained offset whenever
+  // `segment` changes — by tap, deep-link seed, or an explicit `segment` param.
+  // selectSegment sets this synchronously (to avoid a flash on tap), but the
+  // params-driven effect switches segments without touching it, so without this
+  // the FAB could stay stale from the previously active facet until the next
+  // scroll.
+  useEffect(() => {
+    setShowScrollTop((scrollOffsets.current[segment] || 0) > SCROLL_TOP_THRESHOLD);
+  }, [segment]);
+
   const scrollActiveToTop = () => {
     refFor(segmentRef.current).current?.scrollToTop?.();
   };
