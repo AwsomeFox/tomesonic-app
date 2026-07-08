@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -12,6 +12,7 @@ import { queueProgressPatch } from "../utils/progressSync";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { showAppDialog } from "../store/useDialogStore";
 
 export default function LatestEpisodesScreen({ navigation }: any) {
   const colors = useThemeColors();
@@ -38,7 +39,7 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     } catch (e) {
       // Was an unhandled rejection — spinner cleared and nothing happened.
       console.warn("[LatestEpisodes] play failed", e);
-      Alert.alert("Couldn't play episode", "Check your connection to the server and try again.");
+      showAppDialog({ title: "Couldn't play episode", message: "Check your connection to the server and try again." });
     } finally {
       setStartingId(null);
     }

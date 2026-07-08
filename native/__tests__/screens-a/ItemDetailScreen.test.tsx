@@ -4,7 +4,6 @@
  * states, play/read routing, and podcast episode rows.
  */
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
-import { Alert } from "react-native";
 
 // The global setup maps this package to the library's jest mock, which only
 // has a `default` export — named imports (SafeAreaView) come back undefined.
@@ -43,8 +42,12 @@ jest.mock("../../utils/downloader", () => ({
     sweepOrphanFolders: jest.fn().mockResolvedValue(undefined),
   },
 }));
+jest.mock("../../store/useDialogStore", () => ({
+  showAppDialog: jest.fn(),
+}));
 
 import ItemDetailScreen from "../../screens/ItemDetailScreen";
+import { showAppDialog } from "../../store/useDialogStore";
 import { api } from "../../utils/api";
 import { queueFinishedPatch, queueProgressPatch } from "../../utils/progressSync";
 import { downloader } from "../../utils/downloader";
@@ -371,7 +374,7 @@ describe("ItemDetailScreen", () => {
     expect(cancelDownload).toHaveBeenCalledWith("item1");
   });
 
-  it("download button: downloaded → confirm-delete Alert then removeDownload", async () => {
+  it("download button: downloaded → confirm-delete dialog then removeDownload", async () => {
     routeApi(bothFormatItem);
     const removeDownload = jest.fn();
     useDownloadStore.setState({
@@ -380,7 +383,7 @@ describe("ItemDetailScreen", () => {
         item1: { id: "item1", libraryItemId: "item1", title: "The Hobbit", status: "completed", parts: [] },
       },
     } as any);
-    const alertSpy = jest.spyOn(Alert, "alert");
+    const alertSpy = showAppDialog as jest.Mock;
     const navigation = makeNavigation();
     await render(
       <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
@@ -389,12 +392,14 @@ describe("ItemDetailScreen", () => {
 
     await fireEvent.press(screen.getByLabelText("Delete download"));
     expect(alertSpy).toHaveBeenCalledWith(
-      "Delete download",
-      expect.stringContaining("The Hobbit"),
-      expect.any(Array)
+      expect.objectContaining({
+        title: "Delete download",
+        message: expect.stringContaining("The Hobbit"),
+        buttons: expect.any(Array),
+      })
     );
     // Confirm the destructive action.
-    const buttons = alertSpy.mock.calls[0][2] as any[];
+    const buttons = alertSpy.mock.calls[0][0].buttons as any[];
     const del = buttons.find((b) => b.text === "Delete");
     await act(async () => {
       del.onPress();
@@ -587,7 +592,7 @@ describe("send ebook to device (Kindle etc.)", () => {
     routeApi(ebookOnlyItem);
     useUserStore.setState({ ereaderDevices: [{ name: "My Kindle" }, { name: "Kobo" }] } as any);
     mockedPost.mockResolvedValue({ data: {} });
-    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const alertSpy = showAppDialog as jest.Mock;
 
     await render(
       <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
@@ -606,17 +611,16 @@ describe("send ebook to device (Kindle etc.)", () => {
         deviceName: "My Kindle",
       })
     );
-    // In-sheet M3 result burst, not a system alert.
+    // In-sheet M3 result burst, not a system dialog.
     await screen.findByText("Sent to My Kindle");
     expect(alertSpy).not.toHaveBeenCalled();
-    alertSpy.mockRestore();
   });
 
   it("surfaces a failure alert when the server rejects the send", async () => {
     routeApi(ebookOnlyItem);
     useUserStore.setState({ ereaderDevices: [{ name: "My Kindle" }] } as any);
     mockedPost.mockRejectedValue(new Error("smtp down"));
-    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const alertSpy = showAppDialog as jest.Mock;
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 
     await render(
@@ -635,7 +639,6 @@ describe("send ebook to device (Kindle etc.)", () => {
     // Retry returns to the device list.
     await fireEvent.press(screen.getByLabelText("Try again"));
     await screen.findByText("My Kindle");
-    alertSpy.mockRestore();
     errSpy.mockRestore();
   });
 

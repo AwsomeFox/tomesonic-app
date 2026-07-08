@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from "react-native";
+import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -10,6 +10,7 @@ import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { showAppDialog } from "../store/useDialogStore";
 import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
@@ -254,10 +255,10 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
   };
 
   const handleDelete = () => {
-    Alert.alert(
-      "Delete collection?",
-      `"${collectionName || "This collection"}" will be removed from your server. Your books aren't affected.`,
-      [
+    showAppDialog({
+      title: "Delete collection?",
+      message: `"${collectionName || "This collection"}" will be removed from your server. Your books aren't affected.`,
+      buttons: [
         { text: "Cancel", style: "cancel" },
         {
           text: "Delete",
@@ -270,12 +271,12 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
               navigation.goBack();
             } catch {
               setDeleting(false);
-              Alert.alert("Couldn't delete", "The collection couldn't be deleted. Check your connection and try again.");
+              showAppDialog({ title: "Couldn't delete", message: "The collection couldn't be deleted. Check your connection and try again." });
             }
           },
         },
-      ]
-    );
+      ],
+    });
   };
 
   return (

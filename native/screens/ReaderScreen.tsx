@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Linking, ActivityIndicator, FlatList, Animated, Alert } from "react-native";
+import { View, Text, Linking, ActivityIndicator, FlatList, Animated } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { storageHelper, storage } from "../utils/storage";
 import { useThemeColors } from "../theme/useThemeColors";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { showAppDialog } from "../store/useDialogStore";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import { api } from "../utils/api";
@@ -713,7 +714,7 @@ export default function ReaderScreen({ route, navigation }: any) {
     (async () => {
       const target = await resolveAudioTarget(itemId);
       if (!target) {
-        Alert.alert("No audiobook available", "This book doesn't have an audio edition in your library.");
+        showAppDialog({ title: "No audiobook available", message: "This book doesn't have an audio edition in your library." });
         return;
       }
       const fraction = isPdf
@@ -722,7 +723,10 @@ export default function ReaderScreen({ route, navigation }: any) {
       const estimate = target.duration
         ? ` at about ${approximateClock(audioPositionForReadingFraction(fraction, target.duration))}`
         : "";
-      Alert.alert("Listen from here?", `Start the audiobook${estimate}? Position matching is approximate.`, [
+      showAppDialog({
+        title: "Listen from here?",
+        message: `Start the audiobook${estimate}? Position matching is approximate.`,
+        buttons: [
         { text: "Cancel", style: "cancel" },
         {
           text: "Listen",
@@ -739,12 +743,13 @@ export default function ReaderScreen({ route, navigation }: any) {
                 navigation.goBack();
               } catch (e) {
                 console.warn("[Reader] listen-from-here failed", e);
-                Alert.alert("Couldn't start playback", "Check your connection to the server and try again.");
+                showAppDialog({ title: "Couldn't start playback", message: "Check your connection to the server and try again." });
               }
             })();
           },
         },
-      ]);
+      ],
+      });
     })();
   };
 

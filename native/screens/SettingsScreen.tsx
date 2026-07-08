@@ -7,12 +7,12 @@ import {
   Linking,
   TextInput,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeStore, ThemeMode } from '../store/useThemeStore';
 import { useUserStore } from '../store/useUserStore';
 import { usePlaybackStore } from '../store/usePlaybackStore';
+import { showAppDialog } from '../store/useDialogStore';
 import { useThemeColors } from '../theme/useThemeColors';
 import { withAlpha } from '../theme/palette';
 import Icon, { IconName } from '../components/Icon';
@@ -104,10 +104,14 @@ export default function SettingsScreen({ navigation }: any) {
   };
 
   const onRmabDisconnect = () => {
-    Alert.alert('Disconnect ReadMeABook?', 'Request features will be hidden until you reconnect.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Disconnect', style: 'destructive', onPress: () => rmabDisconnect() },
-    ]);
+    showAppDialog({
+      title: 'Disconnect ReadMeABook?',
+      message: 'Request features will be hidden until you reconnect.',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Disconnect', style: 'destructive', onPress: () => rmabDisconnect() },
+      ],
+    });
   };
 
   const set = (updates: any) => {

@@ -21,6 +21,9 @@ jest.mock("react-native-safe-area-context", () => {
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
+jest.mock("../../store/useDialogStore", () => ({
+  showAppDialog: jest.fn(),
+}));
 
 import ChaptersModal from "../../components/ChaptersModal";
 import BookmarksModal from "../../components/BookmarksModal";
@@ -32,6 +35,7 @@ import LibrarySelector from "../../components/LibrarySelector";
 import { api } from "../../utils/api";
 import { useUiStore } from "../../store/useUiStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
+import { showAppDialog } from "../../store/useDialogStore";
 
 const apiGet = api.get as jest.Mock;
 const apiPost = api.post as jest.Mock;
@@ -142,16 +146,13 @@ describe("BookmarksModal", () => {
     { libraryItemId: "other", title: "Different book", time: 10 },
   ];
 
-  // Bookmark deletion now confirms first — auto-tap the destructive button so
-  // these delete assertions still exercise the delete path.
-  let bmAlertSpy: jest.SpyInstance;
+  // Bookmark deletion now confirms first via the themed dialog — auto-tap the
+  // destructive button so these delete assertions still exercise the delete path.
   beforeEach(() => {
-    const { Alert } = require("react-native");
-    bmAlertSpy = jest.spyOn(Alert, "alert").mockImplementation((_t: any, _m: any, buttons: any) => {
-      (buttons || []).find((b: any) => b.style === "destructive")?.onPress?.();
+    (showAppDialog as jest.Mock).mockImplementation((opts: any) => {
+      (opts?.buttons || []).find((b: any) => b.style === "destructive")?.onPress?.();
     });
   });
-  afterEach(() => bmAlertSpy.mockRestore());
 
   it("loads, filters to the item, and sorts bookmarks by time", async () => {
     apiGet.mockResolvedValue({ data: { bookmarks: serverBookmarks } });

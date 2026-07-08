@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, Pressable, FlatList, Alert } from "react-native";
+import { View, Text, Pressable, FlatList } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -8,6 +8,7 @@ import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { showAppDialog } from "../store/useDialogStore";
 import { formatBytes } from "../utils/format";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -210,12 +211,12 @@ export default function DownloadsScreen({ navigation }: any) {
                 </View>
                 <Pressable
                   onPress={() =>
-                    Alert.alert(
-                      "Delete all downloads",
+                    showAppDialog({
+                      title: "Delete all downloads",
                       // Honest scope: the wipe also aborts anything still
                       // downloading (and clears failed retries), not just the
                       // completed items counted in the header.
-                      `Remove all ${completedList.length} downloaded ${
+                      message: `Remove all ${completedList.length} downloaded ${
                         completedList.length === 1 ? "item" : "items"
                       }${
                         activeList.length > 0
@@ -224,15 +225,15 @@ export default function DownloadsScreen({ navigation }: any) {
                             }`
                           : ""
                       } from this device? Your listening/reading progress is kept.`,
-                      [
+                      buttons: [
                         { text: "Cancel", style: "cancel" },
                         {
                           text: "Delete all",
                           style: "destructive",
                           onPress: () => removeAllDownloads(),
                         },
-                      ]
-                    )
+                      ],
+                    })
                   }
                   accessibilityRole="button"
                   accessibilityLabel="Delete all downloads"
@@ -303,14 +304,14 @@ export default function DownloadsScreen({ navigation }: any) {
                   // cancelDownload only touches ACTIVE downloads — a completed
                   // one must go through removeDownload (deletes the files too).
                   // Destructive, so confirm first.
-                  Alert.alert(
-                    "Delete download",
-                    `Remove "${item.title}" from this device? You can download it again later.`,
-                    [
+                  showAppDialog({
+                    title: "Delete download",
+                    message: `Remove "${item.title}" from this device? You can download it again later.`,
+                    buttons: [
                       { text: "Cancel", style: "cancel" },
                       { text: "Delete", style: "destructive", onPress: () => removeDownload(item.id) },
-                    ]
-                  )
+                    ],
+                  })
                 }
                 style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                 hitSlop={6}
@@ -392,14 +393,14 @@ export default function DownloadsScreen({ navigation }: any) {
                     // live downloads so a mistap can't throw away gigabytes.
                     // Failed rows stay one-tap (nothing in flight to lose).
                     if (item.status === "downloading" || item.status === "pending") {
-                      Alert.alert(
-                        "Cancel download?",
-                        `"${item.title}" will stop downloading and its partial files will be deleted.`,
-                        [
+                      showAppDialog({
+                        title: "Cancel download?",
+                        message: `"${item.title}" will stop downloading and its partial files will be deleted.`,
+                        buttons: [
                           { text: "Keep downloading", style: "cancel" },
                           { text: "Cancel download", style: "destructive", onPress: () => cancelDownload(item.id) },
-                        ]
-                      );
+                        ],
+                      });
                     } else {
                       cancelDownload(item.id);
                     }
