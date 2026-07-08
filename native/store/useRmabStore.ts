@@ -57,6 +57,16 @@ interface RmabState {
   refreshPendingCount: () => Promise<void>;
 }
 
+// A fresh-session reset (connect / reconnect / disconnect) must also drop the
+// PERSISTED requested-chip map, or initialize() reloads it on the next launch
+// and resurrects stale "Requested" chips for the new account.
+function clearPersistedRequestedAsins() {
+  try {
+    const { storage } = require("../utils/storage");
+    storage.remove("rmab_requestedAsins");
+  } catch {}
+}
+
 export const useRmabStore = create<RmabState>((set, get) => ({
   configured: false,
   serverUrl: null,
@@ -151,6 +161,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       // Round-trip an authed call so a pasted token that exchanged but can't
       // authenticate (clock skew, revoked session) fails HERE, not later.
       await getMe();
+      clearPersistedRequestedAsins();
       set({
         configured: true,
         serverUrl: cfg.url,
@@ -209,6 +220,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       const user = me?.user || me || withProvider.user || null;
       const full: RmabConfig = { ...withProvider, user };
       writeRmabConfig(full);
+      clearPersistedRequestedAsins();
       set({
         configured: true,
         serverUrl: full.url,
@@ -264,10 +276,7 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   disconnect: () => {
     clearRmabCaches();
     writeRmabConfig(null);
-    try {
-      const { storage } = require("../utils/storage");
-      storage.remove("rmab_requestedAsins");
-    } catch {}
+    clearPersistedRequestedAsins();
     set({
       configured: false,
       serverUrl: null,

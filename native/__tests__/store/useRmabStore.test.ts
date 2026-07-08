@@ -171,6 +171,14 @@ describe("connect", () => {
     expect(ok).toBe(true);
     expect(useRmabStore.getState().requestedAsins).toEqual({});
   });
+
+  it("success also clears the PERSISTED chip map so a restart can't resurrect it", async () => {
+    storage.set("rmab_requestedAsins", JSON.stringify({ B01: "pending" }));
+    mockedExchange.mockResolvedValue(CFG);
+    mockedMe.mockResolvedValue({ user: {} });
+    await useRmabStore.getState().connect("https://rmab.test", "tok");
+    expect(storage.getString("rmab_requestedAsins")).toBeFalsy();
+  });
 });
 
 describe("connectWithOidc", () => {
