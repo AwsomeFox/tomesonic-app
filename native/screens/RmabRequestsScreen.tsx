@@ -158,7 +158,9 @@ export default function RmabRequestsScreen({ navigation }: any) {
         <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "600" }}>{canManage ? "Requests" : "My Requests"}</Text>
       </View>
 
-      <RmabSessionExpiredBanner onManualReconnect={() => navigation.navigate("Settings")} />
+      <RmabSessionExpiredBanner
+        onManualReconnect={(msg) => navigation.navigate("Settings", { openRmabConnect: true, rmabConnectError: msg })}
+      />
 
       {requests === null ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>

@@ -55,7 +55,7 @@ const JUMP_OPTIONS: SelectOption[] = [5, 10, 15, 30, 45, 60].map((s) => ({
 }));
 const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-export default function SettingsScreen({ navigation }: any) {
+export default function SettingsScreen({ navigation, route }: any) {
   const colors = useThemeColors();
 
   const themeMode = useThemeStore((state) => state.mode);
@@ -101,11 +101,23 @@ export default function SettingsScreen({ navigation }: any) {
     ? rmabUrl.includes('token=') || !!rmabToken.trim()
     : rmabTokenIsLoginUrl;
 
-  // Clear a prior SSO error whenever the connect sheet (re)opens, so a stale
-  // failure never carries into a fresh attempt.
+  // Clear a prior SSO error when the connect sheet CLOSES, so it never lingers
+  // into a later open — but without wiping an error the deep-link below sets
+  // while opening (a clear-on-open effect would race and erase it).
   React.useEffect(() => {
-    if (rmabSheetOpen) setRmabSsoError(null);
+    if (!rmabSheetOpen) setRmabSsoError(null);
   }, [rmabSheetOpen]);
+
+  // Deep-link from the session-expired banner on Requests/Discover: open the
+  // connect sheet directly (a bare navigate would dump the user on Settings
+  // with no re-login UI) and surface any failure reason it forwarded.
+  React.useEffect(() => {
+    if (route?.params?.openRmabConnect) {
+      setRmabSheetOpen(true);
+      if (route.params.rmabConnectError) setRmabSsoError(route.params.rmabConnectError);
+      navigation.setParams({ openRmabConnect: undefined, rmabConnectError: undefined });
+    }
+  }, [route?.params?.openRmabConnect, route?.params?.rmabConnectError]);
 
   const onRmabConnect = async () => {
     if (!rmabCanSubmit) return;
@@ -341,7 +353,12 @@ export default function SettingsScreen({ navigation }: any) {
         <SectionHeader label="ReadMeABook" colors={colors} />
         {rmabConfigured ? (
           <>
-            <RmabSessionExpiredBanner onManualReconnect={() => setRmabSheetOpen(true)} />
+            <RmabSessionExpiredBanner
+              onManualReconnect={(msg) => {
+                if (msg) setRmabSsoError(msg);
+                setRmabSheetOpen(true);
+              }}
+            />
             <RowBase icon="globe" title="Server" subtitle={rmabServerUrl || ''} colors={colors} />
             <Divider colors={colors} />
             <RowBase

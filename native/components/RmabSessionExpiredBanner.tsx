@@ -19,7 +19,9 @@ import { useRmabStore } from "../store/useRmabStore";
 export default function RmabSessionExpiredBanner({
   onManualReconnect,
 }: {
-  onManualReconnect?: () => void;
+  // Routes token / API-key sessions (and SSO fallbacks) to the connect sheet.
+  // An optional message is surfaced there so a failure isn't a silent dead end.
+  onManualReconnect?: (errorMessage?: string) => void;
 }) {
   const colors = useThemeColors();
   const sessionExpired = useRmabStore((s) => s.sessionExpired);
@@ -84,15 +86,17 @@ export default function RmabSessionExpiredBanner({
           onSuccess={async (cfg) => {
             setSsoOpen(false);
             // If the OIDC connect fails, the banner would otherwise linger (or
-            // the session gets wiped) with no feedback — fall back to the manual
-            // reconnect path so the user gets a visible error and a retry.
+            // the session gets wiped) with no feedback — fall back to the connect
+            // sheet. connectWithOidc has already set the store connectError,
+            // which the sheet shows, so no message needs threading here.
             const ok = await connectWithOidc(cfg);
             if (!ok) onManualReconnect?.();
           }}
           onError={() => {
-            // Parse failure: same fallback so it isn't a silent dead end.
+            // Parse failure sets no store error — pass an explicit message so
+            // the connect sheet explains why sign-in failed.
             setSsoOpen(false);
-            onManualReconnect?.();
+            onManualReconnect?.("Sign-in failed — please try again.");
           }}
         />
       ) : null}

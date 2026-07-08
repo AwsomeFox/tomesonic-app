@@ -396,7 +396,9 @@ export default function DiscoverScreen({ navigation }: any) {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       <TopAppBar navigation={navigation} />
-      <RmabSessionExpiredBanner onManualReconnect={() => navigation.navigate("Settings")} />
+      <RmabSessionExpiredBanner
+        onManualReconnect={(msg) => navigation.navigate("Settings", { openRmabConnect: true, rmabConnectError: msg })}
+      />
       <ScrollView
         contentContainerStyle={{ paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
