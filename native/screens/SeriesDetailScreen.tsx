@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl } from "react-native";
+import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl, ScrollView } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -79,6 +79,13 @@ interface SeriesBook {
   };
   sequence?: string | number;
   userMediaProgress?: MediaProgress | null;
+  // Recency signals for the re-release dedup tie-break (newest wins when
+  // neither candidate has progress or a download).
+  addedAt?: number;
+  // Download signals — a downloaded copy is preferred as the dedup
+  // representative over a non-downloaded re-release.
+  isLocal?: boolean;
+  localLibraryItem?: any;
 }
 
 interface SeriesData {
@@ -210,12 +217,16 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           return {
             id: item.id,
             mediaType: item.mediaType,
+            isLocal: item.isLocal,
+            localLibraryItem: item.localLibraryItem,
             media: {
               metadata: {
                 title: item.media?.metadata?.title || "Untitled",
                 authorName: item.media?.metadata?.authorName || "",
                 // Audible ASIN (when matched) — powers the missing-books diff.
                 asin: item.media?.metadata?.asin || null,
+                // Publication year — secondary recency tie-break for the dedup.
+                publishedYear: item.media?.metadata?.publishedYear || null,
               },
               coverPath: item.media?.coverPath,
               duration: item.media?.duration || 0,
@@ -232,8 +243,59 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
             },
             sequence: matchedSeriesObj?.sequence ?? "",
             userMediaProgress: item.userMediaProgress || null,
+            addedAt: Number(item.addedAt) || 0,
           };
         });
+
+        // Collapse re-releases: two catalog editions of the same entry share a
+        // sequence but have different item ids, so both used to render. Group
+        // by the normalized non-empty sequence and keep ONE representative,
+        // preferring (1) the copy with listening progress, (2) a downloaded
+        // copy, then (3) the newest (addedAt, then publishedYear). Blank/
+        // whitespace sequences are never collapsed — each stays its own entry.
+        const progressStore = useUserStore.getState().mediaProgress || {};
+        const hasProgress = (b: SeriesBook) => {
+          const p = progressStore[b.id] || b.userMediaProgress;
+          return !!(p && (p.isFinished || (p.progress || 0) > 0));
+        };
+        const isDownloaded = (b: SeriesBook) =>
+          !!((b as any).isLocal || (b as any).localLibraryItem);
+        const recency = (b: SeriesBook) =>
+          b.addedAt || Number((b.media?.metadata as any)?.publishedYear) || 0;
+        const repScore = (b: SeriesBook) => (hasProgress(b) ? 2 : 0) + (isDownloaded(b) ? 1 : 0);
+        const seqKey = (b: SeriesBook): string | null => {
+          const raw = String(b.sequence ?? "").trim();
+          if (!raw) return null; // blank → keep un-collapsed
+          const n = parseFloat(raw);
+          return Number.isNaN(n) ? raw.toLowerCase() : String(n);
+        };
+
+        const groups = new Map<string, SeriesBook>();
+        const deduped: SeriesBook[] = [];
+        for (const b of books) {
+          const key = seqKey(b);
+          if (key === null) {
+            deduped.push(b);
+            continue;
+          }
+          const current = groups.get(key);
+          if (!current) {
+            groups.set(key, b);
+            deduped.push(b);
+            continue;
+          }
+          // A better representative replaces the one already placed.
+          const sc = repScore(b);
+          const scCur = repScore(current);
+          const better = sc !== scCur ? sc > scCur : recency(b) > recency(current);
+          if (better) {
+            groups.set(key, b);
+            const idx = deduped.indexOf(current);
+            if (idx >= 0) deduped[idx] = b;
+          }
+        }
+        books.length = 0;
+        books.push(...deduped);
 
         books.sort((a, b) => {
           const seqA = parseFloat(String(a.sequence)) || 0;
@@ -531,12 +593,16 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           style={{ flex: 1 }}
         />
       ) : bookCount === 0 ? (
-        <EmptyState
-          icon="series"
-          title="No books in this series"
-          message="Books in this series will appear here once they're in your library."
-          style={{ flex: 1 }}
-        />
+        // Even with nothing owned in this series, still offer the missing-books
+        // discovery/Request affordance below the empty state.
+        <ScrollView contentContainerStyle={{ flexGrow: 1 }} showsVerticalScrollIndicator={false}>
+          <EmptyState
+            icon="series"
+            title="No books in this series"
+            message="Books in this series will appear here once they're in your library."
+          />
+          <RmabMissingSection title="Missing from this series" fetchMissing={fetchMissingInSeries} />
+        </ScrollView>
       ) : (
         <FlatList
           data={books}

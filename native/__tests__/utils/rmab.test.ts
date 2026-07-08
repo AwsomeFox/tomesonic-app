@@ -24,6 +24,7 @@ import {
   listMyRequests,
   getMe,
   clearRmabCaches,
+  setRmabSessionDeadHandler,
 } from "../../utils/rmab";
 import { secureStorage } from "../../utils/storage";
 
@@ -220,6 +221,65 @@ describe("authed requests", () => {
     await call;
 
     expect(readRmabConfig()).toEqual(newCfg);
+  });
+});
+
+describe("dead-session self-heal (definitive refresh rejection)", () => {
+  beforeEach(() => {
+    writeRmabConfig(CONFIG);
+    setRmabSessionDeadHandler(null);
+  });
+  afterEach(() => setRmabSessionDeadHandler(null));
+
+  it("a 401 from /api/auth/refresh clears the config and fires the dead-session handler", async () => {
+    const onDead = jest.fn();
+    setRmabSessionDeadHandler(onDead);
+    // The request 401s → triggers refresh; the refresh ITSELF 401s (the
+    // refresh token is dead) → the session is unrecoverable.
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    mockedPost.mockRejectedValue({ response: { status: 401 } });
+
+    await expect(searchBooks("dune")).rejects.toBeTruthy();
+
+    expect(mockedPost).toHaveBeenCalledWith(
+      "https://rmab.test/api/auth/refresh",
+      { refreshToken: "ref1" },
+      expect.any(Object)
+    );
+    // Config wiped + teardown fired so the Discover tab drops.
+    expect(readRmabConfig()).toBeNull();
+    expect(onDead).toHaveBeenCalledTimes(1);
+  });
+
+  it("a NON-auth refresh failure (5xx) leaves the session intact (transient)", async () => {
+    const onDead = jest.fn();
+    setRmabSessionDeadHandler(onDead);
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    mockedPost.mockRejectedValue({ response: { status: 500 } });
+
+    await expect(searchBooks("dune")).rejects.toBeTruthy();
+    expect(readRmabConfig()).not.toBeNull();
+    expect(onDead).not.toHaveBeenCalled();
+  });
+
+  it("does not tear down a DIFFERENT connection that reconnected mid-refresh", async () => {
+    const onDead = jest.fn();
+    setRmabSessionDeadHandler(onDead);
+    mockedRequest.mockRejectedValue({ response: { status: 401 } });
+    // The refresh 401s only after a reconnect to a different server landed.
+    let releaseRefresh: (v: any) => void = () => {};
+    mockedPost.mockImplementation(() => new Promise((_res, rej) => (releaseRefresh = rej)));
+
+    const call = searchBooks("dune");
+    await new Promise((r) => setTimeout(r, 0));
+    const newCfg = { url: "https://other.test", accessToken: "oa", refreshToken: "or", user: null };
+    writeRmabConfig(newCfg);
+    releaseRefresh({ response: { status: 401 } });
+    await expect(call).rejects.toBeTruthy();
+
+    // The new connection survives — the stale refresh must not clear it.
+    expect(readRmabConfig()).toEqual(newCfg);
+    expect(onDead).not.toHaveBeenCalled();
   });
 });
 

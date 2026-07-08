@@ -58,6 +58,25 @@ jest.mock("react-native-reanimated", () => {
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
+jest.mock("../../utils/audible", () => ({
+  audibleAuthorBooks: jest.fn().mockResolvedValue([]),
+  buildOwnedTitleMatcher: jest.fn(() => () => false),
+  audibleBookDetails: jest.fn().mockResolvedValue(null),
+}));
+jest.mock("../../utils/rmab", () => ({
+  searchAuthors: jest.fn(),
+  getAuthorBooks: jest.fn(),
+  resolveRmabUrl: (p: any) => p || undefined,
+  rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
+  readRmabConfig: jest.fn(() => null),
+  writeRmabConfig: jest.fn(),
+  getMe: jest.fn(),
+  createRequest: jest.fn(),
+  getPendingApprovalCount: jest.fn().mockResolvedValue(0),
+  listMyRequests: jest.fn().mockResolvedValue([]),
+  clearRmabCaches: jest.fn(),
+  setRmabSessionDeadHandler: jest.fn(),
+}));
 
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react-native";
@@ -65,9 +84,11 @@ import AuthorDetailScreen from "../../screens/AuthorDetailScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useRmabStore } from "../../store/useRmabStore";
 
 const initialUser = useUserStore.getState();
 const initialPlayback = usePlaybackStore.getState();
+const initialRmab = useRmabStore.getState();
 
 const AUTHOR = {
   id: "a1",
@@ -110,6 +131,7 @@ async function renderAuthor(params: any = { authorId: "a1", authorName: "Jane Au
 beforeEach(() => {
   useUserStore.setState(initialUser, true);
   usePlaybackStore.setState(initialPlayback, true);
+  useRmabStore.setState(initialRmab, true);
   useUserStore.setState({
     serverConnectionConfig: { address: "https://abs.example.com", token: "tok" },
   } as any);
@@ -221,5 +243,57 @@ describe("AuthorDetailScreen", () => {
 
     expect(await screen.findByText("Couldn't load author")).toBeTruthy();
     expect(api.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("AuthorDetailScreen — missing-books discovery", () => {
+  const { searchAuthors, getAuthorBooks } = require("../../utils/rmab");
+  const { audibleAuthorBooks } = require("../../utils/audible");
+
+  it("uses RMAB's server-side author list in jwt mode (reliable ASIN lookup, not Audible)", async () => {
+    useRmabStore.setState({ configured: true, authMode: "jwt" } as any);
+    (searchAuthors as jest.Mock).mockResolvedValue([{ name: "Jane Author", asin: "AUTH1" }]);
+    (getAuthorBooks as jest.Mock).mockResolvedValue([
+      { asin: "R1", title: "Server Missing Book", author: "Jane Author", isAvailable: false },
+    ]);
+
+    await renderAuthor();
+
+    expect(await screen.findByText("Server Missing Book")).toBeTruthy();
+    expect(searchAuthors).toHaveBeenCalledWith("Jane Author");
+    expect(getAuthorBooks).toHaveBeenCalledWith("AUTH1");
+    // The reliable server path means the Audible name text-match is not used.
+    expect(audibleAuthorBooks).not.toHaveBeenCalled();
+  });
+
+  it("renders the missing section even when the author has NO owned books (empty branch)", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: { ...AUTHOR, libraryItems: [], description: null },
+    });
+    useRmabStore.setState({ configured: true, authMode: "jwt" } as any);
+    (searchAuthors as jest.Mock).mockResolvedValue([{ name: "Jane Author", asin: "AUTH1" }]);
+    (getAuthorBooks as jest.Mock).mockResolvedValue([
+      { asin: "R9", title: "Discoverable Book", author: "Jane Author", isAvailable: false },
+    ]);
+
+    await renderAuthor();
+
+    // The empty-state copy AND the discovery/Request affordance both render.
+    expect(await screen.findByText("No books by this author")).toBeTruthy();
+    expect(await screen.findByText("Discoverable Book")).toBeTruthy();
+    expect(screen.getByLabelText("Request Discoverable Book")).toBeTruthy();
+  });
+
+  it("falls back to Audible discovery for apiToken sessions", async () => {
+    useRmabStore.setState({ configured: true, authMode: "apiToken" } as any);
+    (audibleAuthorBooks as jest.Mock).mockResolvedValue([
+      { asin: "A9", title: "Audible Book", author: "Jane Author" },
+    ]);
+
+    await renderAuthor();
+
+    expect(await screen.findByText("Audible Book")).toBeTruthy();
+    expect(searchAuthors).not.toHaveBeenCalled();
+    expect(audibleAuthorBooks).toHaveBeenCalledWith("Jane Author");
   });
 });

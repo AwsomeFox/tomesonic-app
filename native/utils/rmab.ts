@@ -131,17 +131,48 @@ export async function exchangeLoginToken(
 // keyed by (url, refreshToken) so a disconnect/reconnect mid-flight never
 // shares a stale refresh with a different connection.
 let _refreshInFlight: { key: string; promise: Promise<RmabConfig> } | null = null;
+
+// A definitively-rejected refresh means the whole session is unrecoverable —
+// but the store still reads `configured: true`, so the Discover tab stays up
+// and every call keeps failing. The store registers a teardown here (mirror of
+// the main api's forceLogout) so the connection is dropped and the user is
+// prompted to reconnect.
+let _onSessionDead: (() => void) | null = null;
+export function setRmabSessionDeadHandler(fn: (() => void) | null) {
+  _onSessionDead = fn;
+}
+
 function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
   const key = `${cfg.url}::${cfg.refreshToken || ""}`;
   if (_refreshInFlight && _refreshInFlight.key === key) return _refreshInFlight.promise;
   const promise = (async () => {
     try {
       if (!cfg.refreshToken) throw new Error("No refresh token");
-      const res = await axios.post(
-        `${cfg.url}/api/auth/refresh`,
-        { refreshToken: cfg.refreshToken },
-        { timeout: 15000 }
-      );
+      let res;
+      try {
+        res = await axios.post(
+          `${cfg.url}/api/auth/refresh`,
+          { refreshToken: cfg.refreshToken },
+          { timeout: 15000 }
+        );
+      } catch (e: any) {
+        // A 400/401/403 from /api/auth/refresh means the refresh token itself
+        // is dead — no future call can recover. Clear the persisted config and
+        // fire the dead-session teardown so the store disconnects (Discover
+        // hides). Guarded to the CURRENT stored connection so a disconnect /
+        // reconnect landing mid-flight isn't torn down by a stale refresh.
+        const status = e?.response?.status;
+        if (status === 400 || status === 401 || status === 403) {
+          const current = readRmabConfig();
+          if (current && current.url === cfg.url && current.refreshToken === cfg.refreshToken) {
+            writeRmabConfig(null);
+            try {
+              _onSessionDead?.();
+            } catch {}
+          }
+        }
+        throw e;
+      }
       const accessToken = res.data?.accessToken;
       if (!accessToken) throw new Error("Refresh failed");
       const next = { ...cfg, accessToken };

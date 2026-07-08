@@ -15,7 +15,8 @@ import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
-import { isEbookOnly } from "../utils/bookMatch";
+import { isEbookOnly, authorsMatch } from "../utils/bookMatch";
+import { useRmabStore } from "../store/useRmabStore";
 import BookProgressBadge, { bookStatusA11yLabel } from "../components/BookProgressBadge";
 import Skeleton, { ListSkeleton } from "../components/Skeleton";
 import ErrorState from "../components/ErrorState";
@@ -63,6 +64,11 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   // Request tap.
   const rmabName = author?.name || authorName;
   const authorLoading = loading;
+  // Full-login (jwt) sessions can use RMAB's server-side author list, which
+  // resolves the author by ASIN relationship instead of a fragile name
+  // text-match — the reliable source. apiToken/none fall back to Audible.
+  const rmabConfigured = useRmabStore((s) => s.configured);
+  const rmabMode = useRmabStore((s) => s.authMode);
   const fetchMissingByAuthor = React.useCallback(async () => {
     const { audibleAuthorBooks, buildOwnedTitleMatcher } = require("../utils/audible");
     if (!rmabName || authorLoading) return [];
@@ -70,7 +76,6 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     // inside the callback: closing over a derived array keyed on .length
     // would go stale on a same-length content change.
     const authorItems = author?.libraryItems || [];
-    const all = await audibleAuthorBooks(rmabName);
     const haveAsins = new Set(
       authorItems.map((b: any) => b.media?.metadata?.asin).filter(Boolean)
     );
@@ -81,10 +86,38 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
     const ownedMatches = buildOwnedTitleMatcher(
       authorItems.map((b: any) => b.media?.metadata?.title)
     );
+
+    // JWT primary: RMAB's /api/authors/{asin}/books is a reliable ASIN-keyed
+    // lookup (rows pre-enriched with isAvailable). Resolve the author ASIN via
+    // searchAuthors, then fetch. Any miss/failure falls through to Audible.
+    if (rmabConfigured && rmabMode === "jwt") {
+      try {
+        const { searchAuthors, getAuthorBooks } = require("../utils/rmab");
+        const authors = await searchAuthors(rmabName);
+        const match =
+          (authors || []).find((a: any) => a?.name && authorsMatch(a.name, rmabName)) ||
+          (authors || [])[0];
+        const asin = match?.asin || match?.authorAsin || match?.id;
+        if (asin) {
+          const rows = await getAuthorBooks(asin);
+          if (rows && rows.length) {
+            // Still drop books we already own so this matches the Audible path;
+            // RmabMissingSection additionally drops any isAvailable rows.
+            return rows.filter(
+              (b: any) => !haveAsins.has(b.asin) && !ownedMatches({ title: b.title })
+            );
+          }
+        }
+      } catch {
+        // Fall through to the Audible discovery path on any RMAB failure.
+      }
+    }
+
+    const all = await audibleAuthorBooks(rmabName);
     const missing = all.filter((b: any) => !haveAsins.has(b.asin) && !ownedMatches(b));
     if ((all as any).partial) (missing as any).partial = true;
     return missing;
-  }, [rmabName, authorLoading, author]);
+  }, [rmabName, authorLoading, author, rmabConfigured, rmabMode]);
 
   const [loadError, setLoadError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
@@ -376,6 +409,11 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
                 Books appear here once this library has titles matched to this author.
               </Text>
             </View>
+          }
+          // Owning nothing by this author should still surface discovery/Request
+          // — the missing-books section renders in the empty state too.
+          ListFooterComponent={
+            <RmabMissingSection title="Missing from your library" fetchMissing={fetchMissingByAuthor} />
           }
         />
       ) : (

@@ -8,6 +8,7 @@ import {
   createRequest,
   getPendingApprovalCount,
   clearRmabCaches,
+  setRmabSessionDeadHandler,
   RmabBook,
 } from "../utils/rmab";
 
@@ -56,6 +57,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
   requestedAsins: {},
 
   initialize: () => {
+    // Self-heal a dead RMAB session: a definitively-rejected token refresh
+    // tears the connection down here so the Discover tab drops instead of
+    // staying visible over calls that can never succeed again.
+    setRmabSessionDeadHandler(() => get().disconnect());
     const cfg = readRmabConfig();
     if (cfg) {
       // Requested-state is persisted: Audible-sourced series/author rows carry

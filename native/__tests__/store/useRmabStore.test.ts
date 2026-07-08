@@ -9,6 +9,7 @@ jest.mock("../../utils/rmab", () => ({
   getPendingApprovalCount: jest.fn().mockResolvedValue(0),
   listMyRequests: jest.fn().mockResolvedValue([]),
   clearRmabCaches: jest.fn(),
+  setRmabSessionDeadHandler: jest.fn(),
 }));
 
 import { useRmabStore } from "../../store/useRmabStore";
@@ -57,6 +58,23 @@ describe("initialize", () => {
     mockedRead.mockReturnValue(null);
     useRmabStore.getState().initialize();
     expect(useRmabStore.getState().configured).toBe(false);
+  });
+});
+
+describe("dead-session self-heal wiring", () => {
+  const { setRmabSessionDeadHandler } = require("../../utils/rmab");
+
+  it("initialize registers a handler that disconnects the store (Discover drops)", () => {
+    mockedRead.mockReturnValue(CFG);
+    useRmabStore.getState().initialize();
+    expect(setRmabSessionDeadHandler).toHaveBeenCalled();
+    const handler = (setRmabSessionDeadHandler as jest.Mock).mock.calls.at(-1)![0];
+    expect(useRmabStore.getState().configured).toBe(true);
+    // Firing it (as a definitively-rejected refresh would) tears the session
+    // down: configured flips false and the persisted config is cleared.
+    handler();
+    expect(useRmabStore.getState().configured).toBe(false);
+    expect(mockedWrite).toHaveBeenLastCalledWith(null);
   });
 });
 
