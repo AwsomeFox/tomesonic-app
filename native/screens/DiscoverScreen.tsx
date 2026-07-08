@@ -20,6 +20,7 @@ import Pressable from "../components/HintPressable";
 import TopAppBar from "../components/TopAppBar";
 import SearchContent from "../components/SearchContent";
 import ErrorState from "../components/ErrorState";
+import EmptyState from "../components/EmptyState";
 import { useUiStore } from "../store/useUiStore";
 import { useUserStore } from "../store/useUserStore";
 import RmabBookDetailSheet from "../components/RmabBookDetailSheet";
@@ -54,6 +55,11 @@ export default function DiscoverScreen({ navigation }: any) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const requestedAsins = useRmabStore((s) => s.requestedAsins);
   const requestBook = useRmabStore((s) => s.requestBook);
+  // The BookDate deck + shelves only work over a full (jwt) RMAB session. When
+  // that isn't in place (never connected, or connected with an API token that
+  // can't hit discovery), we render a "connect ReadMeABook" promo instead.
+  const rmabConnected = useRmabStore((s) => s.configured && s.authMode === "jwt");
+  const updateUserSettings = useUserStore((s) => s.updateUserSettings);
 
   // ── BookDate deck ────────────────────────────────────────────────────────
   const [deck, setDeck] = useState<BookdateRec[] | null>(null);
@@ -205,9 +211,13 @@ export default function DiscoverScreen({ navigation }: any) {
   }, []);
 
   useEffect(() => {
+    // Without a full (jwt) RMAB session the discovery endpoints just 401/400 —
+    // don't fire them; the promo renders instead. Connecting flips
+    // rmabConnected and re-runs this to load for real.
+    if (!rmabConnected) return;
     loadDeck();
     loadShelves();
-  }, [loadDeck, loadShelves]);
+  }, [loadDeck, loadShelves, rmabConnected]);
 
   // The active server can change in place (Account → Edit server address)
   // WITHOUT remounting this screen, leaving the deck/shelves pointed at the old
@@ -407,6 +417,89 @@ export default function DiscoverScreen({ navigation }: any) {
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
         <TopAppBar navigation={navigation} />
         <SearchContent navigation={navigation} />
+      </SafeAreaView>
+    );
+  }
+
+  // ── Not fully connected: promote ReadMeABook instead of the deck/shelves ──
+  if (!rmabConnected) {
+    const primaryButton = (
+      <Pressable
+        onPress={() => navigation.navigate("Settings", { openRmabConnect: true })}
+        accessibilityRole="button"
+        accessibilityLabel="Connect ReadMeABook"
+        android_ripple={{ color: withAlpha(colors.onPrimary, 0.13) }}
+        style={{
+          backgroundColor: colors.primary,
+          height: 48,
+          minWidth: 220,
+          paddingHorizontal: 28,
+          borderRadius: 24,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          elevation: 2,
+        }}
+      >
+        <Icon name="send" size={18} color={colors.onPrimary} />
+        <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600", marginLeft: 8 }}>
+          Connect ReadMeABook
+        </Text>
+      </Pressable>
+    );
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
+        <TopAppBar navigation={navigation} />
+        {/* A configured-but-expired API-token session can still flag expiry —
+            surface the reconnect banner here too. */}
+        <RmabSessionExpiredBanner
+          onManualReconnect={(msg) =>
+            navigation.navigate("Settings", { openRmabConnect: true, rmabConnectError: msg })
+          }
+        />
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1, justifyContent: "center", paddingBottom: 110 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <EmptyState
+            icon="explore"
+            title="Discover audiobooks with ReadMeABook"
+            message="Connect ReadMeABook to swipe through personalized BookDate picks and request audiobooks that are missing from your library."
+            action={primaryButton}
+          />
+          <Text
+            style={{
+              color: colors.onSurfaceVariant,
+              fontSize: 13,
+              lineHeight: 19,
+              textAlign: "center",
+              paddingHorizontal: 40,
+              marginTop: 4,
+            }}
+          >
+            Full access needs the one-time login URL an admin generates (or SSO).
+            An rmab_ API token works too, but only for search and requests.
+          </Text>
+          <View style={{ alignItems: "center", marginTop: 24 }}>
+            <Pressable
+              onPress={() => {
+                // Removing the current tab mid-view is jarring — step over to
+                // Home first, then drop the tab via the AppNavigator gating.
+                navigation.navigate("Home");
+                updateUserSettings({ showDiscoverWhenDisconnected: false });
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Hide Discover until I connect"
+              android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.13), borderless: true }}
+              hitSlop={8}
+              style={{ paddingVertical: 10, paddingHorizontal: 16 }}
+            >
+              <Text style={{ color: colors.primary, fontSize: 14, fontWeight: "600" }}>
+                Hide Discover until I connect
+              </Text>
+            </Pressable>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }

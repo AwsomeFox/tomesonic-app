@@ -39,8 +39,10 @@ import {
   createRequest,
 } from "../../utils/rmab";
 import { useRmabStore } from "../../store/useRmabStore";
+import { useUserStore } from "../../store/useUserStore";
 
 const rmabInitial = useRmabStore.getState();
+const userInitial = useUserStore.getState();
 
 const RECS = [
   { id: "rec1", title: "First Pick", author: "Author One", narrator: "Narrator One", description: "<p>Great</p>", coverUrl: "/api/cache/a.jpg", aiReason: "Because you love Neal Stephenson." },
@@ -49,7 +51,10 @@ const RECS = [
 
 beforeEach(() => {
   jest.clearAllMocks();
-  useRmabStore.setState(rmabInitial, true);
+  // The deck/shelves only render for a full (jwt) RMAB session — default the
+  // store to connected so the existing suite exercises that experience. The
+  // not-connected promo has its own describe block below.
+  useRmabStore.setState({ ...rmabInitial, configured: true, authMode: "jwt" }, true);
   (getBookdateRecommendations as jest.Mock).mockResolvedValue(RECS);
   (swipeBookdate as jest.Mock).mockResolvedValue({});
 });
@@ -315,5 +320,57 @@ describe("DiscoverScreen (BookDate)", () => {
     (getBookdateRecommendations as jest.Mock).mockResolvedValue(RECS);
     await fireEvent.press(screen.getByLabelText("Get more picks"));
     await screen.findByText("First Pick");
+  });
+});
+
+describe("DiscoverScreen (not connected promo)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useUserStore.setState(userInitial, true);
+  });
+
+  it("renders the connect promo (not the deck/shelves) and never hits discovery when RMAB isn't connected", async () => {
+    useRmabStore.setState({ ...rmabInitial, configured: false, authMode: null }, true);
+    (getBookdateRecommendations as jest.Mock).mockResolvedValue(RECS);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+
+    await screen.findByText("Discover audiobooks with ReadMeABook");
+    expect(screen.getByLabelText("Connect ReadMeABook")).toBeTruthy();
+    // The connected experience must NOT render, and no discovery call fires.
+    expect(screen.queryByText("BookDate picks")).toBeNull();
+    expect(getBookdateRecommendations).not.toHaveBeenCalled();
+  });
+
+  it("treats a configured API-token (non-jwt) session as not connected", async () => {
+    useRmabStore.setState({ ...rmabInitial, configured: true, authMode: "apiToken" }, true);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Discover audiobooks with ReadMeABook");
+    expect(getBookdateRecommendations).not.toHaveBeenCalled();
+  });
+
+  it("the primary button opens Settings' RMAB connect flow", async () => {
+    useRmabStore.setState({ ...rmabInitial, configured: false, authMode: null }, true);
+    const navigate = jest.fn();
+    await render(<DiscoverScreen navigation={{ navigate }} />);
+    await fireEvent.press(await screen.findByLabelText("Connect ReadMeABook"));
+    expect(navigate).toHaveBeenCalledWith("Settings", { openRmabConnect: true });
+  });
+
+  it("the in-screen 'Hide Discover' control turns the setting off (and steps to Home)", async () => {
+    useRmabStore.setState({ ...rmabInitial, configured: false, authMode: null }, true);
+    const navigate = jest.fn();
+    await render(<DiscoverScreen navigation={{ navigate }} />);
+    await fireEvent.press(await screen.findByLabelText("Hide Discover until I connect"));
+
+    expect(useUserStore.getState().settings.showDiscoverWhenDisconnected).toBe(false);
+    expect(navigate).toHaveBeenCalledWith("Home");
+  });
+
+  it("renders the deck once a full (jwt) connection exists", async () => {
+    useRmabStore.setState({ ...rmabInitial, configured: true, authMode: "jwt" }, true);
+    (getBookdateRecommendations as jest.Mock).mockResolvedValue(RECS);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("First Pick");
+    expect(screen.queryByText("Discover audiobooks with ReadMeABook")).toBeNull();
   });
 });
