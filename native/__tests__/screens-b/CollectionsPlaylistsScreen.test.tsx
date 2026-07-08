@@ -60,6 +60,7 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
+import { Text } from "react-native";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import CollectionsPlaylistsScreen from "../../screens/CollectionsPlaylistsScreen";
 import { api } from "../../utils/api";
@@ -265,5 +266,58 @@ describe("CollectionsPlaylistsScreen", () => {
 
     expect(screen.queryByText("Favorites")).toBeNull();
     expect(screen.getByPlaceholderText("Search library...")).toBeTruthy();
+  });
+
+  describe("embedded in the Library hub", () => {
+    it("locks the tab to `mode`, hides the sub-tab row, and renders the hub list header", async () => {
+      const navigation = makeNavigation();
+      await render(
+        <CollectionsPlaylistsScreen
+          navigation={navigation}
+          embedded
+          mode="playlists"
+          listHeader={<Text>HUB_PILLS</Text>}
+        />
+      );
+
+      // Fetches playlists directly (mode-pinned) — no Collections fetch.
+      expect(await screen.findByText("Morning Mix")).toBeTruthy();
+      expect(api.get).toHaveBeenCalledWith("/api/libraries/lib1/playlists");
+      expect(api.get).not.toHaveBeenCalledWith("/api/libraries/lib1/collections");
+
+      // Hub owns the pill row (passed as listHeader); the internal sub-tab
+      // toggle + inline create button are gone in embedded mode.
+      expect(screen.getByText("HUB_PILLS")).toBeTruthy();
+      expect(screen.queryByLabelText("Create new playlist")).toBeNull();
+      expect(screen.queryByRole("tab")).toBeNull();
+    });
+
+    it("opens the create dialog through the imperative openCreate() handle", async () => {
+      const ref = React.createRef<any>();
+      const navigation = makeNavigation();
+      await render(
+        <CollectionsPlaylistsScreen ref={ref} navigation={navigation} embedded mode="collections" />
+      );
+      await screen.findByText("Favorites");
+
+      // No inline button in embedded mode; the hub FAB drives creation via ref.
+      expect(screen.queryByText("New collection")).toBeNull();
+      await act(async () => {
+        ref.current.openCreate();
+      });
+      expect(screen.getByText("New collection")).toBeTruthy();
+    });
+
+    it("exposes a scrollToTop() handle", async () => {
+      const ref = React.createRef<any>();
+      const navigation = makeNavigation();
+      await render(
+        <CollectionsPlaylistsScreen ref={ref} navigation={navigation} embedded mode="collections" />
+      );
+      await screen.findByText("Favorites");
+      expect(typeof ref.current.scrollToTop).toBe("function");
+      // Should not throw when the scroll view is mounted.
+      act(() => ref.current.scrollToTop());
+    });
   });
 });

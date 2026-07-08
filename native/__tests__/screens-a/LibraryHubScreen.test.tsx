@@ -1,14 +1,15 @@
 /**
  * LibraryHubScreen — the consolidated "Library" destination. Verifies the
- * segmented control (Books · Series · Collections · Authors), that switching
- * segments swaps the embedded facet body, that a route param selects the
- * initial segment, that a Books filter/sort deep-link lands on the Books
- * segment with the seed applied, and that the last segment is persisted to MMKV.
+ * segmented pill control (Books · Series · Collections · Playlists · Authors),
+ * that facets stay MOUNTED across segment switches and the search toggle (no
+ * unmount / page-0 refetch, scroll preserved), that a Books deep-link seed is
+ * cleared once consumed, and the scroll-to-top / create FAB + tab-press wiring.
  *
- * The four facet screens are mocked to lightweight markers so the test targets
+ * The facet screens are mocked to lightweight markers that render the hub's
+ * pill row (passed down as `listHeader`) plus a body marker, so the test targets
  * hub behavior, not each facet's data fetching.
  */
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 
 jest.mock("react-native-safe-area-context", () => {
   const React = require("react");
@@ -55,23 +56,60 @@ jest.mock("../../components/SearchContent", () => {
 
 const mockOpenFilter = jest.fn();
 const mockOpenSort = jest.fn();
+const mockScrollToTop: Record<string, jest.Mock> = {
+  books: jest.fn(),
+  series: jest.fn(),
+  collections: jest.fn(),
+  playlists: jest.fn(),
+  authors: jest.fn(),
+};
+const mockOpenCreate: Record<string, jest.Mock> = {
+  collections: jest.fn(),
+  playlists: jest.fn(),
+};
+const mockMount: Record<string, jest.Mock> = {
+  books: jest.fn(),
+  series: jest.fn(),
+  collections: jest.fn(),
+  playlists: jest.fn(),
+  authors: jest.fn(),
+};
 
 jest.mock("../../screens/LibraryScreen", () => {
   const React = require("react");
-  const { Text } = require("react-native");
+  const { Text, Pressable } = require("react-native");
   return {
     __esModule: true,
     default: React.forwardRef((props: any, ref: any) => {
       React.useImperativeHandle(ref, () => ({
         openFilter: mockOpenFilter,
         openSort: mockOpenSort,
+        scrollToTop: mockScrollToTop.books,
       }));
+      React.useEffect(() => {
+        mockMount.books();
+      }, []);
       const p = props.route?.params || {};
-      return React.createElement(
-        Text,
-        null,
-        `BOOKS_BODY filter=${p.filter ?? "none"} order=${p.orderBy ?? "none"} desc=${String(p.descending ?? "none")}`
-      );
+      return React.createElement(React.Fragment, null, [
+        React.createElement(React.Fragment, { key: "h" }, props.listHeader),
+        React.createElement(
+          Text,
+          { key: "b" },
+          `BOOKS_BODY filter=${p.filter ?? "none"} order=${p.orderBy ?? "none"} desc=${String(
+            p.descending ?? "none"
+          )}`
+        ),
+        React.createElement(
+          Pressable,
+          { key: "seed", accessibilityLabel: "consume-seed", onPress: () => props.onSeedConsumed?.() },
+          React.createElement(Text, null, "consume")
+        ),
+        React.createElement(
+          Pressable,
+          { key: "sc", accessibilityLabel: "books-emit-scroll", onPress: () => props.onScroll?.(700) },
+          React.createElement(Text, null, "emit")
+        ),
+      ]);
     }),
   };
 });
@@ -81,9 +119,18 @@ jest.mock("../../screens/SeriesListScreen", () => {
   const { Text } = require("react-native");
   return {
     __esModule: true,
-    default: React.forwardRef((_props: any, ref: any) => {
-      React.useImperativeHandle(ref, () => ({ openSort: mockOpenSort }));
-      return React.createElement(Text, null, "SERIES_BODY");
+    default: React.forwardRef((props: any, ref: any) => {
+      React.useImperativeHandle(ref, () => ({
+        openSort: mockOpenSort,
+        scrollToTop: mockScrollToTop.series,
+      }));
+      React.useEffect(() => {
+        mockMount.series();
+      }, []);
+      return React.createElement(React.Fragment, null, [
+        React.createElement(React.Fragment, { key: "h" }, props.listHeader),
+        React.createElement(Text, { key: "b" }, "SERIES_BODY"),
+      ]);
     }),
   };
 });
@@ -93,9 +140,20 @@ jest.mock("../../screens/CollectionsPlaylistsScreen", () => {
   const { Text } = require("react-native");
   return {
     __esModule: true,
-    default: React.forwardRef((_props: any, _ref: any) =>
-      React.createElement(Text, null, "COLLECTIONS_BODY")
-    ),
+    default: React.forwardRef((props: any, ref: any) => {
+      const mode = props.mode;
+      React.useImperativeHandle(ref, () => ({
+        scrollToTop: mockScrollToTop[mode],
+        openCreate: mockOpenCreate[mode],
+      }));
+      React.useEffect(() => {
+        mockMount[mode]();
+      }, [mode]);
+      return React.createElement(React.Fragment, null, [
+        React.createElement(React.Fragment, { key: "h" }, props.listHeader),
+        React.createElement(Text, { key: "b" }, `COLLECTIONS_BODY mode=${mode}`),
+      ]);
+    }),
   };
 });
 
@@ -104,9 +162,18 @@ jest.mock("../../screens/AuthorsScreen", () => {
   const { Text } = require("react-native");
   return {
     __esModule: true,
-    default: React.forwardRef((_props: any, ref: any) => {
-      React.useImperativeHandle(ref, () => ({ openSort: mockOpenSort }));
-      return React.createElement(Text, null, "AUTHORS_BODY");
+    default: React.forwardRef((props: any, ref: any) => {
+      React.useImperativeHandle(ref, () => ({
+        openSort: mockOpenSort,
+        scrollToTop: mockScrollToTop.authors,
+      }));
+      React.useEffect(() => {
+        mockMount.authors();
+      }, []);
+      return React.createElement(React.Fragment, null, [
+        React.createElement(React.Fragment, { key: "h" }, props.listHeader),
+        React.createElement(Text, { key: "b" }, "AUTHORS_BODY"),
+      ]);
     }),
   };
 });
@@ -118,9 +185,26 @@ import { storage, storageHelper } from "../../utils/storage";
 const initialUi = useUiStore.getState();
 
 function makeNavigation() {
-  const navigation: any = { navigate: jest.fn(), goBack: jest.fn(), addListener: jest.fn(() => jest.fn()) };
+  const handlers: Record<string, any> = {};
+  const navigation: any = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    setParams: jest.fn(),
+    isFocused: jest.fn(() => true),
+    addListener: jest.fn((event: string, cb: any) => {
+      handlers[event] = cb;
+      return jest.fn();
+    }),
+    __handlers: handlers,
+  };
   navigation.getParent = jest.fn(() => navigation);
   return navigation;
+}
+
+function layerDisplay(key: string): string | undefined {
+  return (
+    screen.getByTestId(`facet-layer-${key}`, { includeHiddenElements: true }).props.style || {}
+  ).display;
 }
 
 beforeEach(() => {
@@ -129,33 +213,51 @@ beforeEach(() => {
 });
 
 describe("LibraryHubScreen", () => {
-  it("renders all four segments and defaults to the Books facet", async () => {
+  it("renders all five segments and defaults to the Books facet", async () => {
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
 
-    // Segment labels
+    // Segment labels (the pill row is rendered by the active facet's header).
     expect(screen.getByText("Books")).toBeTruthy();
     expect(screen.getByText("Series")).toBeTruthy();
     expect(screen.getByText("Collections")).toBeTruthy();
+    expect(screen.getByText("Playlists")).toBeTruthy();
     expect(screen.getByText("Authors")).toBeTruthy();
 
-    // Default body is Books
+    // Default body is Books; other facets are lazy (not mounted yet).
     expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
     expect(screen.queryByText("SERIES_BODY")).toBeNull();
   });
 
-  it("switching segments swaps the embedded facet body", async () => {
+  it("keeps facets mounted across segment switches (no unmount / refetch)", async () => {
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
-    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+    expect(mockMount.books).toHaveBeenCalledTimes(1);
 
     await fireEvent.press(screen.getByText("Series"));
     expect(screen.getByText("SERIES_BODY")).toBeTruthy();
-    expect(screen.queryByText(/BOOKS_BODY/)).toBeNull();
+    expect(mockMount.series).toHaveBeenCalledTimes(1);
 
-    await fireEvent.press(screen.getByText("Authors"));
-    expect(screen.getByText("AUTHORS_BODY")).toBeTruthy();
+    await fireEvent.press(screen.getByText("Books"));
+
+    // Both facets are still mounted (Books never re-mounted → never refetched
+    // page 0). Only the active layer is shown.
+    expect(mockMount.books).toHaveBeenCalledTimes(1);
+    expect(mockMount.series).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+    // The Series body is still in the tree (kept mounted), just hidden behind
+    // the now-inactive display:none layer.
+    expect(screen.getByText("SERIES_BODY", { includeHiddenElements: true })).toBeTruthy();
+    expect(layerDisplay("books")).toBe("flex");
+    expect(layerDisplay("series")).toBe("none");
+  });
+
+  it("promotes Playlists to a top-level segment", async () => {
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+
+    await fireEvent.press(screen.getByText("Playlists"));
+    expect(screen.getByText("COLLECTIONS_BODY mode=playlists")).toBeTruthy();
 
     await fireEvent.press(screen.getByText("Collections"));
-    expect(screen.getByText("COLLECTIONS_BODY")).toBeTruthy();
+    expect(screen.getByText("COLLECTIONS_BODY mode=collections")).toBeTruthy();
   });
 
   it("persists the selected segment to storage", async () => {
@@ -176,7 +278,6 @@ describe("LibraryHubScreen", () => {
   });
 
   it("a Books filter/sort deep-link lands on Books with the seed applied", async () => {
-    // Even with a persisted 'authors' segment, a filter/sort deep-link forces Books.
     storageHelper.setLibraryHubSegment("authors");
     await render(
       <LibraryHubScreen
@@ -189,12 +290,25 @@ describe("LibraryHubScreen", () => {
     ).toBeTruthy();
   });
 
+  it("clears the Books seed once the facet reports it consumed", async () => {
+    await render(
+      <LibraryHubScreen
+        route={{ params: { filter: "genres.QUJD", orderBy: "title", descending: false } }}
+        navigation={makeNavigation()}
+      />
+    );
+    expect(
+      screen.getByText("BOOKS_BODY filter=genres.QUJD order=title desc=false")
+    ).toBeTruthy();
+
+    // The embedded Books facet applies the seed and reports back — the hub drops
+    // it so a later remount/search-toggle can't revert the user's chosen sort.
+    await fireEvent.press(screen.getByLabelText("consume-seed"));
+    expect(screen.getByText("BOOKS_BODY filter=none order=none desc=none")).toBeTruthy();
+  });
+
   it("clears consumed route params so a sticky seed can't re-force Books later", async () => {
-    // React Navigation merges + keeps tab params sticky; the hub must clear the
-    // ones it consumes, or a one-off deep-link seed would keep forcing Books
-    // (and override a later `segment` param) on every remount.
     const navigation = makeNavigation();
-    navigation.setParams = jest.fn();
     await render(
       <LibraryHubScreen
         route={{ params: { filter: "genres.QUJD", orderBy: "title", descending: false } }}
@@ -211,29 +325,77 @@ describe("LibraryHubScreen", () => {
 
   it("does not call setParams when there were no params to consume", async () => {
     const navigation = makeNavigation();
-    navigation.setParams = jest.fn();
     await render(<LibraryHubScreen route={{ params: {} }} navigation={navigation} />);
     expect(navigation.setParams).not.toHaveBeenCalled();
   });
 
   it("contextual TopAppBar actions drive the active facet (Books filter, Series sort)", async () => {
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
-    // Books: both filter + sort available
     await fireEvent.press(screen.getByLabelText("Filter"));
     expect(mockOpenFilter).toHaveBeenCalledTimes(1);
 
-    // Series: only sort; the sort button routes into the series facet's handle
     await fireEvent.press(screen.getByText("Series"));
     expect(screen.queryByLabelText("Filter")).toBeNull();
     await fireEvent.press(screen.getByLabelText("Sort"));
     expect(mockOpenSort).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the shared search overlay when search is active", async () => {
+  it("overlays search above the still-mounted active facet", async () => {
     useUiStore.setState({ isSearchActive: true } as any);
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
     expect(screen.getByText("SEARCH_OVERLAY")).toBeTruthy();
-    // Segment control + facet body are hidden behind the overlay
-    expect(screen.queryByText(/BOOKS_BODY/)).toBeNull();
+    // The Books facet stays mounted underneath the overlay (survives the toggle).
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+  });
+
+  it("re-tapping the focused Library tab scrolls the active facet to top", async () => {
+    const navigation = makeNavigation();
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={navigation} />);
+
+    await act(async () => {
+      navigation.__handlers.tabPress();
+    });
+    expect(mockScrollToTop.books).toHaveBeenCalledTimes(1);
+
+    await fireEvent.press(screen.getByText("Series"));
+    await act(async () => {
+      navigation.__handlers.tabPress();
+    });
+    expect(mockScrollToTop.series).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not scroll-to-top on tabPress while search is active", async () => {
+    useUiStore.setState({ isSearchActive: true } as any);
+    const navigation = makeNavigation();
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={navigation} />);
+    await act(async () => {
+      navigation.__handlers.tabPress();
+    });
+    expect(mockScrollToTop.books).not.toHaveBeenCalled();
+  });
+
+  it("shows a scroll-to-top FAB once the active list is scrolled down", async () => {
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    expect(screen.queryByLabelText("Scroll to top")).toBeNull();
+
+    await fireEvent.press(screen.getByLabelText("books-emit-scroll"));
+    const fab = screen.getByLabelText("Scroll to top");
+    expect(fab).toBeTruthy();
+
+    await fireEvent.press(fab);
+    expect(mockScrollToTop.books).toHaveBeenCalled();
+  });
+
+  it("shows a create FAB only on the collections/playlists segments", async () => {
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    expect(screen.queryByLabelText("Create new collection")).toBeNull();
+
+    await fireEvent.press(screen.getByText("Collections"));
+    await fireEvent.press(screen.getByLabelText("Create new collection"));
+    expect(mockOpenCreate.collections).toHaveBeenCalledTimes(1);
+
+    await fireEvent.press(screen.getByText("Playlists"));
+    await fireEvent.press(screen.getByLabelText("Create new playlist"));
+    expect(mockOpenCreate.playlists).toHaveBeenCalledTimes(1);
   });
 });

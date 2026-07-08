@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef, forwardRef, useImperativeHandle } from "react";
 import {
   View,
   Text,
@@ -65,10 +65,11 @@ function lastName(name: string): string {
 
 export interface AuthorsScreenHandle {
   openSort: () => void;
+  scrollToTop: () => void;
 }
 
 function AuthorsScreen(
-  { navigation, embedded }: any,
+  { navigation, embedded, listHeader, onScroll }: any,
   ref: React.Ref<AuthorsScreenHandle>
 ) {
   const colors = useThemeColors();
@@ -92,7 +93,15 @@ function AuthorsScreen(
     savedSettings?.mobileAuthorsOrderDesc ?? false
   );
   const [sortOpen, setSortOpen] = useState(false);
-  useImperativeHandle(ref, () => ({ openSort: () => setSortOpen(true) }), []);
+  const listRef = useRef<FlatList>(null);
+  useImperativeHandle(
+    ref,
+    () => ({
+      openSort: () => setSortOpen(true),
+      scrollToTop: () => listRef.current?.scrollToOffset({ offset: 0, animated: true }),
+    }),
+    []
+  );
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -355,28 +364,43 @@ function AuthorsScreen(
   const content =
     loading && authors.length === 0 ? (
       // Square tiles to match the real author cards (no snap on arrival).
-      <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
+      <>
+        {listHeader}
+        <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
+      </>
     ) : loadError && authors.length === 0 ? (
-      <ErrorState
-        style={{ flex: 1 }}
-        title="Couldn't load authors"
-        message="Check your connection to the server and try again."
-        onRetry={fetchAuthors}
-      />
-      ) : authors.length === 0 ? (
-        <EmptyState
+      <>
+        {listHeader}
+        <ErrorState
           style={{ flex: 1 }}
-          icon="authors"
-          title="No authors found"
-          message="No authors have been added to this library yet."
+          title="Couldn't load authors"
+          message="Check your connection to the server and try again."
+          onRetry={fetchAuthors}
         />
+      </>
+      ) : authors.length === 0 ? (
+        <>
+          {listHeader}
+          <EmptyState
+            style={{ flex: 1 }}
+            icon="authors"
+            title="No authors found"
+            message="No authors have been added to this library yet."
+          />
+        </>
       ) : (
         <FlatList
+          ref={listRef}
           key={`authors-grid-${numColumns}`}
           data={sortedAuthors}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
           numColumns={numColumns}
+          // The hub passes the segment pill row as a non-sticky list header; a
+          // grid header must span the full row.
+          ListHeaderComponent={listHeader ? <View style={{ width: "100%" }}>{listHeader}</View> : null}
+          onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={16}
           // gap (not space-between) so an incomplete last row packs left
           // instead of stretching across the width.
           columnWrapperStyle={{ gap: CARD_GAP }}
