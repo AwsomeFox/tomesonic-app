@@ -61,10 +61,11 @@ interface Series {
 
 export interface SeriesListScreenHandle {
   openSort: () => void;
+  scrollToTop: () => void;
 }
 
 function SeriesListScreen(
-  { navigation, embedded }: any,
+  { navigation, embedded, listHeader, onScroll }: any,
   ref: React.Ref<SeriesListScreenHandle>
 ) {
   const colors = useThemeColors();
@@ -94,7 +95,15 @@ function SeriesListScreen(
     savedSettings?.mobileSeriesOrderDesc ?? false
   );
   const [sortOpen, setSortOpen] = useState(false);
-  useImperativeHandle(ref, () => ({ openSort: () => setSortOpen(true) }), []);
+  const listRef = useRef<FlatList>(null);
+  useImperativeHandle(
+    ref,
+    () => ({
+      openSort: () => setSortOpen(true),
+      scrollToTop: () => listRef.current?.scrollToOffset({ offset: 0, animated: true }),
+    }),
+    []
+  );
   // Cover books fetched lazily per-series when the series payload omits `books`.
   const [coverBooksMap, setCoverBooksMap] = useState<Record<string, SeriesBook[]>>({});
   const fetchingCoversRef = useRef<Set<string>>(new Set());
@@ -409,31 +418,47 @@ function SeriesListScreen(
       {isSearchActive && !embedded ? (
         <SearchContent navigation={navigation} />
       ) : initialLoading ? (
-        <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
+        <>
+          {listHeader}
+          <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
+        </>
       ) : loadError && seriesList.length === 0 ? (
-        <ErrorState
-          style={{ flex: 1 }}
-          title="Couldn't load series"
-          message="Check your connection to the server and try again."
-          onRetry={() => fetchSeries(0, true)}
-        />
+        <>
+          {listHeader}
+          <ErrorState
+            style={{ flex: 1 }}
+            title="Couldn't load series"
+            message="Check your connection to the server and try again."
+            onRetry={() => fetchSeries(0, true)}
+          />
+        </>
       ) : seriesList.length === 0 ? (
-        <EmptyState
-          style={{ flex: 1 }}
-          icon="series"
-          title="No series found"
-          message="No series have been created in this library yet."
-        />
+        <>
+          {listHeader}
+          <EmptyState
+            style={{ flex: 1 }}
+            icon="series"
+            title="No series found"
+            message="No series have been created in this library yet."
+          />
+        </>
       ) : (
         /* Grid — flex flex-wrap justify-center, p-4 */
         <FlatList
+          ref={listRef}
           key={`series-grid-${numColumns}`}
           data={seriesList}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
           numColumns={numColumns}
+          // The hub passes the segment pill row as a non-sticky list header. A
+          // grid header must span the full row, so wrap it to break out of the
+          // column layout.
+          ListHeaderComponent={listHeader ? <View style={{ width: "100%" }}>{listHeader}</View> : null}
+          onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={16}
           columnWrapperStyle={{ justifyContent: "space-evenly", paddingHorizontal: 8 }}
-          contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32, paddingTop: 8 }}
+          contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32, paddingTop: 4 }}
           onEndReached={handleLoadMore}
           onEndReachedThreshold={0.5}
           ListFooterComponent={renderFooter}

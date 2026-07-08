@@ -66,6 +66,27 @@ jest.mock("react-native-reanimated", () => {
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
+jest.mock("../../utils/audible", () => ({
+  audibleSeriesAsinFromBook: jest.fn().mockResolvedValue(null),
+  audibleFindSeriesAsin: jest.fn().mockResolvedValue(null),
+  audibleSeriesBooks: jest.fn().mockResolvedValue([]),
+  buildOwnedTitleMatcher: jest.fn(() => () => false),
+  audibleBookDetails: jest.fn().mockResolvedValue(null),
+}));
+jest.mock("../../utils/rmab", () => ({
+  searchAuthors: jest.fn(),
+  getAuthorBooks: jest.fn(),
+  resolveRmabUrl: (p: any) => p || undefined,
+  rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
+  readRmabConfig: jest.fn(() => null),
+  writeRmabConfig: jest.fn(),
+  getMe: jest.fn(),
+  createRequest: jest.fn(),
+  getPendingApprovalCount: jest.fn().mockResolvedValue(0),
+  listMyRequests: jest.fn().mockResolvedValue([]),
+  clearRmabCaches: jest.fn(),
+  setRmabSessionDeadHandler: jest.fn(),
+}));
 
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react-native";
@@ -74,10 +95,12 @@ import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useRmabStore } from "../../store/useRmabStore";
 
 const initialUser = useUserStore.getState();
 const initialLibrary = useLibraryStore.getState();
 const initialPlayback = usePlaybackStore.getState();
+const initialRmab = useRmabStore.getState();
 
 const LONG_DESC =
   "An epic multi-generational saga that sweeps across continents and decades, " +
@@ -163,6 +186,7 @@ beforeEach(() => {
   useUserStore.setState(initialUser, true);
   useLibraryStore.setState(initialLibrary, true);
   usePlaybackStore.setState(initialPlayback, true);
+  useRmabStore.setState(initialRmab, true);
   useUserStore.setState({
     serverConnectionConfig: { address: "https://abs.example.com", token: "tok" },
   } as any);
@@ -310,5 +334,101 @@ describe("SeriesDetailScreen", () => {
     await renderSeries();
 
     expect(await screen.findByText("No books in this series")).toBeTruthy();
+  });
+});
+
+describe("SeriesDetailScreen — re-release dedup (same sequence collapses)", () => {
+  // Each sequence appears twice (re-releases: same sequence, different id).
+  const mk = (over: any) => ({
+    mediaType: "book",
+    userMediaProgress: null,
+    ...over,
+    media: {
+      metadata: { authorName: "Author X", series: [{ id: "ser1", sequence: over.seq }], ...over.meta },
+      duration: 3600,
+      numTracks: 3,
+      ...over.media,
+    },
+  });
+  const DUP_ITEMS = [
+    // seq 1: the copy WITH progress wins over the one without.
+    mk({ id: "s1a", seq: "1", meta: { title: "Old One" }, addedAt: 100 }),
+    mk({ id: "s1b", seq: "1", meta: { title: "New One" }, userMediaProgress: { progress: 0.5 }, addedAt: 50 }),
+    // seq 2: neither has progress → the downloaded copy wins.
+    mk({ id: "s2a", seq: "2", meta: { title: "Plain Two" }, addedAt: 10 }),
+    mk({ id: "s2b", seq: "2", meta: { title: "Downloaded Two" }, isLocal: true, addedAt: 5 }),
+    // seq 3: neither progress nor download → the newest (addedAt) wins.
+    mk({ id: "s3a", seq: "3", meta: { title: "Older Three" }, addedAt: 1 }),
+    mk({ id: "s3b", seq: "3", meta: { title: "Newer Three" }, addedAt: 999 }),
+  ];
+
+  it("collapses each sequence to the progress/downloaded/newest representative and recomputes header stats", async () => {
+    mockSeriesApi({ items: DUP_ITEMS });
+    const navigation = await renderSeries();
+    await screen.findByText("#1 New One");
+
+    // One row per sequence — the losing re-releases are gone.
+    const rows = screen.getAllByText(/^#\d /);
+    expect(rows.map((r) => r.props.children)).toEqual(["#1 New One", "#2 Downloaded Two", "#3 Newer Three"]);
+    expect(screen.queryByText("#1 Old One")).toBeNull();
+    expect(screen.queryByText("#2 Plain Two")).toBeNull();
+    expect(screen.queryByText("#3 Older Three")).toBeNull();
+
+    // Header stats come from the DEDUPED list (3 books · 3h), not the raw 6.
+    expect(screen.getByText(/3 books\s+·\s+3 hr 0 min/)).toBeTruthy();
+
+    // Continue targets the deduped nextUnfinished — the progress-bearing s1b.
+    await fireEvent.press(screen.getByText("Continue"));
+    expect(startPlayback).toHaveBeenCalledWith("s1b");
+  });
+
+  it("never collapses blank/whitespace sequences — each stays its own entry", async () => {
+    const BLANK_ITEMS = [
+      mk({ id: "n1", seq: "", meta: { title: "Blank A" }, addedAt: 1 }),
+      mk({ id: "n2", seq: "", meta: { title: "Blank B" }, addedAt: 2 }),
+    ];
+    mockSeriesApi({ items: BLANK_ITEMS });
+    await renderSeries();
+
+    // Both survive despite sharing an (empty) sequence.
+    expect(await screen.findByText("Blank A")).toBeTruthy();
+    expect(screen.getByText("Blank B")).toBeTruthy();
+    expect(screen.getByText(/2 books/)).toBeTruthy();
+  });
+
+  it("never collapses whitespace-only sequences and the header count reflects it", async () => {
+    // Whitespace sequences must trim to empty (→ un-collapsed). Without the
+    // .trim(), "  " would key together and wrongly collapse both into one.
+    const WS_ITEMS = [
+      mk({ id: "w1", seq: "  ", meta: { title: "Space A" }, addedAt: 1 }),
+      mk({ id: "w2", seq: "\t", meta: { title: "Space B" }, addedAt: 2 }),
+    ];
+    mockSeriesApi({ items: WS_ITEMS });
+    await renderSeries();
+
+    // Both entries stay distinct despite whitespace-only sequences.
+    expect(await screen.findByText(/Space A/)).toBeTruthy();
+    expect(screen.getByText(/Space B/)).toBeTruthy();
+    // Header bookCount reflects the (un-collapsed) deduped list of 2.
+    expect(screen.getByText(/2 books/)).toBeTruthy();
+  });
+});
+
+describe("SeriesDetailScreen — missing-books section on empty series", () => {
+  const { audibleFindSeriesAsin, audibleSeriesBooks } = require("../../utils/audible");
+
+  it("offers the discovery/Request affordance even when nothing is owned", async () => {
+    mockSeriesApi({ items: [] });
+    useRmabStore.setState({ configured: true, authMode: "jwt" } as any);
+    (audibleFindSeriesAsin as jest.Mock).mockResolvedValue("SER_ASIN");
+    (audibleSeriesBooks as jest.Mock).mockResolvedValue([
+      { asin: "M1", title: "Missing Volume", author: "Author X" },
+    ]);
+
+    await renderSeries();
+
+    expect(await screen.findByText("No books in this series")).toBeTruthy();
+    expect(await screen.findByText("Missing Volume")).toBeTruthy();
+    expect(screen.getByLabelText("Request Missing Volume")).toBeTruthy();
   });
 });

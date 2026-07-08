@@ -169,9 +169,12 @@ export async function restoreLocalNowPlayingMeta() {
 // nothing". Alert is the app's established feedback pattern; in headless
 // contexts (Android Auto) there's no activity, so it safely no-ops.
 function alertPlayFailure(message: string) {
+  // Themed Material 3 dialog. In headless contexts (Android Auto) there's no
+  // mounted React tree, so the <AppDialog/> host never renders — the state is
+  // set but nothing shows, the same safe no-op as before.
   try {
-    const { Alert } = require("react-native");
-    Alert.alert("Couldn't play", message);
+    const { showAppDialog } = require("./useDialogStore");
+    showAppDialog({ title: "Couldn't play", message });
   } catch {}
 }
 

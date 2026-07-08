@@ -11,6 +11,7 @@ import LibrarySelector from "./components/LibrarySelector";
 import ErrorBoundary from "./components/ErrorBoundary";
 import OfflineBanner from "./components/OfflineBanner";
 import RotationCurtain from "./components/RotationCurtain";
+import AppDialog from "./components/AppDialog";
 import { useUserStore } from "./store/useUserStore";
 import { useThemeStore } from "./store/useThemeStore";
 import { useThemeColors } from "./theme/useThemeColors";
@@ -43,8 +44,10 @@ function AppShell() {
       <PlayerBottomSheet />
       {user ? <CastController /> : null}
       {user ? <LibrarySelector /> : null}
-      {/* Last child = topmost: masks layout reflow during rotation. */}
+      {/* Masks layout reflow during rotation. */}
       <RotationCurtain />
+      {/* Themed Alert.alert replacement — last child so it sits above all. */}
+      <AppDialog />
     </View>
   );
 }

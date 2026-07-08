@@ -1,4 +1,5 @@
 import axios from "axios";
+import { authorsMatch } from "./bookMatch";
 
 /**
  * Audible's public catalog API — keyless, fast (~1-2s), and the same data
@@ -173,6 +174,42 @@ export async function audibleAuthorBooks(name: string): Promise<AudibleBook[]> {
     // Hard page cap hit on a FULL page — more almost certainly exists, so
     // the list must not present itself as the complete backlist.
     if (page === 4) (out as any).partial = true;
+  }
+  // The `author=` text filter is brittle: multi-author credits, "Last, First"
+  // ordering, or a name-format drift between the library and Audible's catalog
+  // can all yield zero products for an author who plainly has books. When that
+  // happens, fall back to a plain keyword search over the name and keep only
+  // rows that actually credit this author (authorsMatch). Best-effort — a
+  // fallback failure leaves the (empty) primary result untouched.
+  if (out.length === 0) {
+    try {
+      const res = await axios.get(`${BASE}/catalog/products`, {
+        params: {
+          keywords: name,
+          num_results: 50,
+          products_sort_by: "-ReleaseDate",
+          response_groups: GROUPS,
+        },
+        timeout: TIMEOUT,
+      });
+      const products = res.data?.products || [];
+      for (const p of products) {
+        const names = (p.authors || []).map((a: any) => a?.name).filter(Boolean);
+        // A keyword hit with no author overlap (or no listed authors) is noise.
+        if (!names.some((n: string) => authorsMatch(n, name))) continue;
+        const mapped = mapProduct(p);
+        if (mapped && inAppLanguage(mapped) && !seen.has(mapped.asin)) {
+          seen.add(mapped.asin);
+          out.push(mapped);
+        }
+      }
+      // The fallback is a single un-paginated page capped at 50; a full page
+      // means more matches likely exist, so flag partiality (same contract as
+      // the primary path) rather than presenting a truncated backlist as whole.
+      if (products.length >= 50) (out as any).partial = true;
+    } catch {
+      // Keep the empty primary result on a fallback failure.
+    }
   }
   return out;
 }

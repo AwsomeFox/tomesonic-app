@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, useWindowDimensions } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -7,6 +7,7 @@ import { api } from "../utils/api";
 import { queueFinishedPatch, queueProgressPatch } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { showAppDialog } from "../store/useDialogStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
@@ -246,14 +247,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       // A completed download must go through removeDownload (cancelDownload
       // only touches in-flight downloads and would silently no-op here).
       // Destructive — deletes the files — so confirm first.
-      Alert.alert(
-        "Delete download",
-        `Remove "${metadata.title || "this book"}" from this device? You can download it again later.`,
-        [
+      showAppDialog({
+        title: "Delete download",
+        message: `Remove "${metadata.title || "this book"}" from this device? You can download it again later.`,
+        buttons: [
           { text: "Cancel", style: "cancel" },
           { text: "Delete", style: "destructive", onPress: () => removeDownload(item.id) },
-        ]
-      );
+        ],
+      });
     } else if (isDownloading) {
       cancelDownload(item.id);
     } else if (isDownloadFailed) {
@@ -265,10 +266,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         refetchItem();
       } catch (err) {
         console.warn("[ItemDetail] Download failed:", err);
-        Alert.alert(
-          "Download failed",
-          "Couldn't start the download. Check your connection and free space, then try again."
-        );
+        showAppDialog({
+          title: "Download failed",
+          message: "Couldn't start the download. Check your connection and free space, then try again.",
+        });
       }
     }
   };

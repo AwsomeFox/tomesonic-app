@@ -60,6 +60,7 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
+import { Text } from "react-native";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import AuthorsScreen from "../../screens/AuthorsScreen";
 import { api } from "../../utils/api";
@@ -225,5 +226,17 @@ describe("AuthorsScreen", () => {
     await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Ann Leckie")).toBeTruthy();
+  });
+
+  it("renders the hub list header and exposes scrollToTop when embedded", async () => {
+    const ref = React.createRef<any>();
+    const navigation = makeNavigation();
+    await render(
+      <AuthorsScreen ref={ref} navigation={navigation} embedded listHeader={<Text>HUB_PILLS</Text>} />
+    );
+    expect(await screen.findByText("Ann Leckie")).toBeTruthy();
+    expect(screen.getByText("HUB_PILLS")).toBeTruthy();
+    expect(typeof ref.current.scrollToTop).toBe("function");
+    expect(typeof ref.current.openSort).toBe("function");
   });
 });

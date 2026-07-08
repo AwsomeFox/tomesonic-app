@@ -67,10 +67,11 @@ function formatAdded(ms?: number): string {
 export interface LibraryScreenHandle {
   openFilter: () => void;
   openSort: () => void;
+  scrollToTop: () => void;
 }
 
 function LibraryScreen(
-  { route, navigation, embedded, onFilterActiveChange }: any,
+  { route, navigation, embedded, onFilterActiveChange, listHeader, onScroll, onSeedConsumed }: any,
   ref: React.Ref<LibraryScreenHandle>
 ) {
   const colors = useThemeColors();
@@ -95,6 +96,7 @@ function LibraryScreen(
   const [startingId, setStartingId] = useState<string | null>(null);
   const isFetchingRef = useRef(false);
   const fetchIdRef = useRef(0);
+  const listRef = useRef<FlatList>(null);
   // Set when the server returns an empty page: with the hide-non-audiobooks
   // client filter active, items.length can stay below `total` forever, which
   // would otherwise make onEndReached refetch empty pages on every scroll-end.
@@ -119,18 +121,26 @@ function LibraryScreen(
   const [filterOpen, setFilterOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
 
+  // A deep-link seed (route filter/sort) applies AUTHORITATIVELY: when a new
+  // seed arrives — including on the embedded hub's already-mounted Books facet —
+  // every field the seed omits resets to the user's saved default, so a
+  // narrower re-seed (e.g. a filter-only genre link) can't leave a stale sort
+  // from a previous seed in place. Fields are still applied without persisting
+  // (a one-off view). Once applied we notify the hub so it can drop the seed and
+  // never re-apply it on a later remount/search-toggle (the sort-reversion bug).
   useEffect(() => {
-    if (routeFilter) {
-      setFilterBy(routeFilter);
-    }
-  }, [routeFilter]);
-
-  // A shelf tap re-navigates to this (already-mounted) tab with new sort
-  // params — apply them without persisting (a one-off view, like routeFilter).
-  useEffect(() => {
-    if (routeOrderBy) setOrderBy(routeOrderBy);
-    if (routeDescending !== undefined) setDescending(routeDescending);
-  }, [routeOrderBy, routeDescending]);
+    const hasSeed =
+      routeFilter !== undefined ||
+      routeOrderBy !== undefined ||
+      routeDescending !== undefined;
+    if (!hasSeed) return;
+    const saved = useUserStore.getState().settings;
+    setFilterBy(routeFilter ?? saved?.mobileFilterBy ?? "all");
+    setOrderBy(routeOrderBy ?? saved?.mobileOrderBy ?? "addedAt");
+    setDescending(routeDescending ?? saved?.mobileOrderDesc ?? true);
+    onSeedConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeFilter, routeOrderBy, routeDescending]);
 
   // Badge the filter icon when the view differs from the app default sort
   // (addedAt, descending) or has an active filter — otherwise a persisted
@@ -145,6 +155,7 @@ function LibraryScreen(
     () => ({
       openFilter: () => setFilterOpen(true),
       openSort: () => setSortOpen(true),
+      scrollToTop: () => listRef.current?.scrollToOffset({ offset: 0, animated: true }),
     }),
     []
   );
@@ -471,19 +482,27 @@ function LibraryScreen(
       {isSearchActive && !route.params?.showBack && !embedded ? (
         <SearchContent navigation={navigation} />
       ) : initialLoading ? (
-        <ListSkeleton rows={9} />
+        <>
+          {listHeader}
+          <ListSkeleton rows={9} />
+        </>
       ) : loadError && items.length === 0 ? (
-        <ErrorState
-          style={{ flex: 1 }}
-          title="Couldn't load your library"
-          message="Check your connection to the server and try again."
-          onRetry={() => fetchItems(0, true)}
-        />
+        <>
+          {listHeader}
+          <ErrorState
+            style={{ flex: 1 }}
+            title="Couldn't load your library"
+            message="Check your connection to the server and try again."
+            onRetry={() => fetchItems(0, true)}
+          />
+        </>
       ) : items.length === 0 ? (
-        <EmptyState
-          style={{ flex: 1 }}
-          icon="library"
-          title="No items found"
+        <>
+          {listHeader}
+          <EmptyState
+            style={{ flex: 1 }}
+            icon="library"
+            title="No items found"
           message={
             filterBy && filterBy !== "all"
               ? "Nothing in this library matches the current filter."
@@ -512,12 +531,19 @@ function LibraryScreen(
               </Pressable>
             ) : undefined
           }
-        />
+          />
+        </>
       ) : (
         <FlatList
+          ref={listRef}
           data={items}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
+          // The hub passes the segment pill row as a non-sticky list header so
+          // it scrolls away with the content (only for the active facet).
+          ListHeaderComponent={listHeader ?? null}
+          onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={16}
           // Generous spacing, no hard dividers (matches screenshot 05)
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32, paddingTop: 4 }}
           onEndReached={handleLoadMore}

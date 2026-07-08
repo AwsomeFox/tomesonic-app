@@ -103,6 +103,78 @@ describe("audibleAuthorBooks", () => {
   });
 });
 
+describe("audibleAuthorBooks keyword fallback", () => {
+  it("falls back to a keyword search when author= returns nothing, keeping only author-matched rows, deduped", async () => {
+    mockedGet
+      // The author= text filter finds nothing (name-format drift, multi-author).
+      .mockResolvedValueOnce({ data: { products: [] } })
+      // The keyword search returns a mixed bag; only author-matched rows survive.
+      .mockResolvedValueOnce({
+        data: {
+          products: [
+            { asin: "K1", title: "Real Book", authors: [{ name: "Jane Q. Author" }] },
+            { asin: "K1", title: "Dup ASIN", authors: [{ name: "Jane Q. Author" }] }, // deduped
+            {
+              asin: "K2",
+              title: "Coauthored",
+              authors: [{ name: "Someone Else" }, { name: "Jane Q. Author" }],
+            },
+            { asin: "K3", title: "Unrelated", authors: [{ name: "Nobody Relevant" }] }, // dropped
+            { asin: "K4", title: "No Authors Listed" }, // dropped — no author overlap
+          ],
+        },
+      });
+
+    const books = await audibleAuthorBooks("Jane Author");
+
+    // Primary author= query first, then the keyword fallback.
+    expect(mockedGet).toHaveBeenNthCalledWith(
+      1,
+      "https://api.audible.com/1.0/catalog/products",
+      expect.objectContaining({ params: expect.objectContaining({ author: "Jane Author" }) })
+    );
+    expect(mockedGet).toHaveBeenNthCalledWith(
+      2,
+      "https://api.audible.com/1.0/catalog/products",
+      expect.objectContaining({ params: expect.objectContaining({ keywords: "Jane Author" }) })
+    );
+    // Only the author-credited rows, deduped by ASIN, survive.
+    expect(books.map((b) => b.asin)).toEqual(["K1", "K2"]);
+  });
+
+  it("does NOT run the keyword fallback when the author= query already returned books", async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: { products: [{ asin: "A1", title: "Book", authors: [{ name: "Jane" }] }] },
+    });
+    const books = await audibleAuthorBooks("Jane");
+    expect(books.map((b) => b.asin)).toEqual(["A1"]);
+    expect(mockedGet).toHaveBeenCalledTimes(1); // no fallback call
+  });
+
+  it("a keyword-fallback failure leaves the empty list (no throw)", async () => {
+    mockedGet
+      .mockResolvedValueOnce({ data: { products: [] } })
+      .mockRejectedValueOnce(new Error("kw down"));
+    const books = await audibleAuthorBooks("Jane");
+    expect(books).toEqual([]);
+  });
+
+  it("flags the keyword fallback as partial when it returns a full 50-row page", async () => {
+    const full = Array.from({ length: 50 }, (_, i) => ({
+      asin: `K${i}`,
+      title: `Book ${i}`,
+      authors: [{ name: "Jane Author" }],
+    }));
+    mockedGet
+      .mockResolvedValueOnce({ data: { products: [] } }) // author= empty → fallback
+      .mockResolvedValueOnce({ data: { products: full } });
+    const books = await audibleAuthorBooks("Jane Author");
+    expect(books.length).toBe(50);
+    // A capped fallback page must not present itself as the complete backlist.
+    expect((books as any).partial).toBe(true);
+  });
+});
+
 describe("audibleAuthorBooks pagination", () => {
   const fullPage = (prefix: string) =>
     Array.from({ length: 50 }, (_, i) => ({ asin: `${prefix}${i}`, title: `Book ${prefix}${i}` }));

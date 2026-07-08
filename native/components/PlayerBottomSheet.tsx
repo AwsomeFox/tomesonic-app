@@ -11,7 +11,6 @@ import {
   AccessibilityInfo,
   findNodeHandle,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -26,6 +25,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { SPATIAL_SHEET, EMPHASIZED } from "../theme/motion";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { showAppDialog } from "../store/useDialogStore";
 import { useUserStore } from "../store/useUserStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -200,17 +200,17 @@ export default function PlayerBottomSheet() {
     (async () => {
       const target = await resolveEbookTarget(bookItemId);
       if (!target) {
-        Alert.alert("No ebook available", "This book doesn't have an ebook edition in your library.");
+        showAppDialog({ title: "No ebook available", message: "This book doesn't have an ebook edition in your library." });
         return;
       }
       const frac = readingFractionForAudioPosition(st.position, st.duration);
       const jump = canJumpToFraction(target.ebookFormat);
-      Alert.alert(
-        "Read from here?",
-        jump
+      showAppDialog({
+        title: "Read from here?",
+        message: jump
           ? `Open the ebook at about ${Math.round(frac * 100)}%? Position matching is approximate.`
           : "This ebook format can't jump to a position — it will open at your last reading spot.",
-        [
+        buttons: [
           { text: "Cancel", style: "cancel" },
           {
             text: "Read",
@@ -229,8 +229,8 @@ export default function PlayerBottomSheet() {
               }, 300);
             },
           },
-        ]
-      );
+        ],
+      });
     })();
   };
 

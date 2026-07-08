@@ -57,14 +57,18 @@ jest.mock("react-native-reanimated", () => {
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
+jest.mock("../../store/useDialogStore", () => ({
+  showAppDialog: jest.fn(),
+}));
 
 import React from "react";
-import { Alert, Linking } from "react-native";
+import { Linking } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import AccountScreen from "../../screens/AccountScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { showAppDialog } from "../../store/useDialogStore";
 import { storage, storageHelper } from "../../utils/storage";
 
 const initialUser = useUserStore.getState();
@@ -94,7 +98,7 @@ async function renderAccount() {
   return navigation;
 }
 
-let alertSpy: jest.SpyInstance;
+const alertSpy = showAppDialog as jest.Mock;
 
 beforeEach(() => {
   useUserStore.setState(initialUser, true);
@@ -104,13 +108,12 @@ beforeEach(() => {
     serverConnectionConfig: CONFIG,
   } as any);
   storageHelper.setServerConfig(CONFIG);
-  alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+  alertSpy.mockImplementation(() => {});
   (api.post as jest.Mock).mockResolvedValue({ data: {} });
   (api.patch as jest.Mock).mockResolvedValue({ data: {} });
 });
 
 afterEach(() => {
-  alertSpy.mockRestore();
   storage.getAllKeys().forEach((k) => storage.remove(k));
 });
 
@@ -149,15 +152,17 @@ describe("AccountScreen", () => {
 
     await fireEvent.press(screen.getByText("Switch Server/User"));
     expect(alertSpy).toHaveBeenCalledWith(
-      "Switch Server / User",
-      // The body must name the real data-loss consequence: logout wipes all
-      // downloaded books, not just the session.
-      expect.stringMatching(/deletes all downloaded books/i),
-      expect.any(Array)
+      expect.objectContaining({
+        title: "Switch Server / User",
+        // The body must name the real data-loss consequence: logout wipes all
+        // downloaded books, not just the session.
+        message: expect.stringMatching(/deletes all downloaded books/i),
+        buttons: expect.any(Array),
+      })
     );
-    expect(alertSpy.mock.calls[0][1]).toMatch(/re-download/i);
+    expect(alertSpy.mock.calls[0][0].message).toMatch(/re-download/i);
 
-    const buttons = alertSpy.mock.calls[0][2];
+    const buttons = alertSpy.mock.calls[0][0].buttons;
     const logOutBtn = buttons.find((b: any) => b.text === "Log Out");
     expect(logOutBtn).toBeTruthy();
     // Cancel button must not log out.
@@ -199,14 +204,18 @@ describe("AccountScreen", () => {
 
     // All empty -> error.
     await fireEvent.press(screen.getByText("Save"));
-    expect(alertSpy).toHaveBeenCalledWith("Error", "Please fill in all fields.");
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Error", message: "Please fill in all fields." })
+    );
 
     // Mismatch -> error, no PATCH.
     await fireEvent.changeText(inputs[0], "oldpass");
     await fireEvent.changeText(inputs[1], "newpass");
     await fireEvent.changeText(inputs[2], "different");
     await fireEvent.press(screen.getByText("Save"));
-    expect(alertSpy).toHaveBeenCalledWith("Error", "New passwords do not match.");
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Error", message: "New passwords do not match." })
+    );
     expect(api.patch).not.toHaveBeenCalled();
   });
 
@@ -226,7 +235,9 @@ describe("AccountScreen", () => {
       password: "oldpass",
       newPassword: "newpass",
     });
-    expect(alertSpy).toHaveBeenCalledWith("Success", "Password changed successfully!");
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Success", message: "Password changed successfully!" })
+    );
     // Modal closed -> inputs are gone (typed passwords not retained).
     expect(screen.queryByDisplayValue("oldpass")).toBeNull();
     expect(screen.queryByText("Save")).toBeNull();
@@ -247,7 +258,9 @@ describe("AccountScreen", () => {
     await fireEvent.press(screen.getByText("Save"));
     await act(async () => {});
 
-    expect(alertSpy).toHaveBeenCalledWith("Error", "Invalid password");
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Error", message: "Invalid password" })
+    );
     // Modal stays open for another attempt.
     expect(screen.getByDisplayValue("wrong")).toBeTruthy();
     expect(screen.getByText("Save")).toBeTruthy();
@@ -286,7 +299,9 @@ describe("AccountScreen", () => {
       expect(updateServerAddress).toHaveBeenCalledWith("https://moved.example.com")
     );
     // Success closes the modal and reassures the user their data is kept.
-    expect(alertSpy).toHaveBeenCalledWith("Server updated", expect.stringContaining("unchanged"));
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Server updated", message: expect.stringContaining("unchanged") })
+    );
   });
 
   it("surfaces an error when the in-place address change fails", async () => {
@@ -299,7 +314,9 @@ describe("AccountScreen", () => {
     await fireEvent.press(screen.getByLabelText("Save server address"));
 
     await waitFor(() =>
-      expect(alertSpy).toHaveBeenCalledWith("Couldn't update server", "Couldn't reach that server.")
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't update server", message: "Couldn't reach that server." })
+      )
     );
   });
 

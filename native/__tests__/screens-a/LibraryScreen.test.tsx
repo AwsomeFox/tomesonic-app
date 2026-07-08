@@ -93,6 +93,8 @@ jest.mock("../../utils/progressSync", () => ({
   closeSession: jest.fn().mockResolvedValue(undefined),
 }));
 
+import React from "react";
+import { Text } from "react-native";
 import LibraryScreen from "../../screens/LibraryScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
@@ -179,6 +181,29 @@ describe("LibraryScreen", () => {
     expect(url).toContain("sort=addedAt");
     expect(url).toContain("desc=1");
     expect(url).not.toContain("filter=");
+  });
+
+  it("seeds the initial sort from route orderBy/descending without persisting it", async () => {
+    // The Home hub routes here with an explicit sort (booksSeed). The seed must
+    // flow straight into the first items query — and, being a one-off view, must
+    // NOT be written back to the user's saved default via updateUserSettings.
+    const updateSpy = jest.fn().mockResolvedValue(undefined);
+    useUserStore.setState({ updateUserSettings: updateSpy } as any);
+    mockItemsPage([audioItem]);
+    const navigation = makeNavigation();
+    await render(
+      <LibraryScreen
+        route={{ params: { orderBy: "addedAt", descending: false } }}
+        navigation={navigation}
+      />
+    );
+    await screen.findByText("Audio Book One");
+
+    const url = mockedGet.mock.calls[0][0] as string;
+    expect(url).toContain("sort=addedAt");
+    expect(url).toContain("desc=0");
+    // A seed is a transient view — it must never persist as the saved default.
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 
   it("honors the route filter param in the query string", async () => {
@@ -330,5 +355,80 @@ describe("LibraryScreen", () => {
     await render(<LibraryScreen route={{ params: {} }} navigation={navigation} />);
     await screen.findByText("No items found");
     expect(screen.getByText("Your library is empty. Add some audiobooks to get started.")).toBeTruthy();
+  });
+
+  describe("embedded in the Library hub", () => {
+    it("renders the hub list header, exposes scrollToTop, and reports seed consumption", async () => {
+      mockItemsPage([audioItem]);
+      const onSeedConsumed = jest.fn();
+      const ref = React.createRef<any>();
+      const navigation = makeNavigation();
+      await render(
+        <LibraryScreen
+          ref={ref}
+          embedded
+          route={{ params: { orderBy: "title", descending: false } }}
+          navigation={navigation}
+          listHeader={<Text>HUB_PILLS</Text>}
+          onSeedConsumed={onSeedConsumed}
+        />
+      );
+      await screen.findByText("Audio Book One");
+
+      // Hub pill row is rendered inside the list; scrollToTop handle is exposed.
+      expect(screen.getByText("HUB_PILLS")).toBeTruthy();
+      expect(typeof ref.current.scrollToTop).toBe("function");
+      // The applied seed is reported back so the hub can drop it.
+      expect(onSeedConsumed).toHaveBeenCalled();
+    });
+
+    it("applies a re-seed AUTHORITATIVELY, resetting omitted fields to saved defaults", async () => {
+      // Saved default sort is title-ascending.
+      useUserStore.setState({
+        settings: {
+          ...useUserStore.getState().settings,
+          mobileFilterBy: "all",
+          mobileOrderBy: "title",
+          mobileOrderDesc: false,
+        },
+      } as any);
+      mockItemsPage([audioItem]);
+      const navigation = makeNavigation();
+      const { rerender } = await render(
+        <LibraryScreen
+          embedded
+          route={{ params: { orderBy: "addedAt", descending: true } }}
+          navigation={navigation}
+        />
+      );
+      await screen.findByText("Audio Book One");
+      expect(mockedGet.mock.calls[0][0]).toContain("sort=addedAt");
+      expect(mockedGet.mock.calls[0][0]).toContain("desc=1");
+      mockedGet.mockClear();
+
+      // A narrower re-seed (filter only) must reset the omitted sort fields back
+      // to the saved defaults rather than leaving the previous seed's sort.
+      await act(async () => {
+        rerender(
+          <LibraryScreen
+            embedded
+            route={{ params: { filter: "genres.QUJD" } }}
+            navigation={navigation}
+          />
+        );
+      });
+
+      await waitFor(
+        () => {
+          const urls = mockedGet.mock.calls.map((c) => String(c[0]));
+          expect(
+            urls.some(
+              (u) => u.includes("sort=title") && u.includes("desc=0") && u.includes("filter=genres.QUJD")
+            )
+          ).toBe(true);
+        },
+        { timeout: 5000 }
+      );
+    });
   });
 });

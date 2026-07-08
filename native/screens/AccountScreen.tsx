@@ -5,7 +5,6 @@ import {
   ScrollView,
   Pressable,
   Linking,
-  Alert,
   TextInput,
   Modal,
   ActivityIndicator,
@@ -14,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { showAppDialog } from "../store/useDialogStore";
 import { api } from "../utils/api";
 import Icon from "../components/Icon";
 
@@ -48,17 +48,17 @@ export default function AccountScreen({ navigation }: any) {
     serverConnectionConfig?.isOpenid === true;
 
   const handleSwitch = () => {
-    Alert.alert(
-      "Switch Server / User",
+    showAppDialog({
+      title: "Switch Server / User",
       // Name the real consequence: logout wipes every downloaded book and the
       // cached progress on this device (via removeAllDownloads), not just the
       // session. Without this, "you'll need to log in again" hid a data-loss trap.
-      "Logging out deletes all downloaded books and cached progress on this device. You'll need to sign in again and re-download them.",
-      [
+      message: "Logging out deletes all downloaded books and cached progress on this device. You'll need to sign in again and re-download them.",
+      buttons: [
         { text: "Cancel", style: "cancel" },
         { text: "Log Out", style: "destructive", onPress: () => logout() }
       ]
-    );
+    });
   };
 
   const [showAddressModal, setShowAddressModal] = React.useState(false);
@@ -77,9 +77,9 @@ export default function AccountScreen({ navigation }: any) {
       const res = await updateServerAddress(newAddress);
       if (res.ok) {
         setShowAddressModal(false);
-        Alert.alert("Server updated", "Your server address was updated. Your downloads and progress are unchanged.");
+        showAppDialog({ title: "Server updated", message: "Your server address was updated. Your downloads and progress are unchanged." });
       } else {
-        Alert.alert("Couldn't update server", res.error || "Please check the address and try again.");
+        showAppDialog({ title: "Couldn't update server", message: res.error || "Please check the address and try again." });
       }
     } finally {
       setSavingAddress(false);
@@ -103,11 +103,11 @@ export default function AccountScreen({ navigation }: any) {
 
   const handleChangePassword = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
-      Alert.alert("Error", "Please fill in all fields.");
+      showAppDialog({ title: "Error", message: "Please fill in all fields." });
       return;
     }
     if (newPassword !== confirmPassword) {
-      Alert.alert("Error", "New passwords do not match.");
+      showAppDialog({ title: "Error", message: "New passwords do not match." });
       return;
     }
     try {
@@ -116,12 +116,12 @@ export default function AccountScreen({ navigation }: any) {
         password: currentPassword,
         newPassword: newPassword,
       });
-      Alert.alert("Success", "Password changed successfully!");
+      showAppDialog({ title: "Success", message: "Password changed successfully!" });
       closePasswordModal();
     } catch (err: any) {
       console.warn("[Account] Change password failed:", err);
       const msg = err?.response?.data || err?.message || "Failed to update password.";
-      Alert.alert("Error", typeof msg === "string" ? msg : "Failed to change password. Make sure your current password is correct.");
+      showAppDialog({ title: "Error", message: typeof msg === "string" ? msg : "Failed to change password. Make sure your current password is correct." });
     } finally {
       setChangingPassword(false);
     }

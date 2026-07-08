@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef, forwardRef, useImperativeHandle } from "react";
 import {
   View,
   Text,
@@ -34,16 +34,33 @@ type Tab = "collections" | "playlists";
 
 const ROW_COVER = 72;
 
-// A plain component (no forwardRef): unlike the Books/Series/Authors facets,
-// this screen exposes no TopAppBar-driven actions to the Library hub — its
-// Collections/Playlists sub-tabs and create button live in the body — so the
-// hub renders it without a ref.
-function CollectionsPlaylistsScreen({ navigation, embedded }: any) {
+/**
+ * Imperative handle the Library-hub uses to scroll this facet to the top and to
+ * open the create-new dialog from the hub's shared FAB (the hub owns the FAB so
+ * it can position it above the mini-player on the collections/playlists
+ * segments).
+ */
+export interface CollectionsPlaylistsScreenHandle {
+  scrollToTop: () => void;
+  openCreate: () => void;
+}
+
+// In the Library hub this screen is mounted twice — once per segment — with a
+// locked `mode` ("collections" | "playlists") that seeds+pins its active tab.
+// Standalone (non-embedded) it renders its own Collections/Playlists sub-tab
+// row + inline create button and manages its own active tab.
+function CollectionsPlaylistsScreen(
+  { navigation, embedded, mode, listHeader, onScroll }: any,
+  ref: React.Ref<CollectionsPlaylistsScreenHandle>
+) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { currentLibraryId } = useLibraryStore();
   const { serverConnectionConfig } = useUserStore();
-  const [activeTab, setActiveTab] = useState<Tab>("collections");
+  const [internalTab, setInternalTab] = useState<Tab>("collections");
+  // A hub-supplied `mode` pins the tab; standalone uses the internal toggle.
+  const activeTab: Tab = (mode as Tab) ?? internalTab;
+  const scrollRef = useRef<ScrollView>(null);
   const [collections, setCollections] = useState<any[]>([]);
   const [playlists, setPlaylists] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -55,6 +72,21 @@ function CollectionsPlaylistsScreen({ navigation, embedded }: any) {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  const openCreate = useCallback(() => {
+    setNewName("");
+    setCreateError(null);
+    setCreateOpen(true);
+  }, []);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToTop: () => scrollRef.current?.scrollTo({ y: 0, animated: true }),
+      openCreate,
+    }),
+    [openCreate]
+  );
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -219,99 +251,102 @@ function CollectionsPlaylistsScreen({ navigation, embedded }: any) {
 
   const data = activeTab === "collections" ? collections : playlists;
 
-  const body =
-    isSearchActive && !embedded ? (
-      <SearchContent navigation={navigation} />
-    ) : (
-        <>
-          {/* Segmented toggle: Collections | Playlists (+ create button) */}
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              paddingHorizontal: 16,
-              paddingTop: 10,
-              paddingBottom: 6,
-            }}
-          >
-        <View
-          style={{
-            flex: 1,
-            flexDirection: "row",
-            borderWidth: 1,
-            borderColor: colors.outline,
-            borderRadius: 20,
-            overflow: "hidden",
-          }}
-        >
-          {(["collections", "playlists"] as Tab[]).map((tab, i) => {
-            const selected = activeTab === tab;
-            return (
-              <Pressable
-                key={tab}
-                onPress={() => setActiveTab(tab)}
-                android_ripple={{ color: colors.surfaceContainerHighest }}
-                accessibilityRole="tab"
-                accessibilityState={{ selected }}
+  // Collections | Playlists sub-tab row + inline create button. Rendered ONLY
+  // when standalone (!embedded) — inside the hub the segment lives in the top
+  // pill row and creating is driven by the hub's shared FAB via openCreate().
+  const subTabRow = (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 16,
+        paddingTop: 10,
+        paddingBottom: 6,
+      }}
+    >
+      <View
+        style={{
+          flex: 1,
+          flexDirection: "row",
+          borderWidth: 1,
+          borderColor: colors.outline,
+          borderRadius: 20,
+          overflow: "hidden",
+        }}
+      >
+        {(["collections", "playlists"] as Tab[]).map((tab, i) => {
+          const selected = activeTab === tab;
+          return (
+            <Pressable
+              key={tab}
+              onPress={() => setInternalTab(tab)}
+              android_ripple={{ color: colors.surfaceContainerHighest }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+              style={{
+                flex: 1,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                paddingVertical: 10,
+                backgroundColor: selected ? colors.secondaryContainer : "transparent",
+                borderLeftWidth: i === 1 ? 1 : 0,
+                borderLeftColor: colors.outline,
+              }}
+            >
+              <Icon
+                name={selected ? "check" : tab === "collections" ? "collections" : "list"}
+                size={18}
+                color={selected ? colors.onSecondaryContainer : colors.onSurfaceVariant}
+              />
+              <Text
                 style={{
-                  flex: 1,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  paddingVertical: 10,
-                  backgroundColor: selected ? colors.secondaryContainer : "transparent",
-                  borderLeftWidth: i === 1 ? 1 : 0,
-                  borderLeftColor: colors.outline,
+                  color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                  fontSize: 14,
+                  fontWeight: "500",
+                  marginLeft: 8,
                 }}
               >
-                <Icon
-                  name={selected ? "check" : tab === "collections" ? "collections" : "list"}
-                  size={18}
-                  color={selected ? colors.onSecondaryContainer : colors.onSurfaceVariant}
-                />
-                <Text
-                  style={{
-                    color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
-                    fontSize: 14,
-                    fontWeight: "500",
-                    marginLeft: 8,
-                  }}
-                >
-                  {tab === "collections" ? "Collections" : "Playlists"}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        {/* Create new (for the active tab) */}
-        <Pressable
-          onPress={() => {
-            setNewName("");
-            setCreateError(null);
-            setCreateOpen(true);
-          }}
-          android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), borderless: true, radius: 22 }}
-          accessibilityRole="button"
-          accessibilityLabel={`Create new ${activeTab === "collections" ? "collection" : "playlist"}`}
-          style={{
-            marginLeft: 10,
-            width: 42,
-            height: 42,
-            borderRadius: 21,
-            backgroundColor: colors.primary,
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="add" size={24} color={colors.onPrimary} />
-        </Pressable>
+                {tab === "collections" ? "Collections" : "Playlists"}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
-      {/* Content */}
-      {loading && data.length === 0 ? (
+      {/* Create new (for the active tab) */}
+      <Pressable
+        onPress={openCreate}
+        android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), borderless: true, radius: 22 }}
+        accessibilityRole="button"
+        accessibilityLabel={`Create new ${activeTab === "collections" ? "collection" : "playlist"}`}
+        style={{
+          marginLeft: 10,
+          width: 42,
+          height: 42,
+          borderRadius: 21,
+          backgroundColor: colors.primary,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Icon name="add" size={24} color={colors.onPrimary} />
+      </Pressable>
+    </View>
+  );
+
+  // When embedded, the hub's pill row is passed down as listHeader and rendered
+  // as the first child of the scroll body (so it collapses away with content);
+  // for the non-scrolling skeleton/error states it sits statically on top.
+  const content =
+    loading && data.length === 0 ? (
+      <>
+        {embedded ? listHeader : null}
         <ListSkeleton rows={7} thumb={72} />
-      ) : loadError && data.length === 0 ? (
+      </>
+    ) : loadError && data.length === 0 ? (
+      <>
+        {embedded ? listHeader : null}
         <ErrorState
           style={{ flex: 1 }}
           title={`Couldn't load ${activeTab}`}
@@ -321,38 +356,51 @@ function CollectionsPlaylistsScreen({ navigation, embedded }: any) {
             fetchData().finally(() => setLoading(false));
           }}
         />
-      ) : (
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: 6, paddingBottom: hasSession ? 100 : 32, flexGrow: 1 }}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.primary}
-              colors={[colors.primary]}
-              progressBackgroundColor={colors.surfaceContainerHigh}
-            />
-          }
-        >
-          {data.length > 0 ? (
-            data.map((item, index) => renderRow(item, index))
-          ) : (
-            <EmptyState
-              style={{ flex: 1 }}
-              icon={activeTab === "collections" ? "collections" : "list"}
-              title={`No ${activeTab} yet`}
-              message={
-                activeTab === "collections"
-                  ? "Collections you create on the server will show up here."
-                  : "Playlists you create will show up here."
-              }
-            />
-          )}
-        </ScrollView>
-      )}
-        </>
-      );
+      </>
+    ) : (
+      <ScrollView
+        ref={scrollRef}
+        style={{ flex: 1 }}
+        onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingTop: 4, paddingBottom: hasSession ? 100 : 32, flexGrow: 1 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+            progressBackgroundColor={colors.surfaceContainerHigh}
+          />
+        }
+      >
+        {embedded ? listHeader : null}
+        {data.length > 0 ? (
+          data.map((item, index) => renderRow(item, index))
+        ) : (
+          <EmptyState
+            style={{ flex: 1 }}
+            icon={activeTab === "collections" ? "collections" : "list"}
+            title={`No ${activeTab} yet`}
+            message={
+              activeTab === "collections"
+                ? "Collections you create on the server will show up here."
+                : "Playlists you create will show up here."
+            }
+          />
+        )}
+      </ScrollView>
+    );
+
+  const body =
+    isSearchActive && !embedded ? (
+      <SearchContent navigation={navigation} />
+    ) : (
+      <>
+        {!embedded ? subTabRow : null}
+        {content}
+      </>
+    );
 
   // Create collection/playlist dialog — always mounted (Modal is a portal).
   const createModal = (
@@ -472,7 +520,7 @@ function CollectionsPlaylistsScreen({ navigation, embedded }: any) {
   );
 }
 
-export default CollectionsPlaylistsScreen;
+export default forwardRef(CollectionsPlaylistsScreen);
 
 // Rounded square cover: single fills the square, otherwise a 2x2 collage over
 // a primary background (mirrors CollectionCover/PlaylistCover.vue).

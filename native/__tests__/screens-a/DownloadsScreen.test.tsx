@@ -6,7 +6,6 @@
  * wiring.
  */
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
-import { Alert } from "react-native";
 
 jest.mock("react-native-safe-area-context", () => {
   const React = require("react");
@@ -34,11 +33,15 @@ jest.mock("../../utils/progressSync", () => ({
   syncProgress: jest.fn().mockResolvedValue(undefined),
   closeSession: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock("../../store/useDialogStore", () => ({
+  showAppDialog: jest.fn(),
+}));
 
 import DownloadsScreen from "../../screens/DownloadsScreen";
 import { useDownloadStore } from "../../store/useDownloadStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
+import { showAppDialog } from "../../store/useDialogStore";
 
 const initialDownloads = useDownloadStore.getState();
 const initialPlayback = usePlaybackStore.getState();
@@ -170,22 +173,24 @@ describe("DownloadsScreen", () => {
     });
   });
 
-  it("delete goes through a confirm Alert before removeDownload", async () => {
+  it("delete goes through a confirm dialog before removeDownload", async () => {
     seed();
     const removeDownload = useDownloadStore.getState().removeDownload as jest.Mock;
-    const alertSpy = jest.spyOn(Alert, "alert");
+    const alertSpy = showAppDialog as jest.Mock;
     const navigation = makeNavigation();
     await render(<DownloadsScreen navigation={navigation} />);
 
     await fireEvent.press(screen.getByLabelText("Delete download of Audio DL"));
     expect(alertSpy).toHaveBeenCalledWith(
-      "Delete download",
-      expect.stringContaining("Audio DL"),
-      expect.any(Array)
+      expect.objectContaining({
+        title: "Delete download",
+        message: expect.stringContaining("Audio DL"),
+        buttons: expect.any(Array),
+      })
     );
     expect(removeDownload).not.toHaveBeenCalled(); // not before confirming
 
-    const buttons = alertSpy.mock.calls[0][2] as any[];
+    const buttons = alertSpy.mock.calls[0][0].buttons as any[];
     await act(async () => {
       buttons.find((b) => b.text === "Delete").onPress();
     });
@@ -214,16 +219,18 @@ describe("DownloadsScreen", () => {
     expect(screen.queryByLabelText("Retry download of Active Book")).toBeNull();
 
     // Cancelling a LIVE download is destructive (partial files are deleted)
-    // and now goes through a confirm Alert first.
-    const alertSpy = jest.spyOn(Alert, "alert");
+    // and now goes through a confirm dialog first.
+    const alertSpy = showAppDialog as jest.Mock;
     await fireEvent.press(screen.getByLabelText("Cancel download of Active Book"));
     expect(cancelDownload).not.toHaveBeenCalled(); // not before confirming
     expect(alertSpy).toHaveBeenCalledWith(
-      "Cancel download?",
-      expect.stringContaining("Active Book"),
-      expect.any(Array)
+      expect.objectContaining({
+        title: "Cancel download?",
+        message: expect.stringContaining("Active Book"),
+        buttons: expect.any(Array),
+      })
     );
-    const buttons = alertSpy.mock.calls[0][2] as any[];
+    const buttons = alertSpy.mock.calls[0][0].buttons as any[];
     await act(async () => {
       buttons.find((b) => b.text === "Cancel download").onPress();
     });
@@ -239,24 +246,26 @@ describe("DownloadsScreen", () => {
     expect(screen.queryByText(/Failed \(/)).toBeNull();
   });
 
-  it("Delete all goes through a confirm Alert before removeAllDownloads", async () => {
+  it("Delete all goes through a confirm dialog before removeAllDownloads", async () => {
     seed();
     const removeAllDownloads = useDownloadStore.getState().removeAllDownloads as jest.Mock;
-    const alertSpy = jest.spyOn(Alert, "alert");
+    const alertSpy = showAppDialog as jest.Mock;
     const navigation = makeNavigation();
     await render(<DownloadsScreen navigation={navigation} />);
 
     await fireEvent.press(screen.getByLabelText("Delete all downloads"));
     expect(alertSpy).toHaveBeenCalledWith(
-      "Delete all downloads",
-      // Copy must disclose the FULL scope: completed items AND the in-flight/
-      // failed downloads the wipe aborts (seed has 2 of each).
-      expect.stringContaining("2 downloaded items and cancel 2 in-progress/failed downloads"),
-      expect.any(Array)
+      expect.objectContaining({
+        title: "Delete all downloads",
+        // Copy must disclose the FULL scope: completed items AND the in-flight/
+        // failed downloads the wipe aborts (seed has 2 of each).
+        message: expect.stringContaining("2 downloaded items and cancel 2 in-progress/failed downloads"),
+        buttons: expect.any(Array),
+      })
     );
     expect(removeAllDownloads).not.toHaveBeenCalled(); // not before confirming
 
-    const buttons = alertSpy.mock.calls[0][2] as any[];
+    const buttons = alertSpy.mock.calls[0][0].buttons as any[];
     const destructive = buttons.find((b) => b.text === "Delete all");
     expect(destructive.style).toBe("destructive");
     await act(async () => {

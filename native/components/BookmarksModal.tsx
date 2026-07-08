@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, Alert } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
+import { showAppDialog } from "../store/useDialogStore";
 import Icon from "./Icon";
 import { api } from "../utils/api";
 import {
@@ -145,14 +146,14 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
   // Deleting a bookmark is destructive and irreversible offline — confirm first
   // (a mis-tap on the small delete affordance otherwise lost it silently).
   const deleteBookmark = (bm: Bookmark) => {
-    Alert.alert(
-      "Delete bookmark",
-      bm.title ? `Delete "${bm.title}"?` : "Delete this bookmark?",
-      [
+    showAppDialog({
+      title: "Delete bookmark",
+      message: bm.title ? `Delete "${bm.title}"?` : "Delete this bookmark?",
+      buttons: [
         { text: "Cancel", style: "cancel" },
         { text: "Delete", style: "destructive", onPress: () => performDeleteBookmark(bm) },
-      ]
-    );
+      ],
+    });
   };
 
   return (

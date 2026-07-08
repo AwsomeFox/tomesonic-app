@@ -236,6 +236,7 @@ function notifyRmabSessionExpired() {
 // keyed by (url, refreshToken) so a disconnect/reconnect mid-flight never
 // shares a stale refresh with a different connection.
 let _refreshInFlight: { key: string; promise: Promise<RmabConfig> } | null = null;
+
 function refreshAccessToken(cfg: RmabConfig): Promise<RmabConfig> {
   const key = `${cfg.url}::${cfg.refreshToken || ""}`;
   if (_refreshInFlight && _refreshInFlight.key === key) return _refreshInFlight.promise;
