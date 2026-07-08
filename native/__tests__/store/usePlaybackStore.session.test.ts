@@ -432,11 +432,53 @@ describe("usePlaybackStore sessions", () => {
         expect(TrackPlayer.add).not.toHaveBeenCalled();
       });
 
-      it("does not fall back for podcast episodes", async () => {
+      it("does not fall back for a non-downloaded podcast episode", async () => {
+        // Only the BOOK-style bare-key download exists — an episode play must
+        // not resolve it (episodes live under the composite key).
         mockPost.mockRejectedValue(new Error("Network Error"));
         useDownloadStore.setState({ completedDownloads: { item1: downloaded } });
         const ok = await usePlaybackStore.getState().startPlayback("item1", "ep1");
         expect(ok).toBe(false);
+      });
+
+      it("builds a local session from a DOWNLOADED episode (composite key)", async () => {
+        // Past the 2s duplicate-start window: a sibling test starts the same
+        // item1/ep1 at BASE, and the dedupe guard is module-scoped (not store
+        // state) so it survives the per-test reset.
+        jest.setSystemTime(BASE + 10_000);
+        mockPost.mockRejectedValue(new Error("Network Error"));
+        const epDownload = {
+          id: "item1::ep1",
+          libraryItemId: "item1",
+          episodeId: "ep1",
+          title: "Episode One",
+          author: "Podcaster",
+          coverUrl: "file:///downloads/item1::ep1/cover.jpg",
+          status: "completed",
+          localFolderPath: "file:///downloads/item1::ep1/",
+          parts: [{ id: "track_0", filename: "track_0.mp3", localFilePath: "/x/track_0.mp3" }],
+          meta: {
+            duration: 1800,
+            chapters: [],
+            tracks: [{ index: 0, filename: "track_0.mp3", duration: 1800, startOffset: 0 }],
+          },
+        } as any;
+        useDownloadStore.setState({ completedDownloads: { "item1::ep1": epDownload } });
+        // Episode progress lives under the composite `${itemId}-${episodeId}` key.
+        useUserStore.setState({
+          mediaProgress: { "item1-ep1": { libraryItemId: "item1", episodeId: "ep1", currentTime: 90 } },
+        } as any);
+
+        const ok = await usePlaybackStore.getState().startPlayback("item1", "ep1");
+
+        expect(ok).toBe(true);
+        const s = usePlaybackStore.getState();
+        expect(s.currentSession.id).toBe("local_item1::ep1");
+        expect(s.currentSession.episodeId).toBe("ep1");
+        expect(s.duration).toBe(1800);
+        expect(s.position).toBe(90); // resumes from the composite-keyed progress
+        // Queue built from the on-device episode file.
+        expect(addedTracks()[0].url).toBe("file:///downloads/item1::ep1/track_0.mp3");
       });
 
       it("returns false when nothing is downloaded", async () => {

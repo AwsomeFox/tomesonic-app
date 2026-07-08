@@ -37,6 +37,7 @@ jest.mock("../../utils/progressSync", () => ({
 jest.mock("../../utils/downloader", () => ({
   downloader: {
     downloadBook: jest.fn().mockResolvedValue(undefined),
+    downloadEpisode: jest.fn().mockResolvedValue(undefined),
     resumeDownload: jest.fn().mockResolvedValue(undefined),
     abortBookParts: jest.fn().mockResolvedValue(undefined),
     sweepOrphanFolders: jest.fn().mockResolvedValue(undefined),
@@ -444,12 +445,58 @@ describe("ItemDetailScreen", () => {
     expect(screen.getByText("Episode One")).toBeTruthy();
     expect(screen.getByText("Episode Two")).toBeTruthy();
 
-    // No Download button for podcasts, and a note explaining why (not a bug).
+    // No item-level Download button for podcasts (no item-level audio), and the
+    // old "aren't downloaded" note is gone now that episodes download per-row.
     expect(screen.queryByLabelText("Download")).toBeNull();
-    expect(screen.getByText(/Podcast episodes stream and aren't downloaded/)).toBeTruthy();
+    expect(screen.queryByText(/aren't downloaded/)).toBeNull();
+    // Each episode carries its own download control instead.
+    expect(screen.getByLabelText("Download Episode One")).toBeTruthy();
+    expect(screen.getByLabelText("Download Episode Two")).toBeTruthy();
 
     await fireEvent.press(screen.getByLabelText("Play Episode One"));
     await waitFor(() => expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1"));
+  });
+
+  it("podcast: per-episode download button triggers downloadEpisode and reflects downloaded/downloading state", async () => {
+    routeApi(podcastItem);
+    // ep1 already downloaded (composite key); ep2 mid-download.
+    useDownloadStore.setState({
+      completedDownloads: {
+        "pod1::ep1": { id: "pod1::ep1", libraryItemId: "pod1", episodeId: "ep1", title: "Episode One" },
+      },
+      activeDownloads: {
+        "pod1::ep2": {
+          id: "pod1::ep2",
+          libraryItemId: "pod1",
+          episodeId: "ep2",
+          title: "Episode Two",
+          status: "downloading",
+          progress: 0.42,
+        },
+      },
+    } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+
+    // ep1 downloaded → delete affordance; ep2 downloading → cancel affordance.
+    expect(screen.getByLabelText("Delete download of Episode One")).toBeTruthy();
+    expect(screen.getByLabelText(/Cancel download of Episode Two, 42 percent complete/)).toBeTruthy();
+
+    // A NOT-downloaded episode would show a plain Download control — swap the
+    // store to a clean slate and verify pressing it drives downloadEpisode.
+    useDownloadStore.setState({ completedDownloads: {}, activeDownloads: {} } as any);
+    await waitFor(() => expect(screen.getByLabelText("Download Episode One")).toBeTruthy());
+    await fireEvent.press(screen.getByLabelText("Download Episode One"));
+    await waitFor(() =>
+      expect(downloader.downloadEpisode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "pod1" }),
+        expect.objectContaining({ id: "ep1" }),
+        expect.any(String),
+        expect.any(String)
+      )
+    );
   });
 
   it("podcast: filters episodes by Unplayed / In-Progress against the progress map", async () => {

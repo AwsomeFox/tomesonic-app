@@ -220,6 +220,110 @@ describe("downloadBook — part list construction", () => {
   });
 });
 
+describe("downloadEpisode — podcast episode downloads", () => {
+  const podcastItem = () => ({
+    id: "pod1",
+    libraryId: "lib1",
+    media: {
+      coverPath: "/metadata/items/pod1/cover.jpg",
+      metadata: { title: "My Podcast", author: "Podcaster" },
+    },
+  });
+
+  const episode = () => ({
+    id: "ep1",
+    title: "Episode One",
+    duration: 1800,
+    audioTrack: { contentUrl: "/api/items/pod1/file/aud1", metadata: { ext: ".mp3", size: 5000 } },
+  });
+
+  it("stores the completed download under the composite `${itemId}::${episodeId}` key", async () => {
+    await downloader.downloadEpisode(podcastItem(), episode(), SERVER, TOKEN);
+
+    // Keyed by the composite, NOT the bare podcast id.
+    expect(useDownloadStore.getState().completedDownloads["pod1"]).toBeUndefined();
+    const done = useDownloadStore.getState().completedDownloads["pod1::ep1"];
+    expect(done).toBeTruthy();
+    expect(done.status).toBe("completed");
+    expect(done.progress).toBe(1);
+    expect(done.id).toBe("pod1::ep1");
+    expect(done.libraryItemId).toBe("pod1");
+    expect(done.episodeId).toBe("ep1");
+    expect(done.title).toBe("Episode One");
+    expect(done.author).toBe("Podcaster");
+    expect(done.localFolderPath).toBe("file:///test-documents/downloads/pod1::ep1_Episode_One/");
+  });
+
+  it("builds a cover + single track_0 audio part with the right urls/meta", async () => {
+    await downloader.downloadEpisode(podcastItem(), episode(), SERVER, TOKEN);
+    const done = useDownloadStore.getState().completedDownloads["pod1::ep1"];
+
+    expect(done.parts.map((p) => p.id)).toEqual(["cover", "track_0"]);
+    expect(done.parts.map((p) => p.filename)).toEqual(["cover.jpg", "track_0.mp3"]);
+    expect(done.parts.map((p) => p.fileSize)).toEqual([0, 5000]);
+    // Single-track meta, same shape a book records (offline builder maps it).
+    expect(done.meta).toEqual({
+      duration: 1800,
+      chapters: [],
+      tracks: [{ index: 0, filename: "track_0.mp3", duration: 1800, startOffset: 0 }],
+    });
+    expect(resumables.map((r) => r.url)).toEqual([
+      "http://abs.local/api/items/pod1/cover?token=tok1",
+      "http://abs.local/api/items/pod1/file/aud1?token=tok1",
+    ]);
+    for (const r of resumables) {
+      expect(r.options).toEqual({ headers: { Authorization: `Bearer ${TOKEN}` } });
+      expect(r.dest.startsWith("file:///test-documents/downloads/pod1::ep1_Episode_One/")).toBe(true);
+    }
+    expect(notifications.start).toHaveBeenCalledWith("pod1::ep1", "Episode One");
+    expect(notifications.complete).toHaveBeenCalledWith("pod1::ep1", "Episode One");
+  });
+
+  it("falls back to the ino-based file url + audioFile ext/duration when no audioTrack", async () => {
+    const ep = {
+      id: "ep2",
+      title: "E2",
+      audioFile: { ino: "ino5", duration: 600, metadata: { ext: ".m4a", size: 700 } },
+    };
+    await downloader.downloadEpisode(podcastItem(), ep, SERVER, TOKEN);
+    const done = useDownloadStore.getState().completedDownloads["pod1::ep2"];
+    expect(done.parts.map((p) => p.id)).toEqual(["cover", "track_0"]);
+    expect(done.parts[1]).toMatchObject({ filename: "track_0.m4a", fileSize: 700 });
+    expect(done.meta!.tracks[0]).toEqual({ index: 0, filename: "track_0.m4a", duration: 600, startOffset: 0 });
+    expect(resumables[1].url).toBe("http://abs.local/api/items/pod1/file/ino5?token=tok1");
+  });
+
+  it("ignores a duplicate start while the same episode is already downloading", async () => {
+    const gate = deferred<any>();
+    downloadImpl = () => gate.promise;
+
+    const first = downloader.downloadEpisode(podcastItem(), episode(), SERVER, TOKEN);
+    await until(() => resumables.length === 1);
+
+    await downloader.downloadEpisode(podcastItem(), episode(), SERVER, TOKEN);
+    expect(notifications.start).toHaveBeenCalledTimes(1);
+
+    gate.resolve({ uri: "x", status: 200 });
+    downloadImpl = async () => ({ uri: "x", status: 200 });
+    await first;
+    expect(useDownloadStore.getState().completedDownloads["pod1::ep1"]).toBeTruthy();
+  });
+
+  it("fails the episode entry (keyed by composite) when a part errors", async () => {
+    downloadImpl = async () => ({ uri: "x", status: 500 });
+    await downloader.downloadEpisode(podcastItem(), episode(), SERVER, TOKEN);
+    const failed = useDownloadStore.getState().activeDownloads["pod1::ep1"];
+    expect(failed.status).toBe("failed");
+    expect(failed.episodeId).toBe("ep1");
+  });
+
+  it("does nothing without an item/episode id", async () => {
+    await downloader.downloadEpisode({ media: {} }, { title: "x" }, SERVER, TOKEN);
+    expect(notifications.start).not.toHaveBeenCalled();
+    expect(resumables).toHaveLength(0);
+  });
+});
+
 describe("downloadBook — duplicate-start guard", () => {
   it("ignores a second start while a loop is already driving the book", async () => {
     const gate = deferred<any>();

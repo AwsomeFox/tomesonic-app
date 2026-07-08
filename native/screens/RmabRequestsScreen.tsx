@@ -14,6 +14,22 @@ import { useRmabStore } from "../store/useRmabStore";
 import { showAppDialog } from "../store/useDialogStore";
 import Pressable from "../components/HintPressable";
 
+// Statuses the RMAB server lets the REQUESTER cancel (mirrors the server's
+// CANCELLABLE_STATUSES in src/lib/constants/request-statuses.ts). Terminal /
+// fulfilled states are deliberately omitted — the server 400s ("Cannot cancel
+// request with status: …") on those, so we never offer the action for them.
+const CANCELLABLE_STATUSES = new Set([
+  "pending",
+  "searching",
+  "downloading",
+  "awaiting_search",
+  "awaiting_approval",
+  "awaiting_release",
+  // The screen treats this as an alias of awaiting_approval elsewhere.
+  "pending_approval",
+]);
+const isCancellable = (status?: string) => CANCELLABLE_STATUSES.has((status || "").toLowerCase());
+
 /** Friendly label + color role per RMAB request status. */
 function statusMeta(status: string, colors: any): { label: string; bg: string; fg: string } {
   switch ((status || "").toLowerCase()) {
@@ -61,7 +77,12 @@ export default function RmabRequestsScreen({ navigation }: any) {
   const isAdmin = useRmabStore((s) => s.isAdmin);
   const authMode = useRmabStore((s) => s.authMode);
   const refreshPendingCount = useRmabStore((s) => s.refreshPendingCount);
+  const cancelMyRequest = useRmabStore((s) => s.cancelMyRequest);
   const canManage = isAdmin && authMode === "jwt";
+  // When NOT an admin manager, /api/requests returns only the caller's own
+  // requests, so every row is theirs — offer requester self-cancel on the ones
+  // still in a cancellable state.
+  const canCancelOwn = !canManage;
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [detail, setDetail] = useState<any | null>(null);
@@ -125,6 +146,49 @@ export default function RmabRequestsScreen({ navigation }: any) {
     } finally {
       setActing(null);
     }
+  };
+
+  // Requester self-cancel: a themed confirm, then an optimistic row removal that
+  // reverts (and explains) if the server refuses — e.g. a 403 on a server that
+  // doesn't permit owner-cancel, or a 400 if the status left the cancellable
+  // window between render and tap.
+  const onCancelOwn = (item: any) => {
+    const id = String(item?.id ?? "");
+    if (!id) return;
+    const asin = item?.audiobook?.asin || item?.asin;
+    const title = item?.title || item?.audiobook?.title || "This request";
+    showAppDialog({
+      title: "Cancel request?",
+      message: `"${title}" will be withdrawn from ReadMeABook. You can request it again later.`,
+      buttons: [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Cancel request",
+          style: "destructive",
+          onPress: async () => {
+            // Snapshot for revert, then remove optimistically so the row leaves
+            // immediately on the happy path.
+            const snapshot = requests;
+            setActing(id);
+            setRequests((prev) => (prev || []).filter((r: any) => String(r?.id) !== id));
+            try {
+              const res = await cancelMyRequest(id, asin);
+              if (!res.ok) {
+                setRequests(snapshot);
+                showAppDialog({
+                  title: "Couldn't cancel",
+                  message:
+                    res.message ||
+                    "The request couldn't be cancelled. Check your connection and try again.",
+                });
+              }
+            } finally {
+              setActing(null);
+            }
+          },
+        },
+      ],
+    });
   };
 
   // Guards a focus/mount refetch against stacking a second in-flight load on
@@ -386,6 +450,33 @@ export default function RmabRequestsScreen({ navigation }: any) {
                     ) : null}
                   </Pressable>
                 ) : null}
+
+                {canCancelOwn && isCancellable(item?.status) ? (
+                  <Pressable
+                    onPress={() => onCancelOwn(item)}
+                    disabled={acting === id}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Cancel ${item?.title || item?.audiobook?.title || "request"}`}
+                    android_ripple={{ color: withAlpha(colors.error, 0.13) }}
+                    style={{
+                      marginLeft: 8,
+                      height: 36,
+                      borderRadius: 18,
+                      paddingHorizontal: 14,
+                      backgroundColor: withAlpha(colors.error, 0.08),
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexDirection: "row",
+                      opacity: acting === id ? 0.5 : 1,
+                    }}
+                  >
+                    <Icon name="close" size={16} color={colors.error} />
+                    <Text style={{ color: colors.error, fontSize: 13, fontWeight: "600", marginLeft: 4 }}>
+                      Cancel
+                    </Text>
+                  </Pressable>
+                ) : null}
               </View>
             );
           }}
@@ -551,6 +642,34 @@ export default function RmabRequestsScreen({ navigation }: any) {
                   <Icon name="trash" size={18} color={colors.error} />
                   <Text style={{ color: colors.error, fontSize: 14, fontWeight: "600", marginLeft: 6 }}>
                     Delete
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {canCancelOwn && isCancellable(detail.status) ? (
+              <View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 18 }}>
+                <Pressable
+                  onPress={() => {
+                    const item = detail;
+                    setDetail(null);
+                    onCancelOwn(item);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel request"
+                  android_ripple={{ color: withAlpha(colors.error, 0.13) }}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: withAlpha(colors.error, 0.08),
+                    borderRadius: 20,
+                    height: 40,
+                    paddingHorizontal: 18,
+                  }}
+                >
+                  <Icon name="close" size={18} color={colors.error} />
+                  <Text style={{ color: colors.error, fontSize: 14, fontWeight: "600", marginLeft: 6 }}>
+                    Cancel request
                   </Text>
                 </Pressable>
               </View>

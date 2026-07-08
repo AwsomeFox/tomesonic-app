@@ -13,7 +13,7 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
-import { useDownloadStore } from "../store/useDownloadStore";
+import { useDownloadStore, episodeDownloadKey } from "../store/useDownloadStore";
 import { downloader } from "../utils/downloader";
 import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
@@ -266,6 +266,42 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         refetchItem();
       } catch (err) {
         console.warn("[ItemDetail] Download failed:", err);
+        showAppDialog({
+          title: "Download failed",
+          message: "Couldn't start the download. Check your connection and free space, then try again.",
+        });
+      }
+    }
+  };
+
+  // Per-episode download control. Episodes are stored under the composite
+  // `${itemId}::${episodeId}` key (episodeDownloadKey); the four states mirror
+  // the book download button (download / cancel / retry / delete).
+  const handleEpisodeDownloadPress = async (episode: any) => {
+    if (!item?.id || !episode?.id) return;
+    const key = episodeDownloadKey(item.id, episode.id);
+    const active = useDownloadStore.getState().activeDownloads[key];
+    const completed = useDownloadStore.getState().completedDownloads[key];
+    if (completed && !active) {
+      // A completed download must go through removeDownload (deletes files);
+      // destructive, so confirm first.
+      showAppDialog({
+        title: "Delete download",
+        message: `Remove "${episode.title || "this episode"}" from this device? You can download it again later.`,
+        buttons: [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: () => removeDownload(key) },
+        ],
+      });
+    } else if (active?.status === "downloading" || active?.status === "pending") {
+      cancelDownload(key);
+    } else if (active?.status === "failed") {
+      useDownloadStore.getState().retryDownload(key);
+    } else {
+      try {
+        await downloader.downloadEpisode(item, episode, serverAddress, token);
+      } catch (err) {
+        console.warn("[ItemDetail] Episode download failed:", err);
         showAppDialog({
           title: "Download failed",
           message: "Couldn't start the download. Check your connection and free space, then try again.",
@@ -1161,23 +1197,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             ) : null}
           </View>
 
-          {/* Podcasts have no Download button (the downloader handles book
-              tracks, not episodes) — say so, so its absence doesn't read as a
-              bug. Episodes stream and can be added to playlists for later. */}
-          {isPodcastItem ? (
-            <Text
-              accessibilityRole="text"
-              style={{
-                color: colors.onSurfaceVariant,
-                fontSize: 13,
-                textAlign: "center",
-                paddingHorizontal: 32,
-                marginTop: 12,
-              }}
-            >
-              Podcast episodes stream and aren't downloaded for offline playback.
-            </Text>
-          ) : null}
+          {/* Podcasts have no item-level Download button (there's no
+              item-level audio to grab). Each episode carries its own download
+              control in the episode list below. */}
 
           {/* Your Progress card — one icon-labeled row per format so listening
               and reading progress can never be mistaken for each other. */}
@@ -1530,6 +1552,16 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 const subtitleStr = [pubDate, durationStr].filter(Boolean).join(" · ");
                 const isThisPlaying =
                   currentSession?.libraryItemId === itemId && currentSession?.episodeId === episode.id;
+                // Per-episode offline download state (composite-keyed).
+                const epDlKey = episodeDownloadKey(itemId, episode.id);
+                const epActiveDl = activeDownloads[epDlKey];
+                const epDownloaded = !!(completedDownloads[epDlKey] && !epActiveDl);
+                const epDownloading = epActiveDl?.status === "downloading" || epActiveDl?.status === "pending";
+                const epDownloadFailed = epActiveDl?.status === "failed";
+                const epDownloadPct =
+                  epActiveDl && Number.isFinite(epActiveDl.progress)
+                    ? Math.round(epActiveDl.progress * 100)
+                    : 0;
                 return (
                   <View
                     key={episode.id}
@@ -1572,6 +1604,54 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                         </View>
                       ) : null}
                     </View>
+                    {/* Per-episode download control — mirrors the book download
+                        button's four states (download / downloading% / retry /
+                        delete) but scoped to this episode's composite key. */}
+                    <Pressable
+                      onPress={() => handleEpisodeDownloadPress(episode)}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        epDownloaded
+                          ? `Delete download of ${episode.title || "episode"}`
+                          : epDownloading
+                          ? `Cancel download of ${episode.title || "episode"}, ${epDownloadPct} percent complete`
+                          : epDownloadFailed
+                          ? `Download of ${episode.title || "episode"} failed, tap to retry`
+                          : `Download ${episode.title || "episode"}`
+                      }
+                      hitSlop={6}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 20,
+                        marginRight: 8,
+                        backgroundColor:
+                          epDownloaded || epDownloadFailed
+                            ? withAlpha(colors.error, 0.1)
+                            : colors.secondaryContainer,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderWidth: epDownloaded || epDownloadFailed ? 1 : 0,
+                        borderColor: epDownloaded || epDownloadFailed ? colors.error : "transparent",
+                      }}
+                    >
+                      {epDownloading ? (
+                        <View style={{ alignItems: "center", justifyContent: "center" }}>
+                          <ActivityIndicator size="small" color={colors.primary} />
+                          <Text style={{ fontSize: 9, color: colors.onSurface, marginTop: 1, fontWeight: "800" }}>
+                            {epDownloadPct}%
+                          </Text>
+                        </View>
+                      ) : epDownloadFailed ? (
+                        <Icon name="refresh" size={18} color={colors.error} />
+                      ) : (
+                        <Icon
+                          name={epDownloaded ? "trash" : "download"}
+                          size={18}
+                          color={epDownloaded ? colors.error : colors.onSecondaryContainer}
+                        />
+                      )}
+                    </Pressable>
                     {/* Per-episode finished toggle — PATCHes the episode-scoped
                         endpoint and updates the `${itemId}-${episodeId}` map key. */}
                     <Pressable

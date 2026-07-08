@@ -73,8 +73,10 @@ export default function DownloadsScreen({ navigation }: any) {
       return;
     }
     // The playback store already prefers locally-downloaded files when
-    // available, so just start a normal playback session for this item.
-    await startPlayback(item.libraryItemId || item.id);
+    // available, so just start a normal playback session. Episode downloads
+    // carry an episodeId — pass it so the right episode plays (and the offline
+    // fallback resolves the episode's composite download key).
+    await startPlayback(item.libraryItemId || item.id, item.episodeId || undefined);
   };
 
   const Cover = ({ uri }: { uri?: string }) => (

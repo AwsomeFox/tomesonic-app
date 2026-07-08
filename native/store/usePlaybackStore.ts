@@ -1229,16 +1229,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // Offline fallback: if this book is downloaded (with playback meta), build
       // a local session from the on-device files so it plays without the server.
       try {
-        const { useDownloadStore } = require("./useDownloadStore");
-        const dl = useDownloadStore.getState().completedDownloads[itemId];
+        const { useDownloadStore, episodeDownloadKey } = require("./useDownloadStore");
+        // Podcast episodes are downloaded under the composite key; books under
+        // the bare libraryItemId. Resolve whichever this play is for.
+        const downloadKey = episodeId ? episodeDownloadKey(itemId, episodeId) : itemId;
+        const dl = useDownloadStore.getState().completedDownloads[downloadKey];
         // Requires actual AUDIO tracks — an ebook-only download has meta but an
         // empty tracks list, and "playing" it would reset the player into an
-        // empty queue (the reader is its playback surface, not us).
-        if (dl?.meta?.tracks?.length && dl.localFolderPath && !episodeId) {
-          const lastLocal = useUserStore.getState().getMediaProgress(itemId);
+        // empty queue (the reader is its playback surface, not us). A
+        // non-downloaded episode simply has no entry here and keeps streaming.
+        if (dl?.meta?.tracks?.length && dl.localFolderPath) {
+          const lastLocal = useUserStore.getState().getMediaProgress(itemId, episodeId);
           const localSession = {
-            id: `local_${itemId}`,
+            id: episodeId ? `local_${downloadKey}` : `local_${itemId}`,
             libraryItemId: itemId,
+            episodeId: episodeId || undefined,
             displayTitle: dl.title,
             displayAuthor: dl.author,
             duration: dl.meta.duration || 0,

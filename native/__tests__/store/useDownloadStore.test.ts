@@ -237,6 +237,28 @@ describe("useDownloadStore", () => {
         idempotent: true,
       });
     });
+
+    it("removes a podcast-episode download by its composite key", async () => {
+      const ep = baseItem({
+        id: "pod1::ep1",
+        libraryItemId: "pod1",
+        episodeId: "ep1",
+        status: "completed",
+        localFolderPath: "file:///downloads/pod1::ep1/",
+      });
+      db.saveDownloadItem(ep);
+      db.saveLocalLibraryItem({ id: "pod1::ep1", libraryItemId: "pod1", episodeId: "ep1" });
+      useDownloadStore.setState({ completedDownloads: { "pod1::ep1": ep } });
+
+      await useDownloadStore.getState().removeDownload("pod1::ep1");
+
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/pod1::ep1/", {
+        idempotent: true,
+      });
+      expect(useDownloadStore.getState().completedDownloads["pod1::ep1"]).toBeUndefined();
+      expect(db.getAllDownloads()).toHaveLength(0);
+      expect(db.getLocalLibraryItem("pod1::ep1")).toBeNull();
+    });
   });
 
   describe("removeDownload live-playback handoff", () => {
@@ -278,6 +300,57 @@ describe("useDownloadStore", () => {
 
       expect(closePlayback).toHaveBeenCalledTimes(1);
       expect(startPlayback).not.toHaveBeenCalled();
+    });
+
+    it("swaps a playing EPISODE session (composite key) to streaming with its episodeId", async () => {
+      const ep = baseItem({
+        id: "pod1::ep1",
+        libraryItemId: "pod1",
+        episodeId: "ep1",
+        status: "completed",
+        localFolderPath: "file:///downloads/pod1::ep1/",
+      });
+      useDownloadStore.setState({ completedDownloads: { "pod1::ep1": ep } });
+      const startPlayback = jest.fn().mockResolvedValue(true);
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      mockPlaybackGetState.mockReturnValue({
+        currentSession: { libraryItemId: "pod1", episodeId: "ep1" },
+        isPlaying: true,
+        startPlayback,
+        closePlayback,
+      } as any);
+
+      await useDownloadStore.getState().removeDownload("pod1::ep1");
+
+      // Restarts the SAME episode streaming (bare id + episodeId), not the
+      // composite key, and matched despite the session key differing from id.
+      expect(startPlayback).toHaveBeenCalledWith("pod1", "ep1");
+      expect(closePlayback).not.toHaveBeenCalled();
+    });
+
+    it("does not touch playback when deleting a different episode of the loaded podcast", async () => {
+      const ep2 = baseItem({
+        id: "pod1::ep2",
+        libraryItemId: "pod1",
+        episodeId: "ep2",
+        status: "completed",
+        localFolderPath: "file:///downloads/pod1::ep2/",
+      });
+      useDownloadStore.setState({ completedDownloads: { "pod1::ep2": ep2 } });
+      const startPlayback = jest.fn().mockResolvedValue(true);
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      // ep1 is playing; we delete ep2 — same podcast, different episode.
+      mockPlaybackGetState.mockReturnValue({
+        currentSession: { libraryItemId: "pod1", episodeId: "ep1" },
+        isPlaying: true,
+        startPlayback,
+        closePlayback,
+      } as any);
+
+      await useDownloadStore.getState().removeDownload("pod1::ep2");
+
+      expect(startPlayback).not.toHaveBeenCalled();
+      expect(closePlayback).not.toHaveBeenCalled();
     });
 
     it("leaves playback untouched when a different book is loaded", async () => {

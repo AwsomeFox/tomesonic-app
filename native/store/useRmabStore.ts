@@ -6,6 +6,7 @@ import {
   rmabAuthMode,
   getMe,
   createRequest,
+  cancelRequest,
   getPendingApprovalCount,
   clearRmabCaches,
   setRmabSessionExpiredHandler,
@@ -60,6 +61,13 @@ interface RmabState {
   markSessionExpired: () => void;
   disconnect: () => void;
   requestBook: (book: RmabBook) => Promise<{ ok: boolean; message?: string }>;
+  // Requester self-cancel: withdraw one of the user's OWN pending requests
+  // (PATCH /api/requests/:id {action:"cancel"}). Clears the optimistic chip for
+  // `asin` so discovery re-shows "Request", and pre-records the cancellation in
+  // the fulfillment-poll baseline so it isn't later surfaced as a "failed"
+  // request. Returns { ok:false, message } for graceful UI handling (403 = the
+  // server doesn't allow it; 400 = no longer cancellable).
+  cancelMyRequest: (requestId: string, asin?: string) => Promise<{ ok: boolean; message?: string }>;
   noteRequestStatus: (asin: string, status: string) => void;
   reconcileRequestedAsins: () => Promise<void>;
   refreshPendingCount: () => Promise<void>;
@@ -454,6 +462,68 @@ export const useRmabStore = create<RmabState>((set, get) => ({
       const detail = err || e?.response?.data?.message || e?.message;
       return { ok: false, message: detail ? `Request failed: ${detail}` : "Request failed" };
     }
+  },
+
+  cancelMyRequest: async (requestId, asin) => {
+    try {
+      await cancelRequest(requestId);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (!e?.response) {
+        return { ok: false, message: "You're offline — try again when connected" };
+      }
+      // The DELETE route is admin-only; if THIS server also gates the cancel
+      // route (or the request isn't the caller's), it 403s — say so plainly.
+      if (status === 403) {
+        return { ok: false, message: "This server doesn't allow cancelling your own requests" };
+      }
+      // Status moved past the cancellable window between render and tap.
+      if (status === 400) {
+        const detail = e?.response?.data?.message;
+        return { ok: false, message: detail || "This request can no longer be cancelled" };
+      }
+      if (status === 401) {
+        return { ok: false, message: "Session expired — reconnect ReadMeABook in Settings" };
+      }
+      const detail = e?.response?.data?.message || e?.response?.data?.error || e?.message;
+      return { ok: false, message: detail ? `Couldn't cancel: ${detail}` : "Couldn't cancel the request" };
+    }
+    // Success: drop the optimistic "Requested" chip for this book so the
+    // Discover/search UI re-shows a "Request" button. Functional set + persist,
+    // mirroring noteRequestStatus; a no-op (asin not present) returns the same
+    // state ref so subscribers don't needlessly re-render.
+    if (asin && typeof asin === "string") {
+      let merged: Record<string, string> | null = null;
+      set((state) => {
+        if (!Object.prototype.hasOwnProperty.call(state.requestedAsins, asin)) return state;
+        const next = { ...state.requestedAsins };
+        delete next[asin];
+        merged = next;
+        return { requestedAsins: next };
+      });
+      if (merged) {
+        try {
+          const { storage } = require("../utils/storage");
+          storage.set("rmab_requestedAsins", JSON.stringify(merged));
+        } catch {}
+      }
+    }
+    // Pre-empt the non-admin fulfillment poller: a cancelled request reads as a
+    // FAILED_STATUS, so without recording it in the baseline the next
+    // refreshMyRequestStatuses() would diff (pending → cancelled) and wrongly
+    // nag the user that their OWN just-cancelled request "failed".
+    try {
+      const { storage } = require("../utils/storage");
+      const raw = storage.getString(MY_REQUEST_STATUS_KEY);
+      if (raw != null) {
+        const snap = JSON.parse(raw);
+        if (snap && typeof snap === "object" && !Array.isArray(snap)) {
+          snap[String(requestId)] = "cancelled";
+          storage.set(MY_REQUEST_STATUS_KEY, JSON.stringify(snap));
+        }
+      }
+    } catch {}
+    return { ok: true };
   },
 
   // Functional set: concurrent requestBook calls each merge into the latest

@@ -8,6 +8,7 @@ import axios from "axios";
 import {
   exchangeLoginToken,
   deleteRequest,
+  cancelRequest,
   approveRequest,
   resolveRmabUrl,
   getBookdatePreferences,
@@ -482,6 +483,18 @@ describe("endpoint wrappers", () => {
     await deleteRequest("req9");
     expect(mockedRequest).toHaveBeenCalledWith(
       expect.objectContaining({ method: "delete", url: "https://rmab.test/api/requests/req9" })
+    );
+  });
+
+  it("cancelRequest PATCHes the request with the cancel action (owner-permitted route, not admin DELETE)", async () => {
+    mockedRequest.mockResolvedValue({ data: { success: true, message: "Request cancelled successfully" } });
+    await cancelRequest("req9");
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "patch",
+        url: "https://rmab.test/api/requests/req9",
+        data: { action: "cancel" },
+      })
     );
   });
 

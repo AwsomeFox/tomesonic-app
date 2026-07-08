@@ -6,6 +6,7 @@ jest.mock("../../utils/rmab", () => ({
   rmabAuthMode: (cfg: any) => (cfg ? (cfg.apiToken ? "apiToken" : "jwt") : null),
   getMe: jest.fn(),
   createRequest: jest.fn(),
+  cancelRequest: jest.fn(),
   getPendingApprovalCount: jest.fn().mockResolvedValue(0),
   listMyRequests: jest.fn().mockResolvedValue([]),
   clearRmabCaches: jest.fn(),
@@ -19,6 +20,7 @@ import {
   writeRmabConfig,
   getMe,
   createRequest,
+  cancelRequest,
 } from "../../utils/rmab";
 // Real in-memory MMKV (see jest.setup.ts) — the store lazy-requires this same
 // module to persist requested-state.
@@ -30,6 +32,7 @@ const mockedRead = readRmabConfig as jest.Mock;
 const mockedWrite = writeRmabConfig as jest.Mock;
 const mockedMe = getMe as jest.Mock;
 const mockedCreate = createRequest as jest.Mock;
+const mockedCancel = cancelRequest as jest.Mock;
 
 const CFG = {
   url: "https://rmab.test",
@@ -432,6 +435,77 @@ describe("requestBook", () => {
       B01: "downloading",
       B02: "approved",
     });
+  });
+});
+
+describe("cancelMyRequest (requester self-cancel)", () => {
+  beforeEach(() => {
+    storage.remove("rmab_myRequestStatuses");
+    mockedCancel.mockReset();
+  });
+
+  it("cancels, clears the requestedAsins chip, and persists the drop", async () => {
+    mockedCancel.mockResolvedValue(undefined);
+    useRmabStore.setState({
+      configured: true,
+      requestedAsins: { B01: "pending", B02: "pending" },
+    } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({ ok: true });
+    expect(mockedCancel).toHaveBeenCalledWith("r1");
+    // B01's chip is gone (discovery re-shows "Request"); B02 untouched.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B02: "pending" });
+    expect(JSON.parse(storage.getString("rmab_requestedAsins")!)).toEqual({ B02: "pending" });
+  });
+
+  it("records the cancellation in the fulfillment baseline so the poller won't call it 'failed'", async () => {
+    mockedCancel.mockResolvedValue(undefined);
+    // A pending baseline for this request already exists.
+    storage.set("rmab_myRequestStatuses", JSON.stringify({ r1: "pending" }));
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+
+    await useRmabStore.getState().cancelMyRequest("r1", "B01");
+    // Baseline now reads cancelled, so the next diff sees no pending→failed jump.
+    expect(JSON.parse(storage.getString("rmab_myRequestStatuses")!)).toEqual({ r1: "cancelled" });
+
+    const { listMyRequests } = require("../../utils/rmab");
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "r1", status: "cancelled" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
+
+  it("a 403 surfaces a 'server doesn't allow it' message and leaves the chip intact (revert-safe)", async () => {
+    mockedCancel.mockRejectedValue({ response: { status: 403 } });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({
+      ok: false,
+      message: "This server doesn't allow cancelling your own requests",
+    });
+    // No local mutation on failure — the caller reverts its own row from this.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("a 400 (no longer cancellable) surfaces the server's detail without touching state", async () => {
+    mockedCancel.mockRejectedValue({
+      response: { status: 400, data: { message: "Cannot cancel request with status: available" } },
+    });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({ ok: false, message: "Cannot cancel request with status: available" });
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("an offline failure reads as offline", async () => {
+    mockedCancel.mockRejectedValue(new Error("Network Error"));
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+    expect(res).toEqual({ ok: false, message: "You're offline — try again when connected" });
   });
 });
 
