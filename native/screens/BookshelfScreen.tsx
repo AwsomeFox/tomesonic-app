@@ -32,10 +32,13 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 // of it (each shelf is a capped horizontal scroll, so its tail is otherwise
 // unreachable). Returns null for shelves with no sensible full-list mapping
 // (Continue Series/Reading, author rows, Discover) — those stay non-pressable.
-// Maps a home shelf to a "see all" destination on the Library hub tab. The hub
+// Maps a home shelf to its "see all" destination on the Library hub tab. The hub
 // consumes `filter`/`orderBy`/`descending` (seeds the Books facet) and `segment`
-// (switches to the Series/Authors facet). Returns null when a shelf has no
-// sensible full-list view — those headers stay non-pressable (and get no arrow).
+// (switches to the Series/Authors facet). Series/author shelves and Continue
+// Reading all resolve to a destination here; a shelf with no sensible full-list
+// view returns null. Returning a destination does NOT by itself make the header
+// pressable — the call site also requires the row to overflow (see `showSeeAll`);
+// a null return is what unconditionally leaves a header non-pressable.
 function shelfToLibraryParams(shelf: any): Record<string, any> | null {
   // Series/author shelves (incl. the transformed "Continue Series") open the
   // matching browse segment rather than a books filter.
