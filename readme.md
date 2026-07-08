@@ -1,3 +1,4 @@
+[![Deploy to Play Store](https://github.com/AwsomeFox/tomesonic-app/actions/workflows/deploy-playstore.yml/badge.svg?event=release)](https://github.com/AwsomeFox/tomesonic-app/actions/workflows/deploy-playstore.yml)
 # TomeSonic Mobile App
 
 TomeSonic is a premium mobile companion for your AudiobookShelf server, bringing your personal audiobook library to Android with stunning Material You theming and advanced features. The app is a native React Native (Expo) application living in [`native/`](native).
