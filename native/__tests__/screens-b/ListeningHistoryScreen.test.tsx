@@ -180,6 +180,16 @@ describe("ListeningHistoryScreen", () => {
     expect(navigation.navigate).not.toHaveBeenCalled();
   });
 
+  it("consolidates the row into a single accessibility label (title, author, subtitle)", async () => {
+    await renderHistory();
+    await screen.findByText("Big Audiobook");
+
+    // Title, author, then "<date> · <listened> listened" — one spoken label.
+    expect(
+      screen.getByLabelText(/^Big Audiobook, Author One, Jan 1[45] · 1h 6m listened$/)
+    ).toBeTruthy();
+  });
+
   it("shows the empty state when there is no history", async () => {
     (api.get as jest.Mock).mockResolvedValue({ data: { sessions: [] } });
     await renderHistory();

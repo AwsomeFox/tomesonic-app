@@ -11,6 +11,7 @@ import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import { isEbookOnly, hasAudio } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
@@ -392,15 +393,11 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           {bookItems.length > 0 ? (
             bookItems.map((book, index) => renderBookRow(book, index))
           ) : (
-            <View style={{ alignItems: "center", paddingVertical: 60, paddingHorizontal: 32 }}>
-              <Icon name="collections" size={48} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
-              <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "700", marginBottom: 4 }}>
-                No items yet
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
-                Add books to this collection from a book's details screen.
-              </Text>
-            </View>
+            <EmptyState
+              icon="collections"
+              title="No items yet"
+              message="Add books to this collection from a book's details screen."
+            />
           )}
         </ScrollView>
       ) : null}

@@ -3,7 +3,6 @@ import {
   View,
   Text,
   ScrollView,
-  TouchableOpacity,
   Clipboard,
   Share,
   Modal,
@@ -12,7 +11,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { appLogger, type LogEntry, type LogLevel } from '../utils/logger';
 import { useThemeColors } from '../theme/useThemeColors';
+import { withAlpha } from '../theme/palette';
 import Icon from '../components/Icon';
+import HintPressable from '../components/HintPressable';
 
 const LEVEL_FILTERS: (LogLevel | 'ALL')[] = ['ALL', 'INFO', 'WARN', 'ERROR'];
 
@@ -113,6 +114,8 @@ export default function LogsScreen({ navigation }: any) {
     justifyContent: 'center' as const,
   };
 
+  const iconRipple = { color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={['top', 'left', 'right']}>
       {/* Title row: Logs + copy + share + spacer + overflow */}
@@ -125,16 +128,18 @@ export default function LogsScreen({ navigation }: any) {
           paddingBottom: 8,
         }}
       >
-        <TouchableOpacity
+        <HintPressable
           onPress={() => navigation.goBack()}
           style={iconBtnStyle}
+          android_ripple={iconRipple}
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
-        </TouchableOpacity>
+        </HintPressable>
         <Text
+          accessibilityRole="header"
           style={{
             color: colors.onSurface,
             fontSize: 20,
@@ -146,36 +151,39 @@ export default function LogsScreen({ navigation }: any) {
           Logs
         </Text>
 
-        <TouchableOpacity
+        <HintPressable
           onPress={handleCopyAll}
           style={iconBtnStyle}
+          android_ripple={iconRipple}
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel={copied ? 'Logs copied' : 'Copy logs to clipboard'}
         >
           <Icon name={copied ? 'check' : 'copy'} size={22} color={colors.onSurface} />
-        </TouchableOpacity>
-        <TouchableOpacity
+        </HintPressable>
+        <HintPressable
           onPress={handleShare}
           style={iconBtnStyle}
+          android_ripple={iconRipple}
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel="Share logs"
         >
           <Icon name="share" size={22} color={colors.onSurface} />
-        </TouchableOpacity>
+        </HintPressable>
 
         <View style={{ flex: 1 }} />
 
-        <TouchableOpacity
+        <HintPressable
           onPress={() => setMenuVisible(true)}
           style={iconBtnStyle}
+          android_ripple={iconRipple}
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel="More options"
         >
           <Icon name="more-vert" size={24} color={colors.onSurface} />
-        </TouchableOpacity>
+        </HintPressable>
       </View>
 
       {/* Level filter chips */}
@@ -297,25 +305,31 @@ export default function LogsScreen({ navigation }: any) {
               shadowOffset: { width: 0, height: 2 },
             }}
           >
-            <TouchableOpacity
+            <HintPressable
               onPress={() => {
                 setMaskServerAddress((m) => !m);
                 setMenuVisible(false);
               }}
+              accessibilityRole="button"
+              accessibilityLabel={maskServerAddress ? 'Unmask server address' : 'Mask server address'}
+              android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
               style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 }}
             >
               <Icon name="info" size={20} color={colors.onSurface} />
               <Text style={{ color: colors.onSurface, fontSize: 15, marginLeft: 16 }}>
                 {maskServerAddress ? 'Unmask server address' : 'Mask server address'}
               </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
+            </HintPressable>
+            <HintPressable
               onPress={handleClear}
+              accessibilityRole="button"
+              accessibilityLabel="Clear logs"
+              android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
               style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 }}
             >
               <Icon name="trash" size={20} color={colors.error} />
               <Text style={{ color: colors.error, fontSize: 15, marginLeft: 16 }}>Clear logs</Text>
-            </TouchableOpacity>
+            </HintPressable>
           </View>
         </Pressable>
       </Modal>
