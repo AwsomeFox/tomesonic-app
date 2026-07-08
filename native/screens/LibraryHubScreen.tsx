@@ -392,49 +392,10 @@ export default function LibraryHubScreen({ route, navigation }: any) {
       />
 
       <View style={{ flex: 1 }}>
-        {/* Offline fallback: the library facets browse the server, so offline
-            there's nothing to load. Show a clear notice + a jump to the
-            downloaded content instead of rendering facets that only fire
-            failing fetches. */}
-        {isOffline ? (
-          <EmptyState
-            style={{ flex: 1 }}
-            icon="cloud-off"
-            title="You're offline"
-            message="Browsing the library needs a connection. Your downloaded books are always available offline."
-            action={
-              <Pressable
-                onPress={() => navigation?.navigate?.("Downloads")}
-                android_ripple={{ color: colors.surfaceContainerHighest }}
-                accessibilityRole="button"
-                accessibilityLabel="Open Downloads"
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  paddingVertical: 12,
-                  paddingHorizontal: 24,
-                  borderRadius: 20,
-                  backgroundColor: colors.primaryContainer,
-                }}
-              >
-                <Icon name="download" size={18} color={colors.onPrimaryContainer} />
-                <Text
-                  style={{
-                    color: colors.onPrimaryContainer,
-                    fontSize: 14,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  Open Downloads
-                </Text>
-              </Pressable>
-            }
-          />
-        ) : (
-          <>
         {/* Keep-alive facet layers: every visited segment stays mounted; only
-            the active one is shown. */}
+            the active one is shown. These stay mounted even while offline (see
+            the offline overlay below) so a transient connectivity blip doesn't
+            unmount them and force a page-0 refetch on reconnect. */}
         {SEGMENTS.map((seg) => {
           if (!mountedRef.current.has(seg.key)) return null;
           const active = seg.key === segment;
@@ -460,8 +421,9 @@ export default function LibraryHubScreen({ route, navigation }: any) {
           </View>
         ) : null}
 
-        {/* Scroll-to-top FAB — appears once the active list is scrolled down. */}
-        {!isSearchActive && showScrollTop ? (
+        {/* Scroll-to-top FAB — appears once the active list is scrolled down.
+            Hidden while offline (the offline overlay covers the facets). */}
+        {!isSearchActive && !isOffline && showScrollTop ? (
           <Pressable
             onPress={scrollActiveToTop}
             android_ripple={{ color: colors.surfaceContainerHighest }}
@@ -487,8 +449,59 @@ export default function LibraryHubScreen({ route, navigation }: any) {
             <Icon name="chevron-up" size={26} color={colors.onSecondaryContainer} />
           </Pressable>
         ) : null}
-          </>
-        )}
+
+        {/* Offline overlay: the library facets browse the server, so offline
+            there's nothing to load. Rather than REPLACING (and thereby
+            unmounting) the facet tree — which would discard the retained
+            pagination/scroll/in-flight state the hub promises and refetch page 0
+            on every reconnect — we keep the facets mounted and cover them with
+            an absolute-fill notice (mirroring the search overlay). When
+            connectivity returns this layer is removed, revealing the facets with
+            their state intact. pointerEvents="auto" + a solid surface background
+            block interaction with the facets beneath; accessibilityViewIsModal
+            keeps screen readers on the notice. */}
+        {isOffline ? (
+          <View
+            style={{ ...ABSOLUTE_FILL, backgroundColor: colors.surface }}
+            pointerEvents="auto"
+            accessibilityViewIsModal
+          >
+            <EmptyState
+              style={{ flex: 1 }}
+              icon="cloud-off"
+              title="You're offline"
+              message="Browsing the library needs a connection. Your downloaded books are always available offline."
+              action={
+                <Pressable
+                  onPress={() => navigation?.navigate?.("Downloads")}
+                  android_ripple={{ color: colors.surfaceContainerHighest }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Downloads"
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingVertical: 12,
+                    paddingHorizontal: 24,
+                    borderRadius: 20,
+                    backgroundColor: colors.primaryContainer,
+                  }}
+                >
+                  <Icon name="download" size={18} color={colors.onPrimaryContainer} />
+                  <Text
+                    style={{
+                      color: colors.onPrimaryContainer,
+                      fontSize: 14,
+                      fontWeight: "600",
+                      marginLeft: 8,
+                    }}
+                  >
+                    Open Downloads
+                  </Text>
+                </Pressable>
+              }
+            />
+          </View>
+        ) : null}
       </View>
     </SafeAreaView>
   );

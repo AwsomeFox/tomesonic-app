@@ -437,15 +437,39 @@ describe("LibraryHubScreen", () => {
     expect(screen.queryByLabelText("Create new playlist")).toBeNull();
   });
 
-  it("shows an offline notice instead of the facets when offline", async () => {
+  it("overlays an offline notice WITHOUT unmounting the active facet", async () => {
     mockIsConnected = false;
     await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
 
-    // Offline CTA is shown; the server-backed facets are not rendered (no failing
-    // fetches).
+    // Offline CTA is shown as an overlay layer.
     expect(screen.getByText("You're offline")).toBeTruthy();
     expect(screen.getByLabelText("Open Downloads")).toBeTruthy();
-    expect(screen.queryByText(/BOOKS_BODY/)).toBeNull();
+
+    // Crucially the active Books facet stays MOUNTED beneath the overlay (it is
+    // not swapped out), so a transient offline blip preserves its
+    // pagination/scroll/in-flight state instead of forcing a page-0 refetch on
+    // reconnect.
+    expect(mockMount.books).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByText(/BOOKS_BODY/, { includeHiddenElements: true })
+    ).toBeTruthy();
+  });
+
+  it("removing the offline overlay on reconnect reveals the facet without a remount", async () => {
+    mockIsConnected = false;
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    expect(screen.getByText("You're offline")).toBeTruthy();
+    expect(mockMount.books).toHaveBeenCalledTimes(1);
+
+    // Connectivity returns → the hub re-renders and the overlay is gone, but the
+    // facet was never unmounted (mount count unchanged → no page-0 refetch).
+    mockIsConnected = true;
+    await act(async () => {
+      screen.rerender(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    });
+    expect(screen.queryByText("You're offline")).toBeNull();
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+    expect(mockMount.books).toHaveBeenCalledTimes(1);
   });
 
   it("the offline notice navigates to the Downloads screen", async () => {
