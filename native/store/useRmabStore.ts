@@ -512,13 +512,34 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     // FAILED_STATUS, so without recording it in the baseline the next
     // refreshMyRequestStatuses() would diff (pending → cancelled) and wrongly
     // nag the user that their OWN just-cancelled request "failed".
+    //
+    // The baseline keys each entry by `r.id ?? asin` (see refreshMyRequestStatuses),
+    // so when the server omits `id` for this request the baseline entry is keyed
+    // by ASIN, not requestId. Writing the cancellation unconditionally under
+    // requestId would then miss the asin-keyed entry, and the next poll would
+    // still diff (pending → cancelled) and surface a bogus "failed". Record the
+    // cancellation under the SAME key the baseline already uses.
     try {
       const { storage } = require("../utils/storage");
       const raw = storage.getString(MY_REQUEST_STATUS_KEY);
       if (raw != null) {
         const snap = JSON.parse(raw);
         if (snap && typeof snap === "object" && !Array.isArray(snap)) {
-          snap[String(requestId)] = "cancelled";
+          const idKey = String(requestId);
+          const asinKey = asin && typeof asin === "string" && asin !== "__proto__" ? asin : null;
+          const hasId = Object.prototype.hasOwnProperty.call(snap, idKey);
+          const hasAsin = asinKey != null && Object.prototype.hasOwnProperty.call(snap, asinKey);
+          if (hasId) {
+            snap[idKey] = "cancelled";
+          } else if (hasAsin) {
+            snap[asinKey as string] = "cancelled";
+          } else {
+            // Neither key is in the baseline yet (e.g. the request was created
+            // after the last poll seeded it). Record under BOTH so whichever key
+            // the next poll derives (`r.id ?? asin`) is already marked cancelled.
+            snap[idKey] = "cancelled";
+            if (asinKey != null) snap[asinKey] = "cancelled";
+          }
           storage.set(MY_REQUEST_STATUS_KEY, JSON.stringify(snap));
         }
       }

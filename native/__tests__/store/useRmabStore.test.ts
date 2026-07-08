@@ -507,6 +507,48 @@ describe("cancelMyRequest (requester self-cancel)", () => {
     const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
     expect(res).toEqual({ ok: false, message: "You're offline — try again when connected" });
   });
+
+  it("a 401 points the user at reconnecting RMAB", async () => {
+    mockedCancel.mockRejectedValue({ response: { status: 401, data: {} } });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({
+      ok: false,
+      message: "Session expired — reconnect ReadMeABook in Settings",
+    });
+    // No local mutation on an auth failure.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("a generic server failure surfaces the server's detail", async () => {
+    mockedCancel.mockRejectedValue({ response: { status: 500, data: { message: "db down" } } });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({ ok: false, message: "Couldn't cancel: db down" });
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("SE#4: a cancelled request with NO server id (baseline keyed by asin) is not later called 'failed'", async () => {
+    mockedCancel.mockResolvedValue(undefined);
+    // The server omitted `id`, so the fulfillment baseline is keyed by ASIN.
+    storage.set("rmab_myRequestStatuses", JSON.stringify({ B01: "pending" }));
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+
+    await useRmabStore.getState().cancelMyRequest("r1", "B01");
+    // The cancellation lands under the asin key the baseline actually uses, not
+    // under the (unmatched) requestId — so no stray pending entry survives.
+    expect(JSON.parse(storage.getString("rmab_myRequestStatuses")!)).toEqual({ B01: "cancelled" });
+
+    const { listMyRequests } = require("../../utils/rmab");
+    // The next poll still returns the request keyed by asin (no id).
+    (listMyRequests as jest.Mock).mockResolvedValue([{ audiobook: { asin: "B01" }, status: "cancelled" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
 });
 
 describe("requested-state persistence (survives restarts)", () => {
@@ -692,6 +734,17 @@ describe("refreshMyRequestStatuses (non-admin fulfillment awareness)", () => {
 
     useRmabStore.getState().clearMyRequestUpdates();
     expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
+
+  it("surfaces a re-fulfilled request (failed → available) as a fulfilled update", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "failed" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses(); // baseline: failed
+
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "available" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    // failed → available is a genuine transition INTO fulfilled.
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
   });
 
   it("keys by book asin when the server omits a request id", async () => {

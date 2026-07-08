@@ -27,9 +27,17 @@ jest.mock("../../utils/api", () => ({
 // mock it so the test doesn't pull in expo-file-system/db, and so we can
 // assert the display fields land in the POSTed local session.
 jest.mock("../../store/useDownloadStore", () => ({
+  // Episodes key by the composite `${itemId}::${episodeId}` (real signature) —
+  // recordLocalListening must resolve display metadata via this key for an
+  // episode, not the bare libraryItemId.
+  episodeDownloadKey: (itemId: string, episodeId: string) => `${itemId}::${episodeId}`,
   useDownloadStore: {
     getState: () => ({
-      completedDownloads: { li1: { title: "Book One", author: "Author A" } },
+      completedDownloads: {
+        li1: { title: "Book One", author: "Author A" },
+        // A downloaded podcast episode, stored under the COMPOSITE key.
+        "pod1::ep1": { title: "Episode One", author: "Podcaster P" },
+      },
     }),
   },
 }));
@@ -468,6 +476,32 @@ describe("flushPendingSyncs", () => {
       libraryItemId: "li1",
       body: { currentTime: 25, duration: 100, progress: 0.25 },
     });
+  });
+
+  // QA#3: the WEAK merge that converts a dead-session (404) sync into a PATCH
+  // must only FILL fields — it must never clobber a newer position already
+  // queued for the same item.
+  it("a 404 dead-session sync does NOT regress a newer position already queued for the item", async () => {
+    // A fresher position is already queued for li1...
+    queueProgressPatch("li1", 200, 3600);
+    // ...then a STALE session sync for the same item 404s carrying an OLDER
+    // position 50 (it queued before the session died).
+    storage.set(
+      "pendingSync_s1",
+      JSON.stringify({
+        sessionId: "s1",
+        currentTime: 50,
+        timeListened: 5,
+        duration: 3600,
+        libraryItemId: "li1",
+      })
+    );
+    mockedPost.mockRejectedValue(err404());
+    mockedPatch.mockRejectedValue(errNetwork()); // keep the patch queued for inspection
+    await flushPendingSyncs();
+    // The weak merge fills only missing fields — the newer 200 survives.
+    expect(readJson("pendingPatch_li1").body.currentTime).toBe(200);
+    expect(pendingKeys()).toHaveLength(0); // stale session dropped
   });
 
   it("drops a 404 sync with no item id without queuing anything", async () => {
@@ -963,6 +997,27 @@ describe("offline local-session listening bank", () => {
     );
   });
 
+  // REGRESSION (SE#2): an offline downloaded EPISODE session used to POST a
+  // blank displayTitle because it looked up completedDownloads by the bare
+  // libraryItemId — but episodes are keyed by the composite `${id}::${episodeId}`.
+  // The lookup now uses episodeDownloadKey so the real title/author land.
+  it("SE#2: an offline episode session resolves its display fields via the COMPOSITE download key", async () => {
+    await withFixedNow(async () => {
+      recordLocalListening("pod1", "ep1", 10, 100, 30);
+      await flushPendingSyncs();
+    });
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({
+        id: "local_pod1-ep1_2026-01-15",
+        episodeId: "ep1",
+        mediaType: "podcast",
+        displayTitle: "Episode One", // NOT "" — resolved via pod1::ep1
+        displayAuthor: "Podcaster P",
+      })
+    );
+  });
+
   it("fully-synced local record is NOT pending; more listening makes it pending again and re-POSTs the GROWN total", async () => {
     await withFixedNow(async () => {
       recordLocalListening("li1", undefined, 100, 3600, 30);
@@ -1269,6 +1324,31 @@ describe("syncBothProgressFraction / reconcileLinkedProgress", () => {
     expect("ebookLocation" in body).toBe(false);
   });
 
+  // QA#1: the finished branch (f >= 0.99) marks isFinished on BOTH the queued
+  // PATCH body and the in-memory entry.
+  it("QA#1: a target fraction >= 0.99 marks the item finished (queued body + in-memory)", () => {
+    ps.syncBothProgressFraction(ITEM, 1, { duration: 3600 });
+    const body = readBody(ITEM);
+    expect(body.isFinished).toBe(true);
+    expect(store.getState().mediaProgress[ITEM].isFinished).toBe(true);
+  });
+
+  // QA#2: unknown duration cannot place a timestamp — the queued body and the
+  // in-memory entry must carry ebookProgress WITHOUT any bogus audio fields
+  // (a currentTime=0 would regress real server progress).
+  it("QA#2: unknown duration queues ebookProgress only — no bogus currentTime/duration/progress", () => {
+    ps.syncBothProgressFraction(ITEM, 0.6, { duration: 0 });
+    const body = readBody(ITEM);
+    expect(body.ebookProgress).toBe(0.6);
+    expect("currentTime" in body).toBe(false);
+    expect("duration" in body).toBe(false);
+    expect("progress" in body).toBe(false);
+    const p = store.getState().mediaProgress[ITEM];
+    expect(p.ebookProgress).toBe(0.6);
+    expect("currentTime" in p).toBe(false);
+    expect("progress" in p).toBe(false);
+  });
+
   it("reconcileLinkedProgress is a no-op when the item is NOT linked", () => {
     store.setState({
       mediaProgress: { [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0.1, duration: 3600 } },
@@ -1312,5 +1392,50 @@ describe("syncBothProgressFraction / reconcileLinkedProgress", () => {
     const p = store.getState().mediaProgress[ITEM];
     expect(p.progress).toBeCloseTo(0.8, 5);
     expect(p.ebookProgress).toBeCloseTo(0.8, 5);
+  });
+
+  // REGRESSION (SE#3): locked item, ebook furthest, audio duration UNKNOWN. The
+  // audio timestamp can never be placed, so audio stays behind and the two can
+  // never converge — every ItemDetail focus used to re-queue a redundant PATCH
+  // + flush forever. "Audio can't move" is now treated as un-reconcilable: the
+  // reconcile is a stable no-op instead of an endless re-queue loop.
+  it("SE#3: locked item, ebook ahead, unknown duration — reconcile is a stable no-op (no re-queue loop)", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: {
+          libraryItemId: ITEM,
+          progress: 0.2,
+          ebookProgress: 0.7,
+          ebookLocation: "epubcfi(/6/9)",
+          duration: 0, // unknown — no audio timestamp derivable
+        },
+      },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    // First call: audio is the lagging side and can't advance → no write.
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(false);
+    expect(freshPatchKeys()).toHaveLength(0);
+    // Repeated calls (repeated focus) stay no-ops — the loop converges.
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(false);
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(false);
+    expect(freshPatchKeys()).toHaveLength(0);
+    // The in-memory progress is untouched (audio not dragged, ebook not moved).
+    const p = store.getState().mediaProgress[ITEM];
+    expect(p.progress).toBe(0.2);
+    expect(p.ebookProgress).toBe(0.7);
+  });
+
+  // The audio-AHEAD counterpart still reconciles with unknown duration: the
+  // ebook side moves regardless of duration, so the two converge.
+  it("SE#3 counterpart: audio ahead with unknown duration still pulls the ebook up", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 0.6, ebookProgress: 0.2, duration: 0 },
+      },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(true);
+    // Ebook caught up to the audio fraction; audio (in-memory) unchanged.
+    expect(store.getState().mediaProgress[ITEM].ebookProgress).toBe(0.6);
   });
 });

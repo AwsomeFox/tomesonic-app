@@ -448,8 +448,13 @@ export function recordLocalListening(
       let displayTitle: string | undefined;
       let displayAuthor: string | undefined;
       try {
-        const { useDownloadStore } = require("../store/useDownloadStore");
-        const dl = useDownloadStore.getState().completedDownloads[libraryItemId];
+        const { useDownloadStore, episodeDownloadKey } = require("../store/useDownloadStore");
+        // Podcast episodes are keyed by the composite `${itemId}::${episodeId}`,
+        // NOT the bare libraryItemId — looking up the bare id for an episode
+        // missed the download and POSTed a blank displayTitle. Resolve via the
+        // composite key when an episodeId is present.
+        const dlKey = episodeId ? episodeDownloadKey(libraryItemId, episodeId) : libraryItemId;
+        const dl = useDownloadStore.getState().completedDownloads[dlKey];
         displayTitle = dl?.title;
         displayAuthor = dl?.author;
       } catch {}
@@ -709,6 +714,14 @@ export function reconcileLinkedProgress(
   );
   if (Math.abs(audioFraction - ebookFraction) < LINK_EPSILON) return false;
   const target = Math.max(audioFraction, ebookFraction);
+  // When the audio duration is unknown we can't place a timestamp, so the audio
+  // fraction can NEVER advance. If the ebook is furthest (audio is the lagging
+  // side that would need to move up), syncBothProgressFraction skips the audio
+  // write and leaves the in-memory audio progress behind — the two never
+  // converge, and every ItemDetail focus re-queues a redundant PATCH + flush.
+  // Treat "audio can't move" as un-reconcilable and skip rather than looping.
+  // (Audio-ahead still reconciles: the ebook side moves regardless of duration.)
+  if (duration <= 0 && target > audioFraction) return false;
   syncBothProgressFraction(libraryItemId, target, {
     duration,
     // Preserve whatever CFI/page the reader last wrote.
