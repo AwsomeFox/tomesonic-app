@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, forwardRef, useImperativeHandle } from "react";
 import {
   View,
   Text,
@@ -63,7 +63,14 @@ function lastName(name: string): string {
   return parts.length > 1 ? parts[parts.length - 1] : name;
 }
 
-export default function AuthorsScreen({ navigation }: any) {
+export interface AuthorsScreenHandle {
+  openSort: () => void;
+}
+
+function AuthorsScreen(
+  { navigation, embedded }: any,
+  ref: React.Ref<AuthorsScreenHandle>
+) {
   const colors = useThemeColors();
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const { width } = useWindowDimensions();
@@ -85,6 +92,7 @@ export default function AuthorsScreen({ navigation }: any) {
     savedSettings?.mobileAuthorsOrderDesc ?? false
   );
   const [sortOpen, setSortOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ openSort: () => setSortOpen(true) }), []);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -312,7 +320,27 @@ export default function AuthorsScreen({ navigation }: any) {
     );
   };
 
-  if (isSearchActive) {
+  // Sort sheet — rendered alongside every content state (except the search
+  // overlay, which replaces the whole body). Embedded mode omits it visually
+  // since sortOpen is only ever set via the hub's shared TopAppBar handle.
+  const modal = (
+    <OrderModal
+      visible={sortOpen}
+      onClose={() => setSortOpen(false)}
+      orderBy={sortKey}
+      descending={descending}
+      items={SORT_ITEMS}
+      onChange={(o, d) => {
+        setSortKey(o as SortKey);
+        setDescending(d);
+        // Persist so the choice survives restarts (mirrors the library page).
+        updateUserSettings({ mobileAuthorsOrderBy: o, mobileAuthorsOrderDesc: d }).catch(() => {});
+      }}
+    />
+  );
+
+  // Search overlay (standalone only — the hub owns it when embedded).
+  if (isSearchActive && !embedded) {
     return (
       <SafeAreaView
         style={{ flex: 1, backgroundColor: colors.surface }}
@@ -324,48 +352,17 @@ export default function AuthorsScreen({ navigation }: any) {
     );
   }
 
-  if (loading && authors.length === 0) {
-    return (
-      <SafeAreaView
-        style={{ flex: 1, backgroundColor: colors.surface }}
-        edges={["top", "left", "right"]}
-      >
-        <TopAppBar navigation={navigation} />
-        {/* Square tiles to match the real author cards (no snap on arrival). */}
-        <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: colors.surface }}
-      edges={["top", "left", "right"]}
-    >
-      {/* Same top-bar sort affordance as the library page. */}
-      <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
-
-      <OrderModal
-        visible={sortOpen}
-        onClose={() => setSortOpen(false)}
-        orderBy={sortKey}
-        descending={descending}
-        items={SORT_ITEMS}
-        onChange={(o, d) => {
-          setSortKey(o as SortKey);
-          setDescending(d);
-          // Persist so the choice survives restarts (mirrors the library page).
-          updateUserSettings({ mobileAuthorsOrderBy: o, mobileAuthorsOrderDesc: d }).catch(() => {});
-        }}
+  const content =
+    loading && authors.length === 0 ? (
+      // Square tiles to match the real author cards (no snap on arrival).
+      <GridSkeleton columns={numColumns} count={numColumns * 4} aspectRatio={1} />
+    ) : loadError && authors.length === 0 ? (
+      <ErrorState
+        style={{ flex: 1 }}
+        title="Couldn't load authors"
+        message="Check your connection to the server and try again."
+        onRetry={fetchAuthors}
       />
-
-      {loadError && authors.length === 0 ? (
-        <ErrorState
-          style={{ flex: 1 }}
-          title="Couldn't load authors"
-          message="Check your connection to the server and try again."
-          onRetry={fetchAuthors}
-        />
       ) : authors.length === 0 ? (
         <EmptyState
           style={{ flex: 1 }}
@@ -400,7 +397,28 @@ export default function AuthorsScreen({ navigation }: any) {
             />
           }
         />
-      )}
+      );
+
+  if (embedded) {
+    return (
+      <View style={{ flex: 1 }}>
+        {modal}
+        {content}
+      </View>
+    );
+  }
+
+  return (
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: colors.surface }}
+      edges={["top", "left", "right"]}
+    >
+      {/* Same top-bar sort affordance as the library page. */}
+      <TopAppBar navigation={navigation} showSort onSort={() => setSortOpen(true)} />
+      {modal}
+      {content}
     </SafeAreaView>
   );
 }
+
+export default forwardRef(AuthorsScreen);

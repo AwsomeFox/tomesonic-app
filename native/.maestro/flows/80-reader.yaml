@@ -19,7 +19,11 @@ env:
 - extendedWaitUntil:
     visible: "Home"
     timeout: 20000
+# The Library tab is a hub with Books/Series/Collections/Authors segments that
+# remembers the last-viewed segment across flows — select Books explicitly so
+# the ebook row is shown regardless of what an earlier flow left selected.
 - tapOn: "Library"
+- tapOn: "Books"
 - extendedWaitUntil:
     visible: ${EBOOK_ROW}
     timeout: 20000

@@ -147,6 +147,16 @@ export const storageHelper = {
     storage.remove("mediaProgressCache");
   },
 
+  // Library hub — last-selected browse segment (Books/Series/Collections/
+  // Authors). Persisted so revisiting the Library tab lands on the same facet
+  // the user left it on. Defaults to "books" (handled by the caller).
+  getLibraryHubSegment: (): string | null => {
+    return storage.getString("libraryHubSegment") || null;
+  },
+  setLibraryHubSegment: (segment: string) => {
+    storage.set("libraryHubSegment", segment);
+  },
+
   // Global playback speed — persisted so resuming any book (in-app or via
   // Android Auto) restores the last speed the user set.
   getPlaybackRate: (): number => {

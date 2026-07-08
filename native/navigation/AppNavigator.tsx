@@ -13,11 +13,9 @@ import Icon, { IconName } from "../components/Icon";
 // Import Screens
 import ConnectScreen from "../screens/ConnectScreen";
 import BookshelfScreen from "../screens/BookshelfScreen";
+import LibraryHubScreen from "../screens/LibraryHubScreen";
 import LibraryScreen from "../screens/LibraryScreen";
-import SeriesListScreen from "../screens/SeriesListScreen";
 import SeriesDetailScreen from "../screens/SeriesDetailScreen";
-import CollectionsPlaylistsScreen from "../screens/CollectionsPlaylistsScreen";
-import AuthorsScreen from "../screens/AuthorsScreen";
 import AuthorDetailScreen from "../screens/AuthorDetailScreen";
 import CollectionDetailScreen from "../screens/CollectionDetailScreen";
 import PlaylistDetailScreen from "../screens/PlaylistDetailScreen";
@@ -42,9 +40,6 @@ const Stack = createNativeStackNavigator();
 const TAB_ICONS: Record<string, IconName> = {
   Home: "home",
   Library: "library",
-  Series: "series",
-  Collections: "collections",
-  Authors: "authors",
   Discover: "explore",
 };
 
@@ -110,11 +105,10 @@ function TabNavigator() {
       })}
     >
       <Tab.Screen name="Home" component={BookshelfScreen} />
+      {/* Consolidated Library hub — Books/Series/Collections/Authors live behind
+          one destination with a segmented control (M3 ≤5 destinations). */}
+      <Tab.Screen name="Library" component={LibraryHubScreen} />
       {showDiscover ? <Tab.Screen name="Discover" component={DiscoverScreen} /> : null}
-      <Tab.Screen name="Library" component={LibraryScreen} />
-      <Tab.Screen name="Series" component={SeriesListScreen} />
-      <Tab.Screen name="Collections" component={CollectionsPlaylistsScreen} />
-      <Tab.Screen name="Authors" component={AuthorsScreen} />
     </Tab.Navigator>
   );
 }
@@ -152,7 +146,10 @@ export default function AppNavigator() {
         if (navigationRef.isReady()) {
           const route: any = navigationRef.getCurrentRoute();
           if (route) {
-            const TAB_ROUTES = ["Home", "Library", "Series", "Collections", "Authors", "Discover"];
+            // The four browse facets now live inside the "Library" hub tab; the
+            // pushed narrator/tag/genre "Library" list (route.params.showBack)
+            // still counts as a non-tab screen via the guard below.
+            const TAB_ROUTES = ["Home", "Library", "Discover"];
             const isTab = TAB_ROUTES.includes(route.name) && !route.params?.showBack;
             usePlaybackStore.getState().setOnTabScreen(isTab);
           }
