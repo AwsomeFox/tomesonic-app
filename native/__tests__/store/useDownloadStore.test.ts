@@ -414,6 +414,35 @@ describe("useDownloadStore", () => {
       expect(downloader.resumeDownload).not.toHaveBeenCalled();
       expect(useDownloadStore.getState().activeDownloads["item1"].status).toBe("downloading");
     });
+
+    it("marks the download failed (not stuck pending) when resumeDownload rejects mid-resume", async () => {
+      // The retry flips the row to "pending" first; if the resume then rejects,
+      // the catch MUST failDownload so the row lands on "failed" with the reason
+      // surfaced — otherwise it's stuck pending forever with no retry affordance.
+      storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+      (downloader.resumeDownload as jest.Mock).mockRejectedValueOnce(new Error("Connection lost"));
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem({ status: "failed", error: "Interrupted" }) } });
+
+      await useDownloadStore.getState().retryDownload("item1");
+
+      const failed = useDownloadStore.getState().activeDownloads["item1"];
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toBe("Connection lost"); // the reject message, surfaced
+      // Parts survive so a subsequent retry can still resume.
+      expect(failed.parts).toHaveLength(2);
+    });
+
+    it("falls back to a generic message when the resume rejection carries none", async () => {
+      storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+      (downloader.resumeDownload as jest.Mock).mockRejectedValueOnce(new Error(""));
+      useDownloadStore.setState({ activeDownloads: { item1: baseItem({ status: "failed" }) } });
+
+      await useDownloadStore.getState().retryDownload("item1");
+
+      const failed = useDownloadStore.getState().activeDownloads["item1"];
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toBe("Retry failed");
+    });
   });
 
   describe("removeAllDownloads", () => {
@@ -716,6 +745,62 @@ describe("useDownloadStore", () => {
       expect(db.getAllDownloads()[0].sessionKey).toBeUndefined();
     });
 
+    describe("remapSessionKey (in-place server-address change)", () => {
+      const OLD = "https://old.example.com::userA";
+      const NEW = "https://new.example.com::userA";
+
+      it("re-stamps this account's rows + in-memory entries old→new, leaving other accounts' rows", () => {
+        db.saveDownloadItem(baseItem({ id: "mine", status: "completed", sessionKey: OLD }));
+        db.saveDownloadItem(baseItem({ id: "theirs", status: "completed", sessionKey: SESSION_B }));
+        useDownloadStore.setState({
+          completedDownloads: { mine: baseItem({ id: "mine", status: "completed", sessionKey: OLD }) },
+          activeDownloads: {},
+        });
+
+        useDownloadStore.getState().remapSessionKey(OLD, NEW);
+
+        // My persisted row + in-memory copy moved to the new address...
+        expect(db.getAllDownloads().find((d) => d.id === "mine")!.sessionKey).toBe(NEW);
+        expect(useDownloadStore.getState().completedDownloads["mine"].sessionKey).toBe(NEW);
+        // ...another account's row is untouched.
+        expect(db.getAllDownloads().find((d) => d.id === "theirs")!.sessionKey).toBe(SESSION_B);
+      });
+
+      it("keeps the moved downloads adoptable: loading under the NEW key still surfaces them", () => {
+        db.saveDownloadItem(baseItem({ id: "mine", status: "completed", sessionKey: OLD }));
+
+        useDownloadStore.getState().remapSessionKey(OLD, NEW);
+        // Now the current account IS the new key.
+        storageHelper.setLastSessionKey(NEW);
+        useDownloadStore.getState().loadDownloadsFromDb();
+
+        // Not orphaned — re-adopted under the new identity.
+        expect(useDownloadStore.getState().completedDownloads["mine"]).toBeTruthy();
+      });
+
+      it("is a no-op when oldKey === newKey", () => {
+        db.saveDownloadItem(baseItem({ id: "x", status: "completed", sessionKey: SESSION_A }));
+        useDownloadStore.getState().remapSessionKey(SESSION_A, SESSION_A);
+        expect(db.getAllDownloads().find((d) => d.id === "x")!.sessionKey).toBe(SESSION_A);
+      });
+
+      it("does not churn in-memory state when no surfaced rows match oldKey", () => {
+        // Rows belong to SESSION_B; remapping OLD→NEW touches nothing in memory,
+        // so the map references must stay identical (no spurious set()/notify).
+        useDownloadStore.setState({
+          completedDownloads: { other: baseItem({ id: "other", status: "completed", sessionKey: SESSION_B }) },
+          activeDownloads: {},
+        });
+        const beforeCompleted = useDownloadStore.getState().completedDownloads;
+        const beforeActive = useDownloadStore.getState().activeDownloads;
+
+        useDownloadStore.getState().remapSessionKey(OLD, NEW);
+
+        expect(useDownloadStore.getState().completedDownloads).toBe(beforeCompleted);
+        expect(useDownloadStore.getState().activeDownloads).toBe(beforeActive);
+      });
+    });
+
     describe("deactivateDownloadsForSwitch", () => {
       it("empties both maps and aborts in-flight parts WITHOUT deleting files or DB rows", async () => {
         const done = baseItem({ id: "done1", status: "completed", sessionKey: SESSION_A });
@@ -924,6 +1009,77 @@ describe("useDownloadStore", () => {
       const entries = m.writeAutoDownloads.mock.calls.at(-1)![0];
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({ id: "book1" });
+    });
+
+    it("excludes podcast EPISODES from the car mirror, mirroring only books", () => {
+      // Every episode of one podcast shares a libraryItemId, so emitting them
+      // would collide on the browse id and mis-resolve resume positions
+      // (episode progress lives under a composite key). A completed episode with
+      // playable tracks must still be dropped; the book alongside it stays.
+      const m = loadFresh();
+      const episode: DownloadItem = {
+        ...baseItem({
+          id: "pod1::ep1",
+          libraryItemId: "pod1",
+          episodeId: "ep1",
+          status: "completed",
+          progress: 1,
+        }),
+        meta: {
+          duration: 1800,
+          chapters: [],
+          tracks: [{ index: 0, filename: "ep.m4b", duration: 1800, startOffset: 0 }],
+        },
+      };
+
+      m.store.setState({
+        completedDownloads: { book1: audioItem("book1"), "pod1::ep1": episode },
+      });
+
+      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      const entries = m.writeAutoDownloads.mock.calls.at(-1)![0];
+      // ONLY the book — the episode is omitted despite being a completed, fully
+      // downloaded audio item.
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ id: "book1" });
+      expect(entries.find((e: any) => e.id === "pod1")).toBeUndefined();
+    });
+
+    it("dedup key EXCLUDES episodes: an episode's book-id progress change does not re-write the car file", () => {
+      // REGRESSION: the re-emit dedup key was computed over ALL completed items
+      // (including episodes) while `entries` excluded episodes. For an episode it
+      // read the WRONG book-level progress (its bare libraryItemId), so a change
+      // to that book-level position forced a redundant, identically-entried
+      // write. The key must be computed over the SAME book-only set as entries.
+      const m = loadFresh();
+      const clock = mockClock();
+      try {
+        const episode: DownloadItem = {
+          ...baseItem({
+            id: "pod1::ep1",
+            libraryItemId: "pod1",
+            episodeId: "ep1",
+            status: "completed",
+            progress: 1,
+          }),
+          meta: {
+            duration: 1800,
+            chapters: [],
+            tracks: [{ index: 0, filename: "ep.m4b", duration: 1800, startOffset: 0 }],
+          },
+        };
+        m.store.setState({ completedDownloads: { book1: audioItem("book1"), "pod1::ep1": episode } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+
+        // Advance the PODCAST's book-level progress (the episode's libraryItemId)
+        // across a 15s bucket, past the rate-limit window. book1's own position
+        // never moved, so the book-only dedup key is unchanged → NO re-write.
+        clock.advance(20_000);
+        m.userStore.setState({ mediaProgress: { pod1: { currentTime: 300 } } });
+        expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      } finally {
+        clock.restore();
+      }
     });
   });
 });

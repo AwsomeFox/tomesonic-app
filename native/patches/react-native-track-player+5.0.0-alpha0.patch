@@ -205,7 +205,7 @@ index d6e3483..7c8675f 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..65d88f1 100644
+index b495b5a..672d343 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -222,7 +222,7 @@ index b495b5a..65d88f1 100644
  import androidx.media3.common.MediaItem
  import androidx.media3.common.Rating
  import androidx.media3.common.util.BitmapLoader
-@@ -61,7 +63,51 @@ class MusicService : HeadlessJsMediaService() {
+@@ -61,7 +63,62 @@ class MusicService : HeadlessJsMediaService() {
      private lateinit var player: QueuedAudioPlayer
      private val binder = MusicBinder()
      private val scope = MainScope()
@@ -268,13 +268,24 @@ index b495b5a..65d88f1 100644
 +    private val ABS_PERSIST_INTERVAL_MS = 20_000L
 +    private var absPersistHandler: android.os.Handler? = null
 +    private var absPersistTick: Runnable? = null
-+    // Last absolute position we synced, to derive timeListened between ticks
-+    // (delta, clamped so a seek doesn't bank bogus listened seconds). -1 = none.
++    // Last absolute position we synced. Kept only to detect a real position
++    // change; timeListened is derived from WALL-CLOCK below, not this delta.
 +    private var absPersistLastSyncedSec: Double = -1.0
++    // Wall-clock (SystemClock.elapsedRealtime) at the last tick while playing.
++    // timeListened = the elapsed wall time between ticks, NOT the position
++    // delta: a forward seek advances position far more than time truly listened
++    // and would over-report listened time to the server. Reset to -1 on
++    // (re)start, seek, and identity change so the tick after any of those banks
++    // 0. -1 = no baseline yet.
++    private var absPersistLastWallMs: Long = -1L
++    // The mediaId of the item the persister last banked a tick for. When the
++    // live item changes (a JS-dead A->B book switch) the wall/position baselines
++    // reset so no cross-book delta is ever banked.
++    @Volatile private var absPersistLastIdentity: String? = null
      private lateinit var mediaSession: MediaLibrarySession
      private var progressUpdateJob: Job? = null
      private var sessionCommands: SessionCommands? = null
-@@ -79,10 +125,13 @@ class MusicService : HeadlessJsMediaService() {
+@@ -79,10 +136,13 @@ class MusicService : HeadlessJsMediaService() {
      }
  
      fun getBitmapLoader(): BitmapLoader {
@@ -288,7 +299,7 @@ index b495b5a..65d88f1 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +146,1264 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +157,1278 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -320,6 +331,20 @@ index b495b5a..65d88f1 100644
 +                if (isPlaying) absStartColdStartPersister()
 +                else absStopColdStartPersister(finalFlush = true)
 +            }
++            // A seek jumps the position without any real listening time passing.
++            // Drop the wall-clock baseline so the tick straddling the seek banks
++            // 0 timeListened (it re-establishes on the following tick) — a
++            // forward seek must never inflate the server's listened total.
++            override fun onPositionDiscontinuity(
++                oldPosition: Player.PositionInfo,
++                newPosition: Player.PositionInfo,
++                reason: Int
++            ) {
++                if (reactContext != null) return
++                if (reason == Player.DISCONTINUITY_REASON_SEEK) {
++                    absPersistLastWallMs = -1L
++                }
++            }
 +        })
          val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
              flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -341,7 +366,15 @@ index b495b5a..65d88f1 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -1134,15 +1167,7 @@ index b495b5a..65d88f1 100644
 +            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
 +            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
 +            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +    }
 +
 +    // Continue Series: one browsable folder per series you're ACTIVE in —
@@ -1566,7 +1591,7 @@ index b495b5a..65d88f1 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1491,65 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1516,65 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1634,7 +1659,7 @@ index b495b5a..65d88f1 100644
          observeEvents()
      }
  
-@@ -293,9 +1632,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1657,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1646,7 +1671,7 @@ index b495b5a..65d88f1 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1645,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1670,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1708,7 +1733,7 @@ index b495b5a..65d88f1 100644
          }
      }
  
-@@ -449,6 +1822,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1847,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1719,7 +1744,7 @@ index b495b5a..65d88f1 100644
      }
  
      @MainThread
-@@ -515,6 +1892,154 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1917,229 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -1761,6 +1786,8 @@ index b495b5a..65d88f1 100644
 +        val mid = fakePlayer.currentMediaItem?.mediaId ?: return
 +        if (!mid.startsWith("play:")) return
 +        absPersistLastSyncedSec = -1.0
++        absPersistLastWallMs = -1L
++        absPersistLastIdentity = null
 +        val handler = android.os.Handler(android.os.Looper.getMainLooper())
 +        val tick = object : Runnable {
 +            override fun run() {
@@ -1802,6 +1829,17 @@ index b495b5a..65d88f1 100644
 +        if (!::fakePlayer.isInitialized) return
 +        val mid = fakePlayer.currentMediaItem?.mediaId ?: return
 +        if (!mid.startsWith("play:")) return
++        // Identity guard: the captured snapshot (session id / offset / duration)
++        // describes absColdStartItemId. During a JS-dead A->B book switch
++        // fakePlayer can already be on B's "play:" item while the browse-pool
++        // resolve hasn't refreshed the snapshot yet — persisting then would POST
++        // book A's offset+session with book B's live position. Parse the live
++        // item's identity and abort unless it matches the snapshot.
++        val raw = mid.removePrefix("play:").substringBefore("@@")
++        val liveItemId = raw.substringBefore("::")
++        val liveEpisodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++        if (liveItemId != absColdStartItemId) return
++        if (liveEpisodeId != absColdStartEpisodeId) return
 +        val relMs = fakePlayer.currentPosition.coerceAtLeast(0L)
 +        // Nothing buffered yet (relMs==0): a bogus start-of-file position would
 +        // otherwise overwrite the real server progress. Skip until we have one.
@@ -1809,18 +1847,32 @@ index b495b5a..65d88f1 100644
 +        val absSec = (absColdStartOffsetMs + relMs) / 1000.0
 +        val sessionId = absColdStartSessionId
 +        val itemId = absColdStartItemId
++        val episodeId = absColdStartEpisodeId
 +        val durationSec = absColdStartDurationSec
-+        // timeListened = forward delta since the last sync, clamped so a manual
-+        // seek forward doesn't bank listened seconds it didn't actually play.
-+        val prev = absPersistLastSyncedSec
++        // Reset the wall/position baselines whenever the live identity changes so
++        // a book/episode switch never banks a cross-book listened delta.
++        if (mid != absPersistLastIdentity) {
++            absPersistLastIdentity = mid
++            absPersistLastWallMs = -1L
++            absPersistLastSyncedSec = -1.0
++        }
++        // timeListened = WALL-CLOCK seconds elapsed while playing since the last
++        // tick, NOT the position delta: a forward seek advances position far
++        // beyond the time truly listened and would over-report to the server.
++        // Clamp so a stall / doze between ticks can't bank a huge value; the
++        // first tick after a (re)start / seek / identity change banks 0.
++        val nowWall = android.os.SystemClock.elapsedRealtime()
++        val prevWall = absPersistLastWallMs
 +        val maxStep = (ABS_PERSIST_INTERVAL_MS / 1000.0) * 4
-+        val listened = if (prev < 0.0) 0.0 else (absSec - prev).let { if (it > 0.0 && it <= maxStep) it else 0.0 }
++        val listened = if (prevWall < 0L) 0.0
++            else ((nowWall - prevWall) / 1000.0).let { if (it > 0.0 && it <= maxStep) it else 0.0 }
++        absPersistLastWallMs = nowWall
 +        absPersistLastSyncedSec = absSec
 +        val task = Runnable {
 +            try {
 +                // (a) Server sync — mirrors utils/progressSync.ts's payload shape.
 +                // Missing session id (offline resolve) or offline: skip the POST,
-+                // still do the local write below. absPost self-heals a 401 by
++                // still do the local writes below. absPost self-heals a 401 by
 +                // refreshing the token.
 +                if (sessionId != null && absOnline()) {
 +                    val body = org.json.JSONObject().apply {
@@ -1832,8 +1884,15 @@ index b495b5a..65d88f1 100644
 +                }
 +                // (b) Local mirror — keep widget_state.json's currentTime fresh so
 +                // the home-screen resume widget isn't stale. Only touches an entry
-+                // already pointing at THIS item (never fabricates one).
-+                absWriteWidgetProgress(itemId, absSec)
++                // already pointing at THIS item+episode (never fabricates one).
++                absWriteWidgetProgress(itemId, episodeId, absSec)
++                // (c) Offline (no server session): the widget mirror alone is not
++                // read by any resume path. Native cold-start resume
++                // (absResolveOfflinePlay) and JS loadLastSession's next open read
++                // the download entry's currentTime, so merge the live position
++                // into auto_downloads.json too or a fully-offline JS-dead session
++                // is lost on the next open.
++                if (sessionId == null) absWriteDownloadProgress(itemId, absSec)
 +            } catch (e: Exception) {
 +                Timber.w(e, "AA cold-start persist tick failed")
 +            }
@@ -1849,16 +1908,20 @@ index b495b5a..65d88f1 100644
 +    // Merge a fresh currentTime into widget_state.json without disturbing the
 +    // itemId/title/author JS wrote there. Atomic temp+rename (same swap JS uses)
 +    // so onPlaybackResumption never reads a torn file. Off the main thread.
-+    private fun absWriteWidgetProgress(itemId: String?, currentTimeSec: Double) {
++    private fun absWriteWidgetProgress(itemId: String?, episodeId: String?, currentTimeSec: Double) {
 +        if (itemId == null) return
 +        try {
 +            val o = absReadMirror("widget_state.json")?.let {
 +                try { org.json.JSONObject(it) } catch (_: Exception) { null }
 +            } ?: return
-+            // Guard: only update the mirror when it already describes THIS item.
-+            // A cold start of a DIFFERENT book than the last-mirrored one must not
-+            // stamp its position onto the wrong widget entry.
++            // Guard: only update the mirror when it already describes THIS item
++            // AND episode. A cold start of a DIFFERENT book — or a different
++            // EPISODE of the same podcast — than the last-mirrored one must not
++            // stamp its position onto the wrong widget entry. Normalize the
++            // mirror's episodeId (absent -> null) before comparing.
 +            if (o.optString("itemId") != itemId) return
++            val mirrorEpisodeId = o.optString("episodeId").ifEmpty { null }
++            if (mirrorEpisodeId != episodeId) return
 +            o.put("currentTime", currentTimeSec)
 +            val f = java.io.File(filesDir, "widget_state.json")
 +            val tmp = java.io.File(filesDir, "widget_state.json.tmp")
@@ -1871,10 +1934,47 @@ index b495b5a..65d88f1 100644
 +        } catch (e: Exception) {
 +            Timber.w(e, "widget progress mirror write failed")
 +        }
++    }
++
++    // Merge a fresh currentTime into the matching auto_downloads.json entry so a
++    // fully-offline JS-dead session isn't lost: native cold-start resume
++    // (absResolveOfflinePlay) and JS loadLastSession read this entry's
++    // currentTime on the next open — the widget mirror alone is read by neither.
++    // Atomic temp+rename (same swap JS uses for this file) so a concurrent native
++    // browse read never sees a torn array. Only updates an entry that already
++    // exists for THIS item (never fabricates one). Off the main thread.
++    private fun absWriteDownloadProgress(itemId: String?, currentTimeSec: Double) {
++        if (itemId == null) return
++        try {
++            val raw = absReadMirror("auto_downloads.json") ?: return
++            val arr = try { org.json.JSONArray(raw) } catch (_: Exception) { return }
++            var changed = false
++            for (i in 0 until arr.length()) {
++                val v = arr.opt(i)
++                // Legacy bare-id string entries carry no resume time — skip them.
++                if (v is org.json.JSONObject && v.optString("id") == itemId) {
++                    v.put("currentTime", currentTimeSec)
++                    changed = true
++                    break
++                }
++            }
++            if (!changed) return
++            val out = arr.toString()
++            val f = java.io.File(filesDir, "auto_downloads.json")
++            val tmp = java.io.File(filesDir, "auto_downloads.json.tmp")
++            tmp.writeText(out)
++            try {
++                android.system.Os.rename(tmp.absolutePath, f.absolutePath)
++            } catch (re: Exception) {
++                f.writeText(out); tmp.delete()
++            }
++        } catch (e: Exception) {
++            Timber.w(e, "auto_downloads progress mirror write failed")
++        }
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2242,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2342,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1883,7 +1983,7 @@ index b495b5a..65d88f1 100644
              return
          }
  
-@@ -780,8 +2305,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2405,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1899,7 +1999,7 @@ index b495b5a..65d88f1 100644
          return mediaSession
      }
  
-@@ -792,13 +2323,45 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2423,45 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -1947,7 +2047,7 @@ index b495b5a..65d88f1 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2468,239 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2568,239 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2007,7 +2107,7 @@ index b495b5a..65d88f1 100644
 +                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
 +                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
 +                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
-             }
++            }
 +            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
 +            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
 +        }
@@ -2199,12 +2299,12 @@ index b495b5a..65d88f1 100644
 +                    } else item
 +                }.toMutableList()
 +                future.set(resolved)
-+            }
+             }
 +            return future
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2709,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2809,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2234,7 +2334,7 @@ index b495b5a..65d88f1 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2741,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2841,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2250,7 +2350,7 @@ index b495b5a..65d88f1 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2757,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2857,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  

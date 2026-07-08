@@ -13,6 +13,9 @@ import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { showAppDialog } from "../store/useDialogStore";
+import { useDownloadStore, episodeDownloadKey } from "../store/useDownloadStore";
+import { downloader } from "../utils/downloader";
+import { withAlpha } from "../theme/palette";
 
 export default function LatestEpisodesScreen({ navigation }: any) {
   const colors = useThemeColors();
@@ -20,6 +23,15 @@ export default function LatestEpisodesScreen({ navigation }: any) {
   const { serverConnectionConfig } = useUserStore();
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
+  // Now-playing session so a row can flip its Play button to the active
+  // (headphones-on-primaryContainer) treatment — same as ItemDetail's rows.
+  const currentSession = usePlaybackStore((state) => state.currentSession);
+  // Per-episode offline download state (composite-keyed), so the triage screen
+  // can start/cancel/delete a download without opening the podcast.
+  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
+  const activeDownloads = useDownloadStore((s) => s.activeDownloads);
+  const cancelDownload = useDownloadStore((s) => s.cancelDownload);
+  const removeDownload = useDownloadStore((s) => s.removeDownload);
   // Episode progress lives in the global map keyed `${libraryItemId}-${episode.id}`
   // (the /api/me convention) — same source ItemDetail's episode rows read.
   const progressMap = useUserStore((state) => state.mediaProgress);
@@ -106,6 +118,60 @@ export default function LatestEpisodesScreen({ navigation }: any) {
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
+
+  // Per-episode download control — mirrors ItemDetail's episode download button
+  // (download / cancel / retry / delete) keyed by the composite
+  // `${libraryItemId}::${episodeId}` (episodeDownloadKey). recent-episodes hands
+  // back loose episodes rather than a full libraryItem, so we build the minimal
+  // shell the downloader reads (id + media.metadata/coverPath).
+  const handleEpisodeDownloadPress = async (episode: any) => {
+    const libraryItemId = episode?.libraryItemId;
+    if (!libraryItemId || !episode?.id) return;
+    const key = episodeDownloadKey(libraryItemId, episode.id);
+    const active = useDownloadStore.getState().activeDownloads[key];
+    const completed = useDownloadStore.getState().completedDownloads[key];
+    if (completed && !active) {
+      // A completed download must go through removeDownload (deletes files);
+      // destructive, so confirm first.
+      showAppDialog({
+        title: "Delete download",
+        message: `Remove "${episode.title || "this episode"}" from this device? You can download it again later.`,
+        buttons: [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: () => removeDownload(key) },
+        ],
+      });
+    } else if (active?.status === "downloading" || active?.status === "pending") {
+      cancelDownload(key);
+    } else if (active?.status === "failed") {
+      useDownloadStore.getState().retryDownload(key);
+    } else {
+      // Starting a NEW download needs the server. Without a live connection
+      // serverAddress/token are "" and downloadEpisode would build a bad URL +
+      // empty bearer token and fail confusingly — surface a clear message
+      // instead. (Delete/cancel/retry above are offline-safe and stay reachable.)
+      if (!serverAddress || !token) {
+        showAppDialog({
+          title: "Not connected",
+          message: "Connect to your server before downloading episodes.",
+        });
+        return;
+      }
+      const libraryItem = episode.libraryItem || {
+        id: libraryItemId,
+        media: episode.podcast || { metadata: { title: episode.podcastTitle || "" } },
+      };
+      try {
+        await downloader.downloadEpisode(libraryItem, episode, serverAddress, token);
+      } catch (err) {
+        console.warn("[LatestEpisodes] Episode download failed:", err);
+        showAppDialog({
+          title: "Download failed",
+          message: "Couldn't start the download. Check your connection and free space, then try again.",
+        });
+      }
+    }
+  };
 
   useEffect(() => {
     if (!currentLibraryId) {
@@ -198,10 +264,13 @@ export default function LatestEpisodesScreen({ navigation }: any) {
         accessibilityRole="button"
         accessibilityState={{ selected: active }}
         accessibilityLabel={`Filter: ${label}`}
+        android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+        hitSlop={{ top: 8, bottom: 8 }}
         style={{
           paddingHorizontal: 14,
           height: 34,
           borderRadius: 17,
+          overflow: "hidden",
           alignItems: "center",
           justifyContent: "center",
           marginRight: 8,
@@ -232,6 +301,23 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     const epProgress = progressMap[`${episode.libraryItemId}-${episode.id}`];
     const epFinished = !!epProgress?.isFinished;
     const epFraction = Math.max(0, Math.min(1, Number(epProgress?.progress || 0)));
+
+    // Now-playing: flip Play → headphones-on-primaryContainer for the loaded
+    // session's episode (same treatment as ItemDetail's rows).
+    const isThisPlaying =
+      currentSession?.libraryItemId === episode.libraryItemId &&
+      currentSession?.episodeId === episode.id;
+
+    // Per-episode offline download state (composite-keyed).
+    const epDlKey = episodeDownloadKey(episode.libraryItemId, episode.id);
+    const epActiveDl = activeDownloads[epDlKey];
+    const epDownloaded = !!(completedDownloads[epDlKey] && !epActiveDl);
+    const epDownloading = epActiveDl?.status === "downloading" || epActiveDl?.status === "pending";
+    const epDownloadFailed = epActiveDl?.status === "failed";
+    const epDownloadPct =
+      epActiveDl && Number.isFinite(epActiveDl.progress)
+        ? Math.round(epActiveDl.progress * 100)
+        : 0;
 
     // Plain View row: were the whole row a Pressable (accessible=true),
     // TalkBack/VoiceOver would collapse it into one node and the nested Play +
@@ -351,6 +437,62 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           </View>
         </Pressable>
 
+        {/* Per-episode download control — mirrors ItemDetail's episode download
+            button's four states (download / downloading% / retry / delete)
+            scoped to this episode's composite key. */}
+        <Pressable
+          onPress={() => handleEpisodeDownloadPress(episode)}
+          accessibilityRole="button"
+          accessibilityLabel={
+            epDownloaded
+              ? `Delete download of ${episode.title || "episode"}`
+              : epDownloading
+              ? `Cancel download of ${episode.title || "episode"}, ${epDownloadPct} percent complete`
+              : epDownloadFailed
+              ? `Download of ${episode.title || "episode"} failed, tap to retry`
+              : `Download ${episode.title || "episode"}`
+          }
+          hitSlop={6}
+          android_ripple={{
+            color: withAlpha(
+              epDownloaded || epDownloadFailed ? colors.error : colors.onSecondaryContainer,
+              0.15
+            ),
+          }}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            overflow: "hidden",
+            backgroundColor:
+              epDownloaded || epDownloadFailed
+                ? withAlpha(colors.error, 0.1)
+                : colors.secondaryContainer,
+            alignItems: "center",
+            justifyContent: "center",
+            marginLeft: 8,
+            borderWidth: epDownloaded || epDownloadFailed ? 1 : 0,
+            borderColor: epDownloaded || epDownloadFailed ? colors.error : "transparent",
+          }}
+        >
+          {epDownloading ? (
+            <View style={{ alignItems: "center", justifyContent: "center" }}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={{ fontSize: 9, color: colors.onSurface, marginTop: 1, fontWeight: "800" }}>
+                {epDownloadPct}%
+              </Text>
+            </View>
+          ) : epDownloadFailed ? (
+            <Icon name="refresh" size={18} color={colors.error} />
+          ) : (
+            <Icon
+              name={epDownloaded ? "trash" : "download"}
+              size={18}
+              color={epDownloaded ? colors.error : colors.onSecondaryContainer}
+            />
+          )}
+        </Pressable>
+
         {/* Mark this episode finished/unfinished (episode-scoped progress). */}
         <Pressable
           onPress={() => toggleEpisodeFinished(episode)}
@@ -384,7 +526,9 @@ export default function LatestEpisodesScreen({ navigation }: any) {
             width: 40,
             height: 40,
             borderRadius: 20,
-            backgroundColor: colors.secondaryContainer,
+            // Flip to the primaryContainer/headphones treatment when this is the
+            // loaded session's episode (mirrors ItemDetail's rows).
+            backgroundColor: isThisPlaying ? colors.primaryContainer : colors.secondaryContainer,
             alignItems: "center",
             justifyContent: "center",
             marginLeft: 8,
@@ -395,12 +539,20 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           }}
           hitSlop={6}
           accessibilityRole="button"
-          accessibilityLabel={`Play ${episode.title || "episode"}`}
+          accessibilityLabel={
+            isThisPlaying
+              ? `Resume ${episode.title || "episode"}`
+              : `Play ${episode.title || "episode"}`
+          }
         >
           {startingId === episode.id ? (
             <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
           ) : (
-            <Icon name="play" size={22} color={colors.onSecondaryContainer} />
+            <Icon
+              name={isThisPlaying ? "headphones" : "play"}
+              size={22}
+              color={isThisPlaying ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+            />
           )}
         </Pressable>
       </View>
@@ -478,9 +630,13 @@ export default function LatestEpisodesScreen({ navigation }: any) {
             />
             <Text
               accessibilityRole="header"
+              // Drive the count from the FILTERED list so it never claims "25
+              // Recent Episodes" over 3 visible rows. Announce politely so a
+              // filter/sort change reports the new result count to TalkBack.
+              accessibilityLiveRegion="polite"
               style={{ color: colors.onSurface, fontWeight: "bold", fontSize: 15 }}
             >
-              {episodes.length} Recent {episodes.length === 1 ? "Episode" : "Episodes"}
+              {visibleEpisodes.length} Recent {visibleEpisodes.length === 1 ? "Episode" : "Episodes"}
             </Text>
           </View>
 
@@ -497,12 +653,15 @@ export default function LatestEpisodesScreen({ navigation }: any) {
               onPress={() => setEpisodeSort((s) => (s === "newest" ? "oldest" : "newest"))}
               accessibilityRole="button"
               accessibilityLabel={episodeSort === "newest" ? "Sort oldest first" : "Sort newest first"}
+              android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+              hitSlop={{ top: 8, bottom: 8 }}
               style={{
                 flexDirection: "row",
                 alignItems: "center",
                 paddingHorizontal: 14,
                 height: 34,
                 borderRadius: 17,
+                overflow: "hidden",
                 marginLeft: 4,
                 backgroundColor: "transparent",
                 borderWidth: 1,
@@ -517,7 +676,10 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           </ScrollView>
 
           {visibleEpisodes.length === 0 ? (
-            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", paddingVertical: 40, paddingHorizontal: 32 }}>
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", paddingVertical: 40, paddingHorizontal: 32 }}
+            >
               No episodes match this filter.
             </Text>
           ) : (

@@ -461,6 +461,16 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     const next = !isLinked;
     setProgressLinked(item.id, next);
     if (next && !isCurrentlyPlaying) {
+      // Enabling the lock must NEVER silently mark an unstarted medium finished.
+      // For a read-but-unlistened both-format book (ebook ~100%, audio ~0%) an
+      // immediate furthest-wins reconcile would jump the untouched audiobook to
+      // "finished". When one side hasn't been started (≈0) there is nothing to
+      // link yet — skip the immediate reconcile; once BOTH sides have real
+      // progress the boundary reconcile keeps them aligned. (reconcileLinkedProgress
+      // itself also guards the destructive finish jump, so the focus-effect
+      // re-run triggered by this toggle is safe too.)
+      const LINK_MIN = 0.005;
+      if (audioProgressFraction < LINK_MIN || ebookProgressFraction < LINK_MIN) return;
       reconcileLinkedProgress(item.id, {
         audioFraction: audioProgressFraction,
         ebookFraction: ebookProgressFraction,
@@ -1420,34 +1430,41 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                         (|Δ| >= 2 pts). Reconciles both to the furthest spot;
                         fraction-only (the ebook page isn't repositioned). */}
                     {progressDrifted ? (
-                      <Pressable
-                        onPress={handleSyncProgress}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Sync progress to ${syncTargetPct} percent`}
-                        android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
-                        style={{
-                          alignSelf: "flex-start",
-                          flexDirection: "row",
-                          alignItems: "center",
-                          height: 40,
-                          paddingHorizontal: 16,
-                          borderRadius: 20,
-                          overflow: "hidden",
-                          backgroundColor: colors.secondaryContainer,
-                        }}
-                      >
-                        <Icon name="refresh" size={18} color={colors.onSecondaryContainer} />
-                        <Text
+                      // Wrapped in a polite live region so TalkBack announces the
+                      // Sync button when drift appears (it otherwise pops in
+                      // silently); only rendered when drifted so the parent's
+                      // rowGap doesn't reserve empty space.
+                      <View accessibilityLiveRegion="polite">
+                        <Pressable
+                          onPress={handleSyncProgress}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Sync progress to ${syncTargetPct} percent`}
+                          android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
+                          hitSlop={{ top: 6, bottom: 6 }}
                           style={{
-                            color: colors.onSecondaryContainer,
-                            fontSize: 14,
-                            fontWeight: "600",
-                            marginLeft: 8,
+                            alignSelf: "flex-start",
+                            flexDirection: "row",
+                            alignItems: "center",
+                            height: 40,
+                            paddingHorizontal: 16,
+                            borderRadius: 20,
+                            overflow: "hidden",
+                            backgroundColor: colors.secondaryContainer,
                           }}
                         >
-                          Sync progress
-                        </Text>
-                      </Pressable>
+                          <Icon name="refresh" size={18} color={colors.onSecondaryContainer} />
+                          <Text
+                            style={{
+                              color: colors.onSecondaryContainer,
+                              fontSize: 14,
+                              fontWeight: "600",
+                              marginLeft: 8,
+                            }}
+                          >
+                            Sync progress
+                          </Text>
+                        </Pressable>
+                      </View>
                     ) : null}
 
                     {/* "Link reading & listening" lock — persisted per item. */}
@@ -1815,10 +1832,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                           : `Download ${episode.title || "episode"}`
                       }
                       hitSlop={6}
+                      android_ripple={{
+                        color: withAlpha(
+                          epDownloaded || epDownloadFailed ? colors.error : colors.onSecondaryContainer,
+                          0.15
+                        ),
+                      }}
                       style={{
                         width: 40,
                         height: 40,
                         borderRadius: 20,
+                        overflow: "hidden",
                         marginRight: 8,
                         backgroundColor:
                           epDownloaded || epDownloadFailed

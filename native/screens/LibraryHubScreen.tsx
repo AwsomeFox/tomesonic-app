@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, Pressable, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -13,6 +13,15 @@ import { storageHelper } from "../utils/storage";
 import LibraryScreen, { LibraryScreenHandle } from "./LibraryScreen";
 import SeriesListScreen, { SeriesListScreenHandle } from "./SeriesListScreen";
 import AuthorsScreen, { AuthorsScreenHandle } from "./AuthorsScreen";
+
+// Memoized facet wrappers: crossing the scroll-to-top threshold flips
+// setShowScrollTop and re-renders the hub, which would otherwise reconcile
+// every kept-alive facet subtree with fresh props. With stable props (see the
+// memoized pillRow, route and callbacks below) these bail out of re-rendering
+// unless their own inputs actually change.
+const MemoLibraryScreen = React.memo(LibraryScreen);
+const MemoSeriesListScreen = React.memo(SeriesListScreen);
+const MemoAuthorsScreen = React.memo(AuthorsScreen);
 
 /**
  * LibraryHubScreen — Material 3 "Library" destination that consolidates the
@@ -169,19 +178,36 @@ export default function LibraryHubScreen({ route, navigation }: any) {
   // reflects the retained position of whichever facet is now active).
   const scrollOffsets = useRef<Record<string, number>>({});
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const handleFacetScroll = (key: LibrarySegment) => (y: number) => {
-    scrollOffsets.current[key] = y;
-    if (key === segmentRef.current) setShowScrollTop(y > SCROLL_TOP_THRESHOLD);
-  };
+  // Stable per-facet scroll handlers. The previous handleFacetScroll(key)
+  // allocated a fresh closure per facet on every hub render (including each time
+  // the scroll-to-top threshold toggled setShowScrollTop), changing the onScroll
+  // prop and re-rendering every mounted facet. These read only refs + the stable
+  // setter, so they never need to change.
+  const onScrollHandlers = useMemo(() => {
+    const make = (key: LibrarySegment) => (y: number) => {
+      scrollOffsets.current[key] = y;
+      if (key === segmentRef.current) setShowScrollTop(y > SCROLL_TOP_THRESHOLD);
+    };
+    return {
+      books: make("books"),
+      series: make("series"),
+      authors: make("authors"),
+    } as Record<LibrarySegment, (y: number) => void>;
+  }, []);
 
-  const selectSegment = (next: LibrarySegment) => {
-    if (next === segment) return;
+  const selectSegment = useCallback((next: LibrarySegment) => {
+    if (next === segmentRef.current) return;
     setSegment(next);
     // A manual segment switch drops any pending Books deep-link seed.
     setBooksSeed(undefined);
     setShowScrollTop((scrollOffsets.current[next] || 0) > SCROLL_TOP_THRESHOLD);
     storageHelper.setLibraryHubSegment(next);
-  };
+  }, []);
+
+  // Stable Books-facet props so the memoized facet doesn't re-render when only
+  // the hub's scroll-to-top state changes.
+  const onBooksSeedConsumed = useCallback(() => setBooksSeed(undefined), []);
+  const booksRoute = useMemo(() => ({ params: booksSeed || {} }), [booksSeed]);
 
   // Resync the scroll-to-top FAB to the active facet's retained offset whenever
   // `segment` changes — by tap, deep-link seed, or an explicit `segment` param.
@@ -228,7 +254,10 @@ export default function LibraryHubScreen({ route, navigation }: any) {
 
   // The segment pill row. Passed down to (only) the active facet as its list
   // header so it collapses away with the content (M3 collapsing header).
-  const pillRow = (
+  // Memoized so an unrelated hub re-render (e.g. the scroll-to-top FAB toggling)
+  // doesn't recreate it and, through it, re-render the active facet's header.
+  const pillRow = useMemo(
+    () => (
     <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 }}>
       <ScrollView
         horizontal
@@ -297,6 +326,8 @@ export default function LibraryHubScreen({ route, navigation }: any) {
         </View>
       </ScrollView>
     </View>
+    ),
+    [colors, segment, selectSegment]
   );
 
   const renderFacet = (key: LibrarySegment) => {
@@ -304,24 +335,24 @@ export default function LibraryHubScreen({ route, navigation }: any) {
     // Only the active facet receives the pill row (a single visible copy) and
     // reports scroll — inactive layers are hidden anyway.
     const listHeader = active ? pillRow : undefined;
-    const onScroll = handleFacetScroll(key);
+    const onScroll = onScrollHandlers[key];
     switch (key) {
       case "books":
         return (
-          <LibraryScreen
+          <MemoLibraryScreen
             ref={booksRef}
             embedded
             navigation={navigation}
-            route={{ params: booksSeed || {} }}
+            route={booksRoute}
             onFilterActiveChange={setBooksFilterActive}
-            onSeedConsumed={() => setBooksSeed(undefined)}
+            onSeedConsumed={onBooksSeedConsumed}
             listHeader={listHeader}
             onScroll={onScroll}
           />
         );
       case "series":
         return (
-          <SeriesListScreen
+          <MemoSeriesListScreen
             ref={seriesRef}
             embedded
             navigation={navigation}
@@ -331,7 +362,7 @@ export default function LibraryHubScreen({ route, navigation }: any) {
         );
       case "authors":
         return (
-          <AuthorsScreen
+          <MemoAuthorsScreen
             ref={authorsRef}
             embedded
             navigation={navigation}
@@ -361,49 +392,10 @@ export default function LibraryHubScreen({ route, navigation }: any) {
       />
 
       <View style={{ flex: 1 }}>
-        {/* Offline fallback: the library facets browse the server, so offline
-            there's nothing to load. Show a clear notice + a jump to the
-            downloaded content instead of rendering facets that only fire
-            failing fetches. */}
-        {isOffline ? (
-          <EmptyState
-            style={{ flex: 1 }}
-            icon="cloud-off"
-            title="You're offline"
-            message="Browsing the library needs a connection. Your downloaded books are always available offline."
-            action={
-              <Pressable
-                onPress={() => navigation?.navigate?.("Downloads")}
-                android_ripple={{ color: colors.surfaceContainerHighest }}
-                accessibilityRole="button"
-                accessibilityLabel="Open Downloads"
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  paddingVertical: 12,
-                  paddingHorizontal: 24,
-                  borderRadius: 20,
-                  backgroundColor: colors.primaryContainer,
-                }}
-              >
-                <Icon name="download" size={18} color={colors.onPrimaryContainer} />
-                <Text
-                  style={{
-                    color: colors.onPrimaryContainer,
-                    fontSize: 14,
-                    fontWeight: "600",
-                    marginLeft: 8,
-                  }}
-                >
-                  Open Downloads
-                </Text>
-              </Pressable>
-            }
-          />
-        ) : (
-          <>
         {/* Keep-alive facet layers: every visited segment stays mounted; only
-            the active one is shown. */}
+            the active one is shown. These stay mounted even while offline (see
+            the offline overlay below) so a transient connectivity blip doesn't
+            unmount them and force a page-0 refetch on reconnect. */}
         {SEGMENTS.map((seg) => {
           if (!mountedRef.current.has(seg.key)) return null;
           const active = seg.key === segment;
@@ -429,8 +421,9 @@ export default function LibraryHubScreen({ route, navigation }: any) {
           </View>
         ) : null}
 
-        {/* Scroll-to-top FAB — appears once the active list is scrolled down. */}
-        {!isSearchActive && showScrollTop ? (
+        {/* Scroll-to-top FAB — appears once the active list is scrolled down.
+            Hidden while offline (the offline overlay covers the facets). */}
+        {!isSearchActive && !isOffline && showScrollTop ? (
           <Pressable
             onPress={scrollActiveToTop}
             android_ripple={{ color: colors.surfaceContainerHighest }}
@@ -456,8 +449,59 @@ export default function LibraryHubScreen({ route, navigation }: any) {
             <Icon name="chevron-up" size={26} color={colors.onSecondaryContainer} />
           </Pressable>
         ) : null}
-          </>
-        )}
+
+        {/* Offline overlay: the library facets browse the server, so offline
+            there's nothing to load. Rather than REPLACING (and thereby
+            unmounting) the facet tree — which would discard the retained
+            pagination/scroll/in-flight state the hub promises and refetch page 0
+            on every reconnect — we keep the facets mounted and cover them with
+            an absolute-fill notice (mirroring the search overlay). When
+            connectivity returns this layer is removed, revealing the facets with
+            their state intact. pointerEvents="auto" + a solid surface background
+            block interaction with the facets beneath; accessibilityViewIsModal
+            keeps screen readers on the notice. */}
+        {isOffline ? (
+          <View
+            style={{ ...ABSOLUTE_FILL, backgroundColor: colors.surface }}
+            pointerEvents="auto"
+            accessibilityViewIsModal
+          >
+            <EmptyState
+              style={{ flex: 1 }}
+              icon="cloud-off"
+              title="You're offline"
+              message="Browsing the library needs a connection. Your downloaded books are always available offline."
+              action={
+                <Pressable
+                  onPress={() => navigation?.navigate?.("Downloads")}
+                  android_ripple={{ color: colors.surfaceContainerHighest }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Downloads"
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingVertical: 12,
+                    paddingHorizontal: 24,
+                    borderRadius: 20,
+                    backgroundColor: colors.primaryContainer,
+                  }}
+                >
+                  <Icon name="download" size={18} color={colors.onPrimaryContainer} />
+                  <Text
+                    style={{
+                      color: colors.onPrimaryContainer,
+                      fontSize: 14,
+                      fontWeight: "600",
+                      marginLeft: 8,
+                    }}
+                  >
+                    Open Downloads
+                  </Text>
+                </Pressable>
+              }
+            />
+          </View>
+        ) : null}
       </View>
     </SafeAreaView>
   );

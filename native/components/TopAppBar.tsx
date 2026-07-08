@@ -7,6 +7,7 @@ import { useUiStore } from "../store/useUiStore";
 import Icon from "./Icon";
 import Pressable from "./HintPressable";
 import { useRmabStore } from "../store/useRmabStore";
+import { useDownloadStore } from "../store/useDownloadStore";
 
 interface TopAppBarProps {
   navigation: any;
@@ -52,6 +53,10 @@ export default function TopAppBar({
   const pendingApprovals = useRmabStore((st) => st.pendingApprovalCount);
   const refreshPendingCount = useRmabStore((st) => st.refreshPendingCount);
   const openLibrarySelector = useUiStore((s) => s.openLibrarySelector);
+  // Downloads has no home in the tab bar after the Round 11 nav split, so it's
+  // surfaced from the account menu. Count in-flight downloads to badge the menu
+  // (and the account icon) — an active download must stay reachable from here.
+  const activeDownloadCount = useDownloadStore((s) => Object.keys(s.activeDownloads).length);
   const { libraries, currentLibraryId } = useLibraryStore();
 
   const isSearchActive = useUiStore((s) => s.isSearchActive);
@@ -337,9 +342,11 @@ export default function TopAppBar({
         android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 20 }}
         accessibilityRole="button"
         accessibilityLabel={
-          pendingApprovals > 0
-            ? `Account menu, ${pendingApprovals} requests awaiting approval`
-            : "Account menu"
+          "Account menu" +
+          (pendingApprovals > 0 ? `, ${pendingApprovals} requests awaiting approval` : "") +
+          (activeDownloadCount > 0
+            ? `, ${activeDownloadCount} ${activeDownloadCount === 1 ? "download" : "downloads"} in progress`
+            : "")
         }
         style={{
           padding: 8,
@@ -370,6 +377,28 @@ export default function TopAppBar({
               {pendingApprovals > 9 ? "9+" : pendingApprovals}
             </Text>
           </View>
+        ) : null}
+        {/* Active-download indicator — a small themed dot at the bottom-right so
+            an in-progress download is visibly reachable via this menu even when
+            no approvals badge is shown. Decorative (the count is in the button
+            label above); kept out of the a11y tree. */}
+        {activeDownloadCount > 0 ? (
+          <View
+            testID="account-download-indicator"
+            importantForAccessibility="no-hide-descendants"
+            accessibilityElementsHidden
+            style={{
+              position: "absolute",
+              bottom: -1,
+              right: -1,
+              width: 11,
+              height: 11,
+              borderRadius: 6,
+              backgroundColor: colors.primary,
+              borderWidth: 2,
+              borderColor: colors.surface,
+            }}
+          />
         ) : null}
       </Pressable>
 
@@ -428,6 +457,52 @@ export default function TopAppBar({
               <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurface, fontSize: 16 }}>
                 Account
               </Text>
+            </Pressable>
+
+            {/* Downloads — its only home now that the tab bar dropped it. Badges
+                with the in-flight count so an active download is reachable. */}
+            <Pressable
+              onPress={() => {
+                setMenuOpen(false);
+                navigation?.navigate("Downloads");
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={
+                activeDownloadCount > 0
+                  ? `Downloads, ${activeDownloadCount} in progress`
+                  : "Downloads"
+              }
+              android_ripple={{ color: colors.surfaceContainerHighest }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                paddingHorizontal: 16,
+                paddingVertical: 12,
+              }}
+            >
+              <Icon name="download" size={20} color={colors.onSurface} style={{ marginRight: 12 }} />
+              <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurface, fontSize: 16 }}>
+                Downloads
+              </Text>
+              {activeDownloadCount > 0 ? (
+                <View
+                  testID="downloads-active-badge"
+                  style={{
+                    marginLeft: 10,
+                    minWidth: 20,
+                    height: 20,
+                    borderRadius: 10,
+                    paddingHorizontal: 5,
+                    backgroundColor: colors.primary,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: colors.onPrimary, fontSize: 11, fontWeight: "700" }}>
+                    {activeDownloadCount > 9 ? "9+" : activeDownloadCount}
+                  </Text>
+                </View>
+              ) : null}
             </Pressable>
 
             {rmabConfigured ? (

@@ -1,10 +1,15 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { View, Text } from "react-native";
 import { useUserStore } from "../store/useUserStore";
 import { useDownloadStore } from "../store/useDownloadStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 import { hasAudio, hasEbook } from "../utils/bookMatch";
+
+// Stable empty map so the podcast-only whole-map subscription returns a constant
+// reference for book rows — a book badge then never re-renders off another
+// item's per-tick mediaProgress write.
+const EMPTY_MEDIA_PROGRESS: Record<string, any> = {};
 
 function remainingPretty(seconds: number): string {
   // < 1s would render "0s" — treat sub-second remainders as done.
@@ -101,10 +106,49 @@ interface Props {
 
 export default function BookProgressBadge({ itemId, item, downloaded, progress, style }: Props) {
   const colors = useThemeColors();
-  const mediaProgress = useUserStore((s) => s.mediaProgress);
-  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
+  const isPodcast = item?.mediaType === "podcast";
+  // BOOK path: subscribe to ONLY this item's entry, so a different book playing
+  // (which rewrites its own mediaProgress key) never re-renders this badge.
+  const perItemProgress = useUserStore((s) => (isPodcast ? undefined : s.mediaProgress[itemId]));
+  // PODCAST path: needs to summarize across the per-episode composite keys, so
+  // it reads the whole map — but only podcast rows subscribe to it (book rows
+  // get the stable empty constant), and the O(n) scan below is memoized on the
+  // map reference so it never rescans on an unrelated re-render.
+  const podcastMap = useUserStore((s) => (isPodcast ? s.mediaProgress : EMPTY_MEDIA_PROGRESS));
+  const isDownloadedEntry = useDownloadStore((s) => !!(itemId && s.completedDownloads[itemId]));
 
-  const isDownloaded = !!downloaded || !!(itemId && completedDownloads[itemId]);
+  const isDownloaded = !!downloaded || isDownloadedEntry;
+
+  // Precomputed podcast episode summary (most-recent unfinished episode +
+  // finished-episode count), memoized on the map so a per-tick progress write
+  // doesn't re-run the full scan on every render. Only computed for the
+  // whole-podcast summary — a caller that passed a specific episode's `progress`
+  // uses that directly and skips the scan.
+  const podcastSummary = useMemo(() => {
+    if (!isPodcast || progress) return null;
+    let latest: any = null;
+    let latestAt = -1;
+    let finishedCount = 0;
+    Object.values(podcastMap).forEach((p: any) => {
+      if (!p || p.libraryItemId !== itemId) return;
+      if (p.isFinished) {
+        // Only composite (per-episode) entries count toward "all finished" — a
+        // plain-key entry from the tick loop would double-count an episode that
+        // also has a server-side composite entry.
+        if (p.episodeId) finishedCount++;
+        return;
+      }
+      const fraction = Number(p.progress || 0);
+      const currentTime = Number(p.currentTime || 0);
+      if (fraction <= 0 && currentTime <= 0) return;
+      const at = Number(p.lastUpdate || p.updatedAt || 0);
+      if (at >= latestAt) {
+        latestAt = at;
+        latest = p;
+      }
+    });
+    return { latest, finishedCount };
+  }, [isPodcast, progress, podcastMap, itemId]);
 
   // What the chip shows — filled in per media type below, rendered once at the
   // bottom. The cloud (downloaded) icon is independent of progress state so a
@@ -114,15 +158,14 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
   let showBook = false;
   let label = "";
 
-  const isPodcast = item?.mediaType === "podcast";
-
   if (isPodcast) {
     // Podcast progress lives per-EPISODE under composite `${itemId}-${episodeId}`
     // keys in the mediaProgress map, so the plain item-id lookup used for books
-    // finds nothing. Summarize the episodes instead: surface the most recently
-    // played unfinished episode, and "Finished" only when every known episode
-    // is done. (Entries written by the playback tick loop under the plain item
-    // key have libraryItemId === itemId too, so they're picked up here.)
+    // finds nothing. Summarize the episodes instead (via the memoized
+    // podcastSummary): surface the most recently played unfinished episode, and
+    // "Finished" only when every known episode is done. (Entries written by the
+    // playback tick loop under the plain item key have libraryItemId === itemId
+    // too, so they're picked up there.)
     let latest: any = null;
     let explicitFinished = false;
     let finishedCount = 0;
@@ -131,26 +174,9 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
       // show exactly that instead of the whole-podcast summary.
       if (progress.isFinished) explicitFinished = true;
       else if (Number(progress.progress || 0) > 0 || Number(progress.currentTime || 0) > 0) latest = progress;
-    } else {
-      let latestAt = -1;
-      Object.values(mediaProgress).forEach((p: any) => {
-        if (!p || p.libraryItemId !== itemId) return;
-        if (p.isFinished) {
-          // Only composite (per-episode) entries count toward "all finished" —
-          // a plain-key entry from the tick loop would double-count an episode
-          // that also has a server-side composite entry.
-          if (p.episodeId) finishedCount++;
-          return;
-        }
-        const fraction = Number(p.progress || 0);
-        const currentTime = Number(p.currentTime || 0);
-        if (fraction <= 0 && currentTime <= 0) return;
-        const at = Number(p.lastUpdate || p.updatedAt || 0);
-        if (at >= latestAt) {
-          latestAt = at;
-          latest = p;
-        }
-      });
+    } else if (podcastSummary) {
+      latest = podcastSummary.latest;
+      finishedCount = podcastSummary.finishedCount;
     }
     const totalEpisodes = Number(item?.media?.numEpisodes ?? item?.media?.episodes?.length ?? 0);
 
@@ -172,7 +198,7 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
       return null;
     }
   } else {
-    const progressObj = progress || (itemId ? mediaProgress[itemId] : null);
+    const progressObj = progress || perItemProgress || null;
     // Prefer the item payload for format detection; fall back to inferring
     // from the progress entry's fields when only an id was provided.
     const itemHasAudio = item ? hasAudio(item) : progressObj?.duration > 0 || progressObj?.currentTime > 0;

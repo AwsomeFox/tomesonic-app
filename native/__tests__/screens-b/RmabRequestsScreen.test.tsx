@@ -21,6 +21,7 @@ jest.mock("../../utils/rmab", () => ({
 import RmabRequestsScreen from "../../screens/RmabRequestsScreen";
 import { useRmabStore } from "../../store/useRmabStore";
 import { useDialogStore } from "../../store/useDialogStore";
+import { storage } from "../../utils/storage";
 import { listMyRequests, deleteRequest, cancelRequest, approveRequest } from "../../utils/rmab";
 
 const initial = useRmabStore.getState();
@@ -36,6 +37,10 @@ const navigation = { goBack: jest.fn() };
 beforeEach(() => {
   useRmabStore.setState(initial, true);
   useDialogStore.setState({ current: null } as any);
+  // Non-admin mount now polls refreshMyRequestStatuses, which diffs against this
+  // persisted baseline — clear it so one test's snapshot can't bleed a spurious
+  // fulfillment banner into the next.
+  storage.remove("rmab_myRequestStatuses");
   jest.clearAllMocks();
   mockedList.mockResolvedValue(REQUESTS);
 });
@@ -151,6 +156,79 @@ describe("RmabRequestsScreen", () => {
       await focusCb!();
     });
     await waitFor(() => expect(mockedList).toHaveBeenCalledTimes(2));
+  });
+
+  it("polls own request statuses on mount and on a genuine refocus for a non-admin", async () => {
+    const spy = jest.fn();
+    useRmabStore.setState({ isAdmin: false, authMode: "jwt", refreshMyRequestStatuses: spy } as any);
+    let focusCb: (() => void) | undefined;
+    const focusNav = {
+      goBack: jest.fn(),
+      addListener: jest.fn((event: string, cb: () => void) => {
+        if (event === "focus") focusCb = cb;
+        return jest.fn();
+      }),
+    };
+    await render(<RmabRequestsScreen navigation={focusNav} />);
+    await screen.findByText("Book A");
+    // Mount poll.
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // First focus event (the mount's own) is skipped, mirroring the list load.
+    await act(async () => {
+      await focusCb!();
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // A real refocus re-polls so a since-fulfilled request can surface.
+    await act(async () => {
+      await focusCb!();
+    });
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+  });
+
+  it("does NOT poll fulfillment status for an admin (they use the approval badge)", async () => {
+    const spy = jest.fn();
+    useRmabStore.setState({ isAdmin: true, authMode: "jwt", refreshMyRequestStatuses: spy } as any);
+    let focusCb: (() => void) | undefined;
+    const focusNav = {
+      goBack: jest.fn(),
+      addListener: jest.fn((event: string, cb: () => void) => {
+        if (event === "focus") focusCb = cb;
+        return jest.fn();
+      }),
+    };
+    await render(<RmabRequestsScreen navigation={focusNav} />);
+    await screen.findByText("Book A");
+    await act(async () => {
+      await focusCb!();
+    });
+    await act(async () => {
+      await focusCb!();
+    });
+    expect(spy).not.toHaveBeenCalled();
+    // And no fulfillment banner for the admin path.
+    expect(screen.queryByText(/ready to read/)).toBeNull();
+  });
+
+  it("renders a fulfillment banner from myRequestUpdates and clears the store counter once shown", async () => {
+    useRmabStore.setState({ isAdmin: false, authMode: "jwt", myRequestUpdates: { fulfilled: 1, failed: 0 } } as any);
+    await render(<RmabRequestsScreen navigation={navigation} />);
+    expect(await screen.findByText("1 request is ready to read")).toBeTruthy();
+    // Snapshotted into the local banner, so the store counter is reset (won't
+    // re-surface on a later poll).
+    await waitFor(() =>
+      expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 })
+    );
+  });
+
+  it("a failed update renders an error banner that can be dismissed", async () => {
+    useRmabStore.setState({ isAdmin: false, authMode: "jwt", myRequestUpdates: { fulfilled: 0, failed: 1 } } as any);
+    await render(<RmabRequestsScreen navigation={navigation} />);
+    await screen.findByText("1 request failed");
+
+    await fireEvent.press(screen.getByLabelText("Dismiss"));
+    await waitFor(() => expect(screen.queryByText("1 request failed")).toBeNull());
   });
 
   it("offers requester Cancel on the user's own cancellable rows, but not on fulfilled ones", async () => {

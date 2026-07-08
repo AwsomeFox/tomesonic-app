@@ -30,6 +30,19 @@ const CANCELLABLE_STATUSES = new Set([
 ]);
 const isCancellable = (status?: string) => CANCELLABLE_STATUSES.has((status || "").toLowerCase());
 
+// Human-readable summary of the non-admin fulfillment banner. Singular/plural
+// aware, and combines both outcomes when a poll surfaced fulfilled AND failed.
+function updatesBannerMessage(fulfilled: number, failed: number): string {
+  const parts: string[] = [];
+  if (fulfilled > 0) {
+    parts.push(fulfilled === 1 ? "1 request is ready to read" : `${fulfilled} requests are ready to read`);
+  }
+  if (failed > 0) {
+    parts.push(failed === 1 ? "1 request failed" : `${failed} requests failed`);
+  }
+  return parts.join(" • ");
+}
+
 /** Friendly label + color role per RMAB request status. */
 function statusMeta(status: string, colors: any): { label: string; bg: string; fg: string } {
   switch ((status || "").toLowerCase()) {
@@ -78,6 +91,11 @@ export default function RmabRequestsScreen({ navigation }: any) {
   const authMode = useRmabStore((s) => s.authMode);
   const refreshPendingCount = useRmabStore((s) => s.refreshPendingCount);
   const cancelMyRequest = useRmabStore((s) => s.cancelMyRequest);
+  // PO4 non-admin fulfillment awareness: a request quietly finishing (or
+  // failing) is otherwise invisible to a requester (they get no approval badge).
+  const refreshMyRequestStatuses = useRmabStore((s) => s.refreshMyRequestStatuses);
+  const clearMyRequestUpdates = useRmabStore((s) => s.clearMyRequestUpdates);
+  const myRequestUpdates = useRmabStore((s) => s.myRequestUpdates);
   const canManage = isAdmin && authMode === "jwt";
   // When NOT an admin manager, /api/requests returns only the caller's own
   // requests, so every row is theirs — offer requester self-cancel on the ones
@@ -216,6 +234,19 @@ export default function RmabRequestsScreen({ navigation }: any) {
     load();
   }, [load]);
 
+  // Non-admins get no approval badge, so poll their own request statuses on
+  // mount/focus — the store diffs against a persisted baseline and accumulates
+  // newly-fulfilled/newly-failed counts into myRequestUpdates (a no-op for
+  // admins, and self-debounced against an overlapping in-flight poll).
+  const pollMyRequestStatuses = useCallback(() => {
+    if (isAdmin) return;
+    refreshMyRequestStatuses();
+  }, [isAdmin, refreshMyRequestStatuses]);
+
+  useEffect(() => {
+    pollMyRequestStatuses();
+  }, [pollMyRequestStatuses]);
+
   // Re-fetch when the screen regains focus (returning from another screen, or
   // the app resuming) so a since-fulfilled/denied status appears without a
   // manual pull-to-refresh. The initial mount already loads via the effect
@@ -229,9 +260,31 @@ export default function RmabRequestsScreen({ navigation }: any) {
         return;
       }
       load();
+      // Also re-poll fulfillment status on a genuine refocus so a since-fulfilled
+      // request surfaces its banner without a manual pull-to-refresh.
+      pollMyRequestStatuses();
     });
     return unsubscribe;
-  }, [navigation, load]);
+  }, [navigation, load, pollMyRequestStatuses]);
+
+  // Snapshot store-accumulated fulfillment updates into a local, dismissible
+  // banner, then immediately clear the store counter. Snapshotting into local
+  // state BEFORE clearing means the banner still renders (from the snapshot)
+  // even though the store is reset — so a pending→available transition that
+  // happens while the app is open is surfaced, never silently re-baselined away.
+  // A later re-poll re-accumulates into a fresh counter, which merges in here.
+  const [updatesBanner, setUpdatesBanner] = useState<{ fulfilled: number; failed: number } | null>(
+    null
+  );
+  useEffect(() => {
+    if (myRequestUpdates.fulfilled > 0 || myRequestUpdates.failed > 0) {
+      setUpdatesBanner((prev) => ({
+        fulfilled: (prev?.fulfilled ?? 0) + myRequestUpdates.fulfilled,
+        failed: (prev?.failed ?? 0) + myRequestUpdates.failed,
+      }));
+      clearMyRequestUpdates();
+    }
+  }, [myRequestUpdates, clearMyRequestUpdates]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -260,6 +313,48 @@ export default function RmabRequestsScreen({ navigation }: any) {
       <RmabSessionExpiredBanner
         onManualReconnect={(msg) => navigation.navigate("Settings", { openRmabConnect: true, rmabConnectError: msg })}
       />
+
+      {updatesBanner && (updatesBanner.fulfilled > 0 || updatesBanner.failed > 0) ? (
+        // Failures read as the more urgent signal, so a mixed banner uses the
+        // error role; an all-good banner uses the primary (success) role.
+        (() => {
+          const isError = updatesBanner.failed > 0;
+          const bg = isError ? colors.errorContainer : colors.primaryContainer;
+          const fg = isError ? colors.onErrorContainer : colors.onPrimaryContainer;
+          const message = updatesBannerMessage(updatesBanner.fulfilled, updatesBanner.failed);
+          return (
+            <View
+              accessibilityLiveRegion="polite"
+              accessibilityRole="alert"
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginHorizontal: 16,
+                marginBottom: 8,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                backgroundColor: bg,
+                borderRadius: 12,
+              }}
+            >
+              <Icon name={isError ? "warning" : "check"} size={18} color={fg} />
+              <Text style={{ color: fg, fontSize: 14, fontWeight: "600", marginLeft: 8, flex: 1 }}>
+                {message}
+              </Text>
+              <Pressable
+                onPress={() => setUpdatesBanner(null)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss"
+                android_ripple={{ color: withAlpha(fg, 0.13) }}
+                style={{ padding: 4, marginLeft: 8 }}
+              >
+                <Icon name="close" size={16} color={fg} />
+              </Pressable>
+            </View>
+          );
+        })()
+      ) : null}
 
       {requests === null ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>

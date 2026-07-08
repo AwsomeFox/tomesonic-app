@@ -70,6 +70,177 @@ export interface LibraryScreenHandle {
   scrollToTop: () => void;
 }
 
+interface LibraryRowProps {
+  item: LibraryItem;
+  index: number;
+  coverUri: string | null;
+  colors: any;
+  starting: boolean;
+  onOpen: (item: LibraryItem) => void;
+  onPlay: (item: LibraryItem) => void;
+  onRead: (item: LibraryItem) => void;
+}
+
+/**
+ * One library row, extracted from LibraryScreen's renderItem and memoized so it
+ * re-renders only when ITS OWN data changes. The previous inline renderItem
+ * closed over the whole mediaProgress map, so a playing book — which rewrites
+ * that map about once a second — reconciled every row on every tick, stealing
+ * frames from animations (the list stays mounted behind every screen via the
+ * keep-alive hub). This row subscribes to just its own progress and download
+ * entry via per-item selectors, so only the currently-playing book's row
+ * updates on a tick.
+ */
+const LibraryRow = React.memo(function LibraryRow({
+  item,
+  index,
+  coverUri,
+  colors,
+  starting,
+  onOpen,
+  onPlay,
+  onRead,
+}: LibraryRowProps) {
+  const perItemProgress = useUserStore((s) => s.mediaProgress[item.id]);
+  const isDownloaded = useDownloadStore((s) => !!s.completedDownloads[item.id]);
+
+  const title = item.media?.metadata?.title || "Untitled";
+  const author = item.media?.metadata?.authorName || "Unknown";
+  const sortLine = formatAdded(item.addedAt);
+  const firstSeries = (item.media?.metadata as any)?.series?.[0];
+  const seriesText = firstSeries
+    ? firstSeries.sequence
+      ? `${firstSeries.name} #${firstSeries.sequence}`
+      : firstSeries.name
+    : null;
+  // Action button: Play for audiobooks, Read for ebook-only items (no audio),
+  // nothing for podcasts.
+  const isPodcast = item.mediaType === "podcast";
+  const rowHasAudio = hasAudio(item);
+  const rowHasEbook = itemHasEbook(item);
+  const isEbookOnly = !rowHasAudio && rowHasEbook;
+  const showPlayButton = !isPodcast && (rowHasAudio || isEbookOnly);
+
+  // Check if progress/download status is active
+  const progress =
+    (item as any).userMediaProgress || (item as any).progress || perItemProgress || null;
+  const isFinished = !!progress?.isFinished;
+  const durationSecs = Number(item.media?.duration || progress?.duration || 0);
+  const progressPercent = Math.max(
+    Math.min(1, progress?.progress ?? (durationSecs > 0 ? (progress?.currentTime || 0) / durationSecs : 0)),
+    0
+  );
+  const isInProgress = progressPercent > 0 && !isFinished;
+  const isLocal = (item as any).isLocal || !!(item as any).localLibraryItem || isDownloaded;
+  // Reading progress and podcast-episode progress count too — the badge itself
+  // renders null when there's truly nothing to show, so this gate only needs to
+  // be generous, not exact.
+  const hasEbookProgress = !!(progress?.ebookLocation || (progress?.ebookProgress || 0) > 0);
+  const hasBadge = isLocal || isFinished || isInProgress || hasEbookProgress || isPodcast;
+
+  return (
+    // material-3-list-card embedded-list-row z-10 cursor-pointer py-1 px-2 mx-0
+    <AnimatedPressable
+      // Gate the per-row entrance to the first screenful. Past that, animating a
+      // freshly-scrolled-in row allocated a new FadeInDown object per row per
+      // render and re-armed on fast scroll — visible jank; those rows now just
+      // appear.
+      entering={index < 12 ? listRowEnter(index) : undefined}
+      onPress={() => onOpen(item)}
+      android_ripple={{ color: colors.surfaceContainerHighest }}
+      style={{ zIndex: 10, paddingVertical: 12, paddingHorizontal: 12 }}
+    >
+      {/* h-full flex items-center relative */}
+      <View style={{ flexDirection: "row", alignItems: "center", position: "relative" }}>
+        {/* list-card-cover relative — 80px tall, rounded-xl, overflow-hidden */}
+        <View
+          style={{
+            position: "relative",
+            borderRadius: 12,
+            overflow: "hidden",
+            backgroundColor: colors.surfaceContainer,
+            width: COVER_WIDTH,
+            height: COVER_HEIGHT,
+          }}
+        >
+          {coverUri ? (
+            <Image
+              source={coverSource(coverUri)}
+              style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
+              contentFit="cover"
+            />
+          ) : (
+            // Material Symbol placeholder — bg-surface-container, book icon
+            <View style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="book" size={34} color={colors.onSurfaceVariant} />
+            </View>
+          )}
+        </View>
+
+        {/* flex-grow min-w-0 pl-4 pr-20 (room for play button) */}
+        <View style={{ flex: 1, minWidth: 0, paddingLeft: 16, paddingRight: showPlayButton ? 80 : 16 }}>
+          {/* Title: truncate text-on-surface text-body-medium font-medium */}
+          <Text numberOfLines={1} ellipsizeMode="tail" style={{ color: colors.onSurface, fontSize: 16, fontWeight: "500" }}>
+            {title}
+          </Text>
+          {/* Author: truncate text-on-surface-variant text-body-small */}
+          <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
+            {author}
+          </Text>
+          {/* displaySortLine / progress indicator */}
+          {hasBadge ? (
+            <BookProgressBadge
+              itemId={item.id}
+              item={item}
+              downloaded={isLocal}
+              style={{ marginTop: 4 }}
+            />
+          ) : sortLine ? (
+            <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+              {sortLine}
+            </Text>
+          ) : null}
+          {/* series information and number */}
+          {seriesText ? (
+            <Text numberOfLines={1} ellipsizeMode="tail" style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
+              {seriesText}
+            </Text>
+          ) : null}
+        </View>
+
+        {/* Play button — vertically centered, right-4, 56dp rounded-full pine-green w/ elevation */}
+        {showPlayButton ? (
+          <View style={{ position: "absolute", right: 16, alignItems: "center", justifyContent: "center", zIndex: 20, top: 0, bottom: 0 }}>
+            <Pressable
+              onPress={() => (isEbookOnly ? onRead(item) : onPlay(item))}
+              hitSlop={6}
+              android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), radius: 28 }}
+              accessibilityRole="button"
+              accessibilityLabel={`${isEbookOnly ? "Read" : "Play"} ${title}`}
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: 28,
+                overflow: "hidden",
+                alignItems: "center",
+                justifyContent: "center",
+                elevation: 2,
+                backgroundColor: starting ? colors.surfaceVariant : colors.primary,
+              }}
+            >
+              {starting ? (
+                <ActivityIndicator size="small" color={colors.onSurfaceVariant} />
+              ) : (
+                <Icon name={isEbookOnly ? "book" : "play"} size={isEbookOnly ? 26 : 30} color={colors.onPrimary} />
+              )}
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    </AnimatedPressable>
+  );
+});
+
 function LibraryScreen(
   { route, navigation, embedded, onFilterActiveChange, listHeader, onScroll, onSeedConsumed }: any,
   ref: React.Ref<LibraryScreenHandle>
@@ -80,9 +251,12 @@ function LibraryScreen(
   const { serverConnectionConfig } = useUserStore();
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
-  const mediaProgress = useUserStore((s) => s.mediaProgress);
+  // The list itself no longer subscribes to the whole mediaProgress /
+  // completedDownloads maps — that made a playing book (which rewrites its
+  // progress mirror ~1×/sec) reconcile the ENTIRE list every tick, and the
+  // keep-alive hub keeps this list mounted behind every screen. Each row
+  // (LibraryRow) subscribes to just its own entry via per-item selectors.
   const hideNonAudiobooks = useUserStore((s) => s.settings?.hideNonAudiobooksGlobal);
-  const completedDownloads = useDownloadStore((s) => s.completedDownloads);
 
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [page, setPage] = useState(0);
@@ -170,10 +344,13 @@ function LibraryScreen(
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
 
-  const getCoverUrl = (itemId: string) => {
-    if (!itemId || !serverAddress || !token) return null;
-    return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
-  };
+  const getCoverUrl = useCallback(
+    (itemId: string) => {
+      if (!itemId || !serverAddress || !token) return null;
+      return `${serverAddress}/api/items/${itemId}/cover?width=400&format=webp&token=${token}`;
+    },
+    [serverAddress, token]
+  );
 
   const fetchItems = useCallback(
     async (pageNum: number, reset = false, showSkeleton = true) => {
@@ -281,157 +458,59 @@ function LibraryScreen(
     }
   };
 
-  const handlePlay = async (item: LibraryItem) => {
-    if (startingId) return;
-    setStartingId(item.id);
-    try {
-      await startPlayback(item.id);
-    } finally {
-      setStartingId(null);
-    }
-  };
+  // startingId is mirrored into a ref so handlePlay stays referentially stable
+  // (its guard reads the ref, not the state) — a new handlePlay each render
+  // would break LibraryRow's React.memo and re-render every visible row when
+  // any single row starts playing.
+  const startingIdRef = useRef<string | null>(null);
+  const handlePlay = useCallback(
+    async (item: LibraryItem) => {
+      if (startingIdRef.current) return;
+      startingIdRef.current = item.id;
+      setStartingId(item.id);
+      try {
+        await startPlayback(item.id);
+      } finally {
+        startingIdRef.current = null;
+        setStartingId(null);
+      }
+    },
+    [startPlayback]
+  );
 
-  const handleReadRow = (item: LibraryItem) => {
-    navigation.navigate("Reader", {
-      itemId: item.id,
-      ebookFormat: getEbookFormat(item),
-      title: item.media?.metadata?.title,
-    });
-  };
+  const handleReadRow = useCallback(
+    (item: LibraryItem) => {
+      navigation.navigate("Reader", {
+        itemId: item.id,
+        ebookFormat: getEbookFormat(item),
+        title: item.media?.metadata?.title,
+      });
+    },
+    [navigation]
+  );
 
-  const renderItem = ({ item, index }: { item: LibraryItem; index: number }) => {
-    const coverUri = getCoverUrl(item.id);
-    const title = item.media?.metadata?.title || "Untitled";
-    const author = item.media?.metadata?.authorName || "Unknown";
-    const sortLine = formatAdded(item.addedAt);
-    const firstSeries = (item.media?.metadata as any)?.series?.[0];
-    const seriesText = firstSeries
-      ? (firstSeries.sequence ? `${firstSeries.name} #${firstSeries.sequence}` : firstSeries.name)
-      : null;
-    // Action button: Play for audiobooks, Read for ebook-only items (no audio),
-    // nothing for podcasts.
-    const isPodcast = item.mediaType === "podcast";
-    const rowHasAudio = hasAudio(item);
-    const rowHasEbook = itemHasEbook(item);
-    const isEbookOnly = !rowHasAudio && rowHasEbook;
-    const showPlayButton = !isPodcast && (rowHasAudio || isEbookOnly);
-    const startingThis = startingId === item.id;
+  const handleOpen = useCallback(
+    (item: LibraryItem) => {
+      navigation.navigate("ItemDetail", { itemId: item.id });
+    },
+    [navigation]
+  );
 
-    // Check if progress/download status is active
-    const progress = (item as any).userMediaProgress || (item as any).progress || mediaProgress[item.id] || null;
-    const isFinished = !!progress?.isFinished;
-    const durationSecs = Number(item.media?.duration || progress?.duration || 0);
-    const progressPercent = Math.max(
-      Math.min(1, progress?.progress ?? (durationSecs > 0 ? (progress?.currentTime || 0) / durationSecs : 0)),
-      0
-    );
-    const isInProgress = progressPercent > 0 && !isFinished;
-    const isLocal = (item as any).isLocal || !!(item as any).localLibraryItem || !!completedDownloads[item.id];
-    // Reading progress and podcast-episode progress count too — the badge
-    // itself renders null when there's truly nothing to show, so this gate
-    // only needs to be generous, not exact.
-    const hasEbookProgress = !!(progress?.ebookLocation || (progress?.ebookProgress || 0) > 0);
-    const isPodcastRow = item.mediaType === "podcast";
-    const hasBadge = isLocal || isFinished || isInProgress || hasEbookProgress || isPodcastRow;
-
-    return (
-      // material-3-list-card embedded-list-row z-10 cursor-pointer py-1 px-2 mx-0
-      <AnimatedPressable
-        entering={listRowEnter(index)}
-        onPress={() => navigation.navigate("ItemDetail", { itemId: item.id })}
-        android_ripple={{ color: colors.surfaceContainerHighest }}
-        style={{ zIndex: 10, paddingVertical: 12, paddingHorizontal: 12 }}
-      >
-        {/* h-full flex items-center relative */}
-        <View style={{ flexDirection: "row", alignItems: "center", position: "relative" }}>
-          {/* list-card-cover relative — 80px tall, rounded-xl, overflow-hidden */}
-          <View
-            style={{
-              position: "relative",
-              borderRadius: 12,
-              overflow: "hidden",
-              backgroundColor: colors.surfaceContainer,
-              width: COVER_WIDTH,
-              height: COVER_HEIGHT,
-            }}
-          >
-            {coverUri ? (
-              <Image
-                source={coverSource(coverUri)}
-                style={{ width: COVER_WIDTH, height: COVER_HEIGHT }}
-                contentFit="cover"
-              />
-            ) : (
-              // Material Symbol placeholder — bg-surface-container, book icon
-              <View style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
-                <Icon name="book" size={34} color={colors.onSurfaceVariant} />
-              </View>
-            )}
-          </View>
-
-          {/* flex-grow min-w-0 pl-4 pr-20 (room for play button) */}
-          <View style={{ flex: 1, minWidth: 0, paddingLeft: 16, paddingRight: showPlayButton ? 80 : 16 }}>
-            {/* Title: truncate text-on-surface text-body-medium font-medium */}
-            <Text numberOfLines={1} ellipsizeMode="tail" style={{ color: colors.onSurface, fontSize: 16, fontWeight: "500" }}>
-              {title}
-            </Text>
-            {/* Author: truncate text-on-surface-variant text-body-small */}
-            <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
-              {author}
-            </Text>
-            {/* displaySortLine / progress indicator */}
-            {hasBadge ? (
-              <BookProgressBadge
-                itemId={item.id}
-                item={item}
-                downloaded={isLocal}
-                style={{ marginTop: 4 }}
-              />
-            ) : sortLine ? (
-              <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
-                {sortLine}
-              </Text>
-            ) : null}
-            {/* series information and number */}
-            {seriesText ? (
-              <Text numberOfLines={1} ellipsizeMode="tail" style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>
-                {seriesText}
-              </Text>
-            ) : null}
-          </View>
-
-          {/* Play button — vertically centered, right-4, 56dp rounded-full pine-green w/ elevation */}
-          {showPlayButton ? (
-            <View style={{ position: "absolute", right: 16, alignItems: "center", justifyContent: "center", zIndex: 20, top: 0, bottom: 0 }}>
-              <Pressable
-                onPress={() => (isEbookOnly ? handleReadRow(item) : handlePlay(item))}
-                hitSlop={6}
-                android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), radius: 28 }}
-                accessibilityRole="button"
-                accessibilityLabel={`${isEbookOnly ? "Read" : "Play"} ${title}`}
-                style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: 28,
-                  overflow: "hidden",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  elevation: 2,
-                  backgroundColor: startingThis ? colors.surfaceVariant : colors.primary,
-                }}
-              >
-                {startingThis ? (
-                  <ActivityIndicator size="small" color={colors.onSurfaceVariant} />
-                ) : (
-                  <Icon name={isEbookOnly ? "book" : "play"} size={isEbookOnly ? 26 : 30} color={colors.onPrimary} />
-                )}
-              </Pressable>
-            </View>
-          ) : null}
-        </View>
-      </AnimatedPressable>
-    );
-  };
+  const renderItem = useCallback(
+    ({ item, index }: { item: LibraryItem; index: number }) => (
+      <LibraryRow
+        item={item}
+        index={index}
+        coverUri={getCoverUrl(item.id)}
+        colors={colors}
+        starting={startingId === item.id}
+        onOpen={handleOpen}
+        onPlay={handlePlay}
+        onRead={handleReadRow}
+      />
+    ),
+    [getCoverUrl, colors, startingId, handleOpen, handlePlay, handleReadRow]
+  );
 
   const renderFooter = () => {
     if (!loading || initialLoading) return null;

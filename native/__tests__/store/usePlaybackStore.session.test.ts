@@ -187,6 +187,49 @@ describe("usePlaybackStore sessions", () => {
       expect(addedTracks()[0].url).toBe("file:///downloads/item1/a.m4b");
     });
 
+    it("prefers a downloaded EPISODE's local file (composite key) even when streaming online", async () => {
+      // A podcast episode is downloaded under the composite key. The server IS
+      // reachable, so the session carries STREAMING urls — but prepare must
+      // resolve the episode download by its composite key and swap in the local
+      // file + local cover (else the episode streams and its offline art is
+      // blank).
+      useDownloadStore.setState({
+        completedDownloads: {
+          "item1::ep1": {
+            id: "item1::ep1",
+            libraryItemId: "item1",
+            episodeId: "ep1",
+            status: "completed",
+            localFolderPath: "file:///downloads/item1::ep1/",
+            parts: [
+              { id: "cover", filename: "cover.jpg", localFilePath: "/downloads/item1::ep1/cover.jpg" },
+              { id: "track_0", filename: "ep.mp3", localFilePath: "/downloads/item1::ep1/ep.mp3" },
+            ],
+          } as any,
+          // A same-item BOOK-style bare-key download must NOT be picked for the
+          // episode (that was the bug: bare-id lookup found the wrong / no row).
+          item1: {
+            id: "item1",
+            libraryItemId: "item1",
+            status: "completed",
+            localFolderPath: "file:///downloads/item1/",
+            parts: [{ id: "track_0", filename: "wrong.mp3", localFilePath: "/downloads/item1/wrong.mp3" }],
+          } as any,
+        },
+      });
+
+      await usePlaybackStore
+        .getState()
+        .preparePlaybackSession(
+          serverSession({ episodeId: "ep1", audioTracks: [{ index: 0, contentUrl: "/api/items/item1/file/ep0", duration: 300, startOffset: 0 }] })
+        );
+
+      const track = addedTracks()[0];
+      expect(track.url).toBe("file:///downloads/item1::ep1/ep.mp3");
+      // Offline art resolves to the downloaded cover FILE, not a dead server url.
+      expect(track.artwork).toBe("/downloads/item1::ep1/cover.jpg");
+    });
+
     it("maps duplicate-index tracks to their uniquified local parts positionally", async () => {
       // Bad metadata: both files claim track.index 1, so the downloader
       // collision-uniquified the second part id to track_1_1. An id-only
@@ -458,7 +501,14 @@ describe("usePlaybackStore sessions", () => {
           coverUrl: "file:///downloads/item1::ep1/cover.jpg",
           status: "completed",
           localFolderPath: "file:///downloads/item1::ep1/",
-          parts: [{ id: "track_0", filename: "track_0.mp3", localFilePath: "/x/track_0.mp3" }],
+          // A real download's part.localFilePath and localFolderPath+filename
+          // resolve to the SAME on-device file. preparePlaybackSession now
+          // resolves the episode download by its composite key too (so the
+          // ONLINE path uses the local file / offline cover instead of
+          // streaming), which means its canonical localForTrack resolution
+          // (part.localFilePath first) also applies to this offline session —
+          // hence the part path must match the folder path.
+          parts: [{ id: "track_0", filename: "track_0.mp3", localFilePath: "/downloads/item1::ep1/track_0.mp3" }],
           meta: {
             duration: 1800,
             chapters: [],

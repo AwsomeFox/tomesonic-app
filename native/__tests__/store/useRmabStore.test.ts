@@ -25,6 +25,8 @@ import {
 // Real in-memory MMKV (see jest.setup.ts) — the store lazy-requires this same
 // module to persist requested-state.
 import { storage } from "../../utils/storage";
+// Required (not imported) to match the store's own lazy require of this module.
+const { listMyRequests: mockedListMyRequests } = require("../../utils/rmab");
 
 const initial = useRmabStore.getState();
 const mockedExchange = exchangeLoginToken as jest.Mock;
@@ -41,10 +43,18 @@ const CFG = {
   user: { id: "u1", username: "tony" },
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   useRmabStore.setState(initial, true);
   storage.remove("rmab_requestedAsins");
   jest.clearAllMocks();
+  // clearAllMocks does NOT clear implementations, so a lingering mockImplementation
+  // (e.g. the reconcile mid-flight test's never-resolving promise) would bleed
+  // into a later initialize()'s fire-and-forget listMyRequests poll and hang its
+  // in-flight guard. Reset to a resolved default every test.
+  (mockedListMyRequests as jest.Mock).mockReset().mockResolvedValue([]);
+  // Then let any fire-and-forget poll a prior initialize() left pending settle,
+  // so refreshMyRequestStatuses's module-level in-flight guard resets first.
+  await new Promise((r) => setImmediate(r));
 });
 
 describe("initialize", () => {
@@ -507,6 +517,48 @@ describe("cancelMyRequest (requester self-cancel)", () => {
     const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
     expect(res).toEqual({ ok: false, message: "You're offline — try again when connected" });
   });
+
+  it("a 401 points the user at reconnecting RMAB", async () => {
+    mockedCancel.mockRejectedValue({ response: { status: 401, data: {} } });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({
+      ok: false,
+      message: "Session expired — reconnect ReadMeABook in Settings",
+    });
+    // No local mutation on an auth failure.
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("a generic server failure surfaces the server's detail", async () => {
+    mockedCancel.mockRejectedValue({ response: { status: 500, data: { message: "db down" } } });
+    useRmabStore.setState({ configured: true, requestedAsins: { B01: "pending" } } as any);
+
+    const res = await useRmabStore.getState().cancelMyRequest("r1", "B01");
+
+    expect(res).toEqual({ ok: false, message: "Couldn't cancel: db down" });
+    expect(useRmabStore.getState().requestedAsins).toEqual({ B01: "pending" });
+  });
+
+  it("SE#4: a cancelled request with NO server id (baseline keyed by asin) is not later called 'failed'", async () => {
+    mockedCancel.mockResolvedValue(undefined);
+    // The server omitted `id`, so the fulfillment baseline is keyed by ASIN.
+    storage.set("rmab_myRequestStatuses", JSON.stringify({ B01: "pending" }));
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+
+    await useRmabStore.getState().cancelMyRequest("r1", "B01");
+    // The cancellation lands under the asin key the baseline actually uses, not
+    // under the (unmatched) requestId — so no stray pending entry survives.
+    expect(JSON.parse(storage.getString("rmab_myRequestStatuses")!)).toEqual({ B01: "cancelled" });
+
+    const { listMyRequests } = require("../../utils/rmab");
+    // The next poll still returns the request keyed by asin (no id).
+    (listMyRequests as jest.Mock).mockResolvedValue([{ audiobook: { asin: "B01" }, status: "cancelled" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
 });
 
 describe("requested-state persistence (survives restarts)", () => {
@@ -694,6 +746,17 @@ describe("refreshMyRequestStatuses (non-admin fulfillment awareness)", () => {
     expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
   });
 
+  it("surfaces a re-fulfilled request (failed → available) as a fulfilled update", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "failed" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses(); // baseline: failed
+
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "available" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    // failed → available is a genuine transition INTO fulfilled.
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
+  });
+
   it("keys by book asin when the server omits a request id", async () => {
     useRmabStore.setState({ configured: true, isAdmin: false } as any);
     (listMyRequests as jest.Mock).mockResolvedValue([{ audiobook: { asin: "B01" }, status: "pending" }]);
@@ -712,6 +775,42 @@ describe("refreshMyRequestStatuses (non-admin fulfillment awareness)", () => {
     await useRmabStore.getState().refreshMyRequestStatuses();
     expect(listMyRequests).not.toHaveBeenCalled();
     expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 0, failed: 0 });
+  });
+
+  it("collapses overlapping polls to one so a single transition isn't double-counted", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "pending" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses(); // baseline: pending
+
+    // Two focus/foreground triggers race: both would see pending→available, but
+    // the in-flight guard lets only the first run — so fulfilled counts once.
+    let release: (v: any) => void = () => {};
+    (listMyRequests as jest.Mock).mockImplementation(
+      () => new Promise((res) => (release = res))
+    );
+    const a = useRmabStore.getState().refreshMyRequestStatuses();
+    const b = useRmabStore.getState().refreshMyRequestStatuses(); // no-op (in-flight)
+    release([{ id: "1", status: "available" }]);
+    await Promise.all([a, b]);
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
+    // listMyRequests fired once for the baseline + once for the winning poll.
+    expect((listMyRequests as jest.Mock).mock.calls.length).toBe(2);
+  });
+
+  it("a pending→available transition while open survives a later same-state re-poll (not re-baselined away)", async () => {
+    useRmabStore.setState({ configured: true, isAdmin: false } as any);
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "pending" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses(); // baseline
+
+    (listMyRequests as jest.Mock).mockResolvedValue([{ id: "1", status: "available" }]);
+    await useRmabStore.getState().refreshMyRequestStatuses(); // surfaces fulfilled=1
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
+
+    // A subsequent poll re-baselines (available===available) but the accumulated
+    // count lives in myRequestUpdates, independent of the baseline — so an
+    // un-consumed update is NOT erased before a screen can surface it.
+    await useRmabStore.getState().refreshMyRequestStatuses();
+    expect(useRmabStore.getState().myRequestUpdates).toEqual({ fulfilled: 1, failed: 0 });
   });
 
   it("keeps the baseline and counts intact when the fetch fails (self-corrects later)", async () => {

@@ -69,6 +69,12 @@ function TabNavigator() {
       }}
       screenOptions={({ route }) => ({
         headerShown: false,
+        // Stop off-screen tabs from rendering while another tab is focused
+        // (react-native-screens). The Library hub keeps its Books list mounted,
+        // and a playing book re-renders that list; without freezeOnBlur those
+        // renders happen behind every other tab and steal frames from the
+        // foreground screen's animations.
+        freezeOnBlur: true,
         tabBarIcon: ({ focused }) => (
           // Material 3 active-indicator pill (w-16 h-8 = 64x32) per BookshelfNavBar.vue
           <View

@@ -149,6 +149,66 @@ describe("usePlaybackStore 1s progress loop", () => {
     expect(persistedSession().currentTime).toBe(15);
   });
 
+  describe("mediaProgress display-mirror throttle", () => {
+    // A long book so neither the rounded percent nor the whole remaining-minute
+    // moves within a few 1s ticks — the loop reads progress.duration for a
+    // single-track chapterless book, so override the mock's duration too.
+    const startLongBook = async () => {
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockImplementation(async () => ({ position: playerPos, duration: 36000, buffered: 0 }));
+      await startLoop({ duration: 36000 });
+    };
+
+    it("does NOT rewrite the display-mirror map every tick when the shown value is unchanged", async () => {
+      await startLongBook();
+      playerPos = 10;
+      await tick(1000);
+      const firstRef = useUserStore.getState().mediaProgress;
+      expect(firstRef["item1"].currentTime).toBe(10);
+
+      playerPos = 11; // same rounded percent AND same whole remaining-minute
+      await tick(1000);
+      // No new map reference → subscribers (the whole library list) don't
+      // re-render this tick.
+      expect(useUserStore.getState().mediaProgress).toBe(firstRef);
+      expect(useUserStore.getState().mediaProgress["item1"].currentTime).toBe(10);
+
+      playerPos = 12;
+      await tick(1000);
+      expect(useUserStore.getState().mediaProgress).toBe(firstRef);
+    });
+
+    it("DOES rewrite the display-mirror when the displayed remaining-minute changes", async () => {
+      await startLongBook();
+      playerPos = 10;
+      await tick(1000);
+      const firstRef = useUserStore.getState().mediaProgress;
+
+      playerPos = 61; // crosses a whole remaining-minute boundary
+      await tick(1000);
+      expect(useUserStore.getState().mediaProgress).not.toBe(firstRef);
+      expect(useUserStore.getState().mediaProgress["item1"].currentTime).toBe(61);
+    });
+
+    it("still keeps persistence/sync running on the throttled ticks", async () => {
+      await startLongBook();
+      playerPos = 10;
+      await tick(1000); // baseline
+      const firstRef = useUserStore.getState().mediaProgress;
+
+      playerPos = 11;
+      await tick(2000); // two more ticks — mirror stays frozen...
+      expect(useUserStore.getState().mediaProgress).toBe(firstRef);
+      // ...but listening time still syncs to the server (separate path).
+      expect(syncProgress).toHaveBeenCalled();
+      expect(jest.mocked(syncProgress).mock.calls.at(-1)![0]).toMatchObject({
+        libraryItemId: "item1",
+        currentTime: 11,
+      });
+    });
+  });
+
   it("translates chapter-relative player positions to absolute book positions in chapter-queue mode", async () => {
     await startLoop({ chapters: CH }); // 1 file + 3 chapters → chapter queue
     expect(usePlaybackStore.getState().chapterQueue).toBe(true);

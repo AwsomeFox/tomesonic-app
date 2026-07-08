@@ -22,6 +22,7 @@ jest.mock("../../utils/progressSync", () => ({
   queueEbookProgressPatch: jest.fn(),
   flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
   clearAllPending: jest.fn(),
+  remapPendingSids: jest.fn(),
   hasPendingWritesFor: jest.fn().mockReturnValue(false),
 }));
 // updateServerAddress probes the candidate address with RAW axios.
@@ -426,6 +427,34 @@ describe("useUserStore", () => {
       expect(storageHelper.getLastPlaybackSession()).toEqual({ id: "sess1", libraryItemId: "item1" });
     });
 
+    it("clears per-item link locks (linkedProgress) when switching accounts, keeping device prefs", async () => {
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      storageHelper.setUserSettings({ jumpForwardTime: 20, linkedProgress: { book1: true } });
+      useUserStore.setState({
+        settings: { ...useUserStore.getState().settings, jumpForwardTime: 20, linkedProgress: { book1: true } },
+      } as any);
+
+      await useUserStore.getState().login(CONFIG_B, { id: "userB" });
+
+      // B must not inherit A's per-item link locks (ids collide on a shared server).
+      expect(storageHelper.getUserSettings().linkedProgress).toEqual({});
+      expect(useUserStore.getState().settings.linkedProgress).toEqual({});
+      // Device-level prefs are preserved.
+      expect(storageHelper.getUserSettings().jumpForwardTime).toBe(20);
+    });
+
+    it("KEEPS per-item link locks on same-account re-login", async () => {
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      storageHelper.setUserSettings({ linkedProgress: { book1: true } });
+      useUserStore.setState({
+        settings: { ...useUserStore.getState().settings, linkedProgress: { book1: true } },
+      } as any);
+
+      await useUserStore.getState().login(CONFIG_A, { id: "userA" });
+
+      expect(storageHelper.getUserSettings().linkedProgress).toEqual({ book1: true });
+    });
+
     it("first-ever login (no previous key) does not wipe anything", async () => {
       seedPreviousSessionLeftovers();
       await useUserStore.getState().login(CONFIG_A, { id: "userA" });
@@ -629,6 +658,28 @@ describe("useUserStore", () => {
       expect(storage.getString("ebookCfi_item1")).toBeUndefined();
       expect(storage.getString("pdfPage_item1")).toBeUndefined();
       expect(storage.getString("last_interaction_item1")).toBeUndefined();
+    });
+
+    it("clears the PERSISTED per-item link locks (linkedProgress) but keeps other device settings", async () => {
+      storageHelper.setServerConfig({ address: "https://a.example.com", token: "tokA" });
+      // Persisted settings carry account A's per-item locks AND a device pref.
+      storageHelper.setUserSettings({ jumpForwardTime: 30, linkedProgress: { book1: true, book2: true } });
+      useUserStore.setState({
+        user: { id: "userA" },
+        serverConnectionConfig: { address: "https://a.example.com", token: "tokA" },
+        settings: { ...useUserStore.getState().settings, jumpForwardTime: 30, linkedProgress: { book1: true } },
+      } as any);
+      jest.mocked(api.post).mockResolvedValue({} as any);
+
+      await useUserStore.getState().logout();
+
+      const persisted = storageHelper.getUserSettings();
+      // linkedProgress wiped from the persisted blob (initialize would merge it back).
+      expect(persisted.linkedProgress).toEqual({});
+      // Device-level prefs survive the logout.
+      expect(persisted.jumpForwardTime).toBe(30);
+      // In-memory settings reset to defaults — no leftover locks.
+      expect(useUserStore.getState().settings.linkedProgress).toEqual({});
     });
 
     it("still clears local state when the server logout call fails", async () => {
@@ -850,6 +901,61 @@ describe("useUserStore", () => {
       const res = await useUserStore.getState().updateServerAddress("https://proxy.example.com");
       expect(res.ok).toBe(false);
       expect(useUserStore.getState().serverConnectionConfig.address).toBe("https://old.example.com");
+    });
+
+    // DATA-LOSS REGRESSION: the address portion of the `${address}::${userId}`
+    // session key changed, but download rows + queued sids still carried the OLD
+    // key. Without an in-place migration, loadDownloadsFromDb filtered every
+    // download out (files remain but "vanish") and the flush loops skipped the
+    // stranded pending entries forever. The move must RE-STAMP them old → new.
+    it("MIGRATES downloads + pending sids in place on an address change (re-stamps old→new, still adopted)", async () => {
+      const { remapPendingSids } = require("../../utils/progressSync");
+      jest.mocked(remapPendingSids).mockClear();
+      mockAxiosGet.mockResolvedValue({ data: { id: "u1", username: "bob" } });
+
+      // A completed download tagged with the OLD session key, both persisted and
+      // surfaced in the store (as a real adopted download would be).
+      const oldRow = {
+        id: "item1",
+        libraryItemId: "item1",
+        status: "completed",
+        parts: [],
+        localFolderPath: "file:///downloads/item1/",
+        sessionKey: "https://old.example.com::u1",
+      } as any;
+      db.saveDownloadItem(oldRow);
+      useDownloadStore.setState({ completedDownloads: { item1: oldRow }, activeDownloads: {} });
+
+      const res = await useUserStore.getState().updateServerAddress("https://new.example.com");
+      expect(res.ok).toBe(true);
+
+      // The persisted DB row is re-stamped to the NEW identity...
+      const row = db.getAllDownloads().find((d) => d.id === "item1");
+      expect(row.sessionKey).toBe("https://new.example.com::u1");
+      // ...and so is the in-memory copy.
+      expect(useDownloadStore.getState().completedDownloads["item1"].sessionKey).toBe(
+        "https://new.example.com::u1"
+      );
+
+      // Loading under the NEW session STILL surfaces it (not orphaned).
+      useDownloadStore.getState().loadDownloadsFromDb();
+      expect(useDownloadStore.getState().completedDownloads["item1"]).toBeTruthy();
+
+      // Queued offline sids were re-keyed old → new so the flush loops adopt them.
+      expect(remapPendingSids).toHaveBeenCalledWith(
+        "https://old.example.com::u1",
+        "https://new.example.com::u1"
+      );
+    });
+
+    it("does NOT migrate when the resolved address is unchanged (no redundant re-stamp)", async () => {
+      const { remapPendingSids } = require("../../utils/progressSync");
+      jest.mocked(remapPendingSids).mockClear();
+      // Probe resolves to the SAME normalized address already configured.
+      mockAxiosGet.mockResolvedValue({ data: { id: "u1" } });
+      const res = await useUserStore.getState().updateServerAddress("https://old.example.com");
+      expect(res.ok).toBe(true);
+      expect(remapPendingSids).not.toHaveBeenCalled();
     });
   });
 

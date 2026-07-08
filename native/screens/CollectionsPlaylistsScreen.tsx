@@ -265,6 +265,7 @@ function CollectionsPlaylistsScreen(
       }}
     >
       <View
+        accessibilityRole="tablist"
         style={{
           flex: 1,
           flexDirection: "row",
@@ -283,6 +284,9 @@ function CollectionsPlaylistsScreen(
               android_ripple={{ color: colors.surfaceContainerHighest }}
               accessibilityRole="tab"
               accessibilityState={{ selected }}
+              // Pills are ~38dp tall (under the 48dp min touch target); extend
+              // the vertical hit area so they're comfortably tappable.
+              hitSlop={{ top: 6, bottom: 6 }}
               style={{
                 flex: 1,
                 flexDirection: "row",
@@ -317,6 +321,8 @@ function CollectionsPlaylistsScreen(
       {/* Create new (for the active tab) */}
       <Pressable
         onPress={openCreate}
+        // 42dp button — pad the hit area up to a comfortable touch target.
+        hitSlop={6}
         android_ripple={{ color: withAlpha(colors.onPrimary, 0.2), borderless: true, radius: 22 }}
         accessibilityRole="button"
         accessibilityLabel={`Create new ${activeTab === "collections" ? "collection" : "playlist"}`}
@@ -338,8 +344,11 @@ function CollectionsPlaylistsScreen(
   // When embedded, the hub's pill row is passed down as listHeader and rendered
   // as the first child of the scroll body (so it collapses away with content);
   // for the non-scrolling skeleton/error states it sits statically on top.
+  // Treat a not-yet-hydrated library id as a loading state: fetchData no-ops
+  // without one, so falling through to EmptyState would flash "No collections
+  // yet" for a frame on cold start before currentLibraryId hydrates.
   const content =
-    loading && data.length === 0 ? (
+    (loading || !currentLibraryId) && data.length === 0 ? (
       <>
         {embedded ? listHeader : null}
         <ListSkeleton rows={7} thumb={72} />
@@ -384,7 +393,7 @@ function CollectionsPlaylistsScreen(
             title={`No ${activeTab} yet`}
             message={
               activeTab === "collections"
-                ? "Collections you create on the server will show up here."
+                ? "Tap + to create your first collection, or they'll appear here once created on the server."
                 : "Playlists you create will show up here."
             }
           />
@@ -422,15 +431,19 @@ function CollectionsPlaylistsScreen(
         >
           <Pressable
             onPress={() => {}}
+            accessibilityViewIsModal
             style={{
               width: "100%",
-              maxWidth: 420,
+              maxWidth: 360,
               backgroundColor: colors.surfaceContainerHigh,
-              borderRadius: 24,
-              padding: 20,
+              borderRadius: 28,
+              padding: 24,
             }}
           >
-            <Text style={{ color: colors.onSurface, fontSize: 19, fontWeight: "700" }}>
+            <Text
+              accessibilityRole="header"
+              style={{ color: colors.onSurface, fontSize: 19, fontWeight: "700" }}
+            >
               New {activeTab === "collections" ? "collection" : "playlist"}
             </Text>
             <TextInput

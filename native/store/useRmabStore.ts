@@ -40,9 +40,9 @@ interface RmabState {
   // available (fulfilled) or newly failed since the last poll — the non-admin
   // analogue of pendingApprovalCount. Accumulates across polls until a screen
   // consumes it via clearMyRequestUpdates().
-  // TODO(screen): surface these on Requests/Discover (e.g. a "1 book ready"
-  // banner or badge) and call clearMyRequestUpdates() once shown. No screen
-  // reads this yet — it's store-only for now.
+  // Surfaced by RmabRequestsScreen: a focus/foreground trigger drives
+  // refreshMyRequestStatuses() (see below), and the screen renders a live-region
+  // banner from these counts, then calls clearMyRequestUpdates() once shown.
   myRequestUpdates: { fulfilled: number; failed: number };
   connecting: boolean;
   connectError: string | null;
@@ -118,6 +118,12 @@ function clearPersistedMyRequestStatuses() {
     storage.remove(MY_REQUEST_STATUS_KEY);
   } catch {}
 }
+
+// Debounce guard: focus/foreground triggers can fire refreshMyRequestStatuses in
+// quick succession (tab switch + resume). Two concurrent polls would each diff
+// the SAME baseline and double-count a single transition, so collapse overlap to
+// one in-flight poll. Module-level (not store state) — it's plumbing, not UI.
+let myRequestStatusInFlight = false;
 
 export const useRmabStore = create<RmabState>((set, get) => ({
   configured: false,
@@ -379,6 +385,10 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     // non-admin gap-filler. (Any authMode works — listMyRequests is allowlisted
     // for API tokens too.)
     if (!configured || isAdmin) return;
+    // Collapse overlapping focus/foreground triggers to a single poll so two
+    // diffs can't both fire against the same baseline and double-count.
+    if (myRequestStatusInFlight) return;
+    myRequestStatusInFlight = true;
     try {
       const { listMyRequests } = require("../utils/rmab");
       const requests = await listMyRequests();
@@ -428,6 +438,8 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     } catch {
       // Offline / server error — leave the last baseline and counts intact;
       // the next successful poll picks up from there.
+    } finally {
+      myRequestStatusInFlight = false;
     }
   },
 
@@ -512,13 +524,34 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     // FAILED_STATUS, so without recording it in the baseline the next
     // refreshMyRequestStatuses() would diff (pending → cancelled) and wrongly
     // nag the user that their OWN just-cancelled request "failed".
+    //
+    // The baseline keys each entry by `r.id ?? asin` (see refreshMyRequestStatuses),
+    // so when the server omits `id` for this request the baseline entry is keyed
+    // by ASIN, not requestId. Writing the cancellation unconditionally under
+    // requestId would then miss the asin-keyed entry, and the next poll would
+    // still diff (pending → cancelled) and surface a bogus "failed". Record the
+    // cancellation under the SAME key the baseline already uses.
     try {
       const { storage } = require("../utils/storage");
       const raw = storage.getString(MY_REQUEST_STATUS_KEY);
       if (raw != null) {
         const snap = JSON.parse(raw);
         if (snap && typeof snap === "object" && !Array.isArray(snap)) {
-          snap[String(requestId)] = "cancelled";
+          const idKey = String(requestId);
+          const asinKey = asin && typeof asin === "string" && asin !== "__proto__" ? asin : null;
+          const hasId = Object.prototype.hasOwnProperty.call(snap, idKey);
+          const hasAsin = asinKey != null && Object.prototype.hasOwnProperty.call(snap, asinKey);
+          if (hasId) {
+            snap[idKey] = "cancelled";
+          } else if (hasAsin) {
+            snap[asinKey as string] = "cancelled";
+          } else {
+            // Neither key is in the baseline yet (e.g. the request was created
+            // after the last poll seeded it). Record under BOTH so whichever key
+            // the next poll derives (`r.id ?? asin`) is already marked cancelled.
+            snap[idKey] = "cancelled";
+            if (asinKey != null) snap[asinKey] = "cancelled";
+          }
           storage.set(MY_REQUEST_STATUS_KEY, JSON.stringify(snap));
         }
       }

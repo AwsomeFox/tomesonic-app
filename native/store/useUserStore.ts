@@ -399,6 +399,16 @@ export const useUserStore = create<UserState>((set, get) => ({
       try {
         useLibraryStore.getState().reset();
       } catch {}
+      // Per-item progress locks (linkedProgress) are keyed by BARE libraryItemId,
+      // which collides across accounts on a shared server — a DIFFERENT account
+      // must not inherit account A's link locks. Clear them from BOTH the
+      // persisted settings blob (initialize() would otherwise merge the stale map
+      // back) and the in-memory settings.
+      try {
+        const persisted = storageHelper.getUserSettings();
+        if (persisted) storageHelper.setUserSettings({ ...persisted, linkedProgress: {} });
+      } catch {}
+      set((s) => ({ settings: { ...s.settings, linkedProgress: {} } }));
     }
     storageHelper.setLastSessionKey(newKey);
 
@@ -486,6 +496,15 @@ export const useUserStore = create<UserState>((set, get) => ({
     storageHelper.removeLastPlaybackSession();
     // The next account must not inherit this one's progress positions.
     storageHelper.removeMediaProgressCache();
+    // Clear the PERSISTED per-item progress locks too: settings goes to DEFAULT
+    // in memory below, but the userSettings MMKV blob would otherwise keep this
+    // account's linkedProgress (keyed by bare libraryItemId → collides across
+    // accounts on a shared server), which initialize() merges back for the next
+    // account. Preserve every other device-level setting.
+    try {
+      const persisted = storageHelper.getUserSettings();
+      if (persisted) storageHelper.setUserSettings({ ...persisted, linkedProgress: {} });
+    } catch {}
     // Explicit logout fully ends the session — clear its identity key too so
     // the next login starts from a clean slate (everything is wiped here).
     storageHelper.removeLastSessionKey();
@@ -571,16 +590,42 @@ export const useUserStore = create<UserState>((set, get) => ({
     }
     if (picked === (cur.address || "").replace(/\/+$/, "")) return { ok: true };
 
-    // In-place move: keep the SAME session identity so a later restore/login on
-    // the new address isn't seen as an account switch (which wipes downloads).
+    // In-place move: keep the SAME account identity, but the ADDRESS portion of
+    // the `${address}::${userId}` session key changes. Downloads are namespaced
+    // by that key and pending offline syncs stamp their sid with it, so we must
+    // MIGRATE the identity in place — otherwise loadDownloadsFromDb filters every
+    // download out (files remain, but they "vanish" from the UI) and the flush
+    // loops skip the stranded pending entries forever (their sid no longer
+    // matches currentSid()).
     const next = { ...cur, address: picked };
     const userId = cur.userId || get().user?.id || "";
+    // Capture the OLD key (what rows/sids were stamped with) BEFORE re-stamping.
+    const oldKey =
+      storageHelper.getLastSessionKey() ||
+      `${(cur.address || "").replace(/\/+$/, "")}::${userId}`;
+    const newKey = `${picked}::${userId}`;
     storageHelper.setServerConfig(next);
-    storageHelper.setLastSessionKey(`${picked}::${userId}`);
+    storageHelper.setLastSessionKey(newKey);
+    if (oldKey !== newKey) {
+      // Re-stamp every download row (DB + in-memory) from oldKey → newKey.
+      try {
+        const { useDownloadStore } = require("./useDownloadStore");
+        useDownloadStore.getState().remapSessionKey(oldKey, newKey);
+      } catch (e) {
+        console.warn("[UserStore] remapSessionKey on address change failed", e);
+      }
+      // Re-key any queued offline syncs/patches/local-sessions sids old → new.
+      try {
+        const { remapPendingSids } = require("../utils/progressSync");
+        remapPendingSids(oldKey, newKey);
+      } catch (e) {
+        console.warn("[UserStore] remapPendingSids on address change failed", e);
+      }
+    }
     // Re-mirror creds for Android Auto and refresh the notification artwork host
-    // (its baked-in address is now stale). No wipe — downloads are keyed by
-    // libraryItemId and their local files stay valid; stream/cover URLs rebuild
-    // from the new address on the next request.
+    // (its baked-in address is now stale). The downloads' local files stay valid
+    // (only their identity stamp moved above); stream/cover URLs rebuild from the
+    // new address on the next request.
     try {
       writeAutoCreds(picked, cur.token, useLibraryStore.getState().currentLibraryId, cur.refreshToken, true);
     } catch {}

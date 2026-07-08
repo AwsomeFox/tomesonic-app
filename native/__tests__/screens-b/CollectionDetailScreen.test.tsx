@@ -219,6 +219,26 @@ describe("CollectionDetailScreen", () => {
     expect(screen.getByText("Empty Collection")).toBeTruthy(); // collage placeholder
   });
 
+  it("empty state offers an Add books CTA into the library browser", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: { id: "col1", name: "Empty", books: [] },
+    });
+    const navigation = await renderCollection();
+
+    const addBooks = await screen.findByLabelText("Add books");
+    await fireEvent.press(addBooks);
+    // A freshly-created (empty) collection isn't a dead end — the CTA routes to
+    // the library browser where a book's "Add to…" sheet populates it.
+    expect(navigation.navigate).toHaveBeenCalledWith("Library");
+  });
+
+  it("does not show the Add books CTA once the collection has items", async () => {
+    await renderCollection();
+    await screen.findByText("Finished Book");
+
+    expect(screen.queryByLabelText("Add books")).toBeNull();
+  });
+
   it("errors without a collection id and offers no retry", async () => {
     await renderCollection({});
 
