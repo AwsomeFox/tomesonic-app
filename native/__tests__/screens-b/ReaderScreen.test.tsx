@@ -96,6 +96,13 @@ jest.mock(
   },
   { virtual: true }
 );
+// expo-speech is now a real dependency; mock its native surface so the TTS path
+// is exercisable in jest without touching a native module.
+jest.mock("expo-speech", () => ({
+  speak: jest.fn(),
+  stop: jest.fn(),
+  isSpeakingAsync: jest.fn().mockResolvedValue(false),
+}));
 
 import React from "react";
 import { Linking, Share } from "react-native";
@@ -967,12 +974,20 @@ describe("ReaderScreen (reader features)", () => {
     );
   });
 
-  it("read-aloud reports 'not available' when expo-speech is absent from the build", async () => {
-    useDialogStore.setState({ current: null } as any);
-    await renderReader();
-    await readyWebView();
+  it("read-aloud (expo-speech) asks the WebView for text and speaks it", async () => {
+    const Speech = require("expo-speech");
+    const webProps = await (async () => { await renderReader(); return readyWebView(); })();
 
+    // Pressing "Read aloud" asks the WebView for the current section's text.
     await fireEvent.press(screen.getByLabelText("Read aloud"));
-    expect(useDialogStore.getState().current?.title).toBe("Read-aloud unavailable");
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringContaining("window.getReaderText")
+    );
+
+    // When the text comes back, it is spoken.
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "Once upon a time" });
+    });
+    expect(Speech.speak).toHaveBeenCalledWith("Once upon a time", expect.any(Object));
   });
 });
