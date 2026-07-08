@@ -323,6 +323,89 @@ describe("usePlaybackStore 1s progress loop", () => {
     });
   });
 
+  it("pause() clears the listening-time anchor so resume doesn't phantom-accrue the paused gap", async () => {
+    await startLoop();
+    playerPos = 10;
+    await tick(1000); // baseline tick: seeds _lastTickAt, accrues nothing yet
+    expect(syncProgress).not.toHaveBeenCalled();
+
+    // Pause with no listening accrued yet (accumulator empty) — the point of
+    // interest is the ANCHOR: pause() must null it so the next resume tick
+    // doesn't charge the paused wall-clock gap as listened time.
+    await usePlaybackStore.getState().pause();
+
+    // Sit paused for 20s of wall-clock. The loop is paused-gated so it does
+    // nothing, but Date.now() marches on — this is exactly the gap that used
+    // to be (partly) charged as listening on resume.
+    await tick(20000);
+
+    await usePlaybackStore.getState().play();
+
+    // FIRST post-resume tick: with the anchor reset it accrues 0 (re-seeds),
+    // so the accumulator is still empty → NO sync fires. Before the fix the
+    // stale pre-pause anchor made this tick accrue up to MAX_TICK_DELTA_S (~2s)
+    // of not-listened time, which (the sync window being wide open) would have
+    // fired a bogus sync here.
+    await tick(1000);
+    expect(syncProgress).not.toHaveBeenCalled();
+
+    // SECOND post-resume tick accrues one REAL listened second and syncs it as
+    // exactly 1 — not 1 + the ~2s phantom.
+    await tick(1000);
+    expect(syncProgress).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(syncProgress).mock.calls.at(-1)![0].timeListened).toBe(1);
+  });
+
+  describe("mediaProgress mirror escape hatches", () => {
+    it("ALWAYS writes the mirror when the book duration is unknown (<=0)", async () => {
+      // With a 0 duration the badge can't show a percent/remaining, so the
+      // throttle would collapse every position to one signature and freeze the
+      // mirror — keep the old always-write behavior there.
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockImplementation(async () => ({ position: playerPos, duration: 0, buffered: 0 }));
+      await startLoop({ duration: 0, audioTracks: [{ index: 0, contentUrl: "/f0.mp3", duration: 0, startOffset: 0 }] });
+
+      playerPos = 10;
+      await tick(1000);
+      const ref1 = useUserStore.getState().mediaProgress;
+      expect(ref1["item1"].currentTime).toBe(10);
+
+      // A DIFFERENT position that yields the same (0%) display still forces a
+      // fresh map write — the throttle is bypassed for unknown-duration books.
+      playerPos = 11;
+      await tick(1000);
+      expect(useUserStore.getState().mediaProgress).not.toBe(ref1);
+      expect(useUserStore.getState().mediaProgress["item1"].currentTime).toBe(11);
+    });
+
+    it("breaks through the throttle to mark finished even after the mirror froze mid-book", async () => {
+      // Long book so the per-tick throttle is active mid-book.
+      jest
+        .mocked(TrackPlayer.getProgress)
+        .mockImplementation(async () => ({ position: playerPos, duration: 36000, buffered: 0 }));
+      await startLoop({ duration: 36000 });
+
+      playerPos = 100;
+      await tick(1000);
+      const midRef = useUserStore.getState().mediaProgress;
+      playerPos = 101; // same displayed pct/minute → throttle freezes the map
+      await tick(1000);
+      expect(useUserStore.getState().mediaProgress).toBe(midRef); // frozen
+
+      // Jump to within the 5s finish window: the finish path must write through
+      // the (frozen) throttle and reset the stale in-progress signature so the
+      // badge flips to finished instead of staying stuck at the mid-book value.
+      playerPos = 35998;
+      await tick(1000);
+      const entry = useUserStore.getState().mediaProgress["item1"];
+      expect(entry.isFinished).toBe(true);
+      expect(entry.progress).toBe(1);
+      expect(entry.currentTime).toBe(36000);
+      expect(useUserStore.getState().mediaProgress).not.toBe(midRef);
+    });
+  });
+
   describe("auto mark-finished", () => {
     it("PATCHes the item finished exactly once per session", async () => {
       await startLoop();

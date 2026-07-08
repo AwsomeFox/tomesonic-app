@@ -34,6 +34,7 @@ import { useRmabStore } from "../store/useRmabStore";
 import ReaderScreen from "../screens/ReaderScreen";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
+import { shouldShowDiscover } from "./discoverVisibility";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -47,13 +48,11 @@ const Stack = createNativeStackNavigator();
  *   with a "how to connect" screen, UNLESS the user turned that off
  *   (showDiscoverWhenDisconnected === false), which restores the old
  *   hidden-until-connected behavior.
+ *
+ * The pure gating helper lives in ./discoverVisibility (a leaf module) so it can
+ * be unit-tested without importing this navigator's whole screen/store graph.
  */
-export function shouldShowDiscover(
-  rmabConnected: boolean,
-  showDiscoverWhenDisconnected: boolean | undefined
-): boolean {
-  return rmabConnected || showDiscoverWhenDisconnected !== false;
-}
+export { shouldShowDiscover } from "./discoverVisibility";
 
 const TAB_ICONS: Record<string, IconName> = {
   Home: "home",

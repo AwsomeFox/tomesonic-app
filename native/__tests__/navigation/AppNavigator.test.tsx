@@ -3,7 +3,10 @@
  * (jwt) connected OR when it's not connected but the user hasn't hidden the
  * pre-connect promo (showDiscoverWhenDisconnected !== false).
  */
-import { shouldShowDiscover } from "../../navigation/AppNavigator";
+// Import the pure gating helper from its leaf module — NOT from AppNavigator,
+// whose full screen/store import graph would pollute shared module mocks (e.g.
+// expo/fetch) and break unrelated suites like oauth.test.
+import { shouldShowDiscover } from "../../navigation/discoverVisibility";
 
 describe("shouldShowDiscover gating", () => {
   it("always shows when fully (jwt) connected, regardless of the setting", () => {
