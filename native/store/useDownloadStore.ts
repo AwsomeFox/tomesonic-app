@@ -93,16 +93,21 @@ function folderForItem(item?: DownloadItem | null): string | null {
  * later re-login re-adopts the SAME namespace and its files); falls back to
  * deriving the key from the live server config so a logged-in user whose key
  * hasn't been stamped yet still gets a stable namespace and never has downloads
- * stranded. Returns null ONLY when fully logged out (no config) — in which case
- * loadDownloadsFromDb surfaces nothing.
+ * stranded. The config fallback requires BOTH address AND userId — a config
+ * missing userId (an older persisted config, or a half-populated one) would
+ * yield an ambiguous `${address}::` namespace that could permanently
+ * strand/mis-scope downloads, so we return null and defer until a real
+ * lastSessionKey/userId exists rather than stamp into that ambiguous key.
+ * Returns null when fully logged out (no config) or userId-less — in which case
+ * loadDownloadsFromDb surfaces nothing (and migration/stamping is deferred).
  */
 function currentSessionKey(): string | null {
   try {
     const k = storageHelper.getLastSessionKey();
     if (k) return k;
     const cfg = storageHelper.getServerConfig();
-    if (cfg?.address) {
-      return `${String(cfg.address).replace(/\/$/, "")}::${cfg.userId || ""}`;
+    if (cfg?.address && cfg?.userId) {
+      return `${String(cfg.address).replace(/\/$/, "")}::${cfg.userId}`;
     }
   } catch {}
   return null;

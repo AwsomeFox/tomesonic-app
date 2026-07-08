@@ -699,6 +699,23 @@ describe("useDownloadStore", () => {
       expect(db.getAllDownloads()[0].sessionKey).toBe("https://c.example.com::userC");
     });
 
+    it("a config MISSING userId does NOT migrate into an ambiguous `address::` namespace", () => {
+      storageHelper.removeLastSessionKey();
+      // Older/half-populated config with no userId — deriving `${address}::`
+      // would be an ambiguous namespace that could strand downloads later.
+      storageHelper.setServerConfig({ address: "https://d.example.com/" } as any);
+      const legacy = baseItem({ id: "dBook", status: "completed" });
+      delete (legacy as any).sessionKey;
+      db.saveDownloadItem(legacy);
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      // Deferred: nothing surfaced, and the legacy row is left UNSTAMPED for a
+      // real (userId-bearing) session to adopt — never stamped `address::`.
+      expect(useDownloadStore.getState().completedDownloads).toEqual({});
+      expect(db.getAllDownloads()[0].sessionKey).toBeUndefined();
+    });
+
     describe("deactivateDownloadsForSwitch", () => {
       it("empties both maps and aborts in-flight parts WITHOUT deleting files or DB rows", async () => {
         const done = baseItem({ id: "done1", status: "completed", sessionKey: SESSION_A });
