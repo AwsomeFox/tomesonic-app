@@ -510,6 +510,7 @@ export default function ConnectScreen() {
                           accessibilityRole="button"
                           accessibilityLabel={`Use saved server ${host}`}
                           testID={`saved-server-${host}`}
+                          hitSlop={{ top: 8, bottom: 8 }}
                           android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
                           style={{
                             flexDirection: "row" as const,

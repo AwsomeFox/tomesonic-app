@@ -12,7 +12,7 @@ jest.mock("../../utils/rmab", () => ({
  * back), context action icons, and the account/settings dropdown navigation.
  */
 import { BackHandler } from "react-native";
-import { render, screen, fireEvent, act } from "@testing-library/react-native";
+import { render, screen, fireEvent, act, within } from "@testing-library/react-native";
 import TopAppBar from "../../components/TopAppBar";
 import { useUiStore } from "../../store/useUiStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
@@ -233,11 +233,15 @@ describe("TopAppBar — default (tab) mode", () => {
     useDownloadStore.setState({ activeDownloads: { a1: activeItem("a1"), a2: activeItem("a2") } } as any);
     await render(<TopAppBar navigation={makeNav()} />);
 
-    // Indicator dot on the account icon (decorative, hidden from a11y tree)...
-    expect(
-      screen.getByTestId("account-download-indicator", { includeHiddenElements: true })
-    ).toBeTruthy();
-    // ...and the count is surfaced in the button's accessible label.
+    // Count pill on the account icon (decorative, hidden from a11y tree),
+    // mirroring the pending-approvals pill rather than an ambiguous dot...
+    const indicator = screen.getByTestId("account-download-indicator", {
+      includeHiddenElements: true,
+    });
+    expect(indicator).toBeTruthy();
+    // ...it renders the active-download count.
+    expect(within(indicator).getByText("2", { includeHiddenElements: true })).toBeTruthy();
+    // ...and the count is also surfaced in the button's accessible label.
     expect(screen.getByLabelText(/2 downloads in progress/)).toBeTruthy();
 
     // The menu row carries the count badge and a labelled affordance.

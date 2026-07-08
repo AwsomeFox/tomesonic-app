@@ -378,10 +378,11 @@ export default function TopAppBar({
             </Text>
           </View>
         ) : null}
-        {/* Active-download indicator — a small themed dot at the bottom-right so
-            an in-progress download is visibly reachable via this menu even when
-            no approvals badge is shown. Decorative (the count is in the button
-            label above); kept out of the a11y tree. */}
+        {/* Active-download indicator — a small primary count pill at the
+            bottom-right, mirroring the pending-approvals pill (top-right) so
+            both badges read as counts rather than one count + one ambiguous
+            dot. Decorative (the count is folded into the button label above);
+            kept out of the a11y tree. */}
         {activeDownloadCount > 0 ? (
           <View
             testID="account-download-indicator"
@@ -389,16 +390,23 @@ export default function TopAppBar({
             accessibilityElementsHidden
             style={{
               position: "absolute",
-              bottom: -1,
-              right: -1,
-              width: 11,
-              height: 11,
-              borderRadius: 6,
+              bottom: -2,
+              right: -2,
+              minWidth: 18,
+              height: 18,
+              borderRadius: 9,
+              paddingHorizontal: 4,
               backgroundColor: colors.primary,
+              alignItems: "center",
+              justifyContent: "center",
               borderWidth: 2,
               borderColor: colors.surface,
             }}
-          />
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 10, fontWeight: "700" }}>
+              {activeDownloadCount > 9 ? "9+" : activeDownloadCount}
+            </Text>
+          </View>
         ) : null}
       </Pressable>
 
