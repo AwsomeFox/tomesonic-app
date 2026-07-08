@@ -182,6 +182,23 @@ function seedOnline(shelves: any[], mediaProgress: Record<string, any> = {}) {
   } as any);
 }
 
+/**
+ * Drive a shelf's horizontal row into an overflowing state. jsdom fires no real
+ * onLayout / onContentSizeChange, so the "see all" arrow (gated on overflow)
+ * never appears without simulating a viewport narrower than the content.
+ */
+async function simulateShelfOverflow(
+  shelfId: string,
+  { viewport = 400, content = 1600 }: { viewport?: number; content?: number } = {}
+) {
+  const row = await screen.findByTestId(`shelf-row-${shelfId}`);
+  await act(async () => {
+    fireEvent(row, "layout", { nativeEvent: { layout: { width: viewport, height: 200, x: 0, y: 0 } } });
+    fireEvent(row, "contentSizeChange", content, 200);
+  });
+  return row;
+}
+
 beforeEach(() => {
   useUserStore.setState(initialUser, true);
   useLibraryStore.setState(initialLibrary, true);
@@ -439,12 +456,56 @@ describe("BookshelfScreen online", () => {
     const navigation = makeNavigation();
     await render(<BookshelfScreen navigation={navigation} />);
 
+    await simulateShelfOverflow("recently-added");
     const header = await screen.findByLabelText("Recently Added, see all");
     await fireEvent.press(header);
     expect(navigation.navigate).toHaveBeenCalledWith("Library", {
       orderBy: "addedAt",
       descending: true,
     });
+  });
+
+  it("shows the 'see all' arrow ONLY when a shelf row overflows the viewport", async () => {
+    seedOnline([baseShelves[1]]); // recently-added
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    // Content fits the viewport → no arrow.
+    await simulateShelfOverflow("recently-added", { viewport: 800, content: 400 });
+    expect(screen.queryByLabelText("Recently Added, see all")).toBeNull();
+
+    // Content now wider than the viewport → arrow appears.
+    await simulateShelfOverflow("recently-added", { viewport: 400, content: 1600 });
+    expect(screen.getByLabelText("Recently Added, see all")).toBeTruthy();
+  });
+
+  it("Continue Reading 'see all' opens the Library in-progress filter", async () => {
+    seedOnline([
+      { id: "continue-reading", label: "Continue Reading", type: "book", entities: [audioBook, ebookOnlyBook] },
+    ]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Reading");
+    await simulateShelfOverflow("continue-reading");
+    await fireEvent.press(screen.getByLabelText("Continue Reading, see all"));
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      "Library",
+      expect.objectContaining({ filter: expect.stringContaining("progress.") })
+    );
+  });
+
+  it("Continue Series 'see all' switches the Library hub to the Series segment", async () => {
+    seedOnline([
+      { id: "recent-series", label: "Recent Series", type: "series", entities: [seriesEntity] },
+    ]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Recent Series");
+    await simulateShelfOverflow("recent-series");
+    await fireEvent.press(screen.getByLabelText("Recent Series, see all"));
+    expect(navigation.navigate).toHaveBeenCalledWith("Library", { segment: "series" });
   });
 
   it("transforms Continue Series into series folders resolved from the library series list", async () => {

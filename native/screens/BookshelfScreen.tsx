@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { View, Text, Pressable, ScrollView, RefreshControl } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -32,11 +32,23 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 // of it (each shelf is a capped horizontal scroll, so its tail is otherwise
 // unreachable). Returns null for shelves with no sensible full-list mapping
 // (Continue Series/Reading, author rows, Discover) — those stay non-pressable.
+// Maps a home shelf to a "see all" destination on the Library hub tab. The hub
+// consumes `filter`/`orderBy`/`descending` (seeds the Books facet) and `segment`
+// (switches to the Series/Authors facet). Returns null when a shelf has no
+// sensible full-list view — those headers stay non-pressable (and get no arrow).
 function shelfToLibraryParams(shelf: any): Record<string, any> | null {
+  // Series/author shelves (incl. the transformed "Continue Series") open the
+  // matching browse segment rather than a books filter.
+  if (shelf?.type === "series") return { segment: "series" };
+  if (shelf?.type === "authors" || shelf?.type === "author") return { segment: "authors" };
   switch (shelf?.id) {
     case "recently-added":
       return { orderBy: "addedAt", descending: true };
+    // Continue Reading is in-progress books too (its rows are ebooks-in-progress;
+    // ABS filters are single-valued, so "in progress" is the closest full-list
+    // match) — give it the same destination as Continue Listening.
     case "continue-listening":
+    case "continue-reading":
       return { filter: `progress.${encodeFilterValue("in-progress")}` };
     case "listen-again":
       return { filter: `progress.${encodeFilterValue("finished")}` };
@@ -79,6 +91,23 @@ export default function BookshelfScreen({ navigation }: any) {
   // MMKV cache, so the `shelves.length === 0` half of the gate skips it.
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Per-shelf "does the horizontal row overflow its viewport" flag. A shelf only
+  // gets a "see all" arrow when its content is wider than the screen (i.e. there
+  // are more items than fit) AND it maps to a full-list destination — a short
+  // row that shows everything already has nothing more to see. Viewport and
+  // content widths arrive from separate callbacks (onLayout / onContentSizeChange)
+  // and in either order, so both are stashed in refs and the flag is recomputed
+  // whenever either changes.
+  const [shelfOverflow, setShelfOverflow] = useState<Record<string, boolean>>({});
+  const shelfViewportW = useRef<Record<string, number>>({});
+  const shelfContentW = useRef<Record<string, number>>({});
+  const recomputeShelfOverflow = useCallback((id: string) => {
+    const vw = shelfViewportW.current[id] || 0;
+    const cw = shelfContentW.current[id] || 0;
+    // +4px slack so sub-pixel rounding on an exactly-fitting row isn't "overflow".
+    const over = vw > 0 && cw > vw + 4;
+    setShelfOverflow((prev) => (prev[id] === over ? prev : { ...prev, [id]: over }));
+  }, []);
   // `isOffline` is the derived, debounced "effectively offline" signal (also
   // true for a captive portal / reachable-Wi-Fi-but-unreachable-server), which
   // the whole-screen offline gating below relies on so those cases actually
@@ -874,6 +903,9 @@ export default function BookshelfScreen({ navigation }: any) {
 
             const shelfLabel = shelf.label || shelf.name;
             const libParams = shelfToLibraryParams(shelf);
+            // Only offer "see all" when the row actually overflows the screen —
+            // a row that already shows all its items has nothing more to reveal.
+            const showSeeAll = !!libParams && !!shelfOverflow[shelf.id];
 
             return (
               // Fade the shelf in when it (later) appears, and animate the
@@ -885,9 +917,10 @@ export default function BookshelfScreen({ navigation }: any) {
                 style={{ width: "100%", position: "relative", paddingBottom: 4 }}
               >
                 {/* Shelf header: teal rounded accent bar + prominent title. When
-                    the shelf maps to a Library sort/filter, the whole header is a
-                    Pressable with a trailing chevron that opens the full list. */}
-                {libParams ? (
+                    the shelf maps to a Library sort/filter AND its row overflows,
+                    the whole header is a Pressable with a trailing chevron that
+                    opens the full filtered list. */}
+                {showSeeAll ? (
                   <Pressable
                     onPress={() => navigation.navigate("Library", libParams)}
                     android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
@@ -918,10 +951,20 @@ export default function BookshelfScreen({ navigation }: any) {
                   </View>
                 )}
 
-                {/* Horizontal shelf row (flex items-end px-3) */}
+                {/* Horizontal shelf row (flex items-end px-3). Viewport +
+                    content widths drive the header's "see all" arrow (overflow). */}
                 <ScrollView
                   horizontal
+                  testID={`shelf-row-${shelf.id}`}
                   showsHorizontalScrollIndicator={false}
+                  onLayout={(e) => {
+                    shelfViewportW.current[shelf.id] = e.nativeEvent.layout.width;
+                    recomputeShelfOverflow(shelf.id);
+                  }}
+                  onContentSizeChange={(w) => {
+                    shelfContentW.current[shelf.id] = w;
+                    recomputeShelfOverflow(shelf.id);
+                  }}
                   contentContainerStyle={{ paddingHorizontal: 12, alignItems: "flex-end" }}
                 >
                   {shelf.entities?.map((entity: any, index: number) => {

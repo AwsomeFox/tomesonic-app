@@ -60,7 +60,7 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
-import { Text } from "react-native";
+import { Text, StyleSheet } from "react-native";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import AuthorsScreen from "../../screens/AuthorsScreen";
 import { api } from "../../utils/api";
@@ -238,5 +238,27 @@ describe("AuthorsScreen", () => {
     expect(screen.getByText("HUB_PILLS")).toBeTruthy();
     expect(typeof ref.current.scrollToTop).toBe("function");
     expect(typeof ref.current.openSort).toBe("function");
+  });
+
+  // Regression: the hub's segment pill row is a shared ListHeaderComponent that
+  // already carries its own horizontal padding. The Authors grid must apply its
+  // horizontal inset on the column rows (columnWrapperStyle), NOT on
+  // contentContainerStyle — a horizontal contentContainer inset also indents the
+  // header, double-padding it, which shrank the selector on the Authors facet vs.
+  // Books/Series and made the pill row visibly jump when Authors was selected.
+  it("keeps the grid's horizontal inset off the shared list header", async () => {
+    const navigation = makeNavigation();
+    await render(
+      <AuthorsScreen navigation={navigation} embedded listHeader={<Text>HUB_PILLS</Text>} />
+    );
+    expect(await screen.findByText("Ann Leckie")).toBeTruthy();
+    // FlatList forwards contentContainerStyle onto its inner scroll host, which
+    // carries the testID. A horizontal inset here would also indent the shared
+    // pill header (the regression); it must be absent.
+    const list = screen.getByTestId("authors-facet-list");
+    const cc = StyleSheet.flatten(list.props.contentContainerStyle) || {};
+    expect(cc.paddingHorizontal).toBeUndefined();
+    expect(cc.paddingLeft).toBeUndefined();
+    expect(cc.paddingRight).toBeUndefined();
   });
 });
