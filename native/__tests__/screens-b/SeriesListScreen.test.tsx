@@ -213,6 +213,67 @@ describe("SeriesListScreen", () => {
     );
   });
 
+  it("dedupes a series that spans two pages by id (no duplicate key)", async () => {
+    // A library add mid-scroll shifts page boundaries, so page 1 re-serves a
+    // row already shown on page 0. It must render exactly once.
+    const s1 = { id: "s1", name: "Series One", numBooks: 1, books: [{ id: "b1" }] };
+    const s2 = { id: "s2", name: "Series Two", numBooks: 1, books: [{ id: "b2" }] };
+    const s3 = { id: "s3", name: "Series Three", numBooks: 1, books: [{ id: "b3" }] };
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes("/series?")) {
+        return url.includes("page=0")
+          ? Promise.resolve({ data: { results: [s1, s2], total: 4 } })
+          : Promise.resolve({ data: { results: [s2, s3], total: 4 } });
+      }
+      if (url.includes("/items?filter=series.")) return Promise.resolve({ data: { results: [] } });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    const navigation = makeNavigation();
+    await render(<SeriesListScreen navigation={navigation} />);
+    await screen.findByText("Series One");
+
+    await fireEvent(screen.getByText("Series One"), "onEndReached", { distanceFromEnd: 0 });
+    await screen.findByText("Series Three");
+
+    // s2 arrived on BOTH pages — the id dedupe keeps a single copy.
+    expect(screen.getAllByText("Series Two")).toHaveLength(1);
+  });
+
+  it("discards a stale in-flight page when the sort changes (monotonic fetchId)", async () => {
+    // The mount fetch (sort=name) hangs; a sort change supersedes it. When the
+    // stale page finally resolves, the guard must drop it so only the new sort's
+    // results render.
+    let resolveStale!: (v: any) => void;
+    const stalePromise = new Promise((res) => (resolveStale = res));
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes("/series?")) {
+        if (url.includes("sort=name")) return stalePromise; // hangs
+        return Promise.resolve({
+          data: { results: [{ id: "fresh", name: "Fresh Series", numBooks: 1, books: [{ id: "fb" }] }], total: 1 },
+        });
+      }
+      if (url.includes("/items?filter=series.")) return Promise.resolve({ data: { results: [] } });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    const navigation = makeNavigation();
+    await render(<SeriesListScreen navigation={navigation} />);
+
+    // Change the sort while the mount fetch is still pending.
+    await fireEvent.press(screen.getByLabelText("Sort"));
+    await fireEvent.press(screen.getByText("Added At"));
+    await screen.findByText("Fresh Series");
+
+    // The superseded page resolves late — it must be discarded, not appended.
+    await act(async () => {
+      resolveStale({
+        data: { results: [{ id: "stale", name: "Stale Series", numBooks: 1, books: [{ id: "sb" }] }], total: 1 },
+      });
+    });
+
+    expect(screen.queryByText("Stale Series")).toBeNull();
+    expect(screen.getByText("Fresh Series")).toBeTruthy();
+  });
+
   it("swaps to the search overlay when search is active", async () => {
     await renderSeriesList();
     await screen.findByText("First Series");

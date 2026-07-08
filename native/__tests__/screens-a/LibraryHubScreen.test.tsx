@@ -28,7 +28,7 @@ jest.mock("../../components/TopAppBar", () => {
   const { Text, Pressable } = require("react-native");
   return {
     __esModule: true,
-    default: ({ showFilter, showSort, onFilter, onSort }: any) =>
+    default: ({ showFilter, showSort, onFilter, onSort, filterActive }: any) =>
       React.createElement(React.Fragment, null, [
         showFilter
           ? React.createElement(
@@ -44,6 +44,8 @@ jest.mock("../../components/TopAppBar", () => {
               React.createElement(Text, null, "Sort")
             )
           : null,
+        // Marker so the badge wiring (filterActive) is assertable.
+        filterActive ? React.createElement(Text, { key: "fa" }, "FILTER_ACTIVE") : null,
       ]),
   };
 });
@@ -108,6 +110,15 @@ jest.mock("../../screens/LibraryScreen", () => {
           Pressable,
           { key: "sc", accessibilityLabel: "books-emit-scroll", onPress: () => props.onScroll?.(700) },
           React.createElement(Text, null, "emit")
+        ),
+        React.createElement(
+          Pressable,
+          {
+            key: "fa",
+            accessibilityLabel: "books-emit-filter-active",
+            onPress: () => props.onFilterActiveChange?.(true),
+          },
+          React.createElement(Text, null, "filter-active")
         ),
       ]);
     }),
@@ -275,6 +286,38 @@ describe("LibraryHubScreen", () => {
   it("an explicit segment route param selects the initial segment", async () => {
     await render(<LibraryHubScreen route={{ params: { segment: "series" } }} navigation={makeNavigation()} />);
     expect(screen.getByText("SERIES_BODY")).toBeTruthy();
+  });
+
+  it("falls back to the Books facet for an invalid segment route param", async () => {
+    await render(
+      <LibraryHubScreen route={{ params: { segment: "bogus" } }} navigation={makeNavigation()} />
+    );
+    // "bogus" isn't a valid segment → normalizeSegment returns null → Books.
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+    expect(screen.queryByText("SERIES_BODY")).toBeNull();
+  });
+
+  it("falls back to the Books facet when the persisted segment is corrupt", async () => {
+    storageHelper.setLibraryHubSegment("garbage");
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    // A corrupt MMKV value doesn't normalize to a real segment → Books.
+    expect(screen.getByText(/BOOKS_BODY/)).toBeTruthy();
+  });
+
+  it("wires the Books filter-active badge to the TopAppBar, gated by the Books segment", async () => {
+    await render(<LibraryHubScreen route={{ params: {} }} navigation={makeNavigation()} />);
+    // No badge until the Books facet reports a non-default filter/sort.
+    expect(screen.queryByText("FILTER_ACTIVE")).toBeNull();
+
+    // Embedded Books facet's onFilterActiveChange → hub booksFilterActive →
+    // TopAppBar filterActive.
+    await fireEvent.press(screen.getByLabelText("books-emit-filter-active"));
+    expect(screen.getByText("FILTER_ACTIVE")).toBeTruthy();
+
+    // Leaving Books drops showFilter, so the (gated) badge disappears even though
+    // the Books facet stays mounted and still reports active.
+    await fireEvent.press(screen.getByText("Series"));
+    expect(screen.queryByText("FILTER_ACTIVE")).toBeNull();
   });
 
   it("a Books filter/sort deep-link lands on Books with the seed applied", async () => {

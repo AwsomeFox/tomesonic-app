@@ -395,6 +395,23 @@ describe("SeriesDetailScreen — re-release dedup (same sequence collapses)", ()
     expect(screen.getByText("Blank B")).toBeTruthy();
     expect(screen.getByText(/2 books/)).toBeTruthy();
   });
+
+  it("never collapses whitespace-only sequences and the header count reflects it", async () => {
+    // Whitespace sequences must trim to empty (→ un-collapsed). Without the
+    // .trim(), "  " would key together and wrongly collapse both into one.
+    const WS_ITEMS = [
+      mk({ id: "w1", seq: "  ", meta: { title: "Space A" }, addedAt: 1 }),
+      mk({ id: "w2", seq: "\t", meta: { title: "Space B" }, addedAt: 2 }),
+    ];
+    mockSeriesApi({ items: WS_ITEMS });
+    await renderSeries();
+
+    // Both entries stay distinct despite whitespace-only sequences.
+    expect(await screen.findByText(/Space A/)).toBeTruthy();
+    expect(screen.getByText(/Space B/)).toBeTruthy();
+    // Header bookCount reflects the (un-collapsed) deduped list of 2.
+    expect(screen.getByText(/2 books/)).toBeTruthy();
+  });
 });
 
 describe("SeriesDetailScreen — missing-books section on empty series", () => {

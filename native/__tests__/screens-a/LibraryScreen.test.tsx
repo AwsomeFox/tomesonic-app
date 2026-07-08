@@ -183,6 +183,29 @@ describe("LibraryScreen", () => {
     expect(url).not.toContain("filter=");
   });
 
+  it("seeds the initial sort from route orderBy/descending without persisting it", async () => {
+    // The Home hub routes here with an explicit sort (booksSeed). The seed must
+    // flow straight into the first items query — and, being a one-off view, must
+    // NOT be written back to the user's saved default via updateUserSettings.
+    const updateSpy = jest.fn().mockResolvedValue(undefined);
+    useUserStore.setState({ updateUserSettings: updateSpy } as any);
+    mockItemsPage([audioItem]);
+    const navigation = makeNavigation();
+    await render(
+      <LibraryScreen
+        route={{ params: { orderBy: "addedAt", descending: false } }}
+        navigation={navigation}
+      />
+    );
+    await screen.findByText("Audio Book One");
+
+    const url = mockedGet.mock.calls[0][0] as string;
+    expect(url).toContain("sort=addedAt");
+    expect(url).toContain("desc=0");
+    // A seed is a transient view — it must never persist as the saved default.
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
   it("honors the route filter param in the query string", async () => {
     mockItemsPage([audioItem]);
     const navigation = makeNavigation();
