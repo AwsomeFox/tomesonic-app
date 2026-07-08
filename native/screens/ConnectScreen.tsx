@@ -37,6 +37,86 @@ function isTlsError(err: any): boolean {
   );
 }
 
+// A connection-LEVEL failure — the transport never established, so the host is
+// likely down / unreachable (as opposed to a TLS handshake that DID reach the
+// host but presented an untrusted cert). Used to keep the "install a
+// certificate" advice from firing when a plain refusal is also in play.
+function isConnRefusedError(err: any): boolean {
+  const msg = String(err?.message || "").toLowerCase();
+  const code = String(err?.code || "").toLowerCase();
+  return (
+    msg.includes("econnrefused") ||
+    code.includes("econnrefused") ||
+    msg.includes("connection refused") ||
+    msg.includes("ehostunreach") ||
+    msg.includes("enetunreach") ||
+    msg.includes("etimedout") ||
+    code.includes("etimedout") ||
+    msg.includes("timeout")
+  );
+}
+
+// --- Saved-server memory (PO#2) --------------------------------------------
+// A tiny, NON-SECRET record of servers the user has previously signed into so
+// switching servers doesn't require retyping the full URL. We persist ONLY the
+// address, username, and auth method — never passwords, tokens, or refresh
+// tokens (those live encrypted in secureStorage and are wiped on switch).
+const SAVED_SERVERS_KEY = "savedServers";
+const MAX_SAVED_SERVERS = 5;
+
+interface SavedServer {
+  address: string;
+  username?: string;
+  authMethod?: "local" | "openid";
+  lastUsedAt?: number;
+}
+
+function loadSavedServers(): SavedServer[] {
+  try {
+    const { storage } = require("../utils/storage");
+    const raw = storage.getString(SAVED_SERVERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((s: any) => s && typeof s.address === "string" && s.address)
+      .map((s: any) => ({
+        address: s.address,
+        username: typeof s.username === "string" ? s.username : undefined,
+        authMethod: s.authMethod === "openid" ? "openid" : s.authMethod === "local" ? "local" : undefined,
+        lastUsedAt: typeof s.lastUsedAt === "number" ? s.lastUsedAt : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedServer(entry: SavedServer) {
+  try {
+    const { storage } = require("../utils/storage");
+    // Only the three non-secret fields ever get written.
+    const clean: SavedServer = {
+      address: entry.address,
+      username: entry.username || undefined,
+      authMethod: entry.authMethod,
+      lastUsedAt: Date.now(),
+    };
+    // Most-recent-first, de-duped by address (case-insensitive), capped.
+    const deduped = loadSavedServers().filter(
+      (s) => s.address.toLowerCase() !== clean.address.toLowerCase()
+    );
+    const next = [clean, ...deduped].slice(0, MAX_SAVED_SERVERS);
+    storage.set(SAVED_SERVERS_KEY, JSON.stringify(next));
+  } catch {
+    // best-effort — the app still works without saved-server memory.
+  }
+}
+
+/** Strip scheme + trailing slash for a compact chip label. */
+function serverHostLabel(addr: string): string {
+  return addr.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+}
+
 // M3 Expressive control metrics for this screen: hero-size touch targets.
 const FIELD_HEIGHT = 56;
 const BUTTON_HEIGHT = 56;
@@ -44,7 +124,14 @@ const BUTTON_HEIGHT = 56;
 export default function ConnectScreen() {
   const colors = useThemeColors();
   const { login, serverConnectionConfig } = useUserStore();
-  const [address, setAddress] = useState(serverConnectionConfig?.address || "");
+  // Previously-connected servers (address + username + authMethod, no secrets).
+  const [savedServers, setSavedServers] = useState<SavedServer[]>(loadSavedServers);
+  // Seed the address from the active config if present, else from the most
+  // recently used saved server — so after a server switch (config is null) the
+  // last address stays prefilled instead of forcing a full retype.
+  const [address, setAddress] = useState(
+    serverConnectionConfig?.address || savedServers[0]?.address || ""
+  );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showAuthFields, setShowAuthFields] = useState(false);
@@ -94,6 +181,14 @@ export default function ConnectScreen() {
     // Don't keep the password in component state any longer than needed — the
     // session tokens are what get persisted, never the password itself.
     setPassword("");
+    // Remember this server (address + username + method — NO secrets) so a
+    // later switch back can prefill it as a tappable chip.
+    persistSavedServer({
+      address: address.replace(/\/+$/, ""),
+      username: user.username || username || undefined,
+      authMethod: method,
+    });
+    setSavedServers(loadSavedServers());
     await login(
       {
         address: address.replace(/\/+$/, ""),
@@ -135,6 +230,7 @@ export default function ConnectScreen() {
       let cleanUrl = candidates[0];
       let statusRes: any = null;
       let sawTlsError = false;
+      let sawConnRefused = false;
       for (let i = 0; i < candidates.length; i++) {
         try {
           statusRes = await axios.get(`${candidates[i]}/status`, { timeout: 10000 });
@@ -142,19 +238,32 @@ export default function ConnectScreen() {
           break;
         } catch (err) {
           if (isTlsError(err)) sawTlsError = true;
+          if (isConnRefusedError(err)) sawConnRefused = true;
         }
       }
       if (!statusRes) {
-        // A self-signed / untrusted certificate fails the TLS handshake with a
-        // message the user can't act on ("Network Error"). Name the real problem
-        // instead of blaming the URL. (When a bare host was tried over https then
-        // http, the http attempt usually fails with connection-refused, so we
-        // remember whether ANY attempt hit a cert error.)
-        setError(
-          sawTlsError
-            ? "Couldn't verify this server's security certificate. A self-signed certificate isn't trusted on this device — install it in Android settings, or use a domain with a valid certificate."
-            : "Unable to connect to the server. Please verify the URL."
-        );
+        // Pick the least-misleading message. A self-signed / untrusted cert
+        // fails the TLS handshake with a message the user can't act on
+        // ("Network Error"), so we DO want to name the cert problem — but only
+        // when it's the DEFINITIVE failure. For a bare host the candidates are
+        // [https://host, http://host]: if https hits a cert error but http is
+        // refused, the server may simply be down or only reachable over http,
+        // and telling the user to install a certificate sends them chasing the
+        // wrong fix. So only surface the cert-install message when a genuine
+        // cert error occurred AND no candidate got a connection-level refusal.
+        if (sawTlsError && !sawConnRefused) {
+          setError(
+            "Couldn't verify this server's security certificate. A self-signed certificate isn't trusted on this device — install it in Android settings, or use a domain with a valid certificate."
+          );
+        } else if (sawTlsError && sawConnRefused) {
+          // TLS failed on https and http was refused — reachability, not certs,
+          // is the likely problem. Prefer a "couldn't reach" message.
+          setError(
+            "Couldn't reach the server. It may be offline or only reachable over http — check the address and that the server is running."
+          );
+        } else {
+          setError("Unable to connect to the server. Please verify the URL.");
+        }
         return;
       }
       if (!statusRes.data || statusRes.data.app !== "audiobookshelf") {
@@ -240,6 +349,14 @@ export default function ConnectScreen() {
   const handleEditAddress = () => {
     setError("");
     setShowAuthFields(false);
+  };
+
+  // Tapping a saved-server chip prefills the address (and username) fields so
+  // the user only has to enter their password to switch servers.
+  const handleUseSavedServer = (server: SavedServer) => {
+    setError("");
+    setAddress(server.address);
+    if (server.username) setUsername(server.username);
   };
 
   // --- M3 Expressive building blocks -------------------------------------
@@ -374,6 +491,52 @@ export default function ConnectScreen() {
                 returnKeyType="go"
                 style={fieldStyle("address")}
               />
+
+              {/* Saved-server chips (PO#2) — tap to prefill a previously
+                  connected server so switching doesn't require a full retype.
+                  Only non-secret fields (address/username) are ever stored. */}
+              {savedServers.length > 0 ? (
+                <View style={{ marginTop: 16 }}>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, fontFamily: "sans-serif", marginBottom: 8 }}>
+                    Recent servers
+                  </Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {savedServers.map((server) => {
+                      const host = serverHostLabel(server.address);
+                      return (
+                        <Pressable
+                          key={server.address}
+                          onPress={() => handleUseSavedServer(server)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Use saved server ${host}`}
+                          testID={`saved-server-${host}`}
+                          android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+                          style={{
+                            flexDirection: "row" as const,
+                            alignItems: "center" as const,
+                            backgroundColor: colors.surfaceContainerHighest,
+                            borderRadius: 12,
+                            paddingHorizontal: 14,
+                            paddingVertical: 8,
+                            borderWidth: 1,
+                            borderColor: colors.outlineVariant,
+                            overflow: "hidden" as const,
+                          }}
+                        >
+                          <Icon name="globe" size={14} color={colors.onSurfaceVariant} />
+                          <Text
+                            style={{ color: colors.onSurface, fontSize: 13, fontFamily: "sans-serif", marginLeft: 8, maxWidth: 220 }}
+                            numberOfLines={1}
+                          >
+                            {host}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
+
               <View style={{ marginTop: 24, alignItems: "flex-end" }}>
                 <BigButton label="Submit" onPress={handleConnectAddress} busy={loading} compact />
               </View>

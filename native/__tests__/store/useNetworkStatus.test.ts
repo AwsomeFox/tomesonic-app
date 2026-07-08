@@ -206,6 +206,43 @@ describe("useNetworkStatus", () => {
       await waitFor(() => expect(result.current.isOffline).toBe(true), { timeout: 2000 });
     });
 
+    it("QA#5: a flap that reverses within the debounce window never flips isOffline (clearTimeout cancellation)", async () => {
+      let listener: (state: any) => void = () => {};
+      jest.mocked(NetInfo.addEventListener).mockImplementation((cb: any) => {
+        listener = cb;
+        return jest.fn();
+      });
+
+      const { result } = await renderHook(() => useNetworkStatus());
+      expect(result.current.isOffline).toBe(false);
+
+      // Wi-Fi up but internet EXPLICITLY unreachable — this render ARMS the
+      // 500ms debounce timer toward isOffline:true.
+      await act(async () => {
+        listener({ isConnected: true, isInternetReachable: false });
+      });
+
+      // A brief pause WELL WITHIN the debounce window — the timer is still
+      // pending, so isOffline must not have flipped yet.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+      expect(result.current.isOffline).toBe(false);
+
+      // Reachability recovers before the window closes. The effect cleanup
+      // (clearTimeout at ~120-125) cancels the pending flip.
+      await act(async () => {
+        listener({ isConnected: true, isInternetReachable: true });
+      });
+
+      // Wait past the ORIGINAL debounce window: isOffline must have NEVER
+      // become true because the pending timer was cancelled.
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 700));
+      });
+      expect(result.current.isOffline).toBe(false);
+    });
+
     it("does NOT mark isOffline for a connected device with UNKNOWN reachability", async () => {
       let listener: (state: any) => void = () => {};
       jest.mocked(NetInfo.addEventListener).mockImplementation((cb: any) => {

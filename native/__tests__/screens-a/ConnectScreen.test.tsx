@@ -49,6 +49,7 @@ import axios from "axios";
 import ConnectScreen from "../../screens/ConnectScreen";
 import { loginWithOpenId } from "../../utils/oauth";
 import { useUserStore } from "../../store/useUserStore";
+import { storage } from "../../utils/storage";
 
 const mockedGet = (axios as any).get as jest.Mock;
 const mockedPost = (axios as any).post as jest.Mock;
@@ -69,6 +70,9 @@ async function connect(address = "abs.example.com") {
 beforeEach(() => {
   useUserStore.setState(initialUser, true);
   useUserStore.setState({ serverConnectionConfig: null } as any);
+  // Saved-server memory is persisted in the shared in-memory MMKV mock — clear
+  // it so chips from one test don't leak into the next.
+  storage.remove("savedServers");
 });
 
 describe("ConnectScreen", () => {
@@ -143,8 +147,27 @@ describe("ConnectScreen", () => {
     await screen.findByText("Unable to connect to the server. Please verify the URL.");
   });
 
-  it("names a certificate problem when the TLS handshake fails (self-signed)", async () => {
-    // https fails the handshake (untrusted cert); the http fallback is refused.
+  it("names a certificate problem when the TLS handshake is the definitive failure", async () => {
+    // Explicit https:// → a single candidate. The handshake fails on an
+    // untrusted cert and there is NO connection-level refusal, so the cert
+    // problem is unambiguously the cause.
+    mockedGet.mockRejectedValue(
+      new Error(
+        "java.security.cert.CertPathValidatorException: Trust anchor for certification path not found."
+      )
+    );
+    await render(<ConnectScreen />);
+    await connect("https://abs.example.com");
+    // Not the generic "verify the URL" — a certificate-specific message.
+    await screen.findByText(/security certificate/);
+    expect(screen.queryByPlaceholderText("Username")).toBeNull();
+  });
+
+  it("SE#5: bare host with https→TLS error then http→refused prefers a 'couldn't reach' message, not cert-install advice", async () => {
+    // Candidates for a bare host are [https://host, http://host]. https fails
+    // the handshake (untrusted cert) but http is REFUSED — the server may be
+    // down or only reachable over http, so blaming the certificate would send
+    // the user chasing the wrong fix.
     mockedGet.mockImplementation((url: string) =>
       url.startsWith("https://")
         ? Promise.reject(
@@ -152,12 +175,16 @@ describe("ConnectScreen", () => {
               "java.security.cert.CertPathValidatorException: Trust anchor for certification path not found."
             )
           )
-        : Promise.reject(new Error("ECONNREFUSED"))
+        : Promise.reject(new Error("connect ECONNREFUSED 10.0.0.5:80"))
     );
     await render(<ConnectScreen />);
     await connect("abs.example.com");
-    // Not the generic "verify the URL" — a certificate-specific message.
-    await screen.findByText(/security certificate/);
+
+    // A reachability-focused message...
+    await screen.findByText(/Couldn't reach the server/);
+    // ...and specifically NOT the cert-install instruction.
+    expect(screen.queryByText(/security certificate/)).toBeNull();
+    expect(screen.queryByText(/install it in Android settings/)).toBeNull();
     expect(screen.queryByPlaceholderText("Username")).toBeNull();
   });
 
@@ -312,5 +339,74 @@ describe("ConnectScreen", () => {
     await fireEvent.press(screen.getByLabelText("Change server address"));
     expect(screen.getByPlaceholderText("http://55.55.55.55:13378")).toBeTruthy();
     expect(screen.queryByPlaceholderText("Username")).toBeNull();
+  });
+
+  describe("PO#2 — saved-server memory", () => {
+    it("prefills the LAST-used saved server's address after a switch (config is null)", async () => {
+      storage.set(
+        "savedServers",
+        JSON.stringify([
+          { address: "https://one.example.com", username: "alice", authMethod: "local" },
+          { address: "https://two.example.com", username: "bob", authMethod: "local" },
+        ])
+      );
+      await render(<ConnectScreen />);
+      // No active config after a switch → the most-recent saved address seeds
+      // the field so the user doesn't retype the whole URL.
+      const input = screen.getByPlaceholderText("http://55.55.55.55:13378");
+      expect(input.props.value).toBe("https://one.example.com");
+    });
+
+    it("tapping a saved-server chip prefills the address (and username) fields", async () => {
+      storage.set(
+        "savedServers",
+        JSON.stringify([
+          { address: "https://one.example.com", username: "alice", authMethod: "local" },
+          { address: "https://two.example.com", username: "bob", authMethod: "local" },
+        ])
+      );
+      mockedGet.mockResolvedValue(absStatus());
+      await render(<ConnectScreen />);
+
+      const input = screen.getByPlaceholderText("http://55.55.55.55:13378");
+      // Tap the SECOND chip — it should overwrite the seeded first address.
+      await fireEvent.press(screen.getByLabelText("Use saved server two.example.com"));
+      expect(input.props.value).toBe("https://two.example.com");
+
+      // The prefilled username carries through to the credentials step.
+      await fireEvent.press(screen.getByText("Submit"));
+      await screen.findByPlaceholderText("Username");
+      expect(screen.getByPlaceholderText("Username").props.value).toBe("bob");
+    });
+
+    it("persists the server (address/username/method, NO secrets) after a successful login", async () => {
+      mockedGet.mockResolvedValue(absStatus());
+      mockedPost.mockResolvedValue({
+        data: { user: { id: "u1", username: "bob", token: "tok123", refreshToken: "ref456" } },
+      });
+      const login = jest.fn();
+      useUserStore.setState({ login } as any);
+      await render(<ConnectScreen />);
+      await connect("abs.example.com");
+      await screen.findByPlaceholderText("Username");
+
+      await fireEvent.changeText(screen.getByPlaceholderText("Username"), "bob");
+      await fireEvent.changeText(screen.getByPlaceholderText("Password"), "hunter2");
+      await fireEvent.press(screen.getByText("Submit"));
+
+      await waitFor(() => expect(login).toHaveBeenCalled());
+
+      const saved = JSON.parse(storage.getString("savedServers")!);
+      expect(saved[0]).toMatchObject({
+        address: "https://abs.example.com",
+        username: "bob",
+        authMethod: "local",
+      });
+      // Never persist secrets.
+      const serialized = storage.getString("savedServers")!;
+      expect(serialized).not.toContain("hunter2");
+      expect(serialized).not.toContain("tok123");
+      expect(serialized).not.toContain("ref456");
+    });
   });
 });
