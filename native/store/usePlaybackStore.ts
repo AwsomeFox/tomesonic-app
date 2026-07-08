@@ -132,7 +132,14 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     const title = ch?.title || book;
     const subtitle = ch ? [book, author].filter(Boolean).join(" • ") : author;
     const meta: any = { title, artist: subtitle };
+    // artwork = the full card's artworkUri (unchanged). localArtwork = the
+    // LOCAL cover file whose bytes the native layer inlines as artworkData for
+    // the compact card — kept separate so the artworkUri is never disturbed.
     if (session.coverUrl) meta.artwork = session.coverUrl;
+    const localArt =
+      session.carArtworkLocal ||
+      (session.coverUrl && !session.coverUrl.startsWith("http") ? session.coverUrl : undefined);
+    if (localArt) meta.localArtwork = localArt;
     await TrackPlayer.updateMetadataForTrack(activeIndex, meta);
     // Mark applied only AFTER the native call succeeds — marking up front
     // meant a throw here (track not ready yet) was never retried, leaving the
@@ -166,6 +173,10 @@ export async function restoreLocalNowPlayingMeta() {
       artist: [book, author].filter(Boolean).join(" • "),
     };
     if (s.coverUrl) meta.artwork = s.coverUrl;
+    const localArt =
+      s.carArtworkLocal ||
+      (s.coverUrl && !s.coverUrl.startsWith("http") ? s.coverUrl : undefined);
+    if (localArt) meta.localArtwork = localArt;
     await TrackPlayer.updateMetadataForTrack(idx, meta);
   } catch {}
 }
@@ -214,12 +225,16 @@ export function refreshNowPlayingArtwork() {
 // image wasn't among the downloaded parts — whose cover is an http URL shows a
 // BLANK tile in the car's small player even though the big player has art.
 //
-// Fix: fetch the cover to a local cache file once, then re-point the live
-// session's coverUrl at that file. The next metadata push (forced via
+// Fix: fetch the cover to a local cache file once, then point the session's
+// carArtworkLocal at that file. The next metadata push (forced via
 // _lastMetaChapter) rebuilds the track through toMediaItem, which inlines the
-// local file's bytes as artworkData — lighting up the compact card. The full
-// player is unaffected (same image). Best-effort: any failure just leaves the
-// remote URL in place, exactly as before.
+// local file's bytes as artworkData (via the track's `localArtwork`) — lighting
+// up the compact card. Crucially we do NOT re-point coverUrl: that is the
+// artworkUri the FULL now-playing card depends on, and the OLD code overwrote
+// it with this private cache path — which the car can't read, blanking the
+// compact card's URI path (and needlessly disturbing the big player). Keeping
+// coverUrl as the http URL leaves the full card untouched. Best-effort: any
+// failure just leaves the remote URL in place, exactly as before.
 async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: number) {
   try {
     if (!itemId || !url || !url.startsWith("http")) return;
@@ -240,8 +255,8 @@ async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: num
     const st = usePlaybackStore.getState();
     const s = st.currentSession;
     if (!s || (s.libraryItemId || s.libraryItem?.id) !== itemId) return;
-    if (s.coverUrl === path) return;
-    usePlaybackStore.setState({ currentSession: { ...s, coverUrl: path } });
+    if (s.carArtworkLocal === path) return;
+    usePlaybackStore.setState({ currentSession: { ...s, carArtworkLocal: path } });
     // Push the new (local) artwork onto the ACTIVE track now. The 1s tick only
     // re-pushes metadata for single-track books; chapter-queue books title each
     // item individually and the tick skips them, so relying on the tick alone
@@ -1364,14 +1379,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         ? useDownloadStore.getState().completedDownloads[libraryItemId]
         : null;
 
-      // Notification artwork. Media3 fetches this URL NATIVELY (no axios
-      // interceptor, no token refresh), so a cover URL with a stale baked-in
-      // token silently 401s → no album art. Priority:
+      // Now-playing artwork. The FULL now-playing card resolves the artworkUri
+      // (via the app's BitmapLoader, which loads http AND local file:// — it
+      // works today and MUST NOT change). Media3 fetches artworkUri NATIVELY
+      // (no axios interceptor / token refresh), so http URLs are built with the
+      // CURRENT token; a stale baked-in one would 401 → no art. Priority:
       //  1. the downloaded cover FILE (token-proof, offline-proof),
       //  2. a URL built fresh with the CURRENT token,
-      //  3. the session's own coverUrl with its (possibly rotated-out) token
-      //     replaced by the current one — restored MMKV sessions carry the
-      //     token that was current when they were saved.
+      //  3. the session's own coverUrl with its token refreshed.
       const localCover = (download?.parts || []).find((p: any) => p.id === "cover")
         ?.localFilePath as string | undefined;
       const freshenToken = (url?: string | null) =>
@@ -1384,6 +1399,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           ? `${serverAddress}/api/items/${libraryItemId}/cover?width=800&format=webp&token=${token}`
           : undefined) ||
         freshenToken(session.coverUrl);
+      // SEPARATE bytes source for Android Auto's COMPACT surfaces (home-screen
+      // media card + mini control bar). Those never render from a remote
+      // artworkUri; they need inline artworkData bytes, which the native layer
+      // (AudioItem.toMediaItem) decodes from a LOCAL cover file. Carried as the
+      // track's `localArtwork` so it feeds artworkData WITHOUT touching the
+      // artworkUri the full card depends on. A downloaded book already has the
+      // file; a streaming book gets one cached lazily (cacheNowPlayingCoverLocally).
+      const carArtworkLocal =
+        localCover || (artworkUrl && !artworkUrl.startsWith("http") ? artworkUrl : undefined);
       const localFolder = download?.localFolderPath;
       const localForTrack = (track: any, idx: number): string | null => {
         if (!download) return null;
@@ -1509,6 +1533,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             clipEndMs: Math.round(((ch.end || 0) - startOffset) * 1000),
           };
           if (artworkUrl) t.artwork = artworkUrl;
+          if (carArtworkLocal) t.localArtwork = carArtworkLocal;
           return t;
         });
       } else {
@@ -1532,6 +1557,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             duration: track.duration,
           };
           if (artworkUrl) t.artwork = artworkUrl;
+          if (carArtworkLocal) t.localArtwork = carArtworkLocal;
           return t;
         });
       }
@@ -1705,7 +1731,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // Persist the resolved cover URL on the session so the Player and
         // MiniPlayer can render artwork (the raw session has no coverUrl).
         // currentTime reflects the RECONCILED position (see freshest-wins above).
-        currentSession: { ...session, currentTime: startAbs, coverUrl: artworkUrl || session.coverUrl || "" },
+        currentSession: {
+          ...session,
+          currentTime: startAbs,
+          coverUrl: artworkUrl || session.coverUrl || "",
+          // Local cover file whose bytes light Android Auto's COMPACT surfaces
+          // (see the artwork comment above). Kept separate from coverUrl so the
+          // full card's artworkUri is never re-pointed at a private path.
+          carArtworkLocal: carArtworkLocal || undefined,
+        },
         playbackSpeed,
         chapters,
         chapterQueue,
@@ -1725,12 +1759,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         episodeId: session.episodeId || undefined,
       });
 
-      // If the now-playing cover is a REMOTE url, cache it to a local file so
-      // Android Auto's compact player (home card / mini bar) — which only reads
-      // inline artwork bytes — gets a bitmap. Fire-and-forget; leaves the remote
-      // url in place on failure. Local-file covers already inline their bytes.
+      // If the now-playing cover is a REMOTE url (streaming, or a downloaded
+      // book whose cover image wasn't among the downloaded parts), cache it to a
+      // local file so Android Auto's compact player (home card / mini bar) —
+      // which only reads inline artwork bytes — gets a bitmap. This populates
+      // carArtworkLocal WITHOUT re-pointing coverUrl, so the full card's
+      // artworkUri stays the (working) http url. Fire-and-forget; leaves the
+      // remote url in place on failure. Downloaded local covers already inline.
       const coverForCache = artworkUrl || session.coverUrl || "";
-      if (libraryItemId && coverForCache.startsWith("http")) {
+      if (libraryItemId && !carArtworkLocal && coverForCache.startsWith("http")) {
         cacheNowPlayingCoverLocally(libraryItemId, coverForCache, gen);
       }
 

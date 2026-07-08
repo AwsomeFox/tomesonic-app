@@ -98,7 +98,11 @@ describe("notification artwork sources", () => {
     expect(usePlaybackStore.getState().currentSession.coverUrl).toContain("token=tok_CURRENT");
   });
 
-  it("prefers the DOWNLOADED cover file over any remote URL", async () => {
+  it("prefers the DOWNLOADED cover file for the full-card artworkUri AND carries it as localArtwork bytes", async () => {
+    // The full now-playing card's artworkUri is UNCHANGED (the downloaded local
+    // file — the app's BitmapLoader reads it fine). The same file is ALSO
+    // carried as `localArtwork`, whose bytes the native layer inlines as
+    // artworkData for Android Auto's compact card / queue rows.
     useDownloadStore.setState({
       completedDownloads: {
         item1: {
@@ -115,7 +119,29 @@ describe("notification artwork sources", () => {
 
     await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
 
-    expect(addedTracks()[0].artwork).toBe("file:///docs/downloads/item1_book/cover.jpg");
+    const track = addedTracks()[0];
+    // Full-card artworkUri unchanged: the downloaded local cover.
+    expect(track.artwork).toBe("file:///docs/downloads/item1_book/cover.jpg");
+    // Compact-card bytes source rides alongside.
+    expect(track.localArtwork).toBe("file:///docs/downloads/item1_book/cover.jpg");
+    expect(usePlaybackStore.getState().currentSession.carArtworkLocal).toBe(
+      "file:///docs/downloads/item1_book/cover.jpg"
+    );
+    expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
+      "file:///docs/downloads/item1_book/cover.jpg"
+    );
+  });
+
+  it("streaming book: full-card artwork is an http URI with no local bytes at build time", async () => {
+    jest.mocked(FileSystem.getInfoAsync).mockResolvedValueOnce({ exists: false } as any);
+
+    await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
+
+    const track = addedTracks()[0];
+    expect(track.artwork.startsWith("http")).toBe(true);
+    expect(track.artwork).toContain("token=tok_CURRENT");
+    // No downloaded cover → no localArtwork until the cache task runs.
+    expect(track.localArtwork).toBeUndefined();
   });
 
   it("offline fallback sessions use the downloaded cover file, not the remote URL", async () => {
@@ -153,15 +179,20 @@ describe("notification artwork sources", () => {
   describe("Android Auto compact-player artwork (local cover cache)", () => {
     // AA's home card + mini bar render art only from inline artworkData bytes,
     // which the native layer inlines for LOCAL file covers. A streaming book's
-    // remote cover url therefore leaves the small player blank. prepare() should
-    // cache the remote cover to a file and re-point the session at it.
-    it("caches a remote cover to a local file and re-points the session artwork", async () => {
+    // remote cover url therefore leaves the small player blank. prepare() caches
+    // the remote cover to a file and points carArtworkLocal at it — WITHOUT
+    // touching coverUrl / carArtworkUri, so the full now-playing card keeps its
+    // car-loadable http artworkUri (re-pointing that at a private cache file is
+    // what used to blank the big player).
+    it("caches a remote cover to a local file for compact bytes, leaving the full-card http URI intact", async () => {
       jest.mocked(FileSystem.getInfoAsync).mockResolvedValueOnce({ exists: false } as any);
 
       await usePlaybackStore.getState().preparePlaybackSession(serverSession(), false);
 
-      // The track is added immediately with the remote url (full player art).
+      // The track is added with the remote http url (full player art) and no
+      // local cover yet.
       expect(addedTracks()[0].artwork).toContain("token=tok_CURRENT");
+      expect(addedTracks()[0].localArtwork).toBeUndefined();
 
       // Let the fire-and-forget cache task run to completion.
       await jest.advanceTimersByTimeAsync(0);
@@ -170,14 +201,22 @@ describe("notification artwork sources", () => {
         expect.stringContaining("/api/items/item1/cover"),
         "file:///test-cache/nowplaying/cover_item1.jpg"
       );
-      expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
+      // REGRESSION GUARD: the full card's artworkUri (coverUrl) is NOT re-pointed
+      // at the private cache file — it stays the http url the big player uses.
+      // (The old code re-pointed it, which blanked the compact card's URI path.)
+      expect(usePlaybackStore.getState().currentSession.coverUrl).toContain("token=tok_CURRENT");
+      // The cached local file backs the compact card's inline bytes.
+      expect(usePlaybackStore.getState().currentSession.carArtworkLocal).toBe(
         "file:///test-cache/nowplaying/cover_item1.jpg"
       );
-      // The active track's metadata is refreshed with the LOCAL artwork so the
-      // native layer inlines its bytes for Android Auto's compact card.
+      // The active track's metadata is re-pushed: http artworkUri (full card,
+      // untouched) + local localArtwork (compact card bytes).
       expect(TrackPlayer.updateMetadataForTrack).toHaveBeenCalledWith(
         0,
-        expect.objectContaining({ artwork: "file:///test-cache/nowplaying/cover_item1.jpg" })
+        expect.objectContaining({
+          artwork: expect.stringContaining("token=tok_CURRENT"),
+          localArtwork: "file:///test-cache/nowplaying/cover_item1.jpg",
+        })
       );
     });
 
@@ -189,7 +228,7 @@ describe("notification artwork sources", () => {
       await jest.advanceTimersByTimeAsync(0);
 
       expect(FileSystem.downloadAsync).not.toHaveBeenCalled();
-      expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
+      expect(usePlaybackStore.getState().currentSession.carArtworkLocal).toBe(
         "file:///test-cache/nowplaying/cover_item1.jpg"
       );
     });
@@ -214,6 +253,11 @@ describe("notification artwork sources", () => {
       await jest.advanceTimersByTimeAsync(0);
 
       expect(FileSystem.downloadAsync).not.toHaveBeenCalled();
+      // Downloaded cover already backs carArtworkLocal (compact bytes) and the
+      // in-app coverUrl.
+      expect(usePlaybackStore.getState().currentSession.carArtworkLocal).toBe(
+        "file:///docs/downloads/item1_book/cover.jpg"
+      );
       expect(usePlaybackStore.getState().currentSession.coverUrl).toBe(
         "file:///docs/downloads/item1_book/cover.jpg"
       );
