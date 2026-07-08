@@ -83,9 +83,17 @@ export default function RmabSessionExpiredBanner({
           onClose={() => setSsoOpen(false)}
           onSuccess={async (cfg) => {
             setSsoOpen(false);
-            await connectWithOidc(cfg);
+            // If the OIDC connect fails, the banner would otherwise linger (or
+            // the session gets wiped) with no feedback — fall back to the manual
+            // reconnect path so the user gets a visible error and a retry.
+            const ok = await connectWithOidc(cfg);
+            if (!ok) onManualReconnect?.();
           }}
-          onError={() => setSsoOpen(false)}
+          onError={() => {
+            // Parse failure: same fallback so it isn't a silent dead end.
+            setSsoOpen(false);
+            onManualReconnect?.();
+          }}
         />
       ) : null}
     </View>
