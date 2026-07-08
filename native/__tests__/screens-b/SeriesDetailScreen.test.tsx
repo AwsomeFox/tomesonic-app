@@ -212,6 +212,16 @@ describe("SeriesDetailScreen", () => {
     );
   });
 
+  it("exposes an accessible label + button role on the hero action", async () => {
+    await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    // anyProgress is true (Alpha finished, Gamma half) -> "Continue".
+    const hero = screen.getByLabelText("Continue");
+    expect(hero.props.accessibilityRole).toBe("button");
+    expect(hero.props.accessibilityState).toMatchObject({ disabled: false, busy: false });
+  });
+
   it("labels the header button Play all when nothing has progress", async () => {
     mockSeriesApi({
       items: RAW_ITEMS.map((i) => ({ ...i, userMediaProgress: null })),
@@ -290,7 +300,7 @@ describe("SeriesDetailScreen", () => {
     expect(await screen.findByText("Failed to load series.")).toBeTruthy();
 
     mockSeriesApi();
-    await fireEvent.press(screen.getByLabelText("Retry loading series"));
+    await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("#1 Alpha")).toBeTruthy();
   });

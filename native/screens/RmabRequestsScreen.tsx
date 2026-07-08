@@ -5,6 +5,7 @@ import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
+import EmptyState from "../components/EmptyState";
 import { listMyRequests, deleteRequest, approveRequest, resolveRmabUrl } from "../utils/rmab";
 import BottomSheet from "../components/BottomSheet";
 import BookDescription from "../components/BookDescription";
@@ -192,17 +193,15 @@ export default function RmabRequestsScreen({ navigation }: any) {
             ) : null
           }
           ListEmptyComponent={
-            <View style={{ alignItems: "center", paddingTop: 64, paddingHorizontal: 32 }}>
-              <Icon name="send" size={44} color={colors.onSurfaceVariant} />
-              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "600", marginTop: 16 }}>
-                {error ? "Couldn't load requests" : "No requests yet"}
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, textAlign: "center", marginTop: 8 }}>
-                {error
+            <EmptyState
+              icon={error ? "warning" : "send"}
+              title={error ? "Couldn't load requests" : "No requests yet"}
+              message={
+                error
                   ? "Pull to retry."
-                  : "Request missing books from search, series, or author pages."}
-              </Text>
-            </View>
+                  : "Request missing books from search, series, or author pages."
+              }
+            />
           }
           renderItem={({ item }: any) => {
             const meta = statusMeta(item?.status, colors);

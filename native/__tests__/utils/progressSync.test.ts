@@ -1075,6 +1075,84 @@ describe("offline local-session listening bank", () => {
     clearAllPending();
     expect(localSessionKeys()).toHaveLength(0);
   });
+
+  // REGRESSION (A1): local-session records lacked the account/sid scoping every
+  // other offline queue enforces. On a shared server a per-item+day record
+  // collides across accounts — a straggler could POST A's minutes under B's
+  // token. The record is now stamped with the identity at creation and the
+  // flush skips (leaves in place) any record for a different current account.
+  it("stamps the record with the session identity (sid) and skips it under a different account", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokA", userId: "uA" });
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+    });
+    expect(readJson(DAY_KEY).sid).toBe("http://abs.local::uA");
+
+    // Switch to account B (same server) — the flush must NOT POST A's minutes.
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokB", userId: "uB" });
+    await flushPendingSyncs();
+    expect(mockedPost).not.toHaveBeenCalled();
+    expect(readJson(DAY_KEY)).not.toBeNull(); // left in place, not dropped
+
+    // Back to A — now it delivers (the guard isn't a blanket skip).
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokA2", userId: "uA" });
+    await flushPendingSyncs();
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({ id: "local_li1_2026-01-15", timeListening: 30 })
+    );
+  });
+
+  it("records with no userId (can't discriminate) carry no sid and flush as before", async () => {
+    // config in beforeEach has a token but NO userId.
+    await withFixedNow(() => {
+      recordLocalListening("li1", undefined, 100, 3600, 30);
+    });
+    expect(readJson(DAY_KEY).sid).toBeUndefined();
+    await flushPendingSyncs();
+    expect(mockedPost).toHaveBeenCalledWith(
+      "/api/session/local",
+      expect.objectContaining({ id: "local_li1_2026-01-15" })
+    );
+  });
+});
+
+// REGRESSION (A3): a straggler closeSession/syncProgress that FAILS after an
+// account switch must queue under the account that OPENED the session, not
+// whichever is current when the failure is finally observed. The sid is now
+// captured at the top of closeSession/syncProgress (session still current),
+// before any await, and carried into queuePending via the payload.
+describe("sid captured at session-open (A3)", () => {
+  it("a close failing AFTER an account switch queues under the OPENING account, and the flush skips it under the new one", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokA", userId: "uA" });
+    // The close POST rejects — but only after account B has switched in.
+    mockedPost.mockImplementationOnce(async () => {
+      storageHelper.setServerConfig({ address: "http://abs.local", token: "tokB", userId: "uB" });
+      throw errNetwork();
+    });
+    await closeSession({ sessionId: "s1", currentTime: 300, timeListened: 30, duration: 3600 });
+
+    // Stamped with A (the opener), NOT B (current when the failure landed).
+    expect(readJson("pendingSync_s1").sid).toBe("http://abs.local::uA");
+
+    // B is current — the flush leaves A's entry in place (does not POST).
+    mockedPost.mockReset();
+    mockedPost.mockResolvedValue({ data: {} } as any);
+    await flushPendingSyncs();
+    expect(mockedPost).not.toHaveBeenCalled();
+    expect(readJson("pendingSync_s1")).not.toBeNull();
+  });
+
+  it("syncProgress captures the opening account's sid when it fails after a switch", async () => {
+    storageHelper.setServerConfig({ address: "http://abs.local", token: "tokA", userId: "uA" });
+    mockedPost.mockImplementationOnce(async () => {
+      // syncProgress flushes first (nothing queued), then POSTs the sync.
+      storageHelper.setServerConfig({ address: "http://abs.local", token: "tokB", userId: "uB" });
+      throw errNetwork();
+    });
+    await syncProgress({ sessionId: "s2", currentTime: 40, timeListened: 4, duration: 400 });
+    expect(readJson("pendingSync_s2").sid).toBe("http://abs.local::uA");
+  });
 });
 
 describe("monotonic stamp cross-restart seeding", () => {

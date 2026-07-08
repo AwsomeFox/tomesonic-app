@@ -20,7 +20,10 @@ export function secondsToTimestamp(seconds: number): string {
 export function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return "0 MB";
   const mb = bytes / (1024 * 1024);
-  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  // Branch on the ROUNDED MB value, not the raw one: a size in [1023.5, 1024)
+  // MB rounds to "1024" at the 0-decimal display precision, so a raw `mb >= 1024`
+  // check would render "1024 MB" instead of promoting it to "1.00 GB".
+  if (Math.round(mb) >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 

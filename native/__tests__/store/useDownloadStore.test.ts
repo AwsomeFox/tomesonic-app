@@ -11,12 +11,20 @@ jest.mock("../../utils/autoCreds", () => ({
   writeAutoDownloads: jest.fn().mockResolvedValue(undefined),
   writeWidgetState: jest.fn().mockResolvedValue(undefined),
 }));
+// removeDownload reconciles playback when the deleted book is the loaded
+// session (lazy require of ../../store/usePlaybackStore). Mock just getState.
+jest.mock("../../store/usePlaybackStore", () => ({
+  usePlaybackStore: { getState: jest.fn(() => ({ currentSession: null, isPlaying: false })) },
+}));
 
 import * as FileSystem from "expo-file-system/legacy";
 import { downloader } from "../../utils/downloader";
 import { db, dbStorage } from "../../utils/db";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
+import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useDownloadStore, DownloadItem } from "../../store/useDownloadStore";
+
+const mockPlaybackGetState = jest.mocked(usePlaybackStore.getState);
 
 const initial = useDownloadStore.getState();
 const flush = () => new Promise((r) => setImmediate(r));
@@ -228,6 +236,64 @@ describe("useDownloadStore", () => {
       expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///downloads/derived/", {
         idempotent: true,
       });
+    });
+  });
+
+  describe("removeDownload live-playback handoff", () => {
+    // Deleting the download of the book currently loaded in the player must
+    // reconcile playback: a PLAYING session swaps to streaming at the current
+    // position (its file:// queue was just deleted); a PAUSED one just closes.
+    beforeEach(() => {
+      useDownloadStore.setState({ completedDownloads: { item1: baseItem({ status: "completed" }) } });
+    });
+
+    it("swaps a playing session to streaming, then closes as a fallback when it can't", async () => {
+      const startPlayback = jest.fn().mockResolvedValue(false);
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      mockPlaybackGetState.mockReturnValue({
+        currentSession: { libraryItemId: "item1", episodeId: undefined },
+        isPlaying: true,
+        startPlayback,
+        closePlayback,
+      } as any);
+
+      await useDownloadStore.getState().removeDownload("item1");
+
+      expect(startPlayback).toHaveBeenCalledWith("item1", undefined);
+      // startPlayback resolved false → close the session as a last resort.
+      expect(closePlayback).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes a paused session without attempting to resume streaming", async () => {
+      const startPlayback = jest.fn().mockResolvedValue(true);
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      mockPlaybackGetState.mockReturnValue({
+        currentSession: { libraryItemId: "item1", episodeId: undefined },
+        isPlaying: false,
+        startPlayback,
+        closePlayback,
+      } as any);
+
+      await useDownloadStore.getState().removeDownload("item1");
+
+      expect(closePlayback).toHaveBeenCalledTimes(1);
+      expect(startPlayback).not.toHaveBeenCalled();
+    });
+
+    it("leaves playback untouched when a different book is loaded", async () => {
+      const startPlayback = jest.fn().mockResolvedValue(true);
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      mockPlaybackGetState.mockReturnValue({
+        currentSession: { libraryItemId: "other", episodeId: undefined },
+        isPlaying: true,
+        startPlayback,
+        closePlayback,
+      } as any);
+
+      await useDownloadStore.getState().removeDownload("item1");
+
+      expect(startPlayback).not.toHaveBeenCalled();
+      expect(closePlayback).not.toHaveBeenCalled();
     });
   });
 
@@ -443,6 +509,21 @@ describe("useDownloadStore", () => {
       useDownloadStore.getState().loadDownloadsFromDb();
       expect(downloader.sweepOrphanFolders).toHaveBeenCalled();
     });
+
+    it("recovers an unknown-status row as a retryable failure with parts defaulted to []", () => {
+      // A corrupt/future-version row with a status outside the known set (and
+      // no parts) must surface as retryable, not sit as an inert ghost.
+      db.saveDownloadItem(baseItem({ id: "weird1", status: "weird" as any, parts: undefined as any }));
+
+      useDownloadStore.getState().loadDownloadsFromDb();
+
+      const item = useDownloadStore.getState().activeDownloads["weird1"];
+      expect(item.status).toBe("failed");
+      expect(item.error).toBe("Interrupted — tap retry to resume");
+      expect(item.parts).toEqual([]);
+      // The recovered failed state is persisted back to the DB.
+      expect(db.getAllDownloads()[0].status).toBe("failed");
+    });
   });
 
   describe("setDownloadFolder", () => {
@@ -589,6 +670,25 @@ describe("useDownloadStore", () => {
       expect(m.writeAutoDownloads).toHaveBeenLastCalledWith([
         expect.objectContaining({ id: "book1", currentTime: 300 }),
       ]);
+    });
+
+    it("mirrors only audio downloads, excluding ebook-only ones (no playable tracks)", () => {
+      const m = loadFresh();
+      // Ebook-only download: completed, but meta.tracks is empty → can't play
+      // in the car, so the mirror must drop it.
+      const ebook: DownloadItem = {
+        ...baseItem({ id: "ebook1", libraryItemId: "ebook1", status: "completed", progress: 1 }),
+        meta: { duration: 0, chapters: [], tracks: [] },
+      };
+
+      m.store.setState({
+        completedDownloads: { book1: audioItem("book1"), ebook1: ebook },
+      });
+
+      expect(m.writeAutoDownloads).toHaveBeenCalledTimes(1);
+      const entries = m.writeAutoDownloads.mock.calls.at(-1)![0];
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ id: "book1" });
     });
   });
 });

@@ -15,6 +15,8 @@ import { withAlpha } from "../theme/palette";
 import TopAppBar from "../components/TopAppBar";
 import BookCard from "../components/BookCard";
 import Icon from "../components/Icon";
+import ErrorState from "../components/ErrorState";
+import { encodeFilterValue } from "../components/FilterModal";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
 import SearchContent from "../components/SearchContent";
@@ -25,6 +27,23 @@ import { flushPendingSyncs } from "../utils/progressSync";
 import { hasEbook, isEbookOnly } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+// Map a personalized shelf to the Library-tab sort/filter that shows the rest
+// of it (each shelf is a capped horizontal scroll, so its tail is otherwise
+// unreachable). Returns null for shelves with no sensible full-list mapping
+// (Continue Series/Reading, author rows, Discover) — those stay non-pressable.
+function shelfToLibraryParams(shelf: any): Record<string, any> | null {
+  switch (shelf?.id) {
+    case "recently-added":
+      return { orderBy: "addedAt", descending: true };
+    case "continue-listening":
+      return { filter: `progress.${encodeFilterValue("in-progress")}` };
+    case "listen-again":
+      return { filter: `progress.${encodeFilterValue("finished")}` };
+    default:
+      return null;
+  }
+}
 
 export default function BookshelfScreen({ navigation }: any) {
   const colors = useThemeColors();
@@ -772,24 +791,12 @@ export default function BookshelfScreen({ navigation }: any) {
               // The fetch FAILED and there's no cache to show — an error
               // disguised as an empty library sends the user hunting through
               // their server for missing books.
-              <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingBottom: 48 }}>
-                <Icon name="warning" size={48} color={colors.onSurfaceVariant} />
-                <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
-                  Couldn't load your library
-                </Text>
-                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
-                  Check your connection to the server, then try again.
-                </Text>
-                <Pressable
-                  onPress={() => loadPersonalizedShelves(true)}
-                  android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Retry loading your library"
-                  style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
-                >
-                  <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-                </Pressable>
-              </View>
+              <ErrorState
+                style={{ flex: 1 }}
+                title="Couldn't load your library"
+                message="Check your connection to the server, then try again."
+                onRetry={() => loadPersonalizedShelves(true)}
+              />
             ) : (
               <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingBottom: 48 }}>
                 <Icon name="library" size={48} color={colors.onSurfaceVariant} />
@@ -810,6 +817,9 @@ export default function BookshelfScreen({ navigation }: any) {
             // shelves (Continue Reading/Series) simply appear once populated.
             if (!shelf.entities || shelf.entities.length === 0) return null;
 
+            const shelfLabel = shelf.label || shelf.name;
+            const libParams = shelfToLibraryParams(shelf);
+
             return (
               // Fade the shelf in when it (later) appears, and animate the
               // layout shift of the shelves below it instead of snapping.
@@ -819,17 +829,39 @@ export default function BookshelfScreen({ navigation }: any) {
                 layout={LinearTransition.duration(250)}
                 style={{ width: "100%", position: "relative", paddingBottom: 4 }}
               >
-                {/* Shelf header: teal rounded accent bar + prominent title */}
-                <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
-                  <View
-                    style={{ width: 5, height: 22, borderRadius: 3, marginRight: 10, backgroundColor: colors.primary }}
-                  />
-                  <Text
-                    style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 21, letterSpacing: 0 }}
+                {/* Shelf header: teal rounded accent bar + prominent title. When
+                    the shelf maps to a Library sort/filter, the whole header is a
+                    Pressable with a trailing chevron that opens the full list. */}
+                {libParams ? (
+                  <Pressable
+                    onPress={() => navigation.navigate("Library", libParams)}
+                    android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${shelfLabel}, see all`}
+                    style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}
                   >
-                    {shelf.label || shelf.name}
-                  </Text>
-                </View>
+                    <View
+                      style={{ width: 5, height: 22, borderRadius: 3, marginRight: 10, backgroundColor: colors.primary }}
+                    />
+                    <Text
+                      style={{ flex: 1, color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 21, letterSpacing: 0 }}
+                    >
+                      {shelfLabel}
+                    </Text>
+                    <Icon name="chevron-right" size={24} color={colors.onSurfaceVariant} />
+                  </Pressable>
+                ) : (
+                  <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
+                    <View
+                      style={{ width: 5, height: 22, borderRadius: 3, marginRight: 10, backgroundColor: colors.primary }}
+                    />
+                    <Text
+                      style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 21, letterSpacing: 0 }}
+                    >
+                      {shelfLabel}
+                    </Text>
+                  </View>
+                )}
 
                 {/* Horizontal shelf row (flex items-end px-3) */}
                 <ScrollView

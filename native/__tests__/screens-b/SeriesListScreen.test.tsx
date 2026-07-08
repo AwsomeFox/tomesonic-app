@@ -238,7 +238,7 @@ describe("SeriesListScreen", () => {
     expect(await screen.findByText("Couldn't load series")).toBeTruthy();
 
     mockSeriesGets();
-    await fireEvent.press(screen.getByLabelText("Retry loading series"));
+    await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("First Series")).toBeTruthy();
   });

@@ -232,4 +232,21 @@ describe("TopAppBar — back/title mode and action icons", () => {
     expect(screen.queryByLabelText("Sort")).toBeNull();
     expect(screen.queryByLabelText("Download")).toBeNull();
   });
+
+  it("does not badge the filter icon when filterActive is unset", async () => {
+    await render(<TopAppBar navigation={makeNav()} showFilter />);
+    expect(screen.getByLabelText("Filter")).toBeTruthy();
+    expect(screen.queryByTestId("filter-active-badge")).toBeNull();
+  });
+
+  it("badges the filter icon (and relabels it) when filterActive is set", async () => {
+    await render(<TopAppBar navigation={makeNav()} showFilter filterActive />);
+    // Badge shows and the label reflects the active state for TalkBack. The dot
+    // is intentionally hidden from the a11y tree, so opt into hidden elements.
+    expect(
+      screen.getByTestId("filter-active-badge", { includeHiddenElements: true })
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Filter, active")).toBeTruthy();
+    expect(screen.queryByLabelText("Filter")).toBeNull();
+  });
 });

@@ -124,8 +124,12 @@ function queuePending(payload: SyncPayload) {
       libraryItemId: payload.libraryItemId ?? existing?.libraryItemId,
       episodeId: payload.episodeId ?? existing?.episodeId,
       // Stamp the session identity so the flush can refuse it under a different
-      // account (existing sid wins — it's the one that opened the session).
-      sid: existing?.sid ?? currentSid() ?? undefined,
+      // account. The payload's sid was captured at SESSION-OPEN time
+      // (syncProgress/closeSession stamp it before any await), so it survives
+      // an account switch that lands before a fire-and-forget close fails —
+      // resolving currentSid() lazily here would mis-stamp A's final position
+      // with B's identity. Fall back to the existing entry's sid, then none.
+      sid: payload.sid ?? existing?.sid ?? undefined,
     };
     storage.set(pendingKey(payload.sessionId), JSON.stringify(merged));
   } catch (e) {
@@ -460,6 +464,12 @@ export function recordLocalListening(
         startedAt: now,
         timeListening: 0,
         syncedTimeListening: 0,
+        // Session identity captured at record creation — the flush refuses it
+        // under a different account (see currentSid), mirroring every other
+        // offline queue. A per-item+day record collides across accounts on a
+        // shared server, so without this a straggler could POST A's minutes
+        // under B's token.
+        sid: currentSid() ?? undefined,
       };
     }
     rec.timeListening = (Number(rec.timeListening) || 0) + seconds;
@@ -484,6 +494,11 @@ async function flushPendingLocalSessions(): Promise<void> {
       } catch {}
       continue;
     }
+    // Belongs to a different (switched/logged-out) account — never POST it
+    // under the current session's token (see currentSid + flushPendingPatches /
+    // the pending-sync loop guards). Left in place; login()'s clearAllPending
+    // sweeps it on account switch.
+    if (rec.sid && rec.sid !== currentSid()) continue;
     const total = Number(rec.timeListening) || 0;
     if (total <= (Number(rec.syncedTimeListening) || 0)) {
       // Fully delivered. Keep TODAY's record so later offline listening keeps
@@ -771,6 +786,12 @@ export async function syncProgress(payload: SyncPayload): Promise<void> {
   // Stamp when this position was read — the queue merge (queuePending) keys
   // freshness on it, since failures are observed out of request order.
   if (!payload.at) payload = { ...payload, at: monotonicNow() };
+  // Capture the session identity NOW, while this session is still current. A
+  // fire-and-forget POST can fail and reach queuePending AFTER an account
+  // switch — resolving currentSid() there would stamp the entry with the NEW
+  // account and let the flush guard pass, PATCHing this position under the
+  // wrong token on a shared server.
+  if (!payload.sid) payload = { ...payload, sid: currentSid() ?? undefined };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {
@@ -806,6 +827,10 @@ export async function closeSession(payload: SyncPayload): Promise<void> {
   // Same freshness stamp as syncProgress — a close always carries the newest
   // position and must win the queue merge even if an older sync fails later.
   if (!payload.at) payload = { ...payload, at: monotonicNow() };
+  // Capture the session identity NOW (see syncProgress): a straggler close that
+  // fails after an account switch must queue under the account that OPENED the
+  // session, not whichever is current when the failure is finally observed.
+  if (!payload.sid) payload = { ...payload, sid: currentSid() ?? undefined };
   const { sessionId, currentTime, timeListened, duration } = payload;
   if (!sessionId) return;
   if (sessionId.startsWith("local_")) {

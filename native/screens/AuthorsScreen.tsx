@@ -22,6 +22,7 @@ import OrderModal, { SortItem } from "../components/OrderModal";
 import { GridSkeleton } from "../components/Skeleton";
 import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import { useUiStore } from "../store/useUiStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import SearchContent from "../components/SearchContent";
@@ -359,53 +360,12 @@ export default function AuthorsScreen({ navigation }: any) {
       />
 
       {loadError && authors.length === 0 ? (
-        <View
-          style={{
-            flex: 1,
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 32,
-          }}
-        >
-          <Icon name="warning" size={48} color={colors.error} />
-          <Text
-            style={{
-              color: colors.onSurface,
-              fontSize: 17,
-              fontWeight: "600",
-              marginTop: 16,
-              marginBottom: 6,
-              textAlign: "center",
-            }}
-          >
-            Couldn't load authors
-          </Text>
-          <Text
-            style={{
-              color: colors.onSurfaceVariant,
-              fontSize: 14,
-              textAlign: "center",
-            }}
-          >
-            Check your connection to the server and try again.
-          </Text>
-          <Pressable
-            onPress={fetchAuthors}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading authors"
-            style={{
-              marginTop: 20,
-              paddingHorizontal: 24,
-              paddingVertical: 10,
-              borderRadius: 24,
-              overflow: "hidden",
-              backgroundColor: colors.primary,
-            }}
-          >
-            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          style={{ flex: 1 }}
+          title="Couldn't load authors"
+          message="Check your connection to the server and try again."
+          onRetry={fetchAuthors}
+        />
       ) : authors.length === 0 ? (
         <EmptyState
           style={{ flex: 1 }}

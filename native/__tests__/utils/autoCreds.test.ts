@@ -204,6 +204,21 @@ describe("writeWidgetState", () => {
     expect(lastWrittenJson()).toEqual({ title: "Dune", author: "Frank Herbert", itemId: "li_123" });
   });
 
+  it("includes episodeId for a podcast so resumption plays the right episode", async () => {
+    await writeWidgetState({
+      title: "The Daily",
+      author: "NYT",
+      itemId: "pod_1",
+      episodeId: "ep_9",
+    });
+    expect(lastWrittenJson()).toEqual({
+      title: "The Daily",
+      author: "NYT",
+      itemId: "pod_1",
+      episodeId: "ep_9",
+    });
+  });
+
   it("deletes the state file for null or title-less state", async () => {
     await writeWidgetState(null);
     expect(del).toHaveBeenCalledWith(WIDGET_PATH, { idempotent: true });

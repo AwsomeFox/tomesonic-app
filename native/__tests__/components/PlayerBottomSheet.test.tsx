@@ -309,6 +309,22 @@ describe("PlayerBottomSheet — transport controls", () => {
   });
 });
 
+describe("PlayerBottomSheet — buffering indicator (M2)", () => {
+  it("overlays a spinner on the play/pause control while buffering", async () => {
+    // A stall folds into "playing" in the progress loop, so without the
+    // spinner the pause glyph sits over a frozen scrubber (looks hung).
+    seedPlayer({ isPlaying: true, isBuffering: true });
+    await render(<PlayerBottomSheet />);
+    expect(screen.getAllByTestId("buffering-indicator").length).toBeGreaterThan(0);
+  });
+
+  it("shows no spinner once the stream is no longer buffering", async () => {
+    seedPlayer({ isPlaying: true, isBuffering: false });
+    await render(<PlayerBottomSheet />);
+    expect(screen.queryAllByTestId("buffering-indicator")).toHaveLength(0);
+  });
+});
+
 describe("PlayerBottomSheet — speed label + modal", () => {
   it("formats float-noise speeds cleanly (1.2999999 → 1.3×)", async () => {
     seedPlayer({ isPlayerExpanded: true });

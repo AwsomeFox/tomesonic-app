@@ -150,9 +150,12 @@ describe("AccountScreen", () => {
     await fireEvent.press(screen.getByText("Switch Server/User"));
     expect(alertSpy).toHaveBeenCalledWith(
       "Switch Server / User",
-      expect.stringContaining("log out"),
+      // The body must name the real data-loss consequence: logout wipes all
+      // downloaded books, not just the session.
+      expect.stringMatching(/deletes all downloaded books/i),
       expect.any(Array)
     );
+    expect(alertSpy.mock.calls[0][1]).toMatch(/re-download/i);
 
     const buttons = alertSpy.mock.calls[0][2];
     const logOutBtn = buttons.find((b: any) => b.text === "Log Out");
@@ -169,6 +172,20 @@ describe("AccountScreen", () => {
     expect(useUserStore.getState().serverConnectionConfig).toBeNull();
     expect(useUserStore.getState().mediaProgress).toEqual({});
     expect(storageHelper.getServerConfig()).toBeNull();
+  });
+
+  it("shows the Change Password row for a local (password) account", async () => {
+    // Default CONFIG carries no openid signal → treated as a local account.
+    await renderAccount();
+    expect(screen.getByLabelText("Change Password")).toBeTruthy();
+  });
+
+  it("hides the Change Password row for an OpenID/SSO session", async () => {
+    useUserStore.setState({
+      serverConnectionConfig: { ...CONFIG, authMethod: "openid" },
+    } as any);
+    await renderAccount();
+    expect(screen.queryByLabelText("Change Password")).toBeNull();
   });
 
   it("change password validates empty and mismatched fields", async () => {

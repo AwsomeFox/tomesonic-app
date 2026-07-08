@@ -395,6 +395,31 @@ describe("BookshelfScreen online", () => {
     await screen.findByText("Nothing on the shelf yet");
   });
 
+  it("renders the shared ErrorState (with Retry) when shelves fail with no cache", async () => {
+    seedOnline([]);
+    useLibraryStore.setState({ shelvesLoadError: true } as any);
+    const loadShelves = useLibraryStore.getState().loadPersonalizedShelves as jest.Mock;
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Couldn't load your library");
+    await fireEvent.press(screen.getByLabelText("Retry"));
+    expect(loadShelves).toHaveBeenCalledWith(true);
+  });
+
+  it("shelf header routes to the Library tab with the shelf's sort (Recently Added → addedAt desc)", async () => {
+    seedOnline([baseShelves[1]]); // recently-added
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    const header = await screen.findByLabelText("Recently Added, see all");
+    await fireEvent.press(header);
+    expect(navigation.navigate).toHaveBeenCalledWith("Library", {
+      orderBy: "addedAt",
+      descending: true,
+    });
+  });
+
   it("transforms Continue Series into series folders resolved from the library series list", async () => {
     const inProgressWithSeries = {
       ...audioBook,

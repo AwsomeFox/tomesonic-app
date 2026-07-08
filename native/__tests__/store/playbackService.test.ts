@@ -347,6 +347,33 @@ describe("playbackService remote events", () => {
     });
   });
 
+  describe("isBuffering (stall indicator)", () => {
+    it("sets isBuffering true on Buffering / Loading", () => {
+      for (const s of [State.Buffering, State.Loading]) {
+        spyActions();
+        usePlaybackStore.setState({ isBuffering: false } as any);
+        emit("playback-state", { state: s });
+        expect(usePlaybackStore.getState().isBuffering).toBe(true);
+      }
+    });
+
+    it("clears isBuffering once the player reports a settled state", () => {
+      for (const s of [State.Playing, State.Paused, State.Ready, State.Stopped, State.Ended]) {
+        spyActions();
+        usePlaybackStore.setState({ isBuffering: true } as any);
+        emit("playback-state", { state: s });
+        expect(usePlaybackStore.getState().isBuffering).toBe(false);
+      }
+    });
+
+    it("does not touch isBuffering while casting (no session-local player)", () => {
+      spyActions();
+      usePlaybackStore.setState({ isBuffering: false, isCasting: true } as any);
+      emit("playback-state", { state: State.Buffering });
+      expect(usePlaybackStore.getState().isBuffering).toBe(false);
+    });
+  });
+
   describe("RemotePlayId (Android Auto browse / bookmarks)", () => {
     it("starts playback for a plain item id", async () => {
       const a = spyActions();
@@ -401,6 +428,43 @@ describe("playbackService remote events", () => {
       await flush();
       expect(a.startPlayback).toHaveBeenCalledWith("item1", undefined);
       expect(a.seek).not.toHaveBeenCalled();
+    });
+
+    it("a PAUSED handoff starts the session then pauses (does not auto-resume)", async () => {
+      // setupPlayer adopting a car session the user PAUSED: the native side
+      // tags the payload paused=true so we build the real JS session but never
+      // auto-resume the audio the user had stopped.
+      const a = spyActions();
+      emit("remote-play-id", { id: "item1", paused: true });
+      await flush();
+      expect(a.startPlayback).toHaveBeenCalledWith("item1", undefined);
+      expect(a.pause).toHaveBeenCalledTimes(1);
+    });
+
+    it("a PAUSED handoff still seeks to the handoff position before pausing", async () => {
+      const a = spyActions();
+      emit("remote-play-id", { id: "pod1::ep1@@1234.5", paused: true });
+      await flush();
+      expect(a.startPlayback).toHaveBeenCalledWith("pod1", "ep1");
+      expect(a.seek).toHaveBeenCalledWith(1234.5);
+      expect(a.pause).toHaveBeenCalledTimes(1);
+    });
+
+    it("a PLAYING handoff (no paused flag) is left playing", async () => {
+      const a = spyActions();
+      emit("remote-play-id", { id: "item1@@100", paused: false });
+      await flush();
+      expect(a.startPlayback).toHaveBeenCalledWith("item1", undefined);
+      expect(a.seek).toHaveBeenCalledWith(100);
+      expect(a.pause).not.toHaveBeenCalled();
+    });
+
+    it("does not pause when a paused handoff's startPlayback failed", async () => {
+      const a = spyActions();
+      a.startPlayback.mockResolvedValue(false);
+      emit("remote-play-id", { id: "item1", paused: true });
+      await flush();
+      expect(a.pause).not.toHaveBeenCalled();
     });
   });
 

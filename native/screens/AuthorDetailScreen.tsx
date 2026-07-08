@@ -18,6 +18,7 @@ import Icon from "../components/Icon";
 import { isEbookOnly } from "../utils/bookMatch";
 import BookProgressBadge, { bookStatusA11yLabel } from "../components/BookProgressBadge";
 import Skeleton, { ListSkeleton } from "../components/Skeleton";
+import ErrorState from "../components/ErrorState";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import RmabMissingSection from "../components/RmabMissingSection";
 
@@ -354,24 +355,12 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
           <ListSkeleton rows={4} thumb={80} />
         </View>
       ) : loadError && !author ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <Icon name="warning" size={48} color={colors.error} />
-          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
-            Couldn't load author
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-            Check your connection to the server and try again.
-          </Text>
-          <Pressable
-            onPress={() => setRetryTick((t) => t + 1)}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading author"
-            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
-          >
-            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          title="Couldn't load author"
+          message="Check your connection to the server and try again."
+          onRetry={() => setRetryTick((t) => t + 1)}
+          style={{ flex: 1 }}
+        />
       ) : books.length === 0 ? (
         <FlatList
           data={[]}

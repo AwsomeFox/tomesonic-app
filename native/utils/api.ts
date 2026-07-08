@@ -81,24 +81,34 @@ const applyRefreshedConfig = (config: any) => {
   // refresh still belongs to the currently stored session.
   const cur = storageHelper.getServerConfig();
   // Two accounts on one server share `address`, so userId is the real
-  // discriminator. Discard when the ids differ, OR when the STORED config has
-  // a userId the refresh lacks — that means the refresh came from an older/
-  // different session and must not clobber the modern one. (A normal refresh
-  // builds its config by spreading the stored one, so their userIds always
-  // match; and when the stored config itself lacks a userId we can't
-  // discriminate, so we keep the old address-only behavior rather than
-  // discarding every legitimate refresh for that account.)
+  // discriminator — and it is the ONLY one. Discard when the ids differ, OR
+  // when the STORED config has a userId the refresh lacks — that means the
+  // refresh came from an older/different session and must not clobber the
+  // modern one. (A normal refresh builds its config by spreading the stored
+  // one, so their userIds always match; and when the stored config itself
+  // lacks a userId we can't discriminate, so we keep the old behavior rather
+  // than discarding every legitimate refresh for that account.)
+  //
+  // We deliberately DON'T gate on address: an in-place updateServerAddress
+  // (same account, moved DNS/IP/proxy/scheme) can land while this refresh is
+  // in flight, so the captured config's address no longer matches the current
+  // one. Discarding then would throw away the freshly-rotated (and, because
+  // ABS rotates refresh tokens, soon-ONLY-valid) pair and strand the session.
   const idMismatch =
     (cur?.userId && config?.userId && cur.userId !== config.userId) ||
     (cur?.userId && !config?.userId);
-  if (!cur?.token || cur.address !== config?.address || idMismatch) {
+  if (!cur?.token || idMismatch) {
     appLogger.warn("Refreshed config no longer matches the stored session — discarding", "API");
     return;
   }
-  storageHelper.setServerConfig(config);
+  // Apply the rotated token pair onto the CURRENT stored config, not the
+  // captured one: if the address changed mid-refresh, the captured config
+  // carries the stale address and blindly persisting it would revert the move.
+  const applied = { ...cur, token: config.token, refreshToken: config.refreshToken };
+  storageHelper.setServerConfig(applied);
   try {
     const { useUserStore } = require("../store/useUserStore");
-    useUserStore.setState({ serverConnectionConfig: config });
+    useUserStore.setState({ serverConnectionConfig: applied });
   } catch (e) {
     // no-op
   }
@@ -111,7 +121,7 @@ const applyRefreshedConfig = (config: any) => {
     // no-op
   }
   // trustTokens: this pair was JUST rotated by the server — it is the freshest.
-  writeAutoCreds(config.address, config.token, undefined, config.refreshToken, true).catch(() => {});
+  writeAutoCreds(applied.address, applied.token, undefined, applied.refreshToken, true).catch(() => {});
 };
 
 const processQueue = (error: any, token: string | null = null) => {

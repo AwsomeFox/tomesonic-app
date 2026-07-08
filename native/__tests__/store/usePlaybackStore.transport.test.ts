@@ -130,6 +130,29 @@ describe("usePlaybackStore transport", () => {
     });
   });
 
+  describe("play() session-liveness re-check (S2)", () => {
+    it("local: a close landing during the play() awaits does not flip isPlaying on a dead store", async () => {
+      setupLocal({ isPlaying: false });
+      // closePlayback races in while play() awaits the native TrackPlayer.play().
+      jest.mocked(TrackPlayer.play).mockImplementationOnce(async () => {
+        usePlaybackStore.setState({ currentSession: null } as any);
+      });
+      await usePlaybackStore.getState().play();
+      expect(usePlaybackStore.getState().isPlaying).toBe(false);
+    });
+
+    it("cast: a close landing during the cast play() await does not flip isPlaying", async () => {
+      setupLocal({ isPlaying: false });
+      const client = makeCastClient();
+      usePlaybackStore.getState().setCastState(client);
+      client.play.mockImplementationOnce(async () => {
+        usePlaybackStore.setState({ currentSession: null } as any);
+      });
+      await usePlaybackStore.getState().play();
+      expect(usePlaybackStore.getState().isPlaying).toBe(false);
+    });
+  });
+
   describe("pause()", () => {
     it("pauses the local player and persists the LIVE position immediately", async () => {
       // Snapshot deliberately stale (position: 5) — the persisted position
@@ -227,6 +250,18 @@ describe("usePlaybackStore transport", () => {
       await usePlaybackStore.getState().setPlaybackSpeed(0.8);
       expect(usePlaybackStore.getState().playbackSpeed).toBe(0.8);
       expect(usePlaybackStore.getState().currentSession).toBeNull();
+    });
+
+    it("local: swallows a setRate rejection and still persists + updates the store (S3)", async () => {
+      setupLocal();
+      // setRate can reject on a not-yet-ready player — this must not become an
+      // unhandled rejection, and the persist + store update must still run.
+      jest.mocked(TrackPlayer.setRate).mockRejectedValueOnce(new Error("player not ready"));
+      await expect(usePlaybackStore.getState().setPlaybackSpeed(1.75)).resolves.toBeUndefined();
+      expect(storage.getNumber("playbackRate")).toBe(1.75);
+      const s = usePlaybackStore.getState();
+      expect(s.playbackSpeed).toBe(1.75);
+      expect(s.currentSession.playbackRate).toBe(1.75);
     });
   });
 

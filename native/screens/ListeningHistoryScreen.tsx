@@ -8,6 +8,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 
 /** Formats seconds listened as "Xh Ym" / "Xm" / "Xs", mirroring the
  *  remainingPretty conventions (a 40-second session must not read "0m"). */
@@ -171,28 +172,11 @@ export default function ListeningHistoryScreen({ navigation }: any) {
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : error ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32 }}>
-          <Icon name="warning" size={36} color={colors.onSurfaceVariant} />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, marginTop: 12, textAlign: "center" }}>
-            {error}
-          </Text>
-          <Pressable
-            onPress={() => setRetryTick((t) => t + 1)}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading listening history"
-            style={{
-              marginTop: 20,
-              paddingHorizontal: 24,
-              paddingVertical: 10,
-              borderRadius: 24,
-              overflow: "hidden",
-              backgroundColor: colors.primary,
-            }}
-          >
-            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          style={{ flex: 1 }}
+          message={error}
+          onRetry={() => setRetryTick((t) => t + 1)}
+        />
       ) : (
         <FlatList
           data={sessions}

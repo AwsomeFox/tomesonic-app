@@ -70,6 +70,23 @@ describe("RmabRequestsScreen", () => {
     await waitFor(() => expect(approveRequest).toHaveBeenCalledWith("r1", "approve"));
   });
 
+  it("shows the shared empty state when there are no requests", async () => {
+    mockedList.mockResolvedValue([]);
+    await render(<RmabRequestsScreen navigation={navigation} />);
+
+    expect(await screen.findByText("No requests yet")).toBeTruthy();
+    expect(
+      screen.getByText("Request missing books from search, series, or author pages.")
+    ).toBeTruthy();
+  });
+
+  it("shows an empty error state when the requests load fails", async () => {
+    mockedList.mockRejectedValueOnce(new Error("down"));
+    await render(<RmabRequestsScreen navigation={navigation} />);
+
+    expect(await screen.findByText("Couldn't load requests")).toBeTruthy();
+  });
+
   it("delete requires a second confirming tap", async () => {
     useRmabStore.setState({ isAdmin: true, authMode: "jwt" } as any);
     (deleteRequest as jest.Mock).mockResolvedValue(undefined);

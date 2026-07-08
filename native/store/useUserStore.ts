@@ -244,9 +244,34 @@ export const useUserStore = create<UserState>((set, get) => ({
       }
       // Skip the setState when nothing changed: this runs on every Home focus,
       // and installing a fresh map object re-renders every card subscribed to
-      // mediaProgress even when the data is identical. The map is small
-      // (one entry per started book), so the compare is cheap.
-      if (JSON.stringify(prev) === JSON.stringify(merged)) return;
+      // mediaProgress even when the data is identical. `merged` is built in
+      // server-key order while `prev` is in local-write order, so a
+      // JSON.stringify compare reported identical maps as different whenever
+      // the key order diverged — re-rendering every card on every focus.
+      // Compare by key count + per-entry SHALLOW equality instead (order-
+      // independent). The map is small (one entry per started book), so this
+      // is cheap.
+      const shallowEqualEntry = (a: any, b: any): boolean => {
+        if (a === b) return true;
+        if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+        const ak = Object.keys(a);
+        const bk = Object.keys(b);
+        if (ak.length !== bk.length) return false;
+        for (const k of ak) if (a[k] !== b[k]) return false;
+        return true;
+      };
+      const prevKeys = Object.keys(prev);
+      const mergedKeys = Object.keys(merged);
+      let identical = prevKeys.length === mergedKeys.length;
+      if (identical) {
+        for (const k of mergedKeys) {
+          if (!shallowEqualEntry(prev[k], merged[k])) {
+            identical = false;
+            break;
+          }
+        }
+      }
+      if (identical) return;
       set({ mediaProgress: merged });
     } catch (err) {
       console.error("[UserStore] Failed to load media progress:", err);

@@ -23,6 +23,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import TopAppBar from "../components/TopAppBar";
 import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
+import ErrorState from "../components/ErrorState";
 import { ListSkeleton } from "../components/Skeleton";
 import { useUiStore } from "../store/useUiStore";
 import SearchContent from "../components/SearchContent";
@@ -310,27 +311,15 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
       {loading && data.length === 0 ? (
         <ListSkeleton rows={7} thumb={72} />
       ) : loadError && data.length === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
-          <Icon name="warning" size={48} color={colors.error} />
-          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, marginBottom: 6, textAlign: "center" }}>
-            Couldn't load {activeTab}
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center" }}>
-            Check your connection to the server and try again.
-          </Text>
-          <Pressable
-            onPress={() => {
-              setLoading(true);
-              fetchData().finally(() => setLoading(false));
-            }}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            accessibilityRole="button"
-            accessibilityLabel={`Retry loading ${activeTab}`}
-            style={{ marginTop: 20, paddingHorizontal: 24, paddingVertical: 10, borderRadius: 24, overflow: "hidden", backgroundColor: colors.primary }}
-          >
-            <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>Retry</Text>
-          </Pressable>
-        </View>
+        <ErrorState
+          style={{ flex: 1 }}
+          title={`Couldn't load ${activeTab}`}
+          message="Check your connection to the server and try again."
+          onRetry={() => {
+            setLoading(true);
+            fetchData().finally(() => setLoading(false));
+          }}
+        />
       ) : (
         <ScrollView
           style={{ flex: 1 }}
@@ -398,6 +387,7 @@ export default function CollectionsPlaylistsScreen({ navigation }: any) {
               value={newName}
               onChangeText={setNewName}
               placeholder={activeTab === "collections" ? "Collection name" : "Playlist name"}
+              accessibilityLabel={activeTab === "collections" ? "Collection name" : "Playlist name"}
               placeholderTextColor={colors.onSurfaceVariant}
               autoFocus
               returnKeyType="done"

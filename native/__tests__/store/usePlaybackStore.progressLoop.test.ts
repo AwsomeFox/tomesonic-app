@@ -16,9 +16,16 @@ jest.mock("../../utils/autoCreds", () => ({
   writeAutoDownloads: jest.fn().mockResolvedValue(undefined),
   writeWidgetState: jest.fn().mockResolvedValue(undefined),
 }));
+// Finishing a downloaded BOOK triggers auto-download-next-in-series via a lazy
+// require of ../../utils/downloader (gated: books only, never episodes).
+jest.mock("../../utils/downloader", () => ({
+  downloader: {},
+  autoDownloadNextAfterFinish: jest.fn().mockResolvedValue(undefined),
+}));
 
 import TrackPlayer, { State } from "react-native-track-player";
 import { api } from "../../utils/api";
+import { autoDownloadNextAfterFinish } from "../../utils/downloader";
 import { syncProgress, queueProgressPatch } from "../../utils/progressSync";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import { usePlaybackStore, restoreLocalNowPlayingMeta } from "../../store/usePlaybackStore";
@@ -274,6 +281,31 @@ describe("usePlaybackStore 1s progress loop", () => {
       expect(map["pod1-ep1"]).toMatchObject({ isFinished: true, episodeId: "ep1" });
       // No bogus item-level entry.
       expect(map["pod1"]).toBeUndefined();
+    });
+
+    it("kicks off auto-download-next when a plain book finishes", async () => {
+      await startLoop();
+      playerPos = 296; // within 5s of the 300s end
+
+      await tick(1000);
+
+      expect(autoDownloadNextAfterFinish).toHaveBeenCalledTimes(1);
+      expect(autoDownloadNextAfterFinish).toHaveBeenCalledWith("item1");
+    });
+
+    it("does NOT auto-download-next when a podcast EPISODE finishes", async () => {
+      await startLoop({ id: "sess2", libraryItemId: "pod1", episodeId: "ep1" });
+      playerPos = 296;
+
+      await tick(1000);
+
+      // The finish PATCH still fires for the episode...
+      expect(api.patch).toHaveBeenCalledWith(
+        "/api/me/progress/pod1/ep1",
+        expect.objectContaining({ isFinished: true })
+      );
+      // ...but auto-download-next is books-only.
+      expect(autoDownloadNextAfterFinish).not.toHaveBeenCalled();
     });
   });
 

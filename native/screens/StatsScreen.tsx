@@ -12,6 +12,7 @@ import { withAlpha } from '../theme/palette';
 import Icon from '../components/Icon';
 import HintPressable from '../components/HintPressable';
 import EmptyState from '../components/EmptyState';
+import ErrorState from '../components/ErrorState';
 import { useUserStore } from '../store/useUserStore';
 import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -234,31 +235,12 @@ export default function StatsScreen({ navigation }: any) {
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : error ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }}>
-          <Icon name="warning" size={48} color={colors.onSurfaceVariant} style={{ marginBottom: 12 }} />
-          <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: '700', marginBottom: 4 }}>
-            Couldn't load stats
-          </Text>
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: 'center', marginBottom: 16 }}>
-            {error}
-          </Text>
-          <HintPressable
-            onPress={loadStats}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading stats"
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
-            style={{
-              backgroundColor: colors.primary,
-              paddingHorizontal: 24,
-              paddingVertical: 10,
-              // Match the app-wide pill retry buttons (was an 8px outlier).
-              borderRadius: 24,
-              overflow: 'hidden',
-            }}
-          >
-            <Text style={{ color: colors.onPrimary, fontWeight: '600', fontSize: 14 }}>Retry</Text>
-          </HintPressable>
-        </View>
+        <ErrorState
+          style={{ flex: 1 }}
+          title="Couldn't load stats"
+          message={error}
+          onRetry={loadStats}
+        />
       ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: hasSession ? 100 : 40 }}>
           {/* Totals row */}
