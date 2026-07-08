@@ -480,7 +480,9 @@ export default function LibraryHubScreen({ route, navigation }: any) {
             pointerEvents="auto"
             accessibilityViewIsModal
             accessibilityLiveRegion="polite"
-            accessibilityRole="header"
+            // "alert" (matching OfflineBanner) rather than "header" — the whole
+            // overlay isn't a heading; the EmptyState's title carries the text.
+            accessibilityRole="alert"
           >
             <EmptyState
               style={{ flex: 1 }}

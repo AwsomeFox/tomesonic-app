@@ -132,7 +132,19 @@ let _lastStartAt = 0;
 async function applyNowPlayingChapter(session: any, chapters: any[], chapterIndex: number) {
   if (!session) return;
   try {
-    const activeIndex = await TrackPlayer.getActiveTrackIndex();
+    const isChapterQueue = usePlaybackStore.getState().chapterQueue;
+    // Only a MULTI-FILE queue (one RNTP item per file) needs a native round-trip
+    // to learn the active FILE index. The common cases are derivable without the
+    // per-second bridge call: a chapter-queue's active item IS the current
+    // chapter, and a single-item session is always index 0. Casting can remap
+    // the local queue, so ask natively there too.
+    const trackCount = (session?.audioTracks || session?.tracks || []).length;
+    const needsNativeIndex = trackCount > 1 || usePlaybackStore.getState().isCasting;
+    const activeIndex = needsNativeIndex
+      ? await TrackPlayer.getActiveTrackIndex()
+      : isChapterQueue && chapterIndex >= 0
+      ? chapterIndex
+      : 0;
     if (activeIndex == null) return;
     // Dedup native work when NOTHING moved. We must re-apply on a change to
     // EITHER the chapter OR the active queue item: a MULTI-FILE book moves the
@@ -143,7 +155,6 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     if (chapterIndex === _lastMetaChapter && activeIndex === _metaAppliedIndex) return;
     const book = session.displayTitle || "Audiobook";
     const author = session.displayAuthor || "";
-    const isChapterQueue = usePlaybackStore.getState().chapterQueue;
     // Bytes live on the ACTIVE queue item ONLY — a chapter-queue item per
     // chapter, a file item per file. If they lingered on every item the ~40KB
     // cover on each of a long book's items would blow past Android Auto's ~1MB
