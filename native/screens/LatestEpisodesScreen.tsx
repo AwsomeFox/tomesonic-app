@@ -157,9 +157,16 @@ export default function LatestEpisodesScreen({ navigation }: any) {
         });
         return;
       }
+      // Build the minimal shell the downloader reads. Carry the podcast cover
+      // into media.coverPath so downloadEpisode queues the cover part — without
+      // it the episode downloads with a blank cover offline + a blank AA card
+      // (the same episode from ItemDetail gets its cover). Best-effort: falls
+      // through untouched when no cover field is present.
+      const podcastMedia = episode.podcast || { metadata: { title: episode.podcastTitle || "" } };
+      const coverPath = episode.podcast?.coverPath || episode.coverPath;
       const libraryItem = episode.libraryItem || {
         id: libraryItemId,
-        media: episode.podcast || { metadata: { title: episode.podcastTitle || "" } },
+        media: coverPath ? { ...podcastMedia, coverPath } : podcastMedia,
       };
       try {
         await downloader.downloadEpisode(libraryItem, episode, serverAddress, token);
@@ -373,13 +380,16 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           {/* Episode info */}
           <View style={{ flex: 1, marginLeft: 14 }}>
             {podcastName ? (
+              // Not an independently-tappable link (the whole row Pressable
+              // navigates to ItemDetail), so no primary color / underline that
+              // would falsely signal a hyperlink — matches ItemDetail's episode
+              // rows.
               <Text
                 numberOfLines={1}
                 style={{
-                  color: colors.primary,
+                  color: colors.onSurfaceVariant,
                   fontSize: 12,
                   fontWeight: "600",
-                  textDecorationLine: "underline",
                 }}
               >
                 {podcastName}
@@ -478,7 +488,13 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           {epDownloading ? (
             <View style={{ alignItems: "center", justifyContent: "center" }}>
               <ActivityIndicator size="small" color={colors.primary} />
-              <Text style={{ fontSize: 9, color: colors.onSurface, marginTop: 1, fontWeight: "800" }}>
+              {/* Cap the font scale so the 9px "%" can't clip out of the 40×40
+                  button at large accessibility text sizes (the percent is also
+                  in the a11y label). */}
+              <Text
+                maxFontSizeMultiplier={1.2}
+                style={{ fontSize: 9, color: colors.onSurface, marginTop: 1, fontWeight: "800" }}
+              >
                 {epDownloadPct}%
               </Text>
             </View>
