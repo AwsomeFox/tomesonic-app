@@ -334,6 +334,18 @@ describe("playbackService remote events", () => {
       expect(a.seek).not.toHaveBeenCalled();
     });
 
+    it("adopts a native cold-start handoff (fractional absolute seconds)", async () => {
+      // The RNTP patch hands a JS-dead Android Auto session off to JS on
+      // setupPlayer via this same channel: id = "<itemId>[::episodeId]@@<absSec>"
+      // carrying the LIVE fakePlayer position (fractional). Adopting it starts
+      // the correct book and seeks to that position instead of a stale disk save.
+      const a = spyActions();
+      emit("remote-play-id", { id: "pod1::ep1@@1234.5" });
+      await flush();
+      expect(a.startPlayback).toHaveBeenCalledWith("pod1", "ep1");
+      expect(a.seek).toHaveBeenCalledWith(1234.5);
+    });
+
     it("ignores empty and zero-time bookmark payloads", async () => {
       const a = spyActions();
       emit("remote-play-id", { id: "" });
