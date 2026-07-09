@@ -391,7 +391,7 @@ describe("PlayerBottomSheet — chapters modal", () => {
   it("opens the chapters list and seeks on selection", async () => {
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     await fireEvent.press(screen.getByText("Ch 1"));
     expect(store().seekToChapter).toHaveBeenCalledWith(0);
   });
@@ -495,7 +495,7 @@ describe("PlayerBottomSheet — Chapters in the bottom control row", () => {
   it("Chapters is reachable in the expanded player and opens the modal", async () => {
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     await fireEvent.press(screen.getByText("Ch 1"));
     expect(store().seekToChapter).toHaveBeenCalledWith(0);
   });
@@ -723,7 +723,7 @@ describe("PlayerBottomSheet — play queue", () => {
   it("opens the queue sheet and lists queued books", async () => {
     seedPlayer({ isPlayerExpanded: true, queue: [{ libraryItemId: "b2", title: "Next Book", author: "A" }] });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     await fireEvent.press(screen.getByText("Up Next (1)"));
     expect(screen.getByText("Up Next")).toBeTruthy();
     expect(screen.getByText("Next Book")).toBeTruthy();
@@ -737,7 +737,7 @@ describe("PlayerBottomSheet — play queue", () => {
       playNextInQueue,
     });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     await fireEvent.press(screen.getByText("Up Next (1)"));
     await fireEvent.press(screen.getByLabelText("Play Next Book now"));
     expect(playNextInQueue).toHaveBeenCalled();
@@ -751,16 +751,16 @@ describe("PlayerBottomSheet — play queue", () => {
       removeFromQueue,
     });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     await fireEvent.press(screen.getByText("Up Next (1)"));
     await fireEvent.press(screen.getByLabelText("Remove Next Book from queue"));
-    expect(removeFromQueue).toHaveBeenCalledWith("b2");
+    expect(removeFromQueue).toHaveBeenCalledWith("b2", undefined);
   });
 
   it("shows the empty-queue message when nothing is queued", async () => {
     seedPlayer({ isPlayerExpanded: true, queue: [] });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
     await fireEvent.press(screen.getByText("Up Next (0)"));
     expect(screen.getByText(/No books queued/)).toBeTruthy();
   });

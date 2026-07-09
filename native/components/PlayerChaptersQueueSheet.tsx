@@ -30,9 +30,9 @@ interface Props {
   currentChapterIndex: number;
   onSeekToChapter: (index: number) => void;
   queue: any[];
-  removeFromQueue: (id: string) => void;
+  removeFromQueue: (id: string, episodeId?: string | null) => void;
   clearQueue: () => void;
-  playNextInQueue: () => Promise<void>;
+  playNextInQueue: () => Promise<boolean>;
   expanded: boolean;
   onToggleExpand: (expanded: boolean) => void;
   activeTab: "chapters" | "queue";
@@ -105,7 +105,8 @@ export default function PlayerChaptersQueueSheet({
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (evt, gestureState) => {
-        return Math.abs(gestureState.dy) > 2;
+        const { dx, dy } = gestureState;
+        return Math.abs(dy) > 4 && Math.abs(dy) > Math.abs(dx);
       },
       onPanResponderMove: (evt, gestureState) => {
         const dy = gestureState.dy;
@@ -223,7 +224,7 @@ export default function PlayerChaptersQueueSheet({
           <Pressable
             onPress={toggleExpand}
             accessibilityRole="button"
-            accessibilityLabel="Chapters and Queue sheet trigger"
+            accessibilityLabel="Chapters"
             style={{
               height: peekHeight,
               flexDirection: "row",
@@ -364,7 +365,7 @@ export default function PlayerChaptersQueueSheet({
                           onToggleExpand(false);
                         }}
                         accessibilityRole="button"
-                        accessibilityLabel={`Chapter ${i + 1}: ${ch.title || "Untitled"}`}
+                        accessibilityLabel={`${ch.title || `Chapter ${i + 1}`}, starts at ${secondsToTimestamp(ch.start || 0)}`}
                         style={{
                           flexDirection: "row",
                           alignItems: "center",
@@ -552,7 +553,7 @@ export default function PlayerChaptersQueueSheet({
                       <Pressable
                         onPress={() => {
                           haptic();
-                          removeFromQueue(item.libraryItemId);
+                          removeFromQueue(item.libraryItemId, item.episodeId);
                         }}
                         accessibilityRole="button"
                         accessibilityLabel={`Remove ${item.title || "track"} from queue`}
