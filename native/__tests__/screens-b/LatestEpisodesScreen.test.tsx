@@ -161,6 +161,17 @@ describe("LatestEpisodesScreen", () => {
     expect(startPlayback).toHaveBeenCalledWith("li1", "ep1");
   });
 
+  it("no longer shows a redundant per-episode podcast-settings gear", async () => {
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    // The per-row settings gear was removed: the list spans many podcasts and
+    // repeated the same podcast across its episodes, so the gear was redundant.
+    // The single podcast-settings entry point lives on ItemDetail instead.
+    expect(screen.queryByLabelText("Podcast settings for Great Show")).toBeNull();
+    expect(screen.queryByLabelText(/Podcast settings for/)).toBeNull();
+  });
+
   it("row tap opens the podcast's item detail", async () => {
     const navigation = await renderEpisodes();
     await screen.findByText("Fresh Episode");

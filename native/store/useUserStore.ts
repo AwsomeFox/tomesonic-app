@@ -395,10 +395,29 @@ export const useUserStore = create<UserState>((set, get) => ({
               k.startsWith("continueReadingCache_") ||
               k.startsWith("ebookCfi_") ||
               k.startsWith("pdfPage_") ||
-              k.startsWith("last_interaction_")
+              k.startsWith("last_interaction_") ||
+              // Reader highlights + per-book reading-speed estimates are keyed by
+              // BARE libraryItemId (collides across accounts on a shared server).
+              k.startsWith("reader_highlights_") ||
+              k.startsWith("reader_speed_") ||
+              // Per-book playback-rate overrides (bare-id keyed map).
+              k === "perBookRate"
           )
           .forEach((k: string) => storage.remove(k));
       } catch {}
+      // "Want to Read" favorites and the cross-book play queue are per-account —
+      // a different ABS account must not inherit them (item ids collide on a
+      // shared server). Clear both MMKV and in-memory state via the stores.
+      try {
+        require("./useFavoritesStore").useFavoritesStore.getState().clear();
+      } catch (e) {
+        console.warn("[UserStore] favorites clear on account switch failed", e);
+      }
+      try {
+        require("./usePlaybackStore").usePlaybackStore.getState().clearQueue();
+      } catch (e) {
+        console.warn("[UserStore] queue clear on account switch failed", e);
+      }
       // Reset BEFORE writeAutoCreds below so the old server's libraryId can't
       // be mirrored into the new server's Android Auto creds file.
       try {
@@ -530,10 +549,28 @@ export const useUserStore = create<UserState>((set, get) => ({
             k.startsWith("continueReadingCache_") ||
             k.startsWith("ebookCfi_") ||
             k.startsWith("pdfPage_") ||
-            k.startsWith("last_interaction_")
+            k.startsWith("last_interaction_") ||
+            // Reader highlights + per-book reading-speed estimates + per-book
+            // playback-rate overrides are all keyed by BARE libraryItemId, which
+            // collides across accounts on a shared server.
+            k.startsWith("reader_highlights_") ||
+            k.startsWith("reader_speed_") ||
+            k === "perBookRate"
         )
         .forEach((k: string) => storage.remove(k));
     } catch {}
+    // "Want to Read" favorites and the cross-book play queue are per-account —
+    // the next login must not inherit them. Clears MMKV + in-memory store state.
+    try {
+      require("./useFavoritesStore").useFavoritesStore.getState().clear();
+    } catch (e) {
+      console.warn("[UserStore] favorites clear on logout failed", e);
+    }
+    try {
+      require("./usePlaybackStore").usePlaybackStore.getState().clearQueue();
+    } catch (e) {
+      console.warn("[UserStore] queue clear on logout failed", e);
+    }
     try {
       const { useLibraryStore } = require("./useLibraryStore");
       useLibraryStore.getState().reset();

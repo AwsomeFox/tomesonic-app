@@ -30,6 +30,9 @@ import LatestEpisodesScreen from "../screens/LatestEpisodesScreen";
 import ListeningHistoryScreen from "../screens/ListeningHistoryScreen";
 import RmabRequestsScreen from "../screens/RmabRequestsScreen";
 import DiscoverScreen from "../screens/DiscoverScreen";
+import GenreBrowseScreen from "../screens/GenreBrowseScreen";
+import YearInReviewScreen from "../screens/YearInReviewScreen";
+import PodcastSettingsScreen from "../screens/PodcastSettingsScreen";
 import { useRmabStore } from "../store/useRmabStore";
 import ReaderScreen from "../screens/ReaderScreen";
 import { usePlaybackStore } from "../store/usePlaybackStore";
@@ -211,6 +214,9 @@ export default function AppNavigator() {
             <Stack.Screen name="Logs" component={LogsScreen} />
             <Stack.Screen name="ListeningHistory" component={ListeningHistoryScreen} />
             <Stack.Screen name="RmabRequests" component={RmabRequestsScreen} />
+            <Stack.Screen name="GenreBrowse" component={GenreBrowseScreen} />
+            <Stack.Screen name="YearInReview" component={YearInReviewScreen} />
+            <Stack.Screen name="PodcastSettings" component={PodcastSettingsScreen} />
             <Stack.Screen name="Reader" component={ReaderScreen} />
           </>
         )}

@@ -17,6 +17,65 @@ interface Props {
   hasChapter: boolean;
   onSet: (seconds: number, endOfChapter?: boolean) => void;
   onCancel: () => void;
+  /** "Rewind on wake" toggle (omit both to hide the row). */
+  rewindOnWake?: boolean;
+  onToggleRewindOnWake?: (value: boolean) => void;
+  /** "Shake to add time" toggle (omit both to hide the row). */
+  shakeToExtend?: boolean;
+  onToggleShakeToExtend?: (value: boolean) => void;
+}
+
+// Minimal M3-style inline switch row (self-contained). The row is the switch.
+function ToggleRow({
+  label,
+  value,
+  onValueChange,
+  colors,
+}: {
+  label: string;
+  value: boolean;
+  onValueChange: (v: boolean) => void;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  return (
+    <Pressable
+      onPress={() => onValueChange(!value)}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+      accessibilityLabel={label}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+      }}
+    >
+      <Text style={{ flex: 1, fontSize: 16, color: colors.onSurface, marginRight: 16 }}>{label}</Text>
+      <View
+        importantForAccessibility="no-hide-descendants"
+        accessibilityElementsHidden
+        style={{
+          width: 48,
+          height: 28,
+          borderRadius: 14,
+          padding: 3,
+          backgroundColor: value ? colors.primary : colors.surfaceVariant,
+          alignItems: value ? "flex-end" : "flex-start",
+          justifyContent: "center",
+        }}
+      >
+        <View
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+            backgroundColor: value ? colors.onPrimary : colors.outline,
+          }}
+        />
+      </View>
+    </Pressable>
+  );
 }
 
 function fmt(seconds: number) {
@@ -33,7 +92,18 @@ function fmt(seconds: number) {
  * durations, End of chapter, and a Custom stepper. When a timer is active it
  * shows the remaining time with a cancel button.
  */
-export default function SleepTimerModal({ visible, onClose, timer, hasChapter, onSet, onCancel }: Props) {
+export default function SleepTimerModal({
+  visible,
+  onClose,
+  timer,
+  hasChapter,
+  onSet,
+  onCancel,
+  rewindOnWake,
+  onToggleRewindOnWake,
+  shakeToExtend,
+  onToggleShakeToExtend,
+}: Props) {
   const colors = useThemeColors();
   const [customMode, setCustomMode] = useState(false);
   const [customMin, setCustomMin] = useState(15);
@@ -191,6 +261,27 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
         <Pressable onPress={() => setCustomMode(true)} {...rowA11y} style={rowStyle}>
           <Text style={{ fontSize: 18, color: colors.onSurface }}>Custom</Text>
         </Pressable>
+
+        {onToggleRewindOnWake || onToggleShakeToExtend ? (
+          <View style={{ borderTopWidth: 1, borderTopColor: colors.outlineVariant, marginTop: 8, paddingTop: 4 }}>
+            {onToggleRewindOnWake ? (
+              <ToggleRow
+                label="Rewind on wake"
+                value={!!rewindOnWake}
+                onValueChange={onToggleRewindOnWake}
+                colors={colors}
+              />
+            ) : null}
+            {onToggleShakeToExtend ? (
+              <ToggleRow
+                label="Shake to add time"
+                value={!!shakeToExtend}
+                onValueChange={onToggleShakeToExtend}
+                colors={colors}
+              />
+            ) : null}
+          </View>
+        ) : null}
       </View>
     );
   };
@@ -199,7 +290,7 @@ export default function SleepTimerModal({ visible, onClose, timer, hasChapter, o
     <BottomSheet visible={visible} onClose={onClose}>
             <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="moon" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-              <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Sleep Timer</Text>
+              <Text accessibilityRole="header" style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Sleep Timer</Text>
             </View>
             {renderBody()}
     </BottomSheet>

@@ -60,6 +60,7 @@ import {
 } from "../../utils/progressSync";
 import { downloader } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
+import { useFavoritesStore } from "../../store/useFavoritesStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
@@ -202,6 +203,7 @@ beforeEach(() => {
     serverConnectionConfig: { address: "https://abs.test", token: "tok" },
   } as any);
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
+  useFavoritesStore.setState({ favorites: [] });
   mockedPatch.mockResolvedValue({ data: {} });
 });
 
@@ -650,11 +652,134 @@ describe("ItemDetailScreen", () => {
     );
   });
 
+  it("shows and toggles the Want to Read (favorite) control, persisting to the store", async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    // Starts un-favorited.
+    const addBtn = screen.getByLabelText("Add to Want to Read");
+    expect(useFavoritesStore.getState().isFavorite("item1")).toBe(false);
+
+    await fireEvent.press(addBtn);
+
+    // Store reflects the toggle and the control flips to the "remove" state.
+    await waitFor(() => expect(useFavoritesStore.getState().isFavorite("item1")).toBe(true));
+    expect(screen.getByLabelText("Remove from Want to Read")).toBeTruthy();
+    expect(screen.queryByLabelText("Add to Want to Read")).toBeNull();
+
+    // Persisted under the store's own MMKV key.
+    expect(JSON.parse(storage.getString("favorites") || "[]")).toContain("item1");
+
+    // Toggling again removes it.
+    await fireEvent.press(screen.getByLabelText("Remove from Want to Read"));
+    await waitFor(() => expect(useFavoritesStore.getState().isFavorite("item1")).toBe(false));
+  });
+
+  it("reflects an already-favorited item on load", async () => {
+    useFavoritesStore.setState({ favorites: ["item1"] });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.getByLabelText("Remove from Want to Read")).toBeTruthy();
+  });
+
   it("shows an error when no itemId is provided", async () => {
     const navigation = makeNavigation();
     await render(<ItemDetailScreen route={{ params: {} }} navigation={navigation} />);
     await screen.findByText("No item ID provided.");
     expect(screen.queryByText("Retry")).toBeNull();
+  });
+});
+
+describe("Add to Up Next queue", () => {
+  it("adds a playable audio book to the queue and confirms via dialog", async () => {
+    routeApi(bothFormatItem);
+    const alertSpy = showAppDialog as jest.Mock;
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    await fireEvent.press(screen.getByLabelText("Add to Up Next queue"));
+
+    // Store now holds the queued book (title/author carried through).
+    const queue = usePlaybackStore.getState().queue;
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toEqual(
+      expect.objectContaining({ libraryItemId: "item1", title: "The Hobbit", author: "J.R.R. Tolkien" })
+    );
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Added to Up Next" })
+    );
+  });
+
+  it("de-dupes: an already-queued book shows the queued state and warns instead of re-adding", async () => {
+    routeApi(bothFormatItem);
+    usePlaybackStore.setState({
+      queue: [{ libraryItemId: "item1", title: "The Hobbit" }],
+    } as any);
+    const alertSpy = showAppDialog as jest.Mock;
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    // Reflects the queued state on load.
+    const btn = screen.getByLabelText("Already in Up Next");
+    await fireEvent.press(btn);
+
+    // No duplicate appended; user is told it's already queued.
+    expect(usePlaybackStore.getState().queue).toHaveLength(1);
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Already in Up Next" })
+    );
+  });
+
+  it("hides the Add to Up Next action for ebook-only items and podcasts", async () => {
+    routeApi(ebookOnlyItem, []);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+    expect(screen.queryByLabelText("Add to Up Next queue")).toBeNull();
+
+    routeApi(podcastItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+    expect(screen.queryByLabelText("Add to Up Next queue")).toBeNull();
+  });
+});
+
+describe("Podcast settings entry", () => {
+  it("navigates to PodcastSettings with the podcast's libraryItemId and title", async () => {
+    routeApi(podcastItem);
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={navigation} />
+    );
+    await screen.findByText("2 Episodes");
+
+    await fireEvent.press(screen.getByLabelText("Podcast settings"));
+    expect(navigation.navigate).toHaveBeenCalledWith("PodcastSettings", {
+      libraryItemId: "pod1",
+      podcastTitle: "My Podcast",
+    });
+  });
+
+  it("hides the Podcast settings entry for non-podcast (book) items", async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(screen.queryByLabelText("Podcast settings")).toBeNull();
   });
 });
 

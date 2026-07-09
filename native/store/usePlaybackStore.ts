@@ -74,6 +74,242 @@ function autoRewindSeconds(pausedForMs: number): number {
   return 30;
 }
 
+// --- Per-book rate memory · cross-book queue · sleep-timer extras ------------
+// All client-only. Persisted directly in the shared MMKV `storage` under their
+// own keys (kept out of the user-settings blob) so they survive restarts.
+const PER_BOOK_RATE_KEY = "perBookRate";
+// Cap the per-book rate memory so it can't grow without bound — one entry is
+// added per book whose speed was ever changed. Approximate LRU: the oldest
+// (least-recently-written) entries are evicted once the map exceeds this.
+const PER_BOOK_RATE_MAX = 200;
+const REMEMBER_RATE_KEY = "rememberSpeedPerBook";
+const QUEUE_KEY = "playbackQueue";
+const AUTO_PLAY_NEXT_KEY = "autoPlayNext";
+const SLEEP_REWIND_ON_WAKE_KEY = "sleepRewindOnWake";
+const SLEEP_REWIND_SECONDS_KEY = "sleepRewindSeconds";
+const SLEEP_SHAKE_KEY = "sleepShakeToExtend";
+// Minutes a phone shake adds to an armed sleep timer.
+const SLEEP_SHAKE_MINUTES = 5;
+
+function getRememberSpeedPerBook(): boolean {
+  if (!storage.contains(REMEMBER_RATE_KEY)) return true; // default ON
+  return storage.getBoolean(REMEMBER_RATE_KEY) ?? true;
+}
+function getPerBookRateMap(): Record<string, number> {
+  try {
+    const parsed = JSON.parse(storage.getString(PER_BOOK_RATE_KEY) || "null");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function getPerBookRate(itemId?: string | null): number | undefined {
+  if (!itemId) return undefined;
+  const r = getPerBookRateMap()[itemId];
+  return typeof r === "number" && r > 0 ? r : undefined;
+}
+function setPerBookRate(itemId?: string | null, rate?: number) {
+  if (!itemId || !(typeof rate === "number" && rate > 0)) return;
+  const map = getPerBookRateMap();
+  // Delete-then-set moves the entry to the end (most-recently-used) so the LRU
+  // eviction below drops the oldest entries first. Object key order is insertion
+  // order for the string (UUID) keys used here.
+  delete map[itemId];
+  map[itemId] = rate;
+  const keys = Object.keys(map);
+  if (keys.length > PER_BOOK_RATE_MAX) {
+    for (const k of keys.slice(0, keys.length - PER_BOOK_RATE_MAX)) delete map[k];
+  }
+  try {
+    storage.set(PER_BOOK_RATE_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+function getStoredQueue(): QueueItem[] {
+  try {
+    const parsed = JSON.parse(storage.getString(QUEUE_KEY) || "null");
+    return Array.isArray(parsed)
+      ? parsed.filter((q: any) => q && typeof q.libraryItemId === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+function persistQueue(q: QueueItem[]) {
+  try {
+    storage.set(QUEUE_KEY, JSON.stringify(q || []));
+  } catch {}
+}
+function getAutoPlayNext(): boolean {
+  if (!storage.contains(AUTO_PLAY_NEXT_KEY)) return true; // default ON
+  return storage.getBoolean(AUTO_PLAY_NEXT_KEY) ?? true;
+}
+
+function getSleepRewindOnWake(): boolean {
+  if (!storage.contains(SLEEP_REWIND_ON_WAKE_KEY)) return true; // default ON
+  return storage.getBoolean(SLEEP_REWIND_ON_WAKE_KEY) ?? true;
+}
+function getSleepRewindSeconds(): number {
+  const n = storage.getNumber(SLEEP_REWIND_SECONDS_KEY);
+  return typeof n === "number" && n > 0 ? n : 30;
+}
+function getSleepShakeToExtend(): boolean {
+  if (!storage.contains(SLEEP_SHAKE_KEY)) return true; // default ON
+  return storage.getBoolean(SLEEP_SHAKE_KEY) ?? true;
+}
+
+// Set true when a sleep timer PAUSES playback so the next play() can apply the
+// dedicated "rewind on wake" nudge, independent of the generic auto-rewind.
+let _sleepRewindPending = false;
+
+// Accelerometer shake-to-extend — works with the SCREEN OFF, battery-efficiently.
+//
+// Why it works screen-off: a non-wake-up SensorManager listener only stops
+// delivering when the application processor enters deep sleep. But this player
+// holds a PARTIAL wake lock during playback (androidWakeMode = WAKE_MODE_NETWORK,
+// set in buildPlayerOptions), so the CPU never deep-sleeps while a book is
+// playing — which is exactly the state during a sleep timer. So the accelerometer
+// keeps firing with the screen off, and the native 1s progress events keep the JS
+// runtime alive to receive them. This is the same approach Smart AudioBook
+// Player / Prologue (and this app's pre-React-Native version) use.
+//
+// Why it's battery-efficient: we register the sensor ONLY while a sleep timer is
+// actually running (a short, user-bounded window) and at a low 4 Hz rate. The CPU
+// is already awake to decode audio, so a 4 Hz accelerometer is a negligible
+// incremental cost — and we hold NO wake lock of our own (we ride the player's).
+// When playback pauses (e.g. the timer fired), the wake lock releases and the CPU
+// can sleep; by then the timer is over and shake-to-extend is no longer needed.
+let _shakeSub: { remove: () => void } | null = null;
+let _lastShakeAt = 0;
+const SHAKE_G_THRESHOLD = 1.8; // total acceleration in g (~1g at rest)
+function onShakeExtend() {
+  const st = usePlaybackStore.getState();
+  const t = st.sleepTimer;
+  if (!t) return;
+  // Extend in place (converting an end-of-chapter timer to fixed), matching the
+  // modal's "+N min" extend semantics.
+  st.setSleepTimer(Math.max(0, Math.round(t.remaining)) + SLEEP_SHAKE_MINUTES * 60, false);
+}
+function armShakeListener() {
+  disarmShakeListener();
+  if (!getSleepShakeToExtend()) return;
+  try {
+    const sensors = require("expo-sensors");
+    const Accelerometer = sensors?.Accelerometer;
+    if (!Accelerometer?.addListener) return;
+    Accelerometer.setUpdateInterval?.(250); // 4 Hz — enough to catch a shake
+    _shakeSub = Accelerometer.addListener((d: { x: number; y: number; z: number }) => {
+      const mag = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+      const now = Date.now();
+      if (mag >= SHAKE_G_THRESHOLD && now - _lastShakeAt > 1500) {
+        _lastShakeAt = now;
+        onShakeExtend();
+      }
+    });
+  } catch {
+    // expo-sensors missing/misconfigured — stay a no-op.
+    _shakeSub = null;
+  }
+}
+function disarmShakeListener() {
+  try {
+    _shakeSub?.remove();
+  } catch {}
+  _shakeSub = null;
+}
+
+// Resolve the NEXT book in the finished book's series. Reuses the same
+// series/sequence resolution as auto-download-next-in-series
+// (utils/downloader.autoDownloadNextAfterFinish).
+//
+// REQUIRES CONNECTIVITY: the series membership + sequence needed to pick the
+// next book lives only on the server — downloaded items (useDownloadStore)
+// don't carry series/sequence metadata, so there's no local source to resolve
+// from. Both api.get calls below therefore run first; offline they throw and
+// this no-ops (returns null). Among the network-resolved candidates we still
+// PREFER one that's already downloaded, so once connectivity picks the next
+// book its playback can proceed from local files.
+export async function resolveNextInSeries(libraryItemId: string): Promise<string | null> {
+  try {
+    const curRes = await api.get(`/api/items/${encodeURIComponent(libraryItemId)}?expanded=1`);
+    const libraryItem = curRes.data;
+    const libraryId = libraryItem?.libraryId;
+    const series = (libraryItem?.media?.metadata?.series || [])[0];
+    if (!libraryId || !series?.id) return null;
+    const currentSequence = parseFloat(series.sequence);
+    const res = await api.get(
+      `/api/libraries/${libraryId}/series/${encodeURIComponent(series.id)}`
+    );
+    const books: any[] = res.data?.books || [];
+    if (!books.length) return null;
+    // A book can belong to MULTIPLE series — match the sequence to the series
+    // we're following, not series[0].
+    const sequenceInSeries = (b: any) =>
+      parseFloat(
+        (b?.media?.metadata?.series || []).find((s: any) => s?.id === series.id)?.sequence
+      );
+    const sorted = books
+      .filter((b) => b.id !== libraryItemId)
+      .sort((a, b) => (sequenceInSeries(a) || 0) - (sequenceInSeries(b) || 0));
+    const after = sorted.filter((b) => {
+      const seq = sequenceInSeries(b);
+      return !isNaN(currentSequence) && !isNaN(seq) && seq > currentSequence;
+    });
+    const candidates = after.length ? after : sorted;
+    if (!candidates.length) return null;
+    // Prefer a downloaded next book (its playback can then run from local
+    // files); else the immediate next.
+    try {
+      const { useDownloadStore } = require("./useDownloadStore");
+      const completed = useDownloadStore.getState().completedDownloads || {};
+      const downloaded = candidates.find((b) => completed[b.id]);
+      if (downloaded) return downloaded.id;
+    } catch {}
+    return candidates[0].id;
+  } catch {
+    return null;
+  }
+}
+
+// Fired once when a book finishes (from the auto-finish block). Advances to the
+// next QUEUED book if any; otherwise, when enabled, auto-plays the next book in
+// the series. Casting keeps working — advancing routes through startPlayback →
+// preparePlaybackSession, which loads the receiver while casting.
+let _autoAdvancing = false;
+export async function autoAdvanceAfterFinish(finishedItemId: string, episodeId?: string | null) {
+  if (episodeId) return; // podcast episodes don't queue / series-advance
+  if (!finishedItemId || _autoAdvancing) return;
+  _autoAdvancing = true;
+  try {
+    const store = usePlaybackStore.getState();
+    // The user may have switched books between finish and now — only advance if
+    // the finished book is still active (or nothing is active). Guards BOTH the
+    // queue and series branches: this runs fire-and-forget, so a book the user
+    // manually started after the finish must not be yanked off by the OLD book's
+    // advance (the queue branch previously lacked this check).
+    const cur = store.currentSession;
+    const curId = cur?.libraryItemId || cur?.libraryItem?.id;
+    if (cur && curId && curId !== finishedItemId) return;
+    if (store.queue.length > 0) {
+      await store.playNextInQueue();
+      return;
+    }
+    if (!getAutoPlayNext()) return;
+    const nextId = await resolveNextInSeries(finishedItemId);
+    if (!nextId) return;
+    // Re-check after the (awaited) series resolution: the user may have started a
+    // different book while it was in flight.
+    const cur2 = usePlaybackStore.getState().currentSession;
+    const curId2 = cur2?.libraryItemId || cur2?.libraryItem?.id;
+    if (cur2 && curId2 && curId2 !== finishedItemId) return;
+    await usePlaybackStore.getState().startPlayback(nextId);
+  } catch (e) {
+    console.warn("[PlaybackStore] auto-advance failed", e);
+  } finally {
+    _autoAdvancing = false;
+  }
+}
+
 // The full RNTP options object. IMPORTANT: RNTP rebuilds the entire Android Auto
 // custom layout on every updateOptions call, so we must ALWAYS pass the complete
 // capabilities set — a partial call (e.g. just jump intervals) would wipe the
@@ -520,6 +756,13 @@ function persistProgressSample(
           autoDownloadNextAfterFinish(libraryItemId).catch(() => {});
         } catch {}
       }
+      // Cross-book queue + series auto-next: advance to the next queued book
+      // (or next in series) when this book finishes. Fire-and-forget; never
+      // block persistence. Guarded once-per-session by the enclosing
+      // _finishedSessionId check above.
+      try {
+        autoAdvanceAfterFinish(libraryItemId, sessionEpisodeId).catch(() => {});
+      } catch {}
     }
   }
 }
@@ -827,6 +1070,15 @@ export async function reconcileWithNativePlayer(): Promise<boolean> {
   }
 }
 
+/** A queued book (or podcast episode) awaiting cross-book auto-advance. */
+export interface QueueItem {
+  libraryItemId: string;
+  episodeId?: string;
+  title?: string;
+  author?: string;
+  coverUrl?: string;
+}
+
 /** Shared shape of the active sleep-timer state (null when no timer runs). */
 export interface SleepTimerState {
   endOfChapter: boolean;
@@ -868,6 +1120,27 @@ interface PlaybackState {
 
   // Sleep timer
   sleepTimer: SleepTimerState | null;
+  // "Rewind on wake": when a sleep timer pauses playback, the next resume
+  // rewinds a dedicated amount (persisted; default ON).
+  sleepRewindOnWake: boolean;
+  setSleepRewindOnWake: (value: boolean) => void;
+  // Shake-to-extend an armed sleep timer (persisted; default ON). No-op unless
+  // expo-sensors is present — see armShakeListener.
+  sleepShakeToExtend: boolean;
+  setSleepShakeToExtend: (value: boolean) => void;
+
+  // Per-book playback-speed memory (persisted; default ON). When ON, each book
+  // resumes at the last speed set for THAT book; when OFF, the global rate is
+  // used everywhere (today's behavior).
+  rememberSpeedPerBook: boolean;
+  setRememberSpeedPerBook: (value: boolean) => void;
+
+  // Cross-book play queue — books to auto-advance to on finish.
+  queue: QueueItem[];
+  addToQueue: (item: QueueItem) => void;
+  removeFromQueue: (libraryItemId: string) => void;
+  clearQueue: () => void;
+  playNextInQueue: () => Promise<boolean>;
 
   // Actions
   initializePlayer: () => Promise<void>;
@@ -921,10 +1194,83 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   isCasting: false,
   castClient: null,
   sleepTimer: null,
+  sleepRewindOnWake: getSleepRewindOnWake(),
+  sleepShakeToExtend: getSleepShakeToExtend(),
+  rememberSpeedPerBook: getRememberSpeedPerBook(),
+  queue: getStoredQueue(),
   isPlayerExpanded: false,
   setPlayerExpanded: (expanded: boolean) => set({ isPlayerExpanded: expanded }),
   onTabScreen: true,
   setOnTabScreen: (isTab: boolean) => set({ onTabScreen: isTab }),
+
+  setSleepRewindOnWake: (value: boolean) => {
+    try {
+      storage.set(SLEEP_REWIND_ON_WAKE_KEY, !!value);
+    } catch {}
+    set({ sleepRewindOnWake: !!value });
+  },
+  setSleepShakeToExtend: (value: boolean) => {
+    try {
+      storage.set(SLEEP_SHAKE_KEY, !!value);
+    } catch {}
+    set({ sleepShakeToExtend: !!value });
+    // Re-arm / disarm live if a timer is currently running.
+    if (get().sleepTimer) {
+      if (value) armShakeListener();
+      else disarmShakeListener();
+    }
+  },
+
+  setRememberSpeedPerBook: (value: boolean) => {
+    try {
+      storage.set(REMEMBER_RATE_KEY, !!value);
+    } catch {}
+    set({ rememberSpeedPerBook: !!value });
+    // Turning it ON records the CURRENT book's active rate right away, so it's
+    // remembered even if the user never touches the stepper again.
+    if (value) {
+      const s = get().currentSession;
+      const itemId = s?.libraryItemId || s?.libraryItem?.id;
+      if (itemId) setPerBookRate(itemId, get().playbackSpeed);
+    }
+  },
+
+  addToQueue: (item: QueueItem) => {
+    if (!item?.libraryItemId) return;
+    const cur = get().queue;
+    // De-dupe by libraryItemId (+episodeId) so re-queuing doesn't stack.
+    if (
+      cur.some(
+        (q) =>
+          q.libraryItemId === item.libraryItemId &&
+          (q.episodeId || null) === (item.episodeId || null)
+      )
+    ) {
+      return;
+    }
+    const next = [...cur, item];
+    persistQueue(next);
+    set({ queue: next });
+  },
+  removeFromQueue: (libraryItemId: string) => {
+    const next = get().queue.filter((q) => q.libraryItemId !== libraryItemId);
+    persistQueue(next);
+    set({ queue: next });
+  },
+  clearQueue: () => {
+    persistQueue([]);
+    set({ queue: [] });
+  },
+  playNextInQueue: async () => {
+    const q = get().queue;
+    if (!q.length) return false;
+    const [next, ...rest] = q;
+    // Pop BEFORE starting: startPlayback awaits the network, and a finish that
+    // fires again mid-start must not re-pick the same item.
+    persistQueue(rest);
+    set({ queue: rest });
+    return await get().startPlayback(next.libraryItemId, next.episodeId);
+  },
 
   setCastState: (client) => {
     // Dropping the client also drops the seek handler (it closes over it).
@@ -1827,9 +2173,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       await TrackPlayer.add(tracksToLoad);
       if (stale()) return false;
 
-      // Restore the last speed the user set (persisted globally), matching the
-      // original app's saved-playback-rate behaviour.
-      const playbackSpeed = session.playbackRate || storageHelper.getPlaybackRate();
+      // Restore the speed. Per-book memory (when enabled) wins: a book resumes
+      // at the last rate set for THAT book. Otherwise fall back to the restored
+      // session rate, then the global rate (original behaviour).
+      const rememberedRate = getRememberSpeedPerBook() ? getPerBookRate(libraryItemId) : undefined;
+      const playbackSpeed = rememberedRate || session.playbackRate || storageHelper.getPlaybackRate();
       await TrackPlayer.setRate(playbackSpeed);
       if (stale()) return false;
 
@@ -1973,6 +2321,25 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           await TrackPlayer.retry();
         }
       } catch {}
+    }
+    // Sleep-timer "rewind on wake": when the sleep timer paused playback, the
+    // next resume rewinds a dedicated amount so you don't lose your place after
+    // dozing off. When the toggle is OFF we fall through to today's generic
+    // auto-rewind (below) unchanged.
+    if (_sleepRewindPending) {
+      _sleepRewindPending = false;
+      if (getSleepRewindOnWake()) {
+        _lastPausedAt = null; // dedicated rewind supersedes the generic one
+        try {
+          const secs = getSleepRewindSeconds();
+          if (secs > 0) {
+            const pos = await getLiveAbsolutePosition(get);
+            await get().seek(Math.max(0, pos - secs));
+          }
+        } catch (e) {
+          console.warn("[PlaybackStore] sleep rewind-on-wake skipped", e);
+        }
+      }
     }
     // Auto rewind: on resume, nudge back a little (scaled by how long paused),
     // unless disabled in Settings. Never let a failing seek strand
@@ -2310,6 +2677,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     const currentSession = get().currentSession;
     if (currentSession) {
+      // Per-book memory: remember the rate the user chose for THIS book so it
+      // resumes at that speed next time (when the feature is enabled).
+      if (getRememberSpeedPerBook()) {
+        setPerBookRate(currentSession.libraryItemId || currentSession.libraryItem?.id, speed);
+      }
       const updatedSession = { ...currentSession, playbackRate: speed };
       set({ currentSession: updatedSession, playbackSpeed: speed });
     } else {
@@ -2344,6 +2716,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       armedChapterIdx = currentChapterIndex;
     }
     set({ sleepTimer: { endOfChapter, remaining: initialRemaining, chapterIdx: armedChapterIdx } });
+
+    // Shake-to-extend: arm the accelerometer listener while the timer runs
+    // (no-op unless expo-sensors is installed — see armShakeListener).
+    armShakeListener();
 
     _sleepLastTickAt = Date.now();
     sleepTimerInterval = setInterval(async () => {
@@ -2428,6 +2804,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           sleepTimerInterval = null;
         }
         set({ sleepTimer: null });
+        disarmShakeListener();
+        // Arm the "rewind on wake" nudge for the next resume, and record the
+        // pause so play()'s generic auto-rewind anchor exists too.
+        _sleepRewindPending = true;
         // pause() can reject on a dead player; this async interval callback's
         // promise is unobserved, so a bare call became an unhandled rejection.
         get().pause().catch(() => {});
@@ -2453,6 +2833,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       sleepTimerInterval = null;
     }
     _sleepLastTickAt = null;
+    disarmShakeListener();
+    // Explicit cancel means the user is awake — don't rewind on the next resume.
+    _sleepRewindPending = false;
     // Undo any in-progress fade (unconditional — see setSleepTimer).
     TrackPlayer.setVolume(1).catch(() => {});
     set({ sleepTimer: null });
@@ -2537,6 +2920,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _finishedSessionId = null;
     _lastPausedAt = null;
     _preparedToken = null;
+    _sleepRewindPending = false;
+    disarmShakeListener();
 
     set({
       currentSession: null,

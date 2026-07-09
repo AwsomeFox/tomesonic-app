@@ -11,6 +11,7 @@ import {
   reconcileLinkedProgress,
 } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
+import { useFavoritesStore } from "../store/useFavoritesStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { showAppDialog } from "../store/useDialogStore";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -101,10 +102,18 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const setProgressLinked = useUserStore((s) => s.setProgressLinked);
   const isLinked = !!(itemId && linkedProgressMap?.[itemId]);
 
+  // Local "Want to Read" / favorites overlay (no server flag exists). Subscribe
+  // to the list so the heart reflects/persists the toggle across screens.
+  const isFavorite = useFavoritesStore((s) => (itemId ? s.favorites.includes(itemId) : false));
+  const toggleFavorite = useFavoritesStore((s) => s.toggleFavorite);
+
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const currentSession = usePlaybackStore((state) => state.currentSession);
   const currentChapterIndex = usePlaybackStore((state) => state.currentChapterIndex);
   const seekToChapter = usePlaybackStore((state) => state.seekToChapter);
+  // Cross-book "Up Next" queue — subscribe so the Add-to-queue action reflects
+  // (and can de-dupe against) what's already queued.
+  const queue = usePlaybackStore((state) => state.queue);
 
   const [item, setItem] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -769,6 +778,39 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     });
   };
 
+  // Cross-book "Up Next" queue: the playable audio item's id (this item, or its
+  // audio-only counterpart). Podcasts are excluded — the queue auto-advances
+  // whole books, and each podcast episode already tracks its own progress.
+  const queueItemId = selfHasAudio ? item?.id : audioCounterpartId;
+  const isQueued = !!(
+    queueItemId && queue.some((q) => q.libraryItemId === queueItemId && !q.episodeId)
+  );
+  const handleAddToQueue = () => {
+    if (!queueItemId) return;
+    // The store de-dupes too, but surface an explicit "already queued" note so
+    // the tap never looks like it silently did nothing.
+    if (isQueued) {
+      showAppDialog({
+        title: "Already in Up Next",
+        message: `"${metadata.title || "This book"}" is already in your Up Next queue.`,
+      });
+      return;
+    }
+    usePlaybackStore.getState().addToQueue({
+      libraryItemId: queueItemId,
+      title: metadata.title || undefined,
+      author: metadata.authorName || authors[0]?.name || undefined,
+      coverUrl:
+        serverAddress && token
+          ? `${serverAddress}/api/items/${queueItemId}/cover?width=400&format=webp&token=${token}`
+          : undefined,
+    });
+    showAppDialog({
+      title: "Added to Up Next",
+      message: `"${metadata.title || "This book"}" will play after the current book.`,
+    });
+  };
+
   /** Two-column metadata row: CAPS grey label (left) + value (right, links green+underline). */
   const MetaRow = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <View style={{ flexDirection: "row", paddingVertical: 6 }}>
@@ -1102,6 +1144,37 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               columnGap: 12,
             }}
           >
+            {/* "Want to Read" / favorite toggle — a device-local overlay (ABS
+                has no server favorites flag). Available for any item. */}
+            <Pressable
+              onPress={() => item?.id && toggleFavorite(item.id)}
+              accessibilityRole="button"
+              accessibilityLabel={isFavorite ? "Remove from Want to Read" : "Add to Want to Read"}
+              accessibilityState={{ selected: isFavorite }}
+              android_ripple={{
+                color: withAlpha(
+                  isFavorite ? colors.onPrimaryContainer : colors.onSecondaryContainer,
+                  0.15
+                ),
+              }}
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: 26,
+                overflow: "hidden",
+                backgroundColor: isFavorite ? colors.primaryContainer : colors.secondaryContainer,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon
+                name="heart"
+                size={22}
+                color={isFavorite ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                style={{ opacity: isFavorite ? 1 : 0.45 }}
+              />
+            </Pressable>
+
             {/* Download Button — for items with their own audio or ebook.
                 Hidden for podcasts: the downloader handles book tracks, not
                 episodes, so the button would silently no-op there. */}
@@ -1158,7 +1231,38 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               </Pressable>
             ) : null}
 
-
+            {/* Add to "Up Next" — cross-book auto-advance queue. Playable audio
+                books only (podcasts auto-advance per-episode; ebook-only items
+                have nothing to queue). */}
+            {hasAudioMedia && !isPodcastItem ? (
+              <Pressable
+                onPress={handleAddToQueue}
+                accessibilityRole="button"
+                accessibilityLabel={isQueued ? "Already in Up Next" : "Add to Up Next queue"}
+                accessibilityState={{ selected: isQueued }}
+                android_ripple={{
+                  color: withAlpha(
+                    isQueued ? colors.onPrimaryContainer : colors.onSecondaryContainer,
+                    0.15
+                  ),
+                }}
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  overflow: "hidden",
+                  backgroundColor: isQueued ? colors.primaryContainer : colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon
+                  name="skip-next"
+                  size={22}
+                  color={isQueued ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                />
+              </Pressable>
+            ) : null}
 
             {/* Chapters Button */}
             {hasChapters ? (
@@ -1298,6 +1402,34 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 }}
               >
                 <Icon name="playlist-add" size={22} color={colors.onSecondaryContainer} />
+              </Pressable>
+            ) : null}
+
+            {/* Per-podcast auto-download settings. Podcasts only — this is the
+                single entry point on the podcast itself (the Latest Episodes
+                list only exposes it per-episode). */}
+            {isPodcastItem && item?.id ? (
+              <Pressable
+                onPress={() =>
+                  navigation.navigate("PodcastSettings", {
+                    libraryItemId: item.id,
+                    podcastTitle: metadata.title || undefined,
+                  })
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Podcast settings"
+                android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 26,
+                  overflow: "hidden",
+                  backgroundColor: colors.secondaryContainer,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Icon name="settings" size={22} color={colors.onSecondaryContainer} />
               </Pressable>
             ) : null}
           </View>

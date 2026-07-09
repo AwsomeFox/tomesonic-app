@@ -391,6 +391,7 @@ function AuthorsScreen(
       ) : (
         <FlatList
           ref={listRef}
+          testID="authors-facet-list"
           key={`authors-grid-${numColumns}`}
           data={sortedAuthors}
           renderItem={renderItem}
@@ -402,10 +403,17 @@ function AuthorsScreen(
           onScroll={(e) => onScroll?.(e.nativeEvent.contentOffset.y)}
           scrollEventThrottle={16}
           // gap (not space-between) so an incomplete last row packs left
-          // instead of stretching across the width.
-          columnWrapperStyle={{ gap: CARD_GAP }}
+          // instead of stretching across the width. The horizontal grid inset
+          // lives HERE (per card row) rather than on contentContainerStyle so it
+          // does NOT also inset the ListHeaderComponent — the hub's segment pill
+          // row already carries its own 16px padding, and double-padding it on
+          // this facet (contentContainer + own) is what made the selector shrink
+          // vs. the Books/Series facets, causing a width jump when Authors was
+          // selected. Books/Series keep their contentContainer horizontally
+          // unpadded for the same reason; match that. Card width is computed from
+          // (width - GRID_PADDING*2 - gaps), so the per-row inset stays correct.
+          columnWrapperStyle={{ gap: CARD_GAP, paddingHorizontal: GRID_PADDING }}
           contentContainerStyle={{
-            paddingHorizontal: GRID_PADDING,
             paddingTop: 4,
             paddingBottom: hasSession ? 100 : 32,
           }}

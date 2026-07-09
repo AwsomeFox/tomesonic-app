@@ -111,9 +111,11 @@ import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
+import { useFavoritesStore } from "../../store/useFavoritesStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUiStore } from "../../store/useUiStore";
 import { storage } from "../../utils/storage";
+import { encodeFilterValue } from "../../components/FilterModal";
 
 const mockedGet = api.get as jest.Mock;
 const mockedPost = api.post as jest.Mock;
@@ -182,12 +184,30 @@ function seedOnline(shelves: any[], mediaProgress: Record<string, any> = {}) {
   } as any);
 }
 
+/**
+ * Drive a shelf's horizontal row into an overflowing state. jsdom fires no real
+ * onLayout / onContentSizeChange, so the "see all" arrow (gated on overflow)
+ * never appears without simulating a viewport narrower than the content.
+ */
+async function simulateShelfOverflow(
+  shelfId: string,
+  { viewport = 400, content = 1600 }: { viewport?: number; content?: number } = {}
+) {
+  const row = await screen.findByTestId(`shelf-row-${shelfId}`);
+  await act(async () => {
+    fireEvent(row, "layout", { nativeEvent: { layout: { width: viewport, height: 200, x: 0, y: 0 } } });
+    fireEvent(row, "contentSizeChange", content, 200);
+  });
+  return row;
+}
+
 beforeEach(() => {
   useUserStore.setState(initialUser, true);
   useLibraryStore.setState(initialLibrary, true);
   useDownloadStore.setState(initialDownloads, true);
   usePlaybackStore.setState(initialPlayback, true);
   useUiStore.setState(initialUi, true);
+  useFavoritesStore.setState({ favorites: [] } as any);
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
   mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true, isOffline: false });
   // Series-list revalidation fetch (parallel effect) — empty by default.
@@ -439,12 +459,56 @@ describe("BookshelfScreen online", () => {
     const navigation = makeNavigation();
     await render(<BookshelfScreen navigation={navigation} />);
 
+    await simulateShelfOverflow("recently-added");
     const header = await screen.findByLabelText("Recently Added, see all");
     await fireEvent.press(header);
     expect(navigation.navigate).toHaveBeenCalledWith("Library", {
       orderBy: "addedAt",
       descending: true,
     });
+  });
+
+  it("shows the 'see all' arrow ONLY when a shelf row overflows the viewport", async () => {
+    seedOnline([baseShelves[1]]); // recently-added
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    // Content fits the viewport → no arrow.
+    await simulateShelfOverflow("recently-added", { viewport: 800, content: 400 });
+    expect(screen.queryByLabelText("Recently Added, see all")).toBeNull();
+
+    // Content now wider than the viewport → arrow appears.
+    await simulateShelfOverflow("recently-added", { viewport: 400, content: 1600 });
+    expect(screen.getByLabelText("Recently Added, see all")).toBeTruthy();
+  });
+
+  it("Continue Reading 'see all' opens the Library in-progress filter", async () => {
+    seedOnline([
+      { id: "continue-reading", label: "Continue Reading", type: "book", entities: [audioBook, ebookOnlyBook] },
+    ]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Reading");
+    await simulateShelfOverflow("continue-reading");
+    await fireEvent.press(screen.getByLabelText("Continue Reading, see all"));
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      "Library",
+      expect.objectContaining({ filter: expect.stringContaining("progress.") })
+    );
+  });
+
+  it("Continue Series 'see all' switches the Library hub to the Series segment", async () => {
+    seedOnline([
+      { id: "recent-series", label: "Recent Series", type: "series", entities: [seriesEntity] },
+    ]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Recent Series");
+    await simulateShelfOverflow("recent-series");
+    await fireEvent.press(screen.getByLabelText("Recent Series, see all"));
+    expect(navigation.navigate).toHaveBeenCalledWith("Library", { segment: "series" });
   });
 
   it("transforms Continue Series into series folders resolved from the library series list", async () => {
@@ -537,5 +601,143 @@ describe("BookshelfScreen online", () => {
       focusHandler();
     });
     expect(loadMediaProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("has a Browse genres entry point that navigates to the GenreBrowse screen", async () => {
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    const entry = await screen.findByLabelText("Browse genres");
+    await fireEvent.press(entry);
+    expect(navigation.navigate).toHaveBeenCalledWith("GenreBrowse");
+  });
+
+  it("builds a 'Because you listened' affinity shelf, excluding books already read", async () => {
+    const sciFiRead = {
+      id: "read1",
+      mediaType: "book",
+      media: { metadata: { title: "Read SciFi", authorName: "A", genres: ["Sci-Fi"] } },
+    };
+    const recNew = {
+      id: "rec1",
+      mediaType: "book",
+      media: { metadata: { title: "New SciFi", authorName: "B" } },
+    };
+    const recFinished = {
+      id: "rec2",
+      mediaType: "book",
+      media: { metadata: { title: "Done SciFi", authorName: "C" } },
+    };
+    seedOnline([{ id: "recently-added", label: "Recently Added", type: "book", entities: [sciFiRead] }], {
+      // A started book (drives the "Sci-Fi" affinity) and an already-finished
+      // recommendation candidate (must be filtered back out of the shelf).
+      read1: { libraryItemId: "read1", progress: 0.5 },
+      rec2: { libraryItemId: "rec2", isFinished: true },
+    });
+    mockedGet.mockImplementation((url: string) => {
+      if (url.includes("filter=genres.")) {
+        return Promise.resolve({ data: { results: [recNew, recFinished] } });
+      }
+      return Promise.resolve({ data: { results: [] } });
+    });
+
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Because you listened");
+    // Coverless cards render the title twice (placeholder + meta panel).
+    expect(screen.getAllByText("New SciFi").length).toBeGreaterThanOrEqual(1);
+    // The finished candidate is excluded from the recommendation.
+    expect(screen.queryByText("Done SciFi")).toBeNull();
+    // The query uses the base64-encoded top genre.
+    expect(mockedGet).toHaveBeenCalledWith(
+      expect.stringContaining(`filter=genres.${encodeFilterValue("Sci-Fi")}`)
+    );
+  });
+
+  it("skips the affinity shelf when there is no genre affinity (no started books with genres)", async () => {
+    // baseShelves items carry no genres and there's no progress → no affinity.
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.queryByText("Because you listened")).toBeNull();
+    // Never issues a genre-affinity query when there's nothing to base it on.
+    expect(mockedGet).not.toHaveBeenCalledWith(expect.stringContaining("filter=genres."));
+  });
+
+  it("surfaces a Want to Read shelf from the favorites store (batch fetch, library-scoped)", async () => {
+    const favBook = {
+      id: "fav1",
+      mediaType: "book",
+      libraryId: "lib1",
+      media: { metadata: { title: "Wishlist Book", authorName: "F Author" } },
+    };
+    // A favorite from ANOTHER library must be scoped out of this shelf.
+    const otherLibFav = {
+      id: "fav2",
+      mediaType: "book",
+      libraryId: "lib2",
+      media: { metadata: { title: "Other Library Fav", authorName: "G Author" } },
+    };
+    seedOnline(baseShelves);
+    useFavoritesStore.setState({ favorites: ["fav1", "fav2"] } as any);
+    mockedPost.mockImplementation((url: string, body: any) => {
+      if (url === "/api/items/batch/get" && body?.libraryItemIds?.includes("fav1")) {
+        return Promise.resolve({ data: { libraryItems: [favBook, otherLibFav] } });
+      }
+      return Promise.resolve({ data: { libraryItems: [] } });
+    });
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Want to Read");
+    expect(screen.getAllByText("Wishlist Book").length).toBeGreaterThanOrEqual(1);
+    // The other-library favorite is filtered out of this library's shelf.
+    expect(screen.queryByText("Other Library Fav")).toBeNull();
+    expect(mockedPost).toHaveBeenCalledWith("/api/items/batch/get", {
+      libraryItemIds: ["fav1", "fav2"],
+    });
+
+    // Tapping the favorite opens ItemDetail, like any other book card.
+    await fireEvent.press(screen.getByLabelText("Wishlist Book by F Author"));
+    expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "fav1" });
+  });
+
+  it("hides the Want to Read shelf when there are no favorites", async () => {
+    seedOnline(baseShelves);
+    // favorites is reset to [] in beforeEach.
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.queryByText("Want to Read")).toBeNull();
+  });
+
+  it("renders Browse genres AFTER the personalized shelves (Continue Listening stays first)", async () => {
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    const browse = await screen.findByLabelText("Browse genres");
+    // Still navigates correctly...
+    await fireEvent.press(browse);
+    expect(navigation.navigate).toHaveBeenCalledWith("GenreBrowse");
+    // ...and the primary resume shelf comes before the genre browse row in the
+    // rendered tree order (guards the placement fix — Browse genres used to
+    // precede Continue Listening). Walk the instance tree in DFS order and
+    // record which marker we reach first.
+    const seq: string[] = [];
+    const walk = (node: any) => {
+      if (!node || typeof node !== "object") return;
+      if (node.props?.accessibilityLabel === "Browse genres") seq.push("browse");
+      if (node.children?.length === 1 && node.children[0] === "Continue Listening") seq.push("continue");
+      (node.children || []).forEach(walk);
+    };
+    walk(screen.root);
+    expect(seq.indexOf("continue")).toBeGreaterThanOrEqual(0);
+    expect(seq.indexOf("continue")).toBeLessThan(seq.indexOf("browse"));
   });
 });

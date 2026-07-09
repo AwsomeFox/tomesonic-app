@@ -509,6 +509,11 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           )}
         </Pressable>
 
+        {/* Per-podcast settings (auto-download schedule / limits / check-feed) are
+            NOT surfaced here: this list spans many podcasts and repeats the same
+            podcast across its episodes, so a per-row gear was redundant. The
+            single entry point lives on the podcast's ItemDetail screen. */}
+
         {/* Mark this episode finished/unfinished (episode-scoped progress). */}
         <Pressable
           onPress={() => toggleEpisodeFinished(episode)}
