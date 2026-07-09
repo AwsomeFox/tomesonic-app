@@ -185,6 +185,37 @@ describe("YearInReviewScreen", () => {
     }
   });
 
+  it("uses the singular 'hour' when the total is exactly one hour", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        numBooksFinished: 1,
+        totalListeningTime: 3600, // exactly 1 hour -> "1 hour", not "1 hours"
+        totalListeningSessions: 2,
+        numBooksListened: 1,
+        topAuthors: [],
+        topGenres: [],
+        finishedBooksWithCovers: [],
+      },
+    });
+    await renderYear({ year: 2025 });
+    await screen.findByText("Books Finished");
+
+    expect(screen.getByText("hour listened")).toBeTruthy();
+    expect(screen.queryByText("hours listened")).toBeNull();
+
+    const shareSpy = jest
+      .spyOn(Share, "share")
+      .mockResolvedValue({ action: "sharedAction" } as any);
+    try {
+      await fireEvent.press(screen.getByLabelText("Share your year in audio"));
+      const msg = shareSpy.mock.calls[0][0].message as string;
+      expect(msg).toContain("1 hour listened");
+      expect(msg).not.toContain("1 hours listened");
+    } finally {
+      shareSpy.mockRestore();
+    }
+  });
+
   it("shows an empty state when there was no listening that year", async () => {
     (api.get as jest.Mock).mockResolvedValue({
       data: {

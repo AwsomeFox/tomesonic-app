@@ -9,6 +9,7 @@ import Animated, {
   withRepeat,
   withTiming,
   interpolate,
+  useReducedMotion,
 } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -31,8 +32,12 @@ export function Skeleton({
 }) {
   const colors = useThemeColors();
   const progress = useSharedValue(0);
+  // Honor the OS "reduce motion" setting: skip the infinite shimmer sweep and
+  // render a steady, static skeleton instead.
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
+    if (reduceMotion) return;
     progress.value = withRepeat(
       withTiming(1, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
       -1,
@@ -40,11 +45,14 @@ export function Skeleton({
     );
     // Stop the infinite shimmer when the skeleton unmounts (content loaded).
     return () => cancelAnimation(progress);
-  }, []);
+  }, [reduceMotion]);
 
-  const sweepStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: interpolate(progress.value, [0, 1], [-1, 1]) * 220 }],
-  }));
+  const sweepStyle = useAnimatedStyle(() =>
+    reduceMotion
+      ? // Reduced motion: hold the highlight centered — a steady mid-opacity fill.
+        { transform: [{ translateX: 0 }] }
+      : { transform: [{ translateX: interpolate(progress.value, [0, 1], [-1, 1]) * 220 }] }
+  );
 
   return (
     <View

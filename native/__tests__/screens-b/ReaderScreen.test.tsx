@@ -1363,4 +1363,17 @@ describe("ReaderScreen (reader features)", () => {
     expect(html).toContain("view.lastLocation");
     expect(html).toContain("selectNodeContents");
   });
+
+  it("does NOT start the loading-placeholder pulse loop under OS reduced motion", async () => {
+    const reanimated = require("react-native-reanimated");
+    const reduced = jest.spyOn(reanimated, "useReducedMotion").mockReturnValue(true);
+    const loop = jest.spyOn(require("react-native").Animated, "loop");
+    await renderReader();
+    await readyWebView();
+    // The ambient breathing pulse must never be scheduled when the OS asks to
+    // reduce motion — the placeholder holds a static opacity instead.
+    expect(loop).not.toHaveBeenCalled();
+    reduced.mockRestore();
+    loop.mockRestore();
+  });
 });

@@ -153,6 +153,8 @@ export default function YearInReviewScreen({ navigation, route }: any) {
     ? totalMinutes === 1
       ? 'minute'
       : 'minutes'
+    : totalHours === 1
+    ? 'hour'
     : 'hours';
 
   const topAuthors = useMemo(() => listLabels(stats?.topAuthors, ['name', 'author']), [stats]);
@@ -380,6 +382,7 @@ export default function YearInReviewScreen({ navigation, route }: any) {
                 justifyContent: 'center',
                 backgroundColor: colors.primary,
                 borderRadius: 24,
+                overflow: 'hidden',
                 paddingVertical: 14,
               }}
             >

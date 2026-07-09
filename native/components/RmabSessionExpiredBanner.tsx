@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { View, Text } from "react-native";
+import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "./Icon";
@@ -30,6 +31,8 @@ export default function RmabSessionExpiredBanner({
   const connectWithOidc = useRmabStore((s) => s.connectWithOidc);
   const [ssoOpen, setSsoOpen] = useState(false);
 
+  // Reanimated keeps the view mounted through the exit animation, so returning
+  // null here still slides/fades the banner out rather than popping it away.
   if (!sessionExpired) return null;
 
   const canSso = authProvider === "oidc" && !!serverUrl;
@@ -39,7 +42,14 @@ export default function RmabSessionExpiredBanner({
   };
 
   return (
-    <View
+    // Slide-down + fade in on expiry, slide-up + fade out on reconnect.
+    // Duration matches the shared listRowEnter recipe (theme/motion.ts); the
+    // FadeIn/FadeOut layout animations auto-respect reduce-motion in reanimated.
+    <Animated.View
+      // Optional-chained so an incomplete test mock of reanimated (missing a
+      // layout-animation export) leaves the prop undefined instead of throwing.
+      entering={FadeInDown.duration(250)}
+      exiting={FadeOutUp.duration(200)}
       // Announce the banner to assistive tech the moment it mounts on session
       // expiry, so a screen-reader user learns the session died rather than
       // discovering it only when a later action silently fails.
@@ -80,6 +90,9 @@ export default function RmabSessionExpiredBanner({
           alignItems: "center",
           justifyContent: "center",
           marginLeft: 8,
+          // Clip the android_ripple to the rounded pill (fixes the square
+          // ripple bleeding past the corners).
+          overflow: "hidden",
         }}
       >
         <Text style={{ color: colors.onPrimary, fontSize: 13, fontWeight: "600" }}>Sign in</Text>
@@ -107,6 +120,6 @@ export default function RmabSessionExpiredBanner({
           }}
         />
       ) : null}
-    </View>
+    </Animated.View>
   );
 }

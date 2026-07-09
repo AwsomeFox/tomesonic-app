@@ -6,10 +6,17 @@
  */
 import React from "react";
 import { Animated, Text } from "react-native";
-import { render, screen, fireEvent, act } from "@testing-library/react-native";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import BottomSheet, { shouldClaimDrag, shouldDismissOnRelease } from "../../components/BottomSheet";
 
+const mockUseReducedMotion = useReducedMotion as jest.Mock;
+
 describe("BottomSheet", () => {
+  afterEach(() => {
+    mockUseReducedMotion.mockReturnValue(false);
+  });
+
   it("renders children when visible", async () => {
     await render(
       <BottomSheet visible onClose={() => {}}>
@@ -133,6 +140,48 @@ describe("BottomSheet", () => {
       expect(screen.getByText("Sheet content")).toBeTruthy();
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("reduced motion: snaps open without running the slide/fade animation", async () => {
+    mockUseReducedMotion.mockReturnValue(true);
+    const parallel = jest.spyOn(Animated, "parallel");
+    try {
+      await render(
+        <BottomSheet visible onClose={() => {}}>
+          <Text>Sheet content</Text>
+        </BottomSheet>
+      );
+      // Sheet is present and mounted, but no animation was started.
+      expect(screen.getByText("Sheet content")).toBeTruthy();
+      expect(parallel).not.toHaveBeenCalled();
+    } finally {
+      parallel.mockRestore();
+    }
+  });
+
+  it("reduced motion: snaps closed and unmounts without animation", async () => {
+    mockUseReducedMotion.mockReturnValue(true);
+    const parallel = jest.spyOn(Animated, "parallel");
+    try {
+      const view = await render(
+        <BottomSheet visible onClose={() => {}}>
+          <Text>Sheet content</Text>
+        </BottomSheet>
+      );
+      expect(screen.getByText("Sheet content")).toBeTruthy();
+      await act(async () => {
+        view.rerender(
+          <BottomSheet visible={false} onClose={() => {}}>
+            <Text>Sheet content</Text>
+          </BottomSheet>
+        );
+      });
+      // Unmounts immediately (close callback still fires), no animation run.
+      await waitFor(() => expect(screen.queryByText("Sheet content")).toBeNull());
+      expect(parallel).not.toHaveBeenCalled();
+    } finally {
+      parallel.mockRestore();
     }
   });
 

@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useReducedMotion } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
 
 /**
@@ -52,6 +53,11 @@ export default function BottomSheet({
   testID?: string;
 }) {
   const colors = useThemeColors();
+  // OS "reduce motion": skip the slide/fade and snap straight to the resting
+  // state. Read through a ref too, for the PanResponder snap-back created once.
+  const reduceMotion = useReducedMotion();
+  const reduceMotionRef = useRef(reduceMotion);
+  reduceMotionRef.current = reduceMotion;
   const { height: windowHeight } = useWindowDimensions();
   // The open/close effect keys on `visible` only (re-running on height
   // changes would replay the enter animation mid-display), so it reads the
@@ -91,6 +97,8 @@ export default function BottomSheet({
           // The close effect animates from the current drag offset the rest
           // of the way off-screen.
           onCloseRef.current();
+        } else if (reduceMotionRef.current) {
+          translateY.setValue(0);
         } else {
           Animated.timing(translateY, {
             toValue: 0,
@@ -101,6 +109,10 @@ export default function BottomSheet({
         }
       },
       onPanResponderTerminate: () => {
+        if (reduceMotionRef.current) {
+          translateY.setValue(0);
+          return;
+        }
         Animated.timing(translateY, {
           toValue: 0,
           duration: 180,
@@ -118,6 +130,12 @@ export default function BottomSheet({
       // rotation/split-screen resize that offset is stale, so re-anchor to the
       // CURRENT height so every open starts fully off-screen.
       translateY.setValue(windowHeightRef.current);
+      if (reduceMotion) {
+        // Reduced motion: snap open, no slide/fade.
+        backdrop.setValue(1);
+        translateY.setValue(0);
+        return;
+      }
       Animated.parallel([
         Animated.timing(backdrop, {
           toValue: 1,
@@ -134,6 +152,15 @@ export default function BottomSheet({
         }),
       ]).start();
     } else if (mounted) {
+      if (reduceMotion) {
+        // Reduced motion: snap closed and unmount, no slide/fade — but keep
+        // the same guard the animated path uses so a same-instant reopen
+        // isn't torn down.
+        backdrop.setValue(0);
+        translateY.setValue(windowHeightRef.current);
+        if (!visibleRef.current) setMounted(false);
+        return;
+      }
       Animated.parallel([
         Animated.timing(backdrop, {
           toValue: 0,

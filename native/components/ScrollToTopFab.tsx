@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Animated, Easing, Pressable } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon, { IconName } from "./Icon";
 
@@ -33,6 +34,7 @@ export default function ScrollToTopFab({
   testID?: string;
 }) {
   const colors = useThemeColors();
+  const reduceMotion = useReducedMotion();
   // Kept mounted while animating out so the collapse is visible.
   const [mounted, setMounted] = useState(visible);
   // Drives both scale and opacity: 0 = hidden/collapsed, 1 = shown.
@@ -41,6 +43,11 @@ export default function ScrollToTopFab({
   useEffect(() => {
     if (visible) {
       setMounted(true);
+      if (reduceMotion) {
+        // Reduced motion: jump to the shown state, no spring.
+        anim.setValue(1);
+        return;
+      }
       // Expressive entrance: a spring with a touch of overshoot so the FAB
       // "pops" in rather than easing linearly.
       Animated.spring(anim, {
@@ -50,6 +57,13 @@ export default function ScrollToTopFab({
         useNativeDriver: true,
       }).start();
     } else if (mounted) {
+      if (reduceMotion) {
+        // Reduced motion: no visible collapse — jump to hidden and unmount now
+        // (the mounted-through-exit contract only applies when motion is on).
+        anim.setValue(0);
+        setMounted(false);
+        return;
+      }
       // Collapse back down, then unmount.
       Animated.timing(anim, {
         toValue: 0,
@@ -60,7 +74,7 @@ export default function ScrollToTopFab({
         if (finished) setMounted(false);
       });
     }
-  }, [visible, mounted, anim]);
+  }, [visible, mounted, anim, reduceMotion]);
 
   if (!mounted) return null;
 

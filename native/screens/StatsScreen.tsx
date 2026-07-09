@@ -415,6 +415,7 @@ export default function StatsScreen({ navigation }: any) {
               paddingVertical: 14,
               paddingHorizontal: 16,
               borderRadius: 14,
+              overflow: 'hidden',
               backgroundColor: seasonal ? colors.primaryContainer : colors.surfaceContainerHigh,
             }}
           >

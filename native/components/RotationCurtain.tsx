@@ -3,6 +3,7 @@ import { Dimensions, StyleSheet } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useReducedMotion,
   withDelay,
   withTiming,
 } from "react-native-reanimated";
@@ -20,6 +21,12 @@ export default function RotationCurtain() {
   const colors = useThemeColors();
   const opacity = useSharedValue(0);
   const lastLandscape = useRef<boolean | null>(null);
+  // OS "reduce motion": the curtain only masks reflow motion, so with motion
+  // suppressed there's nothing to hide — skip the crossfade entirely. Read via
+  // a ref so the Dimensions subscription stays a one-time effect.
+  const reduceMotion = useReducedMotion();
+  const reduceMotionRef = useRef(reduceMotion);
+  reduceMotionRef.current = reduceMotion;
 
   useEffect(() => {
     const check = ({ window }: { window: { width: number; height: number } }) => {
@@ -30,6 +37,7 @@ export default function RotationCurtain() {
       }
       if (landscape !== lastLandscape.current) {
         lastLandscape.current = landscape;
+        if (reduceMotionRef.current) return;
         // Snap opaque immediately, hold ~350ms for reflow, then fade out.
         opacity.value = 1;
         opacity.value = withDelay(

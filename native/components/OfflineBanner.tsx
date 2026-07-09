@@ -1,5 +1,6 @@
 import React from "react";
 import { View, Text } from "react-native";
+import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
@@ -25,10 +26,19 @@ export default function OfflineBanner() {
 
   // Gate on the derived "effectively offline" signal (debounced; also true for
   // a captive portal / server-down-but-Wi-Fi-up), not device isConnected alone.
+  // Reanimated keeps the view mounted through the exit animation, so returning
+  // null here still slides/fades the banner out rather than popping it away.
   if (!isOffline) return null;
 
   return (
-    <View
+    // Slide-down + fade in on connect loss, slide-up + fade out on recovery.
+    // Duration matches the shared listRowEnter recipe (theme/motion.ts); the
+    // FadeIn/FadeOut layout animations auto-respect reduce-motion in reanimated.
+    <Animated.View
+      // Optional-chained so an incomplete test mock of reanimated (missing a
+      // layout-animation export) leaves the prop undefined instead of throwing.
+      entering={FadeInDown.duration(250)}
+      exiting={FadeOutUp.duration(200)}
       accessibilityRole="alert"
       accessibilityLiveRegion="polite"
       style={{
@@ -52,6 +62,6 @@ export default function OfflineBanner() {
           No internet connection — showing downloaded content
         </Text>
       </View>
-    </View>
+    </Animated.View>
   );
 }

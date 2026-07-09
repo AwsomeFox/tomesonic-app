@@ -92,7 +92,10 @@ jest.mock("react-native-reanimated", () => {
     FadeIn: chainable(),
     FadeOut: chainable(),
     FadeInDown: chainable(),
+    FadeInUp: chainable(),
     FadeInRight: chainable(),
+    FadeOutUp: chainable(),
+    FadeOutDown: chainable(),
   };
 });
 
@@ -177,6 +180,17 @@ describe("Skeleton family", () => {
   it("ListSkeleton renders thumb + two text lines per row", async () => {
     await render(<ListSkeleton rows={4} />);
     expect(countGradients(screen.toJSON())).toBe(12);
+  });
+
+  it("does NOT start the shimmer loop under reduced motion (static fill)", async () => {
+    const reanimated = require("react-native-reanimated");
+    const reduced = jest.spyOn(reanimated, "useReducedMotion").mockReturnValue(true);
+    const repeat = jest.spyOn(reanimated, "withRepeat");
+    await render(<Skeleton width={100} height={20} />);
+    // Reduced motion → the infinite shimmer sweep is never scheduled.
+    expect(repeat).not.toHaveBeenCalled();
+    reduced.mockRestore();
+    repeat.mockRestore();
   });
 });
 
@@ -395,6 +409,17 @@ describe("WavyProgress", () => {
     await renderWave({ progress: 4.2 });
     await renderWave({ progress: -1 });
     expect(screen.root!).toBeTruthy();
+  });
+
+  it("does NOT start the phase scroll under reduced motion (holds static)", async () => {
+    const reanimated = require("react-native-reanimated");
+    const reduced = jest.spyOn(reanimated, "useReducedMotion").mockReturnValue(true);
+    const repeat = jest.spyOn(reanimated, "withRepeat");
+    await renderWave({ playing: true });
+    // Even while "playing", reduced motion keeps the endless wave scroll off.
+    expect(repeat).not.toHaveBeenCalled();
+    reduced.mockRestore();
+    repeat.mockRestore();
   });
 });
 

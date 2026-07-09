@@ -40,6 +40,7 @@ import {
 } from "../../utils/rmab";
 import { useRmabStore } from "../../store/useRmabStore";
 import { useUserStore } from "../../store/useUserStore";
+import { useReducedMotion } from "react-native-reanimated";
 
 const rmabInitial = useRmabStore.getState();
 const userInitial = useUserStore.getState();
@@ -418,6 +419,45 @@ describe("DiscoverScreen (BookDate)", () => {
         heldFlyouts.forEach((cb) => cb());
       });
       timingSpy.mockRestore();
+    }
+  });
+
+  it("with OS reduce-motion on, a like-swipe still requests and advances (no animation dependency)", async () => {
+    // Reduce-motion jumps the card to its target instead of animating, so the
+    // deck must advance without ever relying on an animation-completion
+    // callback. Guard against the fly-out timing being used at all.
+    (useReducedMotion as jest.Mock).mockReturnValue(true);
+    const RN = require("react-native");
+    const timingSpy = jest.spyOn(RN.Animated, "timing");
+    try {
+      await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+      await screen.findByText("First Pick");
+
+      await fireEvent.press(screen.getByLabelText("Like and request"));
+      await waitFor(() => expect(swipeBookdate).toHaveBeenCalledWith("rec1", "right"));
+
+      // Card advanced with no fly-out animation, and the confirmation chip shows.
+      await screen.findByText("Second Pick");
+      expect(screen.getByText("Requested")).toBeTruthy();
+      // The 240ms fly-out timing must be skipped entirely under reduce-motion.
+      expect(timingSpy).not.toHaveBeenCalled();
+    } finally {
+      timingSpy.mockRestore();
+      (useReducedMotion as jest.Mock).mockReturnValue(false);
+    }
+  });
+
+  it("with OS reduce-motion on, a pass-swipe still advances the deck", async () => {
+    (useReducedMotion as jest.Mock).mockReturnValue(true);
+    try {
+      await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+      await screen.findByText("First Pick");
+      await fireEvent.press(screen.getByLabelText("Pass"));
+      await waitFor(() => expect(swipeBookdate).toHaveBeenCalledWith("rec1", "left"));
+      await screen.findByText("Second Pick");
+      expect(screen.queryByText("Requested")).toBeNull();
+    } finally {
+      (useReducedMotion as jest.Mock).mockReturnValue(false);
     }
   });
 });

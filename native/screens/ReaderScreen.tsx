@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Linking, ActivityIndicator, FlatList, Animated, TextInput, Share, ScrollView, useWindowDimensions } from "react-native";
+import { View, Text, Linking, ActivityIndicator, FlatList, Animated, Easing, TextInput, Share, ScrollView, useWindowDimensions } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
@@ -720,21 +721,26 @@ export default function ReaderScreen({ route, navigation }: any) {
   const syncTimeoutRef = useRef<any>(null);
   const latestProgressRef = useRef<{ cfi: string; fraction: number } | null>(null);
 
-  // Pulsing animation for loading state
+  // Pulsing animation for loading state. Honors the OS "reduce motion" setting:
+  // when reduced, the placeholder holds a static opacity instead of breathing.
   const pulseAnim = useRef(new Animated.Value(0.6)).current;
+  const reduceMotion = useReducedMotion();
   useEffect(() => {
     let anim: Animated.CompositeAnimation | null = null;
-    if (ebookStatus === "loading" || ebookStatus === "idle") {
+    if ((ebookStatus === "loading" || ebookStatus === "idle") && !reduceMotion) {
       anim = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
             toValue: 1.0,
             duration: 1000,
+            // Smooth "breathing" ease rather than a linear ramp.
+            easing: Easing.inOut(Easing.ease),
             useNativeDriver: true,
           }),
           Animated.timing(pulseAnim, {
             toValue: 0.6,
             duration: 1000,
+            easing: Easing.inOut(Easing.ease),
             useNativeDriver: true,
           }),
         ])
@@ -746,7 +752,7 @@ export default function ReaderScreen({ route, navigation }: any) {
     return () => {
       if (anim) anim.stop();
     };
-  }, [ebookStatus, pulseAnim]);
+  }, [ebookStatus, pulseAnim, reduceMotion]);
 
   // Style Settings States
   const [fontSize, setFontSize] = useState(() => storage.getNumber("reader_font_size") || 100);
