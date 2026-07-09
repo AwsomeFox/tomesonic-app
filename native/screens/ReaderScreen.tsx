@@ -259,9 +259,21 @@ ${FOLIATE_BUNDLE}
         var doc = d.doc;
         var index = d.index;
         if (doc && doc.documentElement) {
-          doc.documentElement.setAttribute('style',
-            'background:' + bg + ' !important; color:' + fg + ' !important;');
+          // Additive: set ONLY the two colors as !important properties so
+          // foliate's column-layout inline props (column-gap / padding /
+          // column-width = the page margin, written via setProperty) survive.
+          // Replacing the whole inline style attribute here would wipe the
+          // margin until the next render(), so only the two colors are set (#).
+          var de = doc.documentElement;
+          de.style.setProperty('background', bg, 'important');
+          de.style.setProperty('color', fg, 'important');
         }
+        // Attach the finger-follow page-curl handlers to THIS section's
+        // document (see attachPageTurn). The text is rendered in a same-origin
+        // iframe whose own touch handlers eat every touch, so the outer-document
+        // listeners never fire over the page — capture-phase listeners here run
+        // before foliate's and can drive/suppress the turn.
+        if (doc) { try { attachPageTurn(doc); } catch(err){} }
         // Text-selection reporting (dictionary look-up / highlight / share).
         // Runs inside the book's own document; the selected text + its CFI are
         // posted to RN, which shows the selection action sheet.
@@ -378,8 +390,13 @@ ${FOLIATE_BUNDLE}
           var contents = view.renderer.getContents ? view.renderer.getContents() : [];
           for (var i = 0; i < contents.length; i++) {
             try {
-              contents[i].doc.documentElement.setAttribute('style',
-                'background:' + bg + ' !important; color:' + fg + ' !important;');
+              // Additive (see the 'load' handler): set only bg/fg so foliate's
+              // column-layout inline props (the page margin) aren't wiped —
+              // replacing the whole inline style attribute collapsed the margin
+              // until the next page turn re-ran render().
+              var de = contents[i].doc.documentElement;
+              de.style.setProperty('background', bg, 'important');
+              de.style.setProperty('color', fg, 'important');
             } catch(e) {}
           }
         } catch(e) {}
@@ -486,10 +503,20 @@ ${FOLIATE_BUNDLE}
 
       // ---- Page-turn gestures: finger-follow curl + tap/swipe fallback ----
       // When the curl is enabled the page tracks your finger and peels with a
-      // soft fold shadow, completing (or snapping back) on release. When it's
-      // off we keep the original discrete tap-zone / swipe behavior. The curl is
-      // a CSS transform on the foliate host + a gradient overlay at the fold; no
+      // real 3D fold (perspective + rotateY on a fold flap + soft shadow),
+      // completing (or snapping back) on release. When it's off we keep the
+      // original discrete tap-zone / swipe behavior. The curl is a CSS transform
+      // on the foliate host + a fold overlay at the lifting edge; no
       // snapshotting, so it can't get out of sync with the rendered content.
+      //
+      // CRITICAL: foliate renders each section inside a same-origin, sandboxed
+      // IFRAME with its own touch handlers, so touches over the text never reach
+      // the OUTER document — the earlier outer-document-only listeners never
+      // fired over the page (what the user saw was foliate's own swipe). We now
+      // ALSO bind these handlers to each section document (attachPageTurn, from
+      // the 'load' handler) in the CAPTURE phase so they run before foliate's
+      // bubble-phase swipe and can suppress it.
+      //
       // The user's explicit "Page Turn: None" setting IS the motion
       // accommodation, so honor it directly. We deliberately do NOT AND-in the
       // OS reduced-motion preference: many Android WebViews report reduce-motion
@@ -503,27 +530,49 @@ ${FOLIATE_BUNDLE}
       var TURN_MS = 200;
       var drag = { active:false, decided:false, dir:0, sx:0, sy:0, st:0, animating:false };
 
-      // Fold shadow that tracks the lifting page edge.
+      // Soft shadow trailing the lifting page edge.
       var curlEl = document.createElement('div');
       curlEl.id = 'pagecurl';
       curlEl.style.cssText = 'position:fixed;top:0;bottom:0;width:56px;pointer-events:none;z-index:9;opacity:0;transition:opacity .12s;';
       document.body.appendChild(curlEl);
 
+      // 3D fold flap: a strip at the lifting edge that bends in perspective so
+      // the turn reads as a page lifting off the spine, not a flat slide. It is
+      // page-colored on the anchored side and darkens toward the fold crease.
+      var foldEl = document.createElement('div');
+      foldEl.id = 'pagecurl-fold';
+      foldEl.style.cssText = 'position:fixed;top:0;bottom:0;width:64px;pointer-events:none;z-index:10;opacity:0;will-change:transform;backface-visibility:hidden;';
+      document.body.appendChild(foldEl);
+
       function setPageX(px){ view.style.transform = px ? 'translateX(' + px + 'px)' : ''; }
       function showCurl(px, progress){
         var w = W();
-        var a = Math.min(0.38, 0.12 + progress * 0.32);
+        var a = Math.min(0.42, 0.12 + progress * 0.34);
+        var ang = Math.min(72, progress * 84); // fold angle grows with the drag
         if (drag.dir < 0) {
-          var fold = w + px; // page moved left; fold at its right edge
+          // Forward turn: page slid left; the leaf lifts from its RIGHT edge.
+          var fold = w + px;
           curlEl.style.left = Math.max(-56, fold - 8) + 'px';
           curlEl.style.background = 'linear-gradient(to right, rgba(0,0,0,' + a + '), rgba(0,0,0,0) 70%)';
+          foldEl.style.left = (fold - 64) + 'px';
+          foldEl.style.transformOrigin = 'right center';
+          foldEl.style.transform = 'perspective(1200px) rotateY(-' + ang + 'deg)';
+          foldEl.style.background = 'linear-gradient(to left, ' + bg + ' 42%, rgba(0,0,0,' + a + '))';
+          foldEl.style.boxShadow = '-10px 0 16px rgba(0,0,0,' + (a * 0.6) + ')';
         } else {
+          // Backward turn: page slid right; the leaf lifts from its LEFT edge.
           curlEl.style.left = Math.min(w, px - 48) + 'px';
           curlEl.style.background = 'linear-gradient(to left, rgba(0,0,0,' + a + '), rgba(0,0,0,0) 70%)';
+          foldEl.style.left = px + 'px';
+          foldEl.style.transformOrigin = 'left center';
+          foldEl.style.transform = 'perspective(1200px) rotateY(' + ang + 'deg)';
+          foldEl.style.background = 'linear-gradient(to right, ' + bg + ' 42%, rgba(0,0,0,' + a + '))';
+          foldEl.style.boxShadow = '10px 0 16px rgba(0,0,0,' + (a * 0.6) + ')';
         }
         curlEl.style.opacity = '1';
+        foldEl.style.opacity = '1';
       }
-      function hideCurl(){ curlEl.style.opacity = '0'; }
+      function hideCurl(){ curlEl.style.opacity = '0'; foldEl.style.opacity = '0'; }
 
       // Slide the current page fully off in the turn direction, then swap to the
       // neighbor and reset. The uncovered strip is the page-colored background,
@@ -552,48 +601,93 @@ ${FOLIATE_BUNDLE}
       // Discrete turn honoring the current mode (animated when the curl is on).
       function turn(dir){ if (curlEnabled) finishTurn(dir); else if (dir < 0) window.goNext(); else window.goPrev(); }
 
-      document.addEventListener('touchstart', function(e){
-        if (drag.animating) return;
-        var t = e.changedTouches[0];
-        drag.active = true; drag.decided = false; drag.dir = 0;
-        drag.sx = t.clientX; drag.sy = t.clientY; drag.st = Date.now();
-      }, { passive: true });
+      // Shared handlers — bound BOTH to the outer document (margins / gaps
+      // around the iframe) AND, via attachPageTurn, to each section document.
+      // Everything is wrapped defensively so any failure falls back to foliate's
+      // own instant turn and never breaks reading.
+      function onTouchStart(e){
+        try {
+          if (drag.animating) return;
+          var t = e.changedTouches[0];
+          drag.active = true; drag.decided = false; drag.dir = 0;
+          drag.sx = t.clientX; drag.sy = t.clientY; drag.st = Date.now();
+        } catch(err){}
+      }
+      function onTouchMove(e){
+        try {
+          if (!drag.active || drag.animating || !curlEnabled) return;
+          var t = e.changedTouches[0];
+          var dx = t.clientX - drag.sx, dy = t.clientY - drag.sy;
+          if (!drag.decided) {
+            if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+            // Vertical / long-press-drag (text selection) → not a page turn;
+            // let foliate/selection behave, do NOT suppress.
+            if (Math.abs(dx) <= Math.abs(dy) * 1.2) { drag.active = false; return; }
+            drag.decided = true; drag.dir = dx < 0 ? -1 : 1;
+          }
+          setPageX(dx);
+          showCurl(dx, Math.min(1, Math.abs(dx) / W()));
+          // A real horizontal drag is in progress — suppress foliate's own
+          // bubble-phase swipe so the two systems don't fight. Harmless on the
+          // outer document, where nothing else listens.
+          try { e.stopImmediatePropagation(); } catch(_e){}
+          if (e.cancelable) e.preventDefault();
+        } catch(err){}
+      }
+      function onTouchEnd(e){
+        try {
+          var isOuter = (e.currentTarget === document);
+          var t = e.changedTouches[0];
+          var dx = t.clientX - drag.sx, dy = t.clientY - drag.sy, dt = Date.now() - drag.st;
+          var wasDrag = drag.decided;
+          drag.active = false; drag.decided = false;
+          if (drag.animating) return;
+          if (wasDrag) {
+            // A curl drag was in progress — commit past the threshold or spring
+            // back, and keep foliate from also acting on the same gesture.
+            try { e.stopImmediatePropagation(); } catch(_e){}
+            var progress = Math.abs(dx) / W();
+            var fast = dt < 250 && Math.abs(dx) > 60;
+            if (progress > 0.25 || fast) finishTurn(drag.dir); else snapBack();
+            return;
+          }
+          // Taps / vertical drags: over the text (a section document) let
+          // foliate and its tap zones behave normally — do NOT suppress. Only
+          // the outer document (the blank margins, where foliate has no handler)
+          // synthesizes swipe / tap-zone turns so those areas stay live.
+          if (!isOuter) return;
+          var w = W();
+          if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.2 && dt < 700) {
+            turn(dx < 0 ? -1 : 1);
+          } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 300) {
+            if (t.clientX < w * 0.3) turn(1);
+            else if (t.clientX > w * 0.7) turn(-1);
+          }
+        } catch(err){}
+      }
 
-      document.addEventListener('touchmove', function(e){
-        if (!drag.active || drag.animating || !curlEnabled) return;
-        var t = e.changedTouches[0];
-        var dx = t.clientX - drag.sx, dy = t.clientY - drag.sy;
-        if (!drag.decided) {
-          if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-          // Vertical / long-press-drag (text selection) → not a page turn.
-          if (Math.abs(dx) <= Math.abs(dy) * 1.2) { drag.active = false; return; }
-          drag.decided = true; drag.dir = dx < 0 ? -1 : 1;
-        }
-        setPageX(dx);
-        showCurl(dx, Math.min(1, Math.abs(dx) / W()));
-        if (e.cancelable) e.preventDefault();
-      }, { passive: false });
+      // Bind the finger-follow handlers to a section's content document in the
+      // CAPTURE phase (passive:false) so they run before foliate's own swipe
+      // handlers and can preventDefault / stopImmediatePropagation. Idempotent
+      // per document via a marker flag. Called from the 'load' handler, which
+      // fires once per section (its function is hoisted, so the first section —
+      // loaded during view.open — is covered too).
+      function attachPageTurn(doc){
+        try {
+          if (!doc || doc.__pgCurlBound) return;
+          doc.__pgCurlBound = true;
+          doc.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
+          doc.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+          doc.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
+        } catch(e) {}
+      }
 
-      document.addEventListener('touchend', function(e){
-        var t = e.changedTouches[0];
-        var dx = t.clientX - drag.sx, dy = t.clientY - drag.sy, dt = Date.now() - drag.st;
-        var wasDrag = drag.decided;
-        drag.active = false; drag.decided = false;
-        if (drag.animating) return;
-        if (wasDrag) {
-          var progress = Math.abs(dx) / W();
-          var fast = dt < 250 && Math.abs(dx) > 60;
-          if (progress > 0.25 || fast) finishTurn(drag.dir); else snapBack();
-          return;
-        }
-        var w = W();
-        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.2 && dt < 700) {
-          turn(dx < 0 ? -1 : 1);
-        } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 300) {
-          if (t.clientX < w * 0.3) turn(1);
-          else if (t.clientX > w * 0.7) turn(-1);
-        }
-      }, { passive: true });
+      // Outer document (margins / letterboxing around the iframe). No longer the
+      // sole path — the per-section binding above is what makes the curl fire
+      // over the text.
+      document.addEventListener('touchstart', onTouchStart, { passive: true });
+      document.addEventListener('touchmove', onTouchMove, { passive: false });
+      document.addEventListener('touchend', onTouchEnd, { passive: true });
 
       // Keyboard navigation
       document.addEventListener('keyup', function(e) {

@@ -3,7 +3,7 @@
  * mark-finished (online w/ fuzzy counterpart + offline queue), download button
  * states, play/read routing, and podcast episode rows.
  */
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react-native";
 
 // The global setup maps this package to the library's jest mock, which only
 // has a `default` export — named imports (SafeAreaView) come back undefined.
@@ -771,6 +771,11 @@ describe("ItemDetailScreen", () => {
     const addBtn = screen.getByLabelText("Add to Want to Read");
     expect(useFavoritesStore.getState().isFavorite("item1")).toBe(false);
 
+    // The heart now lives over the cover, NOT in the secondary action row.
+    expect(
+      within(screen.getByTestId("detail-action-row")).queryByLabelText("Add to Want to Read")
+    ).toBeNull();
+
     await fireEvent.press(addBtn);
 
     // Store reflects the toggle and the control flips to the "remove" state.
@@ -804,16 +809,54 @@ describe("ItemDetailScreen", () => {
   });
 });
 
-describe("Add to Up Next queue", () => {
-  it("adds a playable audio book to the queue and confirms via dialog", async () => {
-    routeApi(bothFormatItem);
-    const alertSpy = showAppDialog as jest.Mock;
+describe("Add to… (combined Up Next / collection / playlist sheet)", () => {
+  // The combined sheet fetches collections + playlists on open — resolve them
+  // (empty) so the sheet body renders instead of the load-error state.
+  function routeApiWithLists(item: any, searchBooks: any[] = []) {
+    mockedGet.mockImplementation((url: string) => {
+      if (url.includes("/collections")) return Promise.resolve({ data: { results: [] } });
+      if (url.includes("/playlists")) return Promise.resolve({ data: { results: [] } });
+      if (url.startsWith(`/api/items/${item.id}`)) return Promise.resolve({ data: item });
+      if (url.includes("/search?")) {
+        return Promise.resolve({ data: { book: searchBooks.map((b) => ({ libraryItem: b })) } });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+  }
+
+  it("merges the two add-buttons into a single Add to… button that opens the sheet", async () => {
+    routeApiWithLists(bothFormatItem);
     await render(
       <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
     );
     await screen.findByText("Listening");
 
-    await fireEvent.press(screen.getByLabelText("Add to Up Next queue"));
+    // The two old, visually-identical add buttons are gone from the row.
+    expect(screen.queryByLabelText("Add to Up Next queue")).toBeNull();
+    expect(screen.queryByLabelText("Add to collection or playlist")).toBeNull();
+
+    // A single combined button remains and opens the sheet.
+    await fireEvent.press(screen.getByLabelText("Add to…"));
+    await act(async () => {}); // flush the sheet's fetchLists
+
+    // Sheet shows the Up Next toggle (audio book) plus collections/playlists.
+    const upNextRow = await screen.findByLabelText("Up Next");
+    expect(upNextRow).toBeTruthy();
+    expect(upNextRow.props.accessibilityState?.checked).toBe(false);
+    expect(screen.getByText("Collections")).toBeTruthy();
+    expect(screen.getByText("Playlists")).toBeTruthy();
+  });
+
+  it("the Up Next row in the sheet queues the playable book via the store", async () => {
+    routeApiWithLists(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    await fireEvent.press(screen.getByLabelText("Add to…"));
+    await act(async () => {});
+    await fireEvent.press(await screen.findByLabelText("Up Next"));
 
     // Store now holds the queued book (title/author carried through).
     const queue = usePlaybackStore.getState().queue;
@@ -821,46 +864,33 @@ describe("Add to Up Next queue", () => {
     expect(queue[0]).toEqual(
       expect.objectContaining({ libraryItemId: "item1", title: "The Hobbit", author: "J.R.R. Tolkien" })
     );
-    expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Added to Up Next" })
-    );
+    // Row flips to the queued/checked state.
+    expect(screen.getByLabelText("Up Next").props.accessibilityState?.checked).toBe(true);
   });
 
-  it("de-dupes: an already-queued book shows the queued state and warns instead of re-adding", async () => {
-    routeApi(bothFormatItem);
-    usePlaybackStore.setState({
-      queue: [{ libraryItemId: "item1", title: "The Hobbit" }],
-    } as any);
-    const alertSpy = showAppDialog as jest.Mock;
-    await render(
-      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
-    );
-    await screen.findByText("Listening");
-
-    // Reflects the queued state on load.
-    const btn = screen.getByLabelText("Already in Up Next");
-    await fireEvent.press(btn);
-
-    // No duplicate appended; user is told it's already queued.
-    expect(usePlaybackStore.getState().queue).toHaveLength(1);
-    expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Already in Up Next" })
-    );
-  });
-
-  it("hides the Add to Up Next action for ebook-only items and podcasts", async () => {
-    routeApi(ebookOnlyItem, []);
+  it("an ebook-only item opens the sheet WITHOUT an Up Next row (nothing to queue)", async () => {
+    routeApiWithLists(ebookOnlyItem, []);
     await render(
       <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
     );
     await screen.findAllByText("Silmarillion Reader");
-    expect(screen.queryByLabelText("Add to Up Next queue")).toBeNull();
 
+    // The combined button is still offered (collections/playlists apply)…
+    await fireEvent.press(screen.getByLabelText("Add to…"));
+    await act(async () => {});
+    // …but there is nothing to queue, so no Up Next toggle appears.
+    expect(await screen.findByText("Collections")).toBeTruthy();
+    expect(screen.queryByLabelText("Up Next")).toBeNull();
+  });
+
+  it("hides the combined Add to… button for podcasts", async () => {
     routeApi(podcastItem);
     await render(
       <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
     );
     await screen.findByText("2 Episodes");
+    expect(screen.queryByLabelText("Add to…")).toBeNull();
+    // The stale separate queue button must be gone too.
     expect(screen.queryByLabelText("Add to Up Next queue")).toBeNull();
   });
 });

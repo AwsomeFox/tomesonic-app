@@ -36,6 +36,8 @@ interface SearchResults {
 
 const COVER_W = 46;
 const COVER_H = 58;
+// Book results use a SQUARE cover; the series collage keeps COVER_W/COVER_H.
+const BOOK_COVER = 56;
 
 export default function SearchContent({ navigation }: { navigation: any }) {
   const colors = useThemeColors();
@@ -220,9 +222,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         }}
       >
         <View
+          testID="book-result-cover"
           style={{
-            width: COVER_W,
-            height: COVER_H,
+            width: BOOK_COVER,
+            height: BOOK_COVER,
             borderRadius: 6,
             overflow: "hidden",
             backgroundColor: colors.surfaceContainerHigh,

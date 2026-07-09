@@ -10,13 +10,16 @@ import {
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { api } from "../utils/api";
+import { usePlaybackStore } from "../store/usePlaybackStore";
 import Icon from "./Icon";
 import BottomSheet from "./BottomSheet";
 
 /**
- * "Add to…" bottom sheet for a library item: lists the library's collections
- * and the user's playlists with membership toggles, plus inline create-new
- * rows. Collections are book-only in ABS, so podcasts only see playlists.
+ * "Add to…" bottom sheet for a library item: the local "Up Next" playback queue
+ * (audio books only), the library's collections, and the user's playlists — each
+ * with membership toggles, plus inline create-new rows. Collections are book-only
+ * in ABS, so podcasts only see playlists. This is the single entry point for
+ * "add to Up Next, a collection, or a playlist".
  *
  * Endpoints (verified against the ABS server ApiRouter):
  *   GET    /api/libraries/:id/collections | /playlists
@@ -26,6 +29,9 @@ import BottomSheet from "./BottomSheet";
  *   POST   /api/playlists {libraryId, name, items[]}
  *   POST   /api/playlists/:id/item {libraryItemId}
  *   DELETE /api/playlists/:id/item/:libraryItemId
+ *
+ * The Up Next queue is device-local (no server call) — it just drives the
+ * usePlaybackStore addToQueue/removeFromQueue actions.
  */
 
 interface Props {
@@ -35,6 +41,16 @@ interface Props {
   libraryId: string;
   /** Collections are book-only — hide that section for podcasts. */
   isPodcast?: boolean;
+  /**
+   * The playable audio item's id (this item, or its audio-only counterpart).
+   * When provided, the "Up Next" queue row is shown and toggles membership of
+   * this id in the local playback queue. Omit for ebook-only items / podcasts.
+   */
+  queueItemId?: string | null;
+  /** Metadata carried into addToQueue so the queued row renders standalone. */
+  title?: string;
+  author?: string;
+  coverUrl?: string;
 }
 
 type ListKind = "collection" | "playlist";
@@ -45,8 +61,29 @@ export default function AddToListModal({
   libraryItemId,
   libraryId,
   isPodcast,
+  queueItemId,
+  title,
+  author,
+  coverUrl,
 }: Props) {
   const colors = useThemeColors();
+  // Cross-book "Up Next" queue — subscribe so the row reflects (and de-dupes
+  // against) what's already queued.
+  const queue = usePlaybackStore((s) => s.queue);
+  const addToQueue = usePlaybackStore((s) => s.addToQueue);
+  const removeFromQueue = usePlaybackStore((s) => s.removeFromQueue);
+  // Books queue at the item level (no episodeId) — match the same way here.
+  const isQueued = !!(
+    queueItemId && queue.some((q) => q.libraryItemId === queueItemId && !q.episodeId)
+  );
+  const toggleQueue = () => {
+    if (!queueItemId) return;
+    if (isQueued) {
+      removeFromQueue(queueItemId);
+    } else {
+      addToQueue({ libraryItemId: queueItemId, title, author, coverUrl });
+    }
+  };
   const [collections, setCollections] = useState<any[]>([]);
   const [playlists, setPlaylists] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -335,6 +372,60 @@ export default function AddToListModal({
     );
   };
 
+  // Single "Up Next" toggle row — device-local queue, no server round-trip, so
+  // it never shows the busy spinner or shares the busyId gate the list rows use.
+  const renderUpNextRow = () => (
+    <Pressable
+      onPress={toggleQueue}
+      android_ripple={{ color: colors.surfaceContainerHighest }}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: isQueued }}
+      accessibilityLabel="Up Next"
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        borderRadius: 16,
+        backgroundColor: isQueued ? colors.secondaryContainer : "transparent",
+        marginBottom: 2,
+      }}
+    >
+      <Icon
+        name="playlist-add"
+        size={20}
+        color={isQueued ? colors.onSecondaryContainer : colors.onSurfaceVariant}
+      />
+      <View style={{ flex: 1, marginLeft: 12 }}>
+        <Text
+          numberOfLines={1}
+          style={{
+            fontSize: 16,
+            color: isQueued ? colors.onSecondaryContainer : colors.onSurface,
+          }}
+        >
+          Up Next
+        </Text>
+        <Text
+          style={{
+            fontSize: 12,
+            marginTop: 1,
+            color: isQueued
+              ? withAlpha(colors.onSecondaryContainer, 0.8)
+              : colors.onSurfaceVariant,
+          }}
+        >
+          {isQueued ? "Plays after the current book" : "Play after the current book"}
+        </Text>
+      </View>
+      {isQueued ? (
+        <Icon name="check" size={22} color={colors.onSecondaryContainer} />
+      ) : (
+        <Icon name="add" size={22} color={colors.onSurfaceVariant} />
+      )}
+    </Pressable>
+  );
+
   const sectionHeader = (label: string) => (
     <Text
       style={{
@@ -363,11 +454,18 @@ export default function AddToListModal({
               }}
             >
               <Icon name="playlist-add" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-              {/* Match the bottom-sheet header type scale used across the app
-                  (Bookmarks / Chapters / Speed / Sleep all use 22/500). */}
-              <Text style={{ fontSize: 22, fontWeight: "500", color: colors.onSurface }}>
-                Add to…
-              </Text>
+              <View style={{ flex: 1 }}>
+                {/* Match the bottom-sheet header type scale used across the app
+                    (Bookmarks / Chapters / Speed / Sleep all use 22/500). */}
+                <Text style={{ fontSize: 22, fontWeight: "500", color: colors.onSurface }}>
+                  Add to…
+                </Text>
+                <Text style={{ fontSize: 13, color: colors.onSurfaceVariant, marginTop: 2 }}>
+                  {queueItemId
+                    ? "Up Next, a collection, or a playlist"
+                    : "A collection or a playlist"}
+                </Text>
+              </View>
             </View>
             {actionError ? (
               <Text style={{ color: colors.error, fontSize: 13, paddingHorizontal: 20, paddingBottom: 4 }}>
@@ -406,6 +504,13 @@ export default function AddToListModal({
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
               >
+                {queueItemId ? (
+                  <>
+                    {sectionHeader("Up Next")}
+                    {renderUpNextRow()}
+                  </>
+                ) : null}
+
                 {!isPodcast ? (
                   <>
                     {sectionHeader("Collections")}

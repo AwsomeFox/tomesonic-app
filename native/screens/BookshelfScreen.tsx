@@ -32,8 +32,8 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 // Map a personalized shelf to the Library-tab sort/filter that shows the rest
 // of it (each shelf is a capped horizontal scroll, so its tail is otherwise
-// unreachable). Returns null for shelves with no sensible full-list mapping
-// (Continue Series/Reading, author rows, Discover) — those stay non-pressable.
+// unreachable). Returns null for shelves with no sensible full-list mapping —
+// those stay non-pressable.
 // Maps a home shelf to its "see all" destination on the Library hub tab. The hub
 // consumes `filter`/`orderBy`/`descending` (seeds the Books facet) and `segment`
 // (switches to the Series/Authors facet). Series/author shelves and Continue
@@ -52,6 +52,13 @@ function shelfToLibraryParams(shelf: any): Record<string, any> | null {
   switch (shelf?.id) {
     case "recently-added":
       return { orderBy: "addedAt", descending: true };
+    // The ABS "Discover" shelf is a random sampling of the library — there's no
+    // "see all random books", so its see-all opens the full library browse (the
+    // Library hub's Books facet, default sort) where the rest of the catalog is
+    // reachable. An empty destination is truthy, so the header still becomes a
+    // pressable "see all" once the row overflows (see the `showSeeAll` gate).
+    case "discover":
+      return {};
     // Continue Reading is in-progress books too (its rows are ebooks-in-progress;
     // ABS filters are single-valued, so "in progress" is the closest full-list
     // match) — give it the same destination as Continue Listening.

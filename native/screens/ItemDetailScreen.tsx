@@ -111,9 +111,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const currentSession = usePlaybackStore((state) => state.currentSession);
   const currentChapterIndex = usePlaybackStore((state) => state.currentChapterIndex);
   const seekToChapter = usePlaybackStore((state) => state.seekToChapter);
-  // Cross-book "Up Next" queue — subscribe so the Add-to-queue action reflects
-  // (and can de-dupe against) what's already queued.
-  const queue = usePlaybackStore((state) => state.queue);
 
   const [item, setItem] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -828,36 +825,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   // Cross-book "Up Next" queue: the playable audio item's id (this item, or its
   // audio-only counterpart). Podcasts are excluded — the queue auto-advances
-  // whole books, and each podcast episode already tracks its own progress.
+  // whole books, and each podcast episode already tracks its own progress. The
+  // queue toggle itself now lives in the "Add to…" sheet (AddToListModal); this
+  // just resolves which id that sheet should queue.
   const queueItemId = selfHasAudio ? item?.id : audioCounterpartId;
-  const isQueued = !!(
-    queueItemId && queue.some((q) => q.libraryItemId === queueItemId && !q.episodeId)
-  );
-  const handleAddToQueue = () => {
-    if (!queueItemId) return;
-    // The store de-dupes too, but surface an explicit "already queued" note so
-    // the tap never looks like it silently did nothing.
-    if (isQueued) {
-      showAppDialog({
-        title: "Already in Up Next",
-        message: `"${metadata.title || "This book"}" is already in your Up Next queue.`,
-      });
-      return;
-    }
-    usePlaybackStore.getState().addToQueue({
-      libraryItemId: queueItemId,
-      title: metadata.title || undefined,
-      author: metadata.authorName || authors[0]?.name || undefined,
-      coverUrl:
-        serverAddress && token
-          ? `${serverAddress}/api/items/${queueItemId}/cover?width=400&format=webp&token=${token}`
-          : undefined,
-    });
-    showAppDialog({
-      title: "Added to Up Next",
-      message: `"${metadata.title || "This book"}" will play after the current book.`,
-    });
-  };
+  // Cover url used both for the sheet's queue entry and (elsewhere) the header.
+  const queueCoverUrl =
+    queueItemId && serverAddress && token
+      ? `${serverAddress}/api/items/${queueItemId}/cover?width=400&format=webp&token=${token}`
+      : undefined;
 
   /** Two-column metadata row: CAPS grey label (left) + value (right, links green+underline). */
   const MetaRow = ({ label, children }: { label: string; children: React.ReactNode }) => (
@@ -1086,6 +1062,43 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   }}
                 />
               ) : null}
+
+              {/* "Want to Read" / favorite toggle, overlaid on the cover's
+                  top-right corner (a device-local overlay — ABS has no server
+                  favorites flag). A translucent scrim keeps the heart legible
+                  over any cover art. Moved here off the action row to declutter. */}
+              <Pressable
+                onPress={() => item?.id && toggleFavorite(item.id)}
+                accessibilityRole="button"
+                accessibilityLabel={isFavorite ? "Remove from Want to Read" : "Add to Want to Read"}
+                accessibilityState={{ selected: isFavorite }}
+                hitSlop={8}
+                android_ripple={{
+                  color: withAlpha(colors.onPrimaryContainer, 0.2),
+                  radius: 22,
+                }}
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  right: 8,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  overflow: "hidden",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  // Translucent scrim keeps the heart legible over any art
+                  // (withAlpha only rewrites rgb() strings, so use a literal).
+                  backgroundColor: isFavorite ? colors.primaryContainer : "rgba(0,0,0,0.42)",
+                }}
+              >
+                <Icon
+                  name="heart"
+                  size={22}
+                  color={isFavorite ? colors.onPrimaryContainer : "#FFFFFF"}
+                  style={{ opacity: isFavorite ? 1 : 0.95 }}
+                />
+              </Pressable>
             </View>
           </View>
 
@@ -1201,37 +1214,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               rowGap: 12,
             }}
           >
-            {/* "Want to Read" / favorite toggle — a device-local overlay (ABS
-                has no server favorites flag). Available for any item. */}
-            <Pressable
-              onPress={() => item?.id && toggleFavorite(item.id)}
-              accessibilityRole="button"
-              accessibilityLabel={isFavorite ? "Remove from Want to Read" : "Add to Want to Read"}
-              accessibilityState={{ selected: isFavorite }}
-              android_ripple={{
-                color: withAlpha(
-                  isFavorite ? colors.onPrimaryContainer : colors.onSecondaryContainer,
-                  0.15
-                ),
-              }}
-              style={{
-                width: 52,
-                height: 52,
-                borderRadius: 26,
-                overflow: "hidden",
-                backgroundColor: isFavorite ? colors.primaryContainer : colors.secondaryContainer,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Icon
-                name="heart"
-                size={22}
-                color={isFavorite ? colors.onPrimaryContainer : colors.onSecondaryContainer}
-                style={{ opacity: isFavorite ? 1 : 0.45 }}
-              />
-            </Pressable>
-
             {/* Download Button — for items with their own audio or ebook.
                 Hidden for podcasts: the downloader handles book tracks, not
                 episodes, so the button would silently no-op there. */}
@@ -1285,39 +1267,6 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     color={isDownloaded ? colors.error : colors.onSecondaryContainer}
                   />
                 )}
-              </Pressable>
-            ) : null}
-
-            {/* Add to "Up Next" — cross-book auto-advance queue. Playable audio
-                books only (podcasts auto-advance per-episode; ebook-only items
-                have nothing to queue). */}
-            {hasAudioMedia && !isPodcastItem ? (
-              <Pressable
-                onPress={handleAddToQueue}
-                accessibilityRole="button"
-                accessibilityLabel={isQueued ? "Already in Up Next" : "Add to Up Next queue"}
-                accessibilityState={{ selected: isQueued }}
-                android_ripple={{
-                  color: withAlpha(
-                    isQueued ? colors.onPrimaryContainer : colors.onSecondaryContainer,
-                    0.15
-                  ),
-                }}
-                style={{
-                  width: 52,
-                  height: 52,
-                  borderRadius: 26,
-                  overflow: "hidden",
-                  backgroundColor: isQueued ? colors.primaryContainer : colors.secondaryContainer,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Icon
-                  name="playlist-add"
-                  size={22}
-                  color={isQueued ? colors.onPrimaryContainer : colors.onSecondaryContainer}
-                />
               </Pressable>
             ) : null}
 
@@ -1442,14 +1391,16 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               </Pressable>
             ) : null}
 
-            {/* Add to collection / playlist. Books only: ABS collections are
-                book-only and playlists hold EPISODES for podcasts — adding a
-                whole podcast item would just 400 on the server. */}
+            {/* Combined "Add to…" — opens the sheet that toggles Up Next (audio
+                books), collections, and playlists in one place. Books only: ABS
+                collections are book-only and playlists hold EPISODES for
+                podcasts — adding a whole podcast item would just 400 on the
+                server. (Podcasts reach the queue per-episode elsewhere.) */}
             {!isPodcastItem ? (
               <Pressable
                 onPress={() => setAddToVisible(true)}
                 accessibilityRole="button"
-                accessibilityLabel="Add to collection or playlist"
+                accessibilityLabel="Add to…"
                 android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
                 style={{
                   width: 52,
@@ -2162,6 +2113,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           libraryItemId={item.id}
           libraryId={item.libraryId}
           isPodcast={isPodcastItem}
+          queueItemId={queueItemId}
+          title={metadata.title || undefined}
+          author={metadata.authorName || authors[0]?.name || undefined}
+          coverUrl={queueCoverUrl}
         />
       ) : null}
 

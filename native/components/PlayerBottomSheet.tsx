@@ -26,8 +26,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { SPATIAL_SHEET, EMPHASIZED } from "../theme/motion";
 import { usePlaybackStore } from "../store/usePlaybackStore";
-import { showAppDialog } from "../store/useDialogStore";
 import { useUserStore } from "../store/useUserStore";
+import { useFavoritesStore } from "../store/useFavoritesStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { navigationRef } from "../navigation/navigationRef";
@@ -43,11 +43,6 @@ import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
 import { haptic } from "../utils/haptics";
 import Pressable from "./HintPressable";
-import {
-  resolveEbookTarget,
-  canJumpToFraction,
-  readingFractionForAudioPosition,
-} from "../utils/formatSwitch";
 
 const MINIPLAYER_HEIGHT = 68;
 
@@ -197,6 +192,13 @@ export default function PlayerBottomSheet() {
   // while playing, the 1s position tick masked the missing subscription.
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
 
+  // Local "Want to Read" / favorites overlay (ABS has no server flag). Subscribe
+  // reactively so the full-player heart reflects/persists the toggle in sync
+  // with the ItemDetail heart. Book-only feature — falsy id hides the button.
+  const favItemId = currentSession?.libraryItemId || currentSession?.libraryItem?.id;
+  const isFav = useFavoritesStore((s) => !!favItemId && s.favorites.includes(favItemId));
+  const toggleFavorite = useFavoritesStore((s) => s.toggleFavorite);
+
   const isPlayerExpandedRef = useRef(isPlayerExpanded);
   useEffect(() => {
     isPlayerExpandedRef.current = isPlayerExpanded;
@@ -217,52 +219,6 @@ export default function PlayerBottomSheet() {
   // Emphasized 300ms morphs (play/pause icon, tab-bar offset): snap when reduced.
   const sheetTiming = (to: number) =>
     withTiming(to, reduceMotionRef.current ? { duration: 0 } : { duration: 300, easing: EMPHASIZED });
-
-  // "Read from here": jump to the ebook edition at (approximately) the
-  // current listening position — the Whispersync-style handoff the
-  // formatSwitch module implements (this is its player-side entry point).
-  const readFromHere = () => {
-    const st = usePlaybackStore.getState();
-    const cur = st.currentSession;
-    if (!cur || cur.episodeId) return; // book-only feature
-    const bookItemId = cur.libraryItemId || cur.libraryItem?.id;
-    if (!bookItemId) return;
-    (async () => {
-      const target = await resolveEbookTarget(bookItemId);
-      if (!target) {
-        showAppDialog({ title: "No ebook available", message: "This book doesn't have an ebook edition in your library." });
-        return;
-      }
-      const frac = readingFractionForAudioPosition(st.position, st.duration);
-      const jump = canJumpToFraction(target.ebookFormat);
-      showAppDialog({
-        title: "Read from here?",
-        message: jump
-          ? `Open the ebook at about ${Math.round(frac * 100)}%? Position matching is approximate.`
-          : "This ebook format can't jump to a position — it will open at your last reading spot.",
-        buttons: [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Read",
-            onPress: () => {
-              st.pause().catch(() => {});
-              st.setPlayerExpanded(false);
-              setTimeout(() => {
-                if (navigationRef.isReady()) {
-                  (navigationRef.navigate as any)("Reader", {
-                    itemId: target.itemId,
-                    ebookFormat: target.ebookFormat,
-                    title: target.title || st.currentSession?.displayTitle,
-                    ...(jump ? { initialFraction: frac } : {}),
-                  });
-                }
-              }, 300);
-            },
-          },
-        ],
-      });
-    })();
-  };
 
   // On expand, move screen-reader focus to the Collapse button once the
   // spring settles — otherwise TalkBack keeps focus on the (now covered and
@@ -933,31 +889,6 @@ export default function PlayerBottomSheet() {
                     </View>
                   </Pressable>
                   <Pressable
-                    onPress={() => setShowChapters(true)}
-                    disabled={!hasChapters}
-                    accessibilityRole="button"
-                    accessibilityLabel="Chapters"
-                    accessibilityState={{ disabled: !hasChapters }}
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 24,
-                      backgroundColor: colors.secondaryContainer,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      }}
-                  >
-                    <Icon
-                      name="list"
-                      size={22}
-                      color={
-                        hasChapters
-                          ? colors.onSecondaryContainer
-                          : withAlpha(colors.onSecondaryContainer, 0.4)
-                      }
-                    />
-                  </Pressable>
-                  <Pressable
                     onPress={() => {
                       setPlayerExpanded(false);
                       const targetId =
@@ -985,21 +916,27 @@ export default function PlayerBottomSheet() {
                   >
                     <Icon name="book" size={22} color={colors.onSecondaryContainer} />
                   </Pressable>
-                  {!currentSession?.episodeId ? (
+                  {favItemId ? (
                     <Pressable
-                      onPress={readFromHere}
+                      onPress={() => { haptic(); toggleFavorite(favItemId); }}
                       accessibilityRole="button"
-                      accessibilityLabel="Read from here"
+                      accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"}
+                      accessibilityState={{ selected: isFav }}
                       style={{
                         width: 48,
                         height: 48,
                         borderRadius: 24,
-                        backgroundColor: colors.secondaryContainer,
+                        backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer,
                         alignItems: "center",
                         justifyContent: "center",
                       }}
                     >
-                      <Icon name="auto-stories" size={22} color={colors.onSecondaryContainer} />
+                      <Icon
+                        name="heart"
+                        size={22}
+                        color={isFav ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                        style={{ opacity: isFav ? 1 : 0.45 }}
+                      />
                     </Pressable>
                   ) : null}
                   <Pressable
@@ -1168,7 +1105,9 @@ export default function PlayerBottomSheet() {
                 />
               </View>
 
-              {/* Secondary row: sleep-timer · speed pill · bookmark */}
+              {/* Secondary row: chapters · sleep-timer · speed pill · bookmark ·
+                  queue. Chapters and Queue sit at the two ends so the speed pill
+                  stays the visually-centered middle item. */}
               <View
                 style={{
                   flexDirection: "row",
@@ -1178,6 +1117,31 @@ export default function PlayerBottomSheet() {
                   columnGap: 28,
                 }}
               >
+                <Pressable
+                  onPress={() => setShowChapters(true)}
+                  disabled={!hasChapters}
+                  accessibilityRole="button"
+                  accessibilityLabel="Chapters"
+                  accessibilityState={{ disabled: !hasChapters }}
+                  style={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 28,
+                    backgroundColor: colors.secondaryContainer,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Icon
+                    name="list"
+                    size={22}
+                    color={
+                      hasChapters
+                        ? colors.onSecondaryContainer
+                        : withAlpha(colors.onSecondaryContainer, 0.4)
+                    }
+                  />
+                </Pressable>
                 <Pressable
                   onPress={() => { haptic(); setShowSleepTimer(true); }}
                   accessibilityRole="button"
@@ -1620,9 +1584,6 @@ export default function PlayerBottomSheet() {
                 <Pressable onPress={() => { try { CastContext.showCastDialog(); } catch (err) { console.warn("Cast picker failed", err); } }} accessibilityRole="button" accessibilityLabel="Cast to device" style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                   <View pointerEvents="none"><CastButton style={{ width: 28, height: 28, tintColor: colors.onSecondaryContainer }} /></View>
                 </Pressable>
-                <Pressable onPress={() => setShowChapters(true)} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                  <Icon name="list" size={22} color={hasChapters ? colors.onSecondaryContainer : withAlpha(colors.onSecondaryContainer, 0.4)} />
-                </Pressable>
                 <Pressable
                   onPress={() => {
                     setPlayerExpanded(false);
@@ -1635,13 +1596,12 @@ export default function PlayerBottomSheet() {
                 >
                   <Icon name="book" size={22} color={colors.onSecondaryContainer} />
                 </Pressable>
-                {/* Read-from-here + Stop were portrait-only — in landscape a
-                    finished book couldn't be dismissed from the player at all
-                    (Stop is the only in-player dismissal), and format-switch
-                    was unreachable. */}
-                {!currentSession?.episodeId ? (
-                  <Pressable onPress={readFromHere} accessibilityRole="button" accessibilityLabel="Read from here" style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="auto-stories" size={22} color={colors.onSecondaryContainer} />
+                {/* Want-to-Read heart + Stop are surfaced in landscape too —
+                    Stop is the only in-player dismissal, so a finished book
+                    couldn't be closed at all without it when rotated. */}
+                {favItemId ? (
+                  <Pressable onPress={() => { haptic(); toggleFavorite(favItemId); }} accessibilityRole="button" accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"} accessibilityState={{ selected: isFav }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                    <Icon name="heart" size={22} color={isFav ? colors.onPrimaryContainer : colors.onSecondaryContainer} style={{ opacity: isFav ? 1 : 0.45 }} />
                   </Pressable>
                 ) : null}
                 <Pressable
@@ -1714,7 +1674,12 @@ export default function PlayerBottomSheet() {
                   <CircleButton icon="skip-next" iconSize={22} onPress={() => { haptic(); nextChapter(); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
                 </View>
 
+                {/* Chapters and Queue bracket the ends so the speed pill stays
+                    the centered middle item (parity with portrait). */}
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 24, marginTop: 12 }}>
+                  <Pressable onPress={() => setShowChapters(true)} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                    <Icon name="list" size={20} color={hasChapters ? colors.onSecondaryContainer : withAlpha(colors.onSecondaryContainer, 0.4)} />
+                  </Pressable>
                   <Pressable onPress={() => { haptic(); setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                     <Icon name="moon" size={20} color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
                     {sleepTimer ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", fontFamily: "monospace", marginLeft: 6 }}>{secondsToTimestamp(sleepTimer.remaining)}</Text> : null}
