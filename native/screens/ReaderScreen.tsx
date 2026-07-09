@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Linking, ActivityIndicator, FlatList, Animated, TextInput, Share } from "react-native";
+import { View, Text, Linking, ActivityIndicator, FlatList, Animated, TextInput, Share, ScrollView, useWindowDimensions } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
@@ -62,9 +62,31 @@ const READER_MARGINS: { label: string; val: number }[] = [
   { label: "Wide", val: 32 },
 ];
 
-// Default reading speed (fraction of the book per minute) used before a live
-// sample exists — ~250 wpm over a ~90k-word book ≈ 6 hours ≈ 0.0028/min.
-const DEFAULT_FRACTION_PER_MIN = 1 / 360;
+// Reading-rate clamps for the "time left" estimate. The chapter estimate is
+// driven by a PAGES/min rate; a couple of fast early page-flips would otherwise
+// inflate it and collapse the estimate to a few minutes forever. Clamp the
+// per-page rate to a sane band so one flip can't poison the smoothed average.
+const READ_RATE_MIN = 0.2; // pages/min (slow, ~5 min/page)
+const READ_RATE_MAX = 8; // pages/min (fast skim)
+// The BOOK estimate uses a fraction/min "book speed"; clamp it so the implied
+// whole-book time (1/bookSpeed) stays within a believable band — this is what
+// prevents the absurd "~2 min left in book" at 5% read.
+const BOOK_MIN_MINUTES = 30;
+const BOOK_MAX_MINUTES = 3000;
+
+// Clamp a pages/min rate into the sane band. 0 (no sample yet) stays 0 so the
+// estimate can be hidden until a real reading sample exists.
+function clampReaderRate(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.min(READ_RATE_MAX, Math.max(READ_RATE_MIN, v));
+}
+// Clamp a fraction/min book speed so 1/bookSpeed ∈ [BOOK_MIN, BOOK_MAX] minutes.
+// 0 (no sample / poisoned) stays 0. Applied on READ too, so a previously
+// persisted absurd value recovers gracefully without a manual reset.
+function clampBookSpeed(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  return Math.min(1 / BOOK_MIN_MINUTES, Math.max(1 / BOOK_MAX_MINUTES, v));
+}
 
 // Read-aloud: turn one page then re-request the section text so speech keeps
 // flowing. The 400ms lets the relocate fire (updating the reported position)
@@ -415,15 +437,37 @@ ${FOLIATE_BUNDLE}
         try { view.deleteAnnotation({ value: cfi }); } catch(e) {}
       };
 
-      // ---- TTS: hand the current section's visible text to RN (expo-speech). ----
+      // ---- TTS: hand the text from the CURRENT reading position to RN. ----
+      // Read-aloud must start at the page you're on, not the top of the chapter
+      // (#5). foliate tracks the current visible location as view.lastLocation,
+      // whose .range is a DOM Range in the current section document; we take its
+      // start and read to the end of the section body. If that can't be
+      // resolved we fall back to the whole-section text (prior behavior) rather
+      // than breaking read-aloud.
       window.getReaderText = function(){
         try {
           var c = view.renderer.getContents ? view.renderer.getContents()[0] : null;
-          var body = c && c.doc ? c.doc.body : null;
-          var t = body ? (body.innerText || body.textContent || '') : '';
-          // Hand back the whole section text plus the current position. RN
-          // chunks it under Android's ~4000-char TextToSpeech limit (#2) and
-          // uses the pos field to detect a stalled/finished book (#1).
+          var doc = c && c.doc ? c.doc : null;
+          var body = doc ? doc.body : null;
+          var t = '';
+          if (body) {
+            var loc = null;
+            try { loc = view.lastLocation; } catch(e0) { loc = null; }
+            var range = loc && loc.range ? loc.range : null;
+            if (range && range.startContainer && doc.createRange) {
+              try {
+                var r = doc.createRange();
+                r.selectNodeContents(body);
+                // Clamp the start into the body — a range from another section
+                // would throw; the catch below falls back to whole-section text.
+                r.setStart(range.startContainer, range.startOffset || 0);
+                t = r.toString() || '';
+              } catch(e1) { t = ''; }
+            }
+            if (!t) t = body.innerText || body.textContent || '';
+          }
+          // RN chunks the text under Android's ~4000-char TextToSpeech limit
+          // (#2) and uses the pos field to detect a stalled/finished book (#1).
           post({ type: 'ttsText', text: String(t || '').replace(/\\s+/g, ' ').trim().slice(0, 20000), pos: lastFraction });
         } catch(e) { post({ type: 'ttsText', text: '', pos: lastFraction }); }
       };
@@ -431,22 +475,17 @@ ${FOLIATE_BUNDLE}
       // ---- Page-turn gestures: finger-follow curl + tap/swipe fallback ----
       // When the curl is enabled the page tracks your finger and peels with a
       // soft fold shadow, completing (or snapping back) on release. When it's
-      // off — or the OS asks for reduced motion — we keep the original discrete
-      // tap-zone / swipe behavior. The curl is a CSS transform on the foliate
-      // host + a gradient overlay at the fold; no snapshotting, so it can't get
-      // out of sync with the rendered content.
-      // Persist the matchMedia handle so BOTH the initial value AND every later
-      // RN setPageCurl() injection AND-in the OS reduced-motion preference. The
-      // settings-sync effect pushes setPageCurl(true) (the default) on ready, so
-      // without re-checking here that injection would clobber the a11y gate and
-      // re-enable the curl. The OS preference must win (#5).
-      var reduceMotionMql = null;
-      try { reduceMotionMql = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null; } catch(e) {}
-      function reduceMotionOn(){ return !!(reduceMotionMql && reduceMotionMql.matches); }
-      var curlEnabled = ${pageCurl ? "true" : "false"} && !reduceMotionOn();
-      // Let RN flip it live (settings toggle) without reloading the book — still
-      // gated by the OS reduced-motion preference.
-      window.setPageCurl = function(v){ curlEnabled = !!v && !reduceMotionOn(); };
+      // off we keep the original discrete tap-zone / swipe behavior. The curl is
+      // a CSS transform on the foliate host + a gradient overlay at the fold; no
+      // snapshotting, so it can't get out of sync with the rendered content.
+      // The user's explicit "Page Turn: None" setting IS the motion
+      // accommodation, so honor it directly. We deliberately do NOT AND-in the
+      // OS reduced-motion preference: many Android WebViews report reduce-motion
+      // (battery saver, "remove animations", some WebView defaults), which
+      // silently disabled the curl even when the user picked "Curl" (#3).
+      var curlEnabled = ${pageCurl ? "true" : "false"};
+      // Let RN flip it live (settings toggle) without reloading the book.
+      window.setPageCurl = function(v){ curlEnabled = !!v; };
 
       var W = function(){ return window.innerWidth || 360; };
       var TURN_MS = 200;
@@ -764,11 +803,20 @@ export default function ReaderScreen({ route, navigation }: any) {
   // cleanly instead of re-speaking the same text forever (#1).
   const ttsLastPosRef = useRef<number>(-1);
 
-  // Rolling reading-speed estimate (fraction of book per minute), persisted per
-  // item so a "~N min left" estimate survives across sessions.
-  const readingSpeedRef = useRef<number>(0);
-  const readingSampleRef = useRef<{ fraction: number; t: number } | null>(null);
-  const [readingEstimate, setReadingEstimate] = useState<number | null>(null);
+  // Rolling reading-rate estimate. Two smoothed, CLAMPED samples are kept per
+  // item so a "~N min left" estimate survives across sessions:
+  //  - readingRateRef: PAGES/min from the section page counter → chapter estimate.
+  //  - bookSpeedRef:   fraction/min → book estimate (clamped to a sane whole-
+  //    book time so a fast early flip can't collapse it to "~2 min", #1).
+  const readingRateRef = useRef<number>(0);
+  const bookSpeedRef = useRef<number>(0);
+  const readingSampleRef = useRef<{ page: number; pages: number; section: number; fraction: number; t: number } | null>(null);
+  // Estimate scope: "chapter" (default) shows time left in the current chapter,
+  // "book" shows time left in the whole book. Only changes the footer text, so
+  // it's applied live with no reload.
+  const [readerEstimateScope, setReaderEstimateScope] = useState<"chapter" | "book">(
+    () => ((storage.getString("reader_estimate_scope") as any) === "book" ? "book" : "chapter")
+  );
 
   // Resolve the reader-scoped theme. "auto" (or an unknown value) falls back to
   // the app surface colors so the reader keeps its original app-themed look.
@@ -779,6 +827,39 @@ export default function ReaderScreen({ route, navigation }: any) {
   const bg = readerThemeColors.bg;
   const fg = readerThemeColors.fg;
   const accent = colors.primary;
+
+  // When a named reader theme is active, the WHOLE reader screen (chrome, not
+  // just the book text) adopts it — otherwise the header/footer/background kept
+  // the app surface color and only the middle text rectangle was themed (#2).
+  // "auto" keeps the app colors (the prior behavior). Dim/border shades are
+  // derived from fg with an alpha suffix (6-digit hex + "99"/"22").
+  const isThemedChrome = readerTheme !== "auto" && !!READER_THEMES[readerTheme];
+  const chromeBg = isThemedChrome ? bg : colors.surface;
+  const chromeFg = isThemedChrome ? fg : colors.onSurface;
+  const chromeFgDim = isThemedChrome ? `${fg}99` : colors.onSurfaceVariant;
+  const chromeBorder = isThemedChrome ? `${fg}22` : colors.outlineVariant;
+
+  // Time-left estimate, DERIVED from the smoothed rate refs + active scope so it
+  // updates live when the scope toggles (no relocate needed). Hidden until a
+  // real sample exists (rate/bookSpeed > 0) or near the end (fraction ≥ 0.99).
+  const readingEstimate: number | null = (() => {
+    if (!pageProgress) return null;
+    const page = Math.max(1, pageProgress.page || 1);
+    const pages = Math.max(1, pageProgress.pages || 1);
+    const frac = pageProgress.fraction || 0;
+    if (readerEstimateScope === "book") {
+      const bookSpeed = clampBookSpeed(bookSpeedRef.current);
+      if (bookSpeed <= 0) return null;
+      const m = Math.ceil(Math.max(0, 1 - frac) / bookSpeed);
+      return Number.isFinite(m) ? m : null;
+    }
+    const rate = readingRateRef.current;
+    if (rate <= 0) return null;
+    const m = Math.ceil(Math.max(0, pages - page) / rate);
+    return Number.isFinite(m) ? m : null;
+  })();
+
+  const { height: windowHeight } = useWindowDimensions();
 
   // Dynamically push styles to the reader WebView when text settings change
   useEffect(() => {
@@ -852,6 +933,12 @@ export default function ReaderScreen({ route, navigation }: any) {
     }
   }, [readerFlow, ebookStatus]);
 
+  // Persist the time-left scope. No WebView injection needed — it only changes
+  // the footer text, which re-derives from state on the next render.
+  useEffect(() => {
+    storage.set("reader_estimate_scope", readerEstimateScope);
+  }, [readerEstimateScope]);
+
   useEffect(() => {
     if (itemId) {
       storage.set(`last_interaction_${itemId}`, "read");
@@ -863,9 +950,18 @@ export default function ReaderScreen({ route, navigation }: any) {
   // already seed the first book, so guard against clobbering it.
   const perItemReseededRef = useRef(false);
   useEffect(() => {
-    readingSpeedRef.current = storage.getNumber(`reader_speed_${itemId}`) || 0;
+    // Clamp on read so a previously persisted, poisoned value recovers — and
+    // write the clamped value straight back so MMKV is actually healed now,
+    // not only after the next valid sample.
+    const rawRate = storage.getNumber(`reader_rate_${itemId}`) || 0;
+    const clampedRate = clampReaderRate(rawRate);
+    readingRateRef.current = clampedRate;
+    if (clampedRate !== rawRate && clampedRate > 0) storage.set(`reader_rate_${itemId}`, clampedRate);
+    const rawBookSpeed = storage.getNumber(`reader_speed_${itemId}`) || 0;
+    const clampedBookSpeed = clampBookSpeed(rawBookSpeed);
+    bookSpeedRef.current = clampedBookSpeed;
+    if (clampedBookSpeed !== rawBookSpeed && clampedBookSpeed > 0) storage.set(`reader_speed_${itemId}`, clampedBookSpeed);
     readingSampleRef.current = null;
-    setReadingEstimate(null);
     if (!perItemReseededRef.current) {
       perItemReseededRef.current = true;
       return;
@@ -1085,33 +1181,48 @@ export default function ReaderScreen({ route, navigation }: any) {
           tocItem: data.tocItem || null,
         });
 
-        // Rolling reading-speed estimate. Sample the fraction delta over the
-        // elapsed time between relocations; smooth it (EMA) and persist per
-        // item. Falls back to ~250 wpm-equivalent until a real sample exists.
+        // Rolling reading-rate samples for the "time left" estimate. Two rates
+        // are smoothed (EMA) and persisted per item, both CLAMPED so a couple of
+        // fast early page-flips can't poison the average and collapse the
+        // estimate (#1). The footer text itself is DERIVED at render time from
+        // these refs + the active scope, so it stays live when the scope toggles.
         {
           const now = Date.now();
           const prevSample = readingSampleRef.current;
           const frac = data.fraction || 0;
-          if (prevSample && frac > prevSample.fraction) {
+          const page = Math.max(1, Number(data.page) || 1);
+          const pages = Math.max(1, Number(data.pages) || 1);
+          const section = Number(data.section) || 0;
+          if (prevSample) {
             const dtMin = (now - prevSample.t) / 60000;
             // Ignore implausible gaps (idle/backgrounded) and instantaneous
             // jumps (TOC navigation) so they don't poison the average.
             if (dtMin > 0.03 && dtMin < 15) {
-              const inst = (frac - prevSample.fraction) / dtMin;
-              if (Number.isFinite(inst) && inst > 0) {
-                const prevSpeed = readingSpeedRef.current;
-                const next = prevSpeed > 0 ? prevSpeed * 0.7 + inst * 0.3 : inst;
-                readingSpeedRef.current = next;
-                storage.set(`reader_speed_${itemId}`, next);
+              // Chapter: pages/min. Only sample forward page turns WITHIN the
+              // same section — the page counter resets across sections.
+              if (prevSample.section === section && page > prevSample.page) {
+                const instRate = (page - prevSample.page) / dtMin;
+                const clampedInst = clampReaderRate(instRate);
+                if (clampedInst > 0) {
+                  const prevRate = readingRateRef.current;
+                  const nextRate = prevRate > 0 ? prevRate * 0.7 + clampedInst * 0.3 : clampedInst;
+                  readingRateRef.current = clampReaderRate(nextRate);
+                  storage.set(`reader_rate_${itemId}`, readingRateRef.current);
+                }
+              }
+              // Book: fraction/min, sampled over any forward movement.
+              if (frac > prevSample.fraction) {
+                const instBook = (frac - prevSample.fraction) / dtMin;
+                if (Number.isFinite(instBook) && instBook > 0) {
+                  const prevBook = bookSpeedRef.current;
+                  const nextBook = prevBook > 0 ? prevBook * 0.7 + instBook * 0.3 : instBook;
+                  bookSpeedRef.current = clampBookSpeed(nextBook);
+                  storage.set(`reader_speed_${itemId}`, bookSpeedRef.current);
+                }
               }
             }
           }
-          readingSampleRef.current = { fraction: frac, t: now };
-          const speed = readingSpeedRef.current || (storage.getNumber(`reader_speed_${itemId}`) || 0);
-          if (speed > 0) {
-            const mins = Math.round(Math.max(0, 1 - frac) / speed);
-            setReadingEstimate(Number.isFinite(mins) ? mins : null);
-          }
+          readingSampleRef.current = { page, pages, section, fraction: frac, t: now };
         }
 
         // Update local store progress state instantly — EBOOK fields only.
@@ -1499,7 +1610,7 @@ export default function ReaderScreen({ route, navigation }: any) {
   const formatLabel = format ? format.toUpperCase() : "ebook";
 
   const Header = (
-    <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, backgroundColor: chromeBg }}>
       <Pressable
         onPress={() => navigation.goBack()}
         style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
@@ -1507,9 +1618,9 @@ export default function ReaderScreen({ route, navigation }: any) {
         accessibilityRole="button"
         accessibilityLabel="Close reader"
       >
-        <Icon name="back" size={24} color={colors.onSurface} />
+        <Icon name="back" size={24} color={chromeFg} />
       </Pressable>
-      <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700", marginLeft: 4, flex: 1 }}>
+      <Text numberOfLines={1} style={{ color: chromeFg, fontSize: 18, fontWeight: "700", marginLeft: 4, flex: 1 }}>
         {title || "Reader"}
       </Text>
       {(isFoliateFormat && canRenderEbook) || canRenderPdf ? (
@@ -1520,7 +1631,7 @@ export default function ReaderScreen({ route, navigation }: any) {
           accessibilityRole="button"
           accessibilityLabel="Listen from here"
         >
-          <Icon name="headphones" size={24} color={colors.onSurface} />
+          <Icon name="headphones" size={24} color={chromeFg} />
         </Pressable>
       ) : null}
       {isFoliateFormat && canRenderEbook ? (
@@ -1539,7 +1650,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             {/* Distinct voice/mic glyph so read-aloud (TTS) doesn't read as the
                 same "play audio" affordance as the headphones "Listen from
                 here" control next to it (#7). */}
-            <Icon name={ttsPlaying ? "pause" : "podcast"} size={24} color={ttsPlaying ? colors.primary : colors.onSurface} />
+            <Icon name={ttsPlaying ? "pause" : "podcast"} size={24} color={ttsPlaying ? accent : chromeFg} />
           </Pressable>
           <Pressable
             onPress={() => setShowToc(true)}
@@ -1548,7 +1659,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             accessibilityRole="button"
             accessibilityLabel="Table of contents"
           >
-            <Icon name="list" size={24} color={colors.onSurface} />
+            <Icon name="list" size={24} color={chromeFg} />
           </Pressable>
           <Pressable
             onPress={() => setShowSettings(true)}
@@ -1557,7 +1668,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             accessibilityRole="button"
             accessibilityLabel="Reading settings"
           >
-            <Icon name="settings" size={24} color={colors.onSurface} />
+            <Icon name="settings" size={24} color={chromeFg} />
           </Pressable>
         </View>
       ) : null}
@@ -1769,7 +1880,7 @@ export default function ReaderScreen({ route, navigation }: any) {
           ref={webRef}
           originWhitelist={["*"]}
           source={{ uri: ebookFileUri as string }}
-          style={{ flex: 1, backgroundColor: colors.surface }}
+          style={{ flex: 1, backgroundColor: chromeBg }}
           onMessage={onWebMessage}
           javaScriptEnabled
           domStorageEnabled
@@ -1808,7 +1919,7 @@ export default function ReaderScreen({ route, navigation }: any) {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: chromeBg }} edges={["top", "left", "right"]}>
       {Header}
       <View style={{ flex: 1 }}>{body}</View>
 
@@ -1863,9 +1974,9 @@ export default function ReaderScreen({ route, navigation }: any) {
             alignItems: "center",
             paddingVertical: 6,
             paddingHorizontal: 12,
-            backgroundColor: colors.surface,
+            backgroundColor: chromeBg,
             borderTopWidth: 1,
-            borderTopColor: colors.outlineVariant,
+            borderTopColor: chromeBorder,
           }}
         >
           {/* Page turning is otherwise gesture-only inside the WebView (tap
@@ -1878,15 +1989,15 @@ export default function ReaderScreen({ route, navigation }: any) {
             hitSlop={8}
             style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
           >
-            <Icon name="chevron-left" size={22} color={colors.onSurfaceVariant} />
+            <Icon name="chevron-left" size={22} color={chromeFgDim} />
           </Pressable>
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
             {pageProgress.tocItem?.label ? (
-              <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
+              <Text numberOfLines={1} style={{ color: chromeFgDim, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
                 {pageProgress.tocItem.label}
               </Text>
             ) : null}
-            <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
+            <Text style={{ color: chromeFgDim, fontSize: 12 }}>
               {/* Percent clamped to 1–99 while mid-book: never "0%" right after
                   starting, and "100%" only at the finished threshold (>=0.99,
                   matching the isFinished sync cutoff). */}
@@ -1899,8 +2010,8 @@ export default function ReaderScreen({ route, navigation }: any) {
             {/* Time-left estimate from the rolling reading-speed sample —
                 hidden until an estimate is available. */}
             {readingEstimate != null && readingEstimate > 0 && pageProgress.fraction < 0.99 ? (
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 11, marginTop: 1 }}>
-                ~{readingEstimate} min left in book
+              <Text style={{ color: chromeFgDim, fontSize: 11, marginTop: 1 }}>
+                ~{readingEstimate} min left in {readerEstimateScope === "book" ? "book" : "chapter"}
               </Text>
             ) : null}
           </View>
@@ -1911,13 +2022,13 @@ export default function ReaderScreen({ route, navigation }: any) {
             hitSlop={8}
             style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
           >
-            <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+            <Icon name="chevron-right" size={22} color={chromeFgDim} />
           </Pressable>
         </View>
       )}
 
       {/* Spacer to clear bottom miniplayer or safe navigation bar */}
-      <View style={{ height: bottomReserve, backgroundColor: colors.surface }} />
+      <View style={{ height: bottomReserve, backgroundColor: chromeBg }} />
 
       {/* Table of Contents Slide-up Modal */}
       <BottomSheet visible={showToc} onClose={() => setShowToc(false)} showHandle={false}>
@@ -1963,9 +2074,10 @@ export default function ReaderScreen({ route, navigation }: any) {
 
       {/* Text Settings Slide-up Modal */}
       <BottomSheet visible={showSettings} onClose={() => setShowSettings(false)} showHandle={false}>
-        <View style={{ padding: 20, paddingBottom: 20 }}>
-            {/* Modal Header */}
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+        {/* Fixed header — the sections below scroll so nothing (Margins, Layout,
+            Time Left) is clipped off the bottom on shorter screens (#4). */}
+        <View style={{ paddingTop: 20, paddingHorizontal: 20 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
               <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Reading Settings</Text>
               <Pressable
                 onPress={() => setShowSettings(false)}
@@ -1977,7 +2089,13 @@ export default function ReaderScreen({ route, navigation }: any) {
                 <Icon name="close" size={24} color={colors.onSurface} />
               </Pressable>
             </View>
-
+        </View>
+        <ScrollView
+          testID="reader-settings-scroll"
+          style={{ maxHeight: windowHeight * 0.75 }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 32 }}
+          showsVerticalScrollIndicator
+        >
             {/* Tools — Search + Highlights live here (rather than crowding the
                 header) so the reader chrome stays uncluttered (#6). Each opens
                 its own sheet and closes this one. */}
@@ -2223,7 +2341,34 @@ export default function ReaderScreen({ route, navigation }: any) {
                 ))}
               </View>
             </View>
-        </View>
+
+            {/* Time Left — chapter vs whole-book estimate scope (#1). Only
+                changes the footer text, so it applies live with no reload. */}
+            <View style={{ marginTop: 12, marginBottom: 12 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Time Left</Text>
+              <View style={{ flexDirection: "row", columnGap: 12 }}>
+                {[
+                  { label: "Chapter", val: "chapter" as const },
+                  { label: "Book", val: "book" as const },
+                ].map((item) => (
+                  <Pressable
+                    key={item.label}
+                    onPress={() => setReaderEstimateScope(item.val)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Time left in ${item.label.toLowerCase()}`}
+                    accessibilityState={{ selected: readerEstimateScope === item.val }}
+                    style={{
+                      flex: 1, height: 48, borderRadius: 12,
+                      backgroundColor: readerEstimateScope === item.val ? colors.primary : colors.secondaryContainer,
+                      alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ color: readerEstimateScope === item.val ? colors.onPrimary : colors.onSecondaryContainer, fontSize: 15, fontWeight: "600" }}>{item.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+        </ScrollView>
       </BottomSheet>
 
       {/* In-book Search */}
