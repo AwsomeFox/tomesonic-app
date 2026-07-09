@@ -292,7 +292,15 @@ export default function YearInReviewScreen({ navigation, route }: any) {
                 {coverIds.map((id) => {
                   const url = coverUrl(id, serverAddress, token);
                   return (
-                    <View key={id} style={{ width: '25%', padding: 4 }}>
+                    <View
+                      key={id}
+                      style={{ width: '25%', padding: 4 }}
+                      // Decorative collage — the "Books You Finished" header
+                      // already conveys the group, so these 12 identical tiles
+                      // are hidden from TalkBack rather than read as 12 stops.
+                      accessibilityElementsHidden
+                      importantForAccessibility="no-hide-descendants"
+                    >
                       <View
                         style={{
                           aspectRatio: 1,
@@ -306,7 +314,6 @@ export default function YearInReviewScreen({ navigation, route }: any) {
                             source={coverSource(url)}
                             style={{ width: '100%', height: '100%' }}
                             contentFit="cover"
-                            accessibilityLabel="Book cover"
                           />
                         ) : null}
                       </View>

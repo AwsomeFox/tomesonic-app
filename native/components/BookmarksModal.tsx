@@ -12,6 +12,7 @@ import {
   pendingBookmarkDeletionsFor,
   queueBookmarkRename,
   pendingBookmarkRenamesFor,
+  removePendingBookmarkRename,
 } from "../utils/progressSync";
 import BottomSheet from "./BottomSheet";
 import Pressable from "./HintPressable";
@@ -182,8 +183,11 @@ export default function BookmarksModal({ visible, onClose, libraryItemId, curren
     setBookmarks((prev) => prev.filter((b) => b.time !== bm.time));
     if (!libraryItemId) return;
     // If it was queued offline, unqueue it too (there's no server row yet —
-    // without this the flush would resurrect a deleted bookmark).
+    // without this the flush would resurrect a deleted bookmark). Also drop any
+    // queued RENAME for this bookmark — otherwise a rename for the now-deleted
+    // bookmark lingers (and on an upsert-style server could resurrect it).
     removePendingBookmark(libraryItemId, bm.time);
+    removePendingBookmarkRename(libraryItemId, bm.time);
     try {
       await api.delete(`/api/me/item/${libraryItemId}/bookmark/${bm.time}`);
     } catch (e) {

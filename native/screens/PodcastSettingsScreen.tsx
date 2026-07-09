@@ -511,10 +511,11 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
 
           {sectionLabel("Auto-download")}
 
-          {/* Auto-download toggle */}
-          <Pressable
-            onPress={() => isAdmin && setAutoDownload((v) => !v)}
-            disabled={!isAdmin}
+          {/* Auto-download toggle. The row is a plain View (not a Pressable): the
+              switch below is the SOLE accessible/actionable control, so TalkBack
+              doesn't land on a roleless duplicate actionable node wrapping the
+              switch. */}
+          <View
             style={{
               flexDirection: "row",
               alignItems: "center",
@@ -537,7 +538,7 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
               label="Auto-download episodes"
               colors={colors}
             />
-          </Pressable>
+          </View>
 
           {/* Schedule presets */}
           <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", paddingHorizontal: 16, marginTop: 6 }}>
@@ -559,6 +560,9 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
                   accessibilityState={{ selected: active, disabled: !isAdmin }}
                   accessibilityLabel={`Schedule: ${preset.label}`}
                   android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+                  // Chip is 34dp tall; extend the vertical touch target toward the
+                  // ~44dp minimum without changing the visual pill height.
+                  hitSlop={{ top: 6, bottom: 6 }}
                   style={{
                     paddingHorizontal: 14,
                     height: 34,

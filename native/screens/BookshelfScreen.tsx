@@ -22,6 +22,7 @@ import { useUiStore } from "../store/useUiStore";
 import SearchContent from "../components/SearchContent";
 import { ShelfSkeleton } from "../components/Skeleton";
 import { useDownloadStore } from "../store/useDownloadStore";
+import { useFavoritesStore } from "../store/useFavoritesStore";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { flushPendingSyncs } from "../utils/progressSync";
 import { hasEbook, isEbookOnly } from "../utils/bookMatch";
@@ -92,6 +93,12 @@ export default function BookshelfScreen({ navigation }: any) {
   const [continueReadingItems, setContinueReadingItems] = useState<any[]>(() =>
     readContinueReadingCache(useLibraryStore.getState().currentLibraryId)
   );
+  // "Want to Read": the device-local favorites list (store/useFavoritesStore),
+  // written from ItemDetail, surfaced here as a normal book shelf. Subscribing to
+  // the `favorites` array makes the shelf refresh the moment an item is
+  // (un)favorited elsewhere. The fetched, library-scoped items live in state.
+  const favoriteIds = useFavoritesStore((s) => s.favorites);
+  const [wantToReadItems, setWantToReadItems] = useState<any[]>([]);
   // "Because you listened": a client-side genre-affinity shelf. Derived from the
   // genres of the books the user has finished/started (tallied over the loaded
   // shelves + Continue Reading), then a single items query for the top genre,
@@ -204,6 +211,53 @@ export default function BookshelfScreen({ navigation }: any) {
     }
   };
 
+  // Load the "Want to Read" shelf from the favorites list. Mirrors Continue
+  // Reading: ONE batch item fetch for the favorite ids (per-item fallback for
+  // older servers), scoped to the current library. Purely additive and
+  // resilient — any failure just leaves the shelf empty, never breaking Home.
+  const loadWantToRead = async () => {
+    const libId = currentLibraryId;
+    if (!libId) return;
+    // Favorites need the server (batch fetch) — skip entirely while offline.
+    if (isOffline) return;
+    const favIds = useFavoritesStore.getState().list();
+    const libStillCurrent = () => useLibraryStore.getState().currentLibraryId === libId;
+
+    if (favIds.length === 0) {
+      if (libStillCurrent()) setWantToReadItems([]);
+      return;
+    }
+
+    try {
+      // Fetch all favorites in ONE batch request (same pattern as Continue
+      // Reading), falling back to per-item fetches on servers without batch/get.
+      let fetchedItems: any[] = [];
+      try {
+        const res = await api.post(`/api/items/batch/get`, { libraryItemIds: favIds });
+        fetchedItems = res.data?.libraryItems || [];
+      } catch (err) {
+        console.warn("[Bookshelf] batch item fetch failed (want-to-read), falling back", err);
+        const itemRequests = favIds.map(async (id) => {
+          try {
+            const r = await api.get(`/api/items/${id}`);
+            return r.data;
+          } catch {
+            return null;
+          }
+        });
+        fetchedItems = (await Promise.all(itemRequests)).filter(Boolean);
+      }
+
+      // Scope to the CURRENT library — the shelf lives under this library's
+      // header, and favorites can span libraries. Favorites are books the user
+      // wants to read (audio or ebook), so no media-type filter is applied.
+      const filtered = fetchedItems.filter((item: any) => item && item.libraryId === libId);
+      if (libStillCurrent()) setWantToReadItems(filtered);
+    } catch (e) {
+      console.warn("[Bookshelf] failed to load want-to-read items", e);
+    }
+  };
+
   // "Started/finished" test used both for building affinity (which genres the
   // user engages with) and for excluding books they've already touched from the
   // recommendation.
@@ -295,6 +349,7 @@ export default function BookshelfScreen({ navigation }: any) {
       await loadLibraries(true).catch(() => {});
       await Promise.all([loadPersonalizedShelves(true), loadMediaProgress()]);
       await loadContinueReading();
+      loadWantToRead();
       loadAffinity();
     } finally {
       setRefreshing(false);
@@ -324,6 +379,9 @@ export default function BookshelfScreen({ navigation }: any) {
       // The affinity shelf is a per-library recommendation — never carry the
       // old library's genre picks under the new library's header.
       setAffinityShelf(null);
+      // Want to Read is scoped to the current library — clear the old library's
+      // items so they don't flash under the new header before the refetch lands.
+      setWantToReadItems([]);
     }
   }, [currentLibraryId]);
 
@@ -356,6 +414,14 @@ export default function BookshelfScreen({ navigation }: any) {
     };
     initData();
   }, [currentLibraryId]);
+
+  // (Re)load the Want to Read shelf whenever the favorites list, the current
+  // library, or connectivity changes. This alone keeps the shelf in sync with
+  // (un)favoriting done from ItemDetail — the store subscription re-renders and
+  // this effect re-fetches — so it doesn't need to piggyback on initData/focus.
+  useEffect(() => {
+    loadWantToRead();
+  }, [favoriteIds, currentLibraryId, isOffline]);
 
   // Refresh progress (and the Continue Reading shelf derived from it) when
   // returning to the tab — skipping the initial-mount focus event, which
@@ -600,6 +666,28 @@ export default function BookshelfScreen({ navigation }: any) {
         type: "book",
         entities: continueReadingItems,
       });
+    }
+    // "Want to Read": the device-local favorites, surfaced near the top of the
+    // personalized content (just after the Continue* shelves). Additive and
+    // library-scoped; hidden while offline/empty. Respects "hide non-audiobooks"
+    // by dropping ebook-only favorites (an all-ebook list then simply vanishes).
+    if (!isOffline && wantToReadItems.length > 0) {
+      const wantEntities = filterEbooks(wantToReadItems);
+      if (wantEntities.length > 0) {
+        // Slot it right after the last Continue* shelf so the primary resume
+        // actions stay first; falls to the top if there are none.
+        let insertAt = 0;
+        for (let i = 0; i < displayShelves.length; i++) {
+          const sid = displayShelves[i]?.id;
+          if (typeof sid === "string" && sid.startsWith("continue-")) insertAt = i + 1;
+        }
+        displayShelves.splice(insertAt, 0, {
+          id: "want-to-read",
+          label: "Want to Read",
+          type: "book",
+          entities: wantEntities,
+        });
+      }
     }
     // "Because you listened" is purely additive — appended last so it never
     // displaces an existing shelf. Only shown once it has recommendations.
@@ -967,50 +1055,6 @@ export default function BookshelfScreen({ navigation }: any) {
               <Icon name="chevron-right" size={24} color={colors.onSecondaryContainer} />
             </Pressable>
           ) : null}
-          {/* Browse genres/tags entry point — opens the searchable genre list
-              (the only navigation to it). Kept lightweight (a bordered row, not
-              a filled card) so it reads as a secondary browse affordance next
-              to the personalized shelves below. */}
-          <Pressable
-            onPress={() => navigation.navigate("GenreBrowse")}
-            android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
-            accessibilityRole="button"
-            accessibilityLabel="Browse genres"
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              marginHorizontal: 16,
-              marginBottom: 8,
-              paddingHorizontal: 16,
-              paddingVertical: 12,
-              borderRadius: 20,
-              borderWidth: 1,
-              borderColor: colors.outlineVariant,
-            }}
-          >
-            <View
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                backgroundColor: colors.surfaceContainerHighest,
-                alignItems: "center",
-                justifyContent: "center",
-                marginRight: 14,
-              }}
-            >
-              <Icon name="explore" size={20} color={colors.onSurface} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>
-                Browse genres
-              </Text>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 1 }}>
-                Explore this library by genre and tag
-              </Text>
-            </View>
-            <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
-          </Pressable>
           {/* Loaded but nothing to shelve (fresh/empty library): a real empty
               state instead of a blank scroll area. RefreshControl stays live
               (flexGrow centers this within the scrollable viewport). */}
@@ -1124,6 +1168,52 @@ export default function BookshelfScreen({ navigation }: any) {
               </Animated.View>
             );
           })}
+          {/* Browse genres/tags entry point — opens the searchable genre list
+              (the only navigation to it). Rendered AFTER the personalized
+              shelves so the primary resume actions (Continue Listening/Reading)
+              are never pushed below the fold; a lightweight bordered row so it
+              reads as a secondary browse affordance at the end of the scroll. */}
+          <Pressable
+            onPress={() => navigation.navigate("GenreBrowse")}
+            android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
+            accessibilityRole="button"
+            accessibilityLabel="Browse genres"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginHorizontal: 16,
+              marginTop: 8,
+              marginBottom: 8,
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: colors.outlineVariant,
+            }}
+          >
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: colors.surfaceContainerHighest,
+                alignItems: "center",
+                justifyContent: "center",
+                marginRight: 14,
+              }}
+            >
+              <Icon name="explore" size={20} color={colors.onSurface} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "700" }}>
+                Browse genres
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 1 }}>
+                Explore this library by genre and tag
+              </Text>
+            </View>
+            <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+          </Pressable>
         </Animated.ScrollView>
       )}
     </SafeAreaView>

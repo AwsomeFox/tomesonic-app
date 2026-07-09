@@ -851,6 +851,8 @@ describe("ReaderScreen (reader features)", () => {
     await renderReader();
     const webProps = await readyWebView();
 
+    // Search moved out of the crowded header into the reading-settings sheet.
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
     await fireEvent.press(screen.getByLabelText("Search in book"));
     await act(async () => {
       fireEvent.changeText(screen.getByLabelText("Search query"), "dragons");
@@ -887,6 +889,7 @@ describe("ReaderScreen (reader features)", () => {
       sendMsg(webProps, { type: "ready", search: false });
     });
 
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
     await fireEvent.press(screen.getByLabelText("Search in book"));
     expect(screen.getByText("Search isn't available for this book.")).toBeTruthy();
     expect(screen.queryByLabelText("Search query")).toBeNull();
@@ -902,7 +905,8 @@ describe("ReaderScreen (reader features)", () => {
     });
 
     expect(screen.getByText('"petrichor"')).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText("Look up"));
+    // Relabeled to be honest: this opens a Google web search, not a dictionary.
+    await fireEvent.press(screen.getByLabelText("Search the web"));
     await waitFor(() =>
       expect(openSpy).toHaveBeenCalledWith(expect.stringContaining("define%20petrichor"))
     );
@@ -929,7 +933,9 @@ describe("ReaderScreen (reader features)", () => {
       expect.stringContaining("window.addHighlight")
     );
 
-    // Appears in the highlights sheet; deleting removes it + un-draws it.
+    // Appears in the highlights sheet (opened from the settings sheet now, not
+    // the header); deleting removes it + un-draws it.
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
     await fireEvent.press(screen.getByLabelText("Highlights"));
     expect(screen.getByText("the quick brown fox")).toBeTruthy();
     (global as any).__injectJS.mockClear();
@@ -989,5 +995,130 @@ describe("ReaderScreen (reader features)", () => {
       sendMsg(webProps, { type: "ttsText", text: "Once upon a time" });
     });
     expect(Speech.speak).toHaveBeenCalledWith("Once upon a time", expect.any(Object));
+  });
+
+  it("chunks a long page under Android's ~4000-char TTS limit and advances only after the last chunk", async () => {
+    const Speech = require("expo-speech");
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Read aloud"));
+    // ~10.8k chars — well over Android's 4000-char speak() ceiling.
+    const longText = "sentence ".repeat(1200).trim();
+    (Speech.speak as jest.Mock).mockClear();
+    (global as any).__injectJS.mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: longText, pos: 0.1 });
+    });
+
+    // The first utterance stays under the limit.
+    const firstArg = (Speech.speak as jest.Mock).mock.calls[0][0] as string;
+    expect(firstArg.length).toBeLessThanOrEqual(3500);
+    expect(firstArg.length).toBeGreaterThan(0);
+
+    // Walk the chunk chain: each onDone speaks the next chunk; the page only
+    // turns (window.goNext) after the final chunk.
+    let guard = 0;
+    while (guard++ < 25) {
+      const calls = (Speech.speak as jest.Mock).mock.calls;
+      const last = calls[calls.length - 1][1];
+      await act(async () => {
+        last.onDone();
+      });
+      const advanced = (global as any).__injectJS.mock.calls.some((c: any[]) =>
+        String(c[0]).includes("window.goNext")
+      );
+      if (advanced) break;
+    }
+    expect((global as any).__injectJS).toHaveBeenCalledWith(expect.stringContaining("window.goNext"));
+    // A >3500-char page needed more than one utterance.
+    expect((Speech.speak as jest.Mock).mock.calls.length).toBeGreaterThan(1);
+    // Every utterance respected the limit.
+    for (const c of (Speech.speak as jest.Mock).mock.calls) {
+      expect((c[0] as string).length).toBeLessThanOrEqual(3500);
+    }
+  });
+
+  it("stops read-aloud at the end of the book instead of looping the same text", async () => {
+    const Speech = require("expo-speech");
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Read aloud"));
+    expect(screen.getByLabelText("Stop read-aloud")).toBeTruthy();
+
+    (Speech.speak as jest.Mock).mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "the last page", pos: 0.99 });
+    });
+    expect(Speech.speak).toHaveBeenCalledTimes(1);
+
+    // Finishing the page asks the WebView to turn + re-read.
+    (global as any).__injectJS.mockClear();
+    await act(async () => {
+      (Speech.speak as jest.Mock).mock.calls[0][1].onDone();
+    });
+    expect((global as any).__injectJS).toHaveBeenCalledWith(expect.stringContaining("window.goNext"));
+
+    // goNext() was a no-op (end of book): the SAME text at the SAME position
+    // comes back. It must NOT be spoken again — read-aloud ends cleanly.
+    (Speech.speak as jest.Mock).mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "the last page", pos: 0.99 });
+    });
+    expect(Speech.speak).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Read aloud")).toBeTruthy();
+  });
+
+  it("skips a blank/image section while reading, then stops when it can't advance further", async () => {
+    const Speech = require("expo-speech");
+    await renderReader();
+    const webProps = await readyWebView();
+    await fireEvent.press(screen.getByLabelText("Read aloud"));
+
+    // Empty page while playing -> advance a page and retry (do not stop).
+    (global as any).__injectJS.mockClear();
+    (Speech.speak as jest.Mock).mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "", pos: 0.5 });
+    });
+    expect(Speech.speak).not.toHaveBeenCalled();
+    expect((global as any).__injectJS).toHaveBeenCalledWith(expect.stringContaining("window.goNext"));
+    expect(screen.getByLabelText("Stop read-aloud")).toBeTruthy(); // still active
+
+    // Another empty page at the SAME position (can't advance = end) -> stop.
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "", pos: 0.5 });
+    });
+    expect(screen.getByLabelText("Read aloud")).toBeTruthy();
+  });
+
+  it("does not speak when read-aloud was stopped before the async text arrived (race)", async () => {
+    const Speech = require("expo-speech");
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Read aloud")); // start intent
+    await fireEvent.press(screen.getByLabelText("Stop read-aloud")); // immediate stop
+
+    (Speech.speak as jest.Mock).mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "should not speak", pos: 0.1 });
+    });
+    expect(Speech.speak).not.toHaveBeenCalled();
+  });
+
+  it("gates the page-curl on the OS reduced-motion preference so a settings-sync can't re-enable it", async () => {
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+
+    // A persisted matchMedia handle is AND-ed into BOTH the initial value and
+    // the live setPageCurl hook, so the OS preference always wins (#5).
+    expect(html).toContain("reduceMotionMql");
+    expect(html).toContain("var curlEnabled = true && !reduceMotionOn()");
+    expect(html).toContain("curlEnabled = !!v && !reduceMotionOn()");
+    // getReaderText reports the reading position so end-of-book is detectable.
+    expect(html).toContain("pos: lastFraction");
   });
 });

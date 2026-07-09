@@ -13,6 +13,7 @@ import {
   pendingBookmarkDeletionsFor,
   queueBookmarkRename,
   pendingBookmarkRenamesFor,
+  removePendingBookmarkRename,
   recordLocalListening,
   hasAnyPendingSyncs,
   syncBothProgressFraction,
@@ -955,6 +956,35 @@ describe("bookmark rename queue", () => {
     await flushPendingSyncs();
     expect(mockedPatch).not.toHaveBeenCalled();
     expect(bookmarkRenameKeys()).toHaveLength(0);
+  });
+
+  it("removePendingBookmarkRename drops the queued rename for a deleted bookmark", () => {
+    queueBookmarkRename("li1", 42.7, "renamed");
+    queueBookmarkRename("li1", 99, "other");
+    removePendingBookmarkRename("li1", 42.7); // keyed by floored time, like queue
+    expect(pendingBookmarkRenamesFor("li1")).toEqual([
+      { libraryItemId: "li1", time: 99, title: "other" },
+    ]);
+  });
+
+  it("ages a rename out after repeated non-404 server failures (permanent 5xx)", async () => {
+    const err500 = () => ({ response: { status: 500 } });
+    queueBookmarkRename("li1", 42, "renamed");
+    mockedPatch.mockRejectedValue(err500());
+    // A real server error increments attempts; the entry survives the first few
+    // flushes but is dropped once it hits the attempt cap (8).
+    for (let i = 0; i < 7; i++) await flushPendingSyncs();
+    expect(bookmarkRenameKeys()).toHaveLength(1);
+    await flushPendingSyncs(); // 8th attempt → dropped
+    expect(bookmarkRenameKeys()).toHaveLength(0);
+  });
+
+  it("a network error does NOT count toward the rename attempt cap", async () => {
+    queueBookmarkRename("li1", 42, "renamed");
+    mockedPatch.mockRejectedValue(errNetwork());
+    for (let i = 0; i < 20; i++) await flushPendingSyncs();
+    // Offline retries never age it out — it waits for connectivity.
+    expect(pendingBookmarkRenamesFor("li1")).toEqual([{ libraryItemId: "li1", time: 42, title: "renamed" }]);
   });
 
   it("flushes a create BEFORE its rename so the PATCH's time-match finds a server bookmark", async () => {

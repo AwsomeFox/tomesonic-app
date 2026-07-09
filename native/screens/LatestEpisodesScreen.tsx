@@ -509,33 +509,10 @@ export default function LatestEpisodesScreen({ navigation }: any) {
           )}
         </Pressable>
 
-        {/* Open this episode's podcast's server-managed settings (auto-download
-            schedule / limits / check-feed). Additive per-row affordance — the
-            list itself spans many podcasts, so the entry point is per-podcast. */}
-        <Pressable
-          onPress={() => {
-            if (episode.libraryItemId) {
-              navigation.navigate("PodcastSettings", {
-                libraryItemId: episode.libraryItemId,
-                podcastTitle: podcastName || undefined,
-              });
-            }
-          }}
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            backgroundColor: colors.secondaryContainer,
-            alignItems: "center",
-            justifyContent: "center",
-            marginLeft: 8,
-          }}
-          hitSlop={6}
-          accessibilityRole="button"
-          accessibilityLabel={`Podcast settings for ${podcastName || episode.title || "podcast"}`}
-        >
-          <Icon name="settings" size={18} color={colors.onSecondaryContainer} />
-        </Pressable>
+        {/* Per-podcast settings (auto-download schedule / limits / check-feed) are
+            NOT surfaced here: this list spans many podcasts and repeats the same
+            podcast across its episodes, so a per-row gear was redundant. The
+            single entry point lives on the podcast's ItemDetail screen. */}
 
         {/* Mark this episode finished/unfinished (episode-scoped progress). */}
         <Pressable

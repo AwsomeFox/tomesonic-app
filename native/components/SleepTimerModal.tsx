@@ -290,7 +290,7 @@ export default function SleepTimerModal({
     <BottomSheet visible={visible} onClose={onClose}>
             <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="moon" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-              <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Sleep Timer</Text>
+              <Text accessibilityRole="header" style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Sleep Timer</Text>
             </View>
             {renderBody()}
     </BottomSheet>

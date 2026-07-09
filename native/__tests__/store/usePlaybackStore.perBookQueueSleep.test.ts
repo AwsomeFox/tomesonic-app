@@ -18,6 +18,25 @@ jest.mock("../../utils/autoCreds", () => ({
   writeWidgetState: jest.fn().mockResolvedValue(undefined),
 }));
 
+// Capture the accelerometer listener so the shake-to-extend test can drive
+// samples through it. expo-sensors is a real dependency but native-only, so the
+// store's runtime require("expo-sensors") resolves to this factory mock. The
+// holder is `mock`-prefixed as babel-plugin-jest-hoist requires.
+const mockAccel: {
+  listener: ((d: { x: number; y: number; z: number }) => void) | null;
+  remove: jest.Mock;
+} = { listener: null, remove: jest.fn() };
+jest.mock("expo-sensors", () => ({
+  Accelerometer: {
+    setUpdateInterval: jest.fn(),
+    addListener: (cb: (d: { x: number; y: number; z: number }) => void) => {
+      mockAccel.listener = cb;
+      return { remove: mockAccel.remove };
+    },
+  },
+}));
+
+import { AppState } from "react-native";
 import TrackPlayer from "react-native-track-player";
 import { api } from "../../utils/api";
 import { storage, storageHelper } from "../../utils/storage";
@@ -102,6 +121,25 @@ describe("usePlaybackStore per-book rate / queue / sleep rewind", () => {
       expect(JSON.parse(storage.getString("perBookRate")!)).toEqual({ item1: 1.75 });
     });
 
+    it("caps the per-book rate map (LRU) so it can't grow unbounded", async () => {
+      // Pre-seed 200 entries (the cap); the 201st write must evict the oldest.
+      const seed: Record<string, number> = {};
+      for (let i = 0; i < 200; i++) seed[`old${i}`] = 1.0;
+      storage.set("perBookRate", JSON.stringify(seed));
+
+      usePlaybackStore.setState({
+        isInitialized: true,
+        currentSession: { id: "s", libraryItemId: "newBook" },
+      } as any);
+      await usePlaybackStore.getState().setPlaybackSpeed(1.5);
+
+      const map = JSON.parse(storage.getString("perBookRate")!);
+      expect(Object.keys(map)).toHaveLength(200);
+      expect(map.newBook).toBe(1.5); // newest kept
+      expect(map.old0).toBeUndefined(); // oldest evicted
+      expect(map.old199).toBe(1.0); // recent entry retained
+    });
+
     it("toggle OFF falls back to the global rate and stops writing per-book", async () => {
       // Feature off + a stale per-book entry that must be ignored.
       usePlaybackStore.getState().setRememberSpeedPerBook(false);
@@ -167,6 +205,22 @@ describe("usePlaybackStore per-book rate / queue / sleep rewind", () => {
       expect(startPlayback).toHaveBeenCalledWith("queued1", undefined);
       // Series resolution must not run when the queue supplied a next book.
       expect(api.get).not.toHaveBeenCalled();
+    });
+
+    it("does NOT pull from the queue when the user already switched books", async () => {
+      // The finish callback fires fire-and-forget; if the user manually started
+      // a DIFFERENT book in the meantime, the queue must not yank them off it.
+      const startPlayback = jest.fn().mockResolvedValue(true);
+      usePlaybackStore.setState({
+        startPlayback,
+        currentSession: { libraryItemId: "otherBook" },
+      } as any);
+      usePlaybackStore.getState().addToQueue({ libraryItemId: "queued1", title: "Queued" });
+
+      await autoAdvanceAfterFinish("item1", null);
+      expect(startPlayback).not.toHaveBeenCalled();
+      // The queue is left intact for a later, legitimate advance.
+      expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["queued1"]);
     });
   });
 
@@ -286,6 +340,70 @@ describe("usePlaybackStore per-book rate / queue / sleep rewind", () => {
       await usePlaybackStore.getState().play();
       // Timer fired just now, so the generic auto-rewind is 0s → no seek at all.
       expect(usePlaybackStore.getState().seek).not.toHaveBeenCalled();
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Shake-to-extend (G3): the accelerometer listener adds SLEEP_SHAKE_MINUTES
+  // to an armed timer, debounced so one shake can't fire twice.
+  // --------------------------------------------------------------------------
+  describe("shake to extend", () => {
+    const SLEEP_SHAKE_SECONDS = 5 * 60; // SLEEP_SHAKE_MINUTES * 60
+
+    beforeEach(() => {
+      mockAccel.listener = null;
+      mockAccel.remove.mockClear();
+      // armShakeListener only registers the sensor while the app is foreground.
+      (AppState as any).currentState = "active";
+      jest.spyOn(AppState, "addEventListener").mockReturnValue({ remove: jest.fn() } as any);
+      // Deterministic clock far past any prior test's shake timestamp, so the
+      // first shake below is never swallowed by the 1.5s debounce.
+      jest.setSystemTime(new Date("2035-01-01T00:00:00Z"));
+    });
+
+    function armTimer(seconds: number) {
+      usePlaybackStore.setState({
+        isInitialized: true,
+        currentSession: { id: "s", libraryItemId: "item1" },
+        isPlaying: true,
+        duration: 3000,
+        position: 0,
+        chapters: [],
+        currentChapterIndex: -1,
+        chapterQueue: false,
+      } as any);
+      usePlaybackStore.getState().setSleepTimer(seconds);
+    }
+
+    it("a shake above threshold extends the timer, and a second within 1.5s is debounced", () => {
+      armTimer(600);
+      // setSleepTimer arms the accelerometer listener (foreground + default ON).
+      expect(mockAccel.listener).toBeTruthy();
+      expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(600);
+
+      // Total acceleration 2g (> SHAKE_G_THRESHOLD 1.8) → +5 min.
+      mockAccel.listener!({ x: 2, y: 0, z: 0 });
+      expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(600 + SLEEP_SHAKE_SECONDS);
+
+      // A second shake at the same instant is inside the 1.5s debounce window
+      // (extending re-armed the listener; it shares the module-level debounce
+      // stamp) — no further extension.
+      mockAccel.listener!({ x: 2, y: 0, z: 0 });
+      expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(600 + SLEEP_SHAKE_SECONDS);
+    });
+
+    it("ignores a sub-threshold jostle (resting ~1g)", () => {
+      armTimer(600);
+      // Magnitude 1.0 < 1.8 threshold → no extension.
+      mockAccel.listener!({ x: 1, y: 0, z: 0 });
+      expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(600);
+    });
+
+    it("does not register the accelerometer when shake-to-extend is OFF", () => {
+      usePlaybackStore.getState().setSleepShakeToExtend(false);
+      mockAccel.listener = null;
+      armTimer(600);
+      expect(mockAccel.listener).toBeNull();
     });
   });
 });

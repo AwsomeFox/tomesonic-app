@@ -36,4 +36,11 @@ describe("PlaybackSpeedModal", () => {
     );
     expect(screen.queryByLabelText("Remember speed per book")).toBeNull();
   });
+
+  it("marks the title as a header for screen readers", async () => {
+    await render(
+      <PlaybackSpeedModal visible onClose={() => {}} speed={1.0} onChange={() => {}} />
+    );
+    expect(screen.getByText("Playback Speed").props.accessibilityRole).toBe("header");
+  });
 });

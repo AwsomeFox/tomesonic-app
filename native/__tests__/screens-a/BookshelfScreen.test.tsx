@@ -111,6 +111,7 @@ import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
+import { useFavoritesStore } from "../../store/useFavoritesStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUiStore } from "../../store/useUiStore";
 import { storage } from "../../utils/storage";
@@ -206,6 +207,7 @@ beforeEach(() => {
   useDownloadStore.setState(initialDownloads, true);
   usePlaybackStore.setState(initialPlayback, true);
   useUiStore.setState(initialUi, true);
+  useFavoritesStore.setState({ favorites: [] } as any);
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
   mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true, isOffline: false });
   // Series-list revalidation fetch (parallel effect) — empty by default.
@@ -664,5 +666,78 @@ describe("BookshelfScreen online", () => {
     expect(screen.queryByText("Because you listened")).toBeNull();
     // Never issues a genre-affinity query when there's nothing to base it on.
     expect(mockedGet).not.toHaveBeenCalledWith(expect.stringContaining("filter=genres."));
+  });
+
+  it("surfaces a Want to Read shelf from the favorites store (batch fetch, library-scoped)", async () => {
+    const favBook = {
+      id: "fav1",
+      mediaType: "book",
+      libraryId: "lib1",
+      media: { metadata: { title: "Wishlist Book", authorName: "F Author" } },
+    };
+    // A favorite from ANOTHER library must be scoped out of this shelf.
+    const otherLibFav = {
+      id: "fav2",
+      mediaType: "book",
+      libraryId: "lib2",
+      media: { metadata: { title: "Other Library Fav", authorName: "G Author" } },
+    };
+    seedOnline(baseShelves);
+    useFavoritesStore.setState({ favorites: ["fav1", "fav2"] } as any);
+    mockedPost.mockImplementation((url: string, body: any) => {
+      if (url === "/api/items/batch/get" && body?.libraryItemIds?.includes("fav1")) {
+        return Promise.resolve({ data: { libraryItems: [favBook, otherLibFav] } });
+      }
+      return Promise.resolve({ data: { libraryItems: [] } });
+    });
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Want to Read");
+    expect(screen.getAllByText("Wishlist Book").length).toBeGreaterThanOrEqual(1);
+    // The other-library favorite is filtered out of this library's shelf.
+    expect(screen.queryByText("Other Library Fav")).toBeNull();
+    expect(mockedPost).toHaveBeenCalledWith("/api/items/batch/get", {
+      libraryItemIds: ["fav1", "fav2"],
+    });
+
+    // Tapping the favorite opens ItemDetail, like any other book card.
+    await fireEvent.press(screen.getByLabelText("Wishlist Book by F Author"));
+    expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "fav1" });
+  });
+
+  it("hides the Want to Read shelf when there are no favorites", async () => {
+    seedOnline(baseShelves);
+    // favorites is reset to [] in beforeEach.
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    expect(screen.queryByText("Want to Read")).toBeNull();
+  });
+
+  it("renders Browse genres AFTER the personalized shelves (Continue Listening stays first)", async () => {
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    const browse = await screen.findByLabelText("Browse genres");
+    // Still navigates correctly...
+    await fireEvent.press(browse);
+    expect(navigation.navigate).toHaveBeenCalledWith("GenreBrowse");
+    // ...and the primary resume shelf comes before the genre browse row in the
+    // rendered tree order (guards the placement fix — Browse genres used to
+    // precede Continue Listening). Walk the instance tree in DFS order and
+    // record which marker we reach first.
+    const seq: string[] = [];
+    const walk = (node: any) => {
+      if (!node || typeof node !== "object") return;
+      if (node.props?.accessibilityLabel === "Browse genres") seq.push("browse");
+      if (node.children?.length === 1 && node.children[0] === "Continue Listening") seq.push("continue");
+      (node.children || []).forEach(walk);
+    };
+    walk(screen.root);
+    expect(seq.indexOf("continue")).toBeGreaterThanOrEqual(0);
+    expect(seq.indexOf("continue")).toBeLessThan(seq.indexOf("browse"));
   });
 });

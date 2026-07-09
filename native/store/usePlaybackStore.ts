@@ -79,6 +79,10 @@ function autoRewindSeconds(pausedForMs: number): number {
 // All client-only. Persisted directly in the shared MMKV `storage` under their
 // own keys (kept out of the user-settings blob) so they survive restarts.
 const PER_BOOK_RATE_KEY = "perBookRate";
+// Cap the per-book rate memory so it can't grow without bound — one entry is
+// added per book whose speed was ever changed. Approximate LRU: the oldest
+// (least-recently-written) entries are evicted once the map exceeds this.
+const PER_BOOK_RATE_MAX = 200;
 const REMEMBER_RATE_KEY = "rememberSpeedPerBook";
 const QUEUE_KEY = "playbackQueue";
 const AUTO_PLAY_NEXT_KEY = "autoPlayNext";
@@ -108,7 +112,15 @@ function getPerBookRate(itemId?: string | null): number | undefined {
 function setPerBookRate(itemId?: string | null, rate?: number) {
   if (!itemId || !(typeof rate === "number" && rate > 0)) return;
   const map = getPerBookRateMap();
+  // Delete-then-set moves the entry to the end (most-recently-used) so the LRU
+  // eviction below drops the oldest entries first. Object key order is insertion
+  // order for the string (UUID) keys used here.
+  delete map[itemId];
   map[itemId] = rate;
+  const keys = Object.keys(map);
+  if (keys.length > PER_BOOK_RATE_MAX) {
+    for (const k of keys.slice(0, keys.length - PER_BOOK_RATE_MAX)) delete map[k];
+  }
   try {
     storage.set(PER_BOOK_RATE_KEY, JSON.stringify(map));
   } catch {}
@@ -227,8 +239,15 @@ function disarmShakeListener() {
 
 // Resolve the NEXT book in the finished book's series. Reuses the same
 // series/sequence resolution as auto-download-next-in-series
-// (utils/downloader.autoDownloadNextAfterFinish); prefers a downloaded next
-// book so the advance works offline.
+// (utils/downloader.autoDownloadNextAfterFinish).
+//
+// REQUIRES CONNECTIVITY: the series membership + sequence needed to pick the
+// next book lives only on the server — downloaded items (useDownloadStore)
+// don't carry series/sequence metadata, so there's no local source to resolve
+// from. Both api.get calls below therefore run first; offline they throw and
+// this no-ops (returns null). Among the network-resolved candidates we still
+// PREFER one that's already downloaded, so once connectivity picks the next
+// book its playback can proceed from local files.
 export async function resolveNextInSeries(libraryItemId: string): Promise<string | null> {
   try {
     const curRes = await api.get(`/api/items/${encodeURIComponent(libraryItemId)}?expanded=1`);
@@ -257,7 +276,8 @@ export async function resolveNextInSeries(libraryItemId: string): Promise<string
     });
     const candidates = after.length ? after : sorted;
     if (!candidates.length) return null;
-    // Prefer a downloaded next book (works offline); else the immediate next.
+    // Prefer a downloaded next book (its playback can then run from local
+    // files); else the immediate next.
     try {
       const { useDownloadStore } = require("./useDownloadStore");
       const completed = useDownloadStore.getState().completedDownloads || {};
@@ -281,6 +301,14 @@ export async function autoAdvanceAfterFinish(finishedItemId: string, episodeId?:
   _autoAdvancing = true;
   try {
     const store = usePlaybackStore.getState();
+    // The user may have switched books between finish and now — only advance if
+    // the finished book is still active (or nothing is active). Guards BOTH the
+    // queue and series branches: this runs fire-and-forget, so a book the user
+    // manually started after the finish must not be yanked off by the OLD book's
+    // advance (the queue branch previously lacked this check).
+    const cur = store.currentSession;
+    const curId = cur?.libraryItemId || cur?.libraryItem?.id;
+    if (cur && curId && curId !== finishedItemId) return;
     if (store.queue.length > 0) {
       await store.playNextInQueue();
       return;
@@ -288,11 +316,11 @@ export async function autoAdvanceAfterFinish(finishedItemId: string, episodeId?:
     if (!getAutoPlayNext()) return;
     const nextId = await resolveNextInSeries(finishedItemId);
     if (!nextId) return;
-    // The user may have switched books between finish and now — only advance if
-    // the finished book is still active (or nothing is active).
-    const cur = usePlaybackStore.getState().currentSession;
-    const curId = cur?.libraryItemId || cur?.libraryItem?.id;
-    if (cur && curId && curId !== finishedItemId) return;
+    // Re-check after the (awaited) series resolution: the user may have started a
+    // different book while it was in flight.
+    const cur2 = usePlaybackStore.getState().currentSession;
+    const curId2 = cur2?.libraryItemId || cur2?.libraryItem?.id;
+    if (cur2 && curId2 && curId2 !== finishedItemId) return;
     await usePlaybackStore.getState().startPlayback(nextId);
   } catch (e) {
     console.warn("[PlaybackStore] auto-advance failed", e);

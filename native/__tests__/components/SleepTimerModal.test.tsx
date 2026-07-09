@@ -61,4 +61,18 @@ describe("SleepTimerModal", () => {
     expect(screen.queryByLabelText("Rewind on wake")).toBeNull();
     expect(screen.queryByLabelText("Shake to add time (screen on)")).toBeNull();
   });
+
+  it("marks the title as a header for screen readers", async () => {
+    await render(
+      <SleepTimerModal
+        visible
+        onClose={() => {}}
+        timer={null}
+        hasChapter={false}
+        onSet={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    expect(screen.getByText("Sleep Timer").props.accessibilityRole).toBe("header");
+  });
 });

@@ -379,6 +379,9 @@ async function flushPendingBookmarkDeletions(): Promise<void> {
 // A rename that failed offline was swallowed — the new title silently reverted
 // to the server copy on the next load. Mirrors the create/delete queues.
 const BOOKMARK_RENAME_PREFIX = "pendingBookmarkRename_";
+// A rename that keeps failing with a real server response (non-404) is dropped
+// after this many attempts so a permanent 4xx/5xx can't retry forever.
+const BOOKMARK_RENAME_MAX_ATTEMPTS = 8;
 
 export function queueBookmarkRename(libraryItemId: string, time: number, title: string) {
   try {
@@ -393,6 +396,17 @@ export function queueBookmarkRename(libraryItemId: string, time: number, title: 
   } catch (e) {
     appLogger.warn(`Failed to queue bookmark rename: ${e}`, "ProgressSync");
   }
+}
+
+/** Drop any queued rename for a bookmark that's being deleted — otherwise a
+ *  rename for a since-deleted bookmark lingers (harmless on ABS, where the PATCH
+ *  404s and is dropped, but on an upsert-style server it could resurrect the
+ *  deleted bookmark). Keyed the same way as queueBookmarkRename. */
+export function removePendingBookmarkRename(libraryItemId: string, time: number) {
+  try {
+    if (!libraryItemId || !Number.isFinite(time)) return;
+    storage.remove(`${BOOKMARK_RENAME_PREFIX}${libraryItemId}_${Math.floor(time)}`);
+  } catch {}
 }
 
 /** Pending (queued-offline) renames for an item — the bookmark list applies
@@ -444,8 +458,23 @@ async function flushPendingBookmarkRenames(): Promise<void> {
       storage.remove(key);
     } catch (e: any) {
       // Item/bookmark gone server-side — the rename can never land.
-      if (e?.response?.status === 404) storage.remove(key);
-      // Otherwise still offline — keep it queued.
+      if (e?.response?.status === 404) {
+        storage.remove(key);
+      } else if (e?.response?.status) {
+        // A server response other than 404 (e.g. a persistent 4xx/5xx) will
+        // never succeed on retry — age the entry out after a few attempts so it
+        // can't be retried forever. A network error (no `.response`) leaves
+        // `attempts` untouched so genuine offline retries aren't burned.
+        const attempts = (Number(b.attempts) || 0) + 1;
+        if (attempts >= BOOKMARK_RENAME_MAX_ATTEMPTS) {
+          storage.remove(key);
+        } else {
+          try {
+            storage.set(key, JSON.stringify({ ...b, attempts }));
+          } catch {}
+        }
+      }
+      // No `.response` at all → offline/transient — keep it queued unchanged.
     }
   }
 }

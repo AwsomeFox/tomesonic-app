@@ -31,6 +31,7 @@ jest.mock("../../utils/progressSync", () => ({
   pendingBookmarkDeletionsFor: jest.fn(() => []),
   queueBookmarkRename: jest.fn(),
   pendingBookmarkRenamesFor: jest.fn(() => []),
+  removePendingBookmarkRename: jest.fn(),
 }));
 jest.mock("../../store/useDialogStore", () => ({
   showAppDialog: jest.fn(),
@@ -45,6 +46,7 @@ import {
   pendingBookmarkDeletionsFor,
   queueBookmarkRename,
   pendingBookmarkRenamesFor,
+  removePendingBookmarkRename,
 } from "../../utils/progressSync";
 
 const apiGet = api.get as jest.Mock;
@@ -126,6 +128,9 @@ describe("BookmarksModal offline deletion", () => {
 
     await waitFor(() => expect(apiDelete).toHaveBeenCalledWith("/api/me/item/item1/bookmark/90.7"));
     expect(queueBookmarkDeletion).not.toHaveBeenCalled();
+    // Any queued rename for the deleted bookmark is dropped too (G6) so it can't
+    // linger / resurrect the bookmark on an upsert-style server.
+    expect(removePendingBookmarkRename).toHaveBeenCalledWith("item1", 90.7);
   });
 
   it("hides server bookmarks whose queued deletion hasn't flushed yet", async () => {

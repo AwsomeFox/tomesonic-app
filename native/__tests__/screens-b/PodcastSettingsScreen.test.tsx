@@ -77,6 +77,36 @@ describe("PodcastSettingsScreen", () => {
     expect(screen.getByLabelText("Max new episodes to download").props.value).toBe("3");
   });
 
+  it("auto-download switch is the sole control and reflects/toggles checked state", async () => {
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    // Exactly one accessible node carries the label — the switch itself — so
+    // TalkBack doesn't land on a roleless duplicate actionable row wrapping it.
+    const toggle = screen.getByLabelText("Auto-download episodes");
+    expect(toggle.props.accessibilityRole).toBe("switch");
+    // Seeded on (autoDownloadEpisodes: true) → checked, admin → not disabled.
+    expect(toggle.props.accessibilityState.checked).toBe(true);
+    expect(toggle.props.accessibilityState.disabled).toBe(false);
+
+    fireEvent.press(toggle);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Auto-download episodes").props.accessibilityState.checked).toBe(
+        false
+      )
+    );
+  });
+
+  it("schedule preset chips extend their touch target with hitSlop", async () => {
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    // Chips are 34dp tall; a vertical hitSlop lifts the effective touch target
+    // toward the ~44dp minimum.
+    const chip = screen.getByLabelText("Schedule: Daily");
+    expect(chip.props.hitSlop).toEqual({ top: 6, bottom: 6 });
+  });
+
   it("saves the changed podcast media fields via PATCH (admin)", async () => {
     await renderScreen();
     await screen.findByText("My Great Podcast");
@@ -107,6 +137,107 @@ describe("PodcastSettingsScreen", () => {
         maxEpisodesToKeep: 10,
         maxNewEpisodesToDownload: 5,
       })
+    );
+  });
+
+  // Helper: make the form dirty (valid), press Save, and run the confirm
+  // dialog's Save button so the doSave PATCH actually fires.
+  async function dirtyAndConfirmSave() {
+    fireEvent.changeText(screen.getByLabelText("Max new episodes to download"), "5");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Max new episodes to download").props.value).toBe("5")
+    );
+    fireEvent.press(screen.getByLabelText("Save podcast settings"));
+    await waitFor(() =>
+      expect(
+        (showAppDialog as jest.Mock).mock.calls.some(
+          (c) => c[0]?.title === "Save podcast settings"
+        )
+      ).toBe(true)
+    );
+    const confirm = (showAppDialog as jest.Mock).mock.calls
+      .map((c) => c[0])
+      .find((d) => d.title === "Save podcast settings");
+    confirm.buttons.find((b: any) => b.text === "Save").onPress();
+  }
+
+  it("G4: save failure WITH a server response shows the permission/rejected dialog", async () => {
+    (api.patch as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("rejected"), { response: { status: 403 } })
+    );
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    await dirtyAndConfirmSave();
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't save",
+          message: expect.stringContaining("permission"),
+        })
+      )
+    );
+  });
+
+  it("G4: save failure WITHOUT a response shows the offline dialog", async () => {
+    (api.patch as jest.Mock).mockRejectedValue(new Error("Network Error")); // no .response
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    await dirtyAndConfirmSave();
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't save",
+          message: expect.stringContaining("offline"),
+        })
+      )
+    );
+  });
+
+  it("G5: turning on auto-download with an unshaped schedule blocks save", async () => {
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    // Auto-download is seeded ON; replace the valid 5-field cron with a 2-field
+    // string (also makes the form dirty so Save is pressable).
+    fireEvent.changeText(screen.getByLabelText("Auto-download schedule (cron)"), "0 3");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Auto-download schedule (cron)").props.value).toBe("0 3")
+    );
+
+    fireEvent.press(screen.getByLabelText("Save podcast settings"));
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Invalid schedule" })
+      )
+    );
+    expect(api.patch).not.toHaveBeenCalled();
+  });
+
+  it("G5: a check-for-new failure surfaces the couldn't-check dialog", async () => {
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/me") return Promise.resolve({ data: ADMIN_ME });
+      if (url.startsWith("/api/items/")) return Promise.resolve({ data: PODCAST_ITEM });
+      if (url.includes("/checknew")) {
+        const err: any = new Error("feed down");
+        err.response = { status: 500 };
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ data: {} });
+    });
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    fireEvent.press(screen.getByLabelText("Check for new episodes now"));
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't check the feed" })
+      )
     );
   });
 

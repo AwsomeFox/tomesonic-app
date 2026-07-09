@@ -228,6 +228,25 @@ describe("StatsScreen", () => {
     expect(screen.getByText("Minutes Listening (last 7 days)")).toBeTruthy();
   });
 
+  it("keeps the streak alive when today has no listening yet (G7)", async () => {
+    // Listening through yesterday, none today: today-with-no-listening must
+    // not reset the streak to 0 — it counts the unbroken run before it.
+    const days: Record<string, number> = {
+      [ymd(daysAgo(1))]: 600,
+      [ymd(daysAgo(2))]: 600,
+      [ymd(daysAgo(3))]: 600,
+    };
+    (api.get as jest.Mock).mockResolvedValue({
+      data: { totalTime: 1800, today: 0, days, recentSessions: [] },
+    });
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    // Run length is 3 (yesterday, 2 days ago, 3 days ago), not 0.
+    expect(screen.getByText("3-day streak")).toBeTruthy();
+    expect(screen.getByLabelText("Current streak: 3 days in a row")).toBeTruthy();
+  });
+
   it("renders recent sessions with pretty times and relative dates", async () => {
     await renderStats();
     await screen.findByText("Recent Sessions");
@@ -411,9 +430,32 @@ describe("StatsScreen", () => {
     await renderStats();
     await screen.findByText("Recent Sessions");
 
-    // weekMinutes = 36 (10+20+5+1) vs a 40-minute weekly goal.
-    expect(screen.getByText("Weekly goal")).toBeTruthy();
+    // weekMinutes = 36 (10+20+5+1) vs a 40-minute weekly goal. The header is
+    // explicit that "weekly" here means a rolling last-7-days total.
+    expect(screen.getByText("Weekly goal (last 7 days)")).toBeTruthy();
     expect(screen.getByText("36 / 40 min")).toBeTruthy();
+  });
+
+  it("conveys the period toggle's selected state via accessibilityState", async () => {
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    await fireEvent.press(screen.getByLabelText("Set a listening goal"));
+
+    // Default draft is daily -> Daily toggle selected, Weekly not. State is
+    // exposed via accessibilityState (not a ", selected" label suffix).
+    const daily = screen.getByLabelText("Daily goal");
+    const weekly = screen.getByLabelText("Weekly goal");
+    expect(daily.props.accessibilityState).toEqual({ selected: true });
+    expect(weekly.props.accessibilityState).toEqual({ selected: false });
+
+    await fireEvent.press(weekly);
+    expect(screen.getByLabelText("Daily goal").props.accessibilityState).toEqual({
+      selected: false,
+    });
+    expect(screen.getByLabelText("Weekly goal").props.accessibilityState).toEqual({
+      selected: true,
+    });
   });
 
   it("marks the goal met and can remove it", async () => {

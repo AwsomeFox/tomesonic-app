@@ -110,7 +110,7 @@ export default function PlaybackSpeedModal({
             {/* Header */}
             <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
               <Icon name="speed" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-              <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Playback Speed</Text>
+              <Text accessibilityRole="header" style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Playback Speed</Text>
             </View>
 
             {/* Large current-speed display + stepper */}

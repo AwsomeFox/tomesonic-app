@@ -124,8 +124,11 @@ describe("YearInReviewScreen", () => {
     expect(screen.getByText("Andy Weir, Brandon Sanderson")).toBeTruthy();
     expect(screen.getByText("Science Fiction, Fantasy")).toBeTruthy();
 
-    // Cover collage — one Image per finished-book id.
-    expect(screen.getAllByLabelText("Book cover").length).toBe(3);
+    // Cover collage — the group header conveys meaning, and the identical
+    // cover tiles are hidden from TalkBack rather than read as N generic
+    // "Book cover" stops.
+    expect(screen.getByText("Books You Finished")).toBeTruthy();
+    expect(screen.queryAllByLabelText("Book cover").length).toBe(0);
   });
 
   it("shares a text summary of the year", async () => {

@@ -1775,7 +1775,7 @@ export default function PlayerBottomSheet() {
       <BottomSheet visible={showQueue} onClose={() => setShowQueue(false)}>
         <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
           <Icon name="playlist-add" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-          <Text style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Up Next</Text>
+          <Text accessibilityRole="header" style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Up Next</Text>
           {queue.length ? (
             <Pressable
               onPress={() => clearQueue()}

@@ -642,6 +642,14 @@ describe("useUserStore", () => {
       storage.set("ebookCfi_item1", "epubcfi(/6/4!/4/2)");
       storage.set("pdfPage_item1", "12");
       storage.set("last_interaction_item1", "listen");
+      // New per-account state that must not leak to the next login: reader
+      // highlights/speed + per-book rate (bare-id keyed), plus the favorites list
+      // and cross-book play queue.
+      storage.set("reader_highlights_item1", JSON.stringify([{ cfi: "x", text: "hi" }]));
+      storage.set("reader_speed_item1", "260");
+      storage.set("perBookRate", JSON.stringify({ item1: 1.5 }));
+      storage.set("favorites", JSON.stringify(["item1", "item2"]));
+      storage.set("playbackQueue", JSON.stringify([{ libraryItemId: "item9" }]));
 
       await useUserStore.getState().logout();
 
@@ -658,6 +666,15 @@ describe("useUserStore", () => {
       expect(storage.getString("ebookCfi_item1")).toBeUndefined();
       expect(storage.getString("pdfPage_item1")).toBeUndefined();
       expect(storage.getString("last_interaction_item1")).toBeUndefined();
+      // New per-account state wiped so the next login can't inherit it.
+      expect(storage.getString("reader_highlights_item1")).toBeUndefined();
+      expect(storage.getString("reader_speed_item1")).toBeUndefined();
+      expect(storage.getString("perBookRate")).toBeUndefined();
+      // Favorites + queue cleared via their stores (key gone or emptied).
+      const favLeft = storage.getString("favorites");
+      expect(favLeft === undefined || favLeft === "[]").toBe(true);
+      const queueLeft = storage.getString("playbackQueue");
+      expect(queueLeft === undefined || queueLeft === "[]").toBe(true);
     });
 
     it("clears the PERSISTED per-item link locks (linkedProgress) but keeps other device settings", async () => {

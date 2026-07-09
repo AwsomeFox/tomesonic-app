@@ -260,10 +260,16 @@ export default function StatsScreen({ navigation }: any) {
   const bestDay = last7.reduce((m, d) => Math.max(m, d.minutes), 0);
 
   // Consecutive days (including today) with listening, matching daysInARow.
+  // Today with no listening *yet* isn't a break — otherwise the streak would
+  // read 0 every morning until the first listen of the day. Only a gap before
+  // the run ends the streak.
   let daysInARow = 0;
   for (let i = 0; i < 10000; i++) {
     const key = ymd(daysAgo(i));
-    if (!days[key]) break;
+    if (!days[key]) {
+      if (i === 0) continue;
+      break;
+    }
     daysInARow++;
   }
 
@@ -437,7 +443,7 @@ export default function StatsScreen({ navigation }: any) {
               <>
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
                   <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: '700', flex: 1 }}>
-                    {goalPeriod === 'weekly' ? 'Weekly goal' : 'Daily goal'}
+                    {goalPeriod === 'weekly' ? 'Weekly goal (last 7 days)' : 'Daily goal'}
                   </Text>
                   <HintPressable
                     onPress={openGoalEditor}
@@ -488,7 +494,8 @@ export default function StatsScreen({ navigation }: any) {
                         key={p}
                         onPress={() => setDraftPeriod(p)}
                         accessibilityRole="button"
-                        accessibilityLabel={`${p === 'daily' ? 'Daily' : 'Weekly'} goal${active ? ', selected' : ''}`}
+                        accessibilityLabel={`${p === 'daily' ? 'Daily' : 'Weekly'} goal`}
+                        accessibilityState={{ selected: active }}
                         style={{
                           flex: 1,
                           paddingVertical: 8,
