@@ -334,9 +334,29 @@ export default function SettingsScreen({ navigation, route }: any) {
         <ToggleRow
           icon="download"
           title="Auto-download next in series"
-          subtitle="When you finish a downloaded book, download the next one"
+          subtitle="When you finish a downloaded book, download the one after it"
           value={!!settings.autoDownloadNextInSeries}
           onValueChange={(v) => set({ autoDownloadNextInSeries: v })}
+          colors={colors}
+        />
+        <Divider colors={colors} />
+
+        <ToggleRow
+          icon="auto-stories"
+          title="Show book progress bar"
+          subtitle="Display full book progress bar in the player"
+          value={settings.showPlayerBookProgress !== false}
+          onValueChange={(v) => set({ showPlayerBookProgress: v })}
+          colors={colors}
+        />
+        <Divider colors={colors} />
+
+        <ToggleRow
+          icon="list"
+          title="Show chapter progress bar"
+          subtitle="Display chapter progress bar in the player"
+          value={settings.showPlayerChapterProgress !== false}
+          onValueChange={(v) => set({ showPlayerChapterProgress: v })}
           colors={colors}
         />
 
