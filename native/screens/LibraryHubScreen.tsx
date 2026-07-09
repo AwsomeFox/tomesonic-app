@@ -6,6 +6,7 @@ import TopAppBar from "../components/TopAppBar";
 import Icon, { IconName } from "../components/Icon";
 import EmptyState from "../components/EmptyState";
 import SearchContent from "../components/SearchContent";
+import ScrollToTopFab from "../components/ScrollToTopFab";
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { useUiStore } from "../store/useUiStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
@@ -429,34 +430,15 @@ export default function LibraryHubScreen({ route, navigation }: any) {
           </View>
         ) : null}
 
-        {/* Scroll-to-top FAB — appears once the active list is scrolled down.
-            Hidden while offline (the offline overlay covers the facets). */}
-        {!isSearchActive && !isOffline && showScrollTop ? (
-          <Pressable
-            onPress={scrollActiveToTop}
-            android_ripple={{ color: colors.surfaceContainerHighest }}
-            accessibilityRole="button"
-            accessibilityLabel="Scroll to top"
-            style={{
-              position: "absolute",
-              right: 16,
-              bottom: fabBottom,
-              width: 48,
-              height: 48,
-              borderRadius: 16,
-              alignItems: "center",
-              justifyContent: "center",
-              backgroundColor: colors.secondaryContainer,
-              elevation: 3,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.2,
-              shadowRadius: 3,
-            }}
-          >
-            <Icon name="chevron-up" size={26} color={colors.onSecondaryContainer} />
-          </Pressable>
-        ) : null}
+        {/* Scroll-to-top FAB — springs in once the active list is scrolled
+            down (M3 Expressive entrance/exit). Hidden while offline (the
+            offline overlay covers the facets). */}
+        <ScrollToTopFab
+          visible={!isSearchActive && !isOffline && showScrollTop}
+          onPress={scrollActiveToTop}
+          bottom={fabBottom}
+          testID="library-scroll-top-fab"
+        />
 
         {/* Offline overlay: the library facets browse the server, so offline
             there's nothing to load. Rather than REPLACING (and thereby
