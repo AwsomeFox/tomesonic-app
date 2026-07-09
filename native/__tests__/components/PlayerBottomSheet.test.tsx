@@ -135,6 +135,7 @@ import { navigationRef } from "../../navigation/navigationRef";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
+import { useFavoritesStore } from "../../store/useFavoritesStore";
 
 const playbackInitial = usePlaybackStore.getState();
 const userInitial = useUserStore.getState();
@@ -186,6 +187,7 @@ beforeEach(() => {
   usePlaybackStore.setState(playbackInitial, true);
   useUserStore.setState(userInitial, true);
   useDownloadStore.setState(downloadInitial, true);
+  useFavoritesStore.setState({ favorites: [] });
   useUserStore.setState({
     settings: { ...userInitial.settings, jumpForwardTime: 30, jumpBackwardTime: 15 },
   } as any);
@@ -478,6 +480,64 @@ describe("PlayerBottomSheet — expand / collapse", () => {
   });
 });
 
+describe("PlayerBottomSheet — Read-from-here removed", () => {
+  // Reading is now reached via the ItemDetail "Read" button, so the player no
+  // longer carries its own Read-from-here affordance in either layout.
+  it("has no Read from here button in the expanded player", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    expect(
+      screen.queryAllByLabelText("Read from here", { includeHiddenElements: true })
+    ).toHaveLength(0);
+  });
+});
+
+describe("PlayerBottomSheet — Chapters in the bottom control row", () => {
+  it("Chapters is reachable in the expanded player and opens the modal", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
+    await fireEvent.press(screen.getByText("Ch 1"));
+    expect(store().seekToChapter).toHaveBeenCalledWith(0);
+  });
+
+  it("Chapters is disabled without chapters", async () => {
+    seedPlayer({ chapters: [], currentChapterIndex: -1, isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    expect(screen.getAllByLabelText("Chapters")[0].props.accessibilityState?.disabled).toBe(true);
+  });
+
+  it("keeps the speed pill present alongside the relocated Chapters button", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    expect(screen.getAllByLabelText("Playback speed, 1.3×").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1.3×").length).toBeGreaterThan(0);
+  });
+});
+
+describe("PlayerBottomSheet — Want to Read heart", () => {
+  it("toggles the favorite and reflects the selected state", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+
+    // Not favorited yet: label offers to add, and selected is false.
+    const add = screen.getAllByLabelText("Add to Want to Read");
+    expect(add.length).toBeGreaterThan(0);
+    expect(add[0].props.accessibilityState?.selected).toBe(false);
+
+    await fireEvent.press(add[0]);
+    expect(useFavoritesStore.getState().favorites).toContain("item1");
+
+    // Re-render reflects the flipped state via the reactive subscription.
+    const remove = screen.getAllByLabelText("Remove from Want to Read");
+    expect(remove.length).toBeGreaterThan(0);
+    expect(remove[0].props.accessibilityState?.selected).toBe(true);
+
+    await fireEvent.press(remove[0]);
+    expect(useFavoritesStore.getState().favorites).not.toContain("item1");
+  });
+});
+
 describe("PlayerBottomSheet — top bar actions", () => {
   it("Cast button opens the cast device dialog", async () => {
     seedPlayer({ isPlayerExpanded: true });
@@ -559,23 +619,23 @@ describe("PlayerBottomSheet — landscape layout", () => {
   });
 
   // Parity with portrait: the landscape header must carry Stop (the only
-  // in-player dismissal) and Read-from-here, or a finished book can't be
-  // closed and format-switch is unreachable when the phone is rotated.
-  it("landscape header has Stop and Read-from-here, and Stop closes playback", async () => {
+  // in-player dismissal), or a finished book can't be closed when the phone is
+  // rotated. Read-from-here was removed (reading is reached via ItemDetail).
+  it("landscape header has Stop (no Read-from-here), and Stop closes playback", async () => {
     const closePlayback = jest.fn().mockResolvedValue(undefined);
     seedPlayer({ isPlayerExpanded: true, closePlayback });
     await render(<PlayerBottomSheet />);
     await goLandscape();
 
     // Portrait + landscape subtrees both render (portrait a11y-hidden while
-    // landscape is active), so each label now appears twice — landscape used
-    // to contribute neither.
+    // landscape is active), so each label now appears twice.
     expect(
       screen.getAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
     ).toBe(2);
+    // Read-from-here is gone from both layouts.
     expect(
-      screen.getAllByLabelText("Read from here", { includeHiddenElements: true }).length
-    ).toBe(2);
+      screen.queryAllByLabelText("Read from here", { includeHiddenElements: true }).length
+    ).toBe(0);
 
     // The visible (landscape) Stop closes playback.
     const stops = screen.getAllByLabelText("Stop and close player");

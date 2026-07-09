@@ -5,6 +5,8 @@ import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
 import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
 import { writeWidgetState } from "../utils/autoCreds";
+import { upNextAddItem, upNextRemoveItem, upNextListItems } from "../utils/upNext";
+import { useLibraryStore } from "./useLibraryStore";
 import * as FileSystem from "expo-file-system/legacy";
 
 // Records when playback was paused so play() can apply the "auto rewind" nudge
@@ -139,6 +141,23 @@ function persistQueue(q: QueueItem[]) {
   try {
     storage.set(QUEUE_KEY, JSON.stringify(q || []));
   } catch {}
+}
+
+// Resolve the library the server "Up Next" playlist mirror should live in. The
+// selected library is the natural home (the queue is browsed from it); fall
+// back to the active session's library when one is exposed. Returns null when
+// neither is known (logged out / no library) — the server mirror is then just
+// skipped and the local queue works exactly as before.
+function currentLibraryId(): string | null {
+  try {
+    const fromLibrary = useLibraryStore.getState().currentLibraryId;
+    if (fromLibrary) return fromLibrary;
+  } catch {}
+  try {
+    const s = usePlaybackStore.getState().currentSession;
+    if (s?.libraryId) return s.libraryId;
+  } catch {}
+  return null;
 }
 function getAutoPlayNext(): boolean {
   if (!storage.contains(AUTO_PLAY_NEXT_KEY)) return true; // default ON
@@ -280,6 +299,46 @@ let _autoAdvancing = false;
 // auto-advance must not pop + start two items (the second start would clobber
 // the first mid-prepare and drop an extra queued book).
 let _playingNext = false;
+/**
+ * Reconcile the local "Up Next" queue with the server playlist mirror: fetch
+ * the server items and MERGE them into the local `queue` (union). Local order
+ * is preserved first (it's the source of truth for the UI), then any
+ * server-only items — added on another device — are appended. De-duped by
+ * libraryItemId + episodeId, matching addToQueue.
+ *
+ * Best-effort and offline-safe: an empty/failed server fetch leaves the local
+ * queue untouched. Exposed (not auto-run) so a later change can call it
+ * opportunistically (on focus / login) without surprising existing tests.
+ */
+export async function syncUpNextFromServer(libraryId?: string | null): Promise<void> {
+  try {
+    const lib = libraryId || currentLibraryId();
+    if (!lib) return;
+    const serverItems = await upNextListItems(lib);
+    if (!serverItems.length) return;
+    const local = usePlaybackStore.getState().queue;
+    const key = (q: QueueItem) => `${q.libraryItemId}::${q.episodeId || ""}`;
+    const seen = new Set(local.map(key));
+    const merged = [...local];
+    for (const item of serverItems) {
+      if (!item?.libraryItemId) continue;
+      // Only book items are safely round-trippable through the server mirror
+      // (ABS playlist DELETE is keyed by libraryItemId alone). Never import
+      // episode-scoped entries — they can't be removed without wiping siblings.
+      if (item.episodeId) continue;
+      if (seen.has(key(item))) continue;
+      seen.add(key(item));
+      merged.push(item);
+    }
+    // Nothing new — avoid a redundant write/re-render.
+    if (merged.length === local.length) return;
+    persistQueue(merged);
+    usePlaybackStore.setState({ queue: merged });
+  } catch {
+    // Offline / server error — local queue stays as-is.
+  }
+}
+
 export async function autoAdvanceAfterFinish(finishedItemId: string, episodeId?: string | null) {
   if (episodeId) return; // podcast episodes don't queue / series-advance
   if (!finishedItemId || _autoAdvancing) return;
@@ -1275,6 +1334,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const next = [...cur, item];
     persistQueue(next);
     set({ queue: next });
+    // Mirror to the server "Up Next" playlist, fire-and-forget so the optimistic
+    // local add above is never blocked. Offline / no-library → no-op.
+    // BOOKS ONLY: ABS playlist items DELETE is keyed by libraryItemId alone, so
+    // mirroring a podcast EPISODE would let a later single-episode remove wipe
+    // every sibling episode server-side (and cross-device). Episodes stay
+    // local-only in the queue — no regression, the queue was device-local before.
+    const libraryId = currentLibraryId();
+    if (libraryId && !item.episodeId) upNextAddItem(libraryId, item).catch(() => {});
   },
   removeFromQueue: (libraryItemId: string, episodeId?: string | null) => {
     // addToQueue de-dupes by libraryItemId + episodeId, so a podcast can have
@@ -1288,10 +1355,28 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     );
     persistQueue(next);
     set({ queue: next });
+    // Drain the same item from the server mirror (best-effort, non-blocking).
+    // Only BOOK items are mirrored (see addToQueue), so only an item-level
+    // remove (no episodeId) may touch the server. A per-episode remove must NOT
+    // DELETE by libraryItemId — that item-level DELETE would take out every
+    // sibling episode server-side. Episodes are local-only, so skip the mirror.
+    const libraryId = currentLibraryId();
+    if (libraryId && episodeId == null) upNextRemoveItem(libraryId, libraryItemId).catch(() => {});
   },
   clearQueue: () => {
+    // Snapshot before wiping so we can drain the server mirror too.
+    const prev = get().queue;
     persistQueue([]);
     set({ queue: [] });
+    // Only book items are mirrored, so only drain those; an episode's
+    // item-level DELETE would wipe its siblings server-side.
+    const libraryId = currentLibraryId();
+    if (libraryId) {
+      for (const item of prev) {
+        if (item.episodeId) continue;
+        upNextRemoveItem(libraryId, item.libraryItemId).catch(() => {});
+      }
+    }
   },
   playNextInQueue: async () => {
     // A "Play now" tap racing the finish auto-advance would otherwise pop + start
@@ -1321,6 +1406,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         );
         persistQueue(rest);
         set({ queue: rest });
+        // Drain the started item from the server mirror too, so the shared
+        // "Up Next" list matches the local queue across devices. Books only —
+        // an episode's item-level DELETE would remove its siblings server-side.
+        const libraryId = currentLibraryId();
+        if (libraryId && !next.episodeId) upNextRemoveItem(libraryId, next.libraryItemId).catch(() => {});
       }
       return ok;
     } catch {

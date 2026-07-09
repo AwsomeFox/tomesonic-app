@@ -583,6 +583,46 @@ describe("ReaderScreen (epub pipeline)", () => {
     expect(html).toContain("var curlEnabled = false");
   });
 
+  it("binds the finger-follow curl to each section document with a real 3D fold", async () => {
+    await renderReader();
+    await readyWebView();
+
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+
+    // The curl handlers are bound to the section document (e.detail.doc) from
+    // the 'load' handler, in the CAPTURE phase, so they run before foliate's own
+    // bubble-phase swipe. Foliate renders the text in a same-origin iframe, so
+    // outer-document listeners never saw touches over the page.
+    expect(html).toContain("function attachPageTurn(doc)");
+    expect(html).toContain("attachPageTurn(doc)"); // called from the load handler
+    expect(html).toContain("doc.addEventListener('touchmove', onTouchMove, { capture: true, passive: false })");
+    // Suppress foliate's own swipe while a horizontal drag is in progress.
+    expect(html).toContain("stopImmediatePropagation");
+
+    // The overlay is a real page-curl fold, not a flat slide: a fold flap driven
+    // by a 3D perspective + rotateY transform, gated on the curl setting.
+    expect(html).toContain("pagecurl-fold");
+    expect(html).toContain("perspective(1200px) rotateY");
+
+    // The outer document is no longer the SOLE touch-registration path.
+    expect(html).toContain("document.addEventListener('touchstart', onTouchStart");
+  });
+
+  it("applies live theme colors additively so foliate's column/margin layout survives", async () => {
+    await renderReader();
+    await readyWebView();
+
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+
+    // A setAttribute('style', ...) here replaced the whole inline style
+    // attribute, wiping foliate's column-layout inline props (the page margin)
+    // until the next render() — the margin collapsed on a theme change until a
+    // page turn. Set only the two colors additively via setProperty instead.
+    expect(html).not.toContain("setAttribute('style'");
+    expect(html).toContain("setProperty('background', bg, 'important')");
+    expect(html).toContain("setProperty('color', fg, 'important')");
+  });
+
   it("toggling Page Turn persists the choice and flips it live in the WebView", async () => {
     await renderReader();
     await readyWebView();

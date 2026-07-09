@@ -511,6 +511,27 @@ describe("BookshelfScreen online", () => {
     expect(screen.getByLabelText("Recently Added, see all")).toBeTruthy();
   });
 
+  it("Discover shelf 'see all' opens the full library browse (only once it overflows)", async () => {
+    // The ABS "discover" shelf (random library books) used to land in the
+    // shelfToLibraryParams default → null → no arrow. It must now get a working
+    // see-all that opens the Library browse, gated on the row overflowing.
+    seedOnline([
+      { id: "discover", label: "Discover", type: "book", entities: [audioBook, ebookOnlyBook] },
+    ]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Discover");
+    // Content fits the viewport → no arrow.
+    await simulateShelfOverflow("discover", { viewport: 800, content: 400 });
+    expect(screen.queryByLabelText("Discover, see all")).toBeNull();
+
+    // Row overflows → the see-all header appears and opens the Library browse.
+    await simulateShelfOverflow("discover", { viewport: 400, content: 1600 });
+    await fireEvent.press(screen.getByLabelText("Discover, see all"));
+    expect(navigation.navigate).toHaveBeenCalledWith("Library", {});
+  });
+
   it("Continue Reading 'see all' opens the Library in-progress filter", async () => {
     seedOnline([
       { id: "continue-reading", label: "Continue Reading", type: "book", entities: [audioBook, ebookOnlyBook] },

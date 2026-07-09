@@ -330,6 +330,15 @@ describe("SearchContent — result sections", () => {
     expect(screen.getByText("favorites")).toBeTruthy();
   });
 
+  it("renders the book result cover as a SQUARE (width === height)", async () => {
+    await renderSearch("hobbit");
+    const cover = screen.getByTestId("book-result-cover");
+    const flat = Array.isArray(cover.props.style)
+      ? Object.assign({}, ...cover.props.style)
+      : cover.props.style;
+    expect(flat.width).toBe(flat.height);
+  });
+
   it("hideNonAudiobooksGlobal filters ebook-only books out of results", async () => {
     useUserStore.setState({
       settings: { ...userInitial.settings, hideNonAudiobooksGlobal: true },

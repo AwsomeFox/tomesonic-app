@@ -21,6 +21,20 @@ jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
 
+// Controllable playback-store stand-in for the Up Next row: a plain selector
+// applied to a mutable snapshot (must be `mock`-prefixed to survive hoisting).
+let mockQueue: any[] = [];
+const mockAddToQueue = jest.fn((item: any) => {
+  mockQueue = [...mockQueue, item];
+});
+const mockRemoveFromQueue = jest.fn((id: string) => {
+  mockQueue = mockQueue.filter((q) => q.libraryItemId !== id);
+});
+jest.mock("../../store/usePlaybackStore", () => ({
+  usePlaybackStore: (selector: any) =>
+    selector({ queue: mockQueue, addToQueue: mockAddToQueue, removeFromQueue: mockRemoveFromQueue }),
+}));
+
 import AddToListModal from "../../components/AddToListModal";
 import { api } from "../../utils/api";
 
@@ -49,6 +63,12 @@ function seedGet(colls: any[] = collections, pls: any[] = playlists) {
 }
 
 const noop = () => {};
+
+beforeEach(() => {
+  mockQueue = [];
+  mockAddToQueue.mockClear();
+  mockRemoveFromQueue.mockClear();
+});
 
 async function renderModal(props: any = {}) {
   await render(
@@ -241,5 +261,71 @@ describe("AddToListModal — create new", () => {
     await fireEvent.press(screen.getByLabelText("Cancel"));
     expect(screen.queryByPlaceholderText("Collection name")).toBeNull();
     expect(screen.getByLabelText("Create new collection")).toBeTruthy();
+  });
+});
+
+describe("AddToListModal — Up Next queue row", () => {
+  const QUEUE_ID = "item1";
+
+  it("hides the Up Next section when no queueItemId is given", async () => {
+    seedGet();
+    await renderModal();
+    // Neither the section header nor the toggle row renders.
+    expect(screen.queryByLabelText("Up Next")).toBeNull();
+    // Header subtitle collapses to the collection/playlist-only wording.
+    expect(screen.getByText("A collection or a playlist")).toBeTruthy();
+  });
+
+  it("shows an unchecked Up Next row (and header wording) when the book is not queued", async () => {
+    seedGet();
+    await renderModal({ queueItemId: QUEUE_ID, title: "The Hobbit", author: "Tolkien" });
+    const row = screen.getByLabelText("Up Next");
+    expect(row.props.accessibilityState?.checked).toBe(false);
+    expect(screen.getByText("Up Next, a collection, or a playlist")).toBeTruthy();
+    // Collections/Playlists sections stay intact alongside it.
+    expect(screen.getByText("Collections")).toBeTruthy();
+    expect(screen.getByText("Playlists")).toBeTruthy();
+  });
+
+  it("shows a checked Up Next row when the book is already in the queue", async () => {
+    mockQueue = [{ libraryItemId: QUEUE_ID, title: "The Hobbit" }];
+    seedGet();
+    await renderModal({ queueItemId: QUEUE_ID });
+    expect(screen.getByLabelText("Up Next").props.accessibilityState?.checked).toBe(true);
+  });
+
+  it("ignores an episode-scoped queue entry when matching a book (item-level only)", async () => {
+    // A queued podcast episode under a colliding id must NOT read as "queued".
+    mockQueue = [{ libraryItemId: QUEUE_ID, episodeId: "ep1" }];
+    seedGet();
+    await renderModal({ queueItemId: QUEUE_ID });
+    expect(screen.getByLabelText("Up Next").props.accessibilityState?.checked).toBe(false);
+  });
+
+  it("adds the book via addToQueue (carrying title/author/cover) when tapped", async () => {
+    seedGet();
+    await renderModal({
+      queueItemId: QUEUE_ID,
+      title: "The Hobbit",
+      author: "Tolkien",
+      coverUrl: "https://abs.test/cover.webp",
+    });
+    await fireEvent.press(screen.getByLabelText("Up Next"));
+    expect(mockAddToQueue).toHaveBeenCalledWith({
+      libraryItemId: QUEUE_ID,
+      title: "The Hobbit",
+      author: "Tolkien",
+      coverUrl: "https://abs.test/cover.webp",
+    });
+    expect(mockRemoveFromQueue).not.toHaveBeenCalled();
+  });
+
+  it("removes the book via removeFromQueue when it is already queued", async () => {
+    mockQueue = [{ libraryItemId: QUEUE_ID }];
+    seedGet();
+    await renderModal({ queueItemId: QUEUE_ID });
+    await fireEvent.press(screen.getByLabelText("Up Next"));
+    expect(mockRemoveFromQueue).toHaveBeenCalledWith(QUEUE_ID);
+    expect(mockAddToQueue).not.toHaveBeenCalled();
   });
 });
