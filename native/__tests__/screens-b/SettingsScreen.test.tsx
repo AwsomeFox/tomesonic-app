@@ -138,6 +138,8 @@ describe("SettingsScreen", () => {
     ["Show Discover tab before connecting", "showDiscoverWhenDisconnected", true, false] as const,
     ["Disable auto rewind", "disableAutoRewind", false, true] as const,
     ["Auto-download next in series", "autoDownloadNextInSeries", false, true] as const,
+    ["Show book progress bar", "showPlayerBookProgress", true, false] as const,
+    ["Show chapter progress bar", "showPlayerChapterProgress", true, false] as const,
   ])("toggle '%s' flips settings.%s and persists it", async (label, key, initial, flipped) => {
     await renderSettings();
 

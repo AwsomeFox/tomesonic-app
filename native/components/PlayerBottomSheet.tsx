@@ -1018,7 +1018,7 @@ export default function PlayerBottomSheet() {
                       ? `Chapter progress: ${spokenTime(chapterElapsed)} elapsed.`
                       : "",
                     settings.showPlayerBookProgress !== false
-                      ? `Overall Book progress: ${secondsToTimestamp(position)} elapsed.`
+                      ? `Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`
                       : ""
                   ].filter(Boolean).join(" ")}
                 >
