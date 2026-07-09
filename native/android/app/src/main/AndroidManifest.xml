@@ -4,6 +4,12 @@
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:replace="android:maxSdkVersion"/>
+  <!-- expo-sensors' library manifest contributes ACTIVITY_RECOGNITION for its
+       Pedometer, which we do NOT use (shake-to-extend reads only the
+       Accelerometer, which needs no permission). That permission trips Google
+       Play's health/fitness declaration gate and blocks the release, so strip
+       it from the merged manifest. -->
+  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" tools:node="remove"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
