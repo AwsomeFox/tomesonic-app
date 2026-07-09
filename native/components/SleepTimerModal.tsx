@@ -274,7 +274,7 @@ export default function SleepTimerModal({
             ) : null}
             {onToggleShakeToExtend ? (
               <ToggleRow
-                label="Shake to add time"
+                label="Shake to add time (screen on)"
                 value={!!shakeToExtend}
                 onValueChange={onToggleShakeToExtend}
                 colors={colors}

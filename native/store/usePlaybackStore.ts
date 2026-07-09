@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { AppState } from "react-native";
 import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react-native-track-player";
 import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
@@ -150,11 +151,21 @@ function getSleepShakeToExtend(): boolean {
 // dedicated "rewind on wake" nudge, independent of the generic auto-rewind.
 let _sleepRewindPending = false;
 
-// Accelerometer shake-to-extend. expo-sensors is NOT a dependency (see
-// package.json), so the require() below throws and the listener is a NO-OP —
-// the setting + plumbing exist and light up automatically if the dep is added,
-// without adding a native dependency now.
+// Accelerometer shake-to-extend.
+//
+// IMPORTANT — FOREGROUND ONLY. expo-sensors registers a normal (non-wake-up)
+// SensorManager listener. Android suspends non-wake-up sensors once the screen
+// turns off, and Doze suspends them further, so accelerometer callbacks stop
+// firing with the screen off / in the background. Making shake work with the
+// screen off would need a wake-up sensor + a partial wake lock held for the
+// whole sleep window — a battery drain that's user-hostile for a "falling
+// asleep" feature. So we gate the listener to the foreground (AppState
+// "active"): it's a screen-on convenience only. We register on foreground and
+// unregister on background rather than holding a dead sensor registration
+// (which wastes battery and misleads). The "+N min" buttons and rewind-on-wake
+// remain the reliable screen-off controls.
 let _shakeSub: { remove: () => void } | null = null;
+let _shakeAppStateSub: { remove: () => void } | null = null;
 let _lastShakeAt = 0;
 const SHAKE_G_THRESHOLD = 1.8; // total acceleration in g (~1g at rest)
 function onShakeExtend() {
@@ -165,12 +176,9 @@ function onShakeExtend() {
   // modal's "+N min" extend semantics.
   st.setSleepTimer(Math.max(0, Math.round(t.remaining)) + SLEEP_SHAKE_MINUTES * 60, false);
 }
-function armShakeListener() {
-  disarmShakeListener();
-  if (!getSleepShakeToExtend()) return;
+function _registerAccelerometer() {
+  if (_shakeSub) return;
   try {
-    // expo-sensors is a project dependency; the defensive require just keeps a
-    // stripped/misconfigured build from crashing (falls through to no-op).
     const sensors = require("expo-sensors");
     const Accelerometer = sensors?.Accelerometer;
     if (!Accelerometer?.addListener) return;
@@ -184,15 +192,37 @@ function armShakeListener() {
       }
     });
   } catch {
-    // expo-sensors not installed — no-op (no new native dependency added).
+    // expo-sensors missing/misconfigured — stay a no-op.
     _shakeSub = null;
   }
 }
-function disarmShakeListener() {
+function _unregisterAccelerometer() {
   try {
     _shakeSub?.remove();
   } catch {}
   _shakeSub = null;
+}
+function armShakeListener() {
+  disarmShakeListener();
+  if (!getSleepShakeToExtend()) return;
+  // Only listen while the app is foreground (see note above); follow AppState
+  // so we drop the sensor when backgrounded and pick it back up on return.
+  if (AppState.currentState === "active") _registerAccelerometer();
+  try {
+    _shakeAppStateSub = AppState.addEventListener("change", (s) => {
+      if (s === "active") _registerAccelerometer();
+      else _unregisterAccelerometer();
+    });
+  } catch {
+    _shakeAppStateSub = null;
+  }
+}
+function disarmShakeListener() {
+  _unregisterAccelerometer();
+  try {
+    _shakeAppStateSub?.remove();
+  } catch {}
+  _shakeAppStateSub = null;
 }
 
 // Resolve the NEXT book in the finished book's series. Reuses the same
