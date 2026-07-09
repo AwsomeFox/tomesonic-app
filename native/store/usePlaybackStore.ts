@@ -322,6 +322,10 @@ export async function syncUpNextFromServer(libraryId?: string | null): Promise<v
     const merged = [...local];
     for (const item of serverItems) {
       if (!item?.libraryItemId) continue;
+      // Only book items are safely round-trippable through the server mirror
+      // (ABS playlist DELETE is keyed by libraryItemId alone). Never import
+      // episode-scoped entries — they can't be removed without wiping siblings.
+      if (item.episodeId) continue;
       if (seen.has(key(item))) continue;
       seen.add(key(item));
       merged.push(item);
@@ -1332,8 +1336,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ queue: next });
     // Mirror to the server "Up Next" playlist, fire-and-forget so the optimistic
     // local add above is never blocked. Offline / no-library → no-op.
+    // BOOKS ONLY: ABS playlist items DELETE is keyed by libraryItemId alone, so
+    // mirroring a podcast EPISODE would let a later single-episode remove wipe
+    // every sibling episode server-side (and cross-device). Episodes stay
+    // local-only in the queue — no regression, the queue was device-local before.
     const libraryId = currentLibraryId();
-    if (libraryId) upNextAddItem(libraryId, item).catch(() => {});
+    if (libraryId && !item.episodeId) upNextAddItem(libraryId, item).catch(() => {});
   },
   removeFromQueue: (libraryItemId: string, episodeId?: string | null) => {
     // addToQueue de-dupes by libraryItemId + episodeId, so a podcast can have
@@ -1348,19 +1356,24 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     persistQueue(next);
     set({ queue: next });
     // Drain the same item from the server mirror (best-effort, non-blocking).
-    // ABS keys playlist items by libraryItemId, so a per-episode local remove
-    // still maps to the item-level DELETE here — acceptable for the mirror.
+    // Only BOOK items are mirrored (see addToQueue), so only an item-level
+    // remove (no episodeId) may touch the server. A per-episode remove must NOT
+    // DELETE by libraryItemId — that item-level DELETE would take out every
+    // sibling episode server-side. Episodes are local-only, so skip the mirror.
     const libraryId = currentLibraryId();
-    if (libraryId) upNextRemoveItem(libraryId, libraryItemId).catch(() => {});
+    if (libraryId && episodeId == null) upNextRemoveItem(libraryId, libraryItemId).catch(() => {});
   },
   clearQueue: () => {
     // Snapshot before wiping so we can drain the server mirror too.
     const prev = get().queue;
     persistQueue([]);
     set({ queue: [] });
+    // Only book items are mirrored, so only drain those; an episode's
+    // item-level DELETE would wipe its siblings server-side.
     const libraryId = currentLibraryId();
     if (libraryId) {
       for (const item of prev) {
+        if (item.episodeId) continue;
         upNextRemoveItem(libraryId, item.libraryItemId).catch(() => {});
       }
     }
@@ -1394,9 +1407,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         persistQueue(rest);
         set({ queue: rest });
         // Drain the started item from the server mirror too, so the shared
-        // "Up Next" list matches the local queue across devices.
+        // "Up Next" list matches the local queue across devices. Books only —
+        // an episode's item-level DELETE would remove its siblings server-side.
         const libraryId = currentLibraryId();
-        if (libraryId) upNextRemoveItem(libraryId, next.libraryItemId).catch(() => {});
+        if (libraryId && !next.episodeId) upNextRemoveItem(libraryId, next.libraryItemId).catch(() => {});
       }
       return ok;
     } catch {

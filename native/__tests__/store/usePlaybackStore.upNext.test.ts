@@ -89,6 +89,43 @@ describe("usePlaybackStore ↔ server Up Next mirror", () => {
     expect(upNextRemoveItem).toHaveBeenCalledWith(LIB, "b2");
   });
 
+  // ABS playlist DELETE is keyed by libraryItemId alone, so mirroring podcast
+  // EPISODES would let one episode's removal wipe its siblings server-side.
+  // Episodes stay local-only; only books touch the maintained playlist.
+  it("does NOT mirror episode-scoped items to the server on add", () => {
+    withLibrary();
+    usePlaybackStore.getState().addToQueue({ libraryItemId: "pod1", episodeId: "ep1" });
+    // Local queue still holds the episode (instant, device-local as before)...
+    expect(usePlaybackStore.getState().queue).toHaveLength(1);
+    // ...but nothing is pushed to the shared server playlist.
+    expect(upNextAddItem).not.toHaveBeenCalled();
+  });
+
+  it("a per-episode remove never issues an item-level server DELETE", () => {
+    withLibrary();
+    usePlaybackStore.getState().addToQueue({ libraryItemId: "pod1", episodeId: "ep1" });
+    usePlaybackStore.getState().addToQueue({ libraryItemId: "pod1", episodeId: "ep2" });
+    jest.mocked(upNextRemoveItem).mockClear();
+
+    usePlaybackStore.getState().removeFromQueue("pod1", "ep1");
+    // Sibling episode survives locally, and the server mirror is untouched (an
+    // item-level DELETE would have removed both episodes server-side).
+    expect(usePlaybackStore.getState().queue.map((q) => q.episodeId)).toEqual(["ep2"]);
+    expect(upNextRemoveItem).not.toHaveBeenCalled();
+  });
+
+  it("clearQueue only drains book items from the server, never episodes", () => {
+    withLibrary();
+    usePlaybackStore.getState().addToQueue({ libraryItemId: "b2" });
+    usePlaybackStore.getState().addToQueue({ libraryItemId: "pod1", episodeId: "ep1" });
+    jest.mocked(upNextRemoveItem).mockClear();
+
+    usePlaybackStore.getState().clearQueue();
+    expect(usePlaybackStore.getState().queue).toEqual([]);
+    expect(upNextRemoveItem).toHaveBeenCalledWith(LIB, "b2");
+    expect(upNextRemoveItem).toHaveBeenCalledTimes(1); // NOT the episode
+  });
+
   it("clearQueue drains every server item", () => {
     withLibrary();
     usePlaybackStore.getState().addToQueue({ libraryItemId: "b2" });
@@ -139,6 +176,18 @@ describe("usePlaybackStore ↔ server Up Next mirror", () => {
 
       await syncUpNextFromServer(LIB);
       expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["local1"]);
+    });
+
+    it("never imports episode-scoped server entries (unremovable without wiping siblings)", async () => {
+      withLibrary();
+      jest.mocked(upNextListItems).mockResolvedValue([
+        { libraryItemId: "server-book", title: "Book" },
+        { libraryItemId: "server-pod", episodeId: "ep9", title: "Episode" },
+      ] as any);
+
+      await syncUpNextFromServer(LIB);
+      // The book merges in; the episode entry is skipped.
+      expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["server-book"]);
     });
   });
 });
