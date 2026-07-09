@@ -160,7 +160,15 @@ export const db = {
       const parsed = safeParse(key);
       if (parsed) logs.push(parsed);
     });
-    return logs.sort((a, b) => a.timestamp - b.timestamp);
+    // Coerce missing/NaN timestamps to 0 so the comparator can never return
+    // NaN — a NaN comparator yields an unstable/garbage order (and V8 may throw
+    // in strict mode). Records without a valid timestamp sort deterministically
+    // first.
+    return logs.sort((a, b) => {
+      const ta = Number(a?.timestamp);
+      const tb = Number(b?.timestamp);
+      return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
+    });
   },
 
   saveLog: (log: any) => {

@@ -61,11 +61,21 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import CollectionDetailScreen from "../../screens/CollectionDetailScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useDialogStore } from "../../store/useDialogStore";
+
+// Pull the destructive "Delete" button out of the confirm dialog the trash
+// icon opens (no AppDialog host is mounted in the unit render) and invoke it.
+async function confirmDelete() {
+  const del = useDialogStore.getState().current!.buttons.find((b) => b.style === "destructive")!;
+  await act(async () => {
+    await del.onPress!();
+  });
+}
 
 const initialUser = useUserStore.getState();
 const initialPlayback = usePlaybackStore.getState();
@@ -128,6 +138,8 @@ beforeEach(() => {
   startPlayback = jest.fn().mockResolvedValue(true);
   usePlaybackStore.setState({ startPlayback, currentSession: null } as any);
   (api.get as jest.Mock).mockResolvedValue({ data: COLLECTION });
+  (api.delete as jest.Mock).mockReset();
+  useDialogStore.setState({ current: null });
 });
 
 describe("CollectionDetailScreen", () => {
@@ -260,5 +272,60 @@ describe("CollectionDetailScreen", () => {
     await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Finished Book")).toBeTruthy();
+  });
+
+  describe("delete (admin-gated)", () => {
+    it("hides the delete control for a non-admin user", async () => {
+      // Default user is null (non-admin): deleting is an admin-only endpoint.
+      await renderCollection();
+      await screen.findByText("Finished Book");
+
+      expect(screen.queryByLabelText("Delete collection")).toBeNull();
+    });
+
+    it("shows the delete control for an admin and deletes on confirm", async () => {
+      useUserStore.setState({ user: { type: "admin" } } as any);
+      (api.delete as jest.Mock).mockResolvedValue({ data: {} });
+      const navigation = await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Delete collection"));
+      await confirmDelete();
+
+      expect(api.delete).toHaveBeenCalledWith("/api/collections/col1");
+      expect(navigation.goBack).toHaveBeenCalled();
+    });
+
+    it("surfaces a permissions message (not offline) on a 403", async () => {
+      useUserStore.setState({ user: { type: "admin" } } as any);
+      (api.delete as jest.Mock).mockRejectedValue({ response: { status: 403 } });
+      const navigation = await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Delete collection"));
+      await confirmDelete();
+
+      expect(navigation.goBack).not.toHaveBeenCalled();
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.title).toBe("Not allowed");
+      expect(dialog.message).toMatch(/permission/i);
+      // The offline copy must NOT be used for a permissions error.
+      expect(dialog.message).not.toMatch(/connection/i);
+    });
+
+    it("surfaces an offline message when the delete fails without a 403", async () => {
+      useUserStore.setState({ user: { type: "admin" } } as any);
+      (api.delete as jest.Mock).mockRejectedValue({ response: { status: 500 } });
+      const navigation = await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Delete collection"));
+      await confirmDelete();
+
+      expect(navigation.goBack).not.toHaveBeenCalled();
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.title).toBe("Couldn't delete");
+      expect(dialog.message).toMatch(/connection/i);
+    });
   });
 });

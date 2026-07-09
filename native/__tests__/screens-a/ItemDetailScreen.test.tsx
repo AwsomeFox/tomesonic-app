@@ -336,6 +336,114 @@ describe("ItemDetailScreen", () => {
     expect(map["ebook1"].isFinished).toBe(true);
   });
 
+  it("does NOT queue an offline finish patch on a server rejection (403) and surfaces an error", async () => {
+    routeApi(audioOnlyItem, [ebookSibling]);
+    // A rejection WITH a response is a real server error — NOT offline.
+    mockedPatch.mockRejectedValue({ response: { status: 403 } });
+    const alertSpy = showAppDialog as jest.Mock;
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+    await screen.findByLabelText("Read ebook");
+
+    await fireEvent.press(screen.getByLabelText("Mark as finished"));
+
+    // Error surfaced to the user.
+    await waitFor(() =>
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't update" })
+      )
+    );
+    // The offline queue must NOT be poisoned by a genuine server error…
+    expect(queueFinishedPatch).not.toHaveBeenCalled();
+    // …and the local map must not be optimistically flipped either.
+    expect(useUserStore.getState().mediaProgress["item1"]?.isFinished).not.toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it("download failure surfaces the actual error reason (not a generic connectivity message)", async () => {
+    routeApi(bothFormatItem);
+    (downloader.downloadBook as jest.Mock).mockRejectedValueOnce(
+      new Error("No space left on device")
+    );
+    const alertSpy = showAppDialog as jest.Mock;
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+    await screen.findByText("Listening");
+
+    await fireEvent.press(screen.getByLabelText("Download"));
+    await waitFor(() =>
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Download failed",
+          message: expect.stringContaining("No space left on device"),
+        })
+      )
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("wraps the secondary action row so all actions stay reachable on narrow screens", async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    const row = screen.getByTestId("detail-action-row");
+    const style = Array.isArray(row.props.style)
+      ? Object.assign({}, ...row.props.style)
+      : row.props.style;
+    // A single non-wrapping row overflowed off-screen once 7-8 circular actions
+    // showed — it must wrap (with a rowGap for the extra lines).
+    expect(style.flexWrap).toBe("wrap");
+    expect(style.rowGap).toBeGreaterThan(0);
+  });
+
+  it("seek-from-here falls back to a TIME seek when the loaded session has no store chapters", async () => {
+    // Item is the loaded session, but the STORE's chapter array is empty, so the
+    // modal fell back to the RAW item chapter list. Indexing seekToChapter() into
+    // the empty store array would silently no-op — seek by the chapter's TIME.
+    const chapteredItem = {
+      ...bothFormatItem,
+      media: {
+        ...bothFormatItem.media,
+        chapters: [
+          { id: 0, title: "Chapter 1", start: 0, end: 600 },
+          { id: 1, title: "Chapter 2", start: 600, end: 1800 },
+        ],
+      },
+    };
+    routeApi(chapteredItem);
+    const seek = jest.fn().mockResolvedValue(undefined);
+    const seekToChapter = jest.fn().mockResolvedValue(undefined);
+    const startPlayback = jest.fn().mockResolvedValue(true);
+    usePlaybackStore.setState({
+      seek,
+      seekToChapter,
+      startPlayback,
+      currentSession: { id: "sess1", libraryItemId: "item1" },
+      chapters: [], // store has NO chapters → modal shows the raw list
+    } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    await fireEvent.press(screen.getByLabelText("View chapters"));
+    // Chapter 2 starts at 600s (10:00) — tapping it must seek to that TIME.
+    await fireEvent.press(screen.getByLabelText("Chapter 2, starts at 10:00"));
+
+    await waitFor(() => expect(seek).toHaveBeenCalledWith(600));
+    // The empty-store index path must NOT be used, and no fresh /play churned.
+    expect(seekToChapter).not.toHaveBeenCalled();
+    expect(startPlayback).not.toHaveBeenCalled();
+  });
+
   it("download button: not downloaded → downloadBook with server address + token", async () => {
     routeApi(bothFormatItem);
     const navigation = makeNavigation();
@@ -903,6 +1011,41 @@ describe("request the other format via ReadMeABook", () => {
         expect.objectContaining({ asin: "B0EBOOK01", title: "Silmarillion Reader" })
       )
     );
+    await screen.findByText("Audiobook requested");
+  });
+
+  it("collapses a rapid double-tap into a single RMAB request (in-flight guard)", async () => {
+    useRmabStore.setState({ configured: true, authMode: "apiToken" } as any);
+    // Hold the request open so the second tap lands while it's still "working".
+    let resolveReq: (v?: any) => void = () => {};
+    const spy = jest
+      .spyOn(rmab, "createRequest")
+      .mockImplementation(() => new Promise((r) => { resolveReq = r; }));
+    const withAsin = {
+      ...ebookOnlyItem,
+      media: { ...ebookOnlyItem.media, metadata: { ...ebookOnlyItem.media.metadata, asin: "B0EBOOK01" } },
+    };
+    routeApi(withAsin);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Silmarillion Reader");
+
+    // First tap starts the request and flips the button to working/disabled.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Request audiobook edition"));
+    });
+    // Second tap while the request is in flight must be swallowed (guard +
+    // disabled button) — no duplicate createRequest.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Request audiobook edition"));
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Settle the request so the success burst renders (no dangling promise/act).
+    await act(async () => {
+      resolveReq({});
+    });
     await screen.findByText("Audiobook requested");
   });
 

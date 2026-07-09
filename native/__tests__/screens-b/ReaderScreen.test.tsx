@@ -165,6 +165,7 @@ beforeEach(() => {
   useDownloadStore.setState(initialDownload, true);
   usePlaybackStore.setState({ currentSession: null } as any);
   useDownloadStore.setState({ completedDownloads: {} } as any);
+  useDialogStore.setState({ current: null } as any);
   storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
   storage.getAllKeys().forEach((k) => storage.remove(k));
   (global as any).__webViewProps = null;
@@ -531,6 +532,32 @@ describe("ReaderScreen (epub pipeline)", () => {
     expect(storage.getNumber("reader_line_height")).toBe(1.8);
   });
 
+  it("marks reading-settings section titles as headers for screen readers", async () => {
+    await renderReader();
+    await readyWebView();
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+
+    // Sheet title + section titles expose the header role so TalkBack/VoiceOver
+    // can navigate by heading.
+    expect(screen.getByText("Reading Settings").props.accessibilityRole).toBe("header");
+    expect(screen.getByText("Margins").props.accessibilityRole).toBe("header");
+    expect(screen.getByText("Layout").props.accessibilityRole).toBe("header");
+    expect(screen.getByText("Time Left").props.accessibilityRole).toBe("header");
+  });
+
+  it("exposes the progress/time-left footer as a polite live region", async () => {
+    await renderReader();
+    const webProps = await readyWebView();
+    await act(async () => {
+      sendMsg(webProps, LOCATION);
+    });
+
+    // The footer announces page/percent/time-left changes without stealing focus.
+    expect(
+      screen.getByTestId("reader-progress-footer").props.accessibilityLiveRegion
+    ).toBe("polite");
+  });
+
   it("emits the finger-follow page-curl gesture code in the reader HTML by default", async () => {
     await renderReader();
     await readyWebView();
@@ -694,6 +721,20 @@ describe("ReaderScreen (pdf)", () => {
     await waitFor(() => expect((global as any).__pdfProps.page).toBe(10));
   });
 
+  it("honors the Read-from-here pending jump for PDFs once the page count is known", async () => {
+    await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF", initialFraction: 0.5 });
+    await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
+    // Until the document loads it sits on the restored/first page.
+    expect((global as any).__pdfProps.page).toBe(1);
+
+    // onLoadComplete reports the page count — the pending 0.5 fraction now maps
+    // to a page (0.5 * 200 = 100), mirroring the epub goToFraction handoff.
+    await act(async () => {
+      (global as any).__pdfProps.onLoadComplete(200);
+    });
+    await waitFor(() => expect((global as any).__pdfProps.page).toBe(100));
+  });
+
   it("shows a PDF-specific error with retry when the PDF component errors", async () => {
     await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF" });
     await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
@@ -778,6 +819,20 @@ describe("ReaderScreen (reader features)", () => {
     // Selection reporting + TTS text extraction.
     expect(html).toContain("type: 'selection'");
     expect(html).toContain("window.getReaderText");
+  });
+
+  it("sets the margin on view.renderer (not the <foliate-view> element) so it re-lays-out", async () => {
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+
+    // Margin must be observed on the renderer (mirroring how `flow` is set),
+    // otherwise changing the margin never re-lays-out the text.
+    expect(html).toContain("view.renderer.setAttribute('margin', px + 'px')");
+    // The initial margin is also applied to the renderer after open.
+    expect(html).toContain("view.renderer.setAttribute('margin', \"16px\")");
+    // The broken element-level margin assignment is gone.
+    expect(html).not.toContain("view.setAttribute('margin'");
   });
 
   it("defaults theme/margin/flow into the HTML and bakes stored preferences", async () => {
@@ -1072,8 +1127,22 @@ describe("ReaderScreen (reader features)", () => {
     await fireEvent.press(screen.getByLabelText("Reading settings"));
     await fireEvent.press(screen.getByLabelText("Highlights"));
     expect(screen.getByText("the quick brown fox")).toBeTruthy();
+    // The sheet says highlights are device-only so the user isn't misled into
+    // thinking they sync.
+    expect(screen.getByText("Saved on this device")).toBeTruthy();
     (global as any).__injectJS.mockClear();
+
+    // Tapping delete only opens a confirm dialog — nothing is removed yet.
     await fireEvent.press(screen.getByLabelText("Delete highlight"));
+    expect(useDialogStore.getState().current?.title).toBe("Delete highlight?");
+    expect((global as any).__injectJS).not.toHaveBeenCalled();
+    expect(JSON.parse(storage.getString(`reader_highlights_${ITEM}`) as string)).toHaveLength(1);
+
+    // Confirming the dialog un-draws it and drops it from storage.
+    const del = useDialogStore.getState().current?.buttons.find((b) => b.text === "Delete");
+    await act(async () => {
+      del?.onPress?.();
+    });
     expect((global as any).__injectJS).toHaveBeenCalledWith(
       expect.stringContaining("window.removeHighlight")
     );
@@ -1129,6 +1198,41 @@ describe("ReaderScreen (reader features)", () => {
       sendMsg(webProps, { type: "ttsText", text: "Once upon a time" });
     });
     expect(Speech.speak).toHaveBeenCalledWith("Once upon a time", expect.any(Object));
+  });
+
+  it("applies the selected read-aloud rate to the Speech.speak call", async () => {
+    const Speech = require("expo-speech");
+    await renderReader();
+    const webProps = await readyWebView();
+
+    // Bump the rate from the default 1.0x to 1.1x in the reading settings sheet.
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+    await fireEvent.press(screen.getByLabelText("Increase read-aloud speed"));
+    expect(screen.getByText("1.1x")).toBeTruthy();
+    expect(storage.getNumber("reader_tts_rate")).toBeCloseTo(1.1);
+
+    // Start read-aloud and feed it text; the utterance carries the new rate.
+    await fireEvent.press(screen.getByLabelText("Read aloud"));
+    (Speech.speak as jest.Mock).mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "Once upon a time", pos: 0 });
+    });
+    const speakOpts = (Speech.speak as jest.Mock).mock.calls[0][1];
+    expect(speakOpts.rate).toBeCloseTo(1.1);
+  });
+
+  it("clamps the read-aloud rate to its lower bound", async () => {
+    storage.set("reader_tts_rate", 0.5);
+    await renderReader();
+    await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+    // Already at the floor — the decrease control is disabled and the value
+    // can't step below TTS_RATE_MIN.
+    expect(screen.getByText("0.5x")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Decrease read-aloud speed").props.accessibilityState?.disabled
+    ).toBe(true);
   });
 
   it("chunks a long page under Android's ~4000-char TTS limit and advances only after the last chunk", async () => {

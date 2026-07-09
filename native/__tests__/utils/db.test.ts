@@ -121,6 +121,23 @@ describe("logs", () => {
     expect(logs[2].id).toBe("custom");
   });
 
+  it("sorts logs deterministically even when some timestamps are missing/NaN", () => {
+    // A record with no (or a non-numeric) timestamp must not poison the sort
+    // with a NaN comparator — those records sort first (treated as 0) and the
+    // valid ones stay in ascending order.
+    db.saveLog({ id: "b", message: "b", timestamp: 200 });
+    db.saveLog({ id: "missing", message: "missing" }); // no timestamp
+    db.saveLog({ id: "a", message: "a", timestamp: 100 });
+    db.saveLog({ id: "bad", message: "bad", timestamp: "oops" as any });
+
+    const logs = db.getLogs();
+    // The two valid timestamps keep their ascending order relative to each other.
+    const ordered = logs.map((l: any) => l.message);
+    expect(ordered.indexOf("a")).toBeLessThan(ordered.indexOf("b"));
+    // Every input record is present (nothing dropped or lost by the sort).
+    expect(ordered.sort()).toEqual(["a", "b", "bad", "missing"]);
+  });
+
   it("cleanLogs removes entries older than the cutoff and keeps recent ones", () => {
     const now = Date.now();
     db.saveLog({ id: "old", message: "old", timestamp: now - 25 * 60 * 60 * 1000 });

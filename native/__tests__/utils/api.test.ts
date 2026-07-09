@@ -216,6 +216,33 @@ describe("response interceptor", () => {
     });
   });
 
+  // REGRESSION: when the FILE candidate token produced the successful refresh
+  // and the server didn't rotate (no new refreshToken), the used file token —
+  // not the stale stored one — must be persisted. Falling back to
+  // serverConfig.refreshToken here would clobber a working token → forced logout.
+  it("persists the USED (file) refresh token when the response omits a new one", async () => {
+    storageHelper.setServerConfig({
+      address: "http://abs.local",
+      token: "stale",
+      refreshToken: "stored-refresh",
+    });
+    (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: true });
+    (FileSystem.readAsStringAsync as jest.Mock).mockResolvedValue(
+      JSON.stringify({ server: "http://abs.local", token: "x", refreshToken: "file-refresh" })
+    );
+    // Refresh succeeds on the file token but the server does NOT rotate it.
+    postSpy.mockResolvedValue({ status: 200, data: { user: { accessToken: "fresh" } } });
+
+    await responseHandler.rejected(make401());
+
+    // The file token that actually worked is kept — NOT the stale stored one.
+    expect(postSpy.mock.calls[0][2].headers["x-refresh-token"]).toBe("file-refresh");
+    expect(storageHelper.getServerConfig()).toMatchObject({
+      token: "fresh",
+      refreshToken: "file-refresh",
+    });
+  });
+
   it("prefers the Android Auto creds file's refresh token over the stored one", async () => {
     storageHelper.setServerConfig({
       address: "http://abs.local",

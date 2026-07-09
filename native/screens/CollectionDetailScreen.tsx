@@ -47,10 +47,21 @@ function elapsedPretty(seconds: number): string {
   return `${Math.floor(seconds)} sec`;
 }
 
+// Deleting a collection is an admin-only ABS endpoint (a non-admin's DELETE
+// returns 403). Gate the button so non-admins don't see a control that can only
+// fail — mirrors PodcastSettingsScreen's isAdminUser check.
+function isAdminUser(u: any): boolean {
+  return (
+    !!u &&
+    (u.type === "admin" || u.type === "root" || !!(u.permissions && u.permissions.update))
+  );
+}
+
 export default function CollectionDetailScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const { collectionId } = route.params || {};
   const { serverConnectionConfig } = useUserStore();
+  const isAdmin = useUserStore((s) => isAdminUser(s.user));
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
 
@@ -269,9 +280,15 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
             try {
               await api.delete(`/api/collections/${collectionId}`);
               navigation.goBack();
-            } catch {
+            } catch (e: any) {
               setDeleting(false);
-              showAppDialog({ title: "Couldn't delete", message: "The collection couldn't be deleted. Check your connection and try again." });
+              // A 403 is a permissions failure (non-admin), NOT an offline
+              // condition — don't send the user to check their connection.
+              if (e?.response?.status === 403) {
+                showAppDialog({ title: "Not allowed", message: "You don't have permission to delete this collection." });
+              } else {
+                showAppDialog({ title: "Couldn't delete", message: "The collection couldn't be deleted. Check your connection and try again." });
+              }
             }
           },
         },
@@ -305,7 +322,7 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
           {collectionName || "Collection"}
         </Text>
-        {collection ? (
+        {collection && isAdmin ? (
           <Pressable
             onPress={handleDelete}
             disabled={deleting}

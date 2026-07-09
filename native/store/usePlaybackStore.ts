@@ -276,6 +276,10 @@ export async function resolveNextInSeries(libraryItemId: string): Promise<string
 // the series. Casting keeps working — advancing routes through startPlayback →
 // preparePlaybackSession, which loads the receiver while casting.
 let _autoAdvancing = false;
+// In-flight guard for playNextInQueue: a "Play now" tap racing the finish
+// auto-advance must not pop + start two items (the second start would clobber
+// the first mid-prepare and drop an extra queued book).
+let _playingNext = false;
 export async function autoAdvanceAfterFinish(finishedItemId: string, episodeId?: string | null) {
   if (episodeId) return; // podcast episodes don't queue / series-advance
   if (!finishedItemId || _autoAdvancing) return;
@@ -707,7 +711,12 @@ function persistProgressSample(
     const libraryItemId = currentSession.libraryItemId;
     if (
       bookDuration > 0 &&
-      absolutePosition >= bookDuration - 5 &&
+      absolutePosition > 0 &&
+      // `bookDuration - 5` is unbounded below: for an item shorter than 5s it is
+      // negative, so a fresh sample at position 0 would satisfy it and instantly
+      // mark the item finished. Floor the threshold at 1s (and require position
+      // > 0 above) so a <5s item only finishes once it has actually played.
+      absolutePosition >= Math.max(1, bookDuration - 5) &&
       libraryItemId &&
       _finishedSessionId !== currentSession.id
     ) {
@@ -1124,6 +1133,9 @@ interface PlaybackState {
   // rewinds a dedicated amount (persisted; default ON).
   sleepRewindOnWake: boolean;
   setSleepRewindOnWake: (value: boolean) => void;
+  // Seconds the "rewind on wake" nudge jumps back (persisted; default 30).
+  sleepRewindSeconds: number;
+  setSleepRewindSeconds: (value: number) => void;
   // Shake-to-extend an armed sleep timer (persisted; default ON). No-op unless
   // expo-sensors is present — see armShakeListener.
   sleepShakeToExtend: boolean;
@@ -1138,7 +1150,7 @@ interface PlaybackState {
   // Cross-book play queue — books to auto-advance to on finish.
   queue: QueueItem[];
   addToQueue: (item: QueueItem) => void;
-  removeFromQueue: (libraryItemId: string) => void;
+  removeFromQueue: (libraryItemId: string, episodeId?: string | null) => void;
   clearQueue: () => void;
   playNextInQueue: () => Promise<boolean>;
 
@@ -1195,6 +1207,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   castClient: null,
   sleepTimer: null,
   sleepRewindOnWake: getSleepRewindOnWake(),
+  sleepRewindSeconds: getSleepRewindSeconds(),
   sleepShakeToExtend: getSleepShakeToExtend(),
   rememberSpeedPerBook: getRememberSpeedPerBook(),
   queue: getStoredQueue(),
@@ -1208,6 +1221,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       storage.set(SLEEP_REWIND_ON_WAKE_KEY, !!value);
     } catch {}
     set({ sleepRewindOnWake: !!value });
+  },
+  setSleepRewindSeconds: (value: number) => {
+    // Clamp at the boundary (mirrors setPlaybackSpeed): a non-finite or
+    // non-positive value would make the rewind-on-wake nudge a no-op or a
+    // NaN seek. getSleepRewindSeconds() reads this back on the next resume.
+    if (!Number.isFinite(value) || value <= 0) return;
+    const secs = Math.round(value);
+    try {
+      storage.set(SLEEP_REWIND_SECONDS_KEY, secs);
+    } catch {}
+    set({ sleepRewindSeconds: secs });
   },
   setSleepShakeToExtend: (value: boolean) => {
     try {
@@ -1252,8 +1276,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     persistQueue(next);
     set({ queue: next });
   },
-  removeFromQueue: (libraryItemId: string) => {
-    const next = get().queue.filter((q) => q.libraryItemId !== libraryItemId);
+  removeFromQueue: (libraryItemId: string, episodeId?: string | null) => {
+    // addToQueue de-dupes by libraryItemId + episodeId, so a podcast can have
+    // multiple episodes queued under one libraryItemId. When an episodeId is
+    // supplied, match BOTH so removing one episode doesn't delete its siblings;
+    // without one, keep the item-level remove (drops every entry for the item).
+    const next = get().queue.filter((q) =>
+      episodeId != null
+        ? !(q.libraryItemId === libraryItemId && (q.episodeId || null) === episodeId)
+        : q.libraryItemId !== libraryItemId
+    );
     persistQueue(next);
     set({ queue: next });
   },
@@ -1262,14 +1294,41 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ queue: [] });
   },
   playNextInQueue: async () => {
+    // A "Play now" tap racing the finish auto-advance would otherwise pop + start
+    // two items; the second start clobbers the first mid-prepare and the extra
+    // queued book is lost. One advance at a time.
+    if (_playingNext) return false;
     const q = get().queue;
     if (!q.length) return false;
-    const [next, ...rest] = q;
-    // Pop BEFORE starting: startPlayback awaits the network, and a finish that
-    // fires again mid-start must not re-pick the same item.
-    persistQueue(rest);
-    set({ queue: rest });
-    return await get().startPlayback(next.libraryItemId, next.episodeId);
+    const next = q[0];
+    _playingNext = true;
+    try {
+      // Start FIRST, remove only on success. startPlayback awaits the network,
+      // and if it resolves false / rejects the queued book must stay put —
+      // popping before the await used to permanently drop the next book AND
+      // leave playback stopped when the start failed.
+      const ok = await get().startPlayback(next.libraryItemId, next.episodeId);
+      if (ok) {
+        // De-dupe guarantees at most one entry matches (libraryItemId +
+        // episodeId), so filtering removes exactly the item we just started —
+        // and is robust to the queue changing during the await.
+        const rest = get().queue.filter(
+          (item) =>
+            !(
+              item.libraryItemId === next.libraryItemId &&
+              (item.episodeId || null) === (next.episodeId || null)
+            )
+        );
+        persistQueue(rest);
+        set({ queue: rest });
+      }
+      return ok;
+    } catch {
+      // Start threw — keep the item queued so a later advance can retry it.
+      return false;
+    } finally {
+      _playingNext = false;
+    }
   },
 
   setCastState: (client) => {
@@ -2696,6 +2755,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // No session → nothing to pause later; an orphan interval dragged the
     // player volume down forever via the fade path.
     if (!get().currentSession) return;
+    // Guard the fixed-duration input at the boundary (mirrors setPlaybackSpeed):
+    // a non-finite or non-positive value makes `remaining` NaN/≤0 — NaN never
+    // satisfies remaining<=0 (so it never fires) yet feeds setVolume(NaN),
+    // muting playback. End-of-chapter timers legitimately pass 0 (they compute
+    // their own remaining from the live position), so only gate the fixed path.
+    if (!endOfChapter && (!Number.isFinite(seconds) || seconds <= 0)) return;
     if (sleepTimerInterval) {
       clearInterval(sleepTimerInterval);
       sleepTimerInterval = null;
@@ -2790,6 +2855,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // PLAYING must consume its full duration on the next tick.
         remaining = get().isPlaying ? timer.remaining - elapsedS : timer.remaining;
       }
+
+      // Re-check the timer is still armed before touching volume or re-arming.
+      // The EOC branch awaits getLiveAbsolutePosition above; a cancel/teardown
+      // (or the fixed branch's own scheduling) can null sleepTimer while this
+      // callback is parked, and without this guard the shared tail below would
+      // still setVolume (fighting the teardown's restore) and re-arm a timer
+      // whose interval is already gone. Mirrors the EOC re-check after its await.
+      if (!get().sleepTimer) return;
 
       // Gently fade the volume down over the final SLEEP_FADE_SECONDS so playback
       // eases out instead of cutting off mid-sentence.

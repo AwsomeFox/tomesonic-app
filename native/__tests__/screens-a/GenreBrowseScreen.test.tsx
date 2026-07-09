@@ -4,7 +4,7 @@
  * (base64 `genres.<enc>` / `tags.<enc>`), and covers loading/empty/offline
  * states.
  */
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -105,6 +105,27 @@ describe("GenreBrowseScreen", () => {
     const navigation = makeNavigation();
     await render(<GenreBrowseScreen navigation={navigation} route={{ params: {} }} />);
     await screen.findByText("You're offline");
+  });
+
+  it("reloads the genres list when connectivity is regained (offline → online)", async () => {
+    // Start offline: the screen shows the offline placeholder with no data.
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
+    const navigation = makeNavigation();
+    const { rerender } = await render(
+      <GenreBrowseScreen navigation={navigation} route={{ params: {} }} />
+    );
+    await screen.findByText("You're offline");
+    mockedGet.mockClear();
+
+    // Connectivity returns — the effect must re-fetch and render the list
+    // rather than stranding the user on the offline placeholder.
+    mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true, isOffline: false });
+    await act(async () => {
+      rerender(<GenreBrowseScreen navigation={navigation} route={{ params: {} }} />);
+    });
+
+    await screen.findByText("Science Fiction");
+    expect(mockedGet).toHaveBeenCalledWith("/api/libraries/lib1/filterdata");
   });
 
   it("shows an error state with retry when the fetch fails", async () => {

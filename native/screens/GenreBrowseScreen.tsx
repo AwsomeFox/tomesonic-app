@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { View, Text, Pressable, ScrollView, TextInput, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -64,6 +64,22 @@ export default function GenreBrowseScreen({ navigation, route }: any) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Coming back online: the offline state showed no data (and any load while
+  // offline failed), so re-fetch the moment connectivity is regained instead
+  // of stranding the user on the offline placeholder. Mirrors the offline→online
+  // refresh other screens do.
+  const wasOffline = useRef(false);
+  useEffect(() => {
+    if (isOffline) {
+      wasOffline.current = true;
+      return;
+    }
+    if (wasOffline.current) {
+      wasOffline.current = false;
+      load();
+    }
+  }, [isOffline, load]);
 
   const list = tab === "genres" ? genres : tags;
   const filtered = useMemo(() => {

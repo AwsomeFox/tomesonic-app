@@ -239,6 +239,12 @@ api.interceptors.response.use(
         appLogger.info("Attempting token refresh...", "API");
         let response: any = null;
         let lastRefreshError: any = null;
+        // Remember WHICH candidate actually produced the successful refresh —
+        // it may be the file token rather than the stored one. When the server
+        // doesn't rotate (omits a new refreshToken), we must persist the token
+        // we just used, not blindly fall back to the (possibly stale) stored
+        // one, which would overwrite a working file token → forced logout.
+        let usedRefreshToken: string | null = null;
         for (const refreshToken of refreshCandidates) {
           try {
             response = await axios.post(
@@ -255,6 +261,7 @@ api.interceptors.response.use(
                 timeout: 20000,
               }
             );
+            usedRefreshToken = refreshToken;
             break;
           } catch (err) {
             lastRefreshError = err;
@@ -267,7 +274,8 @@ api.interceptors.response.use(
 
         if (response.status === 200 && response.data?.user?.accessToken) {
           const newToken = response.data.user.accessToken;
-          const newRefreshToken = response.data.user.refreshToken || serverConfig.refreshToken;
+          const newRefreshToken =
+            response.data.user.refreshToken || usedRefreshToken || serverConfig.refreshToken;
 
           const updatedConfig = {
             ...serverConfig,

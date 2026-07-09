@@ -250,6 +250,19 @@ describe("AuthorDetailScreen", () => {
     expect(await screen.findByText("Couldn't load author")).toBeTruthy();
     expect(api.get).not.toHaveBeenCalled();
   });
+
+  it("survives a null row in the library items without crashing the list", async () => {
+    // A single null entry used to reach keyExtractor's item.id and crash the
+    // FlatList (siblings guard with filter(Boolean)).
+    (api.get as jest.Mock).mockResolvedValue({
+      data: { ...AUTHOR, libraryItems: [AUTHOR.libraryItems[0], null] },
+    });
+    await renderAuthor();
+
+    expect(await screen.findByText("Audio Novel")).toBeTruthy();
+    // The null row is dropped from the count and the list.
+    expect(screen.getByText("1 book")).toBeTruthy();
+  });
 });
 
 describe("AuthorDetailScreen — missing-books discovery", () => {

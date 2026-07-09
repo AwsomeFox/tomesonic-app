@@ -1411,7 +1411,7 @@ export default function PlayerBottomSheet() {
                 textAlign: "center",
               }}
             >
-              Chapter {currentChapterIndex + 1} of {chapters.length}
+              Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}
             </Text>
           ) : null}
         </Animated.View>
@@ -1657,7 +1657,7 @@ export default function PlayerBottomSheet() {
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 22, textAlign: "center" }}>{title}</Text>
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", marginTop: 2 }}>{subtitleText}</Text>
                 {hasChapters && currentChapterIndex >= 0 ? (
-                  <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {currentChapterIndex + 1} of {chapters.length}</Text>
+                  <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}</Text>
                 ) : null}
 
                 <View

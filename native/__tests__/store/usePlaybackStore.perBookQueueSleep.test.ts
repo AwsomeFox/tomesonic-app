@@ -44,6 +44,7 @@ import {
   usePlaybackStore,
   autoAdvanceAfterFinish,
   resolveNextInSeries,
+  persistCastProgressSample,
 } from "../../store/usePlaybackStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 
@@ -186,6 +187,84 @@ describe("usePlaybackStore per-book rate / queue / sleep rewind", () => {
       expect(ok).toBe(true);
       expect(startPlayback).toHaveBeenCalledWith("b2", undefined);
       expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["b3"]);
+    });
+
+    it("retains the queued item when startPlayback resolves false", async () => {
+      // startPlayback failing (offline, bad item) must NOT drop the next book —
+      // popping before the await used to lose it AND leave playback stopped.
+      const startPlayback = jest.fn().mockResolvedValue(false);
+      usePlaybackStore.setState({ startPlayback } as any);
+      usePlaybackStore.getState().addToQueue({ libraryItemId: "b2", title: "Book 2" });
+      usePlaybackStore.getState().addToQueue({ libraryItemId: "b3", title: "Book 3" });
+
+      const ok = await usePlaybackStore.getState().playNextInQueue();
+      expect(ok).toBe(false);
+      // Both books still queued (nothing removed on failure).
+      expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["b2", "b3"]);
+      expect(JSON.parse(storage.getString("playbackQueue")!).map((q: any) => q.libraryItemId)).toEqual([
+        "b2",
+        "b3",
+      ]);
+    });
+
+    it("retains the queued item when startPlayback rejects", async () => {
+      const startPlayback = jest.fn().mockRejectedValue(new Error("boom"));
+      usePlaybackStore.setState({ startPlayback } as any);
+      usePlaybackStore.getState().addToQueue({ libraryItemId: "b2", title: "Book 2" });
+
+      const ok = await usePlaybackStore.getState().playNextInQueue();
+      expect(ok).toBe(false);
+      expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["b2"]);
+    });
+
+    it("in-flight guard: a racing second call can't pop+start two items", async () => {
+      // First call is still awaiting startPlayback when the second fires; the
+      // second must no-op so only ONE item is started and popped.
+      let resolveFirst: (v: boolean) => void = () => {};
+      const startPlayback = jest
+        .fn()
+        .mockImplementationOnce(() => new Promise<boolean>((r) => (resolveFirst = r)))
+        .mockResolvedValue(true);
+      usePlaybackStore.setState({ startPlayback } as any);
+      usePlaybackStore.getState().addToQueue({ libraryItemId: "b2", title: "Book 2" });
+      usePlaybackStore.getState().addToQueue({ libraryItemId: "b3", title: "Book 3" });
+
+      const p1 = usePlaybackStore.getState().playNextInQueue();
+      const secondWhileInFlight = await usePlaybackStore.getState().playNextInQueue();
+      expect(secondWhileInFlight).toBe(false);
+
+      resolveFirst(true);
+      await p1;
+      // Exactly one item started, exactly one popped.
+      expect(startPlayback).toHaveBeenCalledTimes(1);
+      expect(startPlayback).toHaveBeenCalledWith("b2", undefined);
+      expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["b3"]);
+    });
+
+    it("removeFromQueue with an episodeId removes only that episode (siblings kept)", async () => {
+      const s = usePlaybackStore.getState();
+      // Two episodes of ONE podcast — addToQueue de-dupes by item+episode, so
+      // both are queued under the same libraryItemId.
+      s.addToQueue({ libraryItemId: "pod1", episodeId: "e1", title: "Ep 1" });
+      s.addToQueue({ libraryItemId: "pod1", episodeId: "e2", title: "Ep 2" });
+      expect(usePlaybackStore.getState().queue).toHaveLength(2);
+
+      usePlaybackStore.getState().removeFromQueue("pod1", "e1");
+      const q = usePlaybackStore.getState().queue;
+      expect(q).toHaveLength(1);
+      expect(q[0].episodeId).toBe("e2");
+      // Persisted too.
+      expect(JSON.parse(storage.getString("playbackQueue")!)).toHaveLength(1);
+    });
+
+    it("removeFromQueue without an episodeId still drops every entry for the item", () => {
+      const s = usePlaybackStore.getState();
+      s.addToQueue({ libraryItemId: "pod1", episodeId: "e1" });
+      s.addToQueue({ libraryItemId: "pod1", episodeId: "e2" });
+      s.addToQueue({ libraryItemId: "book9" });
+
+      usePlaybackStore.getState().removeFromQueue("pod1");
+      expect(usePlaybackStore.getState().queue.map((q) => q.libraryItemId)).toEqual(["book9"]);
     });
 
     it("playNextInQueue is a no-op when the queue is empty", async () => {
@@ -340,6 +419,125 @@ describe("usePlaybackStore per-book rate / queue / sleep rewind", () => {
       await usePlaybackStore.getState().play();
       // Timer fired just now, so the generic auto-rewind is 0s → no seek at all.
       expect(usePlaybackStore.getState().seek).not.toHaveBeenCalled();
+    });
+
+    it("setSleepRewindSeconds persists, updates state, and drives the rewind", async () => {
+      // The setter (previously missing — the value was read but never settable)
+      // persists to MMKV and is what the next resume rewinds by.
+      usePlaybackStore.getState().setSleepRewindSeconds(15);
+      expect(usePlaybackStore.getState().sleepRewindSeconds).toBe(15);
+      expect(storage.getNumber("sleepRewindSeconds")).toBe(15);
+
+      armAndFire();
+      await tick(2000);
+      await usePlaybackStore.getState().play();
+      // 100 → 85 (15s rewind on wake).
+      expect(usePlaybackStore.getState().seek).toHaveBeenCalledWith(85);
+    });
+
+    it("setSleepRewindSeconds rejects non-finite / non-positive values", () => {
+      usePlaybackStore.getState().setSleepRewindSeconds(20);
+      usePlaybackStore.getState().setSleepRewindSeconds(NaN);
+      usePlaybackStore.getState().setSleepRewindSeconds(0);
+      usePlaybackStore.getState().setSleepRewindSeconds(-5);
+      // Only the valid 20 stuck.
+      expect(usePlaybackStore.getState().sleepRewindSeconds).toBe(20);
+      expect(storage.getNumber("sleepRewindSeconds")).toBe(20);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Auto mark-finished lower-bound guard (short items)
+  // --------------------------------------------------------------------------
+  describe("auto mark-finished guard", () => {
+    it("a <5s item does NOT auto-finish at position 0", () => {
+      // duration - 5 is negative for a <5s item, so position 0 used to satisfy
+      // `>= duration - 5` and instantly mark it finished on the first sample.
+      usePlaybackStore.setState({
+        currentSession: { id: "shortSess", libraryItemId: "shortItem" },
+        isCasting: true, // route through persistCastProgressSample (no straggler gate)
+        isPlaying: true,
+        duration: 4,
+        position: 0,
+        chapters: [],
+        currentChapterIndex: -1,
+        chapterQueue: false,
+      } as any);
+
+      persistCastProgressSample(0);
+      // No finish PATCH fired at position 0.
+      expect(api.patch).not.toHaveBeenCalled();
+      const mp = require("../../store/useUserStore").useUserStore.getState().mediaProgress[
+        "shortItem"
+      ];
+      expect(mp?.isFinished).not.toBe(true);
+    });
+
+    it("a <5s item DOES auto-finish once it has actually played to the end", () => {
+      jest.mocked(api.patch).mockResolvedValue({ data: {} } as any);
+      usePlaybackStore.setState({
+        currentSession: { id: "shortSess2", libraryItemId: "shortItem2" },
+        isCasting: true,
+        isPlaying: true,
+        duration: 4,
+        position: 0,
+        chapters: [],
+        currentChapterIndex: -1,
+        chapterQueue: false,
+      } as any);
+
+      // Played to 4s (>= max(1, 4-5)=1 and > 0) → finish fires.
+      persistCastProgressSample(4);
+      expect(api.patch).toHaveBeenCalledWith(
+        "/api/me/progress/shortItem2",
+        expect.objectContaining({ isFinished: true })
+      );
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // setSleepTimer input guard + teardown safety
+  // --------------------------------------------------------------------------
+  describe("setSleepTimer input guard", () => {
+    function armable() {
+      usePlaybackStore.setState({
+        isInitialized: true,
+        currentSession: { id: "s", libraryItemId: "item1" },
+        isPlaying: true,
+        duration: 300,
+        position: 0,
+        chapters: [],
+        currentChapterIndex: -1,
+        chapterQueue: false,
+      } as any);
+    }
+
+    it("rejects NaN / 0 / negative fixed durations (no timer armed)", () => {
+      armable();
+      usePlaybackStore.getState().setSleepTimer(NaN);
+      expect(usePlaybackStore.getState().sleepTimer).toBeNull();
+      usePlaybackStore.getState().setSleepTimer(0);
+      expect(usePlaybackStore.getState().sleepTimer).toBeNull();
+      usePlaybackStore.getState().setSleepTimer(-1);
+      expect(usePlaybackStore.getState().sleepTimer).toBeNull();
+      // A valid duration still arms.
+      usePlaybackStore.getState().setSleepTimer(60);
+      expect(usePlaybackStore.getState().sleepTimer!.remaining).toBe(60);
+    });
+
+    it("a teardown before a fixed tick performs no fade setVolume", async () => {
+      armable();
+      usePlaybackStore.getState().setSleepTimer(15); // in the fade zone (<20)
+      await tick(1000); // one fade tick
+      // Tear the timer down (interval cleared, volume restored to 1).
+      usePlaybackStore.getState().cancelSleepTimer();
+      jest.mocked(TrackPlayer.setVolume).mockClear();
+      // No further ticks should fade the volume.
+      await tick(5000);
+      const faded = jest
+        .mocked(TrackPlayer.setVolume)
+        .mock.calls.some(([v]) => typeof v === "number" && v < 1);
+      expect(faded).toBe(false);
     });
   });
 

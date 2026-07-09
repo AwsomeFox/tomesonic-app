@@ -277,6 +277,35 @@ describe("BookshelfScreen offline", () => {
     expect(startPlayback).toHaveBeenCalledWith("b1");
   });
 
+  it("double-tapping a downloaded audio row starts playback only once", async () => {
+    mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
+    seedOnline(baseShelves);
+    seedDownloads();
+    // A start that stays in flight until we release it — the in-flight guard
+    // must swallow the second tap so two sessions can't be churned by a
+    // double-tap.
+    let releaseStart!: () => void;
+    const startPlayback = jest.fn(
+      () => new Promise<void>((resolve) => (releaseStart = resolve))
+    );
+    usePlaybackStore.setState({ startPlayback } as any);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Available Offline");
+    const row = screen.getByText("Audio Book One");
+    await act(async () => {
+      fireEvent.press(row);
+      fireEvent.press(row);
+    });
+    expect(startPlayback).toHaveBeenCalledTimes(1);
+
+    // Release the in-flight start so no work is left pending after the test.
+    await act(async () => {
+      releaseStart();
+    });
+  });
+
   it("shows the offline empty state when nothing is downloaded", async () => {
     mockedNet.mockReturnValue({ isConnected: false, isInternetReachable: false, isOffline: true });
     seedOnline(baseShelves);
@@ -714,6 +743,87 @@ describe("BookshelfScreen online", () => {
 
     await screen.findByText("Continue Listening");
     expect(screen.queryByText("Want to Read")).toBeNull();
+  });
+
+  it("keeps ebook favorites in Want to Read even with hide-non-audiobooks on", async () => {
+    // An ebook-only favorite must still surface in Want to Read — the shelf is
+    // a wishlist (audio OR ebook), exempt from the audiobook-only filter.
+    const ebookFav = {
+      id: "efav",
+      mediaType: "book",
+      libraryId: "lib1",
+      media: { ebookFile: { ebookFormat: "epub" }, metadata: { title: "Ebook Wishlist", authorName: "W Author" } },
+    };
+    seedOnline(baseShelves);
+    useUserStore.setState({
+      settings: { ...useUserStore.getState().settings, hideNonAudiobooksGlobal: true },
+    } as any);
+    useFavoritesStore.setState({ favorites: ["efav"] } as any);
+    mockedPost.mockImplementation((url: string, body: any) => {
+      if (url === "/api/items/batch/get" && body?.libraryItemIds?.includes("efav")) {
+        return Promise.resolve({ data: { libraryItems: [ebookFav] } });
+      }
+      return Promise.resolve({ data: { libraryItems: [] } });
+    });
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Want to Read");
+    expect(screen.getAllByText("Ebook Wishlist").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("appends a synthetic Continue Reading when there is no Continue Listening shelf (older server)", async () => {
+    // Only a recently-added shelf — no continue-listening. The synthetic
+    // Continue Reading must be APPENDED after it, not forced to the top.
+    seedOnline([{ id: "recently-added", label: "Recently Added", type: "book", entities: [audioBook] }], {
+      e1: { libraryItemId: "e1", ebookProgress: 0.4 },
+    });
+    mockedPost.mockResolvedValue({ data: { libraryItems: [ebookOnlyBook] } });
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Reading");
+    // Walk the tree in DFS order and confirm Recently Added precedes the
+    // appended Continue Reading (the -1 findIndex used to jam it to the top).
+    const seq: string[] = [];
+    const walk = (node: any) => {
+      if (!node || typeof node !== "object") return;
+      if (node.children?.length === 1 && typeof node.children[0] === "string") {
+        const t = node.children[0];
+        if (t === "Recently Added" || t === "Continue Reading") seq.push(t);
+      }
+      (node.children || []).forEach(walk);
+    };
+    walk(screen.root);
+    expect(seq.indexOf("Recently Added")).toBeGreaterThanOrEqual(0);
+    expect(seq.indexOf("Recently Added")).toBeLessThan(seq.indexOf("Continue Reading"));
+  });
+
+  it("renders the shared EmptyState when the home shelves are empty", async () => {
+    seedOnline([]);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    // The shared EmptyState renders both the title and its supporting message.
+    await screen.findByText("Nothing on the shelf yet");
+    expect(
+      screen.getByText("Books added to this library will show up here. Pull down to refresh.")
+    ).toBeTruthy();
+  });
+
+  it("cleanEntities: null rows and non-array entities don't crash the shelves", async () => {
+    // A corrupt cache blob / misbehaving server can hand back null entries and a
+    // non-array `entities`. These must be normalized at the boundary, not crash
+    // the card renderers, and valid items still render.
+    seedOnline([
+      { id: "recently-added", label: "Recently Added", type: "book", entities: [audioBook, null, undefined, "garbage"] },
+      { id: "broken", label: "Broken Shelf", type: "book", entities: "not-an-array" },
+    ] as any);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Recently Added");
+    expect(screen.getAllByText("Audio Book One").length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders Browse genres AFTER the personalized shelves (Continue Listening stays first)", async () => {

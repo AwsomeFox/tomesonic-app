@@ -104,10 +104,23 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     try {
       await api.patch(`/api/me/progress/${itemId}/${epId}`, { isFinished: next });
       applyLocally();
-    } catch (err) {
-      // Offline — queue an episode-scoped PATCH (non-finite position drops the
-      // audio fields but still carries the isFinished toggle) and reflect it
-      // locally; flushPendingSyncs delivers it when the server is reachable.
+    } catch (err: any) {
+      // A response present means the request REACHED the server and it rejected
+      // it (403/4xx/5xx) — NOT an offline case. Queueing an offline patch here
+      // would poison the sync queue with a request the server already refused,
+      // so surface a message and leave the state untouched instead.
+      if (err?.response) {
+        console.warn("[LatestEpisodes] episode finished-toggle rejected:", err);
+        showAppDialog({
+          title: "Couldn't update episode",
+          message: "The server rejected the change. You may not have permission to update this episode.",
+        });
+        return;
+      }
+      // Genuine network error (no response) — queue an episode-scoped PATCH
+      // (non-finite position drops the audio fields but still carries the
+      // isFinished toggle) and reflect it locally; flushPendingSyncs delivers it
+      // when the server is reachable.
       console.warn("[LatestEpisodes] episode finished-toggle failed — queueing:", err);
       queueProgressPatch(itemId, NaN, NaN, epId, { isFinished: next });
       applyLocally();

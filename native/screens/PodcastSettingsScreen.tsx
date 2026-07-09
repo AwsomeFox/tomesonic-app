@@ -375,10 +375,24 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
   };
 
   const handleCheckNew = async () => {
-    if (!libraryItemId || checking) return;
+    if (!libraryItemId || !isAdmin || checking) return;
     setChecking(true);
     try {
-      const res = await api.get(`/api/podcasts/${libraryItemId}/checknew?limit=3`);
+      // Fetch as many new episodes as the podcast is configured to pull each
+      // check (maxNewEpisodesToDownload), not a hardcoded 3. Fall back to 3 (the
+      // server default) when the field isn't a valid count.
+      const limit = parseCount(maxNew) ?? 3;
+      const res = await api.get(`/api/podcasts/${libraryItemId}/checknew?limit=${limit}`);
+      // Refresh the item so "Last checked" (and any media fields the server
+      // touched during the check) reflect the just-completed run. Best-effort —
+      // a refetch failure doesn't invalidate the check result we already have.
+      // Don't re-seed the form here so any in-progress edits survive.
+      try {
+        const itemRes = await api.get(`/api/items/${libraryItemId}`);
+        if (itemRes?.data) setItem(itemRes.data);
+      } catch (refetchErr) {
+        console.warn("[PodcastSettings] post-check refetch failed", refetchErr);
+      }
       const data = res?.data;
       const eps: any[] = Array.isArray(data?.episodes)
         ? data.episodes
@@ -407,9 +421,12 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
       console.warn("[PodcastSettings] checknew failed", err);
       showAppDialog({
         title: "Couldn't check the feed",
-        message: err?.response
-          ? "The server couldn't check this podcast's feed right now."
-          : "You're offline. Reconnect and try again.",
+        message:
+          err?.response?.status === 403
+            ? "Only server admins can check this podcast's feed."
+            : err?.response
+            ? "The server couldn't check this podcast's feed right now."
+            : "You're offline. Reconnect and try again.",
       });
     } finally {
       setChecking(false);
@@ -630,7 +647,7 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
           />
           <NumberField
             label="Max episodes to keep"
-            helper="Older downloads are removed beyond this count. 0 keeps them all."
+            helper="Server-wide limit (applies to all podcasts, not just this one). Older downloads are removed beyond this count. 0 keeps them all."
             value={maxKeep}
             onChangeText={setMaxKeep}
             accessibilityLabel="Max episodes to keep"
@@ -646,37 +663,41 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
             </Text>
           </View>
 
-          {/* Check for new episodes now */}
-          <Pressable
-            onPress={handleCheckNew}
-            disabled={checking}
-            accessibilityRole="button"
-            accessibilityLabel="Check for new episodes now"
-            android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.14) }}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              marginHorizontal: 16,
-              marginTop: 6,
-              height: 48,
-              borderRadius: 24,
-              overflow: "hidden",
-              backgroundColor: colors.secondaryContainer,
-              opacity: checking ? 0.7 : 1,
-            }}
-          >
-            {checking ? (
-              <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
-            ) : (
-              <>
-                <Icon name="refresh" size={18} color={colors.onSecondaryContainer} />
-                <Text style={{ color: colors.onSecondaryContainer, fontSize: 15, fontWeight: "600", marginLeft: 8 }}>
-                  Check for new episodes now
-                </Text>
-              </>
-            )}
-          </Pressable>
+          {/* Check for new episodes now — admin-only: the server's checknew
+              endpoint is admin-gated (returns 403 otherwise), so we hide the
+              action for non-admins rather than surface a confusing failure. */}
+          {isAdmin ? (
+            <Pressable
+              onPress={handleCheckNew}
+              disabled={checking}
+              accessibilityRole="button"
+              accessibilityLabel="Check for new episodes now"
+              android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.14) }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                marginHorizontal: 16,
+                marginTop: 6,
+                height: 48,
+                borderRadius: 24,
+                overflow: "hidden",
+                backgroundColor: colors.secondaryContainer,
+                opacity: checking ? 0.7 : 1,
+              }}
+            >
+              {checking ? (
+                <ActivityIndicator size="small" color={colors.onSecondaryContainer} />
+              ) : (
+                <>
+                  <Icon name="refresh" size={18} color={colors.onSecondaryContainer} />
+                  <Text style={{ color: colors.onSecondaryContainer, fontSize: 15, fontWeight: "600", marginLeft: 8 }}>
+                    Check for new episodes now
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          ) : null}
 
           {/* Save (admin only) */}
           {isAdmin ? (

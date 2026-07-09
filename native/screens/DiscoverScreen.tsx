@@ -89,6 +89,10 @@ export default function DiscoverScreen({ navigation }: any) {
   // Async loads + the "Requested" chip timer resolve after navigation away —
   // guard every deferred setState and clear the timer on unmount.
   const aliveRef = useRef(true);
+  // Synchronous swipe guard: `busy` is state, so two taps in the same React
+  // batch both read busy===false and each fire a POST for the SAME rec. This
+  // ref flips synchronously on the first tap so the second is dropped.
+  const swipeInFlightRef = useRef(false);
   const likedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Monotonic id per loadShelves() run: shelf ids repeat across runs
   // ("popular-0"…), so a load kicked off before a refresh could resolve after
@@ -264,7 +268,8 @@ export default function DiscoverScreen({ navigation }: any) {
 
   const onSwipe = useCallback(
     async (action: "right" | "left") => {
-      if (!current || busy) return;
+      if (!current || busy || swipeInFlightRef.current) return;
+      swipeInFlightRef.current = true;
       setBusy(true);
       const rec = current;
       flyOut(action === "right" ? 1 : -1, () => {
@@ -273,6 +278,7 @@ export default function DiscoverScreen({ navigation }: any) {
         // fly-out runs ~240ms, longer than a fast/offline network settle, so
         // clearing busy on the request finally let a second swipe hit the
         // SAME rec (duplicate request).
+        swipeInFlightRef.current = false;
         if (aliveRef.current) setBusy(false);
       });
       try {
@@ -963,7 +969,10 @@ function Shelf({
         <FlatList
           horizontal
           data={books}
-          keyExtractor={(b) => b.asin}
+          // Thin-metadata books can arrive without an asin; keying off it alone
+          // yielded an undefined key (React duplicate-key/row-recycling glitch).
+          // Fall back through id/title before a positional last resort.
+          keyExtractor={(b, index) => b.asin || (b as any).id || b.title || String(index)}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 20, columnGap: 12 }}
           renderItem={({ item }) => {

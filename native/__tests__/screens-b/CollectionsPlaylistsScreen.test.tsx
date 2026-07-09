@@ -299,6 +299,38 @@ describe("CollectionsPlaylistsScreen", () => {
     expect(await screen.findByText("Favorites")).toBeTruthy();
   });
 
+  it("discards a stale response for the previous library after a switch", async () => {
+    // lib1's collections resolve slowly; the user switches to lib2 mid-flight.
+    // The late lib1 response must not overwrite lib2's list.
+    let resolveLib1: (v: any) => void = () => {};
+    const lib1Promise = new Promise((res) => {
+      resolveLib1 = res;
+    });
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/libraries/lib1/collections") return lib1Promise;
+      if (url === "/api/libraries/lib2/collections")
+        return Promise.resolve({ data: { results: [{ id: "c9", name: "Lib2 Coll", books: [] }] } });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+
+    await renderScreen();
+
+    // Switch library before lib1's response resolves.
+    await act(async () => {
+      useLibraryStore.setState({ currentLibraryId: "lib2" } as any);
+    });
+    expect(await screen.findByText("Lib2 Coll")).toBeTruthy();
+
+    // The stale lib1 response finally arrives — it must be dropped.
+    await act(async () => {
+      resolveLib1({ data: { results: [{ id: "c1", name: "Stale Lib1 Coll", books: [] }] } });
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("Stale Lib1 Coll")).toBeNull();
+    expect(screen.getByText("Lib2 Coll")).toBeTruthy();
+  });
+
   it("swaps to the search overlay when search is active", async () => {
     await renderScreen();
     await screen.findByText("Favorites");

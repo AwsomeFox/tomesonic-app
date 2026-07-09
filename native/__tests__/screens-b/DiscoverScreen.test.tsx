@@ -321,6 +321,105 @@ describe("DiscoverScreen (BookDate)", () => {
     await fireEvent.press(screen.getByLabelText("Get more picks"));
     await screen.findByText("First Pick");
   });
+
+  it("a deck load failure (5xx) shows 'Couldn't load picks' with a working retry", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    (getBookdateRecommendations as jest.Mock).mockRejectedValueOnce({ response: { status: 500 } });
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Couldn't load picks");
+    expect(screen.getByText("Server error (HTTP 500)")).toBeTruthy();
+    // Retry re-fetches; the deck recovers and the error card is gone.
+    (getBookdateRecommendations as jest.Mock).mockResolvedValue(RECS);
+    await fireEvent.press(screen.getByLabelText("Retry"));
+    await screen.findByText("First Pick");
+    expect(screen.queryByText("Couldn't load picks")).toBeNull();
+    warnSpy.mockRestore();
+  });
+
+  it("a deck load failure while offline shows a network message", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    // No response envelope = offline / network error (undefined status).
+    (getBookdateRecommendations as jest.Mock).mockRejectedValueOnce(new Error("Network Error"));
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Couldn't load picks");
+    expect(screen.getByText("Network error")).toBeTruthy();
+    warnSpy.mockRestore();
+  });
+
+  it("a per-shelf load failure shows 'Couldn't load this shelf' with a working retry", async () => {
+    // First Popular fetch fails (the shelf shows an inline error, not a vanish);
+    // retrying the single shelf recovers it without reloading the whole screen.
+    (getPopularBooks as jest.Mock)
+      .mockRejectedValueOnce(new Error("500"))
+      .mockResolvedValueOnce([{ asin: "P1", title: "Popular Pick", isAvailable: false }]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Couldn't load this shelf");
+    await fireEvent.press(screen.getByLabelText("Retry Popular"));
+    await screen.findByText("Popular Pick");
+    expect(screen.queryByText("Couldn't load this shelf")).toBeNull();
+  });
+
+  it("shelf books with no asin still render distinctly (stable fallback key)", async () => {
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    // Thin-metadata books carrying no asin: keying off asin alone gave both an
+    // undefined key (React duplicate-key / row-recycling glitch). The fallback
+    // key keeps each row's identity.
+    (getPopularBooks as jest.Mock).mockResolvedValue([
+      { title: "No Asin One", author: "A", isAvailable: false },
+      { title: "No Asin Two", author: "B", isAvailable: false },
+    ]);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("No Asin One");
+    // Both rows survive independently (no collapse into one recycled row)…
+    expect(screen.getByText("No Asin Two")).toBeTruthy();
+    // …and React never warned about a duplicate key.
+    const dupWarn = errSpy.mock.calls.some((c) => String(c[0]).includes("same key"));
+    expect(dupWarn).toBe(false);
+    errSpy.mockRestore();
+  });
+
+  it("a double-tap on Like can't POST the same rec twice (busy guard)", async () => {
+    // Hold the ~240ms fly-out open: capture its completion callback instead of
+    // letting jest's Animated mock fire it synchronously. Otherwise the card
+    // advances instantly between the two taps and the second tap legitimately
+    // lands on the NEXT rec — masking the same-frame double-tap guard we want
+    // to verify. With the card held mid-flight, the second tap must be dropped.
+    const RN = require("react-native");
+    const heldFlyouts: Array<() => void> = [];
+    const timingSpy = jest
+      .spyOn(RN.Animated, "timing")
+      .mockImplementation(
+        () =>
+          ({
+            start: (cb?: () => void) => {
+              if (cb) heldFlyouts.push(cb);
+            },
+          } as any)
+      );
+
+    try {
+      await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+      await screen.findByText("First Pick");
+      const like = screen.getByLabelText("Like and request");
+
+      // Two taps in the same batch, before the card advances.
+      await act(async () => {
+        fireEvent.press(like);
+        fireEvent.press(like);
+      });
+
+      await waitFor(() => expect(swipeBookdate).toHaveBeenCalledWith("rec1", "right"));
+      // Synchronous in-flight ref dropped the second tap — the same rec must
+      // never be requested twice.
+      expect(swipeBookdate).toHaveBeenCalledTimes(1);
+    } finally {
+      // Advance the card so nothing leaks, then restore the real animation.
+      await act(async () => {
+        heldFlyouts.forEach((cb) => cb());
+      });
+      timingSpy.mockRestore();
+    }
+  });
 });
 
 describe("DiscoverScreen (not connected promo)", () => {

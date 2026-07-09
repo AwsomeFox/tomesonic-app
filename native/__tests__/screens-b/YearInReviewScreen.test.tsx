@@ -151,6 +151,40 @@ describe("YearInReviewScreen", () => {
     }
   });
 
+  it("shows minutes (not '0 hours') when the year's total is under an hour", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        numBooksFinished: 0,
+        totalListeningTime: 45 * 60, // 45 minutes -> would floor to 0 hours
+        totalListeningSessions: 3,
+        numBooksListened: 1,
+        topAuthors: [],
+        topGenres: [],
+        finishedBooksWithCovers: [],
+      },
+    });
+    await renderYear({ year: 2025 });
+    await screen.findByText("Books Finished");
+
+    // Hero surfaces the minutes rather than a demoralizing "0 hours".
+    expect(screen.getByText("minutes listened")).toBeTruthy();
+    expect(screen.getByText("45")).toBeTruthy();
+    expect(screen.queryByText("hours listened")).toBeNull();
+
+    // Share text mirrors the hero.
+    const shareSpy = jest
+      .spyOn(Share, "share")
+      .mockResolvedValue({ action: "sharedAction" } as any);
+    try {
+      await fireEvent.press(screen.getByLabelText("Share your year in audio"));
+      const msg = shareSpy.mock.calls[0][0].message as string;
+      expect(msg).toContain("45 minutes listened");
+      expect(msg).not.toContain("0 hours listened");
+    } finally {
+      shareSpy.mockRestore();
+    }
+  });
+
   it("shows an empty state when there was no listening that year", async () => {
     (api.get as jest.Mock).mockResolvedValue({
       data: {

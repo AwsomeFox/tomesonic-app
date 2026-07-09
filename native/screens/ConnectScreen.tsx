@@ -208,6 +208,10 @@ export default function ConnectScreen() {
   };
 
   const handleConnectAddress = async () => {
+    // Re-entrancy guard: the field's onSubmitEditing ("go") bypasses the
+    // button's disabled={loading}, so a rapid double "go" would fire two
+    // /status probes. Bail if a request is already in flight.
+    if (loading) return;
     if (!address.trim()) {
       setError("Please enter a server address");
       return;
@@ -286,6 +290,10 @@ export default function ConnectScreen() {
   };
 
   const handleLogin = async () => {
+    // Re-entrancy guard: the password field's onSubmitEditing ("go") bypasses
+    // the button's disabled={loading}, so a rapid double "go" would POST
+    // /login twice (double login). Bail if a request is already in flight.
+    if (loading) return;
     if (!username.trim() || !password.trim()) {
       setError("Please enter username and password");
       return;

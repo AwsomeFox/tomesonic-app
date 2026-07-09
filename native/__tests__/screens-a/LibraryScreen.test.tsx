@@ -262,6 +262,27 @@ describe("LibraryScreen", () => {
     expect(mockedGet.mock.calls.some((c) => String(c[0]).includes("page=2"))).toBe(true);
   });
 
+  it("first page all ebook-only still surfaces audiobooks from a later page (not permanently empty)", async () => {
+    // With hide-non-audiobooks on, page 0 is entirely ebook-only, so it filters
+    // to zero visible rows. The list must keep paginating (chaining off the very
+    // first page) until audiobooks are found rather than showing a stuck spinner
+    // or a false empty state.
+    useUserStore.setState({
+      settings: { ...useUserStore.getState().settings, hideNonAudiobooksGlobal: true },
+    } as any);
+    mockedGet.mockImplementation((url: string) => {
+      if (url.includes("page=0")) return Promise.resolve({ data: { results: [ebookOnlyItem], total: 30 } });
+      if (url.includes("page=1")) return Promise.resolve({ data: { results: [audioItem], total: 30 } });
+      return Promise.resolve({ data: { results: [], total: 30 } });
+    });
+    const navigation = makeNavigation();
+    await render(<LibraryScreen route={{ params: {} }} navigation={navigation} />);
+
+    await screen.findByText("Audio Book One");
+    expect(screen.queryByText("No items found")).toBeNull();
+    expect(mockedGet.mock.calls.some((c) => String(c[0]).includes("page=1"))).toBe(true);
+  });
+
   it("row actions: ebook-only opens the Reader, audio starts playback, podcasts get no button", async () => {
     mockItemsPage([audioItem, ebookOnlyItem, podcastRow]);
     const startPlayback = jest.fn().mockResolvedValue(true);
