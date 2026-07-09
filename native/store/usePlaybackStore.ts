@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { AppState } from "react-native";
 import TrackPlayer, { Capability, State, AppKilledPlaybackBehavior } from "react-native-track-player";
 import { storageHelper, storage } from "../utils/storage";
 import { api } from "../utils/api";
@@ -163,21 +162,24 @@ function getSleepShakeToExtend(): boolean {
 // dedicated "rewind on wake" nudge, independent of the generic auto-rewind.
 let _sleepRewindPending = false;
 
-// Accelerometer shake-to-extend.
+// Accelerometer shake-to-extend — works with the SCREEN OFF, battery-efficiently.
 //
-// IMPORTANT — FOREGROUND ONLY. expo-sensors registers a normal (non-wake-up)
-// SensorManager listener. Android suspends non-wake-up sensors once the screen
-// turns off, and Doze suspends them further, so accelerometer callbacks stop
-// firing with the screen off / in the background. Making shake work with the
-// screen off would need a wake-up sensor + a partial wake lock held for the
-// whole sleep window — a battery drain that's user-hostile for a "falling
-// asleep" feature. So we gate the listener to the foreground (AppState
-// "active"): it's a screen-on convenience only. We register on foreground and
-// unregister on background rather than holding a dead sensor registration
-// (which wastes battery and misleads). The "+N min" buttons and rewind-on-wake
-// remain the reliable screen-off controls.
+// Why it works screen-off: a non-wake-up SensorManager listener only stops
+// delivering when the application processor enters deep sleep. But this player
+// holds a PARTIAL wake lock during playback (androidWakeMode = WAKE_MODE_NETWORK,
+// set in buildPlayerOptions), so the CPU never deep-sleeps while a book is
+// playing — which is exactly the state during a sleep timer. So the accelerometer
+// keeps firing with the screen off, and the native 1s progress events keep the JS
+// runtime alive to receive them. This is the same approach Smart AudioBook
+// Player / Prologue (and this app's pre-React-Native version) use.
+//
+// Why it's battery-efficient: we register the sensor ONLY while a sleep timer is
+// actually running (a short, user-bounded window) and at a low 4 Hz rate. The CPU
+// is already awake to decode audio, so a 4 Hz accelerometer is a negligible
+// incremental cost — and we hold NO wake lock of our own (we ride the player's).
+// When playback pauses (e.g. the timer fired), the wake lock releases and the CPU
+// can sleep; by then the timer is over and shake-to-extend is no longer needed.
 let _shakeSub: { remove: () => void } | null = null;
-let _shakeAppStateSub: { remove: () => void } | null = null;
 let _lastShakeAt = 0;
 const SHAKE_G_THRESHOLD = 1.8; // total acceleration in g (~1g at rest)
 function onShakeExtend() {
@@ -188,13 +190,14 @@ function onShakeExtend() {
   // modal's "+N min" extend semantics.
   st.setSleepTimer(Math.max(0, Math.round(t.remaining)) + SLEEP_SHAKE_MINUTES * 60, false);
 }
-function _registerAccelerometer() {
-  if (_shakeSub) return;
+function armShakeListener() {
+  disarmShakeListener();
+  if (!getSleepShakeToExtend()) return;
   try {
     const sensors = require("expo-sensors");
     const Accelerometer = sensors?.Accelerometer;
     if (!Accelerometer?.addListener) return;
-    Accelerometer.setUpdateInterval?.(250);
+    Accelerometer.setUpdateInterval?.(250); // 4 Hz — enough to catch a shake
     _shakeSub = Accelerometer.addListener((d: { x: number; y: number; z: number }) => {
       const mag = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
       const now = Date.now();
@@ -208,33 +211,11 @@ function _registerAccelerometer() {
     _shakeSub = null;
   }
 }
-function _unregisterAccelerometer() {
+function disarmShakeListener() {
   try {
     _shakeSub?.remove();
   } catch {}
   _shakeSub = null;
-}
-function armShakeListener() {
-  disarmShakeListener();
-  if (!getSleepShakeToExtend()) return;
-  // Only listen while the app is foreground (see note above); follow AppState
-  // so we drop the sensor when backgrounded and pick it back up on return.
-  if (AppState.currentState === "active") _registerAccelerometer();
-  try {
-    _shakeAppStateSub = AppState.addEventListener("change", (s) => {
-      if (s === "active") _registerAccelerometer();
-      else _unregisterAccelerometer();
-    });
-  } catch {
-    _shakeAppStateSub = null;
-  }
-}
-function disarmShakeListener() {
-  _unregisterAccelerometer();
-  try {
-    _shakeAppStateSub?.remove();
-  } catch {}
-  _shakeAppStateSub = null;
 }
 
 // Resolve the NEXT book in the finished book's series. Reuses the same

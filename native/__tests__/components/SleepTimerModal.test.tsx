@@ -41,7 +41,7 @@ describe("SleepTimerModal", () => {
     await fireEvent.press(rewind);
     expect(onRewind).toHaveBeenCalledWith(false);
 
-    const shake = screen.getByLabelText("Shake to add time (screen on)");
+    const shake = screen.getByLabelText("Shake to add time");
     expect(shake.props.accessibilityState?.checked).toBe(false);
     await fireEvent.press(shake);
     expect(onShake).toHaveBeenCalledWith(true);
@@ -59,7 +59,7 @@ describe("SleepTimerModal", () => {
       />
     );
     expect(screen.queryByLabelText("Rewind on wake")).toBeNull();
-    expect(screen.queryByLabelText("Shake to add time (screen on)")).toBeNull();
+    expect(screen.queryByLabelText("Shake to add time")).toBeNull();
   });
 
   it("marks the title as a header for screen readers", async () => {
