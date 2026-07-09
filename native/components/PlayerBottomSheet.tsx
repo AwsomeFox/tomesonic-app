@@ -22,6 +22,7 @@ import Animated, {
   withSpring,
   withTiming,
   interpolate,
+  useReducedMotion,
 } from "react-native-reanimated";
 import { SPATIAL_SHEET, EMPHASIZED } from "../theme/motion";
 import { usePlaybackStore } from "../store/usePlaybackStore";
@@ -201,6 +202,22 @@ export default function PlayerBottomSheet() {
     isPlayerExpandedRef.current = isPlayerExpanded;
   }, [isPlayerExpanded]);
 
+  // Honor the OS "reduce motion" setting for the full-screen mini↔full player
+  // morph — the single biggest travel animation in the app. When it's on, the
+  // sheet still expands/collapses and reaches the EXACT same end state, but the
+  // spring / 300ms timing drivers jump straight to their target (duration 0)
+  // instead of animating. Read through a ref so the once-created PanResponder
+  // callbacks (useRef) see the live value, not a stale first-render one.
+  const reduceMotion = useReducedMotion();
+  const reduceMotionRef = useRef(reduceMotion);
+  reduceMotionRef.current = reduceMotion;
+  // Sheet-progress driver: spring normally, snap when reduced.
+  const sheetSpring = (to: number) =>
+    reduceMotionRef.current ? withTiming(to, { duration: 0 }) : withSpring(to, SPATIAL_SHEET);
+  // Emphasized 300ms morphs (play/pause icon, tab-bar offset): snap when reduced.
+  const sheetTiming = (to: number) =>
+    withTiming(to, reduceMotionRef.current ? { duration: 0 } : { duration: 300, easing: EMPHASIZED });
+
   // "Read from here": jump to the ebook edition at (approximately) the
   // current listening position — the Whispersync-style handoff the
   // formatSwitch module implements (this is its player-side entry point).
@@ -269,7 +286,7 @@ export default function PlayerBottomSheet() {
   const playProgress = useSharedValue(isPlaying ? 1 : 0);
 
   useEffect(() => {
-    playProgress.value = withTiming(isPlaying ? 1 : 0, { duration: 300, easing: EMPHASIZED });
+    playProgress.value = sheetTiming(isPlaying ? 1 : 0);
   }, [isPlaying]);
 
   // Celebrate when a book reaches its end — fires once per session, and only
@@ -307,10 +324,7 @@ export default function PlayerBottomSheet() {
   // Animate bottom offset transitions (sliding tab bar offset)
   const bottomOffsetVal = useSharedValue(bottomOffset);
   useEffect(() => {
-    bottomOffsetVal.value = withTiming(bottomOffset, {
-      duration: 300,
-      easing: EMPHASIZED,
-    });
+    bottomOffsetVal.value = sheetTiming(bottomOffset);
   }, [bottomOffset]);
 
   // Shared value tracking sheet progress (0 = collapsed, 1 = expanded)
@@ -319,10 +333,10 @@ export default function PlayerBottomSheet() {
 
   useEffect(() => {
     if (isPlayerExpanded) {
-      sheetProgress.value = withSpring(1, SPATIAL_SHEET);
+      sheetProgress.value = sheetSpring(1);
     } else {
       setShowChapters(false);
-      sheetProgress.value = withSpring(0, SPATIAL_SHEET);
+      sheetProgress.value = sheetSpring(0);
     }
   }, [isPlayerExpanded]);
 
@@ -409,18 +423,18 @@ export default function PlayerBottomSheet() {
         // Fast swipe checks
         if (gestureState.vy < -0.3) {
           setPlayerExpanded(true);
-          sheetProgress.value = withSpring(1, SPATIAL_SHEET);
+          sheetProgress.value = sheetSpring(1);
         } else if (gestureState.vy > 0.3) {
           setPlayerExpanded(false);
-          sheetProgress.value = withSpring(0, SPATIAL_SHEET);
+          sheetProgress.value = sheetSpring(0);
         } else {
           // Slow drag snaps to closest state
           if (p > 0.5) {
             setPlayerExpanded(true);
-            sheetProgress.value = withSpring(1, SPATIAL_SHEET);
+            sheetProgress.value = sheetSpring(1);
           } else {
             setPlayerExpanded(false);
-            sheetProgress.value = withSpring(0, SPATIAL_SHEET);
+            sheetProgress.value = sheetSpring(0);
           }
         }
       },
@@ -428,10 +442,10 @@ export default function PlayerBottomSheet() {
         const p = sheetProgress.value;
         if (p > 0.5) {
           setPlayerExpanded(true);
-          sheetProgress.value = withSpring(1, SPATIAL_SHEET);
+          sheetProgress.value = sheetSpring(1);
         } else {
           setPlayerExpanded(false);
-          sheetProgress.value = withSpring(0, SPATIAL_SHEET);
+          sheetProgress.value = sheetSpring(0);
         }
       },
     })
@@ -1411,7 +1425,7 @@ export default function PlayerBottomSheet() {
                 textAlign: "center",
               }}
             >
-              Chapter {currentChapterIndex + 1} of {chapters.length}
+              Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}
             </Text>
           ) : null}
         </Animated.View>
@@ -1657,7 +1671,7 @@ export default function PlayerBottomSheet() {
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurface, fontFamily: "serif", fontWeight: "700", fontSize: 22, textAlign: "center" }}>{title}</Text>
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 14, textAlign: "center", marginTop: 2 }}>{subtitleText}</Text>
                 {hasChapters && currentChapterIndex >= 0 ? (
-                  <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {currentChapterIndex + 1} of {chapters.length}</Text>
+                  <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}</Text>
                 ) : null}
 
                 <View

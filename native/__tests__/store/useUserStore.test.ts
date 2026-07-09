@@ -401,6 +401,12 @@ describe("useUserStore", () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       seedPreviousSessionLeftovers();
       useLibraryStore.setState({ currentLibraryId: "lib1", libraries: [{ id: "lib1" }] } as any);
+      // "Want to Read" favorites + the cross-book play queue are per-account and
+      // MUST NOT leak into a different account (item ids collide on a shared
+      // server). Seed both so the switch's clear() / clearQueue() is verified
+      // here, not only on the logout path.
+      storage.set("favorites", JSON.stringify(["item1", "item2"]));
+      storage.set("playbackQueue", JSON.stringify([{ libraryItemId: "item9" }]));
 
       await useUserStore.getState().login(CONFIG_B, { id: "userB", mediaProgress: [] });
 
@@ -413,6 +419,12 @@ describe("useUserStore", () => {
       expect(useLibraryStore.getState().currentLibraryId).toBeNull();
       expect(storageHelper.getLastSessionKey()).toBe("https://b.example.com::userB");
       expect(useUserStore.getState().user).toEqual({ id: "userB", mediaProgress: [] });
+      // Favorites + queue cleared via their stores (key gone or emptied) so
+      // account B can't inherit account A's Want-to-Read list or play queue.
+      const favLeft = storage.getString("favorites");
+      expect(favLeft === undefined || favLeft === "[]").toBe(true);
+      const queueLeft = storage.getString("playbackQueue");
+      expect(queueLeft === undefined || queueLeft === "[]").toBe(true);
     });
 
     it("keeps caches and pending syncs when the same account re-logs in", async () => {

@@ -16,6 +16,7 @@ import TopAppBar from "../components/TopAppBar";
 import BookCard from "../components/BookCard";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
+import EmptyState from "../components/EmptyState";
 import { encodeFilterValue } from "../components/FilterModal";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
@@ -136,6 +137,9 @@ export default function BookshelfScreen({ navigation }: any) {
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const downloadsLoaded = useDownloadStore((s) => s.downloadsLoaded);
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
+  // In-flight guard for the offline downloaded-row tap: double-tapping a row
+  // must not churn two playback sessions (or leave a rejection unhandled).
+  const offlineStartingRef = useRef(false);
 
   const loadContinueReading = async () => {
     // Capture the library at call time: if the user switches libraries while
@@ -660,7 +664,10 @@ export default function BookshelfScreen({ navigation }: any) {
     // (older servers) — inserted right after Continue Listening.
     if (!seenShelfIds.has("continue-reading") && continueReadingItems.length > 0 && !hideNonAudiobooks) {
       const idx = displayShelves.findIndex((s) => s.id === "continue-listening");
-      displayShelves.splice(idx + 1, 0, {
+      // When there's no Continue Listening shelf (older server), findIndex
+      // returns -1 and idx+1 would force this to the TOP — append instead.
+      const insertAt = idx < 0 ? displayShelves.length : idx + 1;
+      displayShelves.splice(insertAt, 0, {
         id: "continue-reading",
         label: "Continue Reading",
         type: "book",
@@ -669,10 +676,12 @@ export default function BookshelfScreen({ navigation }: any) {
     }
     // "Want to Read": the device-local favorites, surfaced near the top of the
     // personalized content (just after the Continue* shelves). Additive and
-    // library-scoped; hidden while offline/empty. Respects "hide non-audiobooks"
-    // by dropping ebook-only favorites (an all-ebook list then simply vanishes).
+    // library-scoped; hidden while offline/empty. Favorites are books the user
+    // explicitly wants to read (audio OR ebook), so this shelf is EXEMPT from
+    // the audiobook-only filter — otherwise ebook favorites would silently
+    // vanish under "hide non-audiobooks".
     if (!isOffline && wantToReadItems.length > 0) {
-      const wantEntities = filterEbooks(wantToReadItems);
+      const wantEntities = wantToReadItems;
       if (wantEntities.length > 0) {
         // Slot it right after the last Continue* shelf so the primary resume
         // actions stay first; falls to the top if there are none.
@@ -941,7 +950,7 @@ export default function BookshelfScreen({ navigation }: any) {
               // startPlayback would reset the player into an empty queue.
               const ebookPart = (dl.parts || []).find((p: any) => p.id === "ebook");
               const isEbookOnly = !dl?.meta?.tracks?.length && !!ebookPart;
-              const openOffline = () => {
+              const openOffline = async () => {
                 if (isEbookOnly) {
                   const filename: string = ebookPart?.filename || "book.epub";
                   navigation.navigate("Reader", {
@@ -949,8 +958,18 @@ export default function BookshelfScreen({ navigation }: any) {
                     ebookFormat: filename.split(".").pop() || "epub",
                     title: dl.title,
                   });
-                } else {
-                  startPlayback(dl.libraryItemId || dl.id);
+                  return;
+                }
+                // Guard against a double-tap starting two sessions, and catch a
+                // rejected start so it doesn't surface as an unhandled rejection.
+                if (offlineStartingRef.current) return;
+                offlineStartingRef.current = true;
+                try {
+                  await startPlayback(dl.libraryItemId || dl.id);
+                } catch (e) {
+                  console.warn("[Bookshelf] offline playback start failed", e);
+                } finally {
+                  offlineStartingRef.current = false;
                 }
               };
               return (
@@ -1070,15 +1089,12 @@ export default function BookshelfScreen({ navigation }: any) {
                 onRetry={() => loadPersonalizedShelves(true)}
               />
             ) : (
-              <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, paddingBottom: 48 }}>
-                <Icon name="library" size={48} color={colors.onSurfaceVariant} />
-                <Text style={{ color: colors.onSurface, fontSize: 17, fontWeight: "600", marginTop: 16, textAlign: "center" }}>
-                  Nothing on the shelf yet
-                </Text>
-                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 6, textAlign: "center" }}>
-                  Books added to this library will show up here. Pull down to refresh.
-                </Text>
-              </View>
+              <EmptyState
+                style={{ flex: 1 }}
+                icon="library"
+                title="Nothing on the shelf yet"
+                message="Books added to this library will show up here. Pull down to refresh."
+              />
             )
           ) : null}
           {displayShelves.map((shelf: any) => {

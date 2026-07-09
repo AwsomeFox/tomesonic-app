@@ -413,6 +413,26 @@ describe("PlayerBottomSheet — expand / collapse", () => {
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
   });
 
+  it("still expands to the full-player state under OS reduce-motion", async () => {
+    // With reduce-motion ON the sheet skips the spring/timing morph but must
+    // still reach the EXACT same expanded end state — the store flips and the
+    // full-player content (a11y-hidden while collapsed) becomes reachable.
+    mockReduceMotion = true;
+    try {
+      seedPlayer();
+      await render(<PlayerBottomSheet />);
+      expect(screen.queryByLabelText("Collapse player")).toBeNull();
+      await fireEvent.press(
+        screen.getAllByLabelText("Expand player. The Hobbit by J.R.R. Tolkien. Ch 2")[0]
+      );
+      expect(usePlaybackStore.getState().isPlayerExpanded).toBe(true);
+      expect(screen.getAllByLabelText("Collapse player").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("STREAMING").length).toBeGreaterThan(0);
+    } finally {
+      mockReduceMotion = false;
+    }
+  });
+
   it("collapse button closes the expanded sheet", async () => {
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);

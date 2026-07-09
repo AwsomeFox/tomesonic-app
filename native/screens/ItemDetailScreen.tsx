@@ -205,13 +205,25 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       }
       applyLocally();
       refetchItem();
-    } catch (err) {
-      // Offline — queue the toggle(s) and reflect the state locally anyway;
-      // flushPendingSyncs delivers them when the server is reachable again.
-      console.warn("[ItemDetail] Toggle finished failed — queueing for later:", err);
-      queueFinishedPatch(item.id, next);
-      if (counterpart?.id) queueFinishedPatch(counterpart.id, next);
-      applyLocally();
+    } catch (err: any) {
+      // Distinguish a genuine offline/network failure (the request never got a
+      // response) from a server rejection (403/500 etc.). Only the offline case
+      // may optimistically queue + apply the toggle locally — poison-patching on
+      // a server error would desync the map from the server's real state.
+      if (err?.response) {
+        console.warn("[ItemDetail] Toggle finished rejected by server:", err);
+        showAppDialog({
+          title: "Couldn't update",
+          message: "The server rejected this change. Please try again.",
+        });
+      } else {
+        // Offline — queue the toggle(s) and reflect the state locally anyway;
+        // flushPendingSyncs delivers them when the server is reachable again.
+        console.warn("[ItemDetail] Toggle finished failed — queueing for later:", err);
+        queueFinishedPatch(item.id, next);
+        if (counterpart?.id) queueFinishedPatch(counterpart.id, next);
+        applyLocally();
+      }
     } finally {
       finishBusyRef.current = false;
     }
@@ -248,13 +260,24 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     try {
       await api.patch(`/api/me/progress/${item.id}/${epId}`, { isFinished: next });
       applyLocally();
-    } catch (err) {
-      // Offline — queue an episode-scoped PATCH (non-finite position drops the
-      // audio fields but still delivers the isFinished toggle) and reflect it
-      // locally; flushPendingSyncs delivers it when the server is reachable.
-      console.warn("[ItemDetail] Episode finished-toggle failed — queueing:", err);
-      queueProgressPatch(item.id, NaN, NaN, epId, { isFinished: next });
-      applyLocally();
+    } catch (err: any) {
+      // As with the item-level toggle: a server rejection (has a response) must
+      // NOT queue + poison the local map — only a genuine offline/network error
+      // (no response) does.
+      if (err?.response) {
+        console.warn("[ItemDetail] Episode finished-toggle rejected by server:", err);
+        showAppDialog({
+          title: "Couldn't update",
+          message: "The server rejected this change. Please try again.",
+        });
+      } else {
+        // Offline — queue an episode-scoped PATCH (non-finite position drops the
+        // audio fields but still delivers the isFinished toggle) and reflect it
+        // locally; flushPendingSyncs delivers it when the server is reachable.
+        console.warn("[ItemDetail] Episode finished-toggle failed — queueing:", err);
+        queueProgressPatch(item.id, NaN, NaN, epId, { isFinished: next });
+        applyLocally();
+      }
     } finally {
       episodeBusyRef.current[key] = false;
     }
@@ -283,11 +306,16 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       try {
         await downloader.downloadBook(item, serverAddress, token);
         refetchItem();
-      } catch (err) {
+      } catch (err: any) {
         console.warn("[ItemDetail] Download failed:", err);
+        // Surface the ACTUAL failure reason (e.g. "No space left on device",
+        // an HTTP status) instead of a one-size-fits-all connectivity blurb.
+        const reason = err?.message || err?.response?.data?.error;
         showAppDialog({
           title: "Download failed",
-          message: "Couldn't start the download. Check your connection and free space, then try again.",
+          message: reason
+            ? `Couldn't start the download: ${reason}`
+            : "Couldn't start the download. Check your connection and free space, then try again.",
         });
       }
     }
@@ -319,11 +347,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     } else {
       try {
         await downloader.downloadEpisode(item, episode, serverAddress, token);
-      } catch (err) {
+      } catch (err: any) {
         console.warn("[ItemDetail] Episode download failed:", err);
+        // Surface the ACTUAL failure reason instead of a generic connectivity blurb.
+        const reason = err?.message || err?.response?.data?.error;
         showAppDialog({
           title: "Download failed",
-          message: "Couldn't start the download. Check your connection and free space, then try again.",
+          message: reason
+            ? `Couldn't start the download: ${reason}`
+            : "Couldn't start the download. Check your connection and free space, then try again.",
         });
       }
     }
@@ -577,27 +609,43 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   });
 
   const handleSeekToChapter = async (index: number) => {
-    if (isCurrentlyPlaying) {
+    // The seek path must match the SAME gate that chose `displayChapters`. Index
+    // seeking is only valid when the modal is showing the STORE's chapter array
+    // (isCurrentlyPlaying AND the store actually has chapters). If this item is
+    // the loaded session but the store list is empty/out of sync, the modal fell
+    // back to the raw item list — indexing seekToChapter() into the empty store
+    // array silently no-ops, so seek by the tapped chapter's TIME instead.
+    const usingStoreChapters = isCurrentlyPlaying && playerChapters.length > 0;
+    if (usingStoreChapters) {
       // displayChapters IS the store array here — the index aligns.
       await seekToChapter(index);
-    } else {
-      // Not loaded yet: the modal showed the RAW item list, whose indices may
-      // not survive normalization — seek by the tapped chapter's TIME.
-      const target = Number(displayChapters[index]?.start) || 0;
-      setStarting(true);
-      const ok = await startPlayback(itemId);
-      setStarting(false);
-      if (ok) {
-        // Wait a brief moment for track player setup before seeking. The
-        // timer callback's promise is unobserved — a rejecting seek (player
-        // torn down in the gap) must not become an unhandled rejection.
-        setTimeout(() => {
-          usePlaybackStore
-            .getState()
-            .seek(target)
-            .catch(() => {});
-        }, 300);
-      }
+      return;
+    }
+    // Seek by the tapped chapter's TIME (its raw-list index may not survive
+    // normalization into the store array).
+    const target = Number(displayChapters[index]?.start) || 0;
+    if (isCurrentlyPlaying) {
+      // Already the loaded session — just seek; don't churn a fresh /play.
+      usePlaybackStore
+        .getState()
+        .seek(target)
+        .catch(() => {});
+      return;
+    }
+    // Not loaded yet: start playback, then seek once the player is set up.
+    setStarting(true);
+    const ok = await startPlayback(itemId);
+    setStarting(false);
+    if (ok) {
+      // Wait a brief moment for track player setup before seeking. The
+      // timer callback's promise is unobserved — a rejecting seek (player
+      // torn down in the gap) must not become an unhandled rejection.
+      setTimeout(() => {
+        usePlaybackStore
+          .getState()
+          .seek(target)
+          .catch(() => {});
+      }, 300);
     }
   };
 
@@ -889,6 +937,10 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // requests ride RMAB's fetch-ebook pipeline (JWT-only, needs an ebook
   // source configured); audiobook requests are ordinary RMAB requests.
   const requestOtherFormat = async (kind: "ebook" | "audiobook") => {
+    // In-flight guard: a rapid double-tap must not fire two RMAB requests. The
+    // button is also disabled while working, but guard here too so a queued
+    // second press (or a programmatic call) can't slip a duplicate through.
+    if (formatReq?.state === "working") return;
     // A pending burst-dismiss from a previous request would null this fresh
     // "working" state mid-flight — cancel it before re-arming.
     if (formatTimerRef.current) clearTimeout(formatTimerRef.current);
@@ -1134,14 +1186,19 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           </View>
 
           {/* Secondary actions on their own row — sharing the primary line
-              squeezed Play/Read into slivers once all four icons showed. */}
+              squeezed Play/Read into slivers once all four icons showed. Wraps
+              to additional lines so all 7-8 circular actions stay reachable on
+              narrow screens (they used to overflow off the right edge). */}
           <View
+            testID="detail-action-row"
             style={{
               flexDirection: "row",
+              flexWrap: "wrap",
               justifyContent: "center",
               paddingHorizontal: 20,
               marginTop: 12,
               columnGap: 12,
+              rowGap: 12,
             }}
           >
             {/* "Want to Read" / favorite toggle — a device-local overlay (ABS
@@ -1257,7 +1314,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 }}
               >
                 <Icon
-                  name="skip-next"
+                  name="playlist-add"
                   size={22}
                   color={isQueued ? colors.onPrimaryContainer : colors.onSecondaryContainer}
                 />
@@ -1323,7 +1380,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               (selfHasEbook && !hasAudioMedia)) ? (
               <Pressable
                 onPress={() => requestOtherFormat(selfHasAudio && !canRead ? "ebook" : "audiobook")}
+                disabled={formatReq?.state === "working"}
                 accessibilityRole="button"
+                accessibilityState={{ disabled: formatReq?.state === "working", busy: formatReq?.state === "working" }}
                 accessibilityLabel={
                   selfHasAudio && !canRead ? "Request ebook edition" : "Request audiobook edition"
                 }
@@ -1336,6 +1395,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   backgroundColor: colors.secondaryContainer,
                   alignItems: "center",
                   justifyContent: "center",
+                  opacity: formatReq?.state === "working" ? 0.6 : 1,
                 }}
               >
                 <Icon

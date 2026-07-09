@@ -411,9 +411,11 @@ function LibraryScreen(
         // "Hide non-audiobooks" can filter a FULL raw page down to nothing —
         // content doesn't grow, so onEndReached never re-fires and load-more
         // stalls (each scroll-wiggle advanced one page). Chain straight into
-        // the next page instead.
+        // the next page instead. This applies to the FIRST page too: when
+        // page 0 is all ebook-only, the list would otherwise be permanently
+        // empty (a stuck spinner / false empty state) even though later pages
+        // hold audiobooks — keep paginating until some survive or pages run out.
         if (
-          !reset &&
           rawResults.length > 0 &&
           results.length === 0 &&
           currentFetchId === fetchIdRef.current

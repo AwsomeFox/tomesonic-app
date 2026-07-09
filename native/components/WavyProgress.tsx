@@ -9,6 +9,7 @@ import Animated, {
   withSpring,
   cancelAnimation,
   Easing,
+  useReducedMotion,
 } from "react-native-reanimated";
 import { SPATIAL_SLOW } from "../theme/motion";
 
@@ -50,6 +51,9 @@ export default function WavyProgress({
   handleActive?: boolean; // enlarge the handle (while dragging)
 }) {
   const [width, setWidth] = useState(0);
+  // Honor the OS "reduce motion" setting: hold the wave static (no scrolling
+  // phase, no amplitude spring) instead of the endless animation.
+  const reduceMotion = useReducedMotion();
   const phase = useSharedValue(0);
   const amp = useSharedValue(0);
   const progressShared = useSharedValue(0);
@@ -71,8 +75,9 @@ export default function WavyProgress({
 
   useEffect(() => {
     // The wave only scrolls while playing so the bar reads as "alive" during
-    // playback and calm when paused.
-    if (playing) {
+    // playback and calm when paused. When reduced motion is on, never start the
+    // endless phase scroll — hold the wave static.
+    if (playing && !reduceMotion) {
       phase.value = withRepeat(withTiming(phase.value + 1, { duration: 1000, easing: Easing.linear }), -1, false);
     } else {
       cancelAnimation(phase);
@@ -83,14 +88,15 @@ export default function WavyProgress({
       cancelAnimation(phase);
       cancelAnimation(amp);
     };
-  }, [playing]);
+  }, [playing, reduceMotion]);
 
   useEffect(() => {
     // Wave rises to full amplitude while playing; if flattenWhenPaused it settles
     // to a clean straight line when paused (avoids a lumpy frozen squiggle).
+    // Under reduced motion, snap straight to the target instead of springing.
     const target = flattenWhenPaused && !playing ? 0 : peakAmp;
-    amp.value = withSpring(target, SPATIAL_SLOW);
-  }, [peakAmp, playing, flattenWhenPaused]);
+    amp.value = reduceMotion ? target : withSpring(target, SPATIAL_SLOW);
+  }, [peakAmp, playing, flattenWhenPaused, reduceMotion]);
 
   const cy = height / 2;
   const clamped = Math.max(0, Math.min(1, progress || 0));

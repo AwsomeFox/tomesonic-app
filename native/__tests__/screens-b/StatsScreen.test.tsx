@@ -84,6 +84,7 @@ import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { storage } from "../../utils/storage";
+import { useDialogStore } from "../../store/useDialogStore";
 
 const mockedNet = useNetworkStatus as jest.Mock;
 const mockedPending = hasAnyPendingSyncs as jest.Mock;
@@ -137,6 +138,10 @@ beforeEach(() => {
   // goal can't leak into the next.
   storage.remove("listeningGoalMinutes");
   storage.remove("listeningGoalPeriod");
+
+  // The themed confirm dialog is a module singleton — clear any dialog a prior
+  // test raised so it can't leak into the next.
+  useDialogStore.getState().dismiss();
 
   useUserStore.setState(initialUser, true);
   usePlaybackStore.setState(initialPlayback, true);
@@ -458,7 +463,7 @@ describe("StatsScreen", () => {
     });
   });
 
-  it("marks the goal met and can remove it", async () => {
+  it("marks the goal met and removes it only after confirmation", async () => {
     storage.set("listeningGoalMinutes", 5);
     storage.set("listeningGoalPeriod", "daily");
 
@@ -471,7 +476,77 @@ describe("StatsScreen", () => {
     await fireEvent.press(screen.getByLabelText("Edit listening goal"));
     await fireEvent.press(screen.getByLabelText("Remove goal"));
 
+    // Confirm required: pressing Remove raises a themed confirm dialog and does
+    // NOT wipe the goal yet.
+    const dialog = useDialogStore.getState().current;
+    expect(dialog).not.toBeNull();
+    expect(dialog!.title).toBe("Remove goal?");
+    expect(storage.getNumber("listeningGoalMinutes")).toBe(5);
+
+    // Confirming the destructive action removes the goal.
+    const remove = dialog!.buttons.find((b) => b.text === "Remove");
+    expect(remove?.style).toBe("destructive");
+    await act(async () => {
+      remove!.onPress?.();
+    });
+
     expect(storage.getNumber("listeningGoalMinutes")).toBeUndefined();
     expect(screen.getByLabelText("Set a listening goal")).toBeTruthy();
+  });
+
+  it("keeps the goal when the remove confirmation is cancelled", async () => {
+    storage.set("listeningGoalMinutes", 5);
+    storage.set("listeningGoalPeriod", "daily");
+
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    await fireEvent.press(screen.getByLabelText("Edit listening goal"));
+    await fireEvent.press(screen.getByLabelText("Remove goal"));
+
+    // Dismissing the dialog (Cancel) leaves the persisted goal untouched.
+    const dialog = useDialogStore.getState().current;
+    const cancel = dialog!.buttons.find((b) => b.text === "Cancel");
+    expect(cancel?.style).toBe("cancel");
+    await act(async () => {
+      useDialogStore.getState().dismiss();
+    });
+
+    expect(storage.getNumber("listeningGoalMinutes")).toBe(5);
+  });
+
+  it("computes daily-goal progress from the local calendar day, not the server's `today`", async () => {
+    // The server's timezone-naive `today` is deliberately wrong here (9999s);
+    // the screen must instead read today's minutes off the DST-safe local day
+    // key in days[]. daysAgo(0) at the faked Nov 3 clock -> 600s -> 10 min.
+    const days: Record<string, number> = {
+      [ymd(daysAgo(0))]: 600, // local today: 10 min
+    };
+    (api.get as jest.Mock).mockResolvedValue({
+      data: { totalTime: 600, today: 9999, days, recentSessions: [] },
+    });
+
+    storage.set("listeningGoalMinutes", 30);
+    storage.set("listeningGoalPeriod", "daily");
+
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    // Local day (10 min), not the naive server `today` (would be 167 min).
+    expect(screen.getByText("10 / 30 min")).toBeTruthy();
+    expect(screen.queryByText("167 / 30 min")).toBeNull();
+  });
+
+  it("defaults the Year in Review to the previous year in January", async () => {
+    // Early January: the current year has ~a week of data, so the entry point
+    // should point at the year that just ended.
+    jest.setSystemTime(new Date(2026, 0, 5, 9, 0, 0));
+
+    const navigation = await renderStats();
+    await screen.findByText("Your Year in Audio");
+
+    // Banner + navigation both use 2025, not the freshly-started 2026.
+    await fireEvent.press(screen.getByLabelText("Your 2025 in Audio"));
+    expect(navigation.navigate).toHaveBeenCalledWith("YearInReview", { year: 2025 });
   });
 });

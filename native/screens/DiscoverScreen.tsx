@@ -12,6 +12,7 @@ import {
   FlatList,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Reanimated, { FadeIn, FadeOut, useReducedMotion } from "react-native-reanimated";
 import { Image } from "expo-image";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -85,10 +86,17 @@ export default function DiscoverScreen({ navigation }: any) {
 
   const translateX = useRef(new Animated.Value(0)).current;
   const enter = useRef(new Animated.Value(0)).current;
+  // Honor the OS "reduce motion" setting: when on, the deck still swipes and
+  // advances — we just jump the card to its target instead of animating.
+  const reduceMotion = useReducedMotion();
 
   // Async loads + the "Requested" chip timer resolve after navigation away —
   // guard every deferred setState and clear the timer on unmount.
   const aliveRef = useRef(true);
+  // Synchronous swipe guard: `busy` is state, so two taps in the same React
+  // batch both read busy===false and each fire a POST for the SAME rec. This
+  // ref flips synchronously on the first tap so the second is dropped.
+  const swipeInFlightRef = useRef(false);
   const likedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Monotonic id per loadShelves() run: shelf ids repeat across runs
   // ("popular-0"…), so a load kicked off before a refresh could resolve after
@@ -106,8 +114,12 @@ export default function DiscoverScreen({ navigation }: any) {
   const playEnter = useCallback(() => {
     enter.setValue(0);
     translateX.setValue(0);
+    if (reduceMotion) {
+      enter.setValue(1);
+      return;
+    }
     Animated.spring(enter, { toValue: 1, tension: 90, friction: 8, useNativeDriver: true }).start();
-  }, [enter, translateX]);
+  }, [enter, translateX, reduceMotion]);
 
   const loadDeck = useCallback(async () => {
     try {
@@ -249,6 +261,14 @@ export default function DiscoverScreen({ navigation }: any) {
 
   const flyOut = useCallback(
     (dir: 1 | -1, after: () => void) => {
+      // Reduce-motion: skip the 240ms fly-out — jump the card off-screen so the
+      // deck still advances (after()) exactly as an animated swipe would.
+      if (reduceMotion) {
+        translateX.setValue(dir * (screenWidth + 120));
+        after();
+        playEnter();
+        return;
+      }
       Animated.timing(translateX, {
         toValue: dir * (screenWidth + 120),
         duration: 240,
@@ -259,12 +279,13 @@ export default function DiscoverScreen({ navigation }: any) {
         playEnter();
       });
     },
-    [translateX, screenWidth, playEnter]
+    [translateX, screenWidth, playEnter, reduceMotion]
   );
 
   const onSwipe = useCallback(
     async (action: "right" | "left") => {
-      if (!current || busy) return;
+      if (!current || busy || swipeInFlightRef.current) return;
+      swipeInFlightRef.current = true;
       setBusy(true);
       const rec = current;
       flyOut(action === "right" ? 1 : -1, () => {
@@ -273,6 +294,7 @@ export default function DiscoverScreen({ navigation }: any) {
         // fly-out runs ~240ms, longer than a fast/offline network settle, so
         // clearing busy on the request finally let a second swipe hit the
         // SAME rec (duplicate request).
+        swipeInFlightRef.current = false;
         if (aliveRef.current) setBusy(false);
       });
       try {
@@ -346,13 +368,18 @@ export default function DiscoverScreen({ navigation }: any) {
   widthRef.current = screenWidth;
 
   const springBack = useCallback(() => {
+    // Reduce-motion: snap the card back to center instead of springing.
+    if (reduceMotion) {
+      translateX.setValue(0);
+      return;
+    }
     Animated.spring(translateX, {
       toValue: 0,
       tension: 120,
       friction: 9,
       useNativeDriver: true,
     }).start();
-  }, [translateX]);
+  }, [translateX, reduceMotion]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -435,6 +462,9 @@ export default function DiscoverScreen({ navigation }: any) {
           minWidth: 220,
           paddingHorizontal: 28,
           borderRadius: 24,
+          // Clip the android_ripple to the rounded corners — without this the
+          // ripple renders square past the radius.
+          overflow: "hidden",
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "center",
@@ -574,6 +604,7 @@ export default function DiscoverScreen({ navigation }: any) {
                     marginTop: 12,
                     backgroundColor: colors.secondaryContainer,
                     borderRadius: 20,
+                    overflow: "hidden",
                     height: 40,
                     paddingHorizontal: 22,
                     alignItems: "center",
@@ -605,6 +636,7 @@ export default function DiscoverScreen({ navigation }: any) {
                     marginTop: 12,
                     backgroundColor: colors.primary,
                     borderRadius: 20,
+                    overflow: "hidden",
                     height: 40,
                     paddingHorizontal: 22,
                     alignItems: "center",
@@ -754,7 +786,11 @@ export default function DiscoverScreen({ navigation }: any) {
                 </Animated.View>
 
                 {lastLiked ? (
-                  <View
+                  <Reanimated.View
+                    // Fade the chip in/out rather than popping it. Reanimated
+                    // layout animations auto-skip when OS reduce-motion is on.
+                    entering={FadeIn.duration(180)}
+                    exiting={FadeOut.duration(180)}
                     // Transient visual chip — announce it so a TalkBack user gets
                     // confirmation the request went through (it auto-dismisses).
                     // accessible marks it as one focusable element so the live
@@ -780,10 +816,14 @@ export default function DiscoverScreen({ navigation }: any) {
                     >
                       Requested
                     </Text>
-                  </View>
+                  </Reanimated.View>
                 ) : null}
                 {failNotice ? (
-                  <View
+                  <Reanimated.View
+                    // Fade in/out (auto-skipped under OS reduce-motion) instead
+                    // of an abrupt appear/disappear.
+                    entering={FadeIn.duration(180)}
+                    exiting={FadeOut.duration(180)}
                     // Failure is exactly when feedback matters most — announce it
                     // assertively since the chip auto-dismisses. accessible marks
                     // it as one focusable element so the live region reliably fires.
@@ -808,7 +848,7 @@ export default function DiscoverScreen({ navigation }: any) {
                     >
                       {failNotice}
                     </Text>
-                  </View>
+                  </Reanimated.View>
                 ) : null}
               </View>
             ) : null}
@@ -834,6 +874,7 @@ export default function DiscoverScreen({ navigation }: any) {
                     width: 60,
                     height: 60,
                     borderRadius: 30,
+                    overflow: "hidden",
                     backgroundColor: colors.surfaceContainerHigh,
                     alignItems: "center",
                     justifyContent: "center",
@@ -853,6 +894,7 @@ export default function DiscoverScreen({ navigation }: any) {
                     width: 60,
                     height: 60,
                     borderRadius: 30,
+                    overflow: "hidden",
                     backgroundColor: colors.surfaceContainer,
                     alignItems: "center",
                     justifyContent: "center",
@@ -872,6 +914,7 @@ export default function DiscoverScreen({ navigation }: any) {
                     width: 60,
                     height: 60,
                     borderRadius: 30,
+                    overflow: "hidden",
                     backgroundColor: colors.primaryContainer,
                     alignItems: "center",
                     justifyContent: "center",
@@ -963,7 +1006,10 @@ function Shelf({
         <FlatList
           horizontal
           data={books}
-          keyExtractor={(b) => b.asin}
+          // Thin-metadata books can arrive without an asin; keying off it alone
+          // yielded an undefined key (React duplicate-key/row-recycling glitch).
+          // Fall back through id/title before a positional last resort.
+          keyExtractor={(b, index) => b.asin || (b as any).id || b.title || String(index)}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 20, columnGap: 12 }}
           renderItem={({ item }) => {

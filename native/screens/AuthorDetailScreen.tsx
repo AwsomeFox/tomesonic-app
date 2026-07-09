@@ -269,7 +269,11 @@ export default function AuthorDetailScreen({ route, navigation }: any) {
   const imageUri = getAuthorImageUrl();
   // "Hide non-audiobooks": ebook-only rows are dropped when the setting is on.
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
-  const books = (author?.libraryItems || []).filter((b: any) => !hideNonAudiobooks || !isEbookOnly(b));
+  // filter(Boolean) first (matching Collection/Playlist/Series): a single null
+  // row in the payload reaches keyExtractor's item.id and crashes the list.
+  const books = (author?.libraryItems || [])
+    .filter(Boolean)
+    .filter((b: any) => !hideNonAudiobooks || !isEbookOnly(b));
 
   const renderHeader = () => (
     <View style={{ paddingBottom: 8 }}>

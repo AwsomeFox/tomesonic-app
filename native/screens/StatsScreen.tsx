@@ -18,6 +18,7 @@ import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hasAnyPendingSyncs } from '../utils/progressSync';
 import { storage } from '../utils/storage';
+import { showAppDialog } from '../store/useDialogStore';
 
 // MMKV keys owned by this screen for the local listening goal.
 const GOAL_MINUTES_KEY = 'listeningGoalMinutes';
@@ -183,7 +184,20 @@ export default function StatsScreen({ navigation }: any) {
     setEditingGoal(false);
   }
 
+  // Removing a goal wipes the saved target and its progress, so confirm first
+  // via the themed dialog (never the OS Alert, which ignores our M3 theme).
   function removeGoal() {
+    showAppDialog({
+      title: 'Remove goal?',
+      message: 'Your listening goal and its progress will be cleared.',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: confirmRemoveGoal },
+      ],
+    });
+  }
+
+  function confirmRemoveGoal() {
     try {
       storage.remove(GOAL_MINUTES_KEY);
       storage.remove(GOAL_PERIOD_KEY);
@@ -273,8 +287,13 @@ export default function StatsScreen({ navigation }: any) {
     daysInARow++;
   }
 
-  // Goal progress, computed from the existing listening-stats payload.
-  const todayMinutes = stats ? Math.round((stats.today || 0) / 60) : 0;
+  // Goal progress. Read today's minutes off the local calendar day rather than
+  // the server's `today` field, whose timezone-naive boundary can attribute
+  // late-night listening to the wrong day. days[] is keyed by the same DST-safe
+  // local YYYY-MM-DD as the streak logic above (daysAgo/ymd both use noon +
+  // setDate, so they can't skip or double-count a calendar day across DST).
+  const todayKey = ymd(daysAgo(0));
+  const todayMinutes = Math.round((days[todayKey] || 0) / 60);
   const goalCurrent = goalPeriod === 'weekly' ? weekMinutes : todayMinutes;
   const goalPct =
     goalMinutes && goalMinutes > 0 ? Math.min(1, goalCurrent / goalMinutes) : 0;
@@ -283,7 +302,11 @@ export default function StatsScreen({ navigation }: any) {
   // Seasonal Year-in-Review banner (Dec/Jan), reachable year-round otherwise.
   const month = currentMonthSafe();
   const seasonal = month === 11 || month === 0;
-  const reviewYear = currentYearSafe();
+  // In January the just-started current year holds only ~a week of listening —
+  // nobody wants that as their "Year in Review", so default to the year that
+  // just ended. December (and the rest of the year) uses the current year.
+  const currentYear = currentYearSafe();
+  const reviewYear = month === 0 ? currentYear - 1 : currentYear;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={['top', 'left', 'right']}>
@@ -373,7 +396,7 @@ export default function StatsScreen({ navigation }: any) {
                 style={{ color: colors.onSecondaryContainer, fontSize: 13, marginLeft: 8, flex: 1 }}
                 numberOfLines={1}
               >
-                {daysInARow === 1 ? 'Keep it going!' : 'days in a row'}
+                {'Keep it going!'}
               </Text>
             </View>
           )}
@@ -392,6 +415,7 @@ export default function StatsScreen({ navigation }: any) {
               paddingVertical: 14,
               paddingHorizontal: 16,
               borderRadius: 14,
+              overflow: 'hidden',
               backgroundColor: seasonal ? colors.primaryContainer : colors.surfaceContainerHigh,
             }}
           >

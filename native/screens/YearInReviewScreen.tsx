@@ -144,6 +144,18 @@ export default function YearInReviewScreen({ navigation, route }: any) {
   const sessions = stats?.totalListeningSessions || 0;
   const booksListened = stats?.numBooksListened || 0;
   const totalHours = Math.floor(totalTime / 3600);
+  const totalMinutes = Math.floor(totalTime / 60);
+  // Under an hour, "0 hours" reads as "nothing listened" and buries a real
+  // (if light) year. Surface the minutes as the headline instead.
+  const heroUnderHour = totalHours < 1;
+  const heroValue = heroUnderHour ? totalMinutes : totalHours;
+  const heroUnit = heroUnderHour
+    ? totalMinutes === 1
+      ? 'minute'
+      : 'minutes'
+    : totalHours === 1
+    ? 'hour'
+    : 'hours';
 
   const topAuthors = useMemo(() => listLabels(stats?.topAuthors, ['name', 'author']), [stats]);
   const topGenres = useMemo(() => listLabels(stats?.topGenres, ['genre', 'name']), [stats]);
@@ -163,7 +175,7 @@ export default function YearInReviewScreen({ navigation, route }: any) {
   function buildShareText(): string {
     const lines = [
       `My ${year} in Audio`,
-      `${formatNumber(totalHours)} hours listened`,
+      `${formatNumber(heroValue)} ${heroUnit} listened`,
       `${formatNumber(booksFinished)} books finished`,
       `${formatNumber(sessions)} listening sessions`,
     ];
@@ -252,16 +264,21 @@ export default function YearInReviewScreen({ navigation, route }: any) {
             <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, marginBottom: 4 }}>
               Your Year in Audio
             </Text>
-            <View accessible accessibilityLabel={`${formatNumber(totalHours)} hours listened, ${hoursMinutes(totalTime)}`}>
+            <View accessible accessibilityLabel={`${formatNumber(heroValue)} ${heroUnit} listened, ${hoursMinutes(totalTime)}`}>
               <Text style={{ color: colors.primary, fontSize: 56, fontWeight: '800', lineHeight: 62 }}>
-                {formatNumber(totalHours)}
+                {formatNumber(heroValue)}
               </Text>
               <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: '600' }}>
-                hours listened
+                {`${heroUnit} listened`}
               </Text>
-              <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
-                {hoursMinutes(totalTime)}
-              </Text>
+              {/* Under an hour the headline already IS the minutes, so the
+                  "X hr Y min" detail would just repeat it — only show it when
+                  the headline is in hours. */}
+              {!heroUnderHour && (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+                  {hoursMinutes(totalTime)}
+                </Text>
+              )}
             </View>
           </View>
 
@@ -365,6 +382,7 @@ export default function YearInReviewScreen({ navigation, route }: any) {
                 justifyContent: 'center',
                 backgroundColor: colors.primary,
                 borderRadius: 24,
+                overflow: 'hidden',
                 paddingVertical: 14,
               }}
             >

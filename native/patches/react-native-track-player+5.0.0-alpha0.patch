@@ -205,7 +205,7 @@ index d6e3483..7c8675f 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..672d343 100644
+index b495b5a..4746d3e 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -299,7 +299,7 @@ index b495b5a..672d343 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +157,1278 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +157,1296 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -366,15 +366,7 @@ index b495b5a..672d343 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -938,7 +930,12 @@ index b495b5a..672d343 100644
 +        title: String,
 +        author: String?,
 +        subtitle: String?,
-+        prog: org.json.JSONObject? = null
++        prog: org.json.JSONObject? = null,
++        // When false, the offline cover is NOT inlined as bytes. Nodes that
++        // Android Auto subscribes to without pagination (e.g. Downloads) cap
++        // how many tiles carry inlined artwork so the combined bytes don't
++        // overflow the Binder transaction (TransactionTooLargeException).
++        inlineArt: Boolean = true
 +    ): MediaItem {
 +        val creds = absCreds()
 +        val downloaded = absDownloads.containsKey(coverItemId)
@@ -964,11 +961,14 @@ index b495b5a..672d343 100644
 +        // car process can't read the app's private storage → blank tiles).
 +        if (absOnline() && creds != null) {
 +            md.setArtworkUri(Uri.parse("${creds.server}/api/items/$coverItemId/cover?token=${creds.token}"))
-+        } else {
++        } else if (inlineArt) {
 +            absLocalArtBytes(coverItemId)?.let {
 +                md.setArtworkData(it, androidx.media3.common.MediaMetadata.PICTURE_TYPE_FRONT_COVER)
 +            }
 +        }
++        // inlineArt == false leaves the tile art-less rather than inlining
++        // bytes: a file:// cover URI would only render as a blank tile anyway
++        // (the car process can't read this app's private storage).
 +        if (!subtitle.isNullOrEmpty()) md.setSubtitle(subtitle)
 +        return MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(md.build()).build()
 +    }
@@ -1041,15 +1041,25 @@ index b495b5a..672d343 100644
 +    }
 +
 +    // Downloaded books as a browse category — playable OFFLINE via local files.
++    // Android Auto subscribes to the Downloads node WITHOUT pagination
++    // (page=0, pageSize=MAX), so every item crosses the Binder in one
++    // transaction. Inlined cover bytes are large (~tens of KB each), and with
++    // many offline books the combined payload overflows the Binder limit
++    // (TransactionTooLargeException) → the node fails to load offline. Cap how
++    // many tiles carry inlined artwork; the rest stay listed and playable, just
++    // art-less. Keep this small so the whole node fits comfortably.
++    private val absDownloadsArtBudget = 8
++
 +    private fun absDownloadsCategory(): List<MediaItem> {
 +        val prog = if (absOnline()) absProgressMap() else HashMap()
 +        return absDownloads.values
 +            .filter { it.tracks.isNotEmpty() } // rich entries only (legacy = badge-only)
 +            .sortedBy { it.title.lowercase() }
-+            .map { d ->
++            .mapIndexed { index, d ->
 +                val p = prog[d.id]
 +                val line = absProgressSubtitle(p, d.author)
-+                absPlayableItem("play:${d.id}", d.id, d.title, line, line, p)
++                // Only the first N tiles inline cover bytes (see budget above).
++                absPlayableItem("play:${d.id}", d.id, d.title, line, line, p, inlineArt = index < absDownloadsArtBudget)
 +            }
 +    }
 +
@@ -1167,7 +1177,15 @@ index b495b5a..672d343 100644
 +            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
 +            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
 +            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +    }
 +
 +    // Continue Series: one browsable folder per series you're ACTIVE in —
@@ -1591,7 +1609,7 @@ index b495b5a..672d343 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1516,65 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1534,65 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1659,7 +1677,7 @@ index b495b5a..672d343 100644
          observeEvents()
      }
  
-@@ -293,9 +1657,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1675,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1671,7 +1689,7 @@ index b495b5a..672d343 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1670,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1688,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1733,7 +1751,7 @@ index b495b5a..672d343 100644
          }
      }
  
-@@ -449,6 +1847,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +1865,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1744,7 +1762,7 @@ index b495b5a..672d343 100644
      }
  
      @MainThread
-@@ -515,6 +1917,229 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +1935,229 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -1974,7 +1992,7 @@ index b495b5a..672d343 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2342,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2360,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -1983,7 +2001,7 @@ index b495b5a..672d343 100644
              return
          }
  
-@@ -780,8 +2405,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2423,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -1999,7 +2017,7 @@ index b495b5a..672d343 100644
          return mediaSession
      }
  
-@@ -792,13 +2423,45 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2441,45 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2047,7 +2065,7 @@ index b495b5a..672d343 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2568,239 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2586,249 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2219,7 +2237,17 @@ index b495b5a..672d343 100644
 +            params: MediaLibraryService.LibraryParams?
 +        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
 +            val results = absSearchCache[query] ?: emptyList()
-+            return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(results), params))
++            // Honor the requested page window, exactly like onGetChildren.
++            // Returning the full result set for every page made paginating head
++            // units append the same rows repeatedly (duplicate entries) and
++            // risked the same TransactionTooLargeException. Slice to
++            // [page*pageSize, end); a page past the end yields an empty list.
++            val from = (page.toLong() * pageSize.toLong())
++                .coerceIn(0L, results.size.toLong()).toInt()
++            val to = (from.toLong() + pageSize.toLong())
++                .coerceIn(from.toLong(), results.size.toLong()).toInt()
++            val window = results.subList(from, to)
++            return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(window), params))
 +        }
 +
 +        // Cold-start play WITH RESUME. Android Auto item taps arrive through
@@ -2304,7 +2332,7 @@ index b495b5a..672d343 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2809,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +2837,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2334,7 +2362,7 @@ index b495b5a..672d343 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2841,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +2869,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2350,7 +2378,7 @@ index b495b5a..672d343 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2857,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +2885,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  

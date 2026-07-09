@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, Easing, Text, View } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
 
@@ -20,12 +21,22 @@ export default function ResultBurst({
   subtitle?: string;
 }) {
   const colors = useThemeColors();
+  const reduceMotion = useReducedMotion();
   const scale = useRef(new Animated.Value(0)).current;
   const halo = useRef(new Animated.Value(0)).current;
   const swing = useRef(new Animated.Value(0)).current; // icon rotation progress
   const shake = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (reduceMotion) {
+      // Reduced motion: jump straight to the settled badge — upright icon,
+      // full-size container, halo already faded out, no shake.
+      scale.setValue(1);
+      halo.setValue(1);
+      swing.setValue(1);
+      shake.setValue(0);
+      return;
+    }
     // Expressive spring: fast attack, visible overshoot, quick settle.
     Animated.parallel([
       Animated.spring(scale, {

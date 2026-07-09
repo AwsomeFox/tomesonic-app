@@ -3,7 +3,7 @@
  * warning, local username/password login (success, 401, validation), OpenID
  * flow, and the edit-address affordance.
  */
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 
 jest.mock("react-native-safe-area-context", () => {
   const React = require("react");
@@ -339,6 +339,121 @@ describe("ConnectScreen", () => {
     await fireEvent.press(screen.getByLabelText("Change server address"));
     expect(screen.getByPlaceholderText("http://55.55.55.55:13378")).toBeTruthy();
     expect(screen.queryByPlaceholderText("Username")).toBeNull();
+  });
+
+  it("session-expired: shows a forced-logout banner and consumes the reason", async () => {
+    // The app force-logged the user out (token refresh definitively rejected)
+    // and left a breadcrumb — the screen should explain why, not read as a
+    // random logout.
+    storage.set("logout_reason", "session_expired");
+    await render(<ConnectScreen />);
+    await screen.findByText("Your session expired — please sign in again.");
+    // The reason is consumed so it doesn't re-appear on the next mount.
+    expect(storage.getString("logout_reason")).toBeUndefined();
+  });
+
+  it("token-less 200: a login response with no token is treated as a failure", async () => {
+    // A 200 whose user carries NO token (e.g. a proxy stripping fields) must
+    // not enter the main stack with token:undefined and silently bounce back.
+    mockedGet.mockResolvedValue(absStatus());
+    mockedPost.mockResolvedValue({ data: { user: { id: "u1", username: "bob" } } });
+    const login = jest.fn();
+    useUserStore.setState({ login } as any);
+    await render(<ConnectScreen />);
+    await connect();
+    await screen.findByPlaceholderText("Username");
+
+    await fireEvent.changeText(screen.getByPlaceholderText("Username"), "bob");
+    await fireEvent.changeText(screen.getByPlaceholderText("Password"), "hunter2");
+    await fireEvent.press(screen.getByText("Submit"));
+
+    await screen.findByText("Authentication failed. Please check your credentials.");
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it("re-entrancy: firing the password field's 'go' twice rapidly only POSTs /login once", async () => {
+    mockedGet.mockResolvedValue(absStatus());
+    // Hold the login POST in flight (deferred) so `loading` stays true across
+    // the second submit — the `if (loading) return` guard must short-circuit it.
+    let resolvePost: (v: any) => void = () => {};
+    mockedPost.mockReturnValue(new Promise((res) => { resolvePost = res; }));
+    await render(<ConnectScreen />);
+    await connect();
+    await screen.findByPlaceholderText("Username");
+
+    await fireEvent.changeText(screen.getByPlaceholderText("Username"), "bob");
+    const pw = screen.getByPlaceholderText("Password");
+    await fireEvent.changeText(pw, "hunter2");
+
+    // First "go" starts the POST and flips loading=true; the awaited act commits
+    // it (rebinding onSubmitEditing) so the second "go" hits the guard.
+    await act(async () => { fireEvent(pw, "submitEditing"); });
+    await act(async () => { fireEvent(pw, "submitEditing"); });
+
+    expect(mockedPost).toHaveBeenCalledTimes(1);
+
+    // Drain the in-flight request so nothing stays pending past the test.
+    await act(async () => { resolvePost({ data: { user: {} } }); });
+  });
+
+  it("re-entrancy: firing the address field's 'go' twice rapidly only probes /status once", async () => {
+    // Hold the /status probe in flight (deferred) so `loading` stays true across
+    // the second submit — the guard must short-circuit the duplicate connect.
+    let resolveGet: (v: any) => void = () => {};
+    mockedGet.mockReturnValue(new Promise((res) => { resolveGet = res; }));
+    await render(<ConnectScreen />);
+
+    const input = screen.getByPlaceholderText("http://55.55.55.55:13378");
+    await fireEvent.changeText(input, "abs.example.com");
+
+    // First "go" starts the /status probe and flips loading=true; the awaited
+    // act commits it so the second "go" hits the guard.
+    await act(async () => { fireEvent(input, "submitEditing"); });
+    await act(async () => { fireEvent(input, "submitEditing"); });
+
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+
+    // Drain the in-flight probe so nothing stays pending past the test.
+    await act(async () => { resolveGet(absStatus()); });
+  });
+
+  describe("OpenID flow", () => {
+    const openIdStatus = () =>
+      absStatus({ authMethods: ["openid"], authFormData: { authOpenIDButtonText: "SSO Login" } });
+
+    it("surfaces an OpenID failure with the thrown message", async () => {
+      mockedGet.mockResolvedValue(openIdStatus());
+      mockedOpenId.mockRejectedValue(new Error("OpenID provider unreachable"));
+      const login = jest.fn();
+      useUserStore.setState({ login } as any);
+      await render(<ConnectScreen />);
+      await connect();
+
+      const ssoButton = await screen.findByText("SSO Login");
+      await fireEvent.press(ssoButton);
+
+      await screen.findByText("OpenID provider unreachable");
+      expect(login).not.toHaveBeenCalled();
+    });
+
+    it("stays silent when the user cancels the OpenID flow (no user, no error)", async () => {
+      mockedGet.mockResolvedValue(openIdStatus());
+      // A cancelled sign-in resolves with no user — a silent no-op.
+      mockedOpenId.mockResolvedValue(undefined);
+      const login = jest.fn();
+      useUserStore.setState({ login } as any);
+      await render(<ConnectScreen />);
+      await connect();
+
+      const ssoButton = await screen.findByText("SSO Login");
+      await fireEvent.press(ssoButton);
+
+      await waitFor(() => expect(mockedOpenId).toHaveBeenCalledWith("https://abs.example.com"));
+      expect(login).not.toHaveBeenCalled();
+      expect(screen.queryByText(/failed/i)).toBeNull();
+      // Still on the sign-in step, ready to retry.
+      expect(screen.getByText("SSO Login")).toBeTruthy();
+    });
   });
 
   describe("PO#2 — saved-server memory", () => {

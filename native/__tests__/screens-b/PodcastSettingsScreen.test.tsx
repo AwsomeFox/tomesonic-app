@@ -294,6 +294,53 @@ describe("PodcastSettingsScreen", () => {
     );
   });
 
+  it("check-for-new requests the configured max-new count as the limit (not a hardcoded 3)", async () => {
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    // Reconfigure how many new episodes to pull, then check the feed. The
+    // checknew request must carry that count as its limit, not a fixed 3.
+    fireEvent.changeText(screen.getByLabelText("Max new episodes to download"), "5");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Max new episodes to download").props.value).toBe("5")
+    );
+
+    fireEvent.press(screen.getByLabelText("Check for new episodes now"));
+
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith("/api/podcasts/pod1/checknew?limit=5")
+    );
+  });
+
+  it("refetches the item after a successful check so Last-checked can update", async () => {
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    const itemCallsBefore = (api.get as jest.Mock).mock.calls.filter(
+      (c) => c[0] === "/api/items/pod1"
+    ).length;
+
+    fireEvent.press(screen.getByLabelText("Check for new episodes now"));
+
+    // A fresh item GET fires after the check (beyond the initial load) so the
+    // Feed section's Last-checked reflects the just-completed run.
+    await waitFor(() =>
+      expect(
+        (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/items/pod1").length
+      ).toBeGreaterThan(itemCallsBefore)
+    );
+  });
+
+  it("non-admin does not see the check-for-new action (endpoint is admin-gated)", async () => {
+    mockGet({ me: USER_ME });
+    await renderScreen();
+    await screen.findByText("My Great Podcast");
+
+    // checknew is admin-only on the server (403 otherwise), so the action is
+    // hidden rather than surfacing a confusing failure.
+    expect(screen.queryByLabelText("Check for new episodes now")).toBeNull();
+  });
+
   it("check-for-new reports when the feed has nothing new", async () => {
     await renderScreen();
     await screen.findByText("My Great Podcast");

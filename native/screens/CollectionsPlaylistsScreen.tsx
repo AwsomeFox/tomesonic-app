@@ -99,21 +99,27 @@ function CollectionsPlaylistsScreen(
   const fetchData = useCallback(async () => {
     try {
       setLoadError(false);
+      // Capture the library at call time: a slow response from the PREVIOUS
+      // library must not overwrite the new one's list after a switch (same
+      // guard AuthorsScreen/SeriesList use).
+      const requestedLibraryId = currentLibraryId;
       // Only ever install an ARRAY: a proxy/captive-portal HTML-or-object body
       // with HTTP 200 would otherwise land in state and crash the row map.
       const asArray = (v: any): any[] | null => (Array.isArray(v) ? v : null);
-      if (activeTab === "collections" && currentLibraryId) {
-        const res = await api.get(`/api/libraries/${currentLibraryId}/collections`);
+      if (activeTab === "collections" && requestedLibraryId) {
+        const res = await api.get(`/api/libraries/${requestedLibraryId}/collections`);
+        if (useLibraryStore.getState().currentLibraryId !== requestedLibraryId) return;
         const list = asArray(res.data?.results) ?? asArray(res.data?.collections) ?? asArray(res.data);
         if (!list) {
           setLoadError(true);
           return;
         }
         setCollections(list);
-      } else if (activeTab === "playlists" && currentLibraryId) {
+      } else if (activeTab === "playlists" && requestedLibraryId) {
         // Library-scoped (matches the collections tab and the Add-to sheet) —
         // the global /api/playlists mixes in other libraries' playlists.
-        const res = await api.get(`/api/libraries/${currentLibraryId}/playlists`);
+        const res = await api.get(`/api/libraries/${requestedLibraryId}/playlists`);
+        if (useLibraryStore.getState().currentLibraryId !== requestedLibraryId) return;
         const list = asArray(res.data?.results) ?? asArray(res.data?.playlists) ?? asArray(res.data);
         if (!list) {
           setLoadError(true);

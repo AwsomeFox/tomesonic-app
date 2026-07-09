@@ -60,11 +60,21 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import PlaylistDetailScreen from "../../screens/PlaylistDetailScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { useDialogStore } from "../../store/useDialogStore";
+
+// Invoke the destructive "Delete" button of the confirm dialog the trash icon
+// opens (no AppDialog host is mounted in the unit render).
+async function confirmDelete() {
+  const del = useDialogStore.getState().current!.buttons.find((b) => b.style === "destructive")!;
+  await act(async () => {
+    await del.onPress!();
+  });
+}
 
 const initialUser = useUserStore.getState();
 const initialPlayback = usePlaybackStore.getState();
@@ -126,6 +136,8 @@ beforeEach(() => {
   startPlayback = jest.fn().mockResolvedValue(true);
   usePlaybackStore.setState({ startPlayback, currentSession: null } as any);
   (api.get as jest.Mock).mockResolvedValue({ data: PLAYLIST });
+  (api.delete as jest.Mock).mockReset();
+  useDialogStore.setState({ current: null });
 });
 
 describe("PlaylistDetailScreen", () => {
@@ -223,5 +235,32 @@ describe("PlaylistDetailScreen", () => {
     await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Audiobook One")).toBeTruthy();
+  });
+
+  describe("delete", () => {
+    it("deletes the playlist on confirm and navigates back", async () => {
+      (api.delete as jest.Mock).mockResolvedValue({ data: {} });
+      const navigation = await renderPlaylist();
+      await screen.findByText("Audiobook One");
+
+      await fireEvent.press(screen.getByLabelText("Delete playlist"));
+      await confirmDelete();
+
+      expect(api.delete).toHaveBeenCalledWith("/api/playlists/pl1");
+      expect(navigation.goBack).toHaveBeenCalled();
+    });
+
+    it("surfaces a \"Couldn't delete\" dialog when the delete fails", async () => {
+      (api.delete as jest.Mock).mockRejectedValue({ response: { status: 500 } });
+      const navigation = await renderPlaylist();
+      await screen.findByText("Audiobook One");
+
+      await fireEvent.press(screen.getByLabelText("Delete playlist"));
+      await confirmDelete();
+
+      expect(navigation.goBack).not.toHaveBeenCalled();
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.title).toBe("Couldn't delete");
+    });
   });
 });

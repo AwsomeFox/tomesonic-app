@@ -244,6 +244,29 @@ describe("LatestEpisodesScreen", () => {
     expect(useUserStore.getState().mediaProgress["li1-ep1"].isFinished).toBe(true);
   });
 
+  it("does NOT enqueue an offline finish patch when the server rejects it (e.g. 403)", async () => {
+    // A response present means the request reached the server and it refused it —
+    // NOT an offline case. Queueing here would poison the sync queue with a patch
+    // the server already rejected.
+    (queueProgressPatch as jest.Mock).mockClear();
+    (api.patch as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("forbidden"), { response: { status: 403 } })
+    );
+    await renderEpisodes();
+    await screen.findByText("Fresh Episode");
+
+    await fireEvent.press(screen.getAllByLabelText("Mark episode finished")[0]);
+
+    // No offline queue, and the optimistic local flip is NOT applied.
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't update episode" })
+      )
+    );
+    expect(queueProgressPatch).not.toHaveBeenCalled();
+    expect(useUserStore.getState().mediaProgress["li1-ep1"]?.isFinished).toBeFalsy();
+  });
+
   it("errors when no library is selected (no fetch)", async () => {
     useLibraryStore.setState({ currentLibraryId: null } as any);
     await renderEpisodes();

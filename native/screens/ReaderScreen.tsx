@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { View, Text, Linking, ActivityIndicator, FlatList, Animated, TextInput, Share, ScrollView, useWindowDimensions } from "react-native";
+import { View, Text, Linking, ActivityIndicator, FlatList, Animated, Easing, TextInput, Share, ScrollView, useWindowDimensions } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as FileSystem from "expo-file-system/legacy";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
@@ -44,6 +45,13 @@ const MAX_EBOOK_INLINE_BYTES = 12 * 1024 * 1024;
 // Text-size stepper bounds (percent of the publisher's base size).
 const FONT_SIZE_MIN = 80;
 const FONT_SIZE_MAX = 180;
+
+// Read-aloud (TTS) rate stepper bounds — expo-speech treats 1.0 as normal
+// speed. Clamped to a sane band so a corrupted persisted value can't hand the
+// native TextToSpeech an unusable rate.
+const TTS_RATE_MIN = 0.5;
+const TTS_RATE_MAX = 2.0;
+const TTS_RATE_STEP = 0.1;
 
 // Reader-scoped color themes. "auto" (the default) follows the app surface so
 // nothing regresses when the preference is unset. Each named theme overrides
@@ -223,7 +231,6 @@ ${FOLIATE_BUNDLE}
       }
       var file = base64ToFile("${base64}", "book${ext}");
       var view = document.createElement('foliate-view');
-      view.setAttribute('margin', ${JSON.stringify(String(margin) + "px")});
       document.body.append(view);
 
       // Apply reading styles — theme colors and typography. fontFamily is
@@ -337,6 +344,11 @@ ${FOLIATE_BUNDLE}
       // observes the 'flow' attribute and re-lays-out on change.
       try { view.renderer.setAttribute('flow', ${JSON.stringify(flow)} === 'scrolled' ? 'scrolled' : 'paginated'); } catch(e) {}
 
+      // Initial margin. Like 'flow', the margin is observed on view.renderer —
+      // NOT on the <foliate-view> element — so it must be set here (after open,
+      // when the renderer exists) to actually drive the layout.
+      try { view.renderer.setAttribute('margin', ${JSON.stringify(String(margin) + "px")}); } catch(e) {}
+
       // Restore saved position. JSON.stringify escapes the CFI — a stored or
       // server value containing a quote/backslash/newline would otherwise
       // break (or inject into) this generated script.
@@ -376,7 +388,7 @@ ${FOLIATE_BUNDLE}
       // attribute and the head/foot part heights.
       window.setReaderMargin = function(px){
         try {
-          view.setAttribute('margin', px + 'px');
+          view.renderer.setAttribute('margin', px + 'px');
           var s = document.getElementById('reader-margins');
           if (s) s.textContent =
             'foliate-view::part(head){height:' + px + 'px !important;min-height:' + px + 'px !important;}' +
@@ -709,21 +721,26 @@ export default function ReaderScreen({ route, navigation }: any) {
   const syncTimeoutRef = useRef<any>(null);
   const latestProgressRef = useRef<{ cfi: string; fraction: number } | null>(null);
 
-  // Pulsing animation for loading state
+  // Pulsing animation for loading state. Honors the OS "reduce motion" setting:
+  // when reduced, the placeholder holds a static opacity instead of breathing.
   const pulseAnim = useRef(new Animated.Value(0.6)).current;
+  const reduceMotion = useReducedMotion();
   useEffect(() => {
     let anim: Animated.CompositeAnimation | null = null;
-    if (ebookStatus === "loading" || ebookStatus === "idle") {
+    if ((ebookStatus === "loading" || ebookStatus === "idle") && !reduceMotion) {
       anim = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
             toValue: 1.0,
             duration: 1000,
+            // Smooth "breathing" ease rather than a linear ramp.
+            easing: Easing.inOut(Easing.ease),
             useNativeDriver: true,
           }),
           Animated.timing(pulseAnim, {
             toValue: 0.6,
             duration: 1000,
+            easing: Easing.inOut(Easing.ease),
             useNativeDriver: true,
           }),
         ])
@@ -735,7 +752,7 @@ export default function ReaderScreen({ route, navigation }: any) {
     return () => {
       if (anim) anim.stop();
     };
-  }, [ebookStatus, pulseAnim]);
+  }, [ebookStatus, pulseAnim, reduceMotion]);
 
   // Style Settings States
   const [fontSize, setFontSize] = useState(() => storage.getNumber("reader_font_size") || 100);
@@ -798,6 +815,18 @@ export default function ReaderScreen({ route, navigation }: any) {
   const ttsAvailable = !!Speech;
   const [ttsPlaying, setTtsPlaying] = useState(false);
   const ttsPlayingRef = useRef(false);
+  // Read-aloud speed. Persisted per-device and clamped to [TTS_RATE_MIN,
+  // TTS_RATE_MAX]; mirrored into a ref so an in-progress read-aloud picks up a
+  // rate change on its NEXT chunk without restarting.
+  const [ttsRate, setTtsRate] = useState<number>(() => {
+    const r = storage.getNumber("reader_tts_rate");
+    return r && r >= TTS_RATE_MIN && r <= TTS_RATE_MAX ? r : 1.0;
+  });
+  const ttsRateRef = useRef(ttsRate);
+  useEffect(() => {
+    ttsRateRef.current = ttsRate;
+    storage.set("reader_tts_rate", ttsRate);
+  }, [ttsRate]);
   // Last reading position spoken by read-aloud. Used to detect that a page turn
   // didn't actually advance (end of book / stuck section) so playback ends
   // cleanly instead of re-speaking the same text forever (#1).
@@ -1373,6 +1402,9 @@ export default function ReaderScreen({ route, navigation }: any) {
           }
           try {
             Speech.speak(chunks[i], {
+              // Read at the user-selected rate (1.0 = normal). Read from the ref
+              // so a mid-read speed change applies to the next chunk.
+              rate: ttsRateRef.current,
               onDone: () => {
                 if (ttsPlayingRef.current) speakFrom(i + 1);
               },
@@ -1540,12 +1572,27 @@ export default function ReaderScreen({ route, navigation }: any) {
   };
 
   const removeHighlight = (cfi: string) => {
-    if (webRef.current) {
-      webRef.current.injectJavaScript(
-        `window.removeHighlight && window.removeHighlight(${JSON.stringify(String(cfi))});true;`
-      );
-    }
-    persistHighlights(highlights.filter((h) => h.cfi !== cfi));
+    // Deleting a highlight is destructive and irreversible, so confirm first
+    // via the themed dialog (mirrors the app's other destructive actions).
+    showAppDialog({
+      title: "Delete highlight?",
+      message: "This highlight is saved on this device and will be removed.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            if (webRef.current) {
+              webRef.current.injectJavaScript(
+                `window.removeHighlight && window.removeHighlight(${JSON.stringify(String(cfi))});true;`
+              );
+            }
+            persistHighlights(highlights.filter((h) => h.cfi !== cfi));
+          },
+        },
+      ],
+    });
   };
 
   // Share the selected text as a quote (text-only share — no native deps).
@@ -1805,6 +1852,19 @@ export default function ReaderScreen({ route, navigation }: any) {
         }
         style={{ flex: 1, backgroundColor: colors.surface }}
         page={pdfPage}
+        onLoadComplete={(numberOfPages: number) => {
+          // Player → reader handoff for PDFs: the pending "Read from here"
+          // fraction is only mappable to a page once the page count is known.
+          // Mirror the epub goToFraction jump — honor it, then clear it so it
+          // doesn't override the user's later scrolling. (Previously the pending
+          // jump was set for PDFs but never consumed, so it silently no-oped.)
+          const f = pendingJumpRef.current;
+          if (f != null && numberOfPages > 0) {
+            pendingJumpRef.current = null;
+            const target = Math.max(1, Math.min(numberOfPages, Math.round(f * numberOfPages)));
+            setPdfPage(target);
+          }
+        }}
         onPageChanged={(page: number, numberOfPages: number) => {
           setPdfProgress({ page, pages: numberOfPages });
           // Keep the controlled page in sync with scroll (no-op jump when the
@@ -1949,7 +2009,10 @@ export default function ReaderScreen({ route, navigation }: any) {
           >
             <Icon name="chevron-left" size={22} color={colors.onSurfaceVariant} />
           </Pressable>
-          <Text style={{ flex: 1, textAlign: "center", color: colors.onSurfaceVariant, fontSize: 12 }}>
+          <Text
+            accessibilityLiveRegion="polite"
+            style={{ flex: 1, textAlign: "center", color: colors.onSurfaceVariant, fontSize: 12 }}
+          >
             Page {pdfProgress.page} of {pdfProgress.pages}
           </Text>
           <Pressable
@@ -1991,7 +2054,11 @@ export default function ReaderScreen({ route, navigation }: any) {
           >
             <Icon name="chevron-left" size={22} color={chromeFgDim} />
           </Pressable>
-          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <View
+            testID="reader-progress-footer"
+            accessibilityLiveRegion="polite"
+            style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
+          >
             {pageProgress.tocItem?.label ? (
               <Text numberOfLines={1} style={{ color: chromeFgDim, fontSize: 13, fontWeight: "600", marginBottom: 2 }}>
                 {pageProgress.tocItem.label}
@@ -2078,7 +2145,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             Time Left) is clipped off the bottom on shorter screens (#4). */}
         <View style={{ paddingTop: 20, paddingHorizontal: 20 }}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Reading Settings</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Reading Settings</Text>
               <Pressable
                 onPress={() => setShowSettings(false)}
                 hitSlop={8}
@@ -2100,7 +2167,7 @@ export default function ReaderScreen({ route, navigation }: any) {
                 header) so the reader chrome stays uncluttered (#6). Each opens
                 its own sheet and closes this one. */}
             <View style={{ marginBottom: 24 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Tools</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Tools</Text>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 <Pressable
                   onPress={() => { setShowSettings(false); setShowSearch(true); }}
@@ -2131,7 +2198,7 @@ export default function ReaderScreen({ route, navigation }: any) {
 
             {/* Text Size Control */}
             <View style={{ marginBottom: 24 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Text Size</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Text Size</Text>
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                 <Pressable
                   onPress={() => setFontSize(prev => Math.max(FONT_SIZE_MIN, prev - 10))}
@@ -2173,7 +2240,7 @@ export default function ReaderScreen({ route, navigation }: any) {
 
             {/* Font Family Control */}
             <View style={{ marginBottom: 24 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Font Family</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Font Family</Text>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 <Pressable
                   onPress={() => setFontFamily("serif")}
@@ -2204,7 +2271,7 @@ export default function ReaderScreen({ route, navigation }: any) {
 
             {/* Line Spacing Control */}
             <View style={{ marginBottom: 12 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Line Spacing</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Line Spacing</Text>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 {[
                   { label: "Narrow", val: 1.2 },
@@ -2231,7 +2298,7 @@ export default function ReaderScreen({ route, navigation }: any) {
 
             {/* Page-turn animation (finger-follow curl) */}
             <View style={{ marginTop: 12, marginBottom: 12 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Page Turn</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Page Turn</Text>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 {[
                   { label: "Curl", val: true },
@@ -2257,7 +2324,7 @@ export default function ReaderScreen({ route, navigation }: any) {
 
             {/* Reader Theme Control */}
             <View style={{ marginTop: 12, marginBottom: 12 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Reader Theme</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Reader Theme</Text>
               <View style={{ flexDirection: "row", columnGap: 8 }}>
                 {[
                   { key: "auto", label: "Auto" },
@@ -2295,7 +2362,7 @@ export default function ReaderScreen({ route, navigation }: any) {
 
             {/* Margin Control */}
             <View style={{ marginTop: 12, marginBottom: 12 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Margins</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Margins</Text>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 {READER_MARGINS.map((item) => (
                   <Pressable
@@ -2318,7 +2385,7 @@ export default function ReaderScreen({ route, navigation }: any) {
 
             {/* Flow Control (paginated vs scrolled) */}
             <View style={{ marginTop: 12, marginBottom: 12 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Layout</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Layout</Text>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 {[
                   { label: "Paginated", val: "paginated" as const },
@@ -2345,7 +2412,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             {/* Time Left — chapter vs whole-book estimate scope (#1). Only
                 changes the footer text, so it applies live with no reload. */}
             <View style={{ marginTop: 12, marginBottom: 12 }}>
-              <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Time Left</Text>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Time Left</Text>
               <View style={{ flexDirection: "row", columnGap: 12 }}>
                 {[
                   { label: "Chapter", val: "chapter" as const },
@@ -2368,6 +2435,52 @@ export default function ReaderScreen({ route, navigation }: any) {
                 ))}
               </View>
             </View>
+
+            {/* Read-aloud Speed — stepper mirroring the Text Size idiom. Applies
+                to the expo-speech `rate` on the next spoken chunk. Only shown
+                when TTS is available in this build. */}
+            {ttsAvailable ? (
+              <View style={{ marginTop: 12, marginBottom: 12 }}>
+                <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600", marginBottom: 12 }}>Read-aloud Speed</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Pressable
+                    onPress={() => setTtsRate((prev) => Math.max(TTS_RATE_MIN, Math.round((prev - TTS_RATE_STEP) * 10) / 10))}
+                    disabled={ttsRate <= TTS_RATE_MIN}
+                    accessibilityRole="button"
+                    accessibilityLabel="Decrease read-aloud speed"
+                    accessibilityState={{ disabled: ttsRate <= TTS_RATE_MIN }}
+                    style={{
+                      width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
+                      alignItems: "center", justifyContent: "center",
+                      opacity: ttsRate <= TTS_RATE_MIN ? 0.4 : 1,
+                    }}
+                  >
+                    <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>-</Text>
+                  </Pressable>
+                  {/* Live region: each +/- step announces the new speed. */}
+                  <Text
+                    accessibilityLiveRegion="polite"
+                    style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}
+                  >
+                    {ttsRate.toFixed(1)}x
+                  </Text>
+                  <Pressable
+                    onPress={() => setTtsRate((prev) => Math.min(TTS_RATE_MAX, Math.round((prev + TTS_RATE_STEP) * 10) / 10))}
+                    disabled={ttsRate >= TTS_RATE_MAX}
+                    accessibilityRole="button"
+                    accessibilityLabel="Increase read-aloud speed"
+                    accessibilityState={{ disabled: ttsRate >= TTS_RATE_MAX }}
+                    style={{
+                      width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer,
+                      alignItems: "center", justifyContent: "center",
+                      opacity: ttsRate >= TTS_RATE_MAX ? 0.4 : 1,
+                    }}
+                  >
+                    <Text style={{ color: colors.onSecondaryContainer, fontSize: 20, fontWeight: "700" }}>+</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
         </ScrollView>
       </BottomSheet>
 
@@ -2468,7 +2581,12 @@ export default function ReaderScreen({ route, navigation }: any) {
               padding: 16, borderBottomWidth: 1, borderBottomColor: colors.outlineVariant,
             }}
           >
-            <Text style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Highlights</Text>
+            <View>
+              <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 18, fontWeight: "700" }}>Highlights</Text>
+              {/* Highlights live only on this device — nothing syncs them to the
+                  server, so say so plainly instead of implying cross-device. */}
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>Saved on this device</Text>
+            </View>
             <Pressable
               onPress={() => setShowHighlights(false)}
               hitSlop={8}
