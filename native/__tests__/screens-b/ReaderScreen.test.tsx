@@ -539,9 +539,12 @@ describe("ReaderScreen (epub pipeline)", () => {
     // Curl handlers + a live toggle hook are present, enabled by default.
     expect(html).toContain("window.setPageCurl");
     expect(html).toContain("function finishTurn");
-    expect(html).toContain("var curlEnabled = true");
-    // Still honors reduced-motion at runtime.
-    expect(html).toContain("prefers-reduced-motion");
+    expect(html).toContain("var curlEnabled = true;");
+    // The curl is NOT gated on the OS reduced-motion preference — many Android
+    // WebViews report reduce-motion and silently disabled it (#3). The "None"
+    // setting is the user-facing motion accommodation.
+    expect(html).not.toContain("prefers-reduced-motion");
+    expect(html).not.toContain("reduceMotionOn");
   });
 
   it("bakes the curl OFF into the HTML when the user disabled it previously", async () => {
@@ -825,8 +828,10 @@ describe("ReaderScreen (reader features)", () => {
     );
   });
 
-  it("shows a time-left estimate from a persisted reading speed", async () => {
-    // 0.01 of the book per minute -> 50% remaining ≈ 50 min.
+  it("shows a whole-book time-left estimate from a persisted, clamped book speed", async () => {
+    // Book scope: 0.01 fraction/min (within the sane clamp band) -> 50%
+    // remaining ≈ 50 min.
+    storage.set("reader_estimate_scope", "book");
     storage.set(`reader_speed_${ITEM}`, 0.01);
     await renderReader();
     const webProps = await readyWebView();
@@ -838,13 +843,119 @@ describe("ReaderScreen (reader features)", () => {
     expect(screen.getByText("~50 min left in book")).toBeTruthy();
   });
 
-  it("keeps the time-left estimate hidden until a speed sample exists", async () => {
+  it("clamps a poisoned persisted book speed so it can't collapse to '~2 min'", async () => {
+    // A poisoned huge book speed (from a fast early flip) would imply a
+    // whole-book time far under 30 min; the clamp holds 1/bookSpeed >= 30 min,
+    // so at 5% read the estimate stays believable rather than "~2 min".
+    storage.set("reader_estimate_scope", "book");
+    storage.set(`reader_speed_${ITEM}`, 5); // absurd fraction/min
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await act(async () => {
+      sendLocation(webProps, { ...LOCATION, fraction: 0.05 });
+    });
+    // bookSpeed clamped to 1/30 -> ceil(0.95 / (1/30)) = ceil(28.5) = 29 min.
+    expect(screen.getByText("~29 min left in book")).toBeTruthy();
+  });
+
+  it("shows a chapter time-left estimate (default scope) from the clamped pages/min rate", async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(0);
+    await renderReader();
+    const webProps = await readyWebView();
+
+    // First relocate seeds the sample (no rate yet -> estimate hidden).
+    await act(async () => {
+      sendLocation(webProps, { ...LOCATION, page: 10, pages: 100, section: 1, fraction: 0.1 });
+    });
+    expect(screen.queryByText(/min left in chapter/)).toBeNull();
+
+    // 1 minute later, 2 pages further in the same section -> 2 pages/min.
+    // 88 pages remain (page 12 of 100) -> ceil(88 / 2) = 44 min left in chapter.
+    jest.setSystemTime(60000);
+    await act(async () => {
+      sendLocation(webProps, { ...LOCATION, page: 12, pages: 100, section: 1, fraction: 0.12 });
+    });
+    expect(screen.getByText("~44 min left in chapter")).toBeTruthy();
+    jest.useRealTimers();
+  });
+
+  it("keeps the time-left estimate hidden until a reading sample exists", async () => {
     await renderReader();
     const webProps = await readyWebView();
     await act(async () => {
       sendLocation(webProps, { ...LOCATION, fraction: 0.3 });
     });
-    expect(screen.queryByText(/min left in book/)).toBeNull();
+    expect(screen.queryByText(/min left/)).toBeNull();
+  });
+
+  it("toggles the time-left scope live between chapter and book", async () => {
+    storage.set(`reader_speed_${ITEM}`, 0.01); // book speed for the book estimate
+    jest.useFakeTimers();
+    jest.setSystemTime(0);
+    await renderReader();
+    const webProps = await readyWebView();
+
+    await act(async () => {
+      sendLocation(webProps, { ...LOCATION, page: 10, pages: 100, section: 1, fraction: 0.4 });
+    });
+    jest.setSystemTime(60000);
+    await act(async () => {
+      sendLocation(webProps, { ...LOCATION, page: 12, pages: 100, section: 1, fraction: 0.5 });
+    });
+    jest.useRealTimers();
+
+    // Default chapter scope: 2 pages/min, 88 pages left -> ceil(88/2) = 44 min.
+    expect(screen.getByText("~44 min left in chapter")).toBeTruthy();
+
+    // Switch to Book in the settings sheet — footer re-derives live (no reload).
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+    await fireEvent.press(screen.getByLabelText("Time left in book"));
+    expect(storage.getString("reader_estimate_scope")).toBe("book");
+    // Book speed EMA settled near 0.1 fraction/min -> clamped to 1/30 max ->
+    // ceil(0.5 / (1/30)) = 15 min.
+    expect(screen.getByText("~15 min left in book")).toBeTruthy();
+  });
+
+  it("applies a named reader theme to the reader chrome, not just the book text", async () => {
+    // Sepia selected -> the header title AND footer text adopt the sepia
+    // foreground, so the whole reader screen is sepia (#2), not just the middle
+    // text rectangle.
+    storage.set("reader_theme", "sepia");
+    await renderReader();
+    const webProps = await readyWebView();
+
+    // Header title uses the themed foreground.
+    const title = screen.getByText("My Book");
+    expect((title.props.style as any).color).toBe("#5b4636");
+
+    // Footer (renders after a relocate) uses the dimmed themed foreground.
+    await act(async () => {
+      sendLocation(webProps, LOCATION);
+    });
+    const footer = screen.getByText("Page 10 of 100 (42%)");
+    expect((footer.props.style as any).color).toBe("#5b463699");
+  });
+
+  it("keeps the app chrome colors when the reader theme is auto (no regression)", async () => {
+    // reader_theme unset -> "auto" -> the header title must NOT use a named
+    // theme foreground (it keeps the app onSurface color).
+    await renderReader();
+    await readyWebView();
+    const title = screen.getByText("My Book");
+    expect((title.props.style as any).color).not.toBe("#5b4636");
+  });
+
+  it("puts the reading-settings sections in a ScrollView so nothing is clipped", async () => {
+    await renderReader();
+    await readyWebView();
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+    // A bounded, scrollable container wraps the sections (Tools ... Time Left).
+    expect(screen.getByTestId("reader-settings-scroll")).toBeTruthy();
+    // The last section is reachable inside it.
+    expect(screen.getByLabelText("Time left in chapter")).toBeTruthy();
+    expect(screen.getByText("Margins")).toBeTruthy();
   });
 
   it("runs an in-book search, lists results, and navigates to a match's CFI", async () => {
@@ -1108,17 +1219,21 @@ describe("ReaderScreen (reader features)", () => {
     expect(Speech.speak).not.toHaveBeenCalled();
   });
 
-  it("gates the page-curl on the OS reduced-motion preference so a settings-sync can't re-enable it", async () => {
+  it("does not disable the page-curl under OS reduced-motion — the None setting is the off switch", async () => {
     await renderReader();
     await readyWebView();
     const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
 
-    // A persisted matchMedia handle is AND-ed into BOTH the initial value and
-    // the live setPageCurl hook, so the OS preference always wins (#5).
-    expect(html).toContain("reduceMotionMql");
-    expect(html).toContain("var curlEnabled = true && !reduceMotionOn()");
-    expect(html).toContain("curlEnabled = !!v && !reduceMotionOn()");
+    // The explicit setting drives the curl directly; no matchMedia gating that
+    // an Android WebView reporting reduce-motion could silently trip (#3).
+    expect(html).not.toContain("reduceMotionMql");
+    expect(html).not.toContain("reduceMotionOn");
+    expect(html).toContain("var curlEnabled = true;");
+    expect(html).toContain("window.setPageCurl = function(v){ curlEnabled = !!v; };");
     // getReaderText reports the reading position so end-of-book is detectable.
     expect(html).toContain("pos: lastFraction");
+    // getReaderText starts from the CURRENT reading position, not chapter top (#5).
+    expect(html).toContain("view.lastLocation");
+    expect(html).toContain("selectNodeContents");
   });
 });
