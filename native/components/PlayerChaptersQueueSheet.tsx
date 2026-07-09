@@ -32,7 +32,7 @@ interface Props {
   queue: any[];
   removeFromQueue: (id: string) => void;
   clearQueue: () => void;
-  playNextInQueue: () => void;
+  playNextInQueue: () => Promise<void>;
   expanded: boolean;
   onToggleExpand: (expanded: boolean) => void;
   activeTab: "chapters" | "queue";
@@ -222,6 +222,8 @@ export default function PlayerChaptersQueueSheet({
         <View {...panResponder.panHandlers}>
           <Pressable
             onPress={toggleExpand}
+            accessibilityRole="button"
+            accessibilityLabel="Chapters and Queue sheet trigger"
             style={{
               height: peekHeight,
               flexDirection: "row",
@@ -240,7 +242,7 @@ export default function PlayerChaptersQueueSheet({
                 marginLeft: -18,
                 width: 36,
                 height: 4,
-                borderRadius: 2,
+                borderRadius: 3,
                 backgroundColor: colors.outlineVariant,
               }}
             />
@@ -361,6 +363,8 @@ export default function PlayerChaptersQueueSheet({
                           onSeekToChapter(i);
                           onToggleExpand(false);
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Chapter ${i + 1}: ${ch.title || "Untitled"}`}
                         style={{
                           flexDirection: "row",
                           alignItems: "center",
@@ -443,7 +447,7 @@ export default function PlayerChaptersQueueSheet({
                       textTransform: "uppercase",
                     }}
                   >
-                    Queue
+                    Up Next
                   </Text>
                   {queue.length > 0 ? (
                     <Pressable
@@ -451,6 +455,8 @@ export default function PlayerChaptersQueueSheet({
                         haptic();
                         clearQueue();
                       }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear all queue items"
                       style={{ paddingHorizontal: 8, paddingVertical: 4 }}
                     >
                       <Text
@@ -525,7 +531,7 @@ export default function PlayerChaptersQueueSheet({
                             playNextInQueue().catch(() => {});
                           }}
                           accessibilityRole="button"
-                          accessibilityLabel={`Play next: ${item.title || "track"}`}
+                          accessibilityLabel={`Play ${item.title || "track"} now`}
                           style={{
                             width: 38,
                             height: 38,

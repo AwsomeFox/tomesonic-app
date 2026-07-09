@@ -391,8 +391,7 @@ describe("PlayerBottomSheet — chapters modal", () => {
   it("opens the chapters list and seeks on selection", async () => {
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
-    // Modal lists all chapters; tap one → seekToChapter(index).
+    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
     await fireEvent.press(screen.getByText("Ch 1"));
     expect(store().seekToChapter).toHaveBeenCalledWith(0);
   });
@@ -400,8 +399,8 @@ describe("PlayerBottomSheet — chapters modal", () => {
   it("chapters button is disabled without chapters", async () => {
     seedPlayer({ chapters: [], currentChapterIndex: -1, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    const buttons = screen.getAllByLabelText("Chapters");
-    expect(buttons[0].props.accessibilityState?.disabled).toBe(true);
+    await fireEvent.press(screen.getByLabelText("More options"));
+    expect(screen.getByLabelText("Chapters List").props.accessibilityState?.disabled).toBe(true);
   });
 });
 
@@ -496,7 +495,7 @@ describe("PlayerBottomSheet — Chapters in the bottom control row", () => {
   it("Chapters is reachable in the expanded player and opens the modal", async () => {
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getAllByLabelText("Chapters")[0]);
+    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
     await fireEvent.press(screen.getByText("Ch 1"));
     expect(store().seekToChapter).toHaveBeenCalledWith(0);
   });
@@ -504,7 +503,8 @@ describe("PlayerBottomSheet — Chapters in the bottom control row", () => {
   it("Chapters is disabled without chapters", async () => {
     seedPlayer({ chapters: [], currentChapterIndex: -1, isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    expect(screen.getAllByLabelText("Chapters")[0].props.accessibilityState?.disabled).toBe(true);
+    await fireEvent.press(screen.getByLabelText("More options"));
+    expect(screen.getByLabelText("Chapters List").props.accessibilityState?.disabled).toBe(true);
   });
 
   it("keeps the speed pill present alongside the relocated Chapters button", async () => {
@@ -517,24 +517,41 @@ describe("PlayerBottomSheet — Chapters in the bottom control row", () => {
 
 describe("PlayerBottomSheet — Want to Read heart", () => {
   it("toggles the favorite and reflects the selected state", async () => {
-    seedPlayer({ isPlayerExpanded: true });
-    await render(<PlayerBottomSheet />);
+    jest.useFakeTimers();
+    try {
+      seedPlayer({ isPlayerExpanded: true });
+      await render(<PlayerBottomSheet />);
 
-    // Not favorited yet: label offers to add, and selected is false.
-    const add = screen.getAllByLabelText("Add to Want to Read");
-    expect(add.length).toBeGreaterThan(0);
-    expect(add[0].props.accessibilityState?.selected).toBe(false);
+      // Open overflow modal to show "Add to Want to Read"
+      await fireEvent.press(screen.getByLabelText("More options"));
 
-    await fireEvent.press(add[0]);
-    expect(useFavoritesStore.getState().favorites).toContain("item1");
+      // Not favorited yet: label offers to add, and selected is false.
+      const add = screen.getAllByLabelText("Add to Want to Read");
+      expect(add.length).toBeGreaterThan(0);
+      expect(add[0].props.accessibilityState?.selected).toBe(false);
 
-    // Re-render reflects the flipped state via the reactive subscription.
-    const remove = screen.getAllByLabelText("Remove from Want to Read");
-    expect(remove.length).toBeGreaterThan(0);
-    expect(remove[0].props.accessibilityState?.selected).toBe(true);
+      await fireEvent.press(add[0]);
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+      });
+      expect(useFavoritesStore.getState().favorites).toContain("item1");
 
-    await fireEvent.press(remove[0]);
-    expect(useFavoritesStore.getState().favorites).not.toContain("item1");
+      // Open overflow modal again to show "Remove from Want to Read"
+      await fireEvent.press(screen.getByLabelText("More options"));
+
+      // Re-render reflects the flipped state via the reactive subscription.
+      const remove = screen.getAllByLabelText("Remove from Want to Read");
+      expect(remove.length).toBeGreaterThan(0);
+      expect(remove[0].props.accessibilityState?.selected).toBe(true);
+
+      await fireEvent.press(remove[0]);
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+      });
+      expect(useFavoritesStore.getState().favorites).not.toContain("item1");
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
@@ -551,7 +568,11 @@ describe("PlayerBottomSheet — top bar actions", () => {
     try {
       seedPlayer({ isPlayerExpanded: true });
       await render(<PlayerBottomSheet />);
+      await fireEvent.press(screen.getByLabelText("More options"));
       await fireEvent.press(screen.getAllByLabelText("View book details")[0]);
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+      });
       expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
       await act(async () => {
         jest.advanceTimersByTime(300); // waits for the collapse animation
@@ -572,12 +593,21 @@ describe("PlayerBottomSheet — top bar actions", () => {
   // Stop is the only in-player way to dismiss a session (final sync + save
   // cleanup); a dead button would strand a finished book on-screen.
   it("Stop button collapses the player and closes playback", async () => {
-    const closePlayback = jest.fn().mockResolvedValue(undefined);
-    seedPlayer({ isPlayerExpanded: true, closePlayback });
-    await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getAllByLabelText("Stop and close player")[0]);
-    expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
-    expect(closePlayback).toHaveBeenCalled();
+    jest.useFakeTimers();
+    try {
+      const closePlayback = jest.fn().mockResolvedValue(undefined);
+      seedPlayer({ isPlayerExpanded: true, closePlayback });
+      await render(<PlayerBottomSheet />);
+      await fireEvent.press(screen.getByLabelText("More options"));
+      await fireEvent.press(screen.getAllByLabelText("Stop and close player")[0]);
+      await act(async () => {
+        jest.advanceTimersByTime(200);
+      });
+      expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
+      expect(closePlayback).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
@@ -627,11 +657,11 @@ describe("PlayerBottomSheet — landscape layout", () => {
     await render(<PlayerBottomSheet />);
     await goLandscape();
 
-    // Portrait + landscape subtrees both render (portrait a11y-hidden while
-    // landscape is active), so each label now appears twice.
+    // Portrait + landscape subtrees both render, but portrait Stop button is inside
+    // the collapsed overflow modal, so it is not rendered on mount.
     expect(
       screen.getAllByLabelText("Stop and close player", { includeHiddenElements: true }).length
-    ).toBe(2);
+    ).toBe(1);
     // Read-from-here is gone from both layouts.
     expect(
       screen.queryAllByLabelText("Read from here", { includeHiddenElements: true }).length
@@ -693,7 +723,8 @@ describe("PlayerBottomSheet — play queue", () => {
   it("opens the queue sheet and lists queued books", async () => {
     seedPlayer({ isPlayerExpanded: true, queue: [{ libraryItemId: "b2", title: "Next Book", author: "A" }] });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getAllByLabelText("Play queue, 1 up next")[0]);
+    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getByText("Up Next (1)"));
     expect(screen.getByText("Up Next")).toBeTruthy();
     expect(screen.getByText("Next Book")).toBeTruthy();
   });
@@ -706,7 +737,8 @@ describe("PlayerBottomSheet — play queue", () => {
       playNextInQueue,
     });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getAllByLabelText("Play queue, 1 up next")[0]);
+    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getByText("Up Next (1)"));
     await fireEvent.press(screen.getByLabelText("Play Next Book now"));
     expect(playNextInQueue).toHaveBeenCalled();
   });
@@ -719,7 +751,8 @@ describe("PlayerBottomSheet — play queue", () => {
       removeFromQueue,
     });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getAllByLabelText("Play queue, 1 up next")[0]);
+    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getByText("Up Next (1)"));
     await fireEvent.press(screen.getByLabelText("Remove Next Book from queue"));
     expect(removeFromQueue).toHaveBeenCalledWith("b2");
   });
@@ -727,7 +760,8 @@ describe("PlayerBottomSheet — play queue", () => {
   it("shows the empty-queue message when nothing is queued", async () => {
     seedPlayer({ isPlayerExpanded: true, queue: [] });
     await render(<PlayerBottomSheet />);
-    await fireEvent.press(screen.getAllByLabelText("Play queue")[0]);
+    await fireEvent.press(screen.getByLabelText("Chapters and Queue sheet trigger"));
+    await fireEvent.press(screen.getByText("Up Next (0)"));
     expect(screen.getByText(/No books queued/)).toBeTruthy();
   });
 });

@@ -1013,7 +1013,14 @@ export default function PlayerBottomSheet() {
                 <View
                   style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}
                   accessible
-                  accessibilityLabel={`Chapter progress: ${spokenTime(chapterElapsed)} elapsed. Overall Book progress: ${secondsToTimestamp(position)} elapsed.`}
+                  accessibilityLabel={[
+                    settings.showPlayerChapterProgress !== false
+                      ? `Chapter progress: ${spokenTime(chapterElapsed)} elapsed.`
+                      : "",
+                    settings.showPlayerBookProgress !== false
+                      ? `Overall Book progress: ${secondsToTimestamp(position)} elapsed.`
+                      : ""
+                  ].filter(Boolean).join(" ")}
                 >
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 4 }}>
                     {settings.showPlayerChapterProgress !== false ? (

@@ -53,6 +53,8 @@ export default function PlayerOverflowModal({
         <Pressable
           onPress={() => handleItemPress(onShowChapters)}
           disabled={!hasChapters}
+          accessibilityRole="button"
+          accessibilityLabel="Chapters List"
           style={{
             flexDirection: "row",
             alignItems: "center",
@@ -70,6 +72,8 @@ export default function PlayerOverflowModal({
         {isBookSession && (
           <Pressable
             onPress={() => handleItemPress(onReadFromHere)}
+            accessibilityRole="button"
+            accessibilityLabel="Read from here"
             style={{
               flexDirection: "row",
               alignItems: "center",
@@ -86,6 +90,8 @@ export default function PlayerOverflowModal({
         {/* Go to Details */}
         <Pressable
           onPress={() => handleItemPress(onGoToDetails)}
+          accessibilityRole="button"
+          accessibilityLabel="View book details"
           style={{
             flexDirection: "row",
             alignItems: "center",
@@ -102,6 +108,9 @@ export default function PlayerOverflowModal({
         {favItemId && (
           <Pressable
             onPress={() => handleItemPress(onToggleFav)}
+            accessibilityRole="button"
+            accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"}
+            accessibilityState={{ selected: isFav }}
             style={{
               flexDirection: "row",
               alignItems: "center",
@@ -122,6 +131,8 @@ export default function PlayerOverflowModal({
         {/* Stop / Close Session */}
         <Pressable
           onPress={() => handleItemPress(onStopClose)}
+          accessibilityRole="button"
+          accessibilityLabel="Stop and close player"
           style={{
             flexDirection: "row",
             alignItems: "center",
