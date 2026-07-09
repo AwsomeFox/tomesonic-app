@@ -859,6 +859,29 @@ describe("ReaderScreen (reader features)", () => {
     expect(screen.getByText("~29 min left in book")).toBeTruthy();
   });
 
+  it("heals a poisoned persisted rate/speed back to MMKV on load", async () => {
+    // Clamp-on-read must WRITE the clamped value back so MMKV is fixed now, not
+    // only after the next valid sample.
+    storage.set(`reader_speed_${ITEM}`, 5); // absurd fraction/min → clamp to 1/30
+    storage.set(`reader_rate_${ITEM}`, 999); // absurd pages/min → clamp to the max
+    await renderReader();
+    await readyWebView();
+
+    expect(storage.getNumber(`reader_speed_${ITEM}`)).toBeCloseTo(1 / 30, 5);
+    // Clamped pages/min rate persisted (no longer 999).
+    expect(storage.getNumber(`reader_rate_${ITEM}`)).not.toBe(999);
+    expect(storage.getNumber(`reader_rate_${ITEM}`)!).toBeLessThanOrEqual(8);
+  });
+
+  it("does NOT write a rate for a fresh book with no persisted sample", async () => {
+    await renderReader();
+    await readyWebView();
+    // A never-read book keeps 0 (no estimate) — the heal-on-load must not
+    // fabricate a rate out of the clamp minimum.
+    expect(storage.getNumber(`reader_rate_${ITEM}`)).toBeUndefined();
+    expect(storage.getNumber(`reader_speed_${ITEM}`)).toBeUndefined();
+  });
+
   it("shows a chapter time-left estimate (default scope) from the clamped pages/min rate", async () => {
     jest.useFakeTimers();
     jest.setSystemTime(0);

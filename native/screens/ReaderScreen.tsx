@@ -950,9 +950,17 @@ export default function ReaderScreen({ route, navigation }: any) {
   // already seed the first book, so guard against clobbering it.
   const perItemReseededRef = useRef(false);
   useEffect(() => {
-    // Clamp on read so a previously persisted, poisoned value recovers.
-    readingRateRef.current = clampReaderRate(storage.getNumber(`reader_rate_${itemId}`) || 0);
-    bookSpeedRef.current = clampBookSpeed(storage.getNumber(`reader_speed_${itemId}`) || 0);
+    // Clamp on read so a previously persisted, poisoned value recovers — and
+    // write the clamped value straight back so MMKV is actually healed now,
+    // not only after the next valid sample.
+    const rawRate = storage.getNumber(`reader_rate_${itemId}`) || 0;
+    const clampedRate = clampReaderRate(rawRate);
+    readingRateRef.current = clampedRate;
+    if (clampedRate !== rawRate && clampedRate > 0) storage.set(`reader_rate_${itemId}`, clampedRate);
+    const rawBookSpeed = storage.getNumber(`reader_speed_${itemId}`) || 0;
+    const clampedBookSpeed = clampBookSpeed(rawBookSpeed);
+    bookSpeedRef.current = clampedBookSpeed;
+    if (clampedBookSpeed !== rawBookSpeed && clampedBookSpeed > 0) storage.set(`reader_speed_${itemId}`, clampedBookSpeed);
     readingSampleRef.current = null;
     if (!perItemReseededRef.current) {
       perItemReseededRef.current = true;
