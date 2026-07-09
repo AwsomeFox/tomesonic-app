@@ -9,7 +9,7 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   hasChapters: boolean;
-  hasEbook: boolean;
+  isBookSession: boolean;
   favItemId: string | null;
   isFav: boolean;
   onToggleFav: () => void;
@@ -23,7 +23,7 @@ export default function PlayerOverflowModal({
   visible,
   onClose,
   hasChapters,
-  hasEbook,
+  isBookSession,
   favItemId,
   isFav,
   onToggleFav,
@@ -67,7 +67,7 @@ export default function PlayerOverflowModal({
         </Pressable>
 
         {/* Ebook reader */}
-        {hasEbook && (
+        {isBookSession && (
           <Pressable
             onPress={() => handleItemPress(onReadFromHere)}
             style={{

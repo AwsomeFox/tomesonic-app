@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -103,7 +103,7 @@ export default function PlayerChaptersQueueSheet({
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (evt, gestureState) => {
         return Math.abs(gestureState.dy) > 2;
       },
@@ -524,6 +524,8 @@ export default function PlayerChaptersQueueSheet({
                             onToggleExpand(false);
                             playNextInQueue().catch(() => {});
                           }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Play next: ${item.title || "track"}`}
                           style={{
                             width: 38,
                             height: 38,
@@ -546,6 +548,8 @@ export default function PlayerChaptersQueueSheet({
                           haptic();
                           removeFromQueue(item.libraryItemId);
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove ${item.title || "track"} from queue`}
                         style={{
                           width: 38,
                           height: 38,

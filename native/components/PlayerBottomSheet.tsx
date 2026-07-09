@@ -37,7 +37,6 @@ import PlaybackSpeedModal from "./PlaybackSpeedModal";
 import SleepTimerModal from "./SleepTimerModal";
 import BookmarksModal from "./BookmarksModal";
 import { CastContext, CastButton } from "react-native-google-cast";
-import ChaptersModal from "./ChaptersModal";
 import PlayerOverflowModal from "./PlayerOverflowModal";
 import PlayerChaptersQueueSheet from "./PlayerChaptersQueueSheet";
 import { useDownloadStore } from "../store/useDownloadStore";
@@ -1794,7 +1793,7 @@ export default function PlayerBottomSheet() {
         visible={showOverflow}
         onClose={() => setShowOverflow(false)}
         hasChapters={hasChapters}
-        hasEbook={!currentSession?.episodeId}
+        isBookSession={!currentSession?.episodeId}
         favItemId={favItemId}
         isFav={isFav}
         onToggleFav={() => { haptic(); toggleFavorite(favItemId!); }}
