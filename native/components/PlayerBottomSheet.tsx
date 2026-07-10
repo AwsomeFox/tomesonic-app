@@ -238,7 +238,9 @@ export default function PlayerBottomSheet() {
               setTimeout(() => {
                 if (navigationRef.isReady()) {
                   (navigationRef.navigate as any)("Reader", {
-                    bookId: bookItemId,
+                    itemId: target.itemId,
+                    ebookFormat: target.ebookFormat,
+                    title: target.title,
                     initialFraction: jump ? frac : undefined,
                   });
                 }
