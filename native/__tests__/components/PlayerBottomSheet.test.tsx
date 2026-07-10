@@ -249,6 +249,48 @@ describe("PlayerBottomSheet — render basics", () => {
       screen.getAllByText("Chapter 2 of 3", { includeHiddenElements: true }).length
     ).toBeGreaterThan(0);
   });
+
+  it("renders both book and chapter progress when enabled in settings", async () => {
+    useUserStore.setState({
+      settings: {
+        ...useUserStore.getState().settings,
+        showPlayerBookProgress: true,
+        showPlayerChapterProgress: true,
+      },
+    });
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    expect(screen.getAllByLabelText(/Chapter progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText(/Book progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+  });
+
+  it("hides book progress when disabled in settings", async () => {
+    useUserStore.setState({
+      settings: {
+        ...useUserStore.getState().settings,
+        showPlayerBookProgress: false,
+        showPlayerChapterProgress: true,
+      },
+    });
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    expect(screen.getAllByLabelText(/Chapter progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    expect(screen.queryAllByLabelText(/Book progress:/i, { includeHiddenElements: true })).toHaveLength(0);
+  });
+
+  it("hides chapter progress when disabled in settings", async () => {
+    useUserStore.setState({
+      settings: {
+        ...useUserStore.getState().settings,
+        showPlayerBookProgress: true,
+        showPlayerChapterProgress: false,
+      },
+    });
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    expect(screen.queryAllByLabelText(/Chapter progress:/i, { includeHiddenElements: true })).toHaveLength(0);
+    expect(screen.getAllByLabelText(/Book progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+  });
 });
 
 describe("PlayerBottomSheet — transport controls", () => {

@@ -1813,21 +1813,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _lastStartKey = dupeKey;
     _lastStartAt = now;
 
-    // Check connectivity: if offline, bypass api.post and directly trigger fallback
-    let isConnected = true;
     try {
-      const NetInfo = require("@react-native-community/netinfo").default;
-      const state = await NetInfo.fetch();
-      isConnected = state.isConnected && state.isInternetReachable !== false;
-    } catch (e) {
-      // Keep true on error
-    }
+      // Check connectivity: if offline, bypass api.post and directly trigger fallback
+      let isConnected = true;
+      try {
+        const NetInfo = require("@react-native-community/netinfo").default;
+        const state = await NetInfo.fetch();
+        isConnected = state.isConnected && state.isInternetReachable !== false;
+      } catch (e) {
+        // Keep true on error
+      }
 
-    if (!isConnected) {
-      throw new Error("Network unreachable");
-    }
+      if (!isConnected) {
+        throw new Error("Network unreachable");
+      }
 
-    try {
       const path = episodeId
         ? `/api/items/${encodeURIComponent(itemId)}/play/${encodeURIComponent(episodeId)}`
         : `/api/items/${encodeURIComponent(itemId)}/play`;

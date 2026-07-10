@@ -33,7 +33,6 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { navigationRef } from "../navigation/navigationRef";
 import Icon from "./Icon";
-import BottomSheet from "./BottomSheet";
 import PlaybackSpeedModal from "./PlaybackSpeedModal";
 import SleepTimerModal from "./SleepTimerModal";
 import BookmarksModal from "./BookmarksModal";
@@ -1061,7 +1060,7 @@ export default function PlayerBottomSheet() {
                 <View
                   style={{
                     marginTop: 8,
-                    height: 10,
+                    height: 12,
                     justifyContent: "center",
                   }}
                 >
