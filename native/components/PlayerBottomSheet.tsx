@@ -22,6 +22,7 @@ import Animated, {
   withSpring,
   withTiming,
   interpolate,
+  Extrapolation,
   useReducedMotion,
 } from "react-native-reanimated";
 import { SPATIAL_SHEET, EMPHASIZED } from "../theme/motion";
@@ -660,7 +661,7 @@ export default function PlayerBottomSheet() {
       left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
       top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
       borderRadius: 28,
-      opacity: interpolate(p, [0.8, 1], [0, 1]),
+      opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
     };
   });
 
@@ -678,7 +679,7 @@ export default function PlayerBottomSheet() {
       left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
       top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
       borderRadius: 28,
-      opacity: interpolate(p, [0.8, 1], [0, 1]),
+      opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
     };
   });
   const animatedForwardStyle = useAnimatedStyle(() => {
@@ -1376,6 +1377,7 @@ export default function PlayerBottomSheet() {
 
         {/* Skip Previous Button */}
         <Animated.View
+          pointerEvents={isPlayerExpanded ? "auto" : "none"}
           style={[
             {
               position: "absolute",
@@ -1490,6 +1492,7 @@ export default function PlayerBottomSheet() {
 
         {/* Skip Next Button */}
         <Animated.View
+          pointerEvents={isPlayerExpanded ? "auto" : "none"}
           style={[
             {
               position: "absolute",

@@ -84,13 +84,14 @@ export default function PlayerChaptersQueueSheet({
 
   // Scroll to active chapter when chapters tab is selected or opened
   useEffect(() => {
-    if (activeTab === "chapters" && currentChapterIndex > 2) {
-      setTimeout(() => {
+    if (expanded && activeTab === "chapters" && currentChapterIndex > 2) {
+      const timer = setTimeout(() => {
         scrollRef.current?.scrollTo({
           y: (currentChapterIndex - 2) * ROW_H,
           animated: false,
         });
       }, 50);
+      return () => clearTimeout(timer);
     }
   }, [activeTab, expanded, currentChapterIndex]);
 
@@ -190,6 +191,8 @@ export default function PlayerChaptersQueueSheet({
       {expanded && (
         <AnimatedPressable
           onPress={() => onToggleExpand(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss chapters and queue list"
           style={[
             StyleSheet.absoluteFill,
             {
