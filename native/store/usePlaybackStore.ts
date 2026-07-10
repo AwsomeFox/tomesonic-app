@@ -1472,6 +1472,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
+          // Check connectivity before fetching progress
+          let isConnected = true;
+          try {
+            const NetInfo = require("@react-native-community/netinfo").default;
+            const state = await NetInfo.fetch();
+            isConnected = state.isConnected && state.isInternetReachable !== false;
+          } catch {}
+          if (!isConnected) {
+            throw new Error("Network unreachable");
+          }
+
           // Podcast progress is keyed per EPISODE server-side — the item-level
           // GET returns nothing useful for an episode session.
           const progressPath = session.episodeId
@@ -1801,6 +1812,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     _lastStartKey = dupeKey;
     _lastStartAt = now;
+
+    // Check connectivity: if offline, bypass api.post and directly trigger fallback
+    let isConnected = true;
+    try {
+      const NetInfo = require("@react-native-community/netinfo").default;
+      const state = await NetInfo.fetch();
+      isConnected = state.isConnected && state.isInternetReachable !== false;
+    } catch (e) {
+      // Keep true on error
+    }
+
+    if (!isConnected) {
+      throw new Error("Network unreachable");
+    }
+
     try {
       const path = episodeId
         ? `/api/items/${encodeURIComponent(itemId)}/play/${encodeURIComponent(episodeId)}`
