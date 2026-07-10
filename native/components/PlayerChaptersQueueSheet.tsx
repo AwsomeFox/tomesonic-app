@@ -13,7 +13,7 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   interpolate,
-  Extrapolate,
+  Extrapolation,
   SharedValue,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -124,19 +124,19 @@ export default function PlayerChaptersQueueSheet({
       },
       onPanResponderRelease: (evt, gestureState) => {
         const p = subProgress.value;
+        let targetExpanded = expandedRef.current;
         if (gestureState.vy < -0.2) {
-          onToggleExpand(true);
+          targetExpanded = true;
         } else if (gestureState.vy > 0.2) {
-          onToggleExpand(false);
+          targetExpanded = false;
         } else {
-          if (p > 0.4) {
-            onToggleExpand(true);
-          } else {
-            onToggleExpand(false);
-          }
+          targetExpanded = p > 0.4;
         }
+        subProgress.value = withTiming(targetExpanded ? 1 : 0, { duration: 250 });
+        onToggleExpand(targetExpanded);
       },
       onPanResponderTerminate: () => {
+        subProgress.value = withTiming(expandedRef.current ? 1 : 0, { duration: 250 });
         onToggleExpand(expandedRef.current);
       },
     })
@@ -158,7 +158,7 @@ export default function PlayerChaptersQueueSheet({
       mainP,
       [0.9, 1],
       [offScreenY, peekY],
-      Extrapolate.CLAMP
+      Extrapolation.CLAMP
     );
 
     // Expand upward on tap

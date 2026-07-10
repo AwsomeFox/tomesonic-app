@@ -1806,8 +1806,8 @@ export default function PlayerBottomSheet() {
         isBookSession={!currentSession?.episodeId}
         favItemId={favItemId}
         isFav={isFav}
-        onToggleFav={() => { haptic(); toggleFavorite(favItemId!); }}
-        onShowChapters={() => { haptic(); setShowChaptersQueue(true); setChaptersQueueTab("chapters"); }}
+        onToggleFav={() => { toggleFavorite(favItemId!); }}
+        onShowChapters={() => { setShowChaptersQueue(true); setChaptersQueueTab("chapters"); }}
         onGoToDetails={() => {
           setPlayerExpanded(false);
           const targetId =
