@@ -55,6 +55,7 @@ export default function PlayerOverflowModal({
           disabled={!hasChapters}
           accessibilityRole="button"
           accessibilityLabel="Chapters List"
+          accessibilityState={{ disabled: !hasChapters }}
           style={{
             flexDirection: "row",
             alignItems: "center",

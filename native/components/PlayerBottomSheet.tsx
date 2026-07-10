@@ -189,9 +189,12 @@ export default function PlayerBottomSheet() {
   // In-app jump buttons honor the Settings jump intervals — amount AND icon
   // (they were hardcoded to 30s while the notification/Auto buttons already
   // followed the setting via applyJumpOptions).
-  const settings = useUserStore((s) => s.settings);
-  const jumpFwdSecs = settings?.jumpForwardTime ?? 10;
-  const jumpBackSecs = settings?.jumpBackwardTime ?? 10;
+  const jumpForwardTime = useUserStore((s) => s.settings?.jumpForwardTime);
+  const jumpBackwardTime = useUserStore((s) => s.settings?.jumpBackwardTime);
+  const showPlayerBookProgress = useUserStore((s) => s.settings?.showPlayerBookProgress);
+  const showPlayerChapterProgress = useUserStore((s) => s.settings?.showPlayerChapterProgress);
+  const jumpFwdSecs = jumpForwardTime ?? 10;
+  const jumpBackSecs = jumpBackwardTime ?? 10;
   // Subscribed (not getState) so the LOCAL/STREAMING label reacts to a
   // download completing/being deleted while the sheet is open and PAUSED —
   // while playing, the 1s position tick masked the missing subscription.
@@ -1010,21 +1013,21 @@ export default function PlayerBottomSheet() {
               <View style={{ height: COVER_SIZE_EXP, marginTop: COVER_Y_EXP - SOURCE_LABEL_Y - 20 }} />
 
               {/* Consolidated Progress Section: Numeric Info (top slot) & Scrubber (bottom slot) */}
-              {(settings.showPlayerBookProgress !== false || settings.showPlayerChapterProgress !== false) ? (
+              {(showPlayerBookProgress !== false || showPlayerChapterProgress !== false) ? (
                 <View
                   style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}
                   accessible
                   accessibilityLabel={[
-                    settings.showPlayerChapterProgress !== false
+                    showPlayerChapterProgress !== false
                       ? `Chapter progress: ${spokenTime(chapterElapsed)} elapsed.`
                       : "",
-                    settings.showPlayerBookProgress !== false
+                    showPlayerBookProgress !== false
                       ? `Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`
                       : ""
                   ].filter(Boolean).join(" ")}
                 >
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 4 }}>
-                    {settings.showPlayerChapterProgress !== false ? (
+                    {showPlayerChapterProgress !== false ? (
                       <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
                         <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12, fontWeight: "700" }}>
                           Ch: {secondsToTimestamp(chapterElapsed)}
@@ -1035,7 +1038,7 @@ export default function PlayerBottomSheet() {
                       </View>
                     ) : <View />}
 
-                    {settings.showPlayerBookProgress !== false ? (
+                    {showPlayerBookProgress !== false ? (
                       <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
                         <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.primary, fontSize: 12, fontWeight: "700" }}>
                           Book: {secondsToTimestamp(position)}
@@ -1052,7 +1055,7 @@ export default function PlayerBottomSheet() {
               )}
 
               {/* Overall Book Progress Bar */}
-              {settings.showPlayerBookProgress !== false ? (
+              {showPlayerBookProgress !== false ? (
                 <View
                   style={{
                     marginTop: 8,
@@ -1077,12 +1080,12 @@ export default function PlayerBottomSheet() {
               {/* Interactive Chapter Scrubber */}
               <View
                 style={{
-                  marginTop: settings.showPlayerBookProgress !== false ? 12 : (CHAPTER_PROGRESS_Y - BOOK_PROGRESS_Y - 28),
+                  marginTop: showPlayerBookProgress !== false ? 12 : (CHAPTER_PROGRESS_Y - BOOK_PROGRESS_Y - 28),
                   height: 36,
                   justifyContent: "center",
                 }}
               >
-                {settings.showPlayerChapterProgress !== false ? (
+                {showPlayerChapterProgress !== false ? (
                   <View
                     {...chapterScrubPanResponder.panHandlers}
                     {...scrubA11yProps}
@@ -1671,7 +1674,7 @@ export default function PlayerBottomSheet() {
                   <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}</Text>
                 ) : null}
 
-                {settings?.showPlayerBookProgress !== false ? (
+                {showPlayerBookProgress !== false ? (
                   <View
                     style={{ marginTop: 14 }}
                     // Grouped like the portrait book row — see the comment there.
@@ -1687,7 +1690,7 @@ export default function PlayerBottomSheet() {
                   </View>
                 ) : null}
 
-                {settings?.showPlayerChapterProgress !== false ? (
+                {showPlayerChapterProgress !== false ? (
                   <View style={{ marginTop: 8 }}>
                     {/* Hidden: redundant with the scrubber's accessibilityValue. */}
                     <View

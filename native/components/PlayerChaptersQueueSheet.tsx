@@ -230,7 +230,13 @@ export default function PlayerChaptersQueueSheet({
           <Pressable
             onPress={toggleExpand}
             accessibilityRole="button"
-            accessibilityLabel={activeTab === "chapters" ? "Chapters" : "Up Next"}
+            accessibilityLabel={
+              expanded
+                ? "Chapters & Up Next"
+                : activeTab === "chapters"
+                ? "Chapters"
+                : "Up Next"
+            }
             style={{
               height: peekHeight,
               flexDirection: "row",
