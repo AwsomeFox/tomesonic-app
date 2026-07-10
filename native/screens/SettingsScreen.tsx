@@ -334,7 +334,7 @@ export default function SettingsScreen({ navigation, route }: any) {
         <ToggleRow
           icon="download"
           title="Auto-download next in series"
-          subtitle="When you finish a downloaded book, download the one after it"
+          subtitle="When you finish a downloaded book, download the next one"
           value={!!settings.autoDownloadNextInSeries}
           onValueChange={(v) => set({ autoDownloadNextInSeries: v })}
           colors={colors}

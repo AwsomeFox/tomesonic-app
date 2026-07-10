@@ -977,7 +977,7 @@ export default function PlayerBottomSheet() {
                     </View>
                   </Pressable>
                   <Pressable
-                    onPress={() => { haptic(); setShowOverflow(true); }}
+                    onPress={() => { setShowOverflow(true); }}
                     accessibilityRole="button"
                     accessibilityLabel="More options"
                     style={{
@@ -1152,7 +1152,7 @@ export default function PlayerBottomSheet() {
               >
                 {/* Speed indicator & button */}
                 <Pressable
-                  onPress={() => { haptic(); setShowSpeed(true); }}
+                  onPress={() => { setShowSpeed(true); }}
                   accessibilityRole="button"
                   accessibilityLabel={`Playback speed, ${speedLabel}`}
                   style={{
@@ -1173,7 +1173,7 @@ export default function PlayerBottomSheet() {
 
                 {/* Sleep Timer */}
                 <Pressable
-                  onPress={() => { haptic(); setShowSleepTimer(true); }}
+                  onPress={() => { setShowSleepTimer(true); }}
                   accessibilityRole="button"
                   accessibilityLabel={
                     sleepTimer
@@ -1203,7 +1203,7 @@ export default function PlayerBottomSheet() {
 
                 {/* Bookmarks */}
                 <Pressable
-                  onPress={() => { haptic(); setShowBookmarks(true); }}
+                  onPress={() => { setShowBookmarks(true); }}
                   accessibilityRole="button"
                   accessibilityLabel="Bookmarks"
                   style={{
@@ -1393,7 +1393,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); previousChapter(); }}
+            onPress={() => { previousChapter(); }}
             disabled={!hasChapters}
             hitSlop={6}
             accessibilityRole="button"
@@ -1420,7 +1420,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); seekBackward(jumpBackSecs); }}
+            onPress={() => { seekBackward(jumpBackSecs); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={`Back ${jumpBackSecs} seconds`}
@@ -1446,7 +1446,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); playPause(); }}
+            onPress={() => { playPause(); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={isPlaying ? "Pause" : "Play"}
@@ -1481,7 +1481,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); seekForward(jumpFwdSecs); }}
+            onPress={() => { seekForward(jumpFwdSecs); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={`Forward ${jumpFwdSecs} seconds`}
@@ -1508,7 +1508,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); nextChapter(); }}
+            onPress={() => { nextChapter(); }}
             disabled={!hasChapters}
             hitSlop={6}
             accessibilityRole="button"
@@ -1578,13 +1578,13 @@ export default function PlayerBottomSheet() {
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{subtitleText}</Text>
               </View>
             </Pressable>
-            <Pressable onPress={() => { haptic(); seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+            <Pressable onPress={() => { seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
               <Icon name={jumpIconName("back", jumpBackSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
-            <Pressable onPress={() => { haptic(); playPause(); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
+            <Pressable onPress={() => { playPause(); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
               <Icon name={isPlaying ? "pause" : "play"} size={30} color={colors.onPrimary} />
             </Pressable>
-            <Pressable onPress={() => { haptic(); seekForward(jumpFwdSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+            <Pressable onPress={() => { seekForward(jumpFwdSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
               <Icon name={jumpIconName("fwd", jumpFwdSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
             {/* Pinned progress wave — parity with the portrait miniplayer. Inset
@@ -1640,7 +1640,7 @@ export default function PlayerBottomSheet() {
                     Stop is the only in-player dismissal, so a finished book
                     couldn't be closed at all without it when rotated. */}
                 {favItemId ? (
-                  <Pressable onPress={() => { haptic(); toggleFavorite(favItemId); }} accessibilityRole="button" accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"} accessibilityState={{ selected: isFav }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { toggleFavorite(favItemId); }} accessibilityRole="button" accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"} accessibilityState={{ selected: isFav }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="heart" size={22} color={isFav ? colors.onPrimaryContainer : colors.onSecondaryContainer} style={{ opacity: isFav ? 1 : 0.45 }} />
                   </Pressable>
                 ) : null}
@@ -1709,32 +1709,32 @@ export default function PlayerBottomSheet() {
                 ) : null}
 
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 12 }}>
-                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { haptic(); previousChapter(); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
-                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { haptic(); seekBackward(jumpBackSecs); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
-                  <Pressable onPress={() => { haptic(); playPause(); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { previousChapter(); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { seekBackward(jumpBackSecs); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
+                  <Pressable onPress={() => { playPause(); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
                     <Icon name={isPlaying ? "pause" : "play"} size={36} color={colors.onPrimary} />
                   </Pressable>
-                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { haptic(); seekForward(jumpFwdSecs); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
-                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { haptic(); nextChapter(); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { seekForward(jumpFwdSecs); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
+                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { nextChapter(); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
                 </View>
 
                 {/* Chapters and Queue bracket the ends so the speed pill stays
                     the centered middle item (parity with portrait). */}
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 24, marginTop: 12 }}>
-                  <Pressable onPress={() => { haptic(); setShowChaptersQueue(true); setChaptersQueueTab("chapters"); }} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowChaptersQueue(true); setChaptersQueueTab("chapters"); }} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="list" size={20} color={hasChapters ? colors.onSecondaryContainer : withAlpha(colors.onSecondaryContainer, 0.4)} />
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                     <Icon name="moon" size={20} color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
                     {sleepTimer ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", fontFamily: "monospace", marginLeft: 6 }}>{secondsToTimestamp(sleepTimer.remaining)}</Text> : null}
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowSpeed(true); }} accessibilityRole="button" accessibilityLabel={`Playback speed, ${speedLabel}`} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowSpeed(true); }} accessibilityRole="button" accessibilityLabel={`Playback speed, ${speedLabel}`} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 16, fontWeight: "500", color: colors.onSecondaryContainer }}>{speedLabel}</Text>
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="bookmark" size={20} color={colors.onSecondaryContainer} />
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowChaptersQueue(true); setChaptersQueueTab("queue"); }} accessibilityRole="button" accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"} style={{ minWidth: 48, paddingHorizontal: queue.length ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowChaptersQueue(true); setChaptersQueueTab("queue"); }} accessibilityRole="button" accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"} style={{ minWidth: 48, paddingHorizontal: queue.length ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                     <Icon name="playlist-add" size={20} color={queue.length ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
                     {queue.length ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}>{queue.length}</Text> : null}
                   </Pressable>
