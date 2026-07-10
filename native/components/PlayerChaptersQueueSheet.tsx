@@ -96,6 +96,8 @@ export default function PlayerChaptersQueueSheet({
 
   // PanResponder to drive drawer progress via dragging the handle
   const dragRange = sheetHeight - peekHeight - insets.bottom;
+  const dragRangeRef = useRef(dragRange);
+  dragRangeRef.current = dragRange;
   const expandedRef = useRef(expanded);
   useEffect(() => {
     expandedRef.current = expanded;
@@ -110,11 +112,12 @@ export default function PlayerChaptersQueueSheet({
       },
       onPanResponderMove: (evt, gestureState) => {
         const dy = gestureState.dy;
+        const range = dragRangeRef.current || 1;
         if (expandedRef.current) {
-          const newProgress = 1 - dy / dragRange;
+          const newProgress = 1 - dy / range;
           subProgress.value = Math.max(0, Math.min(1, newProgress));
         } else {
-          const newProgress = -dy / dragRange;
+          const newProgress = -dy / range;
           subProgress.value = Math.max(0, Math.min(1, newProgress));
         }
       },
@@ -224,7 +227,7 @@ export default function PlayerChaptersQueueSheet({
           <Pressable
             onPress={toggleExpand}
             accessibilityRole="button"
-            accessibilityLabel="Chapters"
+            accessibilityLabel={activeTab === "chapters" ? "Chapters" : "Up Next"}
             style={{
               height: peekHeight,
               flexDirection: "row",
