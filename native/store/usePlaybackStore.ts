@@ -553,6 +553,22 @@ function alertPlayFailure(message: string) {
   } catch {}
 }
 
+// Check network reachability using NetInfo with a short timeout to prevent hangs.
+async function checkIsConnectedWithTimeout(): Promise<boolean> {
+  let isConnected = true;
+  try {
+    const NetInfo = require("@react-native-community/netinfo").default;
+    const state: any = await Promise.race([
+      NetInfo.fetch(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 1000)),
+    ]);
+    isConnected = state.isConnected && state.isInternetReachable !== false;
+  } catch (e) {
+    // Keep true on timeout or error
+  }
+  return isConnected;
+}
+
 // Called after a token refresh (see api.ts applyRefreshedConfig): the live
 // session's coverUrl — and the artwork Media3 is showing — may carry the
 // ROTATED-OUT token, so its next fetch 401s and the notification loses its
@@ -1473,12 +1489,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
           // Check connectivity before fetching progress
-          let isConnected = true;
-          try {
-            const NetInfo = require("@react-native-community/netinfo").default;
-            const state = await NetInfo.fetch();
-            isConnected = state.isConnected && state.isInternetReachable !== false;
-          } catch {}
+          const isConnected = await checkIsConnectedWithTimeout();
           if (!isConnected) {
             throw new Error("Network unreachable");
           }
@@ -1815,15 +1826,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     try {
       // Check connectivity: if offline, bypass api.post and directly trigger fallback
-      let isConnected = true;
-      try {
-        const NetInfo = require("@react-native-community/netinfo").default;
-        const state = await NetInfo.fetch();
-        isConnected = state.isConnected && state.isInternetReachable !== false;
-      } catch (e) {
-        // Keep true on error
-      }
-
+      const isConnected = await checkIsConnectedWithTimeout();
       if (!isConnected) {
         throw new Error("Network unreachable");
       }
