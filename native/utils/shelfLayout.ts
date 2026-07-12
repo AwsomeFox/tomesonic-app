@@ -2,7 +2,7 @@
 // extracted so unit tests can lock the arithmetic — a past device-only bug was
 // shelf overlap born from layout races, and the "see all" gating below depends
 // on width callbacks that arrive in any order.
-import { encodeFilterValue } from "../components/FilterModal";
+import { encodeFilterValue } from "./filters";
 
 /**
  * Does a horizontal shelf row overflow its viewport (i.e. are there more items

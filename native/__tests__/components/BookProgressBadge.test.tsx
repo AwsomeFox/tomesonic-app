@@ -365,3 +365,20 @@ describe("bookStatusA11yLabel matches the badge for dual-format finished states"
     expect(label).toMatch(/left|percent read/);
   });
 });
+
+describe("non-finite input hardening (Copilot review)", () => {
+  const { badgePercent, audioProgressFraction } = require("../../components/BookProgressBadge");
+
+  it("badgePercent never renders NaN% — non-finite coerces to the 1% floor", () => {
+    expect(badgePercent(NaN)).toBe(1);
+    expect(badgePercent(Infinity)).toBe(1); // non-finite → floor, same as NaN
+    expect(badgePercent(-Infinity)).toBe(1);
+  });
+
+  it("audioProgressFraction treats corrupted persisted values as unstarted", () => {
+    expect(audioProgressFraction(NaN, 10, 100)).toBe(0);
+    expect(audioProgressFraction("garbage" as any, 10, 100)).toBe(0);
+    expect(audioProgressFraction(undefined, NaN, 100)).toBe(0);
+    expect(audioProgressFraction(undefined, 10, NaN)).toBe(0);
+  });
+});

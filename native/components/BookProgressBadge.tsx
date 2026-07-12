@@ -27,6 +27,9 @@ function remainingPretty(seconds: number): string {
  *  Exported for tests — the visual badge and the spoken a11y label both derive
  *  from this so they can never disagree. */
 export function badgePercent(fraction: number): number {
+  // A corrupted/NaN fraction must never surface as "NaN%" in the badge or the
+  // TalkBack label — coerce non-finite input to the 1% floor.
+  if (!Number.isFinite(fraction)) return 1;
   return Math.min(99, Math.max(1, Math.round(fraction * 100)));
 }
 
@@ -38,7 +41,11 @@ export function audioProgressFraction(
   currentTime: number,
   duration: number
 ): number {
-  return Math.max(Math.min(1, Number(progress ?? (duration > 0 ? currentTime / duration : 0))), 0);
+  const raw = Number(progress ?? (duration > 0 ? currentTime / duration : 0));
+  // A corrupted persisted value (NaN/Infinity) would survive Math.min/max
+  // clamping as NaN and propagate into badgePercent — treat it as unstarted.
+  if (!Number.isFinite(raw)) return 0;
+  return Math.max(Math.min(1, raw), 0);
 }
 
 function pctLabel(fraction: number): string {
