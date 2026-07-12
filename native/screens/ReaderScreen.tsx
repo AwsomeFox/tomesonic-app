@@ -649,7 +649,7 @@ ${FOLIATE_BUNDLE}
               var rules = srcDoc.styleSheets[j].cssRules;
               if (!rules) continue;
               var css = '';
-              for (var k = 0; k < rules.length; k++) css += rules[k].cssText + '\n';
+              for (var k = 0; k < rules.length; k++) css += rules[k].cssText + '\\n';
               var st = srcDoc.createElement('style');
               st.textContent = css;
               head.appendChild(st);

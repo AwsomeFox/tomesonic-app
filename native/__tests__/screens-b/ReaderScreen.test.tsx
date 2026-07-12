@@ -861,6 +861,28 @@ describe("ReaderScreen (reader features)", () => {
     expect(html).toContain("window.getReaderText");
   });
 
+  it("the generated WebView module script COMPILES — template-escape regression guard", async () => {
+    // The reader page is built inside a TS template literal, where a single
+    // backslash escape (e.g. '\n' written as \n instead of \\n) silently
+    // becomes a REAL newline inside a quoted JS string in the OUTPUT — a
+    // module-wide syntax error that leaves the reader stuck on "Loading…"
+    // with no error surfaced anywhere (this exact bug shipped once). The
+    // script uses no import/export/TLA, so vm can compile it as a classic
+    // script and throw on any syntax error.
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    const mod = /<script type="module">([\s\S]*?)<\/script>/.exec(html)?.[1];
+    expect(mod).toBeTruthy();
+    // The vendored foliate bundle is a real module (has exports) and is
+    // static — strip it; the escape risk lives in OUR template code around it.
+    const { FOLIATE_BUNDLE } = require("../../utils/foliateBundle");
+    const ours = mod!.replace(FOLIATE_BUNDLE, "/* bundle */");
+    expect(ours).not.toContain("export ");
+    const vm = require("vm");
+    expect(() => new vm.Script(ours)).not.toThrow();
+  });
+
   it("sets the margin on view.renderer (not the <foliate-view> element) so it re-lays-out", async () => {
     await renderReader();
     await readyWebView();
