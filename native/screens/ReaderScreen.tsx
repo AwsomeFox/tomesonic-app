@@ -395,7 +395,14 @@ ${FOLIATE_BUNDLE}
       // or theme change never leaves the page with stale/collapsed margins.
       window.setReaderStyles = (css) => {
         try { view.renderer.setStyles(css); } catch(e) {}
-        try { view.renderer.setAttribute('margin', curMargin + 'px'); } catch(e) {}
+        // Conditional: setAttribute fires attributeChangedCallback (and a
+        // relayout) even for an UNCHANGED value — the style push right after
+        // open must not add a redundant relayout that can race the first
+        // relocate on slow WebViews. Only re-assert when actually dropped.
+        try {
+          var want = curMargin + 'px';
+          if (view.renderer.getAttribute('margin') !== want) view.renderer.setAttribute('margin', want);
+        } catch(e) {}
       };
 
       // Live reader-theme switch: update the closure bg/fg (used by future
@@ -428,8 +435,12 @@ ${FOLIATE_BUNDLE}
           }
           // Belt-and-braces: a theme push is often accompanied by a setStyles
           // relayout — re-assert the margin so it can't stay collapsed until
-          // the next app restart.
-          try { view.renderer.setAttribute('margin', curMargin + 'px'); } catch(e) {}
+          // the next app restart. Conditional for the same reason as
+          // setReaderStyles: don't relayout when nothing was dropped.
+          try {
+            var wantM = curMargin + 'px';
+            if (view.renderer.getAttribute('margin') !== wantM) view.renderer.setAttribute('margin', wantM);
+          } catch(e) {}
         } catch(e) {}
       };
       // Live margin (Narrow/Medium/Wide): drives both the foliate margin
