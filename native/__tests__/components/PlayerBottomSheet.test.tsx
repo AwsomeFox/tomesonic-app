@@ -263,11 +263,13 @@ describe("PlayerBottomSheet — render basics", () => {
     });
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    expect(screen.getAllByLabelText(/Chapter progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    // Chapter bar: the scrubber surface (its labels are folded into its
+    // accessibilityValue); book bar: the grouped spoken row label.
+    expect(screen.getAllByLabelText("Chapter position", { includeHiddenElements: true }).length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText(/Book progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
   });
 
-  it("hides book progress when disabled in settings", async () => {
+  it("hides book progress (bar AND its flanking labels) when disabled in settings", async () => {
     useUserStore.setState({
       settings: {
         ...useUserStore.getState().settings,
@@ -277,11 +279,14 @@ describe("PlayerBottomSheet — render basics", () => {
     });
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    expect(screen.getAllByLabelText(/Chapter progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Chapter position", { includeHiddenElements: true }).length).toBeGreaterThan(0);
     expect(screen.queryAllByLabelText(/Book progress:/i, { includeHiddenElements: true })).toHaveLength(0);
+    // The book row's inline labels (11:40 elapsed / -48:20 remaining) go with it.
+    expect(screen.queryAllByText("11:40", { includeHiddenElements: true })).toHaveLength(0);
+    expect(screen.queryAllByText("-48:20", { includeHiddenElements: true })).toHaveLength(0);
   });
 
-  it("hides chapter progress when disabled in settings", async () => {
+  it("hides chapter progress (scrubber AND its flanking labels) when disabled in settings", async () => {
     useUserStore.setState({
       settings: {
         ...useUserStore.getState().settings,
@@ -291,8 +296,71 @@ describe("PlayerBottomSheet — render basics", () => {
     });
     seedPlayer({ isPlayerExpanded: true });
     await render(<PlayerBottomSheet />);
-    expect(screen.queryAllByLabelText(/Chapter progress:/i, { includeHiddenElements: true })).toHaveLength(0);
+    expect(screen.queryAllByLabelText("Chapter position", { includeHiddenElements: true })).toHaveLength(0);
     expect(screen.getAllByLabelText(/Book progress:/i, { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    // The chapter row's inline labels (1:40 elapsed / -8:20 remaining) go with it.
+    expect(screen.queryAllByText("1:40", { includeHiddenElements: true })).toHaveLength(0);
+    expect(screen.queryAllByText("-8:20", { includeHiddenElements: true })).toHaveLength(0);
+  });
+});
+
+describe("PlayerBottomSheet — flanking time labels (classic layout)", () => {
+  // Seeded session: position 700 in a 3600s book, inside Ch 2 (600–1200).
+  // Book: elapsed 700 → "11:40", remaining 2900 → "-48:20".
+  // Chapter: elapsed 100 → "1:40", remaining 500 → "-8:20".
+  it("each bar renders elapsed left / -remaining right (portrait and landscape)", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    // Both orientation subtrees stay mounted, so each value renders 2×.
+    // includeHiddenElements: the chapter labels are a11y-hidden (their values
+    // live on the scrubber's accessibilityValue) and the landscape subtree is
+    // display-toggled.
+    for (const text of ["11:40", "-48:20", "1:40", "-8:20"]) {
+      expect(screen.getAllByText(text, { includeHiddenElements: true }).length).toBe(2);
+    }
+    // The old combined numeric row is gone.
+    expect(screen.queryAllByText(/^Ch: /, { includeHiddenElements: true })).toHaveLength(0);
+    expect(screen.queryAllByText(/^Book: /, { includeHiddenElements: true })).toHaveLength(0);
+    expect(screen.queryByTestId("player-numeric-row")).toBeNull();
+  });
+
+  it("dragging the chapter scrubber live-updates the elapsed label and seeks on release", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+
+    // Portrait scrubber (first instance). Give it a measured width so
+    // locationX → fraction conversion works.
+    const scrubber = screen.getAllByLabelText("Chapter position")[0];
+    await fireEvent(scrubber, "layout", { nativeEvent: { layout: { width: 200 } } });
+
+    // Drive the PanResponder's grant through the raw responder prop. The
+    // internal wrapper reads event.touchHistory before calling our handler,
+    // so supply a minimal empty history (numberActiveTouches 0 → centroid
+    // helpers short-circuit safely).
+    const touchHistory = {
+      touchBank: [],
+      numberActiveTouches: 0,
+      indexOfSingleActiveTouch: -1,
+      mostRecentTimeStamp: 1,
+    };
+    await fireEvent(scrubber, "responderGrant", {
+      nativeEvent: { locationX: 150 },
+      touchHistory,
+    });
+
+    // dragFrac = 150/200 = 0.75 → chapter elapsed 450s → "7:30" (remaining
+    // "-2:30"), shown live while the finger is still down.
+    expect(screen.getAllByText("7:30", { includeHiddenElements: true }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("-2:30", { includeHiddenElements: true }).length).toBeGreaterThan(0);
+
+    // Release seeks to chapter start + frac * span = 600 + 0.75*600 = 1050.
+    await fireEvent(scrubber, "responderRelease", {
+      nativeEvent: { locationX: 150 },
+      touchHistory,
+    });
+    expect(store().seek).toHaveBeenCalledWith(1050);
+    // Labels snap back to the live position once the drag ends.
+    expect(screen.getAllByText("1:40", { includeHiddenElements: true }).length).toBe(2);
   });
 });
 
@@ -786,6 +854,45 @@ describe("PlayerBottomSheet — landscape layout", () => {
     await fireEvent.press(collapses[collapses.length - 1]);
     expect(usePlaybackStore.getState().isPlayerExpanded).toBe(false);
   });
+
+  // Landscape parity: the same [speed][Sleep][Bookmark] pill as portrait
+  // replaces the old landscape-only sleep/speed/bookmark/chapters/queue
+  // button row; chapters + queue moved into the "Chapters & Up Next" peek.
+  it("landscape has the portrait pill trio and the peek drawer, not the old standalone buttons", async () => {
+    seedPlayer({ isPlayerExpanded: true, queue: [{ libraryItemId: "b2", title: "Next Book" }] });
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+
+    // Pill trio renders in BOTH subtrees (portrait stays mounted) → 2 each.
+    expect(screen.getByTestId("player-bottom-pill-landscape")).toBeTruthy();
+    expect(screen.getAllByLabelText("Playback speed, 1.3×", { includeHiddenElements: true }).length).toBe(2);
+    expect(screen.getAllByLabelText("Sleep timer", { includeHiddenElements: true }).length).toBe(2);
+    expect(screen.getAllByLabelText("Bookmarks", { includeHiddenElements: true }).length).toBe(2);
+
+    // Removed landscape-only standalone buttons.
+    expect(screen.queryAllByLabelText("Chapters", { includeHiddenElements: true })).toHaveLength(0);
+    expect(screen.queryAllByLabelText(/^Play queue/, { includeHiddenElements: true })).toHaveLength(0);
+
+    // The landscape pill buttons work: sleep opens its modal.
+    const sleeps = screen.getAllByLabelText("Sleep timer");
+    await fireEvent.press(sleeps[sleeps.length - 1]);
+    expect(screen.getByText("Sleep Timer")).toBeTruthy();
+  });
+
+  it("landscape exposes the Chapters and Up Next peek (no longer pushed offscreen)", async () => {
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await goLandscape();
+
+    // Single peek handle (the sheet is shared across orientations).
+    const handles = screen.getAllByLabelText("Chapters and Up Next");
+    expect(handles.length).toBe(1);
+
+    // Opening it reaches the chapters list and seeking works from landscape.
+    await fireEvent.press(handles[0]);
+    await fireEvent.press(screen.getByText("Ch 1"));
+    expect(store().seekToChapter).toHaveBeenCalledWith(0);
+  });
 });
 
 describe("PlayerBottomSheet — play queue", () => {
@@ -874,25 +981,22 @@ describe("PlayerBottomSheet — expanded cascade geometry (component ↔ util ag
       showBookProgress: showBook,
     });
 
-    // Numeric info row: cover → numeric gap and row height.
-    const numeric = flat(screen.getByTestId("player-numeric-row"));
-    expect(numeric.marginTop).toBe(expected.COVER_TO_NUMERIC);
-    expect(numeric.height).toBe(expected.NUMERIC_H);
-
-    // Book bar: present with its exact box when ON, absent when OFF.
+    // Book bar row (wave + inline flanking labels): present with its exact
+    // box when ON, absent when OFF. It sits directly under the cover — the
+    // old standalone numeric info row no longer exists.
     if (showBook) {
       const bar = flat(screen.getByTestId("player-book-bar"));
-      expect(bar.marginTop).toBe(expected.BOOK_BAR_GAP);
-      expect(bar.height).toBe(expected.BOOK_BAR_H);
+      expect(bar.marginTop).toBe(expected.COVER_TO_BARS);
+      expect(bar.height).toBe(expected.BOOK_ROW_H);
     } else {
       expect(screen.queryByTestId("player-book-bar")).toBeNull();
     }
 
-    // Chapter scrubber: one delta covers both modes (12 after the bar's box,
-    // 8 directly after the numeric row) — the exact spacing the past
-    // title-crowding bug got wrong.
+    // Chapter scrubber: one delta covers both modes (BARS_GAP under the book
+    // row, COVER_TO_BARS directly under the cover) — the exact spacing the
+    // past title-crowding bug got wrong.
     const scrubber = flat(screen.getByTestId("player-chapter-scrubber"));
-    expect(scrubber.marginTop).toBe(expected.NUMERIC_TO_SCRUBBER);
+    expect(scrubber.marginTop).toBe(expected.SCRUBBER_TOP_GAP);
     expect(scrubber.height).toBe(expected.SCRUBBER_H);
 
     // Bottom pill: transport → pill gap (the element the cascade bug clipped).

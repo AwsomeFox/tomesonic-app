@@ -122,6 +122,135 @@ function CircleButton({
   );
 }
 
+// Inline flanking time label for the progress-bar rows (elapsed left,
+// -remaining right). Decorative by default — the book row groups its labels
+// into one spoken sentence and the chapter row's values live on the scrubber's
+// accessibilityValue — so the raw "3:59:53" text stays out of TalkBack.
+function BarTimeLabel({
+  children,
+  colors,
+}: {
+  children: React.ReactNode;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  return (
+    <Text
+      maxFontSizeMultiplier={1.3}
+      numberOfLines={1}
+      style={{
+        fontFamily: "monospace",
+        fontVariant: ["tabular-nums"],
+        color: colors.onSurfaceVariant,
+        fontSize: 12,
+      }}
+    >
+      {children}
+    </Text>
+  );
+}
+
+// Consolidated bottom pill: [speed][Sleep][Bookmark]. Hoisted (like
+// CircleButton) so it keeps a stable component identity across the ~1s
+// position re-renders, and shared verbatim between the portrait cascade and
+// the landscape control column so the two orientations can't drift. The
+// `compact` variant trims vertical padding for the height-constrained
+// landscape pane.
+function BottomPillRow({
+  colors,
+  speedLabel,
+  sleepTimer,
+  onSpeed,
+  onSleep,
+  onBookmarks,
+  marginTop,
+  compact = false,
+  testID,
+}: {
+  colors: ReturnType<typeof useThemeColors>;
+  speedLabel: string;
+  sleepTimer: { remaining: number } | null;
+  onSpeed: () => void;
+  onSleep: () => void;
+  onBookmarks: () => void;
+  marginTop: number;
+  compact?: boolean;
+  testID: string;
+}) {
+  const btnStyle = (bg: string) => ({
+    flex: 1,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    paddingVertical: compact ? 8 : 10,
+    borderRadius: 20,
+    backgroundColor: bg,
+  });
+  return (
+    <View
+      testID={testID}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginTop,
+        backgroundColor: colors.surfaceContainerHigh,
+        borderRadius: 32,
+        paddingVertical: compact ? 6 : 10,
+        paddingHorizontal: 16,
+        columnGap: 8,
+      }}
+    >
+      {/* Speed indicator & button */}
+      <Pressable
+        onPress={onSpeed}
+        accessibilityRole="button"
+        accessibilityLabel={`Playback speed, ${speedLabel}`}
+        style={btnStyle(colors.secondaryContainer)}
+      >
+        <Icon name="speed" size={16} color={colors.onSecondaryContainer} style={{ marginRight: 4 }} />
+        <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 13, fontWeight: "600", color: colors.onSecondaryContainer }}>
+          {speedLabel}
+        </Text>
+      </Pressable>
+
+      {/* Sleep Timer */}
+      <Pressable
+        onPress={onSleep}
+        accessibilityRole="button"
+        accessibilityLabel={
+          sleepTimer
+            ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining`
+            : "Sleep timer"
+        }
+        style={btnStyle(sleepTimer ? colors.primaryContainer : colors.secondaryContainer)}
+      >
+        <Icon
+          name="moon"
+          size={16}
+          color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+          style={{ marginRight: 4 }}
+        />
+        <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ fontSize: 13, fontWeight: "600", color: sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer }}>
+          {sleepTimer ? secondsToTimestamp(sleepTimer.remaining) : "Sleep"}
+        </Text>
+      </Pressable>
+
+      {/* Bookmarks */}
+      <Pressable
+        onPress={onBookmarks}
+        accessibilityRole="button"
+        accessibilityLabel="Bookmarks"
+        style={btnStyle(colors.secondaryContainer)}
+      >
+        <Icon name="bookmark" size={16} color={colors.onSecondaryContainer} style={{ marginRight: 4 }} />
+        <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 13, fontWeight: "600", color: colors.onSecondaryContainer }}>
+          Bookmark
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 // Maps a configured jump interval to the closest available glyph in the
 // rewind-N / fast-forward-N icon families (5/10/15/30/45/60).
 const JUMP_ICON_STEPS = [5, 10, 15, 30, 45, 60];
@@ -387,11 +516,10 @@ export default function PlayerBottomSheet() {
     TOP_BAR_Y,
     TOPBAR_TO_SOURCE,
     SOURCE_TO_COVER,
-    COVER_TO_NUMERIC,
-    NUMERIC_H,
-    BOOK_BAR_GAP,
+    COVER_TO_BARS,
+    BOOK_ROW_H,
     BOOK_BAR_H,
-    NUMERIC_TO_SCRUBBER,
+    SCRUBBER_TOP_GAP,
     SCRUBBER_H,
     SCRUBBER_TO_TITLE,
     TITLE_H,
@@ -1048,109 +1176,91 @@ export default function PlayerBottomSheet() {
               {/* Cover Art Placeholder (absolute layout overlay handles actual artwork rendering) */}
               <View style={{ height: COVER_SIZE_EXP, marginTop: SOURCE_TO_COVER }} />
 
-              {/* Consolidated Progress Section: Numeric Info (top slot) & Scrubber (bottom slot) */}
-              {(showPlayerBookProgress !== false || showPlayerChapterProgress !== false) ? (
-                <View
-                  testID="player-numeric-row"
-                  style={{ marginTop: COVER_TO_NUMERIC, height: NUMERIC_H, justifyContent: "center" }}
-                  accessible
-                  accessibilityLabel={[
-                    showPlayerChapterProgress !== false
-                      ? `Chapter progress: ${spokenTime(chapterElapsed)} elapsed.`
-                      : "",
-                    showPlayerBookProgress !== false
-                      ? `Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`
-                      : ""
-                  ].filter(Boolean).join(" ")}
-                >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 4 }}>
-                    {showPlayerChapterProgress !== false ? (
-                      <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
-                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12, fontWeight: "700" }}>
-                          Ch: {secondsToTimestamp(chapterElapsed)}
-                        </Text>
-                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurfaceVariant, fontSize: 12 }}>
-                          / -{secondsToTimestamp(chapterRemaining)}
-                        </Text>
-                      </View>
-                    ) : <View />}
-
-                    {showPlayerBookProgress !== false ? (
-                      <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
-                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.primary, fontSize: 12, fontWeight: "700" }}>
-                          Book: {secondsToTimestamp(position)}
-                        </Text>
-                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurfaceVariant, fontSize: 12 }}>
-                          / -{secondsToTimestamp(bookRemaining)}
-                        </Text>
-                      </View>
-                    ) : <View />}
-                  </View>
-                </View>
-              ) : (
-                <View style={{ marginTop: COVER_TO_NUMERIC, height: NUMERIC_H }} />
-              )}
-
-              {/* Overall Book Progress Bar */}
+              {/* Book progress row: elapsed | wave | -remaining. The classic
+                  flanking layout — each bar carries its own time labels
+                  inline, replacing the old combined numeric info row. */}
               {showPlayerBookProgress !== false ? (
                 <View
                   testID="player-book-bar"
                   style={{
-                    marginTop: BOOK_BAR_GAP,
-                    height: BOOK_BAR_H,
-                    justifyContent: "center",
+                    marginTop: COVER_TO_BARS,
+                    height: BOOK_ROW_H,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    columnGap: 8,
                   }}
+                  // One spoken sentence for the whole row — the raw label text
+                  // ("3:59:53") reads ambiguously digit-by-digit on TalkBack.
+                  accessible
+                  accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
                 >
-                  <WavyProgress
-                    progress={bookFrac}
-                    playing={isPlaying}
-                    color={colors.primary}
-                    trackColor={withAlpha(colors.primary, 0.35)}
-                    height={BOOK_BAR_H}
-                    strokeWidth={2.5}
-                    amplitude={2}
-                    wavelength={48}
-                    flattenWhenPaused
-                  />
-                </View>
-              ) : null}
-
-              {/* Interactive Chapter Scrubber. NUMERIC_TO_SCRUBBER already
-                  encodes both book-bar modes (12 after the bar's box, 8
-                  directly after the numeric row), so one delta serves as the
-                  marginTop whether the in-flow element above is the book bar
-                  or the numeric row. */}
-              <View
-                testID="player-chapter-scrubber"
-                style={{
-                  marginTop: NUMERIC_TO_SCRUBBER,
-                  height: SCRUBBER_H,
-                  justifyContent: "center",
-                }}
-              >
-                {showPlayerChapterProgress !== false ? (
-                  <View
-                    {...chapterScrubPanResponder.panHandlers}
-                    {...scrubA11yProps}
-                    onLayout={onChapterBarLayoutFor(false)}
-                    style={{ height: 32, justifyContent: "center" }}
-                    hitSlop={{ top: 8, bottom: 8 }}
-                  >
+                  <BarTimeLabel colors={colors}>{secondsToTimestamp(position)}</BarTimeLabel>
+                  <View style={{ flex: 1, justifyContent: "center" }}>
                     <WavyProgress
-                      progress={chapterFrac}
+                      progress={bookFrac}
                       playing={isPlaying}
                       color={colors.primary}
-                      trackColor={withAlpha(colors.primary, 0.22)}
-                      height={22}
-                      strokeWidth={4}
-                      amplitude={3.5}
-                      wavelength={44}
-                      showStopDot={false}
-                      showHandle
-                      handleActive={dragFrac != null}
+                      trackColor={withAlpha(colors.primary, 0.35)}
+                      height={BOOK_BAR_H}
+                      strokeWidth={2.5}
+                      amplitude={2}
+                      wavelength={48}
                       flattenWhenPaused
                     />
                   </View>
+                  <BarTimeLabel colors={colors}>-{secondsToTimestamp(bookRemaining)}</BarTimeLabel>
+                </View>
+              ) : null}
+
+              {/* Interactive Chapter Scrubber row: elapsed | wave | -remaining.
+                  SCRUBBER_TOP_GAP already encodes both book-bar modes (BARS_GAP
+                  under the book row, COVER_TO_BARS directly under the cover),
+                  so one delta serves as the marginTop either way. The left
+                  label derives from chapterElapsed (→ chapterFrac → dragFrac),
+                  so it live-updates while the scrubber is dragged. */}
+              <View
+                testID="player-chapter-scrubber"
+                style={{
+                  marginTop: SCRUBBER_TOP_GAP,
+                  height: SCRUBBER_H,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  columnGap: 8,
+                }}
+              >
+                {showPlayerChapterProgress !== false ? (
+                  <>
+                    {/* Hidden from a11y: redundant with the scrubber's
+                        accessibilityValue (spoken, unambiguous form). */}
+                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                      <BarTimeLabel colors={colors}>{secondsToTimestamp(chapterElapsed)}</BarTimeLabel>
+                    </View>
+                    <View
+                      {...chapterScrubPanResponder.panHandlers}
+                      {...scrubA11yProps}
+                      onLayout={onChapterBarLayoutFor(false)}
+                      style={{ flex: 1, height: 32, justifyContent: "center" }}
+                      hitSlop={{ top: 8, bottom: 8 }}
+                    >
+                      <WavyProgress
+                        progress={chapterFrac}
+                        playing={isPlaying}
+                        color={colors.primary}
+                        trackColor={withAlpha(colors.primary, 0.22)}
+                        height={22}
+                        strokeWidth={4}
+                        amplitude={3.5}
+                        wavelength={44}
+                        showStopDot={false}
+                        showHandle
+                        handleActive={dragFrac != null}
+                        flattenWhenPaused
+                      />
+                    </View>
+                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                      <BarTimeLabel colors={colors}>-{secondsToTimestamp(chapterRemaining)}</BarTimeLabel>
+                    </View>
+                  </>
                 ) : null}
               </View>
 
@@ -1182,93 +1292,16 @@ export default function PlayerBottomSheet() {
               {/* Consolidated bottom pill: Speed, Sleep Timer, Bookmarks. The
                   play queue lives in the Chapters & Up Next peek sheet below
                   (and the overflow menu's Chapters List entry). */}
-              <View
+              <BottomPillRow
                 testID="player-bottom-pill"
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginTop: TRANSPORT_TO_PILL,
-                  backgroundColor: colors.surfaceContainerHigh,
-                  borderRadius: 32,
-                  paddingVertical: 10,
-                  paddingHorizontal: 16,
-                  columnGap: 8,
-                }}
-              >
-                {/* Speed indicator & button */}
-                <Pressable
-                  onPress={() => { setShowSpeed(true); }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Playback speed, ${speedLabel}`}
-                  style={{
-                    flex: 1,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    paddingVertical: 10,
-                    borderRadius: 20,
-                    backgroundColor: colors.secondaryContainer,
-                  }}
-                >
-                  <Icon name="speed" size={16} color={colors.onSecondaryContainer} style={{ marginRight: 4 }} />
-                  <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 13, fontWeight: "600", color: colors.onSecondaryContainer }}>
-                    {speedLabel}
-                  </Text>
-                </Pressable>
-
-                {/* Sleep Timer */}
-                <Pressable
-                  onPress={() => { setShowSleepTimer(true); }}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    sleepTimer
-                      ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining`
-                      : "Sleep timer"
-                  }
-                  style={{
-                    flex: 1,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    paddingVertical: 10,
-                    borderRadius: 20,
-                    backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer,
-                  }}
-                >
-                  <Icon
-                    name="moon"
-                    size={16}
-                    color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer}
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ fontSize: 13, fontWeight: "600", color: sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer }}>
-                    {sleepTimer ? secondsToTimestamp(sleepTimer.remaining) : "Sleep"}
-                  </Text>
-                </Pressable>
-
-                {/* Bookmarks */}
-                <Pressable
-                  onPress={() => { setShowBookmarks(true); }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Bookmarks"
-                  style={{
-                    flex: 1,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    paddingVertical: 10,
-                    borderRadius: 20,
-                    backgroundColor: colors.secondaryContainer,
-                  }}
-                >
-                  <Icon name="bookmark" size={16} color={colors.onSecondaryContainer} style={{ marginRight: 4 }} />
-                  <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 13, fontWeight: "600", color: colors.onSecondaryContainer }}>
-                    Bookmark
-                  </Text>
-                </Pressable>
-
-              </View>
+                colors={colors}
+                speedLabel={speedLabel}
+                sleepTimer={sleepTimer}
+                onSpeed={() => { setShowSpeed(true); }}
+                onSleep={() => { setShowSleepTimer(true); }}
+                onBookmarks={() => { setShowBookmarks(true); }}
+                marginTop={TRANSPORT_TO_PILL}
+              />
             </ScrollView>
         </Animated.View>
 
@@ -1657,7 +1690,10 @@ export default function PlayerBottomSheet() {
             importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
             style={[
               StyleSheet.absoluteFill,
-              { paddingTop: insets.top, paddingBottom: insets.bottom, paddingHorizontal: 16 },
+              // Bottom budget: safe area + the 54dp "Chapters & Up Next" peek
+              // handle (enabled in landscape too) so the pill/transport never
+              // sit underneath the drawer.
+              { paddingTop: insets.top, paddingBottom: insets.bottom + 54, paddingHorizontal: 16 },
               animatedFullPlayerStyle,
             ]}
           >
@@ -1720,41 +1756,42 @@ export default function PlayerBottomSheet() {
                   <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}</Text>
                 ) : null}
 
+                {/* Book progress row: elapsed | wave | -remaining (same
+                    flanking layout as portrait). */}
                 {showPlayerBookProgress !== false ? (
                   <View
-                    style={{ marginTop: 14 }}
+                    style={{ marginTop: 12, flexDirection: "row", alignItems: "center", columnGap: 8 }}
                     // Grouped like the portrait book row — see the comment there.
                     accessible
                     accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
                   >
-                    <View style={{ flexDirection: "row", marginBottom: 2 }}>
-                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(position)}</Text>
-                      <View style={{ flexGrow: 1 }} />
-                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(bookRemaining)}</Text>
+                    <BarTimeLabel colors={colors}>{secondsToTimestamp(position)}</BarTimeLabel>
+                    <View style={{ flex: 1, justifyContent: "center" }}>
+                      <WavyProgress progress={bookFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.35)} height={12} strokeWidth={3} amplitude={2} wavelength={48} flattenWhenPaused />
                     </View>
-                    <WavyProgress progress={bookFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.35)} height={12} strokeWidth={3} amplitude={2} wavelength={48} flattenWhenPaused />
+                    <BarTimeLabel colors={colors}>-{secondsToTimestamp(bookRemaining)}</BarTimeLabel>
                   </View>
                 ) : null}
 
+                {/* Chapter scrubber row: elapsed | wave | -remaining. Left
+                    label derives from chapterElapsed (→ dragFrac) so it
+                    live-updates during a drag, exactly like portrait. */}
                 {showPlayerChapterProgress !== false ? (
-                  <View style={{ marginTop: 8 }}>
+                  <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center", columnGap: 8 }}>
                     {/* Hidden: redundant with the scrubber's accessibilityValue. */}
-                    <View
-                      style={{ flexDirection: "row", marginBottom: 2 }}
-                      accessibilityElementsHidden
-                      importantForAccessibility="no-hide-descendants"
-                    >
-                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(chapterElapsed)}</Text>
-                      <View style={{ flexGrow: 1 }} />
-                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>
+                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                      <BarTimeLabel colors={colors}>{secondsToTimestamp(chapterElapsed)}</BarTimeLabel>
                     </View>
-                    <View {...chapterScrubPanResponder.panHandlers} {...scrubA11yProps} onLayout={onChapterBarLayoutFor(true)} style={{ height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
+                    <View {...chapterScrubPanResponder.panHandlers} {...scrubA11yProps} onLayout={onChapterBarLayoutFor(true)} style={{ flex: 1, height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
                       <WavyProgress progress={chapterFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.22)} height={22} strokeWidth={4} amplitude={3.5} wavelength={44} showStopDot={false} showHandle handleActive={dragFrac != null} flattenWhenPaused />
                     </View>
+                    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                      <BarTimeLabel colors={colors}>-{secondsToTimestamp(chapterRemaining)}</BarTimeLabel>
+                    </View>
                   </View>
                 ) : null}
 
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 12 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 10 }}>
                   <CircleButton icon="skip-previous" iconSize={22} onPress={() => { previousChapter().catch(() => {}); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
                   <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
                   <Pressable onPress={() => { playPause().catch(() => {}); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
@@ -1764,27 +1801,22 @@ export default function PlayerBottomSheet() {
                   <CircleButton icon="skip-next" iconSize={22} onPress={() => { nextChapter().catch(() => {}); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
                 </View>
 
-                {/* Chapters and Queue bracket the ends so the speed pill stays
-                    the centered middle item (parity with portrait). */}
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 24, marginTop: 12 }}>
-                  <Pressable onPress={() => { setShowChaptersQueue(true); setChaptersQueueTab("chapters"); }} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="list" size={20} color={hasChapters ? colors.onSecondaryContainer : withAlpha(colors.onSecondaryContainer, 0.4)} />
-                  </Pressable>
-                  <Pressable onPress={() => { setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="moon" size={20} color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
-                    {sleepTimer ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", fontFamily: "monospace", marginLeft: 6 }}>{secondsToTimestamp(sleepTimer.remaining)}</Text> : null}
-                  </Pressable>
-                  <Pressable onPress={() => { setShowSpeed(true); }} accessibilityRole="button" accessibilityLabel={`Playback speed, ${speedLabel}`} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                    <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 16, fontWeight: "500", color: colors.onSecondaryContainer }}>{speedLabel}</Text>
-                  </Pressable>
-                  <Pressable onPress={() => { setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="bookmark" size={20} color={colors.onSecondaryContainer} />
-                  </Pressable>
-                  <Pressable onPress={() => { setShowChaptersQueue(true); setChaptersQueueTab("queue"); }} accessibilityRole="button" accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"} style={{ minWidth: 48, paddingHorizontal: queue.length ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
-                    <Icon name="playlist-add" size={20} color={queue.length ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
-                    {queue.length ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}>{queue.length}</Text> : null}
-                  </Pressable>
-                </View>
+                {/* Same bottom pill as portrait ([speed][Sleep][Bookmark]) —
+                    the old landscape-only chapters/sleep/speed/bookmark/queue
+                    button row is gone; chapters + queue now live in the
+                    "Chapters & Up Next" peek drawer (enabled in landscape),
+                    matching portrait. Compact: landscape is height-starved. */}
+                <BottomPillRow
+                  testID="player-bottom-pill-landscape"
+                  colors={colors}
+                  speedLabel={speedLabel}
+                  sleepTimer={sleepTimer}
+                  onSpeed={() => { setShowSpeed(true); }}
+                  onSleep={() => { setShowSleepTimer(true); }}
+                  onBookmarks={() => { setShowBookmarks(true); }}
+                  marginTop={10}
+                  compact
+                />
               </View>
             </View>
           </Animated.View>

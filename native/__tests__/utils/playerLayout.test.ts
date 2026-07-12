@@ -43,33 +43,35 @@ const devices: Array<[string, Omit<PlayerLayoutInput, "showBookProgress">]> = [
 describe("computePlayerLayout", () => {
   describe("book-progress toggle (the bug that clipped the pill)", () => {
     it.each(devices)(
-      "%s: CHAPTER_PROGRESS_Y with the book bar ON exceeds OFF by exactly the book-bar box + gap delta",
+      "%s: CHAPTER_PROGRESS_Y with the book bar ON exceeds OFF by exactly the book-row box",
       (_name, dims) => {
         // Compare on a phone-style fixed anchor: on tablets extraTop shifts the
-        // whole cascade too, so measure relative to BOOK_PROGRESS_Y (the numeric
-        // row top), which pins the same anchor in both modes.
+        // whole cascade too, so measure relative to BOOK_PROGRESS_Y (the bar
+        // block top), which pins the same anchor in both modes.
         const on = computePlayerLayout({ ...dims, showBookProgress: true });
         const off = computePlayerLayout({ ...dims, showBookProgress: false });
         const onDelta = on.CHAPTER_PROGRESS_Y - on.BOOK_PROGRESS_Y;
         const offDelta = off.CHAPTER_PROGRESS_Y - off.BOOK_PROGRESS_Y;
-        expect(onDelta - offDelta).toBe(
-          on.BOOK_BAR_BOX - off.BOOK_BAR_BOX + (on.NUMERIC_TO_SCRUBBER - off.NUMERIC_TO_SCRUBBER)
-        );
-        // And the raw numbers: ON inserts the 8+12 book-bar box and widens the
-        // scrubber gap from 8 to 12 — 24dp total.
-        expect(on.BOOK_BAR_BOX).toBe(on.BOOK_BAR_GAP + on.BOOK_BAR_H);
-        expect(on.BOOK_BAR_BOX).toBe(20);
+        expect(onDelta - offDelta).toBe(on.BOOK_BAR_BOX - off.BOOK_BAR_BOX);
+        // And the raw numbers: ON inserts the 20dp book row (wave + inline
+        // labels) plus the 12dp gap to the scrubber — 32dp total.
+        expect(on.BOOK_BAR_BOX).toBe(on.BOOK_ROW_H + on.BARS_GAP);
+        expect(on.BOOK_BAR_BOX).toBe(32);
         expect(off.BOOK_BAR_BOX).toBe(0);
-        expect(onDelta - offDelta).toBe(24);
+        expect(onDelta - offDelta).toBe(32);
+        // The scrubber's marginTop reconciles both modes: under the book row
+        // it's BARS_GAP; directly under the cover it's COVER_TO_BARS.
+        expect(on.SCRUBBER_TOP_GAP).toBe(on.BARS_GAP);
+        expect(off.SCRUBBER_TOP_GAP).toBe(off.COVER_TO_BARS);
       }
     );
 
-    it("on phones (no extraTop) the absolute CHAPTER_PROGRESS_Y itself shifts by the same 24dp", () => {
+    it("on phones (no extraTop) the absolute CHAPTER_PROGRESS_Y itself shifts by the same 32dp", () => {
       const on = computePlayerLayout(phone({ showBookProgress: true }));
       const off = computePlayerLayout(phone({ showBookProgress: false }));
       expect(on.extraTop).toBe(0);
       expect(off.extraTop).toBe(0);
-      expect(on.CHAPTER_PROGRESS_Y - off.CHAPTER_PROGRESS_Y).toBe(24);
+      expect(on.CHAPTER_PROGRESS_Y - off.CHAPTER_PROGRESS_Y).toBe(32);
     });
   });
 
@@ -105,16 +107,15 @@ describe("computePlayerLayout", () => {
         const l = computePlayerLayout({ ...dims, showBookProgress });
         // Source label (20 high, 8 gap) → cover
         expect(l.COVER_Y_EXP - l.SOURCE_LABEL_Y).toBe(20 + 8);
-        // Cover → numeric row: mirrors the component's numeric placeholder
-        // marginTop expression (BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP).
-        expect(l.BOOK_PROGRESS_Y - l.COVER_Y_EXP - l.COVER_SIZE_EXP).toBe(l.COVER_TO_NUMERIC);
-        // Numeric row → scrubber: mirrors the scrubber marginTop ternary
-        // (12 when the book bar is shown, CHAPTER_PROGRESS_Y - BOOK_PROGRESS_Y - 28 otherwise).
-        expect(l.CHAPTER_PROGRESS_Y - l.BOOK_PROGRESS_Y - l.NUMERIC_H).toBe(
-          l.BOOK_BAR_BOX + l.NUMERIC_TO_SCRUBBER
-        );
-        expect(l.CHAPTER_PROGRESS_Y - l.BOOK_PROGRESS_Y - l.NUMERIC_H).toBe(
-          showBookProgress ? 8 + 12 + 12 : 8
+        // Cover → bar block: mirrors the component's book-row marginTop
+        // (BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP). The old separate
+        // numeric info row is gone — labels are inline on the bars.
+        expect(l.BOOK_PROGRESS_Y - l.COVER_Y_EXP - l.COVER_SIZE_EXP).toBe(l.COVER_TO_BARS);
+        // Bar block top → scrubber: the book row's whole box when shown,
+        // nothing when hidden (the scrubber IS the bar block then).
+        expect(l.CHAPTER_PROGRESS_Y - l.BOOK_PROGRESS_Y).toBe(l.BOOK_BAR_BOX);
+        expect(l.CHAPTER_PROGRESS_Y - l.BOOK_PROGRESS_Y).toBe(
+          showBookProgress ? 20 + 12 : 0
         );
         // Scrubber → title placeholder (TITLE_Y_EXP - CHAPTER_PROGRESS_Y - 36).
         expect(l.TITLE_Y_EXP - l.CHAPTER_PROGRESS_Y - l.SCRUBBER_H).toBe(l.SCRUBBER_TO_TITLE);
@@ -158,12 +159,13 @@ describe("computePlayerLayout", () => {
 
     it("flips exactly at the fit boundary as the viewport shrinks", () => {
       // 412-wide phone, insets 24/0: the cover caps at 320 for both heights,
-      // so the block bottom (+8 slack) sits at a fixed 816dp — one dp of
-      // screen height across that line must flip the flag.
+      // so the block bottom (+8 slack) sits at a fixed 790dp — one dp of
+      // screen height across that line must flip the flag. (Was 816 before
+      // the numeric row folded into the bars as inline labels.)
       const at = (screenHeight: number) =>
         computePlayerLayout({ screenWidth: 412, screenHeight, insetTop: 24, insetBottom: 0, showBookProgress: true });
-      expect(at(816).contentOverflows).toBe(false); // exactly fits (strict >)
-      expect(at(815).contentOverflows).toBe(true); // one dp short
+      expect(at(790).contentOverflows).toBe(false); // exactly fits (strict >)
+      expect(at(789).contentOverflows).toBe(true); // one dp short
     });
 
     it("bottom-inset flip: the same phone overflows with 3-button nav (48) but not gesture nav (0)", () => {
@@ -172,11 +174,11 @@ describe("computePlayerLayout", () => {
       expect(computePlayerLayout({ ...dims, insetBottom: 48 }).contentOverflows).toBe(true);
     });
 
-    it("hiding the book bar frees exactly 24dp of cascade height", () => {
+    it("hiding the book bar frees exactly 32dp of cascade height", () => {
       const on = computePlayerLayout(phone({ showBookProgress: true }));
       const off = computePlayerLayout(phone({ showBookProgress: false }));
-      expect(on.CONTENT_BLOCK_H - off.CONTENT_BLOCK_H).toBe(24);
-      expect(on.contentBottomY - off.contentBottomY).toBe(24);
+      expect(on.CONTENT_BLOCK_H - off.CONTENT_BLOCK_H).toBe(32);
+      expect(on.contentBottomY - off.contentBottomY).toBe(32);
     });
   });
 
@@ -193,10 +195,12 @@ describe("computePlayerLayout", () => {
       expect(base.SOURCE_LABEL_Y).toBe(base.TOP_BAR_Y + 56 + 12 + base.extraTop);
     });
 
-    it("extraTop is clamped to 0 when the block does not fit (squat 800x840 tablet portrait)", () => {
+    it("extraTop is clamped to 0 when the block does not fit (squat 800x760 tablet portrait)", () => {
+      // 800x840 used to be the not-fitting case; folding the numeric row into
+      // the bars freed 26dp, so that block now fits — go squatter.
       const l = computePlayerLayout({
         screenWidth: 800,
-        screenHeight: 840,
+        screenHeight: 760,
         insetTop: 24,
         insetBottom: 24,
         showBookProgress: true,
@@ -215,7 +219,7 @@ describe("computePlayerLayout", () => {
     it("centering is book-bar-aware: toggling the bar changes tablet extraTop by half the freed height", () => {
       const on = computePlayerLayout(tablet({ showBookProgress: true }));
       const off = computePlayerLayout(tablet({ showBookProgress: false }));
-      expect(off.extraTop - on.extraTop).toBe(12); // 24dp freed, half above
+      expect(off.extraTop - on.extraTop).toBe(16); // 32dp freed, half above
     });
   });
 
