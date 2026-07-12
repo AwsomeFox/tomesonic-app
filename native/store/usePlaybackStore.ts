@@ -6,6 +6,7 @@ import { useUserStore } from "./useUserStore";
 import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
 import { writeWidgetState } from "../utils/autoCreds";
 import { upNextAddItem, upNextRemoveItem, upNextListItems } from "../utils/upNext";
+import { chapterIndexAt, absolutePositionFor } from "../utils/chapterMath";
 import { useLibraryStore } from "./useLibraryStore";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -1055,28 +1056,32 @@ export function onNativeProgressSample(e: {
     if (st.chapterQueue && chapters.length) {
       // Chapter-clipped queue: the event position is chapter-relative and the
       // track index IS the chapter.
-      if (typeof e.track === "number" && chapters[e.track]) {
-        chapterIndex = e.track;
-        absolutePosition = (chapters[e.track].start || 0) + e.position;
-      } else {
+      const mapped = absolutePositionFor({
+        chapterQueue: true,
+        chapters,
+        trackOffsets: _trackOffsets,
+        trackIndex: e.track,
+        position: e.position,
+      });
+      if (mapped == null) {
         return; // can't map reliably mid-transition — skip this sample
       }
+      chapterIndex = e.track as number;
+      absolutePosition = mapped;
       bookDuration = st.duration || bookDuration;
     } else {
-      if (
-        _trackOffsets.length > 1 &&
-        typeof e.track === "number" &&
-        _trackOffsets[e.track] != null
-      ) {
-        absolutePosition = _trackOffsets[e.track] + e.position;
+      const mapped = absolutePositionFor({
+        chapterQueue: false,
+        chapters,
+        trackOffsets: _trackOffsets,
+        trackIndex: e.track,
+        position: e.position,
+      });
+      if (mapped != null) {
+        absolutePosition = mapped;
         bookDuration = st.duration || bookDuration;
       }
-      for (let i = 0; i < chapters.length; i++) {
-        if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
-          chapterIndex = i;
-          break;
-        }
-      }
+      chapterIndex = chapterIndexAt(chapters, absolutePosition);
     }
 
     usePlaybackStore.setState({
@@ -1887,12 +1892,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             bookDuration = get().duration;
             isPlayerPlaying = get().isPlaying;
             isPlayingStrict = get().isPlaying;
-            for (let i = 0; i < chapters.length; i++) {
-              if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
-                chapterIndex = i;
-                break;
-              }
-            }
+            chapterIndex = chapterIndexAt(chapters, absolutePosition);
             if (chapterIndex !== get().currentChapterIndex) {
               set({ currentChapterIndex: chapterIndex });
             }
@@ -1929,25 +1929,34 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             bookDuration = progress.duration;
             if (chapterQueue && chapters.length) {
               const activeIndex = await TrackPlayer.getActiveTrackIndex();
-              if (activeIndex != null && chapters[activeIndex]) {
-                chapterIndex = activeIndex;
-                absolutePosition = (chapters[activeIndex].start || 0) + progress.position;
+              const mapped = absolutePositionFor({
+                chapterQueue: true,
+                chapters,
+                trackOffsets: _trackOffsets,
+                trackIndex: activeIndex,
+                position: progress.position,
+              });
+              if (mapped != null) {
+                chapterIndex = activeIndex as number;
+                absolutePosition = mapped;
               }
               bookDuration = get().duration || bookDuration; // keep whole-book duration
             } else {
               if (_trackOffsets.length > 1) {
                 const activeIndex = await TrackPlayer.getActiveTrackIndex();
-                if (activeIndex != null && _trackOffsets[activeIndex] != null) {
-                  absolutePosition = _trackOffsets[activeIndex] + progress.position;
+                const mapped = absolutePositionFor({
+                  chapterQueue: false,
+                  chapters,
+                  trackOffsets: _trackOffsets,
+                  trackIndex: activeIndex,
+                  position: progress.position,
+                });
+                if (mapped != null) {
+                  absolutePosition = mapped;
                 }
                 bookDuration = get().duration || bookDuration; // whole-book duration
               }
-              for (let i = 0; i < chapters.length; i++) {
-                if (absolutePosition >= chapters[i].start && absolutePosition < chapters[i].end) {
-                  chapterIndex = i;
-                  break;
-                }
-              }
+              chapterIndex = chapterIndexAt(chapters, absolutePosition);
             }
 
             // A prepare/close finished during the awaits above — these
@@ -3172,9 +3181,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // rewriting a non-null timer with the interval already gone → a stuck
         // timer that never counts down.
         if (!get().sleepTimer) return;
-        const liveIdx = chapters?.length
-          ? chapters.findIndex((c: any) => position >= (c.start || 0) && position < (c.end || 0))
-          : -1;
+        const liveIdx = chapterIndexAt(chapters, position);
         const armed = armedIdx ?? liveIdx;
         if (liveIdx !== -1 && armed >= 0 && liveIdx > armed) {
           // Crossed the boundary between ticks — fire now instead of

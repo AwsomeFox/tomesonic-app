@@ -23,9 +23,33 @@ function remainingPretty(seconds: number): string {
 
 /** In-progress percent for display, clamped to 1–99: a just-started book must
  *  never read "0%" and a nearly-done one must never read "100%" (100% is
- *  reserved for actually-finished, which renders as "Finished" instead). */
+ *  reserved for actually-finished, which renders as "Finished" instead).
+ *  Exported for tests — the visual badge and the spoken a11y label both derive
+ *  from this so they can never disagree. */
+export function badgePercent(fraction: number): number {
+  // A corrupted/NaN fraction must never surface as "NaN%" in the badge or the
+  // TalkBack label — coerce non-finite input to the 1% floor.
+  if (!Number.isFinite(fraction)) return 1;
+  return Math.min(99, Math.max(1, Math.round(fraction * 100)));
+}
+
+/** Audio progress as a clamped 0..1 fraction: prefers the server's `progress`
+ *  field, falling back to currentTime/duration — with duration <= 0 yielding 0
+ *  (never NaN/Infinity from a 0/0 or n/0 division). Exported for tests. */
+export function audioProgressFraction(
+  progress: number | null | undefined,
+  currentTime: number,
+  duration: number
+): number {
+  const raw = Number(progress ?? (duration > 0 ? currentTime / duration : 0));
+  // A corrupted persisted value (NaN/Infinity) would survive Math.min/max
+  // clamping as NaN and propagate into badgePercent — treat it as unstarted.
+  if (!Number.isFinite(raw)) return 0;
+  return Math.max(Math.min(1, raw), 0);
+}
+
 function pctLabel(fraction: number): string {
-  return `${Math.min(99, Math.max(1, Math.round(fraction * 100)))}%`;
+  return `${badgePercent(fraction)}%`;
 }
 
 /** Remaining time spelled out for TTS ("3 hours 20 minutes"), vs the badge's
@@ -58,9 +82,7 @@ export function bookStatusA11yLabel(
     const itemHasEbook = hasEbook(item);
     const duration = itemHasAudio ? Number(p?.duration || 0) : 0;
     const currentTime = itemHasAudio ? Number(p?.currentTime || 0) : 0;
-    const audioFraction = itemHasAudio
-      ? Math.max(Math.min(1, Number(p?.progress ?? (duration > 0 ? currentTime / duration : 0))), 0)
-      : 0;
+    const audioFraction = itemHasAudio ? audioProgressFraction(p?.progress, currentTime, duration) : 0;
     const ebookFraction = itemHasEbook
       ? Number(p?.ebookProgress || (!itemHasAudio ? p?.progress : 0) || 0)
       : 0;
@@ -82,11 +104,11 @@ export function bookStatusA11yLabel(
         bits.push(
           duration > 0
             ? `${remainingSpoken(duration * (1 - audioFraction))} left`
-            : `${Math.min(99, Math.max(1, Math.round(audioFraction * 100)))} percent`
+            : `${badgePercent(audioFraction)} percent`
         );
       }
       if (isEbookInProgress) {
-        bits.push(`${Math.min(99, Math.max(1, Math.round(ebookFraction * 100)))} percent read`);
+        bits.push(`${badgePercent(ebookFraction)} percent read`);
       }
     }
     if (isDownloaded) bits.push("Downloaded");
@@ -207,7 +229,7 @@ export default function BookProgressBadge({ itemId, item, downloaded, progress, 
     const duration = itemHasAudio ? Number(progressObj?.duration || 0) : 0;
     const currentTime = itemHasAudio ? Number(progressObj?.currentTime || 0) : 0;
     const audioFraction = itemHasAudio
-      ? Math.max(Math.min(1, progressObj?.progress ?? (duration > 0 ? currentTime / duration : 0)), 0)
+      ? audioProgressFraction(progressObj?.progress, currentTime, duration)
       : 0;
 
     let ebookFraction = 0;

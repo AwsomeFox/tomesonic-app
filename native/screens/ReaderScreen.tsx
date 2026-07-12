@@ -135,7 +135,7 @@ function chunkTtsText(text: string, maxLen: number = TTS_MAX_CHUNK): string[] {
 // family / line-height + surface colors), escaped for injection inside a JS
 // template literal. Shared by the per-setting effect AND the on-`ready` flush
 // (#R2) so both apply an identical snapshot.
-function buildLiveReaderCSS(
+export function buildLiveReaderCSS(
   fontSize: number,
   fontFamily: string,
   lineHeight: number,
@@ -171,7 +171,7 @@ function buildLiveReaderCSS(
 // so no CORS/auth request happens in the WebView. Themed to the app surface,
 // paginated, with swipe + tap-to-turn gestures and animated page transitions;
 // progress is reported back to RN via postMessage.
-function ebookHtml(
+export function ebookHtml(
   base64: string,
   bg: string,
   fg: string,

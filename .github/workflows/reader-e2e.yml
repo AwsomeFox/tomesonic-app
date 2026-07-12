@@ -1,0 +1,70 @@
+name: Reader E2E (Playwright)
+
+# Real-DOM tests for the ebook reader's injected WebView JS: the REAL
+# `ebookHtml(...)` output (vendored foliate bundle + a generated fixture EPUB)
+# loaded in actual Chromium, asserting rendered behavior Jest can only
+# string-assert — live margin/theme layout, settings flush, TTS page
+# bounding, page-curl handler attachment, forward-only fraction seek.
+#
+# Mirrors build-apk.yml's trigger shape: pushes only build master; feature
+# branches run through their pull_request events.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+# A new push to the same branch/PR cancels the still-running previous run.
+concurrency:
+  group: reader-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reader-e2e:
+    # Stable check-run name for branch protection.
+    name: reader-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v4
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/package-lock.json
+
+      # postinstall runs patch-package, same as the unit-tests job.
+      - name: install dependencies
+        run: npm ci --prefix native
+
+      # Cache the downloaded browser build keyed on the installed Playwright
+      # version (the version pins the exact chromium revision). On a hit,
+      # `playwright install` skips the ~150MB download; --with-deps still
+      # installs the (fast, apt-cached) system libraries.
+      - name: get Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p 'require("./native/node_modules/@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      - name: install Playwright Chromium
+        working-directory: native
+        run: npx playwright install --with-deps chromium
+
+      - name: reader e2e tests
+        run: npm run test:reader --prefix native
+
+      - name: upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reader-e2e-results
+          path: native/reader-e2e/.artifacts/test-results/
+          if-no-files-found: ignore

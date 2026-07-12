@@ -10,6 +10,7 @@ import {
   upNextAddItem,
   upNextRemoveItem,
   upNextListItems,
+  clearUpNextCache,
 } from "../../utils/upNext";
 
 // The module caches resolved playlist ids in a module-level Map keyed by
@@ -234,6 +235,127 @@ describe("upNext utils", () => {
       const LIB = freshLib();
       jest.mocked(api.get).mockRejectedValue(new Error("offline"));
       await expect(upNextListItems(LIB)).resolves.toEqual([]);
+    });
+  });
+
+  describe("clearUpNextCache (cross-account contract)", () => {
+    it("wipes every upNextPlaylistId_* MMKV key across libraries, leaving other keys alone", async () => {
+      const LIB_A = freshLib();
+      const LIB_B = freshLib();
+      // Populate via the real find-or-create flow (memory + MMKV both set).
+      jest.mocked(api.get).mockResolvedValue({
+        data: { results: [{ id: "plA", name: UP_NEXT_PLAYLIST_NAME, items: [] }] },
+      } as any);
+      await findOrCreateUpNextPlaylist(LIB_A);
+      jest.mocked(api.get).mockResolvedValue({
+        data: { results: [{ id: "plB", name: UP_NEXT_PLAYLIST_NAME, items: [] }] },
+      } as any);
+      await findOrCreateUpNextPlaylist(LIB_B);
+      storage.set("favorites", JSON.stringify(["item1"]));
+      expect(storage.getString(`upNextPlaylistId_${LIB_A}`)).toBe("plA");
+      expect(storage.getString(`upNextPlaylistId_${LIB_B}`)).toBe("plB");
+
+      clearUpNextCache();
+
+      expect(storage.getString(`upNextPlaylistId_${LIB_A}`)).toBeUndefined();
+      expect(storage.getString(`upNextPlaylistId_${LIB_B}`)).toBeUndefined();
+      // Unrelated keys survive.
+      expect(storage.getString("favorites")).toBe(JSON.stringify(["item1"]));
+    });
+
+    // THE cross-account scenario: account A resolved the id, account B logs in
+    // on the same server. Without the clear, B's first remove would DELETE
+    // against A's playlist — trusting server-side per-user scoping (a 404) as
+    // the only guard. After the clear, the module must re-resolve fresh.
+    it("after clear, the next remove RE-RESOLVES via GET instead of DELETEing the stale id (memory AND MMKV cold)", async () => {
+      const LIB = freshLib();
+      // Account A resolves + caches its playlist id (memory + MMKV).
+      jest.mocked(api.get).mockResolvedValue({
+        data: { results: [{ id: "plAccountA", name: UP_NEXT_PLAYLIST_NAME, items: [] }] },
+      } as any);
+      await findOrCreateUpNextPlaylist(LIB);
+      expect(storage.getString(`upNextPlaylistId_${LIB}`)).toBe("plAccountA");
+
+      clearUpNextCache(); // account switch / logout
+
+      // Under account B's credentials the server lists B's OWN playlist.
+      jest.mocked(api.get).mockReset();
+      jest.mocked(api.get).mockResolvedValue({
+        data: {
+          results: [
+            { id: "plAccountB", name: UP_NEXT_PLAYLIST_NAME, items: [{ libraryItemId: "b2" }] },
+          ],
+        },
+      } as any);
+      jest.mocked(api.delete).mockResolvedValue({ data: {} } as any);
+
+      await upNextRemoveItem(LIB, "b2");
+
+      // A fresh list scan ran — proving BOTH cache layers were cold (a live
+      // in-memory entry would have skipped the GET even with MMKV wiped)...
+      expect(api.get).toHaveBeenCalledWith(`/api/libraries/${LIB}/playlists`);
+      // ...and the DELETE targets B's freshly-resolved playlist, never A's.
+      expect(api.delete).toHaveBeenCalledWith("/api/playlists/plAccountB/item/b2");
+      expect(api.delete).not.toHaveBeenCalledWith(expect.stringContaining("plAccountA"));
+    });
+
+    it("after clear, the next add find-or-creates fresh instead of POSTing to the stale playlist", async () => {
+      const LIB = freshLib();
+      jest.mocked(api.get).mockResolvedValue({
+        data: { results: [{ id: "plAccountA", name: UP_NEXT_PLAYLIST_NAME, items: [] }] },
+      } as any);
+      await findOrCreateUpNextPlaylist(LIB);
+
+      clearUpNextCache();
+
+      // Nothing exists yet under the new account — the add must create anew.
+      jest.mocked(api.get).mockReset();
+      jest.mocked(api.get).mockResolvedValue({ data: { results: [] } } as any);
+      jest.mocked(api.post).mockReset();
+      jest.mocked(api.post).mockResolvedValue({
+        data: { id: "plAccountB", items: [{ libraryItemId: "b1" }] },
+      } as any);
+
+      await upNextAddItem(LIB, { libraryItemId: "b1" });
+
+      expect(api.post).toHaveBeenCalledTimes(1);
+      expect(api.post).toHaveBeenCalledWith("/api/playlists", expect.anything());
+      expect(storage.getString(`upNextPlaylistId_${LIB}`)).toBe("plAccountB");
+    });
+  });
+
+  describe("persistence across restarts (same account — the cache's purpose, unchanged)", () => {
+    // The MMKV key deliberately survives an app kill for the SAME account: a
+    // cold start reuses the persisted id without re-scanning the playlist
+    // list. Simulate the restart with a FRESH module registry (empty in-memory
+    // map) wired to the SAME persisted storage + api mocks — no regression
+    // from adding clearUpNextCache.
+    it("a fresh module load for the same account still uses the persisted id (no re-scan GET)", async () => {
+      const LIB = freshLib();
+      jest.mocked(api.get).mockResolvedValue({
+        data: { results: [{ id: "plPersisted", name: UP_NEXT_PLAYLIST_NAME, items: [] }] },
+      } as any);
+      await findOrCreateUpNextPlaylist(LIB);
+      expect(storage.getString(`upNextPlaylistId_${LIB}`)).toBe("plPersisted");
+
+      const outerStorage = require("../../utils/storage");
+      const outerApi = require("../../utils/api"); // the mocked module above
+      let fresh: typeof import("../../utils/upNext") = undefined as any;
+      jest.isolateModules(() => {
+        // Re-wire the fresh registry's storage/api to the OUTER instances so
+        // the persisted MMKV key (and the api spies) carry across the "kill".
+        jest.doMock("../../utils/storage", () => outerStorage);
+        jest.doMock("../../utils/api", () => outerApi);
+        fresh = require("../../utils/upNext");
+      });
+
+      jest.mocked(api.get).mockClear();
+      jest.mocked(api.delete).mockResolvedValue({ data: {} } as any);
+      await fresh.upNextRemoveItem(LIB, "b1");
+
+      // No playlist-list re-scan — the persisted id was adopted directly.
+      expect(api.get).not.toHaveBeenCalled();
+      expect(api.delete).toHaveBeenCalledWith(`/api/playlists/plPersisted/item/b1`);
     });
   });
 });

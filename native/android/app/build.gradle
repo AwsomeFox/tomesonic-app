@@ -155,6 +155,13 @@ android {
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
     }
+    testOptions {
+        unitTests {
+            // Robolectric tests (src/test) inflate the widget layout and read
+            // manifest meta-data, so they need the app's packaged resources.
+            includeAndroidResources = true
+        }
+    }
 }
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
@@ -207,4 +214,21 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // JVM unit tests (src/test). junit/robolectric come from React Native's
+    // version catalog (exposed by Expo as `expoLibs`) so they stay in
+    // lockstep with the RN/AGP toolchain. NOTE: the robolectric version is
+    // mirrored in .github/workflows/android-unit-tests.yml (android-all jar
+    // cache key) — bump both together.
+    testImplementation expoLibs.junit
+    testImplementation expoLibs.robolectric
+    // ApplicationProvider (androidx.test.core.app) — the only androidx.test
+    // artifact the tests import.
+    testImplementation "androidx.test:core:1.6.1"
+    // MusicService's supertype chain (MediaLibraryService) must be resolvable
+    // on the TEST COMPILE classpath: react-native-track-player declares media3
+    // as `implementation`, so it is not exposed transitively. Same version as
+    // node_modules/react-native-track-player/android/build.gradle.
+    testImplementation "androidx.media3:media3-session:1.8.0"
+    testImplementation "androidx.media3:media3-common:1.8.0"
 }

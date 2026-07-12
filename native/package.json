@@ -46,6 +46,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "1.56.1",
     "@testing-library/react-native": "^14.0.1",
     "@types/jest": "^29.5.14",
     "@types/react": "~19.2.2",
@@ -71,6 +72,7 @@
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:coverage": "jest --coverage",
+    "test:reader": "playwright test --config=reader-e2e/playwright.config.ts",
     "e2e": "maestro test .maestro",
     "e2e:smoke": "maestro test .maestro/flows/00-launch.yaml",
     "build:foliate": "node scripts/build-foliate-bundle.mjs"

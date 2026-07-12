@@ -432,6 +432,16 @@ export const useUserStore = create<UserState>((set, get) => ({
       } catch (e) {
         console.warn("[UserStore] queue clear on account switch failed", e);
       }
+      // The cached server "Up Next" playlist ids (utils/upNext, in-memory map +
+      // upNextPlaylistId_* MMKV keys) were resolved under the PREVIOUS account.
+      // ABS playlists are per-user, so account B inheriting A's cached id would
+      // aim its first playlist POST/DELETE at A's playlist — only the server's
+      // per-user scoping (404) would stop the cross-account write. Wipe it.
+      try {
+        require("../utils/upNext").clearUpNextCache();
+      } catch (e) {
+        console.warn("[UserStore] up-next cache clear on account switch failed", e);
+      }
       // Reset BEFORE writeAutoCreds below so the old server's libraryId can't
       // be mirrored into the new server's Android Auto creds file.
       try {
@@ -584,6 +594,14 @@ export const useUserStore = create<UserState>((set, get) => ({
       require("./usePlaybackStore").usePlaybackStore.getState().clearQueue();
     } catch (e) {
       console.warn("[UserStore] queue clear on logout failed", e);
+    }
+    // Cached server "Up Next" playlist ids (in-memory map + upNextPlaylistId_*
+    // MMKV keys) belong to THIS account — whoever logs in next must not aim
+    // playlist writes at them (ABS playlists are per-user; see utils/upNext).
+    try {
+      require("../utils/upNext").clearUpNextCache();
+    } catch (e) {
+      console.warn("[UserStore] up-next cache clear on logout failed", e);
     }
     try {
       const { useLibraryStore } = require("./useLibraryStore");
