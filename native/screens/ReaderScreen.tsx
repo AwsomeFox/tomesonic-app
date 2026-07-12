@@ -212,6 +212,11 @@ ${FOLIATE_BUNDLE}
   let bg = ${JSON.stringify(bg)};
   let fg = ${JSON.stringify(fg)};
   const accent = ${JSON.stringify(accent)};
+  // Current page margin (px), mutable for the same reason: renderer.setStyles
+  // relayouts can drop the margin attribute's inline column props, so every
+  // style/theme push re-asserts the margin from this live value — previously a
+  // theme change left the margin stale/collapsed until an app restart.
+  let curMargin = ${Number(margin)};
 
   function post(o){ try{ window.ReactNativeWebView.postMessage(JSON.stringify(o)); }catch(e){} }
 
@@ -267,6 +272,13 @@ ${FOLIATE_BUNDLE}
           var de = doc.documentElement;
           de.style.setProperty('background', bg, 'important');
           de.style.setProperty('color', fg, 'important');
+          // Body too: after a live theme switch the load-time stylesheet's
+          // body rule still carries the OLD colors with !important — without
+          // this, sections loaded after the switch keep the stale theme.
+          if (doc.body) {
+            doc.body.style.setProperty('background', bg, 'important');
+            doc.body.style.setProperty('color', fg, 'important');
+          }
         }
         // Attach the finger-follow page-curl handlers to THIS section's
         // document (see attachPageTurn). The text is rendered in a same-origin
@@ -359,7 +371,7 @@ ${FOLIATE_BUNDLE}
       // Initial margin. Like 'flow', the margin is observed on view.renderer —
       // NOT on the <foliate-view> element — so it must be set here (after open,
       // when the renderer exists) to actually drive the layout.
-      try { view.renderer.setAttribute('margin', ${JSON.stringify(String(margin) + "px")}); } catch(e) {}
+      try { view.renderer.setAttribute('margin', curMargin + 'px'); } catch(e) {}
 
       // Restore saved position. JSON.stringify escapes the CFI — a stored or
       // server value containing a quote/backslash/newline would otherwise
@@ -378,7 +390,13 @@ ${FOLIATE_BUNDLE}
       // Fraction navigation for the player's "Read from here" jump (percent
       // format switching) — called from RN via injectJavaScript after 'ready'.
       window.goToFraction = (f) => { try { view.goToFraction(f); } catch(e) {} };
-      window.setReaderStyles = (css) => { try { view.renderer.setStyles(css); } catch(e) {} };
+      // setStyles can relayout sections and drop the margin attribute's inline
+      // column props — every style push re-asserts the live margin so a font
+      // or theme change never leaves the page with stale/collapsed margins.
+      window.setReaderStyles = (css) => {
+        try { view.renderer.setStyles(css); } catch(e) {}
+        try { view.renderer.setAttribute('margin', curMargin + 'px'); } catch(e) {}
+      };
 
       // Live reader-theme switch: update the closure bg/fg (used by future
       // section loads) and re-apply to every currently-rendered section.
@@ -390,21 +408,35 @@ ${FOLIATE_BUNDLE}
           var contents = view.renderer.getContents ? view.renderer.getContents() : [];
           for (var i = 0; i < contents.length; i++) {
             try {
-              // Additive (see the 'load' handler): set only bg/fg so foliate's
-              // column-layout inline props (the page margin) aren't wiped —
-              // replacing the whole inline style attribute collapsed the margin
-              // until the next page turn re-ran render().
+              // Additive (see the 'load' handler): setProperty only, so
+              // foliate's column-layout inline props (the page margin) aren't
+              // wiped — replacing the whole inline style attribute collapsed
+              // the margin until the next page turn re-ran render(). BOTH
+              // documentElement and body get the colors: the body rule from
+              // the load-time stylesheet carries the OLD theme with
+              // !important, and the visible margin band is painted by these
+              // section docs — documentElement alone left it stale.
               var de = contents[i].doc.documentElement;
               de.style.setProperty('background', bg, 'important');
               de.style.setProperty('color', fg, 'important');
+              var b = contents[i].doc.body;
+              if (b) {
+                b.style.setProperty('background', bg, 'important');
+                b.style.setProperty('color', fg, 'important');
+              }
             } catch(e) {}
           }
+          // Belt-and-braces: a theme push is often accompanied by a setStyles
+          // relayout — re-assert the margin so it can't stay collapsed until
+          // the next app restart.
+          try { view.renderer.setAttribute('margin', curMargin + 'px'); } catch(e) {}
         } catch(e) {}
       };
       // Live margin (Narrow/Medium/Wide): drives both the foliate margin
       // attribute and the head/foot part heights.
       window.setReaderMargin = function(px){
         try {
+          curMargin = px;
           view.renderer.setAttribute('margin', px + 'px');
           var s = document.getElementById('reader-margins');
           if (s) s.textContent =

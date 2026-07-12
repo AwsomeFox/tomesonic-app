@@ -482,6 +482,27 @@ describe("usePlaybackStore 1s progress loop", () => {
       expect(autoDownloadNextAfterFinish).toHaveBeenCalledWith("item1");
     });
 
+    it("PRE-fires auto-download-next at ~5% remaining, exactly once, before the finish", async () => {
+      await startLoop();
+      playerPos = 286; // 95.3% of 300s — past the 95% pre-fetch line, not finished
+
+      await tick(1000);
+      expect(autoDownloadNextAfterFinish).toHaveBeenCalledTimes(1);
+      expect(autoDownloadNextAfterFinish).toHaveBeenCalledWith("item1");
+      // No finish PATCH yet — this fired from the pre-fetch gate, not finish.
+      expect(api.patch).not.toHaveBeenCalledWith(
+        "/api/me/progress/item1",
+        expect.objectContaining({ isFinished: true })
+      );
+
+      // Later ticks (including the actual finish) never fire it again.
+      playerPos = 290;
+      await tick(1000);
+      playerPos = 296;
+      await tick(1000);
+      expect(autoDownloadNextAfterFinish).toHaveBeenCalledTimes(1);
+    });
+
     it("does NOT auto-download-next when a podcast EPISODE finishes", async () => {
       await startLoop({ id: "sess2", libraryItemId: "pod1", episodeId: "ep1" });
       playerPos = 296;

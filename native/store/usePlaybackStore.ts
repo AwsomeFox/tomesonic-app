@@ -38,6 +38,13 @@ let _lastMirrorSig: string | null = null;
 // Session id that has already been marked finished server-side, so we don't
 // re-fire the PATCH every tick once the book is done.
 let _finishedSessionId: string | null = null;
+// Auto-download-next-in-series now PRE-fires at ~5% remaining (once per
+// session): the old finish-time-only trigger raced the end-of-book moment —
+// overnight (sleep timer + doze) the JS runtime was killed mid-chain, so the
+// confetti showed but the download never started. Firing while the user is
+// still actively listening makes the two API hops + download start reliable,
+// and the next book is ready the moment this one ends.
+let _autoNextFiredSessionId: string | null = null;
 // In-flight initializePlayer() — shared so concurrent callers can't each
 // start their own progress interval.
 let _initPromise: Promise<void> | null = null;
@@ -788,6 +795,27 @@ function persistProgressSample(
     // key the map by the composite id — an item-level PATCH would
     // create bogus whole-podcast progress on the server.
     const libraryItemId = currentSession.libraryItemId;
+
+    // ~5% remaining: pre-fetch the next book in the series (books only, once
+    // per session). autoDownloadNextAfterFinish is internally gated (setting
+    // on, this book downloaded, next not already present) and idempotent, so
+    // the finish-time fallback below firing again is harmless.
+    if (
+      bookDuration > 0 &&
+      !sessionEpisodeId &&
+      libraryItemId &&
+      absolutePosition >= bookDuration * 0.95 &&
+      // Same floor rationale as mark-finished: a sub-minute item hits 95%
+      // almost instantly — let the finish-time call handle those.
+      bookDuration >= 60 &&
+      _autoNextFiredSessionId !== currentSession.id
+    ) {
+      _autoNextFiredSessionId = currentSession.id;
+      try {
+        const { autoDownloadNextAfterFinish } = require("../utils/downloader");
+        autoDownloadNextAfterFinish(libraryItemId).catch(() => {});
+      } catch {}
+    }
     if (
       bookDuration > 0 &&
       absolutePosition > 0 &&
@@ -835,10 +863,12 @@ function persistProgressSample(
       // Finish is a significant event: force the next display-mirror tick to
       // re-write so the throttle gate can't suppress a stale in-progress value.
       _lastMirrorSig = null;
-      // Finishing a downloaded book is the trigger for auto-download-next-in-
-      // series (only for books, not podcast episodes) — one book, opt-in, gated
-      // on this one being downloaded. Fire-and-forget; never block persistence.
-      if (!sessionEpisodeId) {
+      // Finish-time fallback for auto-download-next-in-series (books only) —
+      // normally the ~5%-remaining pre-fetch above has already fired for this
+      // session; this catches sessions that jumped straight past 95% (seek to
+      // the end, sub-minute items). Fire-and-forget; never block persistence.
+      if (!sessionEpisodeId && _autoNextFiredSessionId !== currentSession.id) {
+        _autoNextFiredSessionId = currentSession.id;
         try {
           const { autoDownloadNextAfterFinish } = require("../utils/downloader");
           autoDownloadNextAfterFinish(libraryItemId).catch(() => {});
@@ -2346,6 +2376,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       _lastLocalSaveAt = 0;
       _lastMirrorSig = null;
       _finishedSessionId = null;
+      _autoNextFiredSessionId = null;
       _trackOffsets = trackOffsets;
       // The previous book's pause stamp must not apply its auto-rewind to
       // this book's first play. (loadLastSession re-seeds it AFTER preparing
@@ -3114,6 +3145,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _lastLocalSaveAt = 0;
     _lastMirrorSig = null;
     _finishedSessionId = null;
+    _autoNextFiredSessionId = null;
     _lastPausedAt = null;
     _preparedToken = null;
     _sleepRewindPending = false;
