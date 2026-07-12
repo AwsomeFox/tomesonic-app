@@ -38,6 +38,13 @@ let _lastMirrorSig: string | null = null;
 // Session id that has already been marked finished server-side, so we don't
 // re-fire the PATCH every tick once the book is done.
 let _finishedSessionId: string | null = null;
+// Auto-download-next-in-series now PRE-fires at ~5% remaining (once per
+// session): the old finish-time-only trigger raced the end-of-book moment —
+// overnight (sleep timer + doze) the JS runtime was killed mid-chain, so the
+// confetti showed but the download never started. Firing while the user is
+// still actively listening makes the two API hops + download start reliable,
+// and the next book is ready the moment this one ends.
+let _autoNextFiredSessionId: string | null = null;
 // In-flight initializePlayer() — shared so concurrent callers can't each
 // start their own progress interval.
 let _initPromise: Promise<void> | null = null;
@@ -235,6 +242,58 @@ function disarmShakeListener() {
     _shakeSub?.remove();
   } catch {}
   _shakeSub = null;
+}
+
+// ---- Native sleep-timer enforcement (Android) ----
+// The JS interval drives the UI, but the theory above ("the player's wake lock
+// keeps the JS runtime alive") proved WRONG under real overnight doze: the
+// runtime was frozen/killed, so the fade, the pause, and shake-to-extend all
+// silently died while audio played on. The Media3 service now enforces the
+// same timer natively (countdown that only consumes playing time, fade,
+// pause, shake-to-extend) and emits abs-sleep-fired / abs-sleep-extended;
+// JS mirrors those events while alive and reconciles on next launch if not.
+// While CASTING the receiver plays the audio — pausing the LOCAL player would
+// be wrong, so the JS path stays authoritative there and native stays off.
+let _nativeSleepArmed = false;
+// What the native enforcer was last told, so the EOC tick can detect drift
+// (seeks WITHIN the armed chapter change the JS remaining but not the native
+// deadline) and re-arm. Anchored to wall clock; only compared while playing,
+// which is when both countdowns actually run.
+let _nativeSleepArmedRemaining = 0;
+let _nativeSleepArmedAt = 0;
+function nativeSleepModule(): any | null {
+  try {
+    const RN = require("react-native");
+    if (RN.Platform.OS !== "android") return null;
+    const m = RN.NativeModules?.TrackPlayer;
+    return m?.absSetSleepTimer ? m : null;
+  } catch {
+    return null;
+  }
+}
+function armNativeSleepTimer(seconds: number): boolean {
+  const m = nativeSleepModule();
+  if (!m || !Number.isFinite(seconds) || seconds <= 0) return false;
+  const shakeSecs = getSleepShakeToExtend() ? SLEEP_SHAKE_MINUTES * 60 : 0;
+  _nativeSleepArmed = true;
+  _nativeSleepArmedRemaining = seconds;
+  _nativeSleepArmedAt = Date.now();
+  m.absSetSleepTimer(seconds, SLEEP_FADE_SECONDS, shakeSecs).catch(() => {
+    // The optimistic `true` return already disarmed the JS shake listener —
+    // if native never actually armed (module not bound yet, dead service),
+    // fall back to the JS listener so shake-to-extend keeps working for the
+    // still-active timer.
+    _nativeSleepArmed = false;
+    if (usePlaybackStore.getState().sleepTimer) armShakeListener();
+  });
+  return true;
+}
+function cancelNativeSleepTimer() {
+  if (!_nativeSleepArmed) return;
+  _nativeSleepArmed = false;
+  try {
+    nativeSleepModule()?.absCancelSleepTimer?.().catch(() => {});
+  } catch {}
 }
 
 // Resolve the NEXT book in the finished book's series. Reuses the same
@@ -553,6 +612,35 @@ function alertPlayFailure(message: string) {
   } catch {}
 }
 
+// Check network reachability using NetInfo with a short timeout to prevent hangs.
+async function checkIsConnectedWithTimeout(): Promise<boolean> {
+  let isConnected = true;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const NetInfo = require("@react-native-community/netinfo").default;
+    // The timeout arm RESOLVES (null = unknown) rather than rejecting, and is
+    // cleared when the fetch wins — a rejecting orphan timer fired after the
+    // race was already decided, surfacing as an unhandled rejection (and a
+    // dangling timer under fake-timer tests).
+    const state: any = await Promise.race([
+      NetInfo.fetch(),
+      new Promise((res) => {
+        timer = setTimeout(() => res(null), 1000);
+      }),
+    ]);
+    // Strict booleans only: isConnected is boolean|null and `&&` would leak
+    // null through, treating UNKNOWN as offline. Only an explicit false on
+    // either flag counts as offline — unknown stays optimistic (true), same
+    // as the timeout/error path.
+    isConnected = state?.isConnected !== false && state?.isInternetReachable !== false;
+  } catch (e) {
+    // Keep true on error
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  return isConnected;
+}
+
 // Called after a token refresh (see api.ts applyRefreshedConfig): the live
 // session's coverUrl — and the artwork Media3 is showing — may carry the
 // ROTATED-OUT token, so its next fetch 401s and the notification loses its
@@ -768,6 +856,27 @@ function persistProgressSample(
     // key the map by the composite id — an item-level PATCH would
     // create bogus whole-podcast progress on the server.
     const libraryItemId = currentSession.libraryItemId;
+
+    // ~5% remaining: pre-fetch the next book in the series (books only, once
+    // per session). autoDownloadNextAfterFinish is internally gated (setting
+    // on, this book downloaded, next not already present) and idempotent, so
+    // the finish-time fallback below firing again is harmless.
+    if (
+      bookDuration > 0 &&
+      !sessionEpisodeId &&
+      libraryItemId &&
+      absolutePosition >= bookDuration * 0.95 &&
+      // Same floor rationale as mark-finished: a sub-minute item hits 95%
+      // almost instantly — let the finish-time call handle those.
+      bookDuration >= 60 &&
+      _autoNextFiredSessionId !== currentSession.id
+    ) {
+      _autoNextFiredSessionId = currentSession.id;
+      try {
+        const { autoDownloadNextAfterFinish } = require("../utils/downloader");
+        autoDownloadNextAfterFinish(libraryItemId).catch(() => {});
+      } catch {}
+    }
     if (
       bookDuration > 0 &&
       absolutePosition > 0 &&
@@ -815,10 +924,12 @@ function persistProgressSample(
       // Finish is a significant event: force the next display-mirror tick to
       // re-write so the throttle gate can't suppress a stale in-progress value.
       _lastMirrorSig = null;
-      // Finishing a downloaded book is the trigger for auto-download-next-in-
-      // series (only for books, not podcast episodes) — one book, opt-in, gated
-      // on this one being downloaded. Fire-and-forget; never block persistence.
-      if (!sessionEpisodeId) {
+      // Finish-time fallback for auto-download-next-in-series (books only) —
+      // normally the ~5%-remaining pre-fetch above has already fired for this
+      // session; this catches sessions that jumped straight past 95% (seek to
+      // the end, sub-minute items). Fire-and-forget; never block persistence.
+      if (!sessionEpisodeId && _autoNextFiredSessionId !== currentSession.id) {
+        _autoNextFiredSessionId = currentSession.id;
         try {
           const { autoDownloadNextAfterFinish } = require("../utils/downloader");
           autoDownloadNextAfterFinish(libraryItemId).catch(() => {});
@@ -1232,6 +1343,10 @@ interface PlaybackState {
   previousChapter: () => Promise<void>;
   setPlaybackSpeed: (speed: number) => Promise<void>;
   setSleepTimer: (seconds: number, endOfChapter?: boolean) => void;
+  // Mirror a NATIVE sleep-timer event (the Media3 service enforces the timer
+  // through doze; see armNativeSleepTimer) into JS state.
+  onNativeSleepFired: () => void;
+  onNativeSleepExtended: (remaining: number) => void;
   cancelSleepTimer: () => void;
   closePlayback: () => Promise<void>;
   isPlayerExpanded: boolean;
@@ -1472,15 +1587,36 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
+          // Check connectivity before fetching progress. The pre-check's
+          // elapsed time (up to 1s) counts AGAINST the same 3s budget below,
+          // so the whole restore stays bounded at ~3s as documented — the
+          // pre-check must never stack on top of it.
+          const budgetStart = Date.now();
+          const isConnected = await checkIsConnectedWithTimeout();
+          if (!isConnected) {
+            throw new Error("Network unreachable");
+          }
+          const remainingBudget = Math.max(500, 3000 - (Date.now() - budgetStart));
+
           // Podcast progress is keyed per EPISODE server-side — the item-level
           // GET returns nothing useful for an episode session.
           const progressPath = session.episodeId
             ? `/api/me/progress/${encodeURIComponent(itemId)}/${encodeURIComponent(session.episodeId)}`
             : `/api/me/progress/${encodeURIComponent(itemId)}`;
-          const res: any = await Promise.race([
-            api.get(progressPath),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
-          ]);
+          // Timer is cleared when the request wins — an orphaned rejecting
+          // timeout after a decided race is an unhandled promise rejection.
+          let progressTimer: ReturnType<typeof setTimeout> | null = null;
+          let res: any;
+          try {
+            res = await Promise.race([
+              api.get(progressPath),
+              new Promise((_, rej) => {
+                progressTimer = setTimeout(() => rej(new Error("timeout")), remainingBudget);
+              }),
+            ]);
+          } finally {
+            if (progressTimer) clearTimeout(progressTimer);
+          }
           const p = res?.data;
           const serverUpdatedAt = Number(p?.lastUpdate) || 0;
           const localUpdatedAt = Number(session.updatedAt) || 0;
@@ -1801,7 +1937,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     _lastStartKey = dupeKey;
     _lastStartAt = now;
+
     try {
+      // Check connectivity: if offline, bypass api.post and directly trigger fallback
+      const isConnected = await checkIsConnectedWithTimeout();
+      if (!isConnected) {
+        throw new Error("Network unreachable");
+      }
+
       const path = episodeId
         ? `/api/items/${encodeURIComponent(itemId)}/play/${encodeURIComponent(episodeId)}`
         : `/api/items/${encodeURIComponent(itemId)}/play`;
@@ -2313,6 +2456,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       _lastLocalSaveAt = 0;
       _lastMirrorSig = null;
       _finishedSessionId = null;
+      _autoNextFiredSessionId = null;
       _trackOffsets = trackOffsets;
       // The previous book's pause stamp must not apply its auto-rewind to
       // this book's first play. (loadLastSession re-seeds it AFTER preparing
@@ -2872,9 +3016,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     set({ sleepTimer: { endOfChapter, remaining: initialRemaining, chapterIdx: armedChapterIdx } });
 
-    // Shake-to-extend: arm the accelerometer listener while the timer runs
-    // (no-op unless expo-sensors is installed — see armShakeListener).
-    armShakeListener();
+    // Native enforcement (doze-proof pause/fade/shake) — local playback only;
+    // while casting the receiver plays and JS stays authoritative.
+    const nativeArmed = !get().isCasting && armNativeSleepTimer(initialRemaining);
+    if (get().isCasting) cancelNativeSleepTimer();
+
+    // Shake-to-extend: when the native timer is armed it owns the shake sensor
+    // too (and works with JS frozen); arming the JS accelerometer as well
+    // would double-extend on a single shake. JS listener is the fallback.
+    if (nativeArmed) disarmShakeListener();
+    else armShakeListener();
 
     _sleepLastTickAt = Date.now();
     sleepTimerInterval = setInterval(async () => {
@@ -2885,6 +3036,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           sleepTimerInterval = null;
         }
         return;
+      }
+
+      // A cast session that started mid-timer takes over: cancel the native
+      // enforcer (it would pause the already-paused LOCAL player) and fall
+      // back to the JS accelerometer for shake-to-extend.
+      if (get().isCasting && _nativeSleepArmed) {
+        cancelNativeSleepTimer();
+        armShakeListener();
       }
 
       // PAUSED: the position is frozen (end-of-chapter remaining can't
@@ -2946,6 +3105,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         remaining = get().isPlaying ? timer.remaining - elapsedS : timer.remaining;
       }
 
+      // Native enforcer drift check (EOC timers): any seek — forward, back,
+      // or within the armed chapter — changes the JS remaining while the
+      // native fixed deadline stays put, so the service would pause at the
+      // OLD chapter end. Re-arm whenever the two countdowns disagree by >3s.
+      if (timer.endOfChapter && _nativeSleepArmed && !get().isCasting && get().isPlaying) {
+        const nativeExpected =
+          _nativeSleepArmedRemaining - (Date.now() - _nativeSleepArmedAt) / 1000;
+        if (Math.abs(remaining - nativeExpected) > 3) {
+          armNativeSleepTimer(remaining);
+        }
+      }
+
       // Re-check the timer is still armed before touching volume or re-arming.
       // The EOC branch awaits getLiveAbsolutePosition above; a cancel/teardown
       // (or the fixed branch's own scheduling) can null sleepTimer while this
@@ -2968,6 +3139,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
         set({ sleepTimer: null });
         disarmShakeListener();
+        cancelNativeSleepTimer();
         // Arm the "rewind on wake" nudge for the next resume, and record the
         // pause so play()'s generic auto-rewind anchor exists too.
         _sleepRewindPending = true;
@@ -2997,11 +3169,43 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     _sleepLastTickAt = null;
     disarmShakeListener();
+    cancelNativeSleepTimer();
     // Explicit cancel means the user is awake — don't rewind on the next resume.
     _sleepRewindPending = false;
     // Undo any in-progress fade (unconditional — see setSleepTimer).
     TrackPlayer.setVolume(1).catch(() => {});
     set({ sleepTimer: null });
+  },
+
+  // The native enforcer paused playback (fade already done, volume restored
+  // natively). Mirror the state JS-side: tear down the UI countdown and arm
+  // the rewind-on-wake nudge exactly like the JS fire path.
+  onNativeSleepFired: () => {
+    if (sleepTimerInterval) {
+      clearInterval(sleepTimerInterval);
+      sleepTimerInterval = null;
+    }
+    _nativeSleepArmed = false;
+    _sleepLastTickAt = null;
+    disarmShakeListener();
+    _sleepRewindPending = true;
+    set({ sleepTimer: null });
+  },
+
+  // A native shake extended the timer — update the countdown display. The
+  // native timer runs FIXED countdowns, so an end-of-chapter timer becomes a
+  // fixed one here (same conversion the JS shake handler applies).
+  onNativeSleepExtended: (remaining) => {
+    if (!get().sleepTimer) return;
+    if (!Number.isFinite(remaining) || remaining <= 0) return;
+    _sleepLastTickAt = Date.now();
+    set({
+      sleepTimer: {
+        endOfChapter: false,
+        remaining: Math.max(0, Math.round(remaining)),
+        chapterIdx: undefined,
+      },
+    });
   },
 
   closePlayback: async () => {
@@ -3081,6 +3285,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     _lastLocalSaveAt = 0;
     _lastMirrorSig = null;
     _finishedSessionId = null;
+    _autoNextFiredSessionId = null;
     _lastPausedAt = null;
     _preparedToken = null;
     _sleepRewindPending = false;

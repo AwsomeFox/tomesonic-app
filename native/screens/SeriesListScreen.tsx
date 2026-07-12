@@ -24,7 +24,10 @@ import SearchContent from "../components/SearchContent";
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const CARD_SIZE = 170;
-const PAGE_LIMIT = 20;
+// Matches LibraryScreen: pages this size plus the 3-viewport onEndReached
+// threshold keep the next page arriving before the user can reach the end of
+// the loaded rows — at 20/0.5 the scroll hard-stopped against unloaded series.
+const PAGE_LIMIT = 30;
 
 // Mirrors the original app's $encode: base64 then URI-encode. Used to build the
 // `series.<id>` filter for the items endpoint that backs the cover collage.
@@ -460,8 +463,13 @@ function SeriesListScreen(
           columnWrapperStyle={{ justifyContent: "space-evenly", paddingHorizontal: 8 }}
           contentContainerStyle={{ paddingBottom: hasSession ? 100 : 32, paddingTop: 4 }}
           onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.5}
+          // 3 viewport-heights of lookahead (parity with LibraryScreen's
+          // grid): the next page is in flight well before the user reaches
+          // the loaded edge, so momentum never dies against unloaded rows.
+          onEndReachedThreshold={3.0}
           ListFooterComponent={renderFooter}
+          initialNumToRender={12}
+          windowSize={11}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl

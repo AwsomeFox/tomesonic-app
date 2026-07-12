@@ -35,6 +35,9 @@ interface Library {
   id: string;
   name: string;
   mediaType: "book" | "podcast";
+  // Server-assigned library icon name (abs-icons set, e.g. "books-1",
+  // "microphone-1") — rendered via components/LibraryIcon.
+  icon?: string;
   settings: {
     coverAspectRatio: number;
     audiobooksOnly: boolean;

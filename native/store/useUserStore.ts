@@ -38,6 +38,8 @@ interface UserSettings {
   // the furthest position at transition boundaries (see progressSync's
   // reconcileLinkedProgress). Keyed by libraryItemId; absent = unlocked.
   linkedProgress: Record<string, boolean>;
+  showPlayerBookProgress: boolean;
+  showPlayerChapterProgress: boolean;
 }
 
 interface UserState {
@@ -100,6 +102,8 @@ const DEFAULT_SETTINGS: UserSettings = {
   jumpBackwardTime: 10,
   autoDownloadNextInSeries: false,
   linkedProgress: {},
+  showPlayerBookProgress: true,
+  showPlayerChapterProgress: true,
 };
 
 export const useUserStore = create<UserState>((set, get) => ({

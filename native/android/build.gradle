@@ -22,6 +22,12 @@ allprojects {
     google()
     mavenCentral()
     maven { url 'https://www.jitpack.io' }
+    def notifeeLibs = new File(rootDir, "../node_modules/@notifee/react-native/android/libs")
+    if (notifeeLibs.exists()) {
+      maven {
+        url notifeeLibs
+      }
+    }
   }
 }
 

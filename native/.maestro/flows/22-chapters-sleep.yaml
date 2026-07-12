@@ -34,10 +34,11 @@ env:
 # resume in. Everything below is then deterministic.
 - tapOn: "Pause"
 - assertVisible: "Chapter . of 2"
-# Jump to a KNOWN chapter via the modal (absolute), not by assuming resume.
-# Modal rows carry a "Chapter N, starts at …" label — distinct from the
-# now-playing "Chapter N of 2" caption, so the tap is unambiguous.
-- tapOn: "Chapters"
+# Jump to a KNOWN chapter via the combined Chapters & Up Next sheet (absolute),
+# not by assuming resume. The peek handle carries a stable "Chapters and Up
+# Next" label; rows carry "Chapter N, starts at …" — distinct from the
+# now-playing "Chapter N of 2" caption, so the taps are unambiguous.
+- tapOn: "Chapters and Up Next"
 - extendedWaitUntil:
     visible: "Chapter 1, starts at .*"
     timeout: 5000

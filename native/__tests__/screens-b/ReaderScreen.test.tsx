@@ -861,6 +861,28 @@ describe("ReaderScreen (reader features)", () => {
     expect(html).toContain("window.getReaderText");
   });
 
+  it("the generated WebView module script COMPILES — template-escape regression guard", async () => {
+    // The reader page is built inside a TS template literal, where a single
+    // backslash escape (e.g. '\n' written as \n instead of \\n) silently
+    // becomes a REAL newline inside a quoted JS string in the OUTPUT — a
+    // module-wide syntax error that leaves the reader stuck on "Loading…"
+    // with no error surfaced anywhere (this exact bug shipped once). The
+    // script uses no import/export/TLA, so vm can compile it as a classic
+    // script and throw on any syntax error.
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    const mod = /<script type="module">([\s\S]*?)<\/script>/.exec(html)?.[1];
+    expect(mod).toBeTruthy();
+    // The vendored foliate bundle is a real module (has exports) and is
+    // static — strip it; the escape risk lives in OUR template code around it.
+    const { FOLIATE_BUNDLE } = require("../../utils/foliateBundle");
+    const ours = mod!.replace(FOLIATE_BUNDLE, "/* bundle */");
+    expect(ours).not.toContain("export ");
+    const vm = require("vm");
+    expect(() => new vm.Script(ours)).not.toThrow();
+  });
+
   it("sets the margin on view.renderer (not the <foliate-view> element) so it re-lays-out", async () => {
     await renderReader();
     await readyWebView();
@@ -869,8 +891,9 @@ describe("ReaderScreen (reader features)", () => {
     // Margin must be observed on the renderer (mirroring how `flow` is set),
     // otherwise changing the margin never re-lays-out the text.
     expect(html).toContain("view.renderer.setAttribute('margin', px + 'px')");
-    // The initial margin is also applied to the renderer after open.
-    expect(html).toContain("view.renderer.setAttribute('margin', \"16px\")");
+    // The initial margin is applied to the renderer after open, from the live
+    // curMargin binding (which style/theme pushes re-assert — see issue #2).
+    expect(html).toContain("view.renderer.setAttribute('margin', curMargin + 'px')");
     // The broken element-level margin assignment is gone.
     expect(html).not.toContain("view.setAttribute('margin'");
   });
@@ -880,7 +903,7 @@ describe("ReaderScreen (reader features)", () => {
     await renderReader();
     await readyWebView();
     let html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
-    expect(html).toContain('"16px"');
+    expect(html).toContain("let curMargin = 16;");
     expect(html).toContain("'paginated'");
   });
 
@@ -895,7 +918,7 @@ describe("ReaderScreen (reader features)", () => {
     expect(html).toContain("#f4ecd8");
     expect(html).toContain("#5b4636");
     // Wide margin + scrolled flow.
-    expect(html).toContain('"32px"');
+    expect(html).toContain("let curMargin = 32;");
     expect(html).toContain('"scrolled"');
   });
 

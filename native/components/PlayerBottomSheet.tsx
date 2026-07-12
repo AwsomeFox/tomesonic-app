@@ -22,6 +22,7 @@ import Animated, {
   withSpring,
   withTiming,
   interpolate,
+  Extrapolation,
   useReducedMotion,
 } from "react-native-reanimated";
 import { SPATIAL_SHEET, EMPHASIZED } from "../theme/motion";
@@ -32,15 +33,17 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { navigationRef } from "../navigation/navigationRef";
 import Icon from "./Icon";
-import BottomSheet from "./BottomSheet";
 import PlaybackSpeedModal from "./PlaybackSpeedModal";
 import SleepTimerModal from "./SleepTimerModal";
 import BookmarksModal from "./BookmarksModal";
 import { CastContext, CastButton } from "react-native-google-cast";
-import ChaptersModal from "./ChaptersModal";
+import PlayerOverflowModal from "./PlayerOverflowModal";
+import PlayerChaptersQueueSheet from "./PlayerChaptersQueueSheet";
 import { useDownloadStore } from "../store/useDownloadStore";
 import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
+import { showAppDialog } from "../store/useDialogStore";
+import { resolveEbookTarget, readingFractionForAudioPosition, canJumpToFraction } from "../utils/formatSwitch";
 import { haptic } from "../utils/haptics";
 import Pressable from "./HintPressable";
 
@@ -185,8 +188,12 @@ export default function PlayerBottomSheet() {
   // In-app jump buttons honor the Settings jump intervals — amount AND icon
   // (they were hardcoded to 30s while the notification/Auto buttons already
   // followed the setting via applyJumpOptions).
-  const jumpFwdSecs = useUserStore((s) => s.settings?.jumpForwardTime ?? 10);
-  const jumpBackSecs = useUserStore((s) => s.settings?.jumpBackwardTime ?? 10);
+  const jumpForwardTime = useUserStore((s) => s.settings?.jumpForwardTime);
+  const jumpBackwardTime = useUserStore((s) => s.settings?.jumpBackwardTime);
+  const showPlayerBookProgress = useUserStore((s) => s.settings?.showPlayerBookProgress);
+  const showPlayerChapterProgress = useUserStore((s) => s.settings?.showPlayerChapterProgress);
+  const jumpFwdSecs = jumpForwardTime ?? 10;
+  const jumpBackSecs = jumpBackwardTime ?? 10;
   // Subscribed (not getState) so the LOCAL/STREAMING label reacts to a
   // download completing/being deleted while the sheet is open and PAUSED —
   // while playing, the 1s position tick masked the missing subscription.
@@ -198,6 +205,59 @@ export default function PlayerBottomSheet() {
   const favItemId = currentSession?.libraryItemId || currentSession?.libraryItem?.id;
   const isFav = useFavoritesStore((s) => !!favItemId && s.favorites.includes(favItemId));
   const toggleFavorite = useFavoritesStore((s) => s.toggleFavorite);
+
+  // "Read from here": jump to the ebook edition at (approximately) the
+  // current listening position — the Whispersync-style handoff the
+  // formatSwitch module implements (this is its player-side entry point).
+  const readFromHere = () => {
+    const st = usePlaybackStore.getState();
+    const cur = st.currentSession;
+    if (!cur || cur.episodeId) return; // book-only feature
+    const bookItemId = cur.libraryItemId || cur.libraryItem?.id;
+    if (!bookItemId) return;
+    (async () => {
+      const target = await resolveEbookTarget(bookItemId);
+      if (!target) {
+        showAppDialog({ title: "No ebook available", message: "This book doesn't have an ebook edition in your library." });
+        return;
+      }
+      const frac = readingFractionForAudioPosition(st.position, st.duration);
+      const jump = canJumpToFraction(target.ebookFormat);
+      showAppDialog({
+        title: "Read from here?",
+        message: jump
+          ? `Open the ebook at about ${Math.round(frac * 100)}%? Position matching is approximate.`
+          : "This ebook format can't jump to a position — it will open at your last reading spot.",
+        buttons: [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Read",
+            onPress: () => {
+              setPlayerExpanded(false);
+              setTimeout(() => {
+                // The 300ms collapse delay can outlive the session — a Stop &
+                // Close or item switch in that window must not still open the
+                // reader for the no-longer-active book.
+                const now = usePlaybackStore.getState().currentSession;
+                const nowId = now?.libraryItemId || now?.libraryItem?.id;
+                if (!now || nowId !== bookItemId) return;
+                if (navigationRef.isReady()) {
+                  (navigationRef.navigate as any)("Reader", {
+                    itemId: target.itemId,
+                    ebookFormat: target.ebookFormat,
+                    title: target.title,
+                    initialFraction: jump ? frac : undefined,
+                  });
+                }
+              }, 300);
+            },
+          },
+        ],
+      });
+    })().catch((err) => {
+      console.warn("Read from here failed", err);
+    });
+  };
 
   const isPlayerExpandedRef = useRef(isPlayerExpanded);
   useEffect(() => {
@@ -233,11 +293,12 @@ export default function PlayerBottomSheet() {
     return () => clearTimeout(t);
   }, [isPlayerExpanded]);
 
-  const [showChapters, setShowChapters] = useState(false);
+  const [showChaptersQueue, setShowChaptersQueue] = useState(false);
+  const [chaptersQueueTab, setChaptersQueueTab] = useState<"chapters" | "queue">("chapters");
   const [showSpeed, setShowSpeed] = useState(false);
   const [showSleepTimer, setShowSleepTimer] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
-  const [showQueue, setShowQueue] = useState(false);
+  const [showOverflow, setShowOverflow] = useState(false);
 
   const playProgress = useSharedValue(isPlaying ? 1 : 0);
 
@@ -291,7 +352,7 @@ export default function PlayerBottomSheet() {
     if (isPlayerExpanded) {
       sheetProgress.value = sheetSpring(1);
     } else {
-      setShowChapters(false);
+      setShowChaptersQueue(false);
       sheetProgress.value = sheetSpring(0);
     }
   }, [isPlayerExpanded]);
@@ -326,15 +387,15 @@ export default function PlayerBottomSheet() {
   const TOP_BAR_Y = insets.top + 8;
   // Height of the cover→secondary-row block (matches the offsets cascaded below),
   // used to vertically center it in the available space on large screens.
-  const CONTENT_BLOCK_H = COVER_SIZE_EXP + 24 + 28 + 16 + 36 + 20 + 64 + 24 + 88 + 24 + 56;
+  const CONTENT_BLOCK_H = COVER_SIZE_EXP + 12 + 28 + 8 + 36 + 10 + 64 + 12 + 88 + 12 + 56;
   const availH = screenHeight - (TOP_BAR_Y + 56) - insets.bottom - 20;
   const extraTop = isTablet ? Math.max(0, (availH - CONTENT_BLOCK_H) / 2) : 0;
   const SOURCE_LABEL_Y = TOP_BAR_Y + 56 + 12 + extraTop;
   const COVER_Y_EXP = SOURCE_LABEL_Y + 20 + 8;
-  const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + 24;
-  const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + 28 + 16;
-  const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + 36 + 20;
-  const TRANSPORT_Y_EXP = TITLE_Y_EXP + 64 + 24;
+  const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + 12;
+  const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + 28 + 8;
+  const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + 36 + 10;
+  const TRANSPORT_Y_EXP = TITLE_Y_EXP + 64 + 12;
 
   // Layout values the sheet PanResponder needs. The responder is created ONCE
   // (useRef), so reading `screenHeight`/`COVER_Y_EXP` directly in its callbacks
@@ -596,7 +657,45 @@ export default function PlayerBottomSheet() {
     };
   });
 
-  // Morph Forward-30 Button
+  // Morph Skip Previous Button (fade in/out, align to TRANSPORT_Y_EXP + 16, width/height 56)
+  const animatedSkipPreviousStyle = useAnimatedStyle(() => {
+    const p = sheetProgress.value;
+    // Fully OFF-screen while collapsed (width is 56): the view keeps
+    // pointerEvents="auto" the moment the player expands, so an on-screen
+    // anchor at opacity 0 was an invisible hit area during the animation.
+    const leftCollapsed = -72;
+    const leftExpanded = PX + (PW - 88) / 2 - 144;
+    const topCollapsed = 12;
+    const topExpanded = TRANSPORT_Y_EXP + 16;
+
+    return {
+      width: 56,
+      height: 56,
+      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
+      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
+      borderRadius: 28,
+      opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
+    };
+  });
+
+  // Morph Skip Next Button (fade in/out, align to TRANSPORT_Y_EXP + 16, width/height 56)
+  const animatedSkipNextStyle = useAnimatedStyle(() => {
+    const p = sheetProgress.value;
+    // Fully off-screen right (mirror of skip-previous above).
+    const leftCollapsed = screenWidth + 16;
+    const leftExpanded = PX + (PW - 88) / 2 + 176;
+    const topCollapsed = 12;
+    const topExpanded = TRANSPORT_Y_EXP + 16;
+
+    return {
+      width: 56,
+      height: 56,
+      left: interpolate(p, [0, 1], [leftCollapsed, leftExpanded]),
+      top: interpolate(p, [0, 1], [topCollapsed, topExpanded]),
+      borderRadius: 28,
+      opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
+    };
+  });
   const animatedForwardStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
     const leftCollapsed = screenWidth - 56;
@@ -831,13 +930,11 @@ export default function PlayerBottomSheet() {
           ]}
         >
             <ScrollView
-              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: 24 }}
+              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: 90 + insets.bottom }}
               showsVerticalScrollIndicator={false}
               scrollEnabled={false} // Disable ScrollView scroll so drag gesture runs cleanly
             >
-              {/* Top Row: Chevron, Cast, Chapters List, Book details.
-                  Pulled out to (near) full width so the nav buttons sit near the
-                  corners even when the content column is narrower on tablets. */}
+              {/* Top Row: Simplified Header containing Collapse, Title (Center), and Cast + Overflow Menu (Right) */}
               <View
                 style={{
                   flexDirection: "row",
@@ -864,7 +961,9 @@ export default function PlayerBottomSheet() {
                 >
                   <Icon name="chevron-down" size={28} color={colors.onSecondaryContainer} />
                 </Pressable>
-                <View style={{ flexDirection: "row", columnGap: 8 }}>
+
+                {/* Right options: Cast & Overflow */}
+                <View style={{ flexDirection: "row", columnGap: 8, alignItems: "center" }}>
                   <Pressable
                     onPress={() => {
                       try {
@@ -882,29 +981,16 @@ export default function PlayerBottomSheet() {
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
-                      }}
+                    }}
                   >
                     <View pointerEvents="none">
-                      <CastButton style={{ width: 30, height: 30, tintColor: colors.onSecondaryContainer }} />
+                      <CastButton style={{ width: 28, height: 28, tintColor: colors.onSecondaryContainer }} />
                     </View>
                   </Pressable>
                   <Pressable
-                    onPress={() => {
-                      setPlayerExpanded(false);
-                      const targetId =
-                        currentSession?.libraryItemId ||
-                        currentSession?.libraryItem?.id ||
-                        currentSession?.id;
-                      if (targetId) {
-                        setTimeout(() => {
-                          if (navigationRef.isReady()) {
-                            (navigationRef.navigate as any)("ItemDetail", { itemId: targetId });
-                          }
-                        }, 300);
-                      }
-                    }}
+                    onPress={() => { setShowOverflow(true); }}
                     accessibilityRole="button"
-                    accessibilityLabel="View book details"
+                    accessibilityLabel="More options"
                     style={{
                       width: 48,
                       height: 48,
@@ -912,54 +998,9 @@ export default function PlayerBottomSheet() {
                       backgroundColor: colors.secondaryContainer,
                       alignItems: "center",
                       justifyContent: "center",
-                      }}
-                  >
-                    <Icon name="book" size={22} color={colors.onSecondaryContainer} />
-                  </Pressable>
-                  {favItemId ? (
-                    <Pressable
-                      onPress={() => { haptic(); toggleFavorite(favItemId); }}
-                      accessibilityRole="button"
-                      accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"}
-                      accessibilityState={{ selected: isFav }}
-                      style={{
-                        width: 48,
-                        height: 48,
-                        borderRadius: 24,
-                        backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Icon
-                        name="heart"
-                        size={22}
-                        color={isFav ? colors.onPrimaryContainer : colors.onSecondaryContainer}
-                        style={{ opacity: isFav ? 1 : 0.45 }}
-                      />
-                    </Pressable>
-                  ) : null}
-                  <Pressable
-                    onPress={() => {
-                      // The ONLY other way to dismiss a session was swiping the
-                      // notification (paused-only, non-obvious) — a finished
-                      // book pinned the mini player over every screen forever.
-                      // closePlayback does the final sync + save cleanup.
-                      setPlayerExpanded(false);
-                      closePlayback().catch(() => {});
                     }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Stop and close player"
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 24,
-                      backgroundColor: colors.secondaryContainer,
-                      alignItems: "center",
-                      justifyContent: "center",
-                      }}
                   >
-                    <Icon name="close" size={22} color={colors.onSecondaryContainer} />
+                    <Icon name="more-vert" size={24} color={colors.onSecondaryContainer} />
                   </Pressable>
                 </View>
               </View>
@@ -982,88 +1023,103 @@ export default function PlayerBottomSheet() {
               {/* Cover Art Placeholder (absolute layout overlay handles actual artwork rendering) */}
               <View style={{ height: COVER_SIZE_EXP, marginTop: COVER_Y_EXP - SOURCE_LABEL_Y - 20 }} />
 
-              {/* Book progress bar */}
-              <View
-                style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}
-                // One grouped element: the bare "3:12" / "-6:02" texts read as
-                // context-free number pairs indistinguishable from the chapter
-                // row, and the wave itself has no accessible form.
-                accessible
-                accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
-              >
-                <View style={{ flexDirection: "row", marginBottom: 4 }}>
-                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
-                    {secondsToTimestamp(position)}
-                  </Text>
-                  <View style={{ flexGrow: 1 }} />
-                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
-                    -{secondsToTimestamp(bookRemaining)}
-                  </Text>
-                </View>
-                {/* Book progress — subtle wave while playing, clean flat line
-                    when paused; a clearly-visible full-width track. */}
-                <WavyProgress
-                  progress={bookFrac}
-                  playing={isPlaying}
-                  color={colors.primary}
-                  trackColor={withAlpha(colors.primary, 0.35)}
-                  height={12}
-                  strokeWidth={3}
-                  amplitude={2}
-                  wavelength={48}
-                  flattenWhenPaused
-                />
-              </View>
+              {/* Consolidated Progress Section: Numeric Info (top slot) & Scrubber (bottom slot) */}
+              {(showPlayerBookProgress !== false || showPlayerChapterProgress !== false) ? (
+                <View
+                  style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}
+                  accessible
+                  accessibilityLabel={[
+                    showPlayerChapterProgress !== false
+                      ? `Chapter progress: ${spokenTime(chapterElapsed)} elapsed.`
+                      : "",
+                    showPlayerBookProgress !== false
+                      ? `Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`
+                      : ""
+                  ].filter(Boolean).join(" ")}
+                >
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 4 }}>
+                    {showPlayerChapterProgress !== false ? (
+                      <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
+                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12, fontWeight: "700" }}>
+                          Ch: {secondsToTimestamp(chapterElapsed)}
+                        </Text>
+                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurfaceVariant, fontSize: 12 }}>
+                          / -{secondsToTimestamp(chapterRemaining)}
+                        </Text>
+                      </View>
+                    ) : <View />}
 
-              {/* Chapter progress bar scrubber */}
+                    {showPlayerBookProgress !== false ? (
+                      <View style={{ flexDirection: "row", alignItems: "center", columnGap: 4 }}>
+                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.primary, fontSize: 12, fontWeight: "700" }}>
+                          Book: {secondsToTimestamp(position)}
+                        </Text>
+                        <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurfaceVariant, fontSize: 12 }}>
+                          / -{secondsToTimestamp(bookRemaining)}
+                        </Text>
+                      </View>
+                    ) : <View />}
+                  </View>
+                </View>
+              ) : (
+                <View style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28 }} />
+              )}
+
+              {/* Overall Book Progress Bar */}
+              {showPlayerBookProgress !== false ? (
+                <View
+                  style={{
+                    marginTop: 8,
+                    height: 12,
+                    justifyContent: "center",
+                  }}
+                >
+                  <WavyProgress
+                    progress={bookFrac}
+                    playing={isPlaying}
+                    color={colors.primary}
+                    trackColor={withAlpha(colors.primary, 0.35)}
+                    height={12}
+                    strokeWidth={2.5}
+                    amplitude={2}
+                    wavelength={48}
+                    flattenWhenPaused
+                  />
+                </View>
+              ) : null}
+
+              {/* Interactive Chapter Scrubber */}
               <View
                 style={{
-                  marginTop: CHAPTER_PROGRESS_Y - BOOK_PROGRESS_Y - 28,
+                  marginTop: showPlayerBookProgress !== false ? 12 : (CHAPTER_PROGRESS_Y - BOOK_PROGRESS_Y - 28),
                   height: 36,
                   justifyContent: "center",
                 }}
               >
-                {/* Hidden from screen readers: the scrubber below announces
-                    the same chapter position via its accessibilityValue. */}
-                <View
-                  style={{ flexDirection: "row", marginBottom: 4 }}
-                  accessibilityElementsHidden
-                  importantForAccessibility="no-hide-descendants"
-                >
-                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
-                    {secondsToTimestamp(chapterElapsed)}
-                  </Text>
-                  <View style={{ flexGrow: 1 }} />
-                  <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 13 }}>
-                    -{secondsToTimestamp(chapterRemaining)}
-                  </Text>
-                </View>
-                <View
-                  {...chapterScrubPanResponder.panHandlers}
-                  {...scrubA11yProps}
-                  onLayout={onChapterBarLayoutFor(false)}
-                  style={{ height: 32, justifyContent: "center" }}
-                  hitSlop={{ top: 8, bottom: 8 }}
-                >
-                  {/* Wavy M3 slider: played chapter is a bold scrolling wave,
-                      remainder a flat track, with a handle pinned exactly to the
-                      wave's end (handled inside WavyProgress). Settles flat while
-                      paused, like every other player wave. */}
-                  <WavyProgress
-                    progress={chapterFrac}
-                    playing={isPlaying}
-                    color={colors.primary}
-                    trackColor={withAlpha(colors.primary, 0.22)}
-                    height={22}
-                    strokeWidth={4}
-                    amplitude={3.5}
-                    wavelength={44}
-                    showStopDot={false}
-                    showHandle
-                    handleActive={dragFrac != null}
-                    flattenWhenPaused
-                  />
-                </View>
+                {showPlayerChapterProgress !== false ? (
+                  <View
+                    {...chapterScrubPanResponder.panHandlers}
+                    {...scrubA11yProps}
+                    onLayout={onChapterBarLayoutFor(false)}
+                    style={{ height: 32, justifyContent: "center" }}
+                    hitSlop={{ top: 8, bottom: 8 }}
+                  >
+                    <WavyProgress
+                      progress={chapterFrac}
+                      playing={isPlaying}
+                      color={colors.primary}
+                      trackColor={withAlpha(colors.primary, 0.22)}
+                      height={22}
+                      strokeWidth={4}
+                      amplitude={3.5}
+                      wavelength={44}
+                      showStopDot={false}
+                      showHandle
+                      handleActive={dragFrac != null}
+                      flattenWhenPaused
+                    />
+                  </View>
+                ) : null}
               </View>
 
               {/* Title & Author Placeholder (absolute overlay handles actual rendering) */}
@@ -1079,71 +1135,58 @@ export default function PlayerBottomSheet() {
                   height: 88,
                 }}
               >
-                {/* Skip previous */}
-                <CircleButton
-                  icon="skip-previous"
-                  iconSize={24}
-                  onPress={() => { haptic(); previousChapter(); }}
-                  disabled={!hasChapters}
-                  label="Previous chapter"
-                  colors={colors}
-                />
+                {/* Skip previous placeholder */}
+                <View style={{ width: 56, height: 56 }} />
                 {/* Replay placeholder */}
                 <View style={{ width: 56, height: 56 }} />
                 {/* Play/Pause placeholder */}
                 <View style={{ width: 88, height: 88 }} />
                 {/* Forward placeholder */}
                 <View style={{ width: 56, height: 56 }} />
-                {/* Skip next */}
-                <CircleButton
-                  icon="skip-next"
-                  iconSize={24}
-                  onPress={() => { haptic(); nextChapter(); }}
-                  disabled={!hasChapters}
-                  label="Next chapter"
-                  colors={colors}
-                />
+                {/* Skip next placeholder */}
+                <View style={{ width: 56, height: 56 }} />
               </View>
 
-              {/* Secondary row: chapters · sleep-timer · speed pill · bookmark ·
-                  queue. Chapters and Queue sit at the two ends so the speed pill
-                  stays the visually-centered middle item. */}
+              {/* Consolidated bottom pill: Speed, Sleep Timer, Bookmarks. The
+                  play queue lives in the Chapters & Up Next peek sheet below
+                  (and the overflow menu's Chapters List entry). */}
               <View
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
-                  justifyContent: "center",
-                  marginTop: 24,
-                  columnGap: 28,
+                  justifyContent: "space-between",
+                  marginTop: 12,
+                  backgroundColor: colors.surfaceContainerHigh,
+                  borderRadius: 32,
+                  paddingVertical: 10,
+                  paddingHorizontal: 16,
+                  columnGap: 8,
                 }}
               >
+                {/* Speed indicator & button */}
                 <Pressable
-                  onPress={() => setShowChapters(true)}
-                  disabled={!hasChapters}
+                  onPress={() => { setShowSpeed(true); }}
                   accessibilityRole="button"
-                  accessibilityLabel="Chapters"
-                  accessibilityState={{ disabled: !hasChapters }}
+                  accessibilityLabel={`Playback speed, ${speedLabel}`}
                   style={{
-                    width: 56,
-                    height: 56,
-                    borderRadius: 28,
-                    backgroundColor: colors.secondaryContainer,
+                    flex: 1,
+                    flexDirection: "row",
                     alignItems: "center",
                     justifyContent: "center",
+                    paddingVertical: 10,
+                    borderRadius: 20,
+                    backgroundColor: colors.secondaryContainer,
                   }}
                 >
-                  <Icon
-                    name="list"
-                    size={22}
-                    color={
-                      hasChapters
-                        ? colors.onSecondaryContainer
-                        : withAlpha(colors.onSecondaryContainer, 0.4)
-                    }
-                  />
+                  <Icon name="speed" size={16} color={colors.onSecondaryContainer} style={{ marginRight: 4 }} />
+                  <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 13, fontWeight: "600", color: colors.onSecondaryContainer }}>
+                    {speedLabel}
+                  </Text>
                 </Pressable>
+
+                {/* Sleep Timer */}
                 <Pressable
-                  onPress={() => { haptic(); setShowSleepTimer(true); }}
+                  onPress={() => { setShowSleepTimer(true); }}
                   accessibilityRole="button"
                   accessibilityLabel={
                     sleepTimer
@@ -1151,93 +1194,47 @@ export default function PlayerBottomSheet() {
                       : "Sleep timer"
                   }
                   style={{
-                    minWidth: 56,
-                    paddingHorizontal: sleepTimer ? 16 : 0,
-                    height: 56,
-                    borderRadius: 28,
-                    backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer,
+                    flex: 1,
                     flexDirection: "row",
                     alignItems: "center",
                     justifyContent: "center",
+                    paddingVertical: 10,
+                    borderRadius: 20,
+                    backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer,
                   }}
                 >
                   <Icon
                     name="moon"
-                    size={22}
+                    size={16}
                     color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer}
+                    style={{ marginRight: 4 }}
                   />
-                  {sleepTimer ? (
-                    <Text maxFontSizeMultiplier={1.3}
-                      style={{
-                        color: colors.onPrimaryContainer,
-                        fontSize: 14,
-                        fontWeight: "600",
-                        fontFamily: "monospace",
-                        marginLeft: 8,
-                      }}
-                    >
-                      {secondsToTimestamp(sleepTimer.remaining)}
-                    </Text>
-                  ) : null}
-                </Pressable>
-                <Pressable
-                  onPress={() => { haptic(); setShowSpeed(true); }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Playback speed, ${speedLabel}`}
-                  style={{
-                    paddingHorizontal: 24,
-                    height: 56,
-                    borderRadius: 28,
-                    backgroundColor: colors.secondaryContainer,
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 18, fontWeight: "500", color: colors.onSecondaryContainer }}>
-                    {speedLabel}
+                  <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ fontSize: 13, fontWeight: "600", color: sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer }}>
+                    {sleepTimer ? secondsToTimestamp(sleepTimer.remaining) : "Sleep"}
                   </Text>
                 </Pressable>
+
+                {/* Bookmarks */}
                 <Pressable
-                  onPress={() => { haptic(); setShowBookmarks(true); }}
+                  onPress={() => { setShowBookmarks(true); }}
                   accessibilityRole="button"
                   accessibilityLabel="Bookmarks"
                   style={{
-                    width: 56,
-                    height: 56,
-                    borderRadius: 28,
-                    backgroundColor: colors.secondaryContainer,
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Icon name="bookmark" size={22} color={colors.onSecondaryContainer} />
-                </Pressable>
-                <Pressable
-                  onPress={() => { haptic(); setShowQueue(true); }}
-                  accessibilityRole="button"
-                  accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"}
-                  style={{
-                    minWidth: 56,
-                    paddingHorizontal: queue.length ? 16 : 0,
-                    height: 56,
-                    borderRadius: 28,
-                    backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer,
+                    flex: 1,
                     flexDirection: "row",
                     alignItems: "center",
                     justifyContent: "center",
+                    paddingVertical: 10,
+                    borderRadius: 20,
+                    backgroundColor: colors.secondaryContainer,
                   }}
                 >
-                  <Icon
-                    name="playlist-add"
-                    size={22}
-                    color={queue.length ? colors.onPrimaryContainer : colors.onSecondaryContainer}
-                  />
-                  {queue.length ? (
-                    <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 14, fontWeight: "600", marginLeft: 8 }}>
-                      {queue.length}
-                    </Text>
-                  ) : null}
+                  <Icon name="bookmark" size={16} color={colors.onSecondaryContainer} style={{ marginRight: 4 }} />
+                  <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 13, fontWeight: "600", color: colors.onSecondaryContainer }}>
+                    Bookmark
+                  </Text>
                 </Pressable>
+
               </View>
             </ScrollView>
         </Animated.View>
@@ -1394,6 +1391,34 @@ export default function PlayerBottomSheet() {
           ) : null}
         </Animated.View>
 
+        {/* Skip Previous Button */}
+        <Animated.View
+          pointerEvents={isPlayerExpanded ? "auto" : "none"}
+          style={[
+            {
+              position: "absolute",
+              backgroundColor: colors.secondaryContainer,
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 10,
+            },
+            animatedSkipPreviousStyle,
+          ]}
+        >
+          <Pressable
+            onPress={() => { previousChapter().catch(() => {}); }}
+            disabled={!hasChapters}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Previous chapter"
+            style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", opacity: hasChapters ? 1 : 0.4 }}
+          >
+            <Animated.View style={animatedSmallIconStyle}>
+              <Icon name="skip-previous" size={24} color={colors.onSecondaryContainer} />
+            </Animated.View>
+          </Pressable>
+        </Animated.View>
+
         {/* 3. Replay-30 Button */}
         <Animated.View
           style={[
@@ -1408,7 +1433,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); seekBackward(jumpBackSecs); }}
+            onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={`Back ${jumpBackSecs} seconds`}
@@ -1434,7 +1459,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); playPause(); }}
+            onPress={() => { playPause().catch(() => {}); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={isPlaying ? "Pause" : "Play"}
@@ -1469,7 +1494,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { haptic(); seekForward(jumpFwdSecs); }}
+            onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={`Forward ${jumpFwdSecs} seconds`}
@@ -1477,6 +1502,34 @@ export default function PlayerBottomSheet() {
           >
             <Animated.View style={animatedSmallIconStyle}>
               <Icon name={jumpIconName("fwd", jumpFwdSecs)} size={24} color={colors.onSecondaryContainer} />
+            </Animated.View>
+          </Pressable>
+        </Animated.View>
+
+        {/* Skip Next Button */}
+        <Animated.View
+          pointerEvents={isPlayerExpanded ? "auto" : "none"}
+          style={[
+            {
+              position: "absolute",
+              backgroundColor: colors.secondaryContainer,
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 10,
+            },
+            animatedSkipNextStyle,
+          ]}
+        >
+          <Pressable
+            onPress={() => { nextChapter().catch(() => {}); }}
+            disabled={!hasChapters}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Next chapter"
+            style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", opacity: hasChapters ? 1 : 0.4 }}
+          >
+            <Animated.View style={animatedSmallIconStyle}>
+              <Icon name="skip-next" size={24} color={colors.onSecondaryContainer} />
             </Animated.View>
           </Pressable>
         </Animated.View>
@@ -1538,13 +1591,13 @@ export default function PlayerBottomSheet() {
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{subtitleText}</Text>
               </View>
             </Pressable>
-            <Pressable onPress={() => { haptic(); seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+            <Pressable onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
               <Icon name={jumpIconName("back", jumpBackSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
-            <Pressable onPress={() => { haptic(); playPause(); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
+            <Pressable onPress={() => { playPause().catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
               <Icon name={isPlaying ? "pause" : "play"} size={30} color={colors.onPrimary} />
             </Pressable>
-            <Pressable onPress={() => { haptic(); seekForward(jumpFwdSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+            <Pressable onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
               <Icon name={jumpIconName("fwd", jumpFwdSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
             {/* Pinned progress wave — parity with the portrait miniplayer. Inset
@@ -1600,7 +1653,7 @@ export default function PlayerBottomSheet() {
                     Stop is the only in-player dismissal, so a finished book
                     couldn't be closed at all without it when rotated. */}
                 {favItemId ? (
-                  <Pressable onPress={() => { haptic(); toggleFavorite(favItemId); }} accessibilityRole="button" accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"} accessibilityState={{ selected: isFav }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { toggleFavorite(favItemId); }} accessibilityRole="button" accessibilityLabel={isFav ? "Remove from Want to Read" : "Add to Want to Read"} accessibilityState={{ selected: isFav }} style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: isFav ? colors.primaryContainer : colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="heart" size={22} color={isFav ? colors.onPrimaryContainer : colors.onSecondaryContainer} style={{ opacity: isFav ? 1 : 0.45 }} />
                   </Pressable>
                 ) : null}
@@ -1634,63 +1687,67 @@ export default function PlayerBottomSheet() {
                   <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onSurfaceVariant, fontSize: 12, textAlign: "center", marginTop: 4 }}>Chapter {Math.min(Math.max(currentChapterIndex + 1, 1), chapters.length)} of {chapters.length}</Text>
                 ) : null}
 
-                <View
-                  style={{ marginTop: 14 }}
-                  // Grouped like the portrait book row — see the comment there.
-                  accessible
-                  accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
-                >
-                  <View style={{ flexDirection: "row", marginBottom: 2 }}>
-                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(position)}</Text>
-                    <View style={{ flexGrow: 1 }} />
-                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(bookRemaining)}</Text>
-                  </View>
-                  <WavyProgress progress={bookFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.35)} height={12} strokeWidth={3} amplitude={2} wavelength={48} flattenWhenPaused />
-                </View>
-
-                <View style={{ marginTop: 8 }}>
-                  {/* Hidden: redundant with the scrubber's accessibilityValue. */}
+                {showPlayerBookProgress !== false ? (
                   <View
-                    style={{ flexDirection: "row", marginBottom: 2 }}
-                    accessibilityElementsHidden
-                    importantForAccessibility="no-hide-descendants"
+                    style={{ marginTop: 14 }}
+                    // Grouped like the portrait book row — see the comment there.
+                    accessible
+                    accessibilityLabel={`Book progress: ${spokenTime(position)} elapsed, ${spokenTime(bookRemaining)} remaining`}
                   >
-                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(chapterElapsed)}</Text>
-                    <View style={{ flexGrow: 1 }} />
-                    <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>
+                    <View style={{ flexDirection: "row", marginBottom: 2 }}>
+                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(position)}</Text>
+                      <View style={{ flexGrow: 1 }} />
+                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(bookRemaining)}</Text>
+                    </View>
+                    <WavyProgress progress={bookFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.35)} height={12} strokeWidth={3} amplitude={2} wavelength={48} flattenWhenPaused />
                   </View>
-                  <View {...chapterScrubPanResponder.panHandlers} {...scrubA11yProps} onLayout={onChapterBarLayoutFor(true)} style={{ height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
-                    <WavyProgress progress={chapterFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.22)} height={22} strokeWidth={4} amplitude={3.5} wavelength={44} showStopDot={false} showHandle handleActive={dragFrac != null} flattenWhenPaused />
+                ) : null}
+
+                {showPlayerChapterProgress !== false ? (
+                  <View style={{ marginTop: 8 }}>
+                    {/* Hidden: redundant with the scrubber's accessibilityValue. */}
+                    <View
+                      style={{ flexDirection: "row", marginBottom: 2 }}
+                      accessibilityElementsHidden
+                      importantForAccessibility="no-hide-descendants"
+                    >
+                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>{secondsToTimestamp(chapterElapsed)}</Text>
+                      <View style={{ flexGrow: 1 }} />
+                      <Text maxFontSizeMultiplier={1.3} style={{ fontFamily: "monospace", color: colors.onSurface, fontSize: 12 }}>-{secondsToTimestamp(chapterRemaining)}</Text>
+                    </View>
+                    <View {...chapterScrubPanResponder.panHandlers} {...scrubA11yProps} onLayout={onChapterBarLayoutFor(true)} style={{ height: 32, justifyContent: "center" }} hitSlop={{ top: 8, bottom: 8 }}>
+                      <WavyProgress progress={chapterFrac} playing={isPlaying} color={colors.primary} trackColor={withAlpha(colors.primary, 0.22)} height={22} strokeWidth={4} amplitude={3.5} wavelength={44} showStopDot={false} showHandle handleActive={dragFrac != null} flattenWhenPaused />
+                    </View>
                   </View>
-                </View>
+                ) : null}
 
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 12 }}>
-                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { haptic(); previousChapter(); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
-                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { haptic(); seekBackward(jumpBackSecs); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
-                  <Pressable onPress={() => { haptic(); playPause(); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { previousChapter().catch(() => {}); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
+                  <Pressable onPress={() => { playPause().catch(() => {}); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
                     <Icon name={isPlaying ? "pause" : "play"} size={36} color={colors.onPrimary} />
                   </Pressable>
-                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { haptic(); seekForward(jumpFwdSecs); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
-                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { haptic(); nextChapter(); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
+                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { nextChapter().catch(() => {}); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
                 </View>
 
                 {/* Chapters and Queue bracket the ends so the speed pill stays
                     the centered middle item (parity with portrait). */}
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 24, marginTop: 12 }}>
-                  <Pressable onPress={() => setShowChapters(true)} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowChaptersQueue(true); setChaptersQueueTab("chapters"); }} disabled={!hasChapters} accessibilityRole="button" accessibilityLabel="Chapters" accessibilityState={{ disabled: !hasChapters }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="list" size={20} color={hasChapters ? colors.onSecondaryContainer : withAlpha(colors.onSecondaryContainer, 0.4)} />
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowSleepTimer(true); }} accessibilityRole="button" accessibilityLabel={sleepTimer ? `Sleep timer, ${secondsToTimestamp(sleepTimer.remaining)} remaining` : "Sleep timer"} style={{ minWidth: 48, paddingHorizontal: sleepTimer ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: sleepTimer ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                     <Icon name="moon" size={20} color={sleepTimer ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
                     {sleepTimer ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", fontFamily: "monospace", marginLeft: 6 }}>{secondsToTimestamp(sleepTimer.remaining)}</Text> : null}
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowSpeed(true); }} accessibilityRole="button" accessibilityLabel={`Playback speed, ${speedLabel}`} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowSpeed(true); }} accessibilityRole="button" accessibilityLabel={`Playback speed, ${speedLabel}`} style={{ paddingHorizontal: 20, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Text maxFontSizeMultiplier={1.3} style={{ fontSize: 16, fontWeight: "500", color: colors.onSecondaryContainer }}>{speedLabel}</Text>
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowBookmarks(true); }} accessibilityRole="button" accessibilityLabel="Bookmarks" style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
                     <Icon name="bookmark" size={20} color={colors.onSecondaryContainer} />
                   </Pressable>
-                  <Pressable onPress={() => { haptic(); setShowQueue(true); }} accessibilityRole="button" accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"} style={{ minWidth: 48, paddingHorizontal: queue.length ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                  <Pressable onPress={() => { setShowChaptersQueue(true); setChaptersQueueTab("queue"); }} accessibilityRole="button" accessibilityLabel={queue.length ? `Play queue, ${queue.length} up next` : "Play queue"} style={{ minWidth: 48, paddingHorizontal: queue.length ? 12 : 0, height: 48, borderRadius: 24, backgroundColor: queue.length ? colors.primaryContainer : colors.secondaryContainer, flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
                     <Icon name="playlist-add" size={20} color={queue.length ? colors.onPrimaryContainer : colors.onSecondaryContainer} />
                     {queue.length ? <Text maxFontSizeMultiplier={1.3} style={{ color: colors.onPrimaryContainer, fontSize: 13, fontWeight: "600", marginLeft: 6 }}>{queue.length}</Text> : null}
                   </Pressable>
@@ -1703,12 +1760,20 @@ export default function PlayerBottomSheet() {
 
       {/* --- MODAL DIALOGS (MOUNTED ROOT LEVEL) --- */}
 
-      <ChaptersModal
-        visible={showChapters}
-        onClose={() => setShowChapters(false)}
+      <PlayerChaptersQueueSheet
+        mainPlayerProgress={sheetProgress}
         chapters={chapters}
         currentChapterIndex={currentChapterIndex}
         onSeekToChapter={seekToChapter}
+        queue={queue}
+        removeFromQueue={removeFromQueue}
+        clearQueue={clearQueue}
+        playNextInQueue={playNextInQueue}
+        expanded={showChaptersQueue}
+        onToggleExpand={setShowChaptersQueue}
+        activeTab={chaptersQueueTab}
+        onTabChange={setChaptersQueueTab}
+        isLandscape={isLandscape}
       />
 
       <PlaybackSpeedModal
@@ -1750,69 +1815,35 @@ export default function PlayerBottomSheet() {
         onSeek={seek}
       />
 
-      {/* Cross-book play queue */}
-      <BottomSheet visible={showQueue} onClose={() => setShowQueue(false)}>
-        <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 8, paddingBottom: 12 }}>
-          <Icon name="playlist-add" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-          <Text accessibilityRole="header" style={{ flex: 1, fontSize: 22, fontWeight: "500", color: colors.onSurface }}>Up Next</Text>
-          {queue.length ? (
-            <Pressable
-              onPress={() => clearQueue()}
-              accessibilityRole="button"
-              accessibilityLabel="Clear queue"
-              hitSlop={8}
-              style={{ paddingHorizontal: 8, paddingVertical: 4 }}
-            >
-              <Text style={{ color: colors.primary, fontSize: 15, fontWeight: "600" }}>Clear</Text>
-            </Pressable>
-          ) : null}
-        </View>
-        {queue.length === 0 ? (
-          <View style={{ paddingHorizontal: 24, paddingVertical: 24 }}>
-            <Text style={{ color: colors.onSurfaceVariant, fontSize: 15, textAlign: "center" }}>
-              No books queued. When this book finishes, playback stops unless a queued book or a next-in-series book is available.
-            </Text>
-          </View>
-        ) : (
-          <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ paddingBottom: 16 }}>
-            {queue.map((item, idx) => (
-              <View
-                key={`${item.libraryItemId}:${item.episodeId || ""}`}
-                style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10 }}
-              >
-                <View style={{ flex: 1, marginRight: 12 }}>
-                  <Text numberOfLines={1} style={{ color: colors.onSurface, fontSize: 16 }}>
-                    {item.title || item.libraryItemId}
-                  </Text>
-                  {item.author ? (
-                    <Text numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 1 }}>
-                      {item.author}
-                    </Text>
-                  ) : null}
-                </View>
-                {idx === 0 ? (
-                  <Pressable
-                    onPress={() => { haptic(); setShowQueue(false); playNextInQueue().catch(() => {}); }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Play ${item.title || "next book"} now`}
-                    style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center", marginRight: 4 }}
-                  >
-                    <Icon name="play" size={20} color={colors.onSecondaryContainer} />
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={() => { haptic(); removeFromQueue(item.libraryItemId); }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove ${item.title || "book"} from queue`}
-                  style={{ width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" }}
-                >
-                  <Icon name="close" size={20} color={colors.onSurfaceVariant} />
-                </Pressable>
-              </View>
-            ))}
-          </ScrollView>
-        )}
-      </BottomSheet>
+      <PlayerOverflowModal
+        visible={showOverflow}
+        onClose={() => setShowOverflow(false)}
+        hasChapters={hasChapters}
+        isBookSession={!currentSession?.episodeId}
+        favItemId={favItemId}
+        isFav={isFav}
+        onToggleFav={() => { toggleFavorite(favItemId!); }}
+        onShowChapters={() => { setShowChaptersQueue(true); setChaptersQueueTab("chapters"); }}
+        onGoToDetails={() => {
+          setPlayerExpanded(false);
+          const targetId =
+            currentSession?.libraryItemId ||
+            currentSession?.libraryItem?.id ||
+            currentSession?.id;
+          if (targetId) {
+            setTimeout(() => {
+              if (navigationRef.isReady()) {
+                (navigationRef.navigate as any)("ItemDetail", { itemId: targetId });
+              }
+            }, 300);
+          }
+        }}
+        onReadFromHere={readFromHere}
+        onStopClose={() => {
+          setPlayerExpanded(false);
+          closePlayback().catch(() => {});
+        }}
+      />
 
       <Confetti visible={showConfetti} onDone={() => setShowConfetti(false)} />
     </View>

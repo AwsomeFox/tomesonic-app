@@ -209,10 +209,20 @@ jobs:
           # single command (the script owns PATH/cd and the flow order).
           script: bash native/.maestro/ci-flows.sh
 
+      - name: capture device logcat on failure
+        if: failure()
+        run: |
+          adb -s emulator-5554 logcat -d > $HOME/full-logcat.txt || true
+          grep -iE "CONSOLE|ReactNativeJS|AndroidRuntime|FATAL" $HOME/full-logcat.txt > $HOME/logcat-console.txt || true
+          wc -l $HOME/full-logcat.txt $HOME/logcat-console.txt || true
+
       - name: upload maestro artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: maestro-debug
-          path: ~/.maestro/tests/
+          path: |
+            ~/.maestro/tests/
+            ~/full-logcat.txt
+            ~/logcat-console.txt
           if-no-files-found: ignore
