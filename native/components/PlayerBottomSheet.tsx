@@ -429,7 +429,16 @@ export default function PlayerBottomSheet() {
   // the visible viewport and re-enable scrolling ONLY when it can't fit, so
   // nothing is ever cut off; the top drag region still collapses the sheet.
   const contentBottomY = TRANSPORT_Y_EXP + TRANSPORT_H + TRANSPORT_TO_PILL + PILL_H;
-  const contentOverflows = contentBottomY + 8 > screenHeight - insets.bottom;
+  // Estimate from the constant cascade. It can UNDER-detect overflow when OS
+  // font/display scaling makes the pill or labels taller than their design
+  // heights (PILL_H etc. are dp constants, not measured), so it is combined
+  // with a REAL measurement of the ScrollView below — if the rendered content
+  // is taller than the viewport, scrolling turns on regardless of the estimate.
+  const contentOverflowsEstimate = contentBottomY + 8 > screenHeight - insets.bottom;
+  const [svViewportH, setSvViewportH] = useState(0);
+  const [svContentH, setSvContentH] = useState(0);
+  const measuredOverflow = svViewportH > 0 && svContentH > svViewportH + 1;
+  const contentOverflows = contentOverflowsEstimate || measuredOverflow;
 
   // Layout values the sheet PanResponder needs. The responder is created ONCE
   // (useRef), so reading `screenHeight`/`COVER_Y_EXP` directly in its callbacks
@@ -966,7 +975,9 @@ export default function PlayerBottomSheet() {
             <ScrollView
               contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: 58 + insets.bottom }}
               showsVerticalScrollIndicator={false}
-              scrollEnabled={contentOverflows} // Off so the drag gesture runs cleanly; on only when the block overflows a short viewport so the bottom pill stays reachable
+              scrollEnabled={contentOverflows} // Off so the drag gesture runs cleanly; on when the block overflows the viewport (estimated OR measured) so the bottom pill stays reachable
+              onLayout={(e) => setSvViewportH(e.nativeEvent.layout.height)}
+              onContentSizeChange={(_w, h) => setSvContentH(h)}
             >
               {/* Top Row: Simplified Header containing Collapse, Title (Center), and Cast + Overflow Menu (Right) */}
               <View

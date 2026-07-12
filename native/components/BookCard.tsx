@@ -14,6 +14,34 @@ import { hasAudio, hasEbook } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+// Per-podcast "latest unfinished episode fraction" index, built ONCE per
+// mediaProgress map reference (each playback tick replaces the map, so the
+// WeakMap entry naturally expires with it). Without this, every mounted
+// podcast card's selector scanned the WHOLE map on every store update —
+// O(cards × progressEntries) per tick; with it, the first selector run per
+// tick pays one O(entries) pass and every card does an O(1) lookup.
+const podcastFracIndexCache = new WeakMap<object, Record<string, number>>();
+export function latestPodcastFraction(map: Record<string, any>, itemId: string): number {
+  if (!map || !itemId) return 0;
+  let idx = podcastFracIndexCache.get(map);
+  if (!idx) {
+    idx = {};
+    const latestAt: Record<string, number> = {};
+    for (const p of Object.values(map) as any[]) {
+      if (!p || !p.libraryItemId || p.isFinished) continue;
+      const f = Number(p.progress || 0);
+      if (f <= 0) continue;
+      const at = Number(p.lastUpdate || p.updatedAt || 0);
+      if (at >= (latestAt[p.libraryItemId] ?? -1)) {
+        latestAt[p.libraryItemId] = at;
+        idx[p.libraryItemId] = Math.min(1, f);
+      }
+    }
+    podcastFracIndexCache.set(map, idx);
+  }
+  return idx[itemId] || 0;
+}
+
 /**
  * Shared book/podcast cover card, replicating the legacy LazyBookCard:
  * square cover, top-left progress chip (schedule / check_circle + label),
@@ -39,23 +67,12 @@ function BookCard({ item, size = 165, navigation, badgeCount, onPress }: BookCar
   // Podcasts store progress per-EPISODE under composite `${itemId}-${episodeId}`
   // keys, so the plain-id lookup misses them — derive the latest unfinished
   // episode's fraction with a PRIMITIVE selector so a podcast card still only
-  // re-renders when that number actually changes.
-  const podcastEpisodeFraction = useUserStore((s) => {
-    if (!isPodcast || !item?.id) return 0;
-    let latestAt = -1;
-    let frac = 0;
-    Object.values(s.mediaProgress).forEach((p: any) => {
-      if (!p || p.libraryItemId !== item.id || p.isFinished) return;
-      const f = Number(p.progress || 0);
-      if (f <= 0) return;
-      const at = Number(p.lastUpdate || p.updatedAt || 0);
-      if (at >= latestAt) {
-        latestAt = at;
-        frac = Math.min(1, f);
-      }
-    });
-    return frac;
-  });
+  // re-renders when that number actually changes. The scan is amortized via a
+  // per-map-reference index (see latestPodcastFraction) so N mounted podcast
+  // cards cost one shared O(entries) pass per tick, not N scans.
+  const podcastEpisodeFraction = useUserStore((s) =>
+    isPodcast && item?.id ? latestPodcastFraction(s.mediaProgress, item.id) : 0
+  );
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const activeDownloads = useDownloadStore((s) => s.activeDownloads);
 

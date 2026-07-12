@@ -118,3 +118,40 @@ describe("BookCard memoization (H1)", () => {
     expect(countFor("B")).toBe(bBefore);
   });
 });
+
+describe("latestPodcastFraction index cache", () => {
+  const { latestPodcastFraction } = require("../../components/BookCard");
+
+  it("builds the per-podcast index ONCE per map reference and reads O(1) after", () => {
+    const map: Record<string, any> = {
+      "pod1-ep1": { libraryItemId: "pod1", episodeId: "ep1", progress: 0.3, lastUpdate: 100 },
+      "pod1-ep2": { libraryItemId: "pod1", episodeId: "ep2", progress: 0.7, lastUpdate: 200 },
+      "pod2-ep1": { libraryItemId: "pod2", episodeId: "ep1", progress: 0.4, lastUpdate: 150 },
+      book1: { libraryItemId: "book1", progress: 0.9, lastUpdate: 300 },
+    };
+    // Latest unfinished episode wins per podcast; multiple podcasts resolve
+    // from the SAME single-pass index.
+    expect(latestPodcastFraction(map, "pod1")).toBe(0.7);
+    expect(latestPodcastFraction(map, "pod2")).toBe(0.4);
+
+    // Same map REFERENCE → cached index: an in-place mutation is intentionally
+    // NOT observed (proves no re-scan). The store always replaces the map on
+    // write, so staleness can't occur in production — this pins the cache.
+    map["pod1-ep3"] = { libraryItemId: "pod1", episodeId: "ep3", progress: 0.9, lastUpdate: 400 };
+    expect(latestPodcastFraction(map, "pod1")).toBe(0.7);
+
+    // New reference (how zustand writes land) → recomputed index sees ep3.
+    expect(latestPodcastFraction({ ...map }, "pod1")).toBe(0.9);
+  });
+
+  it("skips finished and zero-progress entries and tolerates junk", () => {
+    const map: Record<string, any> = {
+      "pod1-ep1": { libraryItemId: "pod1", episodeId: "ep1", progress: 0.8, lastUpdate: 500, isFinished: true },
+      "pod1-ep2": { libraryItemId: "pod1", episodeId: "ep2", progress: 0, lastUpdate: 600 },
+      junk: null,
+    };
+    expect(latestPodcastFraction(map, "pod1")).toBe(0);
+    expect(latestPodcastFraction({}, "pod1")).toBe(0);
+    expect(latestPodcastFraction(map, "")).toBe(0);
+  });
+});
