@@ -55,6 +55,12 @@ interface UserState {
   serverConnectionConfig: any | null;
   settings: UserSettings;
   isInitialized: boolean;
+  // The server's settings blob (toJSONForBrowser) — hydrated by
+  // utils/abs/capabilities.refreshCapabilities() (POST /api/authorize) and
+  // kept fresh by utils/abs/server.updateServerSettings() (PATCH /api/settings
+  // echoes the full blob back). Carries `version`, which the capability
+  // gates read. Null until an admin flow first refreshes it.
+  serverSettings: any | null;
   // Server-configured e-reader devices (from /api/authorize) — powers the
   // "Send to device" (Kindle etc.) action on ebook items.
   ereaderDevices: any[];
@@ -121,6 +127,7 @@ export const useUserStore = create<UserState>((set, get) => ({
   serverConnectionConfig: null,
   settings: DEFAULT_SETTINGS,
   isInitialized: false,
+  serverSettings: null,
   ereaderDevices: [],
   mediaProgress: {},
 
@@ -466,6 +473,10 @@ export const useUserStore = create<UserState>((set, get) => ({
     set({
       serverConnectionConfig: config,
       user: user,
+      // A fresh login may target a DIFFERENT server — its settings blob (and
+      // the capability gates derived from it) must not carry over. Admin
+      // flows re-hydrate via refreshCapabilities().
+      serverSettings: null,
       // Seed progress from the login payload; refreshed later via loadMediaProgress.
       mediaProgress: indexMediaProgress(user?.mediaProgress || []),
     });
@@ -612,6 +623,7 @@ export const useUserStore = create<UserState>((set, get) => ({
       user: null,
       serverConnectionConfig: null,
       mediaProgress: {},
+      serverSettings: null,
       ereaderDevices: [],
       settings: DEFAULT_SETTINGS,
     });
