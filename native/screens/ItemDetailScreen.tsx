@@ -30,7 +30,6 @@ import BottomSheet from "../components/BottomSheet";
 import ResultBurst from "../components/ResultBurst";
 import { useRmabStore } from "../store/useRmabStore";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
-import { canJumpToFraction } from "../utils/formatSwitch";
 import { formatBytes } from "../utils/format";
 import Pressable from "../components/HintPressable";
 
@@ -817,21 +816,21 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     if (!ebookSource) return;
     storage.set(`last_interaction_${itemId}`, "read");
     setLastInteractionState("read");
-    // Linked books keep both formats at the furthest spot. Percent-mapped
-    // fraction jumps only work in the foliate reader (not pdf/cbz), so gate on
-    // the format. When listening has run AHEAD of reading, seek the reader
-    // forward to that spot (max only — never backward, and never for a book the
-    // reader is already ahead in). Mirrors PlayerBottomSheet's Read-from-here.
-    let initialFraction: number | undefined;
-    if (isLinked && canJumpToFraction(ebookSource.format)) {
-      const furthest = Math.max(audioProgressFraction, ebookProgressFraction);
-      if (furthest > ebookProgressFraction + 0.001) initialFraction = furthest;
-    }
+    // Linked catch-up (listening ahead of reading → seek the reader forward) is
+    // now handled BY THE READER on its 'ready' message, keyed off its TRUE
+    // rendered page position. We deliberately do NOT pass an initialFraction
+    // here: the ItemDetail focus-effect / audio-close reconcile bumps this
+    // item's ebookProgress PERCENTAGE up to the audio fraction WITHOUT moving
+    // the CFI, so a percentage-based gate here was self-defeating (by tap time
+    // ebook% == audio%, the gate was false, and the reader opened at the stale
+    // CFI). Letting the reader be the single source of truth also fixes every
+    // OTHER entry point (Bookshelf/Library/Series/Playlist) at once. The
+    // explicit "Read from here" jump still flows through PlayerBottomSheet's
+    // own initialFraction, which the reader applies unconditionally.
     navigation.navigate("Reader", {
       itemId: ebookSource.id,
       ebookFormat: ebookSource.format,
       title: metadata.title,
-      initialFraction,
     });
   };
 

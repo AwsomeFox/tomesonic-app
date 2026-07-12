@@ -1784,6 +1784,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // some head units. Native maps "speech" → C.AUDIO_CONTENT_TYPE_SPEECH;
         // without it the else-branch defaulted to MUSIC.
         androidAudioContentType: "speech",
+        // "Skip silence" honored at construction time too: the native setup path
+        // reads androidSkipSilence from THIS top-level bundle (playerOptions), so
+        // omitting it here pinned the ExoPlayer to skipSilence=false at creation
+        // and the first updateOptions was the only thing that could turn it on.
+        // Seed it from the persisted setting so the initial state is correct;
+        // live toggles still flow through updateOptions(buildPlayerOptions()).
+        androidSkipSilence: !!useUserStore.getState().settings.skipSilence,
       } as any);
       await TrackPlayer.updateOptions(buildPlayerOptions());
 

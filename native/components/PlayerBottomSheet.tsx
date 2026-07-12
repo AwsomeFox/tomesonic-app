@@ -385,17 +385,51 @@ export default function PlayerBottomSheet() {
   const PX = (screenWidth - PW) / 2; // column left inset
   const COVER_SIZE_EXP = Math.min(PW - 80, Math.round(screenHeight * 0.42), isTablet ? 420 : 320);
   const TOP_BAR_Y = insets.top + 8;
-  // Height of the cover→secondary-row block (matches the offsets cascaded below),
-  // used to vertically center it in the available space on large screens.
-  const CONTENT_BLOCK_H = COVER_SIZE_EXP + 12 + 28 + 8 + 36 + 10 + 64 + 12 + 88 + 12 + 56;
+  // In-flow vertical rhythm below the cover, expressed as the exact box each
+  // section occupies (marginTop + height). The absolute-overlay Y cascade
+  // (SOURCE_LABEL_Y…TRANSPORT_Y_EXP) AND the tablet-centering block height are
+  // BOTH derived from these deltas, so the two coordinate systems can't drift.
+  // When the book-progress bar is hidden, its whole box (marginTop 8 + height
+  // 12) drops out and the numeric row sits directly above the chapter scrubber.
+  const showBook = showPlayerBookProgress !== false;
+  const COVER_TO_NUMERIC = 12;          // cover bottom → numeric info row
+  const NUMERIC_H = 28;                 // numeric info row (chapter/book times)
+  const BOOK_BAR_BOX = showBook ? 8 + 12 : 0; // book WavyProgress marginTop + height
+  const NUMERIC_TO_SCRUBBER = showBook ? 12 : 8; // gap before the chapter scrubber
+  const SCRUBBER_H = 36;                // chapter scrubber row
+  const SCRUBBER_TO_TITLE = 20;         // comfortable bars → title gap (both modes)
+  const TITLE_H = 64;                   // title + author (+ chapter caption) block
+  const TITLE_TO_TRANSPORT = 12;        // title → transport gap
+  const TRANSPORT_H = 88;               // transport control row
+  const TRANSPORT_TO_PILL = 12;         // transport → bottom pill gap
+  const PILL_H = 56;                    // bottom pill (speed / sleep / bookmark)
+  // Height of the cover→pill block, used to vertically center it on tablets.
+  // Derived from the same deltas as the cascade so it stays book-bar-aware.
+  const CONTENT_BLOCK_H =
+    COVER_SIZE_EXP + COVER_TO_NUMERIC + NUMERIC_H + BOOK_BAR_BOX + NUMERIC_TO_SCRUBBER +
+    SCRUBBER_H + SCRUBBER_TO_TITLE + TITLE_H + TITLE_TO_TRANSPORT + TRANSPORT_H +
+    TRANSPORT_TO_PILL + PILL_H;
   const availH = screenHeight - (TOP_BAR_Y + 56) - insets.bottom - 20;
   const extraTop = isTablet ? Math.max(0, (availH - CONTENT_BLOCK_H) / 2) : 0;
   const SOURCE_LABEL_Y = TOP_BAR_Y + 56 + 12 + extraTop;
   const COVER_Y_EXP = SOURCE_LABEL_Y + 20 + 8;
-  const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + 12;
-  const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + 28 + 8;
-  const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + 36 + 24;
-  const TRANSPORT_Y_EXP = TITLE_Y_EXP + 64 + 12;
+  const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + COVER_TO_NUMERIC;
+  // Scrubber top. When the book bar is shown its box sits between the numeric
+  // row and the scrubber; when hidden only the 8px gap remains. (The scrubber's
+  // own marginTop ternary below reconciles both cases against this value.)
+  const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + NUMERIC_H + BOOK_BAR_BOX + NUMERIC_TO_SCRUBBER;
+  const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + SCRUBBER_H + SCRUBBER_TO_TITLE;
+  const TRANSPORT_Y_EXP = TITLE_Y_EXP + TITLE_H + TITLE_TO_TRANSPORT;
+
+  // The full-player content uses a fixed absolute cascade inside a ScrollView
+  // whose scrolling is normally OFF (so the drag-to-collapse gesture runs
+  // cleanly). On short viewports — small phones, large system font — the
+  // cascade can run past the bottom of the screen and clip the bottom pill,
+  // which would then be unreachable. Measure the in-flow block bottom against
+  // the visible viewport and re-enable scrolling ONLY when it can't fit, so
+  // nothing is ever cut off; the top drag region still collapses the sheet.
+  const contentBottomY = TRANSPORT_Y_EXP + TRANSPORT_H + TRANSPORT_TO_PILL + PILL_H;
+  const contentOverflows = contentBottomY + 8 > screenHeight - insets.bottom;
 
   // Layout values the sheet PanResponder needs. The responder is created ONCE
   // (useRef), so reading `screenHeight`/`COVER_Y_EXP` directly in its callbacks
@@ -932,7 +966,7 @@ export default function PlayerBottomSheet() {
             <ScrollView
               contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: 58 + insets.bottom }}
               showsVerticalScrollIndicator={false}
-              scrollEnabled={false} // Disable ScrollView scroll so drag gesture runs cleanly
+              scrollEnabled={contentOverflows} // Off so the drag gesture runs cleanly; on only when the block overflows a short viewport so the bottom pill stays reachable
             >
               {/* Top Row: Simplified Header containing Collapse, Title (Center), and Cast + Overflow Menu (Right) */}
               <View

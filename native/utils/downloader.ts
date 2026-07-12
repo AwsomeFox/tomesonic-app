@@ -460,11 +460,7 @@ export const downloader = {
         if (!res || (typeof res.status === "number" && res.status >= 400)) return;
 
         // Record the cover as a real part so it survives restarts and future
-        // prepares treat it like any downloaded cover. Re-read the latest item
-        // (a parallel mutation may have landed) and only add if still missing.
-        const latest = useDownloadStore.getState().completedDownloads?.[libraryItemId];
-        if (!latest) return;
-        if ((latest.parts || []).find((p) => p.id === "cover")?.localFilePath) return;
+        // prepares treat it like any downloaded cover.
         const coverPart: DownloadPart = {
           id: "cover",
           filename: "cover.jpg",
@@ -474,14 +470,29 @@ export const downloader = {
           completed: true,
           localFilePath: destPath,
         };
-        const updated: DownloadItem = {
-          ...latest,
-          parts: [...(latest.parts || []), coverPart],
-        };
-        db.saveDownloadItem(updated);
-        useDownloadStore.setState((state) => ({
-          completedDownloads: { ...state.completedDownloads, [libraryItemId]: updated },
-        }));
+        // Re-check-and-merge INSIDE the functional updater. Reading the item
+        // OUTSIDE setState and writing back that stale snapshot would resurrect
+        // a download that removeDownload deleted in the gap between this fetch
+        // finishing and the write (and re-persist it to the DB). Read the item
+        // off the CURRENT state: if it's gone — or already carries a cover —
+        // leave state untouched; otherwise merge the cover onto the live value.
+        let reconciled: DownloadItem | null = null;
+        useDownloadStore.setState((state) => {
+          const current = state.completedDownloads?.[libraryItemId];
+          if (!current) return state; // removed concurrently — do NOT re-add
+          if ((current.parts || []).find((p) => p.id === "cover")?.localFilePath) return state;
+          reconciled = {
+            ...current,
+            parts: [...(current.parts || []), coverPart],
+          };
+          return {
+            completedDownloads: { ...state.completedDownloads, [libraryItemId]: reconciled },
+          };
+        });
+        // Persist ONLY the value the updater actually committed (never the
+        // pre-read snapshot), so the DB mirrors the store and a raced deletion
+        // stays deleted.
+        if (reconciled) db.saveDownloadItem(reconciled);
       } finally {
         coverBackfillInFlight.delete(libraryItemId);
       }

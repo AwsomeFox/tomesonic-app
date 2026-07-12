@@ -1609,6 +1609,54 @@ describe("syncBothProgressFraction / reconcileLinkedProgress", () => {
     expect(store.getState().mediaProgress[ITEM].ebookProgress).toBe(0.5);
   });
 
+  // P3: finishing READING (ebook 100%) while the audio is genuinely mid-way
+  // (50%) must advance the audio percentage per furthest-wins but must NOT mark
+  // the item finished OR slam the audio timestamp to the end — that would
+  // silently destroy the listener's 50% resume position.
+  it("P3: reading to 100% on a mid-listened linked book preserves the audio resume position (no finish, no end-jump)", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: {
+          libraryItemId: ITEM,
+          progress: 0.5,
+          currentTime: 1800, // 0.5 * 3600 — the real resume seconds
+          ebookProgress: 1.0,
+          ebookLocation: "epubcfi(/6/20)",
+          duration: 3600,
+        },
+      },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(true);
+    const p = store.getState().mediaProgress[ITEM];
+    // Percentage advanced (furthest-wins display)…
+    expect(p.progress).toBe(1.0);
+    expect(p.ebookProgress).toBe(1.0);
+    // …but the audio resume position is PRESERVED and the item is NOT finished.
+    expect(p.currentTime).toBe(1800);
+    expect(p.isFinished).toBeUndefined();
+    // The queued PATCH body likewise carries no isFinished and no end-of-book
+    // currentTime that would clobber the server's real resume point.
+    const body = readBody(ITEM);
+    expect(body.isFinished).toBeUndefined();
+    expect("currentTime" in body).toBe(false);
+  });
+
+  // Counterpart to P3: when BOTH media are genuinely near the end, the finish
+  // DOES propagate (nothing to protect — the audio is essentially done too).
+  it("P3 counterpart: both media near the end still finishes the item", () => {
+    store.setState({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 0.995, currentTime: 3582, ebookProgress: 1.0, duration: 3600 },
+      },
+      settings: { ...store.getState().settings, linkedProgress: { [ITEM]: true } },
+    });
+    expect(ps.reconcileLinkedProgress(ITEM)).toBe(true);
+    const p = store.getState().mediaProgress[ITEM];
+    expect(p.isFinished).toBe(true);
+    expect(p.currentTime).toBe(3600);
+  });
+
   it("locked reconcile is a no-op when the two are already aligned", () => {
     store.setState({
       mediaProgress: { [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0.5, duration: 3600 } },

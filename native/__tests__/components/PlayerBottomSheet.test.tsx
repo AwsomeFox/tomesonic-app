@@ -557,6 +557,30 @@ describe("PlayerBottomSheet — Chapters in the bottom control row", () => {
     expect(screen.getAllByLabelText("Playback speed, 1.3×").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1.3×").length).toBeGreaterThan(0);
   });
+
+  // The expanded portrait player lays the pill out via an absolute Y cascade in
+  // a normally-non-scrolling ScrollView. If the cascade's book-bar height is
+  // mis-budgeted the lower half drifts down and the bottom pill can be clipped
+  // off a short viewport — so assert both the speed pill and the Chapters
+  // affordance render whether the book-progress bar is ON or OFF.
+  it.each([
+    ["both progress bars on", true],
+    ["book progress bar off", false],
+  ])("keeps the bottom pill + Chapters reachable with %s", async (_label, showBook) => {
+    useUserStore.setState({
+      settings: {
+        ...useUserStore.getState().settings,
+        showPlayerBookProgress: showBook,
+        showPlayerChapterProgress: true,
+      },
+    });
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    expect(screen.getAllByLabelText("Playback speed, 1.3×").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Sleep timer").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Bookmarks").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Chapters and Up Next").length).toBeGreaterThan(0);
+  });
 });
 
 describe("PlayerBottomSheet — Want to Read heart", () => {

@@ -1190,8 +1190,15 @@ describe("ItemDetailScreen — sync progress + link toggle", () => {
   });
 });
 
-// --- Read handoff: linked, listened-ahead books seek the reader forward ------
-describe("ItemDetailScreen — open reader at the furthest linked spot", () => {
+// --- Read handoff: the READER owns the linked catch-up seek (P1/P2) ----------
+// The old percentage gate here was self-defeating: ItemDetail's focus-effect /
+// audio-close reconcile bumps this item's ebookProgress % up to the audio
+// fraction WITHOUT moving the CFI, so by the time the user taps Read the gate
+// (ebook% < audio%) was already false and the reader opened at the stale CFI.
+// openReader now NEVER passes an automatic initialFraction — the reader
+// self-handles the forward-only linked seek on its 'ready' message, keyed off
+// its TRUE rendered page. That also fixes every OTHER entry point at once.
+describe("ItemDetailScreen — open reader (linked catch-up is reader-owned)", () => {
   /** Pull the params of the (single) navigate("Reader", …) call. */
   const readerParams = (navigation: any) => {
     const call = (navigation.navigate as jest.Mock).mock.calls.find(
@@ -1205,8 +1212,9 @@ describe("ItemDetailScreen — open reader at the furthest linked spot", () => {
       settings: { ...s.settings, linkedProgress: { ...s.settings.linkedProgress, [id]: true } },
     }));
 
-  it("LINKED book listened ahead of reading: Read seeks forward to the listening spot", async () => {
-    // audio 50% vs ebook 25% (bothFormatItem), epub → jumpable.
+  it("LINKED book listened ahead of reading: Read routes WITHOUT an initialFraction (reader self-seeks)", async () => {
+    // audio 50% vs ebook 25% (bothFormatItem), epub → jumpable. The reader, not
+    // ItemDetail, performs the forward seek on ready, so no fraction is passed.
     linkItem("item1");
     routeApi(bothFormatItem);
     const navigation = makeNavigation();
@@ -1218,12 +1226,12 @@ describe("ItemDetailScreen — open reader at the furthest linked spot", () => {
     const params = readerParams(navigation);
     expect(params.itemId).toBe("item1");
     expect(params.ebookFormat).toBe("epub");
-    // Furthest = max(0.5 audio, 0.25 ebook) → seek the reader to the audio spot.
-    expect(params.initialFraction).toBeCloseTo(0.5, 5);
+    // No auto initialFraction — the reader is the single source of truth.
+    expect(params.initialFraction).toBeUndefined();
+    expect("initialFraction" in params).toBe(false);
   });
 
   it("NON-linked book (even when listened ahead): Read opens with no forced seek", async () => {
-    // Same drifted progress, but the per-item lock is OFF → keep current CFI.
     routeApi(bothFormatItem);
     const navigation = makeNavigation();
     await render(
@@ -1234,8 +1242,7 @@ describe("ItemDetailScreen — open reader at the furthest linked spot", () => {
     expect(readerParams(navigation).initialFraction).toBeUndefined();
   });
 
-  it("LINKED book already read PAST the listening spot: Read never seeks backward", async () => {
-    // Reading 60% is ahead of listening 30% → furthest is the ebook's own spot.
+  it("LINKED book already read PAST the listening spot: Read passes no fraction (reader forward-only guards backward)", async () => {
     const readAhead = {
       ...bothFormatItem,
       userMediaProgress: {

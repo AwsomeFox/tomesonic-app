@@ -1101,4 +1101,25 @@ describe("ensureLocalCover — backfill a missing local cover", () => {
       useDownloadStore.getState().completedDownloads["book1"].parts.some((p) => p.id === "cover")
     ).toBe(false);
   });
+
+  it("does NOT resurrect an item removed while the cover fetch was in flight (N2 race)", async () => {
+    completedNoCover();
+    // Hold the cover fetch open so a removeDownload can land in the gap between
+    // the fetch finishing and the store write — the exact window where the old
+    // read-modify-write wrote back a stale snapshot and revived a deleted item.
+    let resolveDownload!: (v: any) => void;
+    downloadAsync.mockReturnValueOnce(new Promise((r) => { resolveDownload = r; }));
+
+    const p = downloader.ensureLocalCover("book1");
+    // The user deletes the download while the fetch is still open.
+    useDownloadStore.setState({ completedDownloads: {} } as any);
+    // Fetch now completes; the merge runs against the CURRENT (empty) state.
+    resolveDownload({ uri: "file:///cover", status: 200 });
+    await p;
+
+    // The deleted item stays deleted — no re-add to the store...
+    expect(useDownloadStore.getState().completedDownloads["book1"]).toBeUndefined();
+    // ...and nothing re-persisted to the download DB.
+    expect(dbStorage.getAllKeys().some((k) => k.includes("book1"))).toBe(false);
+  });
 });
