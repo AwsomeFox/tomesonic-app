@@ -240,7 +240,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..98fa9cc 100644
+index b495b5a..ae90618 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -334,7 +334,7 @@ index b495b5a..98fa9cc 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +157,1335 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +157,1338 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -965,6 +965,9 @@ index b495b5a..98fa9cc 100644
 +        absArtCache[itemId]?.let { return it }
 +        val cover = absDownloads[itemId]?.coverPath ?: return null
 +        val path = cover.removePrefix("file://")
++        // Only filesystem paths are decodable here; http(s)://, content://
++        // and other non-local URIs are left to the regular artwork loader.
++        if (!path.startsWith("/")) return null
 +        return try {
 +            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
 +            android.graphics.BitmapFactory.decodeFile(path, bounds)
@@ -1683,7 +1686,7 @@ index b495b5a..98fa9cc 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1573,77 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1576,77 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1763,7 +1766,7 @@ index b495b5a..98fa9cc 100644
          observeEvents()
      }
  
-@@ -293,9 +1726,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1729,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1775,7 +1778,7 @@ index b495b5a..98fa9cc 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1739,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1742,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1837,7 +1840,7 @@ index b495b5a..98fa9cc 100644
          }
      }
  
-@@ -395,6 +1862,246 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,6 +1865,246 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -2084,7 +2087,7 @@ index b495b5a..98fa9cc 100644
      @MainThread
      fun stop() {
          player.stop()
-@@ -449,6 +2156,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +2159,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -2095,7 +2098,7 @@ index b495b5a..98fa9cc 100644
      }
  
      @MainThread
-@@ -515,6 +2226,229 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2229,229 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2325,7 +2328,7 @@ index b495b5a..98fa9cc 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2651,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2654,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2334,7 +2337,7 @@ index b495b5a..98fa9cc 100644
              return
          }
  
-@@ -780,8 +2714,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2717,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2350,7 +2353,7 @@ index b495b5a..98fa9cc 100644
          return mediaSession
      }
  
-@@ -792,13 +2732,49 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2735,49 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2402,7 +2405,7 @@ index b495b5a..98fa9cc 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2881,250 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2884,250 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2670,7 +2673,7 @@ index b495b5a..98fa9cc 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3133,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3136,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2700,7 +2703,7 @@ index b495b5a..98fa9cc 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3165,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3168,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2716,7 +2719,7 @@ index b495b5a..98fa9cc 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3181,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3184,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
