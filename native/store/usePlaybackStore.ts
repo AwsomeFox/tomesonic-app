@@ -562,7 +562,11 @@ async function checkIsConnectedWithTimeout(): Promise<boolean> {
       NetInfo.fetch(),
       new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 1000)),
     ]);
-    isConnected = state.isConnected && state.isInternetReachable !== false;
+    // Strict booleans only: isConnected is boolean|null and `&&` would leak
+    // null through, treating UNKNOWN as offline. Only an explicit false on
+    // either flag counts as offline — unknown stays optimistic (true), same
+    // as the timeout/error path.
+    isConnected = state?.isConnected !== false && state?.isInternetReachable !== false;
   } catch (e) {
     // Keep true on timeout or error
   }

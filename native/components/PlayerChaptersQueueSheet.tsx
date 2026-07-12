@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import Animated, {
   interpolate,
   Extrapolation,
   SharedValue,
+  useReducedMotion,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -72,14 +73,22 @@ export default function PlayerChaptersQueueSheet({
   const { height: screenHeight } = useWindowDimensions();
   const sheetHeight = screenHeight * 0.72; // covers 72% of the screen
   const peekHeight = 54;
+  // Round-11 convention: every animated surface collapses to instant
+  // transitions under the system reduce-motion setting.
+  const reduceMotion = useReducedMotion();
+  const animDuration = reduceMotion ? 0 : 250;
 
   const subProgress = useSharedValue(0);
   const scrollRef = useRef<ScrollView>(null);
+  // True while the handle is being dragged: the body + backdrop must render
+  // DURING the gesture, not only after release commits `expanded` — otherwise
+  // dragging up reveals an empty sheet that pops its content in at the end.
+  const [dragging, setDragging] = useState(false);
 
   const hasChapters = chapters && chapters.length > 0;
 
   useEffect(() => {
-    subProgress.value = withTiming(expanded ? 1 : 0, { duration: 250 });
+    subProgress.value = withTiming(expanded ? 1 : 0, { duration: animDuration });
   }, [expanded]);
 
   // Scroll to active chapter when chapters tab is selected or opened
@@ -87,7 +96,10 @@ export default function PlayerChaptersQueueSheet({
     if (expanded && activeTab === "chapters" && currentChapterIndex > 2) {
       const timer = setTimeout(() => {
         scrollRef.current?.scrollTo({
-          y: (currentChapterIndex - 2) * ROW_H,
+          // Row pitch = height + vertical margins (marginVertical: 2 → 4px),
+          // not bare ROW_H — the bare value drifts further per row on long
+          // chapter lists.
+          y: (currentChapterIndex - 2) * (ROW_H + 4),
           animated: false,
         });
       }, 50);
@@ -103,13 +115,19 @@ export default function PlayerChaptersQueueSheet({
   useEffect(() => {
     expandedRef.current = expanded;
   }, [expanded]);
+  // The responder is created once (useRef) — route the render-scoped anim
+  // duration through a ref like dragRange/expanded above.
+  const animDurationRef = useRef(animDuration);
+  animDurationRef.current = animDuration;
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (evt, gestureState) => {
         const { dx, dy } = gestureState;
-        return Math.abs(dy) > 4 && Math.abs(dy) > Math.abs(dx);
+        const claim = Math.abs(dy) > 4 && Math.abs(dy) > Math.abs(dx);
+        if (claim) setDragging(true);
+        return claim;
       },
       onPanResponderMove: (evt, gestureState) => {
         const dy = gestureState.dy;
@@ -123,6 +141,7 @@ export default function PlayerChaptersQueueSheet({
         }
       },
       onPanResponderRelease: (evt, gestureState) => {
+        setDragging(false);
         const p = subProgress.value;
         let targetExpanded = expandedRef.current;
         if (gestureState.vy < -0.2) {
@@ -132,11 +151,12 @@ export default function PlayerChaptersQueueSheet({
         } else {
           targetExpanded = p > 0.4;
         }
-        subProgress.value = withTiming(targetExpanded ? 1 : 0, { duration: 250 });
+        subProgress.value = withTiming(targetExpanded ? 1 : 0, { duration: animDurationRef.current });
         onToggleExpand(targetExpanded);
       },
       onPanResponderTerminate: () => {
-        subProgress.value = withTiming(expandedRef.current ? 1 : 0, { duration: 250 });
+        setDragging(false);
+        subProgress.value = withTiming(expandedRef.current ? 1 : 0, { duration: animDurationRef.current });
         onToggleExpand(expandedRef.current);
       },
     })
@@ -187,8 +207,9 @@ export default function PlayerChaptersQueueSheet({
 
   return (
     <>
-      {/* Backdrop */}
-      {expanded && (
+      {/* Backdrop — also present mid-drag so the dim tracks the finger
+          instead of popping in when the gesture commits. */}
+      {(expanded || dragging) && (
         <AnimatedPressable
           onPress={() => onToggleExpand(false)}
           accessibilityRole="button"
@@ -291,7 +312,7 @@ export default function PlayerChaptersQueueSheet({
           </Pressable>
         </View>
 
-        {expanded && (
+        {(expanded || dragging) && (
           <View style={{ flex: 1 }}>
             {/* Tab Selector Row (Material 3 Segmented Control Style) */}
             <View
