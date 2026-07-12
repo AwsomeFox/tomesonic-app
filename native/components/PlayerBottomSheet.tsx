@@ -38,7 +38,7 @@ import SleepTimerModal from "./SleepTimerModal";
 import BookmarksModal from "./BookmarksModal";
 import { CastContext, CastButton } from "react-native-google-cast";
 import PlayerOverflowModal from "./PlayerOverflowModal";
-import PlayerChaptersQueueSheet from "./PlayerChaptersQueueSheet";
+import PlayerChaptersQueueSheet, { PEEK_HANDLE_H } from "./PlayerChaptersQueueSheet";
 import { useDownloadStore } from "../store/useDownloadStore";
 import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
@@ -1690,10 +1690,10 @@ export default function PlayerBottomSheet() {
             importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
             style={[
               StyleSheet.absoluteFill,
-              // Bottom budget: safe area + the 54dp "Chapters & Up Next" peek
+              // Bottom budget: safe area + the "Chapters & Up Next" peek
               // handle (enabled in landscape too) so the pill/transport never
               // sit underneath the drawer.
-              { paddingTop: insets.top, paddingBottom: insets.bottom + 54, paddingHorizontal: 16 },
+              { paddingTop: insets.top, paddingBottom: insets.bottom + PEEK_HANDLE_H, paddingHorizontal: 16 },
               animatedFullPlayerStyle,
             ]}
           >

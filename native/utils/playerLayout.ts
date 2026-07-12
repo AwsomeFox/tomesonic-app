@@ -51,7 +51,8 @@ export interface PlayerLayout {
   /**
    * Cover bottom → first progress-bar row gap. The old separate numeric info
    * row is gone — each bar now carries its elapsed/remaining labels INLINE
-   * (flanking the wave), so the bars start where the numeric row used to.
+   * (flanking the wave), so the bar rows take the numeric row's place in the
+   * cascade (with their own gap value, not the old row's exact offset).
    */
   COVER_TO_BARS: number;
   /** Book bar row height — wave + inline flanking time labels (when shown). */

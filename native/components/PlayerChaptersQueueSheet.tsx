@@ -55,6 +55,13 @@ function secondsToTimestamp(seconds: number) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+/**
+ * Height of the collapsed "Chapters & Up Next" peek handle. Exported so the
+ * landscape player pane can budget exactly this much bottom padding — a
+ * drifted copy would let the transport/pill slide under the handle.
+ */
+export const PEEK_HANDLE_H = 54;
+
 export default function PlayerChaptersQueueSheet({
   mainPlayerProgress,
   chapters,
@@ -79,7 +86,7 @@ export default function PlayerChaptersQueueSheet({
   const sheetHeight = isLandscape
     ? Math.max(screenHeight * 0.72, screenHeight - insets.top - 12)
     : screenHeight * 0.72;
-  const peekHeight = 54;
+  const peekHeight = PEEK_HANDLE_H;
   // Round-11 convention: every animated surface collapses to instant
   // transitions under the system reduce-motion setting.
   const reduceMotion = useReducedMotion();
