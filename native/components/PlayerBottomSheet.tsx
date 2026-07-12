@@ -1137,7 +1137,9 @@ export default function PlayerBottomSheet() {
                 <View style={{ width: 56, height: 56 }} />
               </View>
 
-              {/* Consolidated bottom pill containing Speed, Sleep Timer, Bookmarks, and Play Queue */}
+              {/* Consolidated bottom pill: Speed, Sleep Timer, Bookmarks. The
+                  play queue lives in the Chapters & Up Next peek sheet below
+                  (and the overflow menu's Chapters List entry). */}
               <View
                 style={{
                   flexDirection: "row",
