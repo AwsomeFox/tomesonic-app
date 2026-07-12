@@ -235,6 +235,12 @@ export default function PlayerBottomSheet() {
             onPress: () => {
               setPlayerExpanded(false);
               setTimeout(() => {
+                // The 300ms collapse delay can outlive the session — a Stop &
+                // Close or item switch in that window must not still open the
+                // reader for the no-longer-active book.
+                const now = usePlaybackStore.getState().currentSession;
+                const nowId = now?.libraryItemId || now?.libraryItem?.id;
+                if (!now || nowId !== bookItemId) return;
                 if (navigationRef.isReady()) {
                   (navigationRef.navigate as any)("Reader", {
                     itemId: target.itemId,

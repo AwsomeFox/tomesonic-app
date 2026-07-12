@@ -667,9 +667,15 @@ ${FOLIATE_BUNDLE}
               if (r.width < 1 || r.height < 1) continue;
               if (r.right < -buf || r.left > vw + buf || r.bottom < -buf || r.top > vh + buf) continue;
               if (!im.complete || !im.naturalWidth) { cloneImgs[i].removeAttribute('src'); continue; }
+              // Cap the rasterization: the snapshot only ever shows the image
+              // at page size, and a full-res canvas for a very large image is
+              // a memory spike (or OOM) just from starting a curl gesture.
+              var maxDim = 1024;
+              var scale = Math.min(1, maxDim / Math.max(im.naturalWidth, im.naturalHeight));
               var c = document.createElement('canvas');
-              c.width = im.naturalWidth; c.height = im.naturalHeight;
-              c.getContext('2d').drawImage(im, 0, 0);
+              c.width = Math.max(1, Math.round(im.naturalWidth * scale));
+              c.height = Math.max(1, Math.round(im.naturalHeight * scale));
+              c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
               cloneImgs[i].setAttribute('src', c.toDataURL('image/jpeg', 0.82));
             } catch(e) { try { cloneImgs[i].removeAttribute('src'); } catch(_e){} }
           }
