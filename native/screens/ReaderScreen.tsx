@@ -649,9 +649,15 @@ ${FOLIATE_BUNDLE}
 
       function inlineImages(srcDoc, cloneRoot){
         // <img blob:...> inside an SVG image never loads — swap each one that
-        // is anywhere near the viewport for a data URI (same-origin, so the
-        // temp canvas stays untainted). Best-effort per image.
+        // is near the viewport for a data URI (same-origin, so the temp
+        // canvas stays untainted). Images clearly OFF-screen are skipped
+        // outright: they land outside the captured slice anyway, and
+        // rasterizing every image in an image-heavy chapter would build many
+        // full-size canvases on the first curl gesture (jank + memory).
         try {
+          var vw = (srcDoc.defaultView && srcDoc.defaultView.innerWidth) || W();
+          var vh = (srcDoc.defaultView && srcDoc.defaultView.innerHeight) || (window.innerHeight || 640);
+          var buf = Math.max(vw, vh) * 1.5; // one-and-a-half viewports of slack
           var srcImgs = srcDoc.querySelectorAll('img');
           var cloneImgs = cloneRoot.querySelectorAll('img');
           for (var i = 0; i < srcImgs.length && i < cloneImgs.length; i++) {
@@ -659,6 +665,7 @@ ${FOLIATE_BUNDLE}
             try {
               var r = im.getBoundingClientRect();
               if (r.width < 1 || r.height < 1) continue;
+              if (r.right < -buf || r.left > vw + buf || r.bottom < -buf || r.top > vh + buf) continue;
               if (!im.complete || !im.naturalWidth) { cloneImgs[i].removeAttribute('src'); continue; }
               var c = document.createElement('canvas');
               c.width = im.naturalWidth; c.height = im.naturalHeight;
