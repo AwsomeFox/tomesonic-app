@@ -167,13 +167,15 @@ function seedPlayer(overrides: any = {}) {
     sleepTimer: null,
     isPlayerExpanded: false,
     // Transport actions replaced with spies (real implementations hit TrackPlayer).
-    playPause: jest.fn(),
-    seekForward: jest.fn(),
-    seekBackward: jest.fn(),
+    // Async in the real store (TrackPlayer calls) — the component .catch()es
+    // their rejections, so the mocks must return promises.
+    playPause: jest.fn().mockResolvedValue(undefined),
+    seekForward: jest.fn().mockResolvedValue(undefined),
+    seekBackward: jest.fn().mockResolvedValue(undefined),
     seek: jest.fn(),
     seekToChapter: jest.fn(),
-    nextChapter: jest.fn(),
-    previousChapter: jest.fn(),
+    nextChapter: jest.fn().mockResolvedValue(undefined),
+    previousChapter: jest.fn().mockResolvedValue(undefined),
     setPlaybackSpeed: jest.fn(),
     setSleepTimer: jest.fn(),
     cancelSleepTimer: jest.fn(),

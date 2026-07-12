@@ -1396,7 +1396,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { previousChapter(); }}
+            onPress={() => { previousChapter().catch(() => {}); }}
             disabled={!hasChapters}
             hitSlop={6}
             accessibilityRole="button"
@@ -1423,7 +1423,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { seekBackward(jumpBackSecs); }}
+            onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={`Back ${jumpBackSecs} seconds`}
@@ -1449,7 +1449,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { playPause(); }}
+            onPress={() => { playPause().catch(() => {}); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={isPlaying ? "Pause" : "Play"}
@@ -1484,7 +1484,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { seekForward(jumpFwdSecs); }}
+            onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }}
             hitSlop={6}
             accessibilityRole="button"
             accessibilityLabel={`Forward ${jumpFwdSecs} seconds`}
@@ -1511,7 +1511,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
           <Pressable
-            onPress={() => { nextChapter(); }}
+            onPress={() => { nextChapter().catch(() => {}); }}
             disabled={!hasChapters}
             hitSlop={6}
             accessibilityRole="button"
@@ -1581,13 +1581,13 @@ export default function PlayerBottomSheet() {
                 <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>{subtitleText}</Text>
               </View>
             </Pressable>
-            <Pressable onPress={() => { seekBackward(jumpBackSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+            <Pressable onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Back ${jumpBackSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
               <Icon name={jumpIconName("back", jumpBackSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
-            <Pressable onPress={() => { playPause(); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
+            <Pressable onPress={() => { playPause().catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 56, height: 56, borderRadius: 18, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginHorizontal: 10 }}>
               <Icon name={isPlaying ? "pause" : "play"} size={30} color={colors.onPrimary} />
             </Pressable>
-            <Pressable onPress={() => { seekForward(jumpFwdSecs); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
+            <Pressable onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} hitSlop={6} accessibilityRole="button" accessibilityLabel={`Forward ${jumpFwdSecs} seconds`} style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.secondaryContainer, alignItems: "center", justifyContent: "center" }}>
               <Icon name={jumpIconName("fwd", jumpFwdSecs)} size={24} color={colors.onSecondaryContainer} />
             </Pressable>
             {/* Pinned progress wave — parity with the portrait miniplayer. Inset
@@ -1712,13 +1712,13 @@ export default function PlayerBottomSheet() {
                 ) : null}
 
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", columnGap: 16, marginTop: 12 }}>
-                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { previousChapter(); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
-                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { seekBackward(jumpBackSecs); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
-                  <Pressable onPress={() => { playPause(); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
+                  <CircleButton icon="skip-previous" iconSize={22} onPress={() => { previousChapter().catch(() => {}); }} disabled={!hasChapters} label="Previous chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("back", jumpBackSecs)} iconSize={24} onPress={() => { seekBackward(jumpBackSecs).catch(() => {}); }} label={`Back ${jumpBackSecs} seconds`} colors={colors} />
+                  <Pressable onPress={() => { playPause().catch(() => {}); }} accessibilityRole="button" accessibilityLabel={isPlaying ? "Pause" : "Play"} accessibilityState={{ busy: isBuffering }} style={{ width: 72, height: 72, borderRadius: isPlaying ? 22 : 36, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 3 }}>
                     <Icon name={isPlaying ? "pause" : "play"} size={36} color={colors.onPrimary} />
                   </Pressable>
-                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { seekForward(jumpFwdSecs); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
-                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { nextChapter(); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
+                  <CircleButton icon={jumpIconName("fwd", jumpFwdSecs)} iconSize={24} onPress={() => { seekForward(jumpFwdSecs).catch(() => {}); }} label={`Forward ${jumpFwdSecs} seconds`} colors={colors} />
+                  <CircleButton icon="skip-next" iconSize={22} onPress={() => { nextChapter().catch(() => {}); }} disabled={!hasChapters} label="Next chapter" colors={colors} />
                 </View>
 
                 {/* Chapters and Queue bracket the ends so the speed pill stays
