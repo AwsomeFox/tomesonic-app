@@ -19,16 +19,13 @@ export function shelfOverflows(viewportW: number, contentW: number, slack = 4): 
   return viewportW > 0 && contentW > viewportW + slack;
 }
 
-// Map a personalized shelf to the Library-tab sort/filter that shows the rest
-// of it (each shelf is a capped horizontal scroll, so its tail is otherwise
-// unreachable). Returns null for shelves with no sensible full-list mapping —
-// those stay non-pressable.
-// Maps a home shelf to its "see all" destination on the Library hub tab. The hub
-// consumes `filter`/`orderBy`/`descending` (seeds the Books facet) and `segment`
-// (switches to the Series/Authors facet). Series/author shelves and Continue
-// Reading all resolve to a destination here; a shelf with no sensible full-list
-// view returns null. Returning a destination does NOT by itself make the header
-// pressable — the call site also requires the row to overflow (see
+// Maps a home shelf to its "see all" destination on the Library hub tab (each
+// shelf is a capped horizontal scroll, so its tail is otherwise unreachable).
+// The hub consumes `filter`/`orderBy`/`descending` (seeds the Books facet) and
+// `segment` (switches to the Series/Authors facet). Series/author shelves and
+// Continue Reading all resolve to a destination here; a shelf with no sensible
+// full-list view returns null. Returning a destination does NOT by itself make
+// the header pressable — the call site also requires the row to overflow (see
 // `shelfOverflows` above); a null return is what unconditionally leaves a
 // header non-pressable.
 
