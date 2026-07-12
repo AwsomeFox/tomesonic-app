@@ -66,6 +66,20 @@ export async function playbackService() {
   if (_serviceWired) return;
   _serviceWired = true;
 
+  // Native sleep-timer events (the Media3 service enforces the timer through
+  // doze — see armNativeSleepTimer in usePlaybackStore). JS may be frozen when
+  // these fire; that's fine — native already paused/extended, and these
+  // listeners just reconcile the UI whenever JS is alive to hear them.
+  DeviceEventEmitter.addListener("abs-sleep-fired", () => {
+    console.log("[PlaybackService] Native sleep timer fired");
+    usePlaybackStore.getState().onNativeSleepFired();
+  });
+  DeviceEventEmitter.addListener("abs-sleep-extended", (e: any) => {
+    const remaining = Number(e?.remaining);
+    console.log(`[PlaybackService] Native sleep timer shake-extended to ${remaining}s`);
+    usePlaybackStore.getState().onNativeSleepExtended(remaining);
+  });
+
   // Android Auto "playback speed" button (native emits this custom event).
   DeviceEventEmitter.addListener("remote-playback-speed", () => {
     const st = usePlaybackStore.getState();

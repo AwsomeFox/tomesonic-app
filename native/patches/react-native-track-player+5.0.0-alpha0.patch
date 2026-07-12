@@ -204,8 +204,34 @@ index d6e3483..7c8675f 100644
 +    override val localArtwork: String? = null
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork)
 \ No newline at end of file
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
+index 13a6c60..7d31a8e 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
+@@ -433,6 +433,21 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
+         callback.resolve(null)
+     }
+ 
++    // ABS native sleep timer (see MusicService.absSetSleepTimer): enforce the
++    // fade+pause and shake-to-extend in the foreground service so doze / a
++    // dead JS runtime can't kill them.
++    override fun absSetSleepTimer(seconds: Double, fadeSeconds: Double, shakeExtendSeconds: Double, callback: Promise) = launchInScope {
++        if (verifyServiceBoundOrReject(callback)) return@launchInScope
++        musicService.absSetSleepTimer(seconds, fadeSeconds.toInt(), shakeExtendSeconds.toInt())
++        callback.resolve(null)
++    }
++
++    override fun absCancelSleepTimer(callback: Promise) = launchInScope {
++        if (verifyServiceBoundOrReject(callback)) return@launchInScope
++        musicService.absCancelSleepTimer()
++        callback.resolve(null)
++    }
++
+     override fun setVolume(volume: Double, callback: Promise) = launchInScope {
+         if (verifyServiceBoundOrReject(callback)) return@launchInScope
+ 
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..294d4f1 100644
+index b495b5a..8bd44e5 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -366,15 +392,7 @@ index b495b5a..294d4f1 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -1133,7 +1151,15 @@ index b495b5a..294d4f1 100644
 +        java.net.URLEncoder.encode(
 +            android.util.Base64.encodeToString(s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP),
 +            "UTF-8"
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +
 +    private fun absItemsFromResults(
 +        path: String,
@@ -1775,7 +1801,159 @@ index b495b5a..294d4f1 100644
          }
      }
  
-@@ -449,6 +1889,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,6 +1835,151 @@ class MusicService : HeadlessJsMediaService() {
+         player.pause()
+     }
+ 
++    // ===== ABS native sleep timer =====
++    // Enforced HERE, in the foreground Media3 service, because the JS runtime
++    // is frozen/killed under doze: the JS interval kept the UI countdown, but
++    // overnight the pause, the volume fade, and shake-to-extend all silently
++    // died with it. While audio plays, this service holds Media3's wake lock,
++    // so a main-thread tick + a sensor listener keep working through doze.
++    // JS arms/cancels via absSetSleepTimer/absCancelSleepTimer and mirrors
++    // state from the abs-sleep-* events; if JS is dead, native still finishes
++    // the job and JS reconciles on next launch.
++    private var absSleepRemaining: Double = 0.0        // secs left at last anchor
++    private var absSleepAnchorMs: Long = 0L            // elapsedRealtime at anchor
++    private var absSleepAnchoredPlaying = false        // was playing at anchor
++    private var absSleepFadeSecs: Int = 60
++    private var absSleepShakeExtendSecs: Int = 0
++    private var absSleepActive = false
++    private var absSleepTickPosted = false
++    private var absShakeListener: android.hardware.SensorEventListener? = null
++    private var absLastShakeMs: Long = 0L
++    private val absSleepHandler = android.os.Handler(android.os.Looper.getMainLooper())
++
++    private fun absSleepNow(): Long = android.os.SystemClock.elapsedRealtime()
++
++    // Remaining seconds right now: the countdown only consumes REAL listening
++    // time (parity with the JS timer) — paused stretches don't eat the timer.
++    private fun absSleepRemainingNow(): Double {
++        if (!absSleepActive) return 0.0
++        if (!absSleepAnchoredPlaying) return absSleepRemaining
++        return absSleepRemaining - (absSleepNow() - absSleepAnchorMs) / 1000.0
++    }
++
++    private fun absSleepReanchor() {
++        absSleepRemaining = absSleepRemainingNow()
++        absSleepAnchorMs = absSleepNow()
++        absSleepAnchoredPlaying = player.isPlaying
++    }
++
++    @MainThread
++    fun absSetSleepTimer(seconds: Double, fadeSeconds: Int, shakeExtendSeconds: Int) {
++        if (!seconds.isFinite() || seconds <= 0.0) { absCancelSleepTimer(); return }
++        absSleepRemaining = seconds
++        absSleepAnchorMs = absSleepNow()
++        absSleepAnchoredPlaying = player.isPlaying
++        absSleepFadeSecs = if (fadeSeconds > 0) fadeSeconds else 60
++        absSleepShakeExtendSecs = shakeExtendSeconds
++        absSleepActive = true
++        // Re-arming mid-fade must lift the volume back up immediately.
++        player.volume = 1.0f
++        absArmShakeSensor()
++        if (!absSleepTickPosted) {
++            absSleepTickPosted = true
++            absSleepHandler.postDelayed(absSleepTick, 1000)
++        }
++        Timber.i("ABS sleep timer armed: %.0fs (fade %ds, shake +%ds)", seconds, absSleepFadeSecs, absSleepShakeExtendSecs)
++    }
++
++    @MainThread
++    fun absCancelSleepTimer() {
++        if (!absSleepActive && !absSleepTickPosted) return
++        absSleepActive = false
++        absSleepTickPosted = false
++        absSleepHandler.removeCallbacks(absSleepTick)
++        absDisarmShakeSensor()
++        // Undo any in-progress fade.
++        try { player.volume = 1.0f } catch (_: Exception) {}
++        Timber.i("ABS sleep timer cancelled")
++    }
++
++    private val absSleepTick = object : Runnable {
++        override fun run() {
++            if (!absSleepActive) { absSleepTickPosted = false; return }
++            try {
++                val playing = player.isPlaying
++                // Play/pause transitions re-anchor so paused time never counts.
++                if (playing != absSleepAnchoredPlaying) absSleepReanchor()
++                val remaining = absSleepRemainingNow()
++                if (playing) {
++                    // Fade the last absSleepFadeSecs down so playback eases out.
++                    val vol = if (remaining >= absSleepFadeSecs) 1.0f
++                              else (remaining / absSleepFadeSecs).coerceIn(0.0, 1.0).toFloat()
++                    player.volume = vol
++                    if (remaining <= 0.0) {
++                        absSleepActive = false
++                        absSleepTickPosted = false
++                        absDisarmShakeSensor()
++                        player.pause()
++                        player.volume = 1.0f
++                        emit("abs-sleep-fired", Bundle())
++                        Timber.i("ABS sleep timer fired — paused natively")
++                        return
++                    }
++                }
++            } catch (e: Exception) {
++                Timber.w(e, "ABS sleep tick failed")
++            }
++            absSleepHandler.postDelayed(this, 1000)
++        }
++    }
++
++    // Shake-to-extend, native: works with the screen off while the (playing)
++    // foreground service keeps the device out of full suspend. ~2.2g delta
++    // threshold + 1.5s debounce, mirroring the JS implementation.
++    private fun absArmShakeSensor() {
++        if (absShakeListener != null || absSleepShakeExtendSecs <= 0) return
++        try {
++            val sm = getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager
++            val accel = sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER) ?: return
++            val listener = object : android.hardware.SensorEventListener {
++                override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) {}
++                override fun onSensorChanged(event: android.hardware.SensorEvent) {
++                    val g = 9.80665f
++                    val x = event.values[0] / g; val y = event.values[1] / g; val z = event.values[2] / g
++                    val force = kotlin.math.sqrt(x * x + y * y + z * z)
++                    if (force < 2.2f) return
++                    val now = absSleepNow()
++                    if (now - absLastShakeMs < 1500) return
++                    absLastShakeMs = now
++                    absSleepHandler.post {
++                        if (!absSleepActive) return@post
++                        absSleepReanchor()
++                        absSleepRemaining += absSleepShakeExtendSecs
++                        try { player.volume = 1.0f } catch (_: Exception) {}
++                        emit("abs-sleep-extended", Bundle().apply {
++                            putDouble("remaining", absSleepRemainingNow())
++                        })
++                        Timber.i("ABS sleep timer shake-extended to %.0fs", absSleepRemainingNow())
++                    }
++                }
++            }
++            sm.registerListener(listener, accel, android.hardware.SensorManager.SENSOR_DELAY_UI)
++            absShakeListener = listener
++        } catch (e: Exception) {
++            Timber.w(e, "ABS shake sensor arm failed")
++        }
++    }
++
++    private fun absDisarmShakeSensor() {
++        val l = absShakeListener ?: return
++        absShakeListener = null
++        try {
++            val sm = getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager
++            sm.unregisterListener(l)
++        } catch (_: Exception) {}
++    }
++    // ===== end ABS native sleep timer =====
++
+     @MainThread
+     fun stop() {
+         player.stop()
+@@ -449,6 +2034,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1786,7 +1964,7 @@ index b495b5a..294d4f1 100644
      }
  
      @MainThread
-@@ -515,6 +1959,229 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2104,229 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2016,7 +2194,7 @@ index b495b5a..294d4f1 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2384,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2529,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2025,7 +2203,7 @@ index b495b5a..294d4f1 100644
              return
          }
  
-@@ -780,8 +2447,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2592,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2041,12 +2219,13 @@ index b495b5a..294d4f1 100644
          return mediaSession
      }
  
-@@ -792,13 +2465,45 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2610,46 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
 -        if (::player.isInitialized) {
 -            Timber.d("Releasing media session and destroying player")
++        absCancelSleepTimer()
 +        // Flag teardown FIRST so any in-flight browse-pool task or posted browse
 +        // refresh that lands after the release below skips its session touch.
 +        absDestroyed = true
@@ -2089,7 +2268,7 @@ index b495b5a..294d4f1 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2610,249 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2756,249 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2315,7 +2494,7 @@ index b495b5a..294d4f1 100644
 +                } else {
 +                    future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
 +                }
-+            }
+             }
 +            return future
 +        }
 +
@@ -2351,12 +2530,12 @@ index b495b5a..294d4f1 100644
 +                    } else item
 +                }.toMutableList()
 +                future.set(resolved)
-             }
++            }
 +            return future
          }
  
          override fun onCustomCommand(
-@@ -931,12 +2861,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3007,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2386,7 +2565,7 @@ index b495b5a..294d4f1 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +2893,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3039,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2402,7 +2581,7 @@ index b495b5a..294d4f1 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +2909,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3055,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -2518,3 +2697,19 @@ index d85e2c7..db6b437 100644
          }
      }
  
+diff --git a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
+index a5dcd75..70260bf 100644
+--- a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
++++ b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
+@@ -6,6 +6,11 @@ export interface Spec extends TurboModule {
+   setupPlayer(options: UnsafeObject): Promise<void>;
+   updateOptions(options: UnsafeObject): Promise<void>;
+ 
++  // ABS native sleep timer — enforced in the Media3 service so doze / a dead
++  // JS runtime can't kill the fade+pause or shake-to-extend (Android only).
++  absSetSleepTimer(seconds: number, fadeSeconds: number, shakeExtendSeconds: number): Promise<void>;
++  absCancelSleepTimer(): Promise<void>;
++
+   // player api
+   load(track: UnsafeObject): Promise<number | void>;
+   reset(): Promise<void>;

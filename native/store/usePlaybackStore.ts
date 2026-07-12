@@ -244,6 +244,45 @@ function disarmShakeListener() {
   _shakeSub = null;
 }
 
+// ---- Native sleep-timer enforcement (Android) ----
+// The JS interval drives the UI, but the theory above ("the player's wake lock
+// keeps the JS runtime alive") proved WRONG under real overnight doze: the
+// runtime was frozen/killed, so the fade, the pause, and shake-to-extend all
+// silently died while audio played on. The Media3 service now enforces the
+// same timer natively (countdown that only consumes playing time, fade,
+// pause, shake-to-extend) and emits abs-sleep-fired / abs-sleep-extended;
+// JS mirrors those events while alive and reconciles on next launch if not.
+// While CASTING the receiver plays the audio — pausing the LOCAL player would
+// be wrong, so the JS path stays authoritative there and native stays off.
+let _nativeSleepArmed = false;
+function nativeSleepModule(): any | null {
+  try {
+    const RN = require("react-native");
+    if (RN.Platform.OS !== "android") return null;
+    const m = RN.NativeModules?.TrackPlayer;
+    return m?.absSetSleepTimer ? m : null;
+  } catch {
+    return null;
+  }
+}
+function armNativeSleepTimer(seconds: number): boolean {
+  const m = nativeSleepModule();
+  if (!m || !Number.isFinite(seconds) || seconds <= 0) return false;
+  const shakeSecs = getSleepShakeToExtend() ? SLEEP_SHAKE_MINUTES * 60 : 0;
+  _nativeSleepArmed = true;
+  m.absSetSleepTimer(seconds, SLEEP_FADE_SECONDS, shakeSecs).catch(() => {
+    _nativeSleepArmed = false;
+  });
+  return true;
+}
+function cancelNativeSleepTimer() {
+  if (!_nativeSleepArmed) return;
+  _nativeSleepArmed = false;
+  try {
+    nativeSleepModule()?.absCancelSleepTimer?.().catch(() => {});
+  } catch {}
+}
+
 // Resolve the NEXT book in the finished book's series. Reuses the same
 // series/sequence resolution as auto-download-next-in-series
 // (utils/downloader.autoDownloadNextAfterFinish).
@@ -1282,6 +1321,10 @@ interface PlaybackState {
   previousChapter: () => Promise<void>;
   setPlaybackSpeed: (speed: number) => Promise<void>;
   setSleepTimer: (seconds: number, endOfChapter?: boolean) => void;
+  // Mirror a NATIVE sleep-timer event (the Media3 service enforces the timer
+  // through doze; see armNativeSleepTimer) into JS state.
+  onNativeSleepFired: () => void;
+  onNativeSleepExtended: (remaining: number) => void;
   cancelSleepTimer: () => void;
   closePlayback: () => Promise<void>;
   isPlayerExpanded: boolean;
@@ -2936,9 +2979,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     set({ sleepTimer: { endOfChapter, remaining: initialRemaining, chapterIdx: armedChapterIdx } });
 
-    // Shake-to-extend: arm the accelerometer listener while the timer runs
-    // (no-op unless expo-sensors is installed — see armShakeListener).
-    armShakeListener();
+    // Native enforcement (doze-proof pause/fade/shake) — local playback only;
+    // while casting the receiver plays and JS stays authoritative.
+    const nativeArmed = !get().isCasting && armNativeSleepTimer(initialRemaining);
+    if (get().isCasting) cancelNativeSleepTimer();
+
+    // Shake-to-extend: when the native timer is armed it owns the shake sensor
+    // too (and works with JS frozen); arming the JS accelerometer as well
+    // would double-extend on a single shake. JS listener is the fallback.
+    if (nativeArmed) disarmShakeListener();
+    else armShakeListener();
 
     _sleepLastTickAt = Date.now();
     sleepTimerInterval = setInterval(async () => {
@@ -2949,6 +2999,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           sleepTimerInterval = null;
         }
         return;
+      }
+
+      // A cast session that started mid-timer takes over: cancel the native
+      // enforcer (it would pause the already-paused LOCAL player) and fall
+      // back to the JS accelerometer for shake-to-extend.
+      if (get().isCasting && _nativeSleepArmed) {
+        cancelNativeSleepTimer();
+        armShakeListener();
       }
 
       // PAUSED: the position is frozen (end-of-chapter remaining can't
@@ -2995,6 +3053,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           const ch = chapters?.[liveIdx];
           remaining = ch ? Math.max(0, Math.round((ch.end || 0) - position)) : timer.remaining;
           armedIdx = liveIdx;
+          // The native enforcer runs a fixed countdown from the ORIGINAL
+          // chapter end — re-anchor it to the new one.
+          if (_nativeSleepArmed && !get().isCasting) armNativeSleepTimer(remaining);
         } else {
           const ch = chapters?.[liveIdx];
           // Chapter unknown this tick (gap / boundary transient / chapterless
@@ -3032,6 +3093,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
         set({ sleepTimer: null });
         disarmShakeListener();
+        cancelNativeSleepTimer();
         // Arm the "rewind on wake" nudge for the next resume, and record the
         // pause so play()'s generic auto-rewind anchor exists too.
         _sleepRewindPending = true;
@@ -3061,11 +3123,43 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     }
     _sleepLastTickAt = null;
     disarmShakeListener();
+    cancelNativeSleepTimer();
     // Explicit cancel means the user is awake — don't rewind on the next resume.
     _sleepRewindPending = false;
     // Undo any in-progress fade (unconditional — see setSleepTimer).
     TrackPlayer.setVolume(1).catch(() => {});
     set({ sleepTimer: null });
+  },
+
+  // The native enforcer paused playback (fade already done, volume restored
+  // natively). Mirror the state JS-side: tear down the UI countdown and arm
+  // the rewind-on-wake nudge exactly like the JS fire path.
+  onNativeSleepFired: () => {
+    if (sleepTimerInterval) {
+      clearInterval(sleepTimerInterval);
+      sleepTimerInterval = null;
+    }
+    _nativeSleepArmed = false;
+    _sleepLastTickAt = null;
+    disarmShakeListener();
+    _sleepRewindPending = true;
+    set({ sleepTimer: null });
+  },
+
+  // A native shake extended the timer — update the countdown display. The
+  // native timer runs FIXED countdowns, so an end-of-chapter timer becomes a
+  // fixed one here (same conversion the JS shake handler applies).
+  onNativeSleepExtended: (remaining) => {
+    if (!get().sleepTimer) return;
+    if (!Number.isFinite(remaining) || remaining <= 0) return;
+    _sleepLastTickAt = Date.now();
+    set({
+      sleepTimer: {
+        endOfChapter: false,
+        remaining: Math.max(0, Math.round(remaining)),
+        chapterIdx: undefined,
+      },
+    });
   },
 
   closePlayback: async () => {
