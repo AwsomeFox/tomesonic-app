@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { View, Text } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "./Icon";
@@ -34,9 +34,21 @@ export default function PlayerOverflowModal({
 }: Props) {
   const colors = useThemeColors();
 
+  // The 200ms delay lets the sheet's close animation finish before the
+  // action navigates/mutates. Tracked + cleared on unmount so a Stop & Close
+  // (or player teardown) can't run the action after unmount / leave a stray
+  // timer under fake timers.
+  const pendingActionRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (pendingActionRef.current) clearTimeout(pendingActionRef.current);
+    },
+    []
+  );
   const handleItemPress = (action: () => void) => {
     onClose();
-    setTimeout(action, 200);
+    if (pendingActionRef.current) clearTimeout(pendingActionRef.current);
+    pendingActionRef.current = setTimeout(action, 200);
   };
 
   return (
