@@ -654,7 +654,10 @@ export default function PlayerBottomSheet() {
   // Morph Skip Previous Button (fade in/out, align to TRANSPORT_Y_EXP + 16, width/height 56)
   const animatedSkipPreviousStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
-    const leftCollapsed = 16; // hide/keep near cover in mini
+    // Fully OFF-screen while collapsed (width is 56): the view keeps
+    // pointerEvents="auto" the moment the player expands, so an on-screen
+    // anchor at opacity 0 was an invisible hit area during the animation.
+    const leftCollapsed = -72;
     const leftExpanded = PX + (PW - 88) / 2 - 144;
     const topCollapsed = 12;
     const topExpanded = TRANSPORT_Y_EXP + 16;
@@ -672,7 +675,8 @@ export default function PlayerBottomSheet() {
   // Morph Skip Next Button (fade in/out, align to TRANSPORT_Y_EXP + 16, width/height 56)
   const animatedSkipNextStyle = useAnimatedStyle(() => {
     const p = sheetProgress.value;
-    const leftCollapsed = screenWidth - 16; // hide/keep off-screen in mini
+    // Fully off-screen right (mirror of skip-previous above).
+    const leftCollapsed = screenWidth + 16;
     const leftExpanded = PX + (PW - 88) / 2 + 176;
     const topCollapsed = 12;
     const topExpanded = TRANSPORT_Y_EXP + 16;
