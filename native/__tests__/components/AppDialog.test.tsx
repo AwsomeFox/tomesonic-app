@@ -5,7 +5,7 @@
  * dismisses the dialog, and destructive buttons render in the error color.
  */
 import React from "react";
-import { AccessibilityInfo } from "react-native";
+import { AccessibilityInfo, StyleSheet } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import AppDialog from "../../components/AppDialog";
 import { showAppDialog, useDialogStore } from "../../store/useDialogStore";
@@ -146,6 +146,118 @@ describe("AppDialog", () => {
     // Back is swallowed — the dialog stays up.
     expect(useDialogStore.getState().current).not.toBeNull();
     expect(screen.getByText("Confirm")).toBeTruthy();
+  });
+
+  // ── Typed-confirm (confirmInput) — high-stakes destructive dialogs ──
+
+  const showTypedConfirm = async (opts: Partial<Parameters<typeof showAppDialog>[0]> = {}, onDelete = jest.fn()) => {
+    await act(async () => {
+      showAppDialog({
+        title: "Delete library?",
+        message: "This cannot be undone.",
+        confirmInput: { placeholder: "Library name", requiredText: "Main Library" },
+        buttons: [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: onDelete },
+        ],
+        ...opts,
+      });
+    });
+    await screen.findByText("Delete library?");
+    return onDelete;
+  };
+
+  it("renders the confirm input with placeholder and 'Type … to confirm' label", async () => {
+    await render(<AppDialog />);
+    await showTypedConfirm();
+
+    const input = screen.getByTestId("app-dialog-confirm-input");
+    expect(input.props.placeholder).toBe("Library name");
+    expect(screen.getByLabelText("Type Main Library to confirm")).toBeTruthy();
+  });
+
+  it("keeps the LAST button disabled until the input matches requiredText", async () => {
+    await render(<AppDialog />);
+    const onDelete = await showTypedConfirm();
+
+    // Untouched input: Delete is disabled (state + 50% visual), press is inert.
+    let del = screen.getByLabelText("Delete");
+    expect(del.props.accessibilityState.disabled).toBe(true);
+    expect(StyleSheet.flatten(del.props.style).opacity).toBe(0.5);
+    await fireEvent.press(del);
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(useDialogStore.getState().current).not.toBeNull();
+
+    // Wrong text: still disabled.
+    await fireEvent.changeText(screen.getByTestId("app-dialog-confirm-input"), "Other Library");
+    expect(screen.getByLabelText("Delete").props.accessibilityState.disabled).toBe(true);
+
+    // Exact match: enabled, and pressing confirms + dismisses.
+    await fireEvent.changeText(screen.getByTestId("app-dialog-confirm-input"), "Main Library");
+    del = screen.getByLabelText("Delete");
+    expect(del.props.accessibilityState.disabled).toBe(false);
+    expect(StyleSheet.flatten(del.props.style).opacity).toBe(1);
+    await fireEvent.press(del);
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(useDialogStore.getState().current).toBeNull();
+  });
+
+  it("matches case-insensitively when caseSensitive is off (default)", async () => {
+    await render(<AppDialog />);
+    const onDelete = await showTypedConfirm();
+
+    await fireEvent.changeText(screen.getByTestId("app-dialog-confirm-input"), "main library");
+    const del = screen.getByLabelText("Delete");
+    expect(del.props.accessibilityState.disabled).toBe(false);
+    await fireEvent.press(del);
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the exact casing when caseSensitive is true", async () => {
+    await render(<AppDialog />);
+    await showTypedConfirm({
+      confirmInput: { placeholder: "Library name", requiredText: "Main Library", caseSensitive: true },
+    });
+
+    await fireEvent.changeText(screen.getByTestId("app-dialog-confirm-input"), "main library");
+    expect(screen.getByLabelText("Delete").props.accessibilityState.disabled).toBe(true);
+
+    await fireEvent.changeText(screen.getByTestId("app-dialog-confirm-input"), "Main Library");
+    expect(screen.getByLabelText("Delete").props.accessibilityState.disabled).toBe(false);
+  });
+
+  it("leaves non-last buttons usable while the confirm is unmatched", async () => {
+    await render(<AppDialog />);
+    const onDelete = await showTypedConfirm();
+
+    const cancel = screen.getByLabelText("Cancel");
+    expect(cancel.props.accessibilityState.disabled).toBe(false);
+    await fireEvent.press(cancel);
+    expect(useDialogStore.getState().current).toBeNull();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("renders no input and no disabled buttons for dialogs without confirmInput", async () => {
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({ title: "Plain", buttons: [{ text: "OK" }] });
+    });
+    await screen.findByText("Plain");
+
+    expect(screen.queryByTestId("app-dialog-confirm-input")).toBeNull();
+    expect(screen.getByLabelText("OK").props.accessibilityState.disabled).toBe(false);
+  });
+
+  it("resets the typed text when a new dialog is shown", async () => {
+    await render(<AppDialog />);
+    await showTypedConfirm();
+    await fireEvent.changeText(screen.getByTestId("app-dialog-confirm-input"), "Main Library");
+    await fireEvent.press(screen.getByLabelText("Cancel"));
+
+    // Re-open: previous input must not pre-satisfy the new confirmation.
+    await showTypedConfirm();
+    expect(screen.getByTestId("app-dialog-confirm-input").props.value).toBe("");
+    expect(screen.getByLabelText("Delete").props.accessibilityState.disabled).toBe(true);
   });
 
   it("announces the dialog to the screen reader when it opens", async () => {

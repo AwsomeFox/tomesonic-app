@@ -13,6 +13,19 @@ export interface AppDialogButton {
   style?: AppDialogButtonStyle;
 }
 
+/**
+ * Typed-confirm gate for high-stakes destructive dialogs: when present,
+ * AppDialog renders a TextInput between the message and the buttons, and the
+ * LAST button (the destructive/confirm action by convention) stays disabled
+ * until the input matches requiredText.
+ */
+export interface AppDialogConfirmInput {
+  placeholder: string;
+  requiredText: string;
+  /** Defaults to false — matching is case-insensitive unless set. */
+  caseSensitive?: boolean;
+}
+
 export interface AppDialogOptions {
   title?: string;
   message?: string;
@@ -20,6 +33,8 @@ export interface AppDialogOptions {
   buttons?: AppDialogButton[];
   /** When false, the scrim/back-button can't dismiss without choosing a button. */
   cancelable?: boolean;
+  /** Require typing requiredText before the last (confirm) button enables. */
+  confirmInput?: AppDialogConfirmInput;
 }
 
 interface DialogState {

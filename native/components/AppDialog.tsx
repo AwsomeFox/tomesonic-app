@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from "react";
-import { View, Text, Pressable, Modal, Platform, AccessibilityInfo, findNodeHandle } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { View, Text, TextInput, Pressable, Modal, Platform, AccessibilityInfo, findNodeHandle } from "react-native";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { useDialogStore, AppDialogButton } from "../store/useDialogStore";
@@ -27,6 +27,14 @@ export default function AppDialog() {
   // setAccessibilityFocus pattern the PlayerBottomSheet uses on expand.
   const titleRef = useRef<Text>(null);
   const containerRef = useRef<View>(null);
+
+  // Typed-confirm input value, keyed to the dialog it was typed into (the
+  // derive-on-render reset pattern, no effect): a previous dialog's text can
+  // never pre-satisfy the next confirmation.
+  const [typed, setTyped] = useState<{ dialog: unknown; text: string }>({ dialog: null, text: "" });
+  const confirmText = typed.dialog === dialog ? typed.text : "";
+  const setConfirmText = (text: string) => setTyped({ dialog, text });
+
   useEffect(() => {
     if (!dialog) return;
     const t = setTimeout(() => {
@@ -42,7 +50,20 @@ export default function AppDialog() {
 
   if (!dialog) return null;
 
-  const onButton = (b: AppDialogButton) => {
+  // Typed-confirm gate: the LAST button (destructive/confirm by convention)
+  // stays disabled until the input matches requiredText. Case-insensitive
+  // unless caseSensitive is set.
+  const confirmInput = dialog.confirmInput;
+  const confirmMatched =
+    !confirmInput ||
+    (confirmInput.caseSensitive
+      ? confirmText === confirmInput.requiredText
+      : confirmText.toLowerCase() === confirmInput.requiredText.toLowerCase());
+  const isButtonDisabled = (i: number) =>
+    !!confirmInput && !confirmMatched && i === dialog.buttons.length - 1;
+
+  const onButton = (b: AppDialogButton, i: number) => {
+    if (isButtonDisabled(i)) return;
     dismiss();
     b.onPress?.();
   };
@@ -114,20 +135,54 @@ export default function AppDialog() {
             {dialog.message}
           </Text>
         ) : null}
+        {confirmInput ? (
+          <TextInput
+            testID="app-dialog-confirm-input"
+            value={confirmText}
+            onChangeText={setConfirmText}
+            placeholder={confirmInput.placeholder}
+            placeholderTextColor={colors.onSurfaceVariant}
+            accessibilityLabel={`Type ${confirmInput.requiredText} to confirm`}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={{
+              color: colors.onSurface,
+              fontSize: 15,
+              borderWidth: 1,
+              borderColor: colors.outline,
+              borderRadius: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              marginBottom: 20,
+              backgroundColor: colors.surfaceContainerHighest,
+            }}
+          />
+        ) : null}
         <View style={{ flexDirection: "row", justifyContent: "flex-end", flexWrap: "wrap" }}>
-          {dialog.buttons.map((b, i) => (
-            <Pressable
-              key={`${b.text}-${i}`}
-              onPress={() => onButton(b)}
-              accessibilityRole="button"
-              accessibilityLabel={b.text}
-              hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-              android_ripple={{ color: withAlpha(buttonColor(b), 0.14), borderless: false }}
-              style={{ marginLeft: 8, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 20, overflow: "hidden" }}
-            >
-              <Text style={{ color: buttonColor(b), fontSize: 14, fontWeight: "600" }}>{b.text}</Text>
-            </Pressable>
-          ))}
+          {dialog.buttons.map((b, i) => {
+            const disabled = isButtonDisabled(i);
+            return (
+              <Pressable
+                key={`${b.text}-${i}`}
+                onPress={() => onButton(b, i)}
+                accessibilityRole="button"
+                accessibilityLabel={b.text}
+                accessibilityState={{ disabled }}
+                hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                android_ripple={{ color: withAlpha(buttonColor(b), 0.14), borderless: false }}
+                style={{
+                  marginLeft: 8,
+                  paddingVertical: 10,
+                  paddingHorizontal: 12,
+                  borderRadius: 20,
+                  overflow: "hidden",
+                  opacity: disabled ? 0.5 : 1,
+                }}
+              >
+                <Text style={{ color: buttonColor(b), fontSize: 14, fontWeight: "600" }}>{b.text}</Text>
+              </Pressable>
+            );
+          })}
           </View>
         </View>
       </View>
