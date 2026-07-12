@@ -83,7 +83,15 @@ export default function PlayerChaptersQueueSheet({
   // True while the handle is being dragged: the body + backdrop must render
   // DURING the gesture, not only after release commits `expanded` — otherwise
   // dragging up reveals an empty sheet that pops its content in at the end.
+  // The ref mirrors the state for the once-created PanResponder, which can
+  // probe onMoveShouldSetPanResponder repeatedly and must not re-set state.
   const [dragging, setDragging] = useState(false);
+  const draggingRef = useRef(false);
+  const setDraggingGated = (v: boolean) => {
+    if (draggingRef.current === v) return;
+    draggingRef.current = v;
+    setDragging(v);
+  };
 
   const hasChapters = chapters && chapters.length > 0;
 
@@ -128,7 +136,7 @@ export default function PlayerChaptersQueueSheet({
       onMoveShouldSetPanResponder: (evt, gestureState) => {
         const { dx, dy } = gestureState;
         const claim = Math.abs(dy) > 4 && Math.abs(dy) > Math.abs(dx);
-        if (claim) setDragging(true);
+        if (claim) setDraggingGated(true);
         return claim;
       },
       onPanResponderMove: (evt, gestureState) => {
@@ -143,7 +151,7 @@ export default function PlayerChaptersQueueSheet({
         }
       },
       onPanResponderRelease: (evt, gestureState) => {
-        setDragging(false);
+        setDraggingGated(false);
         const p = subProgress.value;
         let targetExpanded = expandedRef.current;
         if (gestureState.vy < -0.2) {
@@ -157,7 +165,7 @@ export default function PlayerChaptersQueueSheet({
         onToggleExpand(targetExpanded);
       },
       onPanResponderTerminate: () => {
-        setDragging(false);
+        setDraggingGated(false);
         subProgress.value = withTiming(expandedRef.current ? 1 : 0, { duration: animDurationRef.current });
         onToggleExpand(expandedRef.current);
       },

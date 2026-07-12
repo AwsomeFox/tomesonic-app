@@ -255,6 +255,12 @@ function disarmShakeListener() {
 // While CASTING the receiver plays the audio — pausing the LOCAL player would
 // be wrong, so the JS path stays authoritative there and native stays off.
 let _nativeSleepArmed = false;
+// What the native enforcer was last told, so the EOC tick can detect drift
+// (seeks WITHIN the armed chapter change the JS remaining but not the native
+// deadline) and re-arm. Anchored to wall clock; only compared while playing,
+// which is when both countdowns actually run.
+let _nativeSleepArmedRemaining = 0;
+let _nativeSleepArmedAt = 0;
 function nativeSleepModule(): any | null {
   try {
     const RN = require("react-native");
@@ -270,6 +276,8 @@ function armNativeSleepTimer(seconds: number): boolean {
   if (!m || !Number.isFinite(seconds) || seconds <= 0) return false;
   const shakeSecs = getSleepShakeToExtend() ? SLEEP_SHAKE_MINUTES * 60 : 0;
   _nativeSleepArmed = true;
+  _nativeSleepArmedRemaining = seconds;
+  _nativeSleepArmedAt = Date.now();
   m.absSetSleepTimer(seconds, SLEEP_FADE_SECONDS, shakeSecs).catch(() => {
     _nativeSleepArmed = false;
   });
@@ -3072,9 +3080,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           const ch = chapters?.[liveIdx];
           remaining = ch ? Math.max(0, Math.round((ch.end || 0) - position)) : timer.remaining;
           armedIdx = liveIdx;
-          // The native enforcer runs a fixed countdown from the ORIGINAL
-          // chapter end — re-anchor it to the new one.
-          if (_nativeSleepArmed && !get().isCasting) armNativeSleepTimer(remaining);
         } else {
           const ch = chapters?.[liveIdx];
           // Chapter unknown this tick (gap / boundary transient / chapterless
@@ -3088,6 +3093,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         // not eat a 30-minute timer, and a throttled background gap while
         // PLAYING must consume its full duration on the next tick.
         remaining = get().isPlaying ? timer.remaining - elapsedS : timer.remaining;
+      }
+
+      // Native enforcer drift check (EOC timers): any seek — forward, back,
+      // or within the armed chapter — changes the JS remaining while the
+      // native fixed deadline stays put, so the service would pause at the
+      // OLD chapter end. Re-arm whenever the two countdowns disagree by >3s.
+      if (timer.endOfChapter && _nativeSleepArmed && !get().isCasting && get().isPlaying) {
+        const nativeExpected =
+          _nativeSleepArmedRemaining - (Date.now() - _nativeSleepArmedAt) / 1000;
+        if (Math.abs(remaining - nativeExpected) > 3) {
+          armNativeSleepTimer(remaining);
+        }
       }
 
       // Re-check the timer is still armed before touching volume or re-arming.

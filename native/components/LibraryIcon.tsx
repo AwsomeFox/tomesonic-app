@@ -8,13 +8,16 @@ import Icon, { IconName } from "./Icon";
  * /api/libraries; unknown/missing names fall back by media type.
  *
  * Android Auto maps the same SERVER NAMES natively (absLibraryIconRes in the
- * track-player patch) onto its bundled drawables. Keep the recognized NAME
- * LISTS in sync; the glyphs themselves intentionally differ where a set lacks
- * an equivalent (AA folds podcast→mic and book-1→menu-book, for example).
+ * track-player patch) onto bundled drawables. Keep the recognized NAME LISTS
+ * in sync. Glyphs are visually equivalent across the two sets even where the
+ * internal names differ — e.g. "book-1"/"audiobookshelf" render menu-book in
+ * both (the app's "book" glyph IS aa_library's path). The one deliberate
+ * divergence: "podcast" uses the podcast glyph here but a mic drawable in AA
+ * (no podcast vector is bundled natively).
  */
 export const ABS_ICON_MAP: Record<string, IconName> = {
   database: "database",
-  audiobookshelf: "library",
+  audiobookshelf: "book", // menu-book — same glyph as AA's aa_library
   "books-1": "books",
   "books-2": "collections",
   "book-1": "book",
