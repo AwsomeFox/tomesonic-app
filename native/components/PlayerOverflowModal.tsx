@@ -44,7 +44,7 @@ export default function PlayerOverflowModal({
       {/* Header */}
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 24, paddingTop: 12, paddingBottom: 16 }}>
         <Icon name="more-vert" size={24} color={colors.onSurface} style={{ marginRight: 12 }} />
-        <Text style={{ flex: 1, fontSize: 20, fontWeight: "600", color: colors.onSurface }}>Playback Options</Text>
+        <Text accessibilityRole="header" style={{ flex: 1, fontSize: 20, fontWeight: "600", color: colors.onSurface }}>Playback Options</Text>
       </View>
 
       {/* List items */}

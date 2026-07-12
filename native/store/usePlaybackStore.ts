@@ -602,11 +602,18 @@ function alertPlayFailure(message: string) {
 // Check network reachability using NetInfo with a short timeout to prevent hangs.
 async function checkIsConnectedWithTimeout(): Promise<boolean> {
   let isConnected = true;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     const NetInfo = require("@react-native-community/netinfo").default;
+    // The timeout arm RESOLVES (null = unknown) rather than rejecting, and is
+    // cleared when the fetch wins — a rejecting orphan timer fired after the
+    // race was already decided, surfacing as an unhandled rejection (and a
+    // dangling timer under fake-timer tests).
     const state: any = await Promise.race([
       NetInfo.fetch(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 1000)),
+      new Promise((res) => {
+        timer = setTimeout(() => res(null), 1000);
+      }),
     ]);
     // Strict booleans only: isConnected is boolean|null and `&&` would leak
     // null through, treating UNKNOWN as offline. Only an explicit false on
@@ -614,7 +621,9 @@ async function checkIsConnectedWithTimeout(): Promise<boolean> {
     // as the timeout/error path.
     isConnected = state?.isConnected !== false && state?.isInternetReachable !== false;
   } catch (e) {
-    // Keep true on timeout or error
+    // Keep true on error
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   return isConnected;
 }
@@ -1576,10 +1585,20 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           const progressPath = session.episodeId
             ? `/api/me/progress/${encodeURIComponent(itemId)}/${encodeURIComponent(session.episodeId)}`
             : `/api/me/progress/${encodeURIComponent(itemId)}`;
-          const res: any = await Promise.race([
-            api.get(progressPath),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 3000)),
-          ]);
+          // Timer is cleared when the request wins — an orphaned rejecting
+          // timeout after a decided race is an unhandled promise rejection.
+          let progressTimer: ReturnType<typeof setTimeout> | null = null;
+          let res: any;
+          try {
+            res = await Promise.race([
+              api.get(progressPath),
+              new Promise((_, rej) => {
+                progressTimer = setTimeout(() => rej(new Error("timeout")), 3000);
+              }),
+            ]);
+          } finally {
+            if (progressTimer) clearTimeout(progressTimer);
+          }
           const p = res?.data;
           const serverUpdatedAt = Number(p?.lastUpdate) || 0;
           const localUpdatedAt = Number(session.updatedAt) || 0;

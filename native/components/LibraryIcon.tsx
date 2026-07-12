@@ -7,8 +7,10 @@ import Icon, { IconName } from "./Icon";
  * the abs-icons font. The server sends one of a fixed set of names on
  * /api/libraries; unknown/missing names fall back by media type.
  *
- * The same name→glyph mapping exists natively for Android Auto
- * (absLibraryIconRes in the track-player patch) — keep the two in sync.
+ * Android Auto maps the same SERVER NAMES natively (absLibraryIconRes in the
+ * track-player patch) onto its bundled drawables. Keep the recognized NAME
+ * LISTS in sync; the glyphs themselves intentionally differ where a set lacks
+ * an equivalent (AA folds podcast→mic and book-1→menu-book, for example).
  */
 export const ABS_ICON_MAP: Record<string, IconName> = {
   database: "database",

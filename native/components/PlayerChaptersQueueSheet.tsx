@@ -89,7 +89,9 @@ export default function PlayerChaptersQueueSheet({
 
   useEffect(() => {
     subProgress.value = withTiming(expanded ? 1 : 0, { duration: animDuration });
-  }, [expanded]);
+    // animDuration in deps: a live reduce-motion change re-runs toward the
+    // same target with the fresh duration (harmless), instead of going stale.
+  }, [expanded, animDuration]);
 
   // Scroll to active chapter when chapters tab is selected or opened
   useEffect(() => {
@@ -347,6 +349,9 @@ export default function PlayerChaptersQueueSheet({
                         onTabChange(tab);
                       }}
                       accessibilityRole="tab"
+                      // Stable label (no live counts) for screen readers and
+                      // Maestro selectors; the visible text carries the count.
+                      accessibilityLabel={tab === "chapters" ? "Chapters tab" : "Up Next tab"}
                       accessibilityState={{ selected }}
                       style={{
                         flex: 1,
@@ -399,6 +404,9 @@ export default function PlayerChaptersQueueSheet({
                         }}
                         accessibilityRole="button"
                         accessibilityLabel={`${ch.title || `Chapter ${i + 1}`}, starts at ${secondsToTimestamp(ch.start || 0)}`}
+                        // Parity with the old ChaptersModal: announce the
+                        // currently-playing chapter as selected.
+                        accessibilityState={{ selected: active }}
                         style={{
                           flexDirection: "row",
                           alignItems: "center",

@@ -558,6 +558,7 @@ export default function SettingsScreen({ navigation, route }: any) {
                     }
                   }}
                   accessibilityRole="tab"
+                  accessibilityLabel={`${label} tab`}
                   accessibilityState={{ selected }}
                   style={{
                     flex: 1,
