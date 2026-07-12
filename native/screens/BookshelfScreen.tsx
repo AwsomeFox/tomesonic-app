@@ -471,6 +471,15 @@ export default function BookshelfScreen({ navigation }: any) {
       // Want to Read is scoped to the current library — clear the old library's
       // items so they don't flash under the new header before the refetch lands.
       setWantToReadItems([]);
+      // Shelf GEOMETRY caches are keyed by bare shelf.id, which repeats across
+      // libraries (recently-added, continue-listening, …) while the rows now
+      // remount per-library. Without a reset, the new library's rows briefly
+      // reuse the OLD library's viewport/content widths — flashing the "See
+      // all" chevron (and overflow state) incorrectly until fresh onLayout /
+      // onContentSizeChange measurements land.
+      shelfViewportW.current = {};
+      shelfContentW.current = {};
+      setShelfOverflow({});
     }
   }, [currentLibraryId]);
 
