@@ -29,7 +29,9 @@ interface Props {
   mainPlayerProgress: SharedValue<number>;
   chapters: any[];
   currentChapterIndex: number;
-  onSeekToChapter: (index: number) => void;
+  // The store action is async (TrackPlayer seek can reject) — typed as such
+  // so callers remember to handle the rejection.
+  onSeekToChapter: (index: number) => void | Promise<void>;
   queue: any[];
   removeFromQueue: (id: string, episodeId?: string | null) => void;
   clearQueue: () => void;
@@ -407,7 +409,10 @@ export default function PlayerChaptersQueueSheet({
                         key={ch.id ?? i}
                         onPress={() => {
                           haptic();
-                          onSeekToChapter(i);
+                          // Fire-and-forget with an explicit catch — a
+                          // rejected TrackPlayer seek must not surface as an
+                          // unhandled rejection (same pattern as play-next).
+                          Promise.resolve(onSeekToChapter(i)).catch(() => {});
                           onToggleExpand(false);
                         }}
                         accessibilityRole="button"
