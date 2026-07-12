@@ -279,7 +279,12 @@ function armNativeSleepTimer(seconds: number): boolean {
   _nativeSleepArmedRemaining = seconds;
   _nativeSleepArmedAt = Date.now();
   m.absSetSleepTimer(seconds, SLEEP_FADE_SECONDS, shakeSecs).catch(() => {
+    // The optimistic `true` return already disarmed the JS shake listener —
+    // if native never actually armed (module not bound yet, dead service),
+    // fall back to the JS listener so shake-to-extend keeps working for the
+    // still-active timer.
     _nativeSleepArmed = false;
+    if (usePlaybackStore.getState().sleepTimer) armShakeListener();
   });
   return true;
 }

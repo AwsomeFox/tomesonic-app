@@ -263,13 +263,11 @@ export default function PlayerChaptersQueueSheet({
           <Pressable
             onPress={toggleExpand}
             accessibilityRole="button"
-            accessibilityLabel={
-              expanded
-                ? "Chapters & Up Next"
-                : activeTab === "chapters"
-                ? "Chapters"
-                : "Up Next"
-            }
+            // Stable label for assistive tech / Maestro; the expanded state is
+            // announced via accessibilityState and the tab/count detail lives
+            // in the visible text.
+            accessibilityLabel="Chapters and Up Next"
+            accessibilityState={{ expanded }}
             style={{
               height: peekHeight,
               flexDirection: "row",
