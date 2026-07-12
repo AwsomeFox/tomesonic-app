@@ -606,6 +606,263 @@ ${FOLIATE_BUNDLE}
       }
       function hideCurl(){ curlEl.style.opacity = '0'; foldEl.style.opacity = '0'; }
 
+      // ---- Snapshot page curl: peel the REAL page pixels ----
+      // The translate+flap above never deformed the page, so it read as a
+      // flat slide. This path rasterizes the outgoing page (same-origin SVG
+      // foreignObject — fonts are system/Georgia so they survive; blob-loaded
+      // book CSS is inlined, visible <img>s converted to data URIs), flips
+      // the live view instantly UNDERNEATH the overlay, and draws the bitmap
+      // folding over with backside + cylinder shading — an actual page turn.
+      // Any snapshot failure falls back to the slide+flap for that drag, and
+      // after two failures the session stops trying (snapshotBroken).
+      var curlCanvas = document.createElement('canvas');
+      curlCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;z-index:20;display:none;';
+      document.body.appendChild(curlCanvas);
+      var curlCtx = curlCanvas.getContext('2d');
+      var snapshotBroken = 0;
+
+      function inlineDocStyles(srcDoc, cloneDoc){
+        // Book CSS commonly arrives via <link href="blob:..."> which an
+        // SVG-as-image will NOT fetch — serialize every readable sheet into
+        // a <style> tag instead, and drop the links.
+        try {
+          var head = cloneDoc.querySelector('head');
+          if (!head) return;
+          var links = head.querySelectorAll('link[rel="stylesheet"]');
+          for (var i = 0; i < links.length; i++) links[i].parentNode.removeChild(links[i]);
+          for (var j = 0; j < srcDoc.styleSheets.length; j++) {
+            try {
+              var rules = srcDoc.styleSheets[j].cssRules;
+              if (!rules) continue;
+              var css = '';
+              for (var k = 0; k < rules.length; k++) css += rules[k].cssText + '\n';
+              var st = cloneDoc.createElement('style');
+              st.textContent = css;
+              head.appendChild(st);
+            } catch(e) {}
+          }
+        } catch(e) {}
+      }
+
+      function inlineImages(srcDoc, cloneRoot){
+        // <img blob:...> inside an SVG image never loads — swap each one that
+        // is anywhere near the viewport for a data URI (same-origin, so the
+        // temp canvas stays untainted). Best-effort per image.
+        try {
+          var srcImgs = srcDoc.querySelectorAll('img');
+          var cloneImgs = cloneRoot.querySelectorAll('img');
+          for (var i = 0; i < srcImgs.length && i < cloneImgs.length; i++) {
+            var im = srcImgs[i];
+            try {
+              var r = im.getBoundingClientRect();
+              if (r.width < 1 || r.height < 1) continue;
+              if (!im.complete || !im.naturalWidth) { cloneImgs[i].removeAttribute('src'); continue; }
+              var c = document.createElement('canvas');
+              c.width = im.naturalWidth; c.height = im.naturalHeight;
+              c.getContext('2d').drawImage(im, 0, 0);
+              cloneImgs[i].setAttribute('src', c.toDataURL('image/jpeg', 0.82));
+            } catch(e) { try { cloneImgs[i].removeAttribute('src'); } catch(_e){} }
+          }
+        } catch(e) {}
+      }
+
+      // Rasterize the currently VISIBLE page into a window-sized bitmap.
+      function snapshotCurrentPage(){
+        return new Promise(function(resolve, reject){
+          try {
+            var contents = view.renderer.getContents ? view.renderer.getContents() : [];
+            if (!contents.length || !contents[0].doc) return reject('no doc');
+            var doc = contents[0].doc;
+            var iframe = doc.defaultView && doc.defaultView.frameElement;
+            if (!iframe) return reject('no frame');
+            var ifRect = iframe.getBoundingClientRect();
+            var w = W(), h = window.innerHeight || 640;
+            var fullW = Math.max(doc.documentElement.scrollWidth, Math.ceil(ifRect.width));
+            var fullH = Math.max(doc.documentElement.scrollHeight, Math.ceil(ifRect.height));
+            var sliceX = Math.max(0, Math.round(-ifRect.left));
+
+            var clone = doc.documentElement.cloneNode(true);
+            inlineDocStyles(doc, clone);
+            inlineImages(doc, clone);
+            clone.style.width = fullW + 'px';
+            clone.style.height = fullH + 'px';
+
+            var holder = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+            holder.appendChild(clone);
+            var xml = new XMLSerializer().serializeToString(holder);
+            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + fullW + '" height="' + fullH + '">' +
+                      '<foreignObject width="100%" height="100%">' + xml + '</foreignObject></svg>';
+            var url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+            var img = new Image();
+            var timer = setTimeout(function(){ reject('snapshot timeout'); }, 350);
+            img.onload = function(){
+              clearTimeout(timer);
+              try {
+                var dpr = Math.min(2, window.devicePixelRatio || 1);
+                var c = document.createElement('canvas');
+                c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+                var ctx = c.getContext('2d');
+                ctx.fillStyle = bg; ctx.fillRect(0, 0, c.width, c.height);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.drawImage(img, sliceX, 0, Math.min(w, fullW - sliceX), Math.min(h, fullH),
+                                    0, Math.max(0, ifRect.top), Math.min(w, fullW - sliceX), Math.min(h, fullH));
+                resolve({ canvas: c, dpr: dpr, w: w, h: h });
+              } catch(e) { reject(e); }
+            };
+            img.onerror = function(){ clearTimeout(timer); reject('svg raster failed'); };
+            img.src = url;
+          } catch(e) { reject(e); }
+        });
+      }
+
+      // Fold geometry: the leaf's grabbed edge follows edgeX; crease sits
+      // halfway between the edge and its home. Backside is the mirrored page
+      // with paper shading; strips add a slight cylinder bulge so it reads
+      // curved, not creased.
+      var curl = { state: 'idle', dir: 0, bmp: null, edgeX: 0, raf: 0, anim: null };
+
+      function drawFold(){
+        var b = curl.bmp; if (!b) return;
+        var w = b.w, h = b.h, dpr = b.dpr;
+        curlCanvas.width = Math.round(w * dpr); curlCanvas.height = Math.round(h * dpr);
+        curlCanvas.style.width = w + 'px'; curlCanvas.style.height = h + 'px';
+        var ctx = curlCtx;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        var e = curl.edgeX;
+        if (curl.dir < 0) {
+          // Forward: right edge dragged left to e. Crease c = (e + w) / 2.
+          var c = (e + w) / 2;
+          if (c <= 0) return; // fully turned — nothing left to draw
+          // Front (still-flat) part of the leaf.
+          ctx.drawImage(b.canvas, 0, 0, c * dpr, h * dpr, 0, 0, c, h);
+          // Shadow the crease casts back onto the flat part.
+          var sh = ctx.createLinearGradient(c - 34, 0, c, 0);
+          sh.addColorStop(0, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(0,0,0,0.28)');
+          ctx.fillStyle = sh; ctx.fillRect(Math.max(0, c - 34), 0, Math.min(34, c), h);
+          // Shadow cast on the REVEALED page ahead of the fold.
+          var us = ctx.createLinearGradient(c, 0, Math.min(w, c + 44), 0);
+          us.addColorStop(0, 'rgba(0,0,0,0.30)'); us.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = us; ctx.fillRect(c, 0, 44, h);
+          // Backside: content [c..w] folds over to [e..c], mirrored, in strips
+          // with a subtle vertical bulge (cylinder illusion).
+          var backW = c - e;
+          if (backW > 0.5) {
+            var strips = 24;
+            for (var i = 0; i < strips; i++) {
+              var t0 = i / strips, t1 = (i + 1) / strips;
+              var dx0 = c - backW * t0, dx1 = c - backW * t1; // dest right→left
+              var sx0 = c + (w - c) * t0, sx1 = c + (w - c) * t1; // src left→right
+              var bulge = Math.sin(Math.PI * t0) * Math.min(10, backW * 0.06);
+              ctx.drawImage(b.canvas, sx0 * dpr, 0, Math.max(1, (sx1 - sx0) * dpr), h * dpr,
+                                       dx1, -bulge / 2, Math.max(1, dx0 - dx1), h + bulge);
+            }
+            // Paper-back tint + crease highlight.
+            ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.fillRect(e, 0, backW, h);
+            var bs = ctx.createLinearGradient(e, 0, c, 0);
+            bs.addColorStop(0, 'rgba(0,0,0,0.22)'); bs.addColorStop(0.45, 'rgba(0,0,0,0)');
+            bs.addColorStop(0.94, 'rgba(0,0,0,0.10)'); bs.addColorStop(1, 'rgba(0,0,0,0.24)');
+            ctx.fillStyle = bs; ctx.fillRect(e, 0, backW, h);
+          }
+        } else {
+          // Backward: LEFT edge dragged right to e. Crease c = e / 2.
+          var c2 = e / 2;
+          if (c2 >= w) return;
+          ctx.drawImage(b.canvas, c2 * dpr, 0, (w - c2) * dpr, h * dpr, c2, 0, w - c2, h);
+          var sh2 = ctx.createLinearGradient(c2, 0, c2 + 34, 0);
+          sh2.addColorStop(0, 'rgba(0,0,0,0.28)'); sh2.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = sh2; ctx.fillRect(c2, 0, 34, h);
+          var us2 = ctx.createLinearGradient(Math.max(0, c2 - 44), 0, c2, 0);
+          us2.addColorStop(0, 'rgba(0,0,0,0)'); us2.addColorStop(1, 'rgba(0,0,0,0.30)');
+          ctx.fillStyle = us2; ctx.fillRect(Math.max(0, c2 - 44), 0, Math.min(44, c2), h);
+          var backW2 = e - c2;
+          if (backW2 > 0.5) {
+            var strips2 = 24;
+            for (var i2 = 0; i2 < strips2; i2++) {
+              var u0 = i2 / strips2, u1 = (i2 + 1) / strips2;
+              var ddx0 = c2 + backW2 * u0, ddx1 = c2 + backW2 * u1;
+              var ssx0 = c2 - c2 * u0, ssx1 = c2 - c2 * u1;
+              var bulge2 = Math.sin(Math.PI * u0) * Math.min(10, backW2 * 0.06);
+              ctx.drawImage(b.canvas, ssx1 * dpr, 0, Math.max(1, (ssx0 - ssx1) * dpr), h * dpr,
+                                       ddx0, -bulge2 / 2, Math.max(1, ddx1 - ddx0), h + bulge2);
+            }
+            ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.fillRect(c2, 0, backW2, h);
+            var bs2 = ctx.createLinearGradient(c2, 0, e, 0);
+            bs2.addColorStop(0, 'rgba(0,0,0,0.24)'); bs2.addColorStop(0.06, 'rgba(0,0,0,0.10)');
+            bs2.addColorStop(0.55, 'rgba(0,0,0,0)'); bs2.addColorStop(1, 'rgba(0,0,0,0.22)');
+            ctx.fillStyle = bs2; ctx.fillRect(c2, 0, backW2, h);
+          }
+        }
+      }
+
+      function curlBegin(dir){
+        if (snapshotBroken >= 2) return; // stick to the fallback this session
+        curl.state = 'pending'; curl.dir = dir;
+        snapshotCurrentPage().then(function(bmp){
+          if (curl.state !== 'pending') return; // drag already ended
+          curl.bmp = bmp;
+          // Show the full snapshot ON TOP, then flip the live view under it —
+          // the reveal beneath the peel is the REAL destination page.
+          curl.edgeX = dir < 0 ? W() : 0;
+          curlCanvas.style.display = 'block';
+          drawFold();
+          try { if (dir < 0) window.goNext(); else window.goPrev(); } catch(e) {}
+          curl.state = 'ready';
+        }).catch(function(){
+          snapshotBroken++;
+          if (curl.state === 'pending') curl.state = 'fallback';
+        });
+      }
+      function curlMove(fingerX){
+        if (curl.state !== 'ready') return;
+        curl.edgeX = fingerX;
+        if (!curl.raf) curl.raf = requestAnimationFrame(function(){ curl.raf = 0; drawFold(); });
+      }
+      function curlSettle(commit){
+        // Animate the edge home (commit: fully off; cancel: back flat) and
+        // clean up. On cancel the live view flips back beneath the overlay.
+        if (curl.state !== 'ready') { curl.state = 'idle'; return; }
+        curl.state = 'settling';
+        var target;
+        if (curl.dir < 0) target = commit ? -curl.bmp.w : curl.bmp.w;
+        else target = commit ? 2 * curl.bmp.w : 0;
+        var from = curl.edgeX, start = Date.now(), dur = 240;
+        drag.animating = true;
+        function step(){
+          var t = Math.min(1, (Date.now() - start) / dur);
+          var k = 1 - (1 - t) * (1 - t); // ease-out
+          curl.edgeX = from + (target - from) * k;
+          drawFold();
+          if (t < 1) { requestAnimationFrame(step); return; }
+          if (!commit) { try { if (curl.dir < 0) window.goPrev(); else window.goNext(); } catch(e) {} }
+          // Give the (possibly restoring) live view a frame before uncovering.
+          setTimeout(function(){
+            curlCanvas.style.display = 'none';
+            curl.bmp = null; curl.state = 'idle'; drag.animating = false;
+          }, commit ? 0 : 90);
+        }
+        requestAnimationFrame(step);
+      }
+      // Scripted full turn for taps / edge swipes — same peel, driven by time.
+      function curlAuto(dir){
+        if (drag.animating || curl.state !== 'idle') return false;
+        if (snapshotBroken >= 2) return false;
+        drag.animating = true;
+        curlBegin(dir);
+        var waited = 0;
+        (function go(){
+          if (curl.state === 'ready') {
+            drag.animating = false;
+            curl.edgeX = dir < 0 ? W() * 0.72 : W() * 0.28; // start mid-peel
+            drawFold();
+            curlSettle(true);
+          } else if (curl.state === 'fallback' || waited > 400) {
+            curl.state = 'idle'; drag.animating = false; finishTurn(dir);
+          } else { waited += 16; setTimeout(go, 16); }
+        })();
+        return true;
+      }
+
       // Slide the current page fully off in the turn direction, then swap to the
       // neighbor and reset. The uncovered strip is the page-colored background,
       // reading as the blank margin of a turning leaf.
@@ -631,7 +888,10 @@ ${FOLIATE_BUNDLE}
         setTimeout(function(){ view.style.transition = ''; drag.animating = false; }, 170);
       }
       // Discrete turn honoring the current mode (animated when the curl is on).
-      function turn(dir){ if (curlEnabled) finishTurn(dir); else if (dir < 0) window.goNext(); else window.goPrev(); }
+      function turn(dir){
+        if (curlEnabled) { if (!curlAuto(dir)) finishTurn(dir); }
+        else if (dir < 0) window.goNext(); else window.goPrev();
+      }
 
       // Shared handlers — bound BOTH to the outer document (margins / gaps
       // around the iframe) AND, via attachPageTurn, to each section document.
@@ -656,9 +916,16 @@ ${FOLIATE_BUNDLE}
             // let foliate/selection behave, do NOT suppress.
             if (Math.abs(dx) <= Math.abs(dy) * 1.2) { drag.active = false; return; }
             drag.decided = true; drag.dir = dx < 0 ? -1 : 1;
+            curlBegin(drag.dir);
           }
-          setPageX(dx);
-          showCurl(dx, Math.min(1, Math.abs(dx) / W()));
+          if (curl.state === 'ready') {
+            // Real peel: the bitmap's grabbed edge rides the finger.
+            curlMove(t.clientX);
+          } else if (curl.state === 'fallback' || snapshotBroken >= 2) {
+            // Snapshot failed — the old slide+flap still beats nothing.
+            setPageX(dx);
+            showCurl(dx, Math.min(1, Math.abs(dx) / W()));
+          }
           // A real horizontal drag is in progress — suppress foliate's own
           // bubble-phase swipe so the two systems don't fight. Harmless on the
           // outer document, where nothing else listens.
@@ -680,7 +947,24 @@ ${FOLIATE_BUNDLE}
             try { e.stopImmediatePropagation(); } catch(_e){}
             var progress = Math.abs(dx) / W();
             var fast = dt < 250 && Math.abs(dx) > 60;
-            if (progress > 0.25 || fast) finishTurn(drag.dir); else snapBack();
+            var commit = progress > 0.25 || fast;
+            if (curl.state === 'ready' || curl.state === 'pending') {
+              if (curl.state === 'pending') {
+                // Bitmap never landed — resolve the gesture the moment it does.
+                var pollStart = Date.now();
+                (function poll(){
+                  if (curl.state === 'ready') { curlSettle(commit); return; }
+                  if (curl.state === 'fallback' || Date.now() - pollStart > 400) {
+                    curl.state = 'idle';
+                    if (commit) finishTurn(drag.dir); else snapBack();
+                    return;
+                  }
+                  setTimeout(poll, 16);
+                })();
+              } else {
+                curlSettle(commit);
+              }
+            } else if (commit) finishTurn(drag.dir); else snapBack();
             return;
           }
           // Taps / vertical drags: over the text (a section document) let

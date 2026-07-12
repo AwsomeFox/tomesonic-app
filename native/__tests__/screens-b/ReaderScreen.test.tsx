@@ -869,8 +869,9 @@ describe("ReaderScreen (reader features)", () => {
     // Margin must be observed on the renderer (mirroring how `flow` is set),
     // otherwise changing the margin never re-lays-out the text.
     expect(html).toContain("view.renderer.setAttribute('margin', px + 'px')");
-    // The initial margin is also applied to the renderer after open.
-    expect(html).toContain("view.renderer.setAttribute('margin', \"16px\")");
+    // The initial margin is applied to the renderer after open, from the live
+    // curMargin binding (which style/theme pushes re-assert — see issue #2).
+    expect(html).toContain("view.renderer.setAttribute('margin', curMargin + 'px')");
     // The broken element-level margin assignment is gone.
     expect(html).not.toContain("view.setAttribute('margin'");
   });
@@ -880,7 +881,7 @@ describe("ReaderScreen (reader features)", () => {
     await renderReader();
     await readyWebView();
     let html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
-    expect(html).toContain('"16px"');
+    expect(html).toContain("let curMargin = 16;");
     expect(html).toContain("'paginated'");
   });
 
@@ -895,7 +896,7 @@ describe("ReaderScreen (reader features)", () => {
     expect(html).toContain("#f4ecd8");
     expect(html).toContain("#5b4636");
     // Wide margin + scrolled flow.
-    expect(html).toContain('"32px"');
+    expect(html).toContain("let curMargin = 32;");
     expect(html).toContain('"scrolled"');
   });
 

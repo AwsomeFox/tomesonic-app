@@ -130,7 +130,7 @@ describe("SeriesListScreen", () => {
 
     expect(await screen.findByText("First Series")).toBeTruthy();
     expect(api.get).toHaveBeenCalledWith(
-      "/api/libraries/lib1/series?limit=20&page=0&minified=1&sort=name&desc=0"
+      "/api/libraries/lib1/series?limit=30&page=0&minified=1&sort=name&desc=0"
     );
     expect(screen.getByLabelText("Series: First Series, 2 books")).toBeTruthy();
     expect(screen.getByLabelText("Series: Second Series, 5 books")).toBeTruthy();
@@ -171,7 +171,7 @@ describe("SeriesListScreen", () => {
     // addedAt defaults to descending.
     await waitFor(() =>
       expect(api.get).toHaveBeenCalledWith(
-        "/api/libraries/lib1/series?limit=20&page=0&minified=1&sort=addedAt&desc=1"
+        "/api/libraries/lib1/series?limit=30&page=0&minified=1&sort=addedAt&desc=1"
       )
     );
   });
@@ -209,7 +209,7 @@ describe("SeriesListScreen", () => {
 
     // The very first fetch already uses the restored sort — no OrderModal touch.
     expect(api.get).toHaveBeenCalledWith(
-      "/api/libraries/lib1/series?limit=20&page=0&minified=1&sort=totalDuration&desc=1"
+      "/api/libraries/lib1/series?limit=30&page=0&minified=1&sort=totalDuration&desc=1"
     );
   });
 
