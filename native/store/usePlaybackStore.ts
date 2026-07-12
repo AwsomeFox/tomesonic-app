@@ -742,7 +742,12 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
       const dl = useDownloadStore.getState().completedDownloads?.[itemId];
       const localCoverPart = (dl?.parts || []).find((p: any) => p.id === "cover")
         ?.localFilePath as string | undefined;
-      if (localCoverPart) path = localCoverPart;
+      // Legacy download rows can persist a BARE absolute path; Android Auto's
+      // artwork resolver (and the native byte loader) expect a file:// (or
+      // content://) URI, so normalize a bare "/…" path to a file:// URI.
+      if (localCoverPart) {
+        path = localCoverPart.startsWith("/") ? `file://${localCoverPart}` : localCoverPart;
+      }
     } catch {}
     if (!path) {
       // No local cover — fall back to caching the REMOTE url (needs network).

@@ -143,6 +143,29 @@ describe('usePlaybackStore "Enhance voice" + AA cover fallback', () => {
       expect(usePlaybackStore.getState().currentSession?.carArtworkLocal).toBe(localCoverPath);
     });
 
+    it("normalizes a legacy BARE absolute local cover path to a file:// URI", async () => {
+      const itemId = "item-bare-cover";
+      // A legacy download row may persist a bare "/data/..." path; the AA artwork
+      // resolver expects a file:// URI, so it must be normalized before use.
+      const barePath = "/data/user/0/com.tomesonic.app/files/downloads/item-bare-cover_Book/cover.jpg";
+      useDownloadStore.setState({
+        completedDownloads: {
+          [itemId]: {
+            id: itemId,
+            libraryItemId: itemId,
+            status: "completed",
+            parts: [{ id: "cover", filename: "cover.jpg", completed: true, localFilePath: barePath }],
+          },
+        },
+      } as any);
+      usePlaybackStore.setState({ currentSession: { id: "sb", libraryItemId: itemId } } as any);
+
+      await cacheNowPlayingCoverLocally(itemId, "http://server/api/items/x/cover?token=t", 0);
+
+      expect(FileSystem.downloadAsync).not.toHaveBeenCalled();
+      expect(usePlaybackStore.getState().currentSession?.carArtworkLocal).toBe(`file://${barePath}`);
+    });
+
     it("falls back to caching the remote url when there is no local cover part", async () => {
       const itemId = "item-no-cover";
       (FileSystem.getInfoAsync as jest.Mock).mockResolvedValue({ exists: false });

@@ -453,7 +453,10 @@ export const downloader = {
 
       coverBackfillInFlight.add(libraryItemId);
       try {
-        const destPath = `${folder}cover.jpg`;
+        // Join defensively: fresh downloads' localFolderPath always ends with
+        // "/" (bookFolderPath), but a legacy persisted row might not — a bare
+        // concat would then write ".../book1cover.jpg" and persist that bad path.
+        const destPath = folder.endsWith("/") ? `${folder}cover.jpg` : `${folder}/cover.jpg`;
         const res = await FileSystem.downloadAsync(url, destPath, {
           headers: { Authorization: `Bearer ${token}` },
         });
