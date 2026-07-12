@@ -845,12 +845,13 @@ export function reconcileLinkedProgress(
   // read-but-unlistened both-format book (ebook ~100%, audio ~0%) would
   // otherwise reconcile to target 1.0 and PATCH the untouched audiobook as
   // finished with no confirmation — destroying its "unstarted" state. When the
-  // lagging side hasn't been started (≈0) and the target is a finish (>=0.99),
-  // skip: there is nothing to link yet. Partial↔partial reconciles, and moving
-  // an unstarted side to a NON-finished percentage (e.g. listen-only sync of the
-  // ebook %), still proceed — this guards ONLY the destructive finish jump, so
-  // it fires on both the manual toggle-ON and its ItemDetail focus-effect re-run.
-  if (target >= 0.99 && Math.min(audioFraction, ebookFraction) < LINK_EPSILON) return false;
+  // lagging side hasn't been started (≈0) and the target is a finish
+  // (>= NEAR_FINISH), skip: there is nothing to link yet. Partial↔partial
+  // reconciles, and moving an unstarted side to a NON-finished percentage
+  // (e.g. listen-only sync of the ebook %), still proceed — this guards ONLY
+  // the destructive finish jump, so it fires on both the manual toggle-ON and
+  // its ItemDetail focus-effect re-run.
+  if (target >= NEAR_FINISH && Math.min(audioFraction, ebookFraction) < LINK_EPSILON) return false;
   // When the audio duration is unknown we can't place a timestamp, so the audio
   // fraction can NEVER advance. If the ebook is furthest (audio is the lagging
   // side that would need to move up), syncBothProgressFraction skips the audio
