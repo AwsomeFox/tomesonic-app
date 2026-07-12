@@ -87,7 +87,18 @@ export type IconName =
   | "add"
   | "playlist-add"
   | "eye"
-  | "eye-off";
+  | "eye-off"
+  // ABS library-icon glyphs (server-chosen per library; see LibraryIcon).
+  | "database"
+  | "radio"
+  | "rss"
+  | "music"
+  | "image"
+  | "rocket"
+  | "power"
+  | "star"
+  | "mic"
+  | "books";
 
 type Family = "mi" | "mci";
 
@@ -174,6 +185,16 @@ const MAP: Record<IconName, [Family, string]> = {
   "playlist-add": ["mi", "playlist-add"],
   eye: ["mi", "visibility"],
   "eye-off": ["mi", "visibility-off"],
+  database: ["mi", "storage"],
+  radio: ["mi", "radio"],
+  rss: ["mi", "rss-feed"],
+  music: ["mi", "music-note"],
+  image: ["mi", "image"],
+  rocket: ["mi", "rocket-launch"],
+  power: ["mi", "power-settings-new"],
+  star: ["mi", "star"],
+  mic: ["mi", "mic"],
+  books: ["mi", "library-books"],
 };
 
 interface IconProps {

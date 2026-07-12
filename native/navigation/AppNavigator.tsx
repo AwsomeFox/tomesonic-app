@@ -34,6 +34,8 @@ import GenreBrowseScreen from "../screens/GenreBrowseScreen";
 import YearInReviewScreen from "../screens/YearInReviewScreen";
 import PodcastSettingsScreen from "../screens/PodcastSettingsScreen";
 import { useRmabStore } from "../store/useRmabStore";
+import { useLibraryStore } from "../store/useLibraryStore";
+import { libraryIconName } from "../components/LibraryIcon";
 import ReaderScreen from "../screens/ReaderScreen";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { useUiStore } from "../store/useUiStore";
@@ -74,6 +76,12 @@ function TabNavigator() {
   const rmabConnected = useRmabStore((s) => s.configured && s.authMode === "jwt");
   const showDiscoverWhenDisconnected = useUserStore((s) => s.settings.showDiscoverWhenDisconnected);
   const showDiscover = shouldShowDiscover(rmabConnected, showDiscoverWhenDisconnected);
+  // The Library tab wears the CURRENT library's server-assigned icon (parity
+  // with the original app), falling back to the generic glyph.
+  const currentLibraryIconName = useLibraryStore((s) => {
+    const lib = s.libraries.find((l) => l.id === s.currentLibraryId);
+    return lib ? libraryIconName(lib.icon, lib.mediaType) : ("library" as IconName);
+  });
 
   return (
     <Tab.Navigator
@@ -111,7 +119,7 @@ function TabNavigator() {
             }}
           >
             <Icon
-              name={TAB_ICONS[route.name] || "home"}
+              name={route.name === "Library" ? currentLibraryIconName : TAB_ICONS[route.name] || "home"}
               size={22}
               color={focused ? colors.onSecondaryContainer : colors.onSurfaceVariant}
             />

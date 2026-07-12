@@ -4,6 +4,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { useUiStore } from "../store/useUiStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import Icon from "./Icon";
+import LibraryIcon from "./LibraryIcon";
 import BottomSheet from "./BottomSheet";
 
 /**
@@ -64,8 +65,11 @@ export default function LibrarySelector() {
                       paddingVertical: 16,
                     }}
                   >
-                    <Icon
-                      name={lib.mediaType === "podcast" ? "podcast" : "library"}
+                    {/* The server-assigned per-library icon (parity with the
+                        original app), falling back by media type. */}
+                    <LibraryIcon
+                      icon={lib.icon}
+                      mediaType={lib.mediaType}
                       size={22}
                       color={active ? colors.primary : colors.onSurfaceVariant}
                     />

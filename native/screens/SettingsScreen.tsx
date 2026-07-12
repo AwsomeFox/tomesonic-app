@@ -86,6 +86,9 @@ export default function SettingsScreen({ navigation, route }: any) {
   const rmabConnectWithOidc = useRmabStore((s) => s.connectWithOidc);
   const rmabDisconnect = useRmabStore((s) => s.disconnect);
   const [rmabSheetOpen, setRmabSheetOpen] = React.useState(false);
+  // Which token flow the connect sheet shows: an admin-issued one-time login
+  // URL (full access) or a self-service rmab_ API key (search + requests).
+  const [rmabAuthTab, setRmabAuthTab] = React.useState<'url' | 'apiKey'>('url');
   const [rmabUrl, setRmabUrl] = React.useState('');
   const [rmabToken, setRmabToken] = React.useState('');
   // SSO (OIDC) sign-in: a WebView flow that needs no admin-issued login token.
@@ -453,20 +456,20 @@ export default function SettingsScreen({ navigation, route }: any) {
           </Text>
 
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
-            Server URL or login URL
+            Server address
           </Text>
           <TextInput
             value={rmabUrl}
             onChangeText={setRmabUrl}
-            placeholder="https://rmab.example.com/auth/token/login?token=…"
+            placeholder="https://rmab.example.com"
             placeholderTextColor={colors.onSurfaceVariant}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
             // A pasted login URL embeds the one-time token — mask it like the
-            // token field does.
+            // token field does. (Pasting the whole login URL here still works.)
             secureTextEntry={rmabUrl.includes('token=')}
-            accessibilityLabel="ReadMeABook server URL or login URL"
+            accessibilityLabel="ReadMeABook server address"
             style={{
               backgroundColor: colors.surfaceContainer,
               color: colors.onSurface,
@@ -475,6 +478,8 @@ export default function SettingsScreen({ navigation, route }: any) {
               paddingVertical: 10,
             }}
           />
+
+          {/* SSO — the easiest path, called out first. */}
           {rmabShowSso ? (
             <>
               <Pressable
@@ -505,48 +510,129 @@ export default function SettingsScreen({ navigation, route }: any) {
                 </Text>
               </Pressable>
               <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 8, marginBottom: 14 }}>
-                Sign in with your normal account — no login URL from an admin needed.
+                Single sign-on is the easiest way to connect — sign in with your normal
+                account, nothing to paste.
               </Text>
-
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
-                <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
-                <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginHorizontal: 10 }}>
-                  or use a token
-                </Text>
-                <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
-              </View>
             </>
           ) : (
             <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 14 }}>
-              Full access: paste the one-time login URL an admin generates under
-              Admin → Users → Edit permissions → Login Token. Everything below stays empty.
+              Enter your server address. If the server offers single sign-on — the easiest
+              way to connect — a sign-in button will appear here.
             </Text>
           )}
 
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
-            API token (optional)
-          </Text>
-          <TextInput
-            value={rmabToken}
-            onChangeText={setRmabToken}
-            placeholder="rmab_…"
-            placeholderTextColor={colors.onSurfaceVariant}
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry
-            accessibilityLabel="ReadMeABook API token (optional)"
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginHorizontal: 10 }}>
+              or connect with a token
+            </Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: colors.outlineVariant }} />
+          </View>
+
+          {/* Token-kind toggle: admin login URL vs self-service API key. */}
+          <View
+            accessibilityRole="tablist"
             style={{
-              backgroundColor: colors.surfaceContainer,
-              color: colors.onSurface,
-              borderRadius: 12,
-              paddingHorizontal: 14,
-              paddingVertical: 10,
+              flexDirection: 'row',
+              borderWidth: 1,
+              borderColor: colors.outline,
+              borderRadius: 20,
+              overflow: 'hidden',
+              marginBottom: 12,
             }}
-          />
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 8 }}>
-            Instead of a login URL: a plain server URL above plus an rmab_ token from Profile →
-            API Tokens. Limited to search and requests.
-          </Text>
+          >
+            {([
+              { key: 'url', label: 'Login URL' },
+              { key: 'apiKey', label: 'API key' },
+            ] as const).map(({ key, label }) => {
+              const selected = rmabAuthTab === key;
+              return (
+                <Pressable
+                  key={key}
+                  onPress={() => {
+                    if (rmabAuthTab !== key) {
+                      setRmabAuthTab(key);
+                      // The field means a different secret per tab — a stale
+                      // value from the other mode must not ride along.
+                      setRmabToken('');
+                    }
+                  }}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  style={{
+                    flex: 1,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    paddingVertical: 10,
+                    backgroundColor: selected ? colors.secondaryContainer : 'transparent',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: '700',
+                      color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                    }}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {rmabAuthTab === 'url' ? (
+            <>
+              <TextInput
+                value={rmabToken}
+                onChangeText={setRmabToken}
+                placeholder="https://rmab.example.com/auth/token/login?token=…"
+                placeholderTextColor={colors.onSurfaceVariant}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                secureTextEntry
+                accessibilityLabel="ReadMeABook login URL"
+                style={{
+                  backgroundColor: colors.surfaceContainer,
+                  color: colors.onSurface,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                }}
+              />
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 8 }}>
+                Full access. Paste the one-time login URL an admin generates under
+                Admin → Users → Edit permissions → Login Token. The server address is
+                read from the URL, so the field above can stay empty.
+              </Text>
+            </>
+          ) : (
+            <>
+              <TextInput
+                value={rmabToken}
+                onChangeText={setRmabToken}
+                placeholder="rmab_…"
+                placeholderTextColor={colors.onSurfaceVariant}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+                accessibilityLabel="ReadMeABook API key"
+                style={{
+                  backgroundColor: colors.surfaceContainer,
+                  color: colors.onSurface,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                }}
+              />
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 6, marginBottom: 8 }}>
+                Create one yourself under Profile → API Tokens, and fill in the server
+                address above. Limited to search and requests — series and author
+                browsing need SSO or a login URL.
+              </Text>
+            </>
+          )}
 
           {rmabSsoError || rmabError ? (
             // Live region: a failed connect otherwise just leaves the sheet

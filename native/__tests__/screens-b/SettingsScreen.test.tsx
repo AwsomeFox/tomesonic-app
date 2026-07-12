@@ -259,12 +259,12 @@ describe("SettingsScreen", () => {
   });
 
   describe("ReadMeABook SSO button gating", () => {
-    // Open the connect sheet and type an address into the URL field.
+    // Open the connect sheet and type an address into the server field.
     async function openSheetWithUrl(url: string) {
       await renderSettings();
       await fireEvent.press(screen.getByLabelText(/^Connect ReadMeABook/));
       await fireEvent.changeText(
-        screen.getByLabelText("ReadMeABook server URL or login URL"),
+        screen.getByLabelText("ReadMeABook server address"),
         url
       );
     }
@@ -302,14 +302,29 @@ describe("SettingsScreen", () => {
       (getRmabAuthProviders as jest.Mock).mockResolvedValue({ oidcEnabled: true });
       await renderSettings();
       await fireEvent.press(screen.getByLabelText(/^Connect ReadMeABook/));
-      // A raw API token in the token field (URL left empty) yields no origin,
-      // so the SSO button must stay hidden and the probe must not fire.
+      // Switch to the API-key tab and enter a raw token (server left empty):
+      // no origin can be derived, so the SSO button must stay hidden and the
+      // probe must not fire.
+      await fireEvent.press(screen.getByText("API key"));
       await fireEvent.changeText(
-        screen.getByLabelText("ReadMeABook API token (optional)"),
+        screen.getByLabelText("ReadMeABook API key"),
         "rmab_abc123"
       );
       expect(screen.queryByLabelText("Sign in with SSO")).toBeNull();
       expect(getRmabAuthProviders).not.toHaveBeenCalled();
+    });
+
+    it("token-kind toggle swaps the field and clears a stale value from the other mode", async () => {
+      await renderSettings();
+      await fireEvent.press(screen.getByLabelText(/^Connect ReadMeABook/));
+      // Default tab: login URL.
+      const urlField = screen.getByLabelText("ReadMeABook login URL");
+      await fireEvent.changeText(urlField, "https://rmab.test/auth/token/login?token=SECRET");
+      // Switch to API key: the field swaps and the stale login URL is cleared.
+      await fireEvent.press(screen.getByText("API key"));
+      const keyField = screen.getByLabelText("ReadMeABook API key");
+      expect(keyField.props.value).toBe("");
+      expect(screen.queryByLabelText("ReadMeABook login URL")).toBeNull();
     });
   });
 });
