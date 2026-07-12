@@ -8,7 +8,7 @@
  * display-toggled), so most labels appear 2×; tests use getAllBy* and press
  * the first match.
  */
-import { BackHandler } from "react-native";
+import { BackHandler, StyleSheet } from "react-native";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 
 // Toggle for the OS reduce-motion setting (Confetti reads useReducedMotion).
@@ -131,6 +131,7 @@ jest.mock("../../navigation/navigationRef", () => ({
 
 import { CastContext } from "react-native-google-cast";
 import PlayerBottomSheet from "../../components/PlayerBottomSheet";
+import { computePlayerLayout } from "../../utils/playerLayout";
 import { navigationRef } from "../../navigation/navigationRef";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -831,6 +832,72 @@ describe("PlayerBottomSheet — play queue", () => {
     await fireEvent.press(screen.getAllByLabelText("Chapters and Up Next")[0]);
     await fireEvent.press(screen.getByText("Up Next (0)"));
     expect(screen.getByText(/No books queued/)).toBeTruthy();
+  });
+});
+
+describe("PlayerBottomSheet — expanded cascade geometry (component ↔ util agreement)", () => {
+  // Pins the rendered in-flow boxes to computePlayerLayout's outputs so a
+  // future re-hardcoded literal in the component (which the pure-util tests
+  // can't see) fails here. Dims are driven the same way the component derives
+  // them: root onLayout → measured w/h; insets come from the safe-area mock
+  // above (top 24, bottom 0).
+  const DIMS = { width: 412, height: 915 };
+
+  async function measurePortrait() {
+    await fireEvent(screen.root!, "layout", {
+      nativeEvent: { layout: DIMS },
+    });
+  }
+
+  const flat = (el: any) => StyleSheet.flatten(el.props.style) as any;
+
+  it.each([
+    ["book bar ON", true],
+    ["book bar OFF", false],
+  ])("in-flow boxes match computePlayerLayout with %s", async (_label, showBook) => {
+    useUserStore.setState({
+      settings: {
+        ...useUserStore.getState().settings,
+        showPlayerBookProgress: showBook,
+        showPlayerChapterProgress: true,
+      },
+    } as any);
+    seedPlayer({ isPlayerExpanded: true });
+    await render(<PlayerBottomSheet />);
+    await measurePortrait();
+
+    const expected = computePlayerLayout({
+      screenWidth: DIMS.width,
+      screenHeight: DIMS.height,
+      insetTop: 24,
+      insetBottom: 0,
+      showBookProgress: showBook,
+    });
+
+    // Numeric info row: cover → numeric gap and row height.
+    const numeric = flat(screen.getByTestId("player-numeric-row"));
+    expect(numeric.marginTop).toBe(expected.COVER_TO_NUMERIC);
+    expect(numeric.height).toBe(expected.NUMERIC_H);
+
+    // Book bar: present with its exact box when ON, absent when OFF.
+    if (showBook) {
+      const bar = flat(screen.getByTestId("player-book-bar"));
+      expect(bar.marginTop).toBe(expected.BOOK_BAR_GAP);
+      expect(bar.height).toBe(expected.BOOK_BAR_H);
+    } else {
+      expect(screen.queryByTestId("player-book-bar")).toBeNull();
+    }
+
+    // Chapter scrubber: one delta covers both modes (12 after the bar's box,
+    // 8 directly after the numeric row) — the exact spacing the past
+    // title-crowding bug got wrong.
+    const scrubber = flat(screen.getByTestId("player-chapter-scrubber"));
+    expect(scrubber.marginTop).toBe(expected.NUMERIC_TO_SCRUBBER);
+    expect(scrubber.height).toBe(expected.SCRUBBER_H);
+
+    // Bottom pill: transport → pill gap (the element the cascade bug clipped).
+    const pill = flat(screen.getByTestId("player-bottom-pill"));
+    expect(pill.marginTop).toBe(expected.TRANSPORT_TO_PILL);
   });
 });
 

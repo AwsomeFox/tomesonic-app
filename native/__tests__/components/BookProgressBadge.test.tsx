@@ -294,6 +294,54 @@ describe("bookStatusA11yLabel (spoken card status for TalkBack)", () => {
   });
 });
 
+describe("badgePercent (pure 1–99 display clamp)", () => {
+  const { badgePercent } = require("../../components/BookProgressBadge");
+
+  it("never shows 0%: a barely-started fraction clamps up to 1", () => {
+    expect(badgePercent(0.004)).toBe(1);
+    expect(badgePercent(0)).toBe(1);
+    expect(badgePercent(0.001)).toBe(1);
+  });
+
+  it("never shows 100% until finished: a nearly-done fraction clamps down to 99", () => {
+    expect(badgePercent(0.999)).toBe(99);
+    expect(badgePercent(1)).toBe(99);
+    expect(badgePercent(0.995)).toBe(99); // rounds to 100 → clamped
+  });
+
+  it("passes ordinary fractions through as rounded percents", () => {
+    expect(badgePercent(0.5)).toBe(50);
+    expect(badgePercent(0.424)).toBe(42);
+    expect(badgePercent(0.425)).toBe(43);
+  });
+});
+
+describe("audioProgressFraction (progress ?? currentTime/duration fallback)", () => {
+  const { audioProgressFraction } = require("../../components/BookProgressBadge");
+
+  it("prefers the explicit progress field, clamped to 0..1", () => {
+    expect(audioProgressFraction(0.5, 0, 0)).toBe(0.5);
+    expect(audioProgressFraction(1.7, 0, 3600)).toBe(1);
+    expect(audioProgressFraction(-0.2, 1800, 3600)).toBe(0);
+  });
+
+  it("falls back to currentTime/duration when progress is null/undefined", () => {
+    expect(audioProgressFraction(undefined, 1800, 3600)).toBe(0.5);
+    expect(audioProgressFraction(null, 900, 3600)).toBe(0.25);
+  });
+
+  it("duration <= 0 fallback yields 0 — never NaN or Infinity", () => {
+    expect(audioProgressFraction(undefined, 0, 0)).toBe(0); // would be 0/0 = NaN
+    expect(audioProgressFraction(undefined, 500, 0)).toBe(0); // would be 500/0 = Infinity
+    expect(audioProgressFraction(undefined, 500, -10)).toBe(0);
+    expect(Number.isFinite(audioProgressFraction(undefined, 500, 0))).toBe(true);
+  });
+
+  it("a progress of exactly 0 is honored (not skipped for the time fallback)", () => {
+    expect(audioProgressFraction(0, 1800, 3600)).toBe(0);
+  });
+});
+
 describe("bookStatusA11yLabel matches the badge for dual-format finished states", () => {
   const { bookStatusA11yLabel } = require("../../components/BookProgressBadge");
   const dual = { id: "b1", media: { audioFiles: [{}], ebookFile: {}, duration: 3600 } };

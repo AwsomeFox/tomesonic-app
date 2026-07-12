@@ -51,8 +51,10 @@ export interface UpNextItem {
 // restarts (and so a cold start doesn't re-scan on the very first add).
 const _idCache = new Map<string, string>();
 
+const MMKV_KEY_PREFIX = "upNextPlaylistId_";
+
 function mmkvKey(libraryId: string): string {
-  return `upNextPlaylistId_${libraryId}`;
+  return `${MMKV_KEY_PREFIX}${libraryId}`;
 }
 
 function getCachedId(libraryId: string): string | null {
@@ -79,6 +81,29 @@ function clearCachedId(libraryId: string) {
   _idCache.delete(libraryId);
   try {
     storage.remove(mmkvKey(libraryId));
+  } catch {}
+}
+
+/**
+ * Wipe the ENTIRE playlist-id cache: the in-memory map AND every persisted
+ * `upNextPlaylistId_*` MMKV key, across all libraries.
+ *
+ * Called by useUserStore on logout and on an account switch. The cached ids
+ * were resolved under the PREVIOUS account's credentials — ABS playlists are
+ * per-user, so if account B (same server) inherited account A's cached id,
+ * B's first add/remove would aim its POST/DELETE at A's playlist. Today only
+ * server-side per-user scoping (a 404) stands between that and a cross-account
+ * write; clearing here removes the reliance on that backstop. The same-account
+ * case is unaffected: the persisted keys deliberately survive app restarts so
+ * a cold start doesn't re-scan the playlist list (see getCachedId).
+ */
+export function clearUpNextCache(): void {
+  _idCache.clear();
+  try {
+    storage
+      .getAllKeys()
+      .filter((k) => k.startsWith(MMKV_KEY_PREFIX))
+      .forEach((k) => storage.remove(k));
   } catch {}
 }
 

@@ -45,6 +45,7 @@ import Confetti from "./Confetti";
 import { showAppDialog } from "../store/useDialogStore";
 import { resolveEbookTarget, readingFractionForAudioPosition, canJumpToFraction } from "../utils/formatSwitch";
 import { haptic } from "../utils/haptics";
+import { computePlayerLayout } from "../utils/playerLayout";
 import Pressable from "./HintPressable";
 
 const MINIPLAYER_HEIGHT = 68;
@@ -369,72 +370,51 @@ export default function PlayerBottomSheet() {
     return () => sub.remove();
   }, [isPlayerExpanded, setPlayerExpanded]);
 
-  // Responsive layout for the expanded player. Rather than stretching edge to
-  // edge, the content lives in a centered, max-width column (PW) so it stays
-  // balanced on tablets (Pixel Tablet portrait is ~800dp wide); on phones PW ==
-  // screenWidth so nothing changes. On tablets the whole block is also centered
-  // vertically instead of anchored to the top.
-  const isTablet = Math.min(screenWidth, screenHeight) >= 600;
-  // Landscape cover: sized to fit the (short) height, capped by width. Budget
-  // the 56px top bar + margins — the old 48px budget let the vertically-
-  // centered cover overflow up underneath the collapse button on phones.
-  const LS_COVER = Math.round(
-    Math.min(screenHeight - insets.top - insets.bottom - 56 - 32, screenWidth * 0.42)
-  );
-  const PW = Math.min(screenWidth, 480); // content column width
-  const PX = (screenWidth - PW) / 2; // column left inset
-  const COVER_SIZE_EXP = Math.min(PW - 80, Math.round(screenHeight * 0.42), isTablet ? 420 : 320);
-  const TOP_BAR_Y = insets.top + 8;
-  // In-flow vertical rhythm below the cover, expressed as the exact box each
-  // section occupies (marginTop + height). The absolute-overlay Y cascade
-  // (SOURCE_LABEL_Y…TRANSPORT_Y_EXP) AND the tablet-centering block height are
-  // BOTH derived from these deltas, so the two coordinate systems can't drift.
-  // When the book-progress bar is hidden, its whole box (marginTop 8 + height
-  // 12) drops out and the numeric row sits directly above the chapter scrubber.
-  const showBook = showPlayerBookProgress !== false;
-  const COVER_TO_NUMERIC = 12;          // cover bottom → numeric info row
-  const NUMERIC_H = 28;                 // numeric info row (chapter/book times)
-  const BOOK_BAR_BOX = showBook ? 8 + 12 : 0; // book WavyProgress marginTop + height
-  const NUMERIC_TO_SCRUBBER = showBook ? 12 : 8; // gap before the chapter scrubber
-  const SCRUBBER_H = 36;                // chapter scrubber row
-  const SCRUBBER_TO_TITLE = 20;         // comfortable bars → title gap (both modes)
-  const TITLE_H = 64;                   // title + author (+ chapter caption) block
-  const TITLE_TO_TRANSPORT = 12;        // title → transport gap
-  const TRANSPORT_H = 88;               // transport control row
-  const TRANSPORT_TO_PILL = 12;         // transport → bottom pill gap
-  const PILL_H = 56;                    // bottom pill (speed / sleep / bookmark)
-  // Height of the cover→pill block, used to vertically center it on tablets.
-  // Derived from the same deltas as the cascade so it stays book-bar-aware.
-  const CONTENT_BLOCK_H =
-    COVER_SIZE_EXP + COVER_TO_NUMERIC + NUMERIC_H + BOOK_BAR_BOX + NUMERIC_TO_SCRUBBER +
-    SCRUBBER_H + SCRUBBER_TO_TITLE + TITLE_H + TITLE_TO_TRANSPORT + TRANSPORT_H +
-    TRANSPORT_TO_PILL + PILL_H;
-  const availH = screenHeight - (TOP_BAR_Y + 56) - insets.bottom - 20;
-  const extraTop = isTablet ? Math.max(0, (availH - CONTENT_BLOCK_H) / 2) : 0;
-  const SOURCE_LABEL_Y = TOP_BAR_Y + 56 + 12 + extraTop;
-  const COVER_Y_EXP = SOURCE_LABEL_Y + 20 + 8;
-  const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + COVER_TO_NUMERIC;
-  // Scrubber top. When the book bar is shown its box sits between the numeric
-  // row and the scrubber; when hidden only the 8px gap remains. (The scrubber's
-  // own marginTop ternary below reconciles both cases against this value.)
-  const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + NUMERIC_H + BOOK_BAR_BOX + NUMERIC_TO_SCRUBBER;
-  const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + SCRUBBER_H + SCRUBBER_TO_TITLE;
-  const TRANSPORT_Y_EXP = TITLE_Y_EXP + TITLE_H + TITLE_TO_TRANSPORT;
-
-  // The full-player content uses a fixed absolute cascade inside a ScrollView
-  // whose scrolling is normally OFF (so the drag-to-collapse gesture runs
-  // cleanly). On short viewports — small phones, large system font — the
-  // cascade can run past the bottom of the screen and clip the bottom pill,
-  // which would then be unreachable. Measure the in-flow block bottom against
-  // the visible viewport and re-enable scrolling ONLY when it can't fit, so
-  // nothing is ever cut off; the top drag region still collapses the sheet.
-  const contentBottomY = TRANSPORT_Y_EXP + TRANSPORT_H + TRANSPORT_TO_PILL + PILL_H;
-  // Estimate from the constant cascade. It can UNDER-detect overflow when OS
-  // font/display scaling makes the pill or labels taller than their design
-  // heights (PILL_H etc. are dp constants, not measured), so it is combined
-  // with a REAL measurement of the ScrollView below — if the rendered content
+  // Responsive layout for the expanded player: the whole device-dependent Y
+  // cascade (source label → cover → bars → title → transport → pill), the
+  // tablet vertical centering, and the short-viewport overflow flag live in
+  // the pure computePlayerLayout (utils/playerLayout.ts) so unit tests can
+  // lock the arithmetic — two past device-only bugs were pure math drift in
+  // this cascade. See that file for the rationale behind each constant.
+  // The in-flow views below style themselves from the SAME destructured
+  // deltas (never re-hardcoded literals), so a tweak to a util constant moves
+  // the absolute overlays AND the in-flow content together.
+  const {
+    LS_COVER,
+    PW,
+    PX,
+    COVER_SIZE_EXP,
+    TOP_BAR_Y,
+    TOPBAR_TO_SOURCE,
+    SOURCE_TO_COVER,
+    COVER_TO_NUMERIC,
+    NUMERIC_H,
+    BOOK_BAR_GAP,
+    BOOK_BAR_H,
+    NUMERIC_TO_SCRUBBER,
+    SCRUBBER_H,
+    SCRUBBER_TO_TITLE,
+    TITLE_H,
+    TITLE_TO_TRANSPORT,
+    TRANSPORT_H,
+    TRANSPORT_TO_PILL,
+    extraTop,
+    COVER_Y_EXP,
+    TITLE_Y_EXP,
+    TRANSPORT_Y_EXP,
+    contentOverflows: contentOverflowsEstimate,
+  } = computePlayerLayout({
+    screenWidth,
+    screenHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    showBookProgress: showPlayerBookProgress !== false,
+  });
+  // The util's overflow flag is a geometry ESTIMATE from dp constants. It can
+  // UNDER-detect when OS font/display scaling makes the pill or labels taller
+  // than their design heights, so it's combined with a REAL measurement of the
+  // ScrollView (onLayout/onContentSizeChange below) — if the rendered content
   // is taller than the viewport, scrolling turns on regardless of the estimate.
-  const contentOverflowsEstimate = contentBottomY + 8 > screenHeight - insets.bottom;
   const [svViewportH, setSvViewportH] = useState(0);
   const [svContentH, setSvContentH] = useState(0);
   const measuredOverflow = svViewportH > 0 && svContentH > svViewportH + 1;
@@ -1051,7 +1031,7 @@ export default function PlayerBottomSheet() {
               </View>
 
               {/* Source label */}
-              <View style={{ marginTop: 12 + extraTop, justifyContent: "center" }}>
+              <View style={{ marginTop: TOPBAR_TO_SOURCE + extraTop, justifyContent: "center" }}>
                 <Text maxFontSizeMultiplier={1.3}
                   style={{
                     color: colors.onSurfaceVariant,
@@ -1066,12 +1046,13 @@ export default function PlayerBottomSheet() {
               </View>
 
               {/* Cover Art Placeholder (absolute layout overlay handles actual artwork rendering) */}
-              <View style={{ height: COVER_SIZE_EXP, marginTop: COVER_Y_EXP - SOURCE_LABEL_Y - 20 }} />
+              <View style={{ height: COVER_SIZE_EXP, marginTop: SOURCE_TO_COVER }} />
 
               {/* Consolidated Progress Section: Numeric Info (top slot) & Scrubber (bottom slot) */}
               {(showPlayerBookProgress !== false || showPlayerChapterProgress !== false) ? (
                 <View
-                  style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28, justifyContent: "center" }}
+                  testID="player-numeric-row"
+                  style={{ marginTop: COVER_TO_NUMERIC, height: NUMERIC_H, justifyContent: "center" }}
                   accessible
                   accessibilityLabel={[
                     showPlayerChapterProgress !== false
@@ -1107,15 +1088,16 @@ export default function PlayerBottomSheet() {
                   </View>
                 </View>
               ) : (
-                <View style={{ marginTop: BOOK_PROGRESS_Y - COVER_Y_EXP - COVER_SIZE_EXP, height: 28 }} />
+                <View style={{ marginTop: COVER_TO_NUMERIC, height: NUMERIC_H }} />
               )}
 
               {/* Overall Book Progress Bar */}
               {showPlayerBookProgress !== false ? (
                 <View
+                  testID="player-book-bar"
                   style={{
-                    marginTop: 8,
-                    height: 12,
+                    marginTop: BOOK_BAR_GAP,
+                    height: BOOK_BAR_H,
                     justifyContent: "center",
                   }}
                 >
@@ -1124,7 +1106,7 @@ export default function PlayerBottomSheet() {
                     playing={isPlaying}
                     color={colors.primary}
                     trackColor={withAlpha(colors.primary, 0.35)}
-                    height={12}
+                    height={BOOK_BAR_H}
                     strokeWidth={2.5}
                     amplitude={2}
                     wavelength={48}
@@ -1133,11 +1115,16 @@ export default function PlayerBottomSheet() {
                 </View>
               ) : null}
 
-              {/* Interactive Chapter Scrubber */}
+              {/* Interactive Chapter Scrubber. NUMERIC_TO_SCRUBBER already
+                  encodes both book-bar modes (12 after the bar's box, 8
+                  directly after the numeric row), so one delta serves as the
+                  marginTop whether the in-flow element above is the book bar
+                  or the numeric row. */}
               <View
+                testID="player-chapter-scrubber"
                 style={{
-                  marginTop: showPlayerBookProgress !== false ? 12 : (CHAPTER_PROGRESS_Y - BOOK_PROGRESS_Y - 28),
-                  height: 36,
+                  marginTop: NUMERIC_TO_SCRUBBER,
+                  height: SCRUBBER_H,
                   justifyContent: "center",
                 }}
               >
@@ -1168,7 +1155,7 @@ export default function PlayerBottomSheet() {
               </View>
 
               {/* Title & Author Placeholder (absolute overlay handles actual rendering) */}
-              <View style={{ height: 64, marginTop: TITLE_Y_EXP - CHAPTER_PROGRESS_Y - 36 }} />
+              <View style={{ height: TITLE_H, marginTop: SCRUBBER_TO_TITLE }} />
 
               {/* Transport Row Placeholder */}
               <View
@@ -1176,8 +1163,8 @@ export default function PlayerBottomSheet() {
                   flexDirection: "row",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  marginTop: TRANSPORT_Y_EXP - TITLE_Y_EXP - 64,
-                  height: 88,
+                  marginTop: TITLE_TO_TRANSPORT,
+                  height: TRANSPORT_H,
                 }}
               >
                 {/* Skip previous placeholder */}
@@ -1196,11 +1183,12 @@ export default function PlayerBottomSheet() {
                   play queue lives in the Chapters & Up Next peek sheet below
                   (and the overflow menu's Chapters List entry). */}
               <View
+                testID="player-bottom-pill"
                 style={{
                   flexDirection: "row",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  marginTop: 12,
+                  marginTop: TRANSPORT_TO_PILL,
                   backgroundColor: colors.surfaceContainerHigh,
                   borderRadius: 32,
                   paddingVertical: 10,

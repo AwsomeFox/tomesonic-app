@@ -1,0 +1,97 @@
+name: Android Unit Tests
+
+# JVM unit tests for the native Android module: the app's own Kotlin (resume
+# widget, cast options) plus the patched react-native-track-player logic that
+# app tests can reach (Android Auto search cache LRU, progress labels,
+# degraded sleep-timer guards, browse pagination spec).
+# Setup mirrors build-apk: same triggers, node/java versions and gradle cache.
+# No assemble — testDebugUnitTest compiles only JVM bytecode, so this stays
+# much faster than the APK build.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+# A new push to the same branch/PR cancels the still-running previous run.
+concurrency:
+  group: android-unit-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Stable check-run name for branch protection.
+    name: android-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v2
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      # Caches the Gradle distribution + dependency jars between runs —
+      # without it every run cold-downloads ~1GB before compiling.
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # Robolectric downloads its android-all-instrumented jar (~150MB) into
+      # the local Maven repo at TEST RUNTIME — setup-gradle's cache does not
+      # cover it. The key mirrors the robolectric version pinned by RN's
+      # version catalog and used via expoLibs in app/build.gradle; bump both
+      # together.
+      - name: Cache Robolectric android-all jars
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-android-all-4.15.1
+
+      # npm ci runs patch-package (postinstall), which applies the
+      # react-native-track-player patch whose MusicService the tests exercise.
+      - name: install dependencies
+        run: npm ci --prefix native
+
+      - name: run Android unit tests
+        # Run from native/android (not the repo root): the Sentry gradle
+        # snippet resolves its script path via `node --print require.resolve`,
+        # which needs native/node_modules reachable from the working directory.
+        # The Android SDK is preinstalled on ubuntu-latest (same assumption
+        # build-apk relies on). Scoped to :app so autolinked library modules
+        # don't drag their own (untended) test tasks into this job.
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: fail if no tests ran
+        # :app:testDebugUnitTest PASSES with zero compiled test sources, so a
+        # packaging or gitignore mistake that drops the test files would turn
+        # this required check green with nothing under test. Require at least
+        # one executed <testcase> in the JUnit XML results.
+        run: |
+          results="native/android/app/build/test-results/testDebugUnitTest"
+          count=$(grep -rho '<testcase' "$results" --include='*.xml' 2>/dev/null | wc -l)
+          echo "executed test cases: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No JUnit test cases executed (empty or missing $results) — test sources dropped from the build?"
+            exit 1
+          fi
+
+      - name: upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-reports
+          path: |
+            native/android/app/build/reports/tests/
+            native/android/app/build/test-results/

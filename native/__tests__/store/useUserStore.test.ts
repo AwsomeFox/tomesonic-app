@@ -54,6 +54,9 @@ import { clearAllPending } from "../../utils/progressSync";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
 import { db, dbStorage } from "../../utils/db";
 import { useUserStore } from "../../store/useUserStore";
+// Real module (api is mocked above): login/logout lazy-require it, and its
+// cache lives in a module-level map + MMKV — both covered by the fakes here.
+import { clearUpNextCache, findOrCreateUpNextPlaylist, upNextRemoveItem } from "../../utils/upNext";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 // Real store (like useDownloadStore above): login/logout lazy-require it, and
@@ -77,6 +80,9 @@ function clearStorage() {
 describe("useUserStore", () => {
   beforeEach(() => {
     clearStorage();
+    // The upNext playlist-id cache also lives in a module-level map that
+    // clearStorage() can't reach — reset it so tests stay independent.
+    clearUpNextCache();
     useUserStore.setState(initialUser, true);
     useLibraryStore.setState(initialLibrary, true);
     useDownloadStore.setState(initialDownloads, true);
@@ -407,6 +413,15 @@ describe("useUserStore", () => {
       // here, not only on the logout path.
       storage.set("favorites", JSON.stringify(["item1", "item2"]));
       storage.set("playbackQueue", JSON.stringify([{ libraryItemId: "item9" }]));
+      // Seed the server "Up Next" playlist-id cache exactly as account A's
+      // usage would: resolved from the server, cached in the module map + MMKV.
+      // ABS playlists are per-user — account B reusing this id would aim its
+      // first playlist POST/DELETE at A's playlist.
+      mockGet.mockResolvedValueOnce({
+        data: { results: [{ id: "plAccountA", name: "Up Next", items: [] }] },
+      } as any);
+      await findOrCreateUpNextPlaylist("lib1");
+      expect(storage.getString("upNextPlaylistId_lib1")).toBe("plAccountA");
 
       await useUserStore.getState().login(CONFIG_B, { id: "userB", mediaProgress: [] });
 
@@ -425,11 +440,24 @@ describe("useUserStore", () => {
       expect(favLeft === undefined || favLeft === "[]").toBe(true);
       const queueLeft = storage.getString("playbackQueue");
       expect(queueLeft === undefined || queueLeft === "[]").toBe(true);
+      // The Up Next playlist-id cache is wiped: the persisted key is gone...
+      expect(storage.getString("upNextPlaylistId_lib1")).toBeUndefined();
+      // ...and the MODULE-LEVEL map too — B's first remove re-resolves from
+      // the server (fresh GET) instead of DELETEing against A's playlist id.
+      mockGet.mockClear();
+      jest.mocked(api.delete).mockClear();
+      mockGet.mockResolvedValueOnce({ data: { results: [] } } as any);
+      await upNextRemoveItem("lib1", "item1");
+      expect(mockGet).toHaveBeenCalledWith("/api/libraries/lib1/playlists");
+      expect(api.delete).not.toHaveBeenCalled();
     });
 
     it("keeps caches and pending syncs when the same account re-logs in", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       seedPreviousSessionLeftovers();
+      // Same-account re-login keeps the Up Next playlist-id cache too — it's
+      // this account's own playlist, and the cache exists to avoid re-scans.
+      storage.set("upNextPlaylistId_lib1", "plAccountA");
 
       await useUserStore.getState().login(CONFIG_A, { id: "userA" });
 
@@ -437,6 +465,7 @@ describe("useUserStore", () => {
       expect(storage.getString("shelvesCache_lib1")).toBeDefined();
       expect(storageHelper.getLastLibraryId()).toBe("lib1");
       expect(storageHelper.getLastPlaybackSession()).toEqual({ id: "sess1", libraryItemId: "item1" });
+      expect(storage.getString("upNextPlaylistId_lib1")).toBe("plAccountA");
     });
 
     it("clears per-item link locks (linkedProgress) when switching accounts, keeping device prefs", async () => {
@@ -615,6 +644,13 @@ describe("useUserStore", () => {
         mediaProgress: { item1: {} },
       } as any);
       jest.mocked(api.post).mockResolvedValue({} as any);
+      // Seed the Up Next playlist-id cache as this account's usage would
+      // (module map + MMKV) — whoever logs in next must not inherit it.
+      mockGet.mockResolvedValueOnce({
+        data: { results: [{ id: "plAccountA", name: "Up Next", items: [] }] },
+      } as any);
+      await findOrCreateUpNextPlaylist("lib1");
+      expect(storage.getString("upNextPlaylistId_lib1")).toBe("plAccountA");
 
       await useUserStore.getState().logout();
 
@@ -628,6 +664,16 @@ describe("useUserStore", () => {
       expect(s.user).toBeNull();
       expect(s.serverConnectionConfig).toBeNull();
       expect(s.mediaProgress).toEqual({});
+      // Up Next playlist-id cache wiped: MMKV key gone AND the module map is
+      // cold — the next account's first remove re-resolves (fresh GET) instead
+      // of DELETEing against this account's playlist id.
+      expect(storage.getString("upNextPlaylistId_lib1")).toBeUndefined();
+      mockGet.mockClear();
+      jest.mocked(api.delete).mockClear();
+      mockGet.mockResolvedValueOnce({ data: { results: [] } } as any);
+      await upNextRemoveItem("lib1", "item1");
+      expect(mockGet).toHaveBeenCalledWith("/api/libraries/lib1/playlists");
+      expect(api.delete).not.toHaveBeenCalled();
     });
 
     it("stops surfacing downloads (aborts in-flight) but RETAINS files on disk, and wipes reader keys", async () => {

@@ -38,4 +38,10 @@ yarn-error.*
 
 # generated native folders
 /ios
-/android
+# NOTE: /android is intentionally NOT ignored. native/android is tracked
+# (checked-in prebuild output plus hand-maintained sources and tests); a
+# blanket /android ignore silently dropped every NEW file under it — e.g.
+# app/src/test — while `git add -A` still shipped the CI workflow that runs
+# those tests, yielding a green zero-test check. Build junk inside android/
+# (build/, .gradle/, .cxx/, local.properties, …) is covered by the tracked
+# native/android/.gitignore.

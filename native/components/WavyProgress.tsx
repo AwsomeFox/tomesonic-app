@@ -15,6 +15,14 @@ import { SPATIAL_SLOW } from "../theme/motion";
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
+/** Peak wave amplitude, clamped so the stroke never clips the SVG's top/bottom
+ *  edges: at most (height - strokeWidth) / 2, defaulting to 1px inside that
+ *  ceiling, and never below 0 (degenerate height <= strokeWidth flattens the
+ *  wave instead of going negative). Exported for tests. */
+export function clampedPeakAmp(height: number, strokeWidth: number, amplitude?: number): number {
+  return Math.max(0, Math.min(amplitude ?? (height - strokeWidth) / 2 - 1, (height - strokeWidth) / 2));
+}
+
 // M3 Expressive wavy linear progress: the played portion is a scrolling sine
 // wave (amplitude springs to flat when paused), the remainder is a flat track
 // separated by a small gap, with a stop dot at the far end. Read-only — for
@@ -68,10 +76,7 @@ export default function WavyProgress({
   }, [width]);
 
   // Peak amplitude, clamped so the stroke never clips the SVG edges.
-  const peakAmp = Math.max(
-    0,
-    Math.min(amplitude ?? (height - strokeWidth) / 2 - 1, (height - strokeWidth) / 2)
-  );
+  const peakAmp = clampedPeakAmp(height, strokeWidth, amplitude);
 
   useEffect(() => {
     // The wave only scrolls while playing so the bar reads as "alive" during
