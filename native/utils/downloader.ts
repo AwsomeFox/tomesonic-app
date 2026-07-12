@@ -27,6 +27,10 @@ const runningBooks = new Set<string>();
 // completion chain (e.g. if a user has several books mid-series queued up).
 const autoNextInFlight = new Set<string>();
 
+// De-dupes concurrent ensureLocalCover backfills for the same item (a prepare
+// racing itself, or repeated prepares before the fetch lands).
+const coverBackfillInFlight = new Set<string>();
+
 // Leave some headroom beyond the estimated download size when checking free
 // disk space so we don't fill the device to the last byte.
 const FREE_SPACE_MARGIN_BYTES = 50 * 1024 * 1024;
@@ -409,6 +413,81 @@ export const downloader = {
       downloadNotifications.clear(id);
     } finally {
       if (isCurrent()) runningBooks.delete(id);
+    }
+  },
+
+  /**
+   * BACKFILL a missing local cover for an already-completed BOOK download.
+   * Legacy downloads (pre-cover-part), or items whose cover part was skipped at
+   * download time, have no local `cover` part — so Android Auto's compact/mini
+   * tile is blank when offline. This fetches ONLY the cover into the item's
+   * existing local folder and records it as a real `cover` part (persisted to
+   * the download DB + store) so future prepares resolve it exactly like a
+   * natively-downloaded cover.
+   *
+   * Best-effort and safe to call opportunistically on playback prepare — no-ops
+   * (and never throws) when: the item isn't a completed download, it already has
+   * a local cover, it has no local folder, or there's no network/token (offline
+   * / logged out). Only the cover is fetched; the audio parts are untouched.
+   */
+  ensureLocalCover: async (libraryItemId: string) => {
+    try {
+      if (!libraryItemId) return;
+      if (coverBackfillInFlight.has(libraryItemId)) return;
+      const dl = useDownloadStore.getState().completedDownloads?.[libraryItemId];
+      // Only completed BOOK downloads (episode covers live under the composite
+      // key and aren't resolved here).
+      if (!dl || dl.status !== "completed" || dl.episodeId) return;
+      const existing = (dl.parts || []).find((p) => p.id === "cover")?.localFilePath;
+      if (existing) return;
+      const folder = dl.localFolderPath;
+      if (!folder) return;
+      const config = storageHelper.getServerConfig();
+      const serverAddress = (config?.address || "").replace(/\/$/, "");
+      const token = config?.token;
+      // Offline / logged out — nothing to fetch. Current behavior (blank tile
+      // when no local cover) stands; we just tried and couldn't do better.
+      if (!serverAddress || !token) return;
+      const url = buildCoverUrl(libraryItemId, serverAddress, token);
+      if (!url) return;
+
+      coverBackfillInFlight.add(libraryItemId);
+      try {
+        const destPath = `${folder}cover.jpg`;
+        const res = await FileSystem.downloadAsync(url, destPath, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res || (typeof res.status === "number" && res.status >= 400)) return;
+
+        // Record the cover as a real part so it survives restarts and future
+        // prepares treat it like any downloaded cover. Re-read the latest item
+        // (a parallel mutation may have landed) and only add if still missing.
+        const latest = useDownloadStore.getState().completedDownloads?.[libraryItemId];
+        if (!latest) return;
+        if ((latest.parts || []).find((p) => p.id === "cover")?.localFilePath) return;
+        const coverPart: DownloadPart = {
+          id: "cover",
+          filename: "cover.jpg",
+          url,
+          bytesDownloaded: 0,
+          fileSize: 0,
+          completed: true,
+          localFilePath: destPath,
+        };
+        const updated: DownloadItem = {
+          ...latest,
+          parts: [...(latest.parts || []), coverPart],
+        };
+        db.saveDownloadItem(updated);
+        useDownloadStore.setState((state) => ({
+          completedDownloads: { ...state.completedDownloads, [libraryItemId]: updated },
+        }));
+      } finally {
+        coverBackfillInFlight.delete(libraryItemId);
+      }
+    } catch {
+      // Best-effort — a failed backfill must never disturb playback.
+      coverBackfillInFlight.delete(libraryItemId);
     }
   },
 

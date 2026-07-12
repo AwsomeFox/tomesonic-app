@@ -4,7 +4,7 @@ import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import Animated, { FadeIn, LinearTransition } from "react-native-reanimated";
+import Animated, { FadeIn } from "react-native-reanimated";
 import { shelfCardEnter } from "../theme/motion";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
@@ -1119,12 +1119,16 @@ export default function BookshelfScreen({ navigation }: any) {
             const showSeeAll = !!libParams && !!shelfOverflow[shelf.id];
 
             return (
-              // Fade the shelf in when it (later) appears, and animate the
-              // layout shift of the shelves below it instead of snapping.
+              // Fade the shelf in when it (later) appears. No layout transition:
+              // displayShelves mutates repeatedly after first paint (Continue
+              // Reading/Want to Read/affinity/Continue Series all arrive async),
+              // and racing LinearTransition animations could commit a stale
+              // resting offset that Reanimated then drives directly — leaving
+              // two rows overlapping until a fresh mount. Plain flex flow can't
+              // leave rows stacked on top of each other.
               <Animated.View
                 key={shelf.id}
                 entering={FadeIn.duration(220)}
-                layout={LinearTransition.duration(250)}
                 style={{ width: "100%", position: "relative", paddingBottom: 4 }}
               >
                 {/* Shelf header: teal rounded accent bar + prominent title. When
@@ -1176,7 +1180,11 @@ export default function BookshelfScreen({ navigation }: any) {
                     shelfContentW.current[shelf.id] = w;
                     recomputeShelfOverflow(shelf.id);
                   }}
-                  contentContainerStyle={{ paddingHorizontal: 12, alignItems: "flex-end" }}
+                  // Stable minHeight matching the fixed card size (165) so a
+                  // late cover image load can't change the row's height after
+                  // first paint (which previously fed the layout animation stale
+                  // geometry). Cards are fixed-size, so this is a safe floor.
+                  contentContainerStyle={{ paddingHorizontal: 12, alignItems: "flex-end", minHeight: 165 }}
                 >
                   {shelf.entities?.map((entity: any, index: number) => {
                     if (isSeriesType) {

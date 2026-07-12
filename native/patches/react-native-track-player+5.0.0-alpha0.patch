@@ -205,10 +205,10 @@ index d6e3483..7c8675f 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-index 13a6c60..7d31a8e 100644
+index 13a6c60..a46fe7f 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-@@ -433,6 +433,21 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
+@@ -433,6 +433,30 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
          callback.resolve(null)
      }
  
@@ -227,11 +227,20 @@ index 13a6c60..7d31a8e 100644
 +        callback.resolve(null)
 +    }
 +
++    // ABS "Enhance voice": bind/unbind a native LoudnessEnhancer to the ExoPlayer
++    // audio session so quiet narration can be AMPLIFIED (ExoPlayer volume is
++    // clamped to [0,1]). Off by default; JS passes the target gain in millibels.
++    override fun absSetVoiceBoost(enabled: Boolean, gainMb: Double, callback: Promise) = launchInScope {
++        if (verifyServiceBoundOrReject(callback)) return@launchInScope
++        musicService.absSetVoiceBoost(enabled, gainMb.toInt())
++        callback.resolve(null)
++    }
++
      override fun setVolume(volume: Double, callback: Promise) = launchInScope {
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..8bd44e5 100644
+index b495b5a..89b4ec2 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -1151,15 +1160,7 @@ index b495b5a..8bd44e5 100644
 +        java.net.URLEncoder.encode(
 +            android.util.Base64.encodeToString(s.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP),
 +            "UTF-8"
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +
 +    private fun absItemsFromResults(
 +        path: String,
@@ -1233,7 +1234,15 @@ index b495b5a..8bd44e5 100644
 +            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
 +            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
 +            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +    }
 +
 +    // Continue Series: one browsable folder per series you're ACTIVE in —
@@ -1659,7 +1668,7 @@ index b495b5a..8bd44e5 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1558,65 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1558,72 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1671,6 +1680,13 @@ index b495b5a..8bd44e5 100644
 +            wakeMode = playerOptions?.let { BundleUtils.getIntOrNull(it, WAKE_MODE) } ?: 0
          )
          player = QueuedAudioPlayer(this@MusicService, options)
++        // A fresh player = a fresh ExoPlayer/audio session: drop any voice-boost
++        // effect + listener bound to the previous one, then re-attach so
++        // "Enhance voice" follows the new player (and re-applies once its audio
++        // session id is known).
++        absReleaseVoiceBoost()
++        absEnsureVoiceBoostSessionListener()
++        absApplyVoiceBoost()
 +        // Hand a live JS-dead Android Auto session off to JS BEFORE tearing down
 +        // fakePlayer. Without this, the app opening mid-drive silently stopped
 +        // the car's audio (fakePlayer.release) and restored a stale disk save
@@ -1727,7 +1743,7 @@ index b495b5a..8bd44e5 100644
          observeEvents()
      }
  
-@@ -293,9 +1699,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1706,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1739,7 +1755,7 @@ index b495b5a..8bd44e5 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1712,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1719,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1801,7 +1817,7 @@ index b495b5a..8bd44e5 100644
          }
      }
  
-@@ -395,6 +1835,151 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,6 +1842,239 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -1950,10 +1966,98 @@ index b495b5a..8bd44e5 100644
 +    }
 +    // ===== end ABS native sleep timer =====
 +
++    // ===== ABS voice boost ("Enhance voice") =====
++    // ExoPlayer's volume is clamped to [0,1] and CANNOT amplify quiet narration,
++    // so boosting requires an android.media.audiofx.LoudnessEnhancer bound to the
++    // ExoPlayer audio session. JS toggles it via absSetVoiceBoost (bridged through
++    // MusicModule). Off by default; the gain is a small positive value only when
++    // enabled. EVERYTHING here is wrapped in try/catch and NO-OPS on failure —
++    // some devices / audio-offload paths reject effect attach, and that must NEVER
++    // crash playback. The effect is re-created when ExoPlayer swaps audio sessions
++    // (offload on/off) via an AnalyticsListener, and released on teardown.
++    private var absVoiceBoostEnabled = false
++    private var absVoiceBoostGainMb = 0
++    private var absLoudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
++    private var absVoiceBoostSessionId = C.AUDIO_SESSION_ID_UNSET
++    private var absVoiceBoostListener: androidx.media3.exoplayer.analytics.AnalyticsListener? = null
++
++    @MainThread
++    fun absSetVoiceBoost(enabled: Boolean, gainMb: Int) {
++        absVoiceBoostEnabled = enabled
++        absVoiceBoostGainMb = if (gainMb > 0) gainMb else 0
++        absEnsureVoiceBoostSessionListener()
++        absApplyVoiceBoost()
++    }
++
++    // Attach ONCE per player: re-create the effect whenever ExoPlayer's audio
++    // session id changes, so the enhancer never stays bound to a dead session.
++    private fun absEnsureVoiceBoostSessionListener() {
++        if (absVoiceBoostListener != null || !::player.isInitialized) return
++        try {
++            val listener = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
++                override fun onAudioSessionIdChanged(
++                    eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
++                    audioSessionId: Int
++                ) {
++                    absApplyVoiceBoost()
++                }
++            }
++            player.exoPlayer.addAnalyticsListener(listener)
++            absVoiceBoostListener = listener
++        } catch (e: Exception) {
++            Timber.w(e, "ABS voice boost listener attach failed")
++        }
++    }
++
++    // (Re)create + configure the LoudnessEnhancer for the CURRENT audio session.
++    private fun absApplyVoiceBoost() {
++        try {
++            if (!::player.isInitialized) return
++            val sessionId = player.exoPlayer.audioSessionId
++            // Nothing prepared yet — no session to attach to. A later prepare
++            // fires onAudioSessionIdChanged, which re-invokes this.
++            if (sessionId == C.AUDIO_SESSION_ID_UNSET) return
++            if (absLoudnessEnhancer == null || absVoiceBoostSessionId != sessionId) {
++                absReleaseVoiceBoostEffect()
++                absLoudnessEnhancer = android.media.audiofx.LoudnessEnhancer(sessionId)
++                absVoiceBoostSessionId = sessionId
++            }
++            absLoudnessEnhancer?.setTargetGain(if (absVoiceBoostEnabled) absVoiceBoostGainMb else 0)
++            absLoudnessEnhancer?.enabled = absVoiceBoostEnabled
++            Timber.i("ABS voice boost %s (gain %d mB, session %d)",
++                if (absVoiceBoostEnabled) "on" else "off", absVoiceBoostGainMb, sessionId)
++        } catch (e: Exception) {
++            // Effect attach rejected (device/offload) — no-op, never crash.
++            Timber.w(e, "ABS voice boost apply failed")
++            absReleaseVoiceBoostEffect()
++        }
++    }
++
++    private fun absReleaseVoiceBoostEffect() {
++        val fx = absLoudnessEnhancer ?: return
++        absLoudnessEnhancer = null
++        absVoiceBoostSessionId = C.AUDIO_SESSION_ID_UNSET
++        try { fx.release() } catch (_: Exception) {}
++    }
++
++    // Full teardown: release the effect AND detach the analytics listener. Called
++    // on onDestroy and before a player is re-created (its exoPlayer is replaced).
++    private fun absReleaseVoiceBoost() {
++        absReleaseVoiceBoostEffect()
++        val l = absVoiceBoostListener
++        absVoiceBoostListener = null
++        if (l != null) {
++            try {
++                if (::player.isInitialized) player.exoPlayer.removeAnalyticsListener(l)
++            } catch (_: Exception) {}
++        }
++    }
++    // ===== end ABS voice boost =====
++
      @MainThread
      fun stop() {
          player.stop()
-@@ -449,6 +2034,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +2129,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -1964,7 +2068,7 @@ index b495b5a..8bd44e5 100644
      }
  
      @MainThread
-@@ -515,6 +2104,229 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2199,229 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2194,7 +2298,7 @@ index b495b5a..8bd44e5 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2529,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2624,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2203,7 +2307,7 @@ index b495b5a..8bd44e5 100644
              return
          }
  
-@@ -780,8 +2592,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2687,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2219,13 +2323,16 @@ index b495b5a..8bd44e5 100644
          return mediaSession
      }
  
-@@ -792,13 +2610,46 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2705,49 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
 -        if (::player.isInitialized) {
 -            Timber.d("Releasing media session and destroying player")
 +        absCancelSleepTimer()
++        // Release the LoudnessEnhancer + detach its session listener before the
++        // player is destroyed below (the effect is bound to its audio session).
++        absReleaseVoiceBoost()
 +        // Flag teardown FIRST so any in-flight browse-pool task or posted browse
 +        // refresh that lands after the release below skips its session touch.
 +        absDestroyed = true
@@ -2268,7 +2375,7 @@ index b495b5a..8bd44e5 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2756,249 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2854,249 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2328,7 +2435,7 @@ index b495b5a..8bd44e5 100644
 +                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
 +                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
 +                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
-+            }
+             }
 +            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
 +            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
 +        }
@@ -2494,7 +2601,7 @@ index b495b5a..8bd44e5 100644
 +                } else {
 +                    future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
 +                }
-             }
++            }
 +            return future
 +        }
 +
@@ -2535,7 +2642,7 @@ index b495b5a..8bd44e5 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3007,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3105,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2565,7 +2672,7 @@ index b495b5a..8bd44e5 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3039,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3137,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2581,7 +2688,7 @@ index b495b5a..8bd44e5 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3055,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3153,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -2698,10 +2805,10 @@ index d85e2c7..db6b437 100644
      }
  
 diff --git a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
-index a5dcd75..70260bf 100644
+index a5dcd75..226080a 100644
 --- a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
 +++ b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
-@@ -6,6 +6,11 @@ export interface Spec extends TurboModule {
+@@ -6,6 +6,15 @@ export interface Spec extends TurboModule {
    setupPlayer(options: UnsafeObject): Promise<void>;
    updateOptions(options: UnsafeObject): Promise<void>;
  
@@ -2709,6 +2816,10 @@ index a5dcd75..70260bf 100644
 +  // JS runtime can't kill the fade+pause or shake-to-extend (Android only).
 +  absSetSleepTimer(seconds: number, fadeSeconds: number, shakeExtendSeconds: number): Promise<void>;
 +  absCancelSleepTimer(): Promise<void>;
++
++  // ABS "Enhance voice": attach a native LoudnessEnhancer to the ExoPlayer audio
++  // session to amplify quiet narration (gain in millibels; Android only).
++  absSetVoiceBoost(enabled: boolean, gainMb: number): Promise<void>;
 +
    // player api
    load(track: UnsafeObject): Promise<number | void>;

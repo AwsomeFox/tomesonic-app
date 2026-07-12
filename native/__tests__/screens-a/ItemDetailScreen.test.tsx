@@ -1189,3 +1189,69 @@ describe("ItemDetailScreen — sync progress + link toggle", () => {
     );
   });
 });
+
+// --- Read handoff: linked, listened-ahead books seek the reader forward ------
+describe("ItemDetailScreen — open reader at the furthest linked spot", () => {
+  /** Pull the params of the (single) navigate("Reader", …) call. */
+  const readerParams = (navigation: any) => {
+    const call = (navigation.navigate as jest.Mock).mock.calls.find(
+      (c) => c[0] === "Reader"
+    );
+    return call?.[1];
+  };
+
+  const linkItem = (id: string) =>
+    useUserStore.setState((s) => ({
+      settings: { ...s.settings, linkedProgress: { ...s.settings.linkedProgress, [id]: true } },
+    }));
+
+  it("LINKED book listened ahead of reading: Read seeks forward to the listening spot", async () => {
+    // audio 50% vs ebook 25% (bothFormatItem), epub → jumpable.
+    linkItem("item1");
+    routeApi(bothFormatItem);
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+    await fireEvent.press(await screen.findByLabelText("Read ebook"));
+
+    const params = readerParams(navigation);
+    expect(params.itemId).toBe("item1");
+    expect(params.ebookFormat).toBe("epub");
+    // Furthest = max(0.5 audio, 0.25 ebook) → seek the reader to the audio spot.
+    expect(params.initialFraction).toBeCloseTo(0.5, 5);
+  });
+
+  it("NON-linked book (even when listened ahead): Read opens with no forced seek", async () => {
+    // Same drifted progress, but the per-item lock is OFF → keep current CFI.
+    routeApi(bothFormatItem);
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+    await fireEvent.press(await screen.findByLabelText("Read ebook"));
+
+    expect(readerParams(navigation).initialFraction).toBeUndefined();
+  });
+
+  it("LINKED book already read PAST the listening spot: Read never seeks backward", async () => {
+    // Reading 60% is ahead of listening 30% → furthest is the ebook's own spot.
+    const readAhead = {
+      ...bothFormatItem,
+      userMediaProgress: {
+        ...bothFormatItem.userMediaProgress,
+        progress: 0.3,
+        ebookProgress: 0.6,
+      },
+    };
+    linkItem("item1");
+    routeApi(readAhead);
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+    await fireEvent.press(await screen.findByLabelText("Read ebook"));
+
+    expect(readerParams(navigation).initialFraction).toBeUndefined();
+  });
+});

@@ -395,14 +395,11 @@ ${FOLIATE_BUNDLE}
       // or theme change never leaves the page with stale/collapsed margins.
       window.setReaderStyles = (css) => {
         try { view.renderer.setStyles(css); } catch(e) {}
-        // Conditional: setAttribute fires attributeChangedCallback (and a
-        // relayout) even for an UNCHANGED value — the style push right after
-        // open must not add a redundant relayout that can race the first
-        // relocate on slow WebViews. Only re-assert when actually dropped.
-        try {
-          var want = curMargin + 'px';
-          if (view.renderer.getAttribute('margin') !== want) view.renderer.setAttribute('margin', want);
-        } catch(e) {}
+        // Unconditional re-assert: setAttribute fires foliate's
+        // attributeChangedCallback → render() even when the value is
+        // unchanged, and that relayout is exactly what restores a margin
+        // collapsed by setStyles. An equality guard here defeats the fix.
+        try { view.renderer.setAttribute('margin', curMargin + 'px'); } catch(e) {}
       };
 
       // Live reader-theme switch: update the closure bg/fg (used by future
@@ -435,12 +432,10 @@ ${FOLIATE_BUNDLE}
           }
           // Belt-and-braces: a theme push is often accompanied by a setStyles
           // relayout — re-assert the margin so it can't stay collapsed until
-          // the next app restart. Conditional for the same reason as
-          // setReaderStyles: don't relayout when nothing was dropped.
-          try {
-            var wantM = curMargin + 'px';
-            if (view.renderer.getAttribute('margin') !== wantM) view.renderer.setAttribute('margin', wantM);
-          } catch(e) {}
+          // the next page turn. Unconditional: setAttribute fires foliate's
+          // attributeChangedCallback → render() even for an unchanged value,
+          // and that relayout is what restores the collapsed margin.
+          try { view.renderer.setAttribute('margin', curMargin + 'px'); } catch(e) {}
         } catch(e) {}
       };
       // Live margin (Narrow/Medium/Wide): drives both the foliate margin
@@ -1373,11 +1368,13 @@ export default function ReaderScreen({ route, navigation }: any) {
   useEffect(() => {
     storage.set("reader_theme", readerTheme);
     if (ebookStatus === "ready" && webRef.current) {
+      // Belt-and-braces: also re-push the margin so a theme change restores it
+      // independent of the in-WebView re-assert machinery.
       webRef.current.injectJavaScript(
-        `window.setReaderTheme && window.setReaderTheme(${JSON.stringify(bg)}, ${JSON.stringify(fg)});true;`
+        `window.setReaderTheme && window.setReaderTheme(${JSON.stringify(bg)}, ${JSON.stringify(fg)});window.setReaderMargin && window.setReaderMargin(${Number(readerMargin)});true;`
       );
     }
-  }, [readerTheme, bg, fg, ebookStatus]);
+  }, [readerTheme, bg, fg, readerMargin, ebookStatus]);
 
   // Persist the margin and push it live (no reload).
   useEffect(() => {

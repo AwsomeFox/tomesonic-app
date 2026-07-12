@@ -898,6 +898,31 @@ describe("ReaderScreen (reader features)", () => {
     expect(html).not.toContain("view.setAttribute('margin'");
   });
 
+  it("re-asserts the margin UNCONDITIONALLY in setReaderStyles and setReaderTheme (no equality guard)", async () => {
+    // Regression: a theme (or font) change collapsed the page margin until a
+    // manual page turn because the in-WebView re-assert was guarded by an
+    // equality check that is always false after init, so foliate's render()
+    // never re-ran. Both style/theme pushes must re-assert unconditionally —
+    // setAttribute fires foliate's attributeChangedCallback → render() even
+    // for an unchanged value, and that relayout is what restores the margin.
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+
+    // The dead equality guard around the margin re-assert must be gone.
+    expect(html).not.toContain("getAttribute('margin') !==");
+    // Both hooks re-assert the live margin directly on the renderer.
+    const stylesBody = /window\.setReaderStyles = \(css\) => \{([\s\S]*?)\n {6}\};/.exec(html)?.[1];
+    expect(stylesBody).toBeTruthy();
+    expect(stylesBody).toContain("view.renderer.setAttribute('margin', curMargin + 'px')");
+    expect(stylesBody).not.toContain("getAttribute('margin')");
+
+    const themeBody = /window\.setReaderTheme = function\(nbg, nfg\)\{([\s\S]*?)\n {6}\};/.exec(html)?.[1];
+    expect(themeBody).toBeTruthy();
+    expect(themeBody).toContain("view.renderer.setAttribute('margin', curMargin + 'px')");
+    expect(themeBody).not.toContain("getAttribute('margin')");
+  });
+
   it("defaults theme/margin/flow into the HTML and bakes stored preferences", async () => {
     // Defaults: 16px margin, paginated flow.
     await renderReader();
@@ -931,6 +956,14 @@ describe("ReaderScreen (reader features)", () => {
     expect(storage.getString("reader_theme")).toBe("sepia");
     expect((global as any).__injectJS).toHaveBeenCalledWith(
       expect.stringContaining("window.setReaderTheme")
+    );
+    // Belt-and-braces: the theme effect ALSO re-pushes the margin so it is
+    // restored independent of the in-WebView re-assert machinery (default
+    // margin is 16).
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /window\.setReaderTheme &&[\s\S]*window\.setReaderMargin && window\.setReaderMargin\(16\)/
+      )
     );
 
     await fireEvent.press(screen.getByLabelText("Wide margins"));

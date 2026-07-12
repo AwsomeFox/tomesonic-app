@@ -1013,3 +1013,92 @@ describe("auto-download next in series (on finish)", () => {
     await expect(autoDownloadNextAfterFinish("s-book1")).resolves.toBeUndefined();
   });
 });
+
+describe("ensureLocalCover — backfill a missing local cover", () => {
+  const downloadAsync = FileSystem.downloadAsync as jest.Mock;
+
+  const completedNoCover = () =>
+    useDownloadStore.setState({
+      completedDownloads: {
+        book1: {
+          id: "book1",
+          libraryItemId: "book1",
+          title: "My Book",
+          author: "The Author",
+          status: "completed",
+          progress: 1,
+          coverUrl: "",
+          localFolderPath: "file:///test-documents/downloads/book1_My_Book/",
+          // No cover part — a legacy download.
+          parts: [{ id: "track_1", filename: "track_1.mp3", completed: true, bytesDownloaded: 1, fileSize: 1, localFilePath: "file:///x/track_1.mp3" }],
+        },
+      },
+    } as any);
+
+  beforeEach(() => {
+    downloadAsync.mockResolvedValue({ uri: "file:///cover", status: 200 });
+    storageHelper.setServerConfig({ address: SERVER, token: TOKEN });
+  });
+
+  it("fetches only the cover and records it as a completed 'cover' part (persisted)", async () => {
+    completedNoCover();
+    await downloader.ensureLocalCover("book1");
+
+    // Downloaded exactly once, from the cover url, into the item's local folder,
+    // with the Bearer header.
+    expect(downloadAsync).toHaveBeenCalledTimes(1);
+    const [url, dest, options] = downloadAsync.mock.calls[0];
+    expect(url).toBe("http://abs.local/api/items/book1/cover?token=tok1");
+    expect(dest).toBe("file:///test-documents/downloads/book1_My_Book/cover.jpg");
+    expect(options).toEqual({ headers: { Authorization: `Bearer ${TOKEN}` } });
+
+    const cover = useDownloadStore.getState().completedDownloads["book1"].parts.find(
+      (p) => p.id === "cover"
+    );
+    expect(cover?.localFilePath).toBe("file:///test-documents/downloads/book1_My_Book/cover.jpg");
+    expect(cover?.completed).toBe(true);
+    // Audio part is untouched.
+    expect(
+      useDownloadStore.getState().completedDownloads["book1"].parts.some((p) => p.id === "track_1")
+    ).toBe(true);
+    // Persisted to the download DB so it survives a restart.
+    expect(dbStorage.getAllKeys().some((k) => k.includes("book1"))).toBe(true);
+  });
+
+  it("no-ops when the item already has a local cover part", async () => {
+    useDownloadStore.setState({
+      completedDownloads: {
+        book1: {
+          id: "book1",
+          libraryItemId: "book1",
+          status: "completed",
+          localFolderPath: "file:///x/",
+          parts: [{ id: "cover", filename: "cover.jpg", completed: true, bytesDownloaded: 0, fileSize: 0, localFilePath: "file:///x/cover.jpg" }],
+        },
+      },
+    } as any);
+    await downloader.ensureLocalCover("book1");
+    expect(downloadAsync).not.toHaveBeenCalled();
+  });
+
+  it("no-ops offline (no token) — leaves current behavior, no crash", async () => {
+    completedNoCover();
+    storageHelper.setServerConfig({ address: SERVER, token: "" });
+    await expect(downloader.ensureLocalCover("book1")).resolves.toBeUndefined();
+    expect(downloadAsync).not.toHaveBeenCalled();
+  });
+
+  it("no-ops for an item that isn't a completed download", async () => {
+    await expect(downloader.ensureLocalCover("not-downloaded")).resolves.toBeUndefined();
+    expect(downloadAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not add a cover part when the fetch fails (non-2xx)", async () => {
+    completedNoCover();
+    downloadAsync.mockResolvedValue({ uri: "file:///err", status: 404 });
+    await downloader.ensureLocalCover("book1");
+    expect(
+      useDownloadStore.getState().completedDownloads["book1"].parts.some((p) => p.id === "cover")
+    ).toBe(false);
+  });
+});

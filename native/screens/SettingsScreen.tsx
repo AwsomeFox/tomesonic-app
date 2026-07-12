@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeStore, ThemeMode } from '../store/useThemeStore';
 import { useUserStore } from '../store/useUserStore';
-import { usePlaybackStore } from '../store/usePlaybackStore';
+import { usePlaybackStore, applyJumpOptions, applyVoiceBoost } from '../store/usePlaybackStore';
 import { showAppDialog } from '../store/useDialogStore';
 import { useThemeColors } from '../theme/useThemeColors';
 import { withAlpha } from '../theme/palette';
@@ -340,6 +340,37 @@ export default function SettingsScreen({ navigation, route }: any) {
           subtitle="When you finish a downloaded book, download the next one"
           value={!!settings.autoDownloadNextInSeries}
           onValueChange={(v) => set({ autoDownloadNextInSeries: v })}
+          colors={colors}
+        />
+        <Divider colors={colors} />
+
+        <ToggleRow
+          icon="mic"
+          title="Enhance voice"
+          subtitle="Boost quiet narration so speech is easier to hear"
+          value={!!settings.voiceBoost}
+          onValueChange={(v) => {
+            // Persist first, then push the change to the native effect live so
+            // it applies to the currently-playing book without a re-prepare.
+            set({ voiceBoost: v });
+            applyVoiceBoost();
+          }}
+          colors={colors}
+        />
+        <Divider colors={colors} />
+
+        <ToggleRow
+          icon="speed"
+          title="Skip silence"
+          subtitle="Trim silent gaps in narration for faster listening"
+          value={!!settings.skipSilence}
+          onValueChange={(v) => {
+            // Persist first, then re-push the FULL player options so the live
+            // exoPlayer.skipSilenceEnabled flips immediately (buildPlayerOptions
+            // reads the setting; applyJumpOptions sends the whole options object).
+            set({ skipSilence: v });
+            applyJumpOptions();
+          }}
           colors={colors}
         />
         <Divider colors={colors} />

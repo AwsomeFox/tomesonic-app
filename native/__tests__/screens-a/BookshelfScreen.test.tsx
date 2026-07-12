@@ -364,6 +364,20 @@ describe("BookshelfScreen online", () => {
     expect(screen.getByLabelText("Series: Cool Series")).toBeTruthy();
   });
 
+  it("renders every shelf's row in the plain flex flow (no layout-animation overlap)", async () => {
+    // Regression guard for the overlapping-shelves bug: the shelf container no
+    // longer carries a LinearTransition layout animation, so all shelves lay out
+    // in ordinary flex flow. Each shelf must render its own horizontal row.
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    for (const shelf of baseShelves) {
+      expect(screen.getByTestId(`shelf-row-${shelf.id}`)).toBeTruthy();
+    }
+  });
+
   it("shows a Latest Episodes entry point for a podcast library and navigates to it", async () => {
     seedOnline(baseShelves);
     // The current library is a podcast library — the recent-episodes screen is

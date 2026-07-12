@@ -30,6 +30,7 @@ import BottomSheet from "../components/BottomSheet";
 import ResultBurst from "../components/ResultBurst";
 import { useRmabStore } from "../store/useRmabStore";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
+import { canJumpToFraction } from "../utils/formatSwitch";
 import { formatBytes } from "../utils/format";
 import Pressable from "../components/HintPressable";
 
@@ -816,10 +817,21 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     if (!ebookSource) return;
     storage.set(`last_interaction_${itemId}`, "read");
     setLastInteractionState("read");
+    // Linked books keep both formats at the furthest spot. Percent-mapped
+    // fraction jumps only work in the foliate reader (not pdf/cbz), so gate on
+    // the format. When listening has run AHEAD of reading, seek the reader
+    // forward to that spot (max only — never backward, and never for a book the
+    // reader is already ahead in). Mirrors PlayerBottomSheet's Read-from-here.
+    let initialFraction: number | undefined;
+    if (isLinked && canJumpToFraction(ebookSource.format)) {
+      const furthest = Math.max(audioProgressFraction, ebookProgressFraction);
+      if (furthest > ebookProgressFraction + 0.001) initialFraction = furthest;
+    }
     navigation.navigate("Reader", {
       itemId: ebookSource.id,
       ebookFormat: ebookSource.format,
       title: metadata.title,
+      initialFraction,
     });
   };
 

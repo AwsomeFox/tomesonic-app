@@ -296,6 +296,39 @@ function cancelNativeSleepTimer() {
   } catch {}
 }
 
+// ===== "Enhance voice" — voice boost (native LoudnessEnhancer) =====
+// ExoPlayer's volume is clamped to [0,1] and cannot AMPLIFY quiet narration, so
+// boosting requires a native LoudnessEnhancer bound to the ExoPlayer audio
+// session (added in the RNTP native patch: MusicService.absSetVoiceBoost,
+// bridged through MusicModule → NativeModules.TrackPlayer.absSetVoiceBoost).
+// Off by default; conservative gain behind the toggle. Mirrors nativeSleepModule.
+const VOICE_BOOST_GAIN_MB = 700; // ~7 dB lift — conservative, only when enabled
+function nativeVoiceBoostModule(): any | null {
+  try {
+    const RN = require("react-native");
+    if (RN.Platform.OS !== "android") return null;
+    const m = RN.NativeModules?.TrackPlayer;
+    return m?.absSetVoiceBoost ? m : null;
+  } catch {
+    return null;
+  }
+}
+// Push the current voiceBoost setting to the native service. Called on playback
+// prepare and whenever the setting toggles. Best-effort: no-ops off Android /
+// when the native method isn't bound; the native side additionally no-ops on
+// effect-attach failure (some devices/audio-offload reject it) so it can never
+// crash playback.
+export function applyVoiceBoost() {
+  const m = nativeVoiceBoostModule();
+  if (!m) return;
+  try {
+    const enabled = !!useUserStore.getState().settings.voiceBoost;
+    const p = m.absSetVoiceBoost(enabled, enabled ? VOICE_BOOST_GAIN_MB : 0);
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch {}
+}
+// ===== end voice boost =====
+
 // Resolve the NEXT book in the finished book's series. Reuses the same
 // series/sequence resolution as auto-download-next-in-series
 // (utils/downloader.autoDownloadNextAfterFinish).
@@ -441,6 +474,11 @@ function buildPlayerOptions() {
   return {
     android: {
       appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
+      // "Skip silence" (off by default): trims silent gaps in narration. Already
+      // plumbed natively — MusicService.updateOptions reads androidSkipSilence →
+      // exoPlayer.skipSilenceEnabled. Re-pushed live by applyJumpOptions (which
+      // sends the FULL options object) whenever the setting toggles.
+      androidSkipSilence: !!s.skipSilence,
     },
     // NOTE: no icon/notificationIcon here — RNTP 5 (Media3) ignores those JS
     // options entirely. The media-notification small icon is set by overriding
@@ -690,19 +728,37 @@ export function refreshNowPlayingArtwork() {
 // the full card uses the URI, so it stays high-res. Bytes are placed on the
 // ACTIVE item ONLY (a chaptered book moves them per chapter); inactive queue
 // items carry no bytes, so a long book never exceeds the AA Binder limit.
-async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: number) {
+export async function cacheNowPlayingCoverLocally(itemId: string, url: string, gen: number) {
   try {
-    if (!itemId || !url || !url.startsWith("http")) return;
-    const safeId = itemId.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const dir = `${FileSystem.cacheDirectory}nowplaying/`;
-    const path = `${dir}cover_${safeId}.jpg`;
-    // The cover image is identical across token rotations, so a file already
-    // cached for this item is reused — no repeat download on every prepare.
-    const info = await FileSystem.getInfoAsync(path);
-    if (!info?.exists) {
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
-      const res = await FileSystem.downloadAsync(url, path);
-      if (!res || (typeof res.status === "number" && res.status >= 400)) return;
+    if (!itemId) return;
+    let path: string | undefined;
+    // OFFLINE-FIRST: before touching the network, prefer any cover that's
+    // ALREADY downloaded as a local part for this item (books key by bare
+    // libraryItemId). Legacy downloads may lack one — then we fall through to
+    // the network cache below — but when it exists this makes the compact
+    // Android Auto tile work fully offline with zero network.
+    try {
+      const { useDownloadStore } = require("./useDownloadStore");
+      const dl = useDownloadStore.getState().completedDownloads?.[itemId];
+      const localCoverPart = (dl?.parts || []).find((p: any) => p.id === "cover")
+        ?.localFilePath as string | undefined;
+      if (localCoverPart) path = localCoverPart;
+    } catch {}
+    if (!path) {
+      // No local cover — fall back to caching the REMOTE url (needs network).
+      if (!url || !url.startsWith("http")) return;
+      const safeId = itemId.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const dir = `${FileSystem.cacheDirectory}nowplaying/`;
+      const cachePath = `${dir}cover_${safeId}.jpg`;
+      // The cover image is identical across token rotations, so a file already
+      // cached for this item is reused — no repeat download on every prepare.
+      const info = await FileSystem.getInfoAsync(cachePath);
+      if (!info?.exists) {
+        await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
+        const res = await FileSystem.downloadAsync(url, cachePath);
+        if (!res || (typeof res.status === "number" && res.status >= 400)) return;
+      }
+      path = cachePath;
     }
     // A different book may have been prepared while the download ran — only
     // touch the session that is still live and still this item.
@@ -2155,6 +2211,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // file; a streaming book gets one cached lazily (cacheNowPlayingCoverLocally).
       const carArtworkLocal =
         localCover || (artworkUrl && !artworkUrl.startsWith("http") ? artworkUrl : undefined);
+      // BACKFILL: a downloaded BOOK whose cover was never fetched as a local part
+      // (legacy downloads, or items where the cover part was skipped) has no
+      // local cover — so Android Auto's compact/mini tile goes BLANK offline.
+      // Kick off a best-effort, non-blocking fetch of just the cover into the
+      // item's existing local folder so this (or a later) prepare — and the
+      // offline fallback in cacheNowPlayingCoverLocally — can resolve a real
+      // local cover. Offline/no-token safe (the helper no-ops). Books only:
+      // episode covers live under the composite download key.
+      if (download && !localCover && libraryItemId && !session.episodeId) {
+        try {
+          require("../utils/downloader").downloader.ensureLocalCover(libraryItemId);
+        } catch {}
+      }
       const localFolder = download?.localFolderPath;
       const localForTrack = (track: any, idx: number): string | null => {
         if (!download) return null;
@@ -2525,6 +2594,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         position: startAbs,
         currentChapterIndex: startChapterIdx,
       });
+
+      // Apply "Enhance voice" for this session's audio session. Native no-ops
+      // when the setting is off, off Android, or the effect can't attach; a
+      // native onAudioSessionIdChanged listener re-applies if the session swaps.
+      applyVoiceBoost();
 
       // Mirror the current book to the home-screen resume widget and to the
       // native Media3 service (itemId powers Android Auto's resume card).

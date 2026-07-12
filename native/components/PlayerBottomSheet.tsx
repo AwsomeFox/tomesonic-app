@@ -394,7 +394,7 @@ export default function PlayerBottomSheet() {
   const COVER_Y_EXP = SOURCE_LABEL_Y + 20 + 8;
   const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + 12;
   const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + 28 + 8;
-  const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + 36 + 10;
+  const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + 36 + 24;
   const TRANSPORT_Y_EXP = TITLE_Y_EXP + 64 + 12;
 
   // Layout values the sheet PanResponder needs. The responder is created ONCE
@@ -930,7 +930,7 @@ export default function PlayerBottomSheet() {
           ]}
         >
             <ScrollView
-              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: 90 + insets.bottom }}
+              contentContainerStyle={{ flexGrow: 1, paddingHorizontal: PX + 24, paddingBottom: 58 + insets.bottom }}
               showsVerticalScrollIndicator={false}
               scrollEnabled={false} // Disable ScrollView scroll so drag gesture runs cleanly
             >
