@@ -14,6 +14,34 @@ import { hasAudio, hasEbook } from "../utils/bookMatch";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+// Per-podcast "latest unfinished episode fraction" index, built ONCE per
+// mediaProgress map reference (each playback tick replaces the map, so the
+// WeakMap entry naturally expires with it). Without this, every mounted
+// podcast card's selector scanned the WHOLE map on every store update —
+// O(cards × progressEntries) per tick; with it, the first selector run per
+// tick pays one O(entries) pass and every card does an O(1) lookup.
+const podcastFracIndexCache = new WeakMap<object, Record<string, number>>();
+export function latestPodcastFraction(map: Record<string, any>, itemId: string): number {
+  if (!map || !itemId) return 0;
+  let idx = podcastFracIndexCache.get(map);
+  if (!idx) {
+    idx = {};
+    const latestAt: Record<string, number> = {};
+    for (const p of Object.values(map) as any[]) {
+      if (!p || !p.libraryItemId || p.isFinished) continue;
+      const f = Number(p.progress || 0);
+      if (f <= 0) continue;
+      const at = Number(p.lastUpdate || p.updatedAt || 0);
+      if (at >= (latestAt[p.libraryItemId] ?? -1)) {
+        latestAt[p.libraryItemId] = at;
+        idx[p.libraryItemId] = Math.min(1, f);
+      }
+    }
+    podcastFracIndexCache.set(map, idx);
+  }
+  return idx[itemId] || 0;
+}
+
 /**
  * Shared book/podcast cover card, replicating the legacy LazyBookCard:
  * square cover, top-left progress chip (schedule / check_circle + label),
@@ -28,10 +56,23 @@ export interface BookCardProps {
   onPress?: () => void;
 }
 
-export default function BookCard({ item, size = 165, navigation, badgeCount, onPress }: BookCardProps) {
+function BookCard({ item, size = 165, navigation, badgeCount, onPress }: BookCardProps) {
   const colors = useThemeColors();
-  const { serverConnectionConfig } = useUserStore();
-  const mediaProgress = useUserStore((s) => s.mediaProgress);
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
+  const isPodcast = item?.mediaType === "podcast";
+  // Narrow subscription: a book row re-renders only when ITS OWN progress entry
+  // changes, not on every playback tick (which rewrites the playing item's key
+  // and, via the whole-map reference, used to re-render every mounted card).
+  const itemProgress = useUserStore((s) => (item?.id && !isPodcast ? s.mediaProgress[item.id] : undefined));
+  // Podcasts store progress per-EPISODE under composite `${itemId}-${episodeId}`
+  // keys, so the plain-id lookup misses them — derive the latest unfinished
+  // episode's fraction with a PRIMITIVE selector so a podcast card still only
+  // re-renders when that number actually changes. The scan is amortized via a
+  // per-map-reference index (see latestPodcastFraction) so N mounted podcast
+  // cards cost one shared O(entries) pass per tick, not N scans.
+  const podcastEpisodeFraction = useUserStore((s) =>
+    isPodcast && item?.id ? latestPodcastFraction(s.mediaProgress, item.id) : 0
+  );
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const activeDownloads = useDownloadStore((s) => s.activeDownloads);
 
@@ -56,10 +97,9 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
   // The global map is authoritative — it's refreshed from the server on every
   // Home focus and live-updated by the playback/reader loops, whereas a
   // progress object embedded in a shelf payload is a snapshot from fetch time.
-  const progress = (item?.id ? mediaProgress[item.id] : null) || item?.userMediaProgress || item?.progress || null;
+  const progress = itemProgress || item?.userMediaProgress || item?.progress || null;
   const itemHasAudio = hasAudio(item);
   const itemHasEbook = hasEbook(item);
-  const isPodcast = item?.mediaType === "podcast";
 
   const duration = itemHasAudio ? Number(media?.duration || progress?.duration || 0) : 0;
   const currentTime = itemHasAudio ? Number(progress?.currentTime || 0) : 0;
@@ -85,23 +125,8 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
   const isEbookFinished =
     ebookProgressPercent >= 0.99 || (!!progress?.isFinished && !readerSetFinished);
 
-  // Podcast progress lives per-EPISODE under composite `${itemId}-${episodeId}`
-  // map keys, so the plain-id lookup above finds nothing. Drive the bottom bar
-  // from the most recently played unfinished episode instead.
-  let podcastEpisodeFraction = 0;
-  if (isPodcast && item?.id) {
-    let latestAt = -1;
-    Object.values(mediaProgress).forEach((p: any) => {
-      if (!p || p.libraryItemId !== item.id || p.isFinished) return;
-      const frac = Number(p.progress || 0);
-      if (frac <= 0) return;
-      const at = Number(p.lastUpdate || p.updatedAt || 0);
-      if (at >= latestAt) {
-        latestAt = at;
-        podcastEpisodeFraction = Math.min(1, frac);
-      }
-    });
-  }
+  // Podcast progress (per-EPISODE, composite map keys) is resolved by the
+  // `podcastEpisodeFraction` selector above so the whole map isn't subscribed.
 
   // What the bottom (primary-colored) bar shows: the book's audio progress, or
   // the latest episode's progress for podcasts.
@@ -137,7 +162,10 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
       // user otherwise gets none of the badge's information.
       accessibilityLabel={[
         author ? `${title} by ${author}` : title || "Book",
-        bookStatusA11yLabel(item, mediaProgress, isDownloaded),
+        // Non-reactive read: the label recomputes whenever this card re-renders
+        // (i.e. when its own progress changes), which is exactly when it matters
+        // — and avoids resubscribing to the whole per-tick mediaProgress map.
+        bookStatusA11yLabel(item, useUserStore.getState().mediaProgress, isDownloaded),
       ]
         .filter(Boolean)
         .join(". ")}
@@ -295,3 +323,9 @@ export default function BookCard({ item, size = 165, navigation, badgeCount, onP
     </AnimatedPressable>
   );
 }
+
+// Memoized: shelves keep dozens of cards mounted, and with the per-item progress
+// subscription above a card only re-renders when its own props/progress change —
+// a playback tick that rewrites the playing item's progress no longer forces
+// every other card to re-render.
+export default React.memo(BookCard);

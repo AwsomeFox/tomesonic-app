@@ -98,6 +98,34 @@ describe("usePlaybackStore playback-error recovery", () => {
       // omitting this silently disabled focus handling entirely.
       expect(opts.autoHandleInterruptions).toBe(true);
     });
+
+    it("seeds androidSkipSilence at construction AND in the live options from the setting", async () => {
+      // N1: the native setup path reads androidSkipSilence off THIS top-level
+      // setup bundle, so omitting it pinned skipSilence=false at ExoPlayer
+      // creation. With the setting ON, both the setupPlayer literal and the
+      // updateOptions payload (buildPlayerOptions) must carry it true.
+      useUserStore.setState({ settings: { ...useUserStore.getState().settings, skipSilence: true } });
+      await usePlaybackStore.getState().initializePlayer();
+
+      const setupOpts = jest.mocked(TrackPlayer.setupPlayer).mock.calls.at(-1)![0] as any;
+      expect(setupOpts.androidSkipSilence).toBe(true);
+
+      const updateOpts = jest.mocked(TrackPlayer.updateOptions).mock.calls.at(-1)![0] as any;
+      expect(updateOpts.android.androidSkipSilence).toBe(true);
+    });
+
+    it("reflects skipSilence=false (default) in both setup and live options", async () => {
+      // Guard the OTHER direction: the default-off setting must produce a
+      // literal false, not an omitted key (native has no default at construction).
+      useUserStore.setState({ settings: { ...useUserStore.getState().settings, skipSilence: false } });
+      await usePlaybackStore.getState().initializePlayer();
+
+      const setupOpts = jest.mocked(TrackPlayer.setupPlayer).mock.calls.at(-1)![0] as any;
+      expect(setupOpts.androidSkipSilence).toBe(false);
+
+      const updateOpts = jest.mocked(TrackPlayer.updateOptions).mock.calls.at(-1)![0] as any;
+      expect(updateOpts.android.androidSkipSilence).toBe(false);
+    });
   });
 
   describe("onPlaybackError", () => {

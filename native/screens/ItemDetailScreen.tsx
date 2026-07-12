@@ -816,6 +816,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     if (!ebookSource) return;
     storage.set(`last_interaction_${itemId}`, "read");
     setLastInteractionState("read");
+    // Linked catch-up (listening ahead of reading → seek the reader forward) is
+    // now handled BY THE READER on its 'ready' message, keyed off its TRUE
+    // rendered page position. We deliberately do NOT pass an initialFraction
+    // here: the ItemDetail focus-effect / audio-close reconcile bumps this
+    // item's ebookProgress PERCENTAGE up to the audio fraction WITHOUT moving
+    // the CFI, so a percentage-based gate here was self-defeating (by tap time
+    // ebook% == audio%, the gate was false, and the reader opened at the stale
+    // CFI). Letting the reader be the single source of truth also fixes every
+    // OTHER entry point (Bookshelf/Library/Series/Playlist) at once. The
+    // explicit "Read from here" jump still flows through PlayerBottomSheet's
+    // own initialFraction, which the reader applies unconditionally.
     navigation.navigate("Reader", {
       itemId: ebookSource.id,
       ebookFormat: ebookSource.format,

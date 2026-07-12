@@ -706,6 +706,12 @@ function clamp01(n: any): number {
 // pointless writes (and a reconcile that fights an in-flight rounding jitter).
 const LINK_EPSILON = 0.005;
 
+// Fraction at/above which a medium counts as "at the end". A linked reconcile
+// only propagates the FINISHED flag (and slams the audio timestamp to the very
+// end) when BOTH media are this close to done — otherwise finishing ONE medium
+// would silently destroy the OTHER's mid-way resume position (P3).
+const NEAR_FINISH = 0.99;
+
 /** True when the user has locked this item's two progresses together (per-item
  *  toggle persisted in useUserStore settings). Lazy require: circular import. */
 export function isProgressLinked(libraryItemId: string): boolean {
@@ -739,17 +745,30 @@ function getProgressEntry(libraryItemId: string): any {
 export function syncBothProgressFraction(
   libraryItemId: string,
   targetFraction: number,
-  opts?: { duration?: number; ebookLocation?: string }
+  opts?: { duration?: number; ebookLocation?: string; finish?: boolean }
 ): void {
   if (!libraryItemId) return;
   const f = clamp01(targetFraction);
   const duration = Number(opts?.duration) || 0;
-  const finished = f >= 0.99;
+  // Whether this write may actually FINISH the item. Defaults to true so the
+  // explicit "Sync progress" action still finishes both media. The linked
+  // reconcile passes finish:false when only ONE medium reached the end while the
+  // OTHER is still genuinely mid-way (P3) — there, forcing isFinished / slamming
+  // the audio timestamp to (≈)duration would silently obliterate the
+  // mid-listened audiobook's resume position.
+  const allowFinish = opts?.finish !== false;
+  const finished = f >= NEAR_FINISH && allowFinish;
+  // "Finish reached, but finishing suppressed": the percentage still advances
+  // (furthest-wins display), but we must NOT move the audio timestamp to the end
+  // — the real resume seconds are preserved instead.
+  const suppressAudioTimestamp = f >= NEAR_FINISH && !allowFinish;
 
   // AUDIO → currentTime = f * duration (exact-ish). Skip when the duration is
   // unknown — a timestamp can't be placed without it, but the ebook side still
   // syncs. queueProgressPatch also writes `progress` = currentTime/duration.
-  if (duration > 0) {
+  // Also skip when finishing is suppressed: a durable currentTime≈duration write
+  // would destroy the listener's mid-way resume position on the server (P3).
+  if (duration > 0 && !suppressAudioTimestamp) {
     queueProgressPatch(libraryItemId, f * duration, duration, null);
   }
 
@@ -776,9 +795,12 @@ export function syncBothProgressFraction(
         updatedAt: now,
       };
       if (duration > 0) {
-        next.currentTime = f * duration;
-        next.duration = duration;
+        // Advance the audio PERCENTAGE for the Your-Progress display, but when
+        // finishing is suppressed keep the real resume position (currentTime) so
+        // a mid-listened audiobook is never jumped to the end (P3).
         next.progress = f;
+        next.duration = duration;
+        if (!suppressAudioTimestamp) next.currentTime = f * duration;
       }
       if (finished) next.isFinished = true;
       return { mediaProgress: { ...s.mediaProgress, [libraryItemId]: next } };
@@ -823,12 +845,13 @@ export function reconcileLinkedProgress(
   // read-but-unlistened both-format book (ebook ~100%, audio ~0%) would
   // otherwise reconcile to target 1.0 and PATCH the untouched audiobook as
   // finished with no confirmation — destroying its "unstarted" state. When the
-  // lagging side hasn't been started (≈0) and the target is a finish (>=0.99),
-  // skip: there is nothing to link yet. Partial↔partial reconciles, and moving
-  // an unstarted side to a NON-finished percentage (e.g. listen-only sync of the
-  // ebook %), still proceed — this guards ONLY the destructive finish jump, so
-  // it fires on both the manual toggle-ON and its ItemDetail focus-effect re-run.
-  if (target >= 0.99 && Math.min(audioFraction, ebookFraction) < LINK_EPSILON) return false;
+  // lagging side hasn't been started (≈0) and the target is a finish
+  // (>= NEAR_FINISH), skip: there is nothing to link yet. Partial↔partial
+  // reconciles, and moving an unstarted side to a NON-finished percentage
+  // (e.g. listen-only sync of the ebook %), still proceed — this guards ONLY
+  // the destructive finish jump, so it fires on both the manual toggle-ON and
+  // its ItemDetail focus-effect re-run.
+  if (target >= NEAR_FINISH && Math.min(audioFraction, ebookFraction) < LINK_EPSILON) return false;
   // When the audio duration is unknown we can't place a timestamp, so the audio
   // fraction can NEVER advance. If the ebook is furthest (audio is the lagging
   // side that would need to move up), syncBothProgressFraction skips the audio
@@ -837,10 +860,18 @@ export function reconcileLinkedProgress(
   // Treat "audio can't move" as un-reconcilable and skip rather than looping.
   // (Audio-ahead still reconciles: the ebook side moves regardless of duration.)
   if (duration <= 0 && target > audioFraction) return false;
+  // Decouple "advance position" from "force finished" (P3): only propagate the
+  // finished flag (and let the audio timestamp reach the very end) when BOTH
+  // media are already near the end. When the user finishes READING while the
+  // audio is genuinely mid-way, the audio percentage still moves forward, but
+  // its resume position is preserved and it is NOT silently marked finished.
+  const bothNearEnd =
+    Math.min(audioFraction, ebookFraction) >= NEAR_FINISH;
   syncBothProgressFraction(libraryItemId, target, {
     duration,
     // Preserve whatever CFI/page the reader last wrote.
     ebookLocation: hint?.ebookLocation ?? prog.ebookLocation ?? "",
+    finish: bothNearEnd,
   });
   return true;
 }

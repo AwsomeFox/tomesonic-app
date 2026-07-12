@@ -1,10 +1,10 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { View, Text, Pressable, ScrollView, RefreshControl } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import Animated, { FadeIn, LinearTransition } from "react-native-reanimated";
+import Animated, { FadeIn } from "react-native-reanimated";
 import { shelfCardEnter } from "../theme/motion";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useUserStore } from "../store/useUserStore";
@@ -75,7 +75,13 @@ function shelfToLibraryParams(shelf: any): Record<string, any> | null {
 export default function BookshelfScreen({ navigation }: any) {
   const colors = useThemeColors();
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
-  const { serverConnectionConfig } = useUserStore();
+  // Narrow selector (was a whole-store `useUserStore()` destructure, which
+  // re-rendered the screen on every mediaProgress tick).
+  const serverConnectionConfig = useUserStore((s) => s.serverConnectionConfig);
+  // Reactive per-tick map, used ONLY for the series "N left" badge below so it
+  // updates when progress changes. Cards are memoized, so a screen re-render
+  // here doesn't cascade into re-rendering every book card.
+  const mediaProgressMap = useUserStore((s) => s.mediaProgress);
   const isSearchActive = useUiStore((s) => s.isSearchActive);
   const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
   const { personalizedShelves, loadPersonalizedShelves, currentLibraryId, loadLibraries, shelvesLoadError, libraries } = useLibraryStore();
@@ -101,6 +107,13 @@ export default function BookshelfScreen({ navigation }: any) {
   const [continueReadingItems, setContinueReadingItems] = useState<any[]>(() =>
     readContinueReadingCache(useLibraryStore.getState().currentLibraryId)
   );
+  // Latest continueReadingItems, mirrored into a ref so loadAffinity (which can
+  // be invoked from a stale focus/online-recovery closure) always tallies genres
+  // against the CURRENT list instead of a snapshot captured at closure time.
+  const continueReadingItemsRef = useRef(continueReadingItems);
+  useEffect(() => {
+    continueReadingItemsRef.current = continueReadingItems;
+  }, [continueReadingItems]);
   // "Want to Read": the device-local favorites list (store/useFavoritesStore),
   // written from ItemDetail, surfaced here as a normal book shelf. Subscribing to
   // the `favorites` array makes the shelf refresh the moment an item is
@@ -140,6 +153,12 @@ export default function BookshelfScreen({ navigation }: any) {
   // the whole-screen offline gating below relies on so those cases actually
   // show the downloaded library instead of hanging on failed fetches.
   const { isOffline } = useNetworkStatus();
+  // Latest `isOffline`, mirrored into a ref so the async loaders read the CURRENT
+  // connectivity even when invoked from a stale focus/online-recovery closure.
+  const isOfflineRef = useRef(isOffline);
+  useEffect(() => {
+    isOfflineRef.current = isOffline;
+  }, [isOffline]);
   const hideNonAudiobooks = useUserStore((s) => !!s.settings?.hideNonAudiobooksGlobal);
   const completedDownloads = useDownloadStore((s) => s.completedDownloads);
   const downloadsLoaded = useDownloadStore((s) => s.downloadsLoaded);
@@ -148,17 +167,52 @@ export default function BookshelfScreen({ navigation }: any) {
   // must not churn two playback sessions (or leave a rejection unhandled).
   const offlineStartingRef = useRef(false);
 
+  // Mounted flag: the async shelf loaders below fire from several triggers
+  // (initData / focus / refresh / online-recovery) and can resolve after the
+  // screen unmounts — never setState on an unmounted screen.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Per-loader monotonic request ids. Each loader captures the next id at call
+  // time and re-checks it before every setState, so an earlier (slower) request
+  // resolving after a newer one can't clobber the newer result — the classic
+  // last-writer-wins stale-async bug, since multiple can be in flight at once.
+  const continueReadingReqId = useRef(0);
+  const wantToReadReqId = useRef(0);
+  const affinityReqId = useRef(0);
+
+  // Count of in-flight async shelf loaders. Gates the empty state so it can't
+  // flash before the async-built shelves (continue-reading/want-to-read/
+  // affinity) have had a chance to populate.
+  const [pendingLoads, setPendingLoads] = useState(0);
+  const beginLoad = useCallback(() => {
+    if (mountedRef.current) setPendingLoads((n) => n + 1);
+  }, []);
+  const endLoad = useCallback(() => {
+    if (mountedRef.current) setPendingLoads((n) => Math.max(0, n - 1));
+  }, []);
+
   const loadContinueReading = async () => {
     // Capture the library at call time: if the user switches libraries while
     // the fetch is in flight, the stale result must not clobber the new
     // library's shelf (checked again before every setState below).
-    const libId = currentLibraryId;
+    const libId = useLibraryStore.getState().currentLibraryId;
     if (!libId) return;
     // "Hide non-audiobooks" suppresses the Continue Reading shelf — skip the
     // whole item-batch fetch while it's on.
     if (useUserStore.getState().settings?.hideNonAudiobooksGlobal) return;
-    const libStillCurrent = () => useLibraryStore.getState().currentLibraryId === libId;
+    // Request recency + same-library + still-mounted: an earlier request that
+    // resolves after a newer one (or after unmount) is discarded.
+    const reqId = ++continueReadingReqId.current;
+    const isCurrent = () =>
+      mountedRef.current && reqId === continueReadingReqId.current && useLibraryStore.getState().currentLibraryId === libId;
 
+    beginLoad();
     try {
       const mediaProgress = useUserStore.getState().mediaProgress || {};
       
@@ -182,8 +236,10 @@ export default function BookshelfScreen({ navigation }: any) {
       );
 
       if (inProgressIds.length === 0) {
-        try { storage.set(`continueReadingCache_${libId}`, "[]"); } catch {}
-        if (libStillCurrent()) setContinueReadingItems([]);
+        if (isCurrent()) {
+          try { storage.set(`continueReadingCache_${libId}`, "[]"); } catch {}
+          setContinueReadingItems([]);
+        }
         return;
       }
 
@@ -215,10 +271,14 @@ export default function BookshelfScreen({ navigation }: any) {
         (item: any) => item.libraryId === libId && hasEbook(item)
       );
 
-      try { storage.set(`continueReadingCache_${libId}`, JSON.stringify(filtered)); } catch {}
-      if (libStillCurrent()) setContinueReadingItems(filtered);
+      if (isCurrent()) {
+        try { storage.set(`continueReadingCache_${libId}`, JSON.stringify(filtered)); } catch {}
+        setContinueReadingItems(filtered);
+      }
     } catch (e) {
       console.warn("[Bookshelf] failed to load continue reading items", e);
+    } finally {
+      endLoad();
     }
   };
 
@@ -227,18 +287,21 @@ export default function BookshelfScreen({ navigation }: any) {
   // older servers), scoped to the current library. Purely additive and
   // resilient — any failure just leaves the shelf empty, never breaking Home.
   const loadWantToRead = async () => {
-    const libId = currentLibraryId;
+    const libId = useLibraryStore.getState().currentLibraryId;
     if (!libId) return;
     // Favorites need the server (batch fetch) — skip entirely while offline.
-    if (isOffline) return;
+    if (isOfflineRef.current) return;
     const favIds = useFavoritesStore.getState().list();
-    const libStillCurrent = () => useLibraryStore.getState().currentLibraryId === libId;
+    const reqId = ++wantToReadReqId.current;
+    const isCurrent = () =>
+      mountedRef.current && reqId === wantToReadReqId.current && useLibraryStore.getState().currentLibraryId === libId;
 
     if (favIds.length === 0) {
-      if (libStillCurrent()) setWantToReadItems([]);
+      if (isCurrent()) setWantToReadItems([]);
       return;
     }
 
+    beginLoad();
     try {
       // Fetch all favorites in ONE batch request (same pattern as Continue
       // Reading), falling back to per-item fetches on servers without batch/get.
@@ -263,9 +326,11 @@ export default function BookshelfScreen({ navigation }: any) {
       // header, and favorites can span libraries. Favorites are books the user
       // wants to read (audio or ebook), so no media-type filter is applied.
       const filtered = fetchedItems.filter((item: any) => item && item.libraryId === libId);
-      if (libStillCurrent()) setWantToReadItems(filtered);
+      if (isCurrent()) setWantToReadItems(filtered);
     } catch (e) {
       console.warn("[Bookshelf] failed to load want-to-read items", e);
+    } finally {
+      endLoad();
     }
   };
 
@@ -278,14 +343,17 @@ export default function BookshelfScreen({ navigation }: any) {
   // Build the "Because you listened" shelf. Resilient by design: any missing
   // piece (offline, no affinity, empty/failed query) just clears the shelf.
   const loadAffinity = async () => {
-    const libId = currentLibraryId;
+    const libId = useLibraryStore.getState().currentLibraryId;
     if (!libId) return;
-    const libStillCurrent = () => useLibraryStore.getState().currentLibraryId === libId;
+    const reqId = ++affinityReqId.current;
+    const isCurrent = () =>
+      mountedRef.current && reqId === affinityReqId.current && useLibraryStore.getState().currentLibraryId === libId;
     // Offline (or the "audiobooks only" setting) → no recommendation shelf.
-    if (isOffline || useUserStore.getState().settings?.hideNonAudiobooksGlobal) {
-      if (libStillCurrent()) setAffinityShelf(null);
+    if (isOfflineRef.current || useUserStore.getState().settings?.hideNonAudiobooksGlobal) {
+      if (isCurrent()) setAffinityShelf(null);
       return;
     }
+    beginLoad();
     try {
       const mp = useUserStore.getState().mediaProgress || {};
       // Tally genres over every book the user has engaged with that we already
@@ -302,10 +370,13 @@ export default function BookshelfScreen({ navigation }: any) {
       };
       const shelves = useLibraryStore.getState().personalizedShelves || [];
       shelves.forEach((sh: any) => (Array.isArray(sh?.entities) ? sh.entities : []).forEach(consider));
-      continueReadingItems.forEach(consider);
+      // Read the CURRENT continue-reading list via the ref (not the closed-over
+      // snapshot) so a stale focus/online-recovery invocation still tallies the
+      // latest items.
+      continueReadingItemsRef.current.forEach(consider);
 
       if (genreCounts.size === 0) {
-        if (libStillCurrent()) setAffinityShelf(null);
+        if (isCurrent()) setAffinityShelf(null);
         return;
       }
       // Top genre by engagement (ties broken alphabetically for stability).
@@ -316,7 +387,7 @@ export default function BookshelfScreen({ navigation }: any) {
       const res = await api.get(
         `/api/libraries/${libId}/items?filter=genres.${encodeFilterValue(topGenre)}&minified=1&limit=24`
       );
-      if (!libStillCurrent()) return;
+      if (!isCurrent()) return;
       const results = Array.isArray(res.data?.results) ? res.data.results : [];
       // Exclude books already finished/in-progress — the shelf is for what's
       // NEXT, not a re-run of the reading history it was derived from.
@@ -325,10 +396,10 @@ export default function BookshelfScreen({ navigation }: any) {
         (it: any) => it && it.id && !hasProgress(mpNow[it.id])
       );
       if (filtered.length === 0) {
-        if (libStillCurrent()) setAffinityShelf(null);
+        if (isCurrent()) setAffinityShelf(null);
         return;
       }
-      if (libStillCurrent()) {
+      if (isCurrent()) {
         setAffinityShelf({
           id: "because-you-listened",
           label: "Because you listened",
@@ -340,7 +411,9 @@ export default function BookshelfScreen({ navigation }: any) {
       }
     } catch {
       // Older server without the filter, transient failure, etc. — stay silent.
-      if (libStillCurrent()) setAffinityShelf(null);
+      if (isCurrent()) setAffinityShelf(null);
+    } finally {
+      endLoad();
     }
   };
 
@@ -367,6 +440,11 @@ export default function BookshelfScreen({ navigation }: any) {
     }
   };
 
+  // Always-latest handlers, so long-lived effects (focus / online-recovery) call
+  // the freshest loader closures instead of ones captured at a stale render.
+  const handlersRef = useRef({ loadContinueReading, loadAffinity, onRefresh });
+  handlersRef.current = { loadContinueReading, loadAffinity, onRefresh };
+
   // Coming back online: flush queued offline progress and refresh the shelves
   // so the transition back is seamless (no manual pull-to-refresh needed).
   const wasOffline = React.useRef(false);
@@ -376,7 +454,7 @@ export default function BookshelfScreen({ navigation }: any) {
     } else if (wasOffline.current) {
       wasOffline.current = false;
       flushPendingSyncs().catch(() => {});
-      onRefresh();
+      handlersRef.current.onRefresh();
     }
   }, [isOffline]);
 
@@ -393,6 +471,15 @@ export default function BookshelfScreen({ navigation }: any) {
       // Want to Read is scoped to the current library — clear the old library's
       // items so they don't flash under the new header before the refetch lands.
       setWantToReadItems([]);
+      // Shelf GEOMETRY caches are keyed by bare shelf.id, which repeats across
+      // libraries (recently-added, continue-listening, …) while the rows now
+      // remount per-library. Without a reset, the new library's rows briefly
+      // reuse the OLD library's viewport/content widths — flashing the "See
+      // all" chevron (and overflow state) incorrectly until fresh onLayout /
+      // onContentSizeChange measurements land.
+      shelfViewportW.current = {};
+      shelfContentW.current = {};
+      setShelfOverflow({});
     }
   }, [currentLibraryId]);
 
@@ -444,13 +531,15 @@ export default function BookshelfScreen({ navigation }: any) {
         firstFocusRef.current = false;
         return;
       }
+      // Route through the handlers ref so focus always runs the freshest loaders
+      // (against the current library/progress), not closures from mount time.
       loadMediaProgress().then(() => {
-        loadContinueReading();
-        loadAffinity();
+        handlersRef.current.loadContinueReading();
+        handlersRef.current.loadAffinity();
       });
     });
     return unsubscribe;
-  }, [navigation, currentLibraryId]);
+  }, [navigation, loadMediaProgress]);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -611,13 +700,19 @@ export default function BookshelfScreen({ navigation }: any) {
       return;
     }
     setContinueSeries(buildFrom(seriesList));
-  }, [personalizedShelves, currentLibraryId, continueReadingItems, seriesList]);
+    // serverConnectionConfig is a dep because buildFrom/buildFromServerShelf call
+    // getCoverUrl, whose URLs embed the current server address + token — after a
+    // token refresh the covers must rebuild, or they keep the old (401'd) token.
+  }, [personalizedShelves, currentLibraryId, continueReadingItems, seriesList, serverConnectionConfig]);
 
   // Shelf assembly. Structurally deduped by id so "Continue Reading" can never
   // render twice (e.g. a stale cached shelf list racing the fresh one that now
   // includes the server's own continue-reading shelf).
-  const displayShelves: any[] = [];
-  {
+  // Memoized on its real inputs so a playback progress tick (which re-renders
+  // the screen via the reactive mediaProgress subscription) doesn't rebuild the
+  // whole shelf list every frame.
+  const displayShelves = useMemo<any[]>(() => {
+    const result: any[] = [];
     const seenShelfIds = new Set<string>();
     // "Hide non-audiobooks": drop the reading shelf entirely and filter
     // ebook-only items out of every book shelf (they appear in Recently
@@ -633,7 +728,8 @@ export default function BookshelfScreen({ navigation }: any) {
     // shelf includes any in-progress item — including books whose only
     // progress is READING (ebookProgress from the reader) — and those belong
     // exclusively in Continue Reading. Ebook-only items can't be listened to
-    // at all.
+    // at all. Read non-reactively (getState) so this memo isn't invalidated by
+    // every per-tick mediaProgress write.
     const ebookOnlyProgress = (e: any) => {
       const p = useUserStore.getState().mediaProgress[e?.id] || e?.userMediaProgress;
       if (!p) return false;
@@ -647,34 +743,34 @@ export default function BookshelfScreen({ navigation }: any) {
       seenShelfIds.add(shelf.id);
       if (shelf.id === "continue-reading" && hideNonAudiobooks) continue;
       if (shelf.id === "continue-series") {
-        displayShelves.push({ ...shelf, type: "series", entities: continueSeries });
+        result.push({ ...shelf, type: "series", entities: continueSeries });
       } else if (shelf.id === "continue-listening") {
         const entities = (shelf.entities || []).filter(
           (e: any) => !isEbookOnly(e) && !ebookOnlyProgress(e)
         );
-        displayShelves.push({ ...shelf, entities });
+        result.push({ ...shelf, entities });
       } else if (shelf.id === "continue-reading") {
         // Prefer the locally-built list (ebook-progress aware); fall back to
         // the server's entities so the shelf shows instantly while ours loads.
-        displayShelves.push({
+        result.push({
           ...shelf,
           type: "book",
           entities: continueReadingItems.length > 0 ? continueReadingItems : shelf.entities || [],
         });
       } else if (shelf.type === "authors" || shelf.type === "author" || shelf.type === "series") {
-        displayShelves.push(shelf);
+        result.push(shelf);
       } else {
-        displayShelves.push({ ...shelf, entities: filterEbooks(shelf.entities) });
+        result.push({ ...shelf, entities: filterEbooks(shelf.entities) });
       }
     }
     // Synthetic Continue Reading ONLY when the server sent none at all
     // (older servers) — inserted right after Continue Listening.
     if (!seenShelfIds.has("continue-reading") && continueReadingItems.length > 0 && !hideNonAudiobooks) {
-      const idx = displayShelves.findIndex((s) => s.id === "continue-listening");
+      const idx = result.findIndex((s) => s.id === "continue-listening");
       // When there's no Continue Listening shelf (older server), findIndex
       // returns -1 and idx+1 would force this to the TOP — append instead.
-      const insertAt = idx < 0 ? displayShelves.length : idx + 1;
-      displayShelves.splice(insertAt, 0, {
+      const insertAt = idx < 0 ? result.length : idx + 1;
+      result.splice(insertAt, 0, {
         id: "continue-reading",
         label: "Continue Reading",
         type: "book",
@@ -693,11 +789,11 @@ export default function BookshelfScreen({ navigation }: any) {
         // Slot it right after the last Continue* shelf so the primary resume
         // actions stay first; falls to the top if there are none.
         let insertAt = 0;
-        for (let i = 0; i < displayShelves.length; i++) {
-          const sid = displayShelves[i]?.id;
+        for (let i = 0; i < result.length; i++) {
+          const sid = result[i]?.id;
           if (typeof sid === "string" && sid.startsWith("continue-")) insertAt = i + 1;
         }
-        displayShelves.splice(insertAt, 0, {
+        result.splice(insertAt, 0, {
           id: "want-to-read",
           label: "Want to Read",
           type: "book",
@@ -708,9 +804,35 @@ export default function BookshelfScreen({ navigation }: any) {
     // "Because you listened" is purely additive — appended last so it never
     // displaces an existing shelf. Only shown once it has recommendations.
     if (affinityShelf && Array.isArray(affinityShelf.entities) && affinityShelf.entities.length > 0) {
-      displayShelves.push(affinityShelf);
+      result.push(affinityShelf);
     }
-  }
+    return result;
+  }, [activeShelves, hideNonAudiobooks, continueSeries, continueReadingItems, wantToReadItems, affinityShelf, isOffline]);
+
+  // Prune per-shelf geometry state/refs for shelves that have left the list.
+  // Otherwise stale entries linger: a chevron can flash from a previous shelf's
+  // overflow geometry when an id is reused, and the refs grow unbounded across a
+  // long session of library/shelf churn.
+  const shelfIdsKey = displayShelves.map((s: any) => s.id).join("|");
+  useEffect(() => {
+    const ids = new Set(displayShelves.map((s: any) => s.id));
+    Object.keys(shelfViewportW.current).forEach((id) => {
+      if (!ids.has(id)) delete shelfViewportW.current[id];
+    });
+    Object.keys(shelfContentW.current).forEach((id) => {
+      if (!ids.has(id)) delete shelfContentW.current[id];
+    });
+    setShelfOverflow((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      for (const id of Object.keys(prev)) {
+        if (ids.has(id)) next[id] = prev[id];
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shelfIdsKey]);
 
   const renderBookCard = (item: any, index: number) => {
     return (
@@ -738,8 +860,10 @@ export default function BookshelfScreen({ navigation }: any) {
     // undercount, so hide the badge instead of guessing.
     let unread: number | null = null;
     if (books.length && (!bookCount || books.length >= bookCount)) {
-      const pm = useUserStore.getState().mediaProgress;
-      unread = books.filter((b: any) => !(pm[b.id] || b.userMediaProgress)?.isFinished).length;
+      // Reactive read (mediaProgressMap) so the "N left" badge updates when a
+      // book in the series is finished, instead of a non-reactive getState()
+      // snapshot that only refreshed on an unrelated re-render.
+      unread = books.filter((b: any) => !(mediaProgressMap[b.id] || b.userMediaProgress)?.isFinished).length;
     }
 
     return (
@@ -1095,14 +1219,18 @@ export default function BookshelfScreen({ navigation }: any) {
                 message="Check your connection to the server, then try again."
                 onRetry={() => loadPersonalizedShelves(true)}
               />
-            ) : (
+            ) : !loading && pendingLoads === 0 ? (
+              // Only a TRUE empty library, not a transient gap: the async-built
+              // shelves (continue-reading/want-to-read/affinity) can land a beat
+              // after the sync shelves, so suppress the empty state while any of
+              // those loaders are still in flight — otherwise it flashes.
               <EmptyState
                 style={{ flex: 1 }}
                 icon="library"
                 title="Nothing on the shelf yet"
                 message="Books added to this library will show up here. Pull down to refresh."
               />
-            )
+            ) : null
           ) : null}
           {displayShelves.map((shelf: any) => {
             // Dispatch by shelf type. We transform "Continue Series" into a
@@ -1119,12 +1247,21 @@ export default function BookshelfScreen({ navigation }: any) {
             const showSeeAll = !!libParams && !!shelfOverflow[shelf.id];
 
             return (
-              // Fade the shelf in when it (later) appears, and animate the
-              // layout shift of the shelves below it instead of snapping.
+              // Fade the shelf in when it (later) appears. No layout transition:
+              // displayShelves mutates repeatedly after first paint (Continue
+              // Reading/Want to Read/affinity/Continue Series all arrive async),
+              // and racing LinearTransition animations could commit a stale
+              // resting offset that Reanimated then drives directly — leaving
+              // two rows overlapping until a fresh mount. Plain flex flow can't
+              // leave rows stacked on top of each other.
               <Animated.View
-                key={shelf.id}
+                // Key by library + shelf id: shelf ids like "recently-added"
+                // exist in every library, so keying on the id alone reconciled
+                // across a library switch (FadeIn never replayed and each row
+                // kept the previous library's horizontal scroll offset). The
+                // library prefix forces a remount instead.
+                key={`${currentLibraryId}:${shelf.id}`}
                 entering={FadeIn.duration(220)}
-                layout={LinearTransition.duration(250)}
                 style={{ width: "100%", position: "relative", paddingBottom: 4 }}
               >
                 {/* Shelf header: teal rounded accent bar + prominent title. When
@@ -1176,7 +1313,11 @@ export default function BookshelfScreen({ navigation }: any) {
                     shelfContentW.current[shelf.id] = w;
                     recomputeShelfOverflow(shelf.id);
                   }}
-                  contentContainerStyle={{ paddingHorizontal: 12, alignItems: "flex-end" }}
+                  // Stable minHeight matching the fixed card size (165) so a
+                  // late cover image load can't change the row's height after
+                  // first paint (which previously fed the layout animation stale
+                  // geometry). Cards are fixed-size, so this is a safe floor.
+                  contentContainerStyle={{ paddingHorizontal: 12, alignItems: "flex-end", minHeight: 165 }}
                 >
                   {shelf.entities?.map((entity: any, index: number) => {
                     if (isSeriesType) {

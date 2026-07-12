@@ -40,6 +40,14 @@ interface UserSettings {
   linkedProgress: Record<string, boolean>;
   showPlayerBookProgress: boolean;
   showPlayerChapterProgress: boolean;
+  // "Enhance voice" audio options — two INDEPENDENT toggles, both default OFF
+  // (parity with other audiobookshelf apps). skipSilence trims silent gaps in
+  // narration (plumbed natively as ExoPlayer skipSilenceEnabled via
+  // androidSkipSilence in buildPlayerOptions). voiceBoost amplifies quiet
+  // narration through a native LoudnessEnhancer bound to the audio session
+  // (ExoPlayer volume is clamped to [0,1] and can't boost). See usePlaybackStore.
+  skipSilence: boolean;
+  voiceBoost: boolean;
 }
 
 interface UserState {
@@ -104,6 +112,8 @@ const DEFAULT_SETTINGS: UserSettings = {
   linkedProgress: {},
   showPlayerBookProgress: true,
   showPlayerChapterProgress: true,
+  skipSilence: false,
+  voiceBoost: false,
 };
 
 export const useUserStore = create<UserState>((set, get) => ({

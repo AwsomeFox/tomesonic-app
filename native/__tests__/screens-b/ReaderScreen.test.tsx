@@ -698,6 +698,98 @@ describe("ReaderScreen (epub pipeline)", () => {
   });
 });
 
+describe("ReaderScreen — settings flush + linked catch-up on 'ready'", () => {
+  const injectedAll = () =>
+    ((global as any).__injectJS.mock.calls as any[]).map((c) => c[0]).join("\n");
+
+  const sendReady = async (webProps: any) => {
+    await act(async () => {
+      webProps.onMessage({ nativeEvent: { data: JSON.stringify({ type: "ready" }) } });
+    });
+  };
+
+  // R2: the per-setting live-apply effects gate on ebookStatus === "ready",
+  // which flips on WebView MOUNT — before init() defines the window.setX
+  // helpers — so a setting changed in that window no-op'd forever. The 'ready'
+  // MESSAGE re-applies the whole current snapshot.
+  it("R2: re-applies the full current settings snapshot on the 'ready' message", async () => {
+    await renderReader();
+    const webProps = await readyWebView();
+    (global as any).__injectJS.mockClear();
+
+    await sendReady(webProps);
+
+    const injected = injectedAll();
+    expect(injected).toContain("window.setReaderStyles");
+    expect(injected).toContain("window.setReaderTheme");
+    expect(injected).toContain("window.setReaderMargin");
+    expect(injected).toContain("window.setReaderFlow");
+    expect(injected).toContain("window.setPageCurl");
+  });
+
+  // P1/P2: the reader itself performs the forward-only linked seek, keyed off
+  // its TRUE rendered page — fixing the self-defeating percentage gate and
+  // every entry point at once.
+  it("P1/P2: LINKED book listened ahead seeks the reader FORWARD to the audio fraction on ready", async () => {
+    useUserStore.setState((s: any) => ({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0.2, duration: 3600 },
+      },
+      settings: { ...s.settings, linkedProgress: { [ITEM]: true } },
+    }));
+    await renderReader();
+    const webProps = await readyWebView();
+    (global as any).__injectJS.mockClear();
+
+    await sendReady(webProps);
+
+    expect(injectedAll()).toContain("window.seekForwardToFraction(0.5)");
+  });
+
+  it("P1/P2: the linked auto-seek is FORWARD-ONLY in the WebView (never drags reading backward)", async () => {
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    // The forward-only comparison lives in the WebView, against the reader's
+    // real rendered fraction (so "already read ahead" never seeks backward).
+    expect(html).toContain("window.seekForwardToFraction");
+    expect(html).toContain("target > cur + 0.001");
+  });
+
+  it("P1/P2: NON-linked book does NOT auto-seek on ready", async () => {
+    useUserStore.setState((s: any) => ({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0.2, duration: 3600 },
+      },
+    }));
+    await renderReader();
+    const webProps = await readyWebView();
+    (global as any).__injectJS.mockClear();
+
+    await sendReady(webProps);
+
+    expect(injectedAll()).not.toContain("seekForwardToFraction");
+  });
+
+  it("P1/P2: an EXPLICIT initialFraction (Read-from-here) applies as-is and suppresses the auto-seek", async () => {
+    useUserStore.setState((s: any) => ({
+      mediaProgress: {
+        [ITEM]: { libraryItemId: ITEM, progress: 0.5, ebookProgress: 0.2, duration: 3600 },
+      },
+      settings: { ...s.settings, linkedProgress: { [ITEM]: true } },
+    }));
+    await renderReader({ itemId: ITEM, ebookFormat: "epub", title: "My Book", initialFraction: 0.8 });
+    const webProps = await readyWebView();
+    (global as any).__injectJS.mockClear();
+
+    await sendReady(webProps);
+
+    const injected = injectedAll();
+    expect(injected).toContain("goToFraction(0.8)");
+    expect(injected).not.toContain("seekForwardToFraction");
+  });
+});
+
 describe("ReaderScreen (pdf)", () => {
   const PDF_ITEM = "item2";
 
@@ -898,6 +990,31 @@ describe("ReaderScreen (reader features)", () => {
     expect(html).not.toContain("view.setAttribute('margin'");
   });
 
+  it("re-asserts the margin UNCONDITIONALLY in setReaderStyles and setReaderTheme (no equality guard)", async () => {
+    // Regression: a theme (or font) change collapsed the page margin until a
+    // manual page turn because the in-WebView re-assert was guarded by an
+    // equality check that is always false after init, so foliate's render()
+    // never re-ran. Both style/theme pushes must re-assert unconditionally —
+    // setAttribute fires foliate's attributeChangedCallback → render() even
+    // for an unchanged value, and that relayout is what restores the margin.
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+
+    // The dead equality guard around the margin re-assert must be gone.
+    expect(html).not.toContain("getAttribute('margin') !==");
+    // Both hooks re-assert the live margin directly on the renderer.
+    const stylesBody = /window\.setReaderStyles = \(css\) => \{([\s\S]*?)\n {6}\};/.exec(html)?.[1];
+    expect(stylesBody).toBeTruthy();
+    expect(stylesBody).toContain("view.renderer.setAttribute('margin', curMargin + 'px')");
+    expect(stylesBody).not.toContain("getAttribute('margin')");
+
+    const themeBody = /window\.setReaderTheme = function\(nbg, nfg\)\{([\s\S]*?)\n {6}\};/.exec(html)?.[1];
+    expect(themeBody).toBeTruthy();
+    expect(themeBody).toContain("view.renderer.setAttribute('margin', curMargin + 'px')");
+    expect(themeBody).not.toContain("getAttribute('margin')");
+  });
+
   it("defaults theme/margin/flow into the HTML and bakes stored preferences", async () => {
     // Defaults: 16px margin, paginated flow.
     await renderReader();
@@ -931,6 +1048,14 @@ describe("ReaderScreen (reader features)", () => {
     expect(storage.getString("reader_theme")).toBe("sepia");
     expect((global as any).__injectJS).toHaveBeenCalledWith(
       expect.stringContaining("window.setReaderTheme")
+    );
+    // Belt-and-braces: the theme effect ALSO re-pushes the margin so it is
+    // restored independent of the in-WebView re-assert machinery (default
+    // margin is 16).
+    expect((global as any).__injectJS).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /window\.setReaderTheme &&[\s\S]*window\.setReaderMargin && window\.setReaderMargin\(16\)/
+      )
     );
 
     await fireEvent.press(screen.getByLabelText("Wide margins"));
@@ -1438,5 +1563,75 @@ describe("ReaderScreen (reader features)", () => {
     expect(loop).not.toHaveBeenCalled();
     reduced.mockRestore();
     loop.mockRestore();
+  });
+});
+
+describe("ReaderScreen — R1 (page-bounded read-aloud), R5 (a11y headers), R6 (TTS unmount)", () => {
+  // R1: read-aloud must extract only the CURRENT PAGE. The old code clamped the
+  // range START to the cursor but left the END at the section end, so the TTS
+  // advance (window.goNext turns ONE page) re-requested cursor→end-of-section
+  // again — re-reading a multi-page chapter ~N times. Bounding the range END to
+  // the visible page makes goNext advance one page at a time.
+  it("R1: getReaderText bounds the range to the CURRENT PAGE (start AND end), not the section tail", async () => {
+    await renderReader();
+    await readyWebView();
+    const html = jest.mocked(FileSystem.writeAsStringAsync).mock.calls[0][1] as string;
+    expect(html).toContain("r.setStart(range.startContainer");
+    // The end is clamped to the page's end container — the fix for #R1.
+    expect(html).toContain("r.setEnd(range.endContainer");
+    expect(html).toContain("range.endContainer");
+  });
+
+  // R5: header roles let TalkBack/VoiceOver navigate by heading, matching the
+  // settings-sheet section titles that already expose the role.
+  it("R5: the book title exposes the header role", async () => {
+    await renderReader();
+    await readyWebView();
+    expect(screen.getByText("My Book").props.accessibilityRole).toBe("header");
+  });
+
+  it("R5: the TOC modal title exposes the header role", async () => {
+    await renderReader();
+    await readyWebView();
+    await fireEvent.press(screen.getByLabelText("Table of contents"));
+    expect(screen.getByText("Table of Contents").props.accessibilityRole).toBe("header");
+  });
+
+  it("R5: the Search modal title exposes the header role", async () => {
+    await renderReader();
+    await readyWebView();
+    await fireEvent.press(screen.getByLabelText("Reading settings"));
+    await fireEvent.press(screen.getByLabelText("Search in book"));
+    expect(screen.getByText("Search in Book").props.accessibilityRole).toBe("header");
+  });
+
+  // R6: expo-speech's onStopped/onDone/onError fire ASYNCHRONOUSLY. The unmount
+  // cleanup calls Speech.stop(), whose onStopped resolves after teardown — the
+  // callbacks must no-op (guarded by unmountedRef) rather than setState / keep
+  // paging.
+  it("R6: TTS speech callbacks no-op after unmount (no further speak, no throw)", async () => {
+    const Speech = require("expo-speech");
+    const { unmount } = await renderReader();
+    const webProps = await readyWebView();
+
+    await fireEvent.press(screen.getByLabelText("Read aloud"));
+    (Speech.speak as jest.Mock).mockClear();
+    await act(async () => {
+      sendMsg(webProps, { type: "ttsText", text: "a page of words", pos: 0.1 });
+    });
+    const opts = (Speech.speak as jest.Mock).mock.calls[0][1];
+
+    // Screen tears down; the native callbacks resolve AFTER unmount.
+    (Speech.speak as jest.Mock).mockClear();
+    unmount();
+    expect(() =>
+      act(() => {
+        opts.onDone();
+        opts.onStopped();
+        opts.onError();
+      })
+    ).not.toThrow();
+    // onDone would normally chain to the next chunk — guarded off after unmount.
+    expect(Speech.speak).not.toHaveBeenCalled();
   });
 });

@@ -364,6 +364,20 @@ describe("BookshelfScreen online", () => {
     expect(screen.getByLabelText("Series: Cool Series")).toBeTruthy();
   });
 
+  it("renders every shelf's row in the plain flex flow (no layout-animation overlap)", async () => {
+    // Regression guard for the overlapping-shelves bug: the shelf container no
+    // longer carries a LinearTransition layout animation, so all shelves lay out
+    // in ordinary flex flow. Each shelf must render its own horizontal row.
+    seedOnline(baseShelves);
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+
+    await screen.findByText("Continue Listening");
+    for (const shelf of baseShelves) {
+      expect(screen.getByTestId(`shelf-row-${shelf.id}`)).toBeTruthy();
+    }
+  });
+
   it("shows a Latest Episodes entry point for a podcast library and navigates to it", async () => {
     seedOnline(baseShelves);
     // The current library is a podcast library — the recent-episodes screen is
@@ -469,6 +483,59 @@ describe("BookshelfScreen online", () => {
     const navigation = makeNavigation();
     await render(<BookshelfScreen navigation={navigation} />);
     await screen.findByText("Nothing on the shelf yet");
+  });
+
+  it("discards a stale earlier continue-reading request that resolves after a newer one (H2)", async () => {
+    seedOnline(baseShelves, { e1: { libraryItemId: "e1", ebookProgress: 0.4 } });
+    const freshEbook = {
+      id: "fresh1",
+      mediaType: "book",
+      libraryId: "lib1",
+      media: { ebookFile: { ebookFormat: "epub" }, metadata: { title: "Fresh Ebook", authorName: "New Writer" } },
+    };
+    // A distinct stale result (not present in any base shelf) so its absence
+    // uniquely proves the earlier request's late resolution was discarded.
+    const staleEbook = {
+      id: "stale1",
+      mediaType: "book",
+      libraryId: "lib1",
+      media: { ebookFile: { ebookFormat: "epub" }, metadata: { title: "Stale Ebook", authorName: "Old Writer" } },
+    };
+    // Each continue-reading batch request parks on a resolver we release by hand,
+    // letting us resolve them OUT OF ORDER (newer first, older last).
+    const resolvers: Array<(v: any) => void> = [];
+    mockedPost.mockImplementation(() => new Promise((res) => resolvers.push(res)));
+
+    const navigation = makeNavigation();
+    await render(<BookshelfScreen navigation={navigation} />);
+    await screen.findByText("Continue Listening");
+    // Mount issues request #1.
+    await waitFor(() => expect(resolvers.length).toBe(1));
+
+    const focusHandler = (navigation.addListener as jest.Mock).mock.calls.find((c) => c[0] === "focus")?.[1];
+    // The first focus after mount is intentionally skipped; the second issues #2.
+    await act(async () => {
+      focusHandler();
+    });
+    await act(async () => {
+      focusHandler();
+    });
+    await waitFor(() => expect(resolvers.length).toBe(2));
+
+    // Newer request (#2) resolves FIRST with the fresh result...
+    await act(async () => {
+      resolvers[1]({ data: { libraryItems: [freshEbook] } });
+    });
+    // ...then the older request (#1) resolves LATE with stale data.
+    await act(async () => {
+      resolvers[0]({ data: { libraryItems: [staleEbook] } });
+    });
+
+    // The newer result wins; the stale late-resolver is dropped by the request-id
+    // guard (last-writer-wins would otherwise show "Stale Ebook").
+    // (Coverless cards render their title twice — placeholder + meta panel.)
+    expect((await screen.findAllByText("Fresh Ebook")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Stale Ebook")).toBeNull();
   });
 
   it("renders the shared ErrorState (with Retry) when shelves fail with no cache", async () => {
