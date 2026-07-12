@@ -1587,11 +1587,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
-          // Check connectivity before fetching progress
+          // Check connectivity before fetching progress. The pre-check's
+          // elapsed time (up to 1s) counts AGAINST the same 3s budget below,
+          // so the whole restore stays bounded at ~3s as documented — the
+          // pre-check must never stack on top of it.
+          const budgetStart = Date.now();
           const isConnected = await checkIsConnectedWithTimeout();
           if (!isConnected) {
             throw new Error("Network unreachable");
           }
+          const remainingBudget = Math.max(500, 3000 - (Date.now() - budgetStart));
 
           // Podcast progress is keyed per EPISODE server-side — the item-level
           // GET returns nothing useful for an episode session.
@@ -1606,7 +1611,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             res = await Promise.race([
               api.get(progressPath),
               new Promise((_, rej) => {
-                progressTimer = setTimeout(() => rej(new Error("timeout")), 3000);
+                progressTimer = setTimeout(() => rej(new Error("timeout")), remainingBudget);
               }),
             ]);
           } finally {
