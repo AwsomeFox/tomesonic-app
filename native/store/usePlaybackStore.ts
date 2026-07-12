@@ -821,13 +821,22 @@ function persistProgressSample(
   // saveSessionPositionNow, where a fresh stamp IS correct.
   if (currentSession && isPlayerPlaying) {
     if (now - _lastLocalSaveAt >= LOCAL_SAVE_INTERVAL_MS) {
-      _lastLocalSaveAt = now;
       const updatedSession = {
         ...currentSession,
         currentTime: absolutePosition,
         updatedAt: now,
       };
-      storageHelper.setLastPlaybackSession(updatedSession);
+      // Advance the throttle stamp ONLY on a successful write, and contain a
+      // failure here. Stamping first meant one failed MMKV set (disk full / IO
+      // error) silently consumed the whole 5s crash-safety window — the save
+      // wasn't retried until the NEXT window (disk up to ~10s stale) — and the
+      // throw unwound the rest of this tick (mediaProgress mirror, 15s server
+      // sync, auto-finish) via the caller's blanket catch. A failed save now
+      // leaves the window open so the next 1s tick retries immediately.
+      try {
+        storageHelper.setLastPlaybackSession(updatedSession);
+        _lastLocalSaveAt = now;
+      } catch {}
     }
 
     // Update global mediaProgress map in useUserStore for UI binding.
