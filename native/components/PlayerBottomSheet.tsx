@@ -135,6 +135,12 @@ function BarTimeLabel({
 }) {
   return (
     <Text
+      // Explicitly hidden on both platforms — parent-group semantics alone
+      // are implementation-dependent, and a reused instance must never let
+      // the raw "3:59:53" text become focusable.
+      accessible={false}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
       maxFontSizeMultiplier={1.3}
       numberOfLines={1}
       style={{
