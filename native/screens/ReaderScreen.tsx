@@ -621,12 +621,15 @@ ${FOLIATE_BUNDLE}
       var curlCtx = curlCanvas.getContext('2d');
       var snapshotBroken = 0;
 
-      function inlineDocStyles(srcDoc, cloneDoc){
+      function inlineDocStyles(srcDoc, cloneRoot){
         // Book CSS commonly arrives via <link href="blob:..."> which an
         // SVG-as-image will NOT fetch — serialize every readable sheet into
-        // a <style> tag instead, and drop the links.
+        // a <style> tag instead, and drop the links. cloneRoot is a cloned
+        // documentElement (an ELEMENT, not a Document) — elements have no
+        // createElement, so the <style> nodes are created via srcDoc, which
+        // also owns the clone (cloneNode preserves ownerDocument).
         try {
-          var head = cloneDoc.querySelector('head');
+          var head = cloneRoot.querySelector('head');
           if (!head) return;
           var links = head.querySelectorAll('link[rel="stylesheet"]');
           for (var i = 0; i < links.length; i++) links[i].parentNode.removeChild(links[i]);
@@ -636,7 +639,7 @@ ${FOLIATE_BUNDLE}
               if (!rules) continue;
               var css = '';
               for (var k = 0; k < rules.length; k++) css += rules[k].cssText + '\n';
-              var st = cloneDoc.createElement('style');
+              var st = srcDoc.createElement('style');
               st.textContent = css;
               head.appendChild(st);
             } catch(e) {}
