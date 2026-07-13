@@ -441,6 +441,33 @@ describe("SeriesDetailScreen — batch progress (mark finished / reset)", () => 
       expect(api.patch).toHaveBeenCalledTimes(1);
     });
 
+    it("recomputes targets from the live progress map at confirm time (not dialog-open time)", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      // Open the dialog with b2 + b3 unfinished (b1 already finished).
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+      // While the dialog is open, b2 becomes finished (e.g. a background sync).
+      await act(async () => {
+        useUserStore.setState({
+          mediaProgress: { b2: { libraryItemId: "b2", isFinished: true } },
+        } as any);
+      });
+      const confirm = useDialogStore.getState().current!.buttons!.find(
+        (b) => b.text === "Mark finished"
+      )!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      // Only b3 is sent, and the snackbar count reflects the recomputed target.
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
+        { libraryItemId: "b3", isFinished: true },
+      ]);
+      expect(useSnackbarStore.getState().current?.message).toBe("1 book marked finished");
+    });
+
     it("uses the progress MAP (not just the payload snapshot) for the finished check", async () => {
       (api.patch as jest.Mock).mockResolvedValue({ data: {} });
       // b2 finished in the authoritative map since the payload was taken.

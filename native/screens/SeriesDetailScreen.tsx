@@ -368,6 +368,20 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
     (b) => progressOf(b)?.isFinished || (progressOf(b)?.progress || 0) > 0
   );
 
+  // Recompute the batch targets from the LATEST progress map at confirm time —
+  // the dialog can sit open while a background sync changes progress, so the
+  // render-time lists above are only the preview; the payload must not be stale.
+  const freshTargets = () => {
+    const map = useUserStore.getState().mediaProgress || {};
+    const pOf = (b: any) => map[b.id] || b.userMediaProgress;
+    return {
+      unfinished: books.filter((b) => !pOf(b)?.isFinished),
+      withProgress: books.filter(
+        (b) => pOf(b)?.isFinished || (pOf(b)?.progress || 0) > 0
+      ),
+    };
+  };
+
   // Refresh the authoritative progress map (drives header stats + row badges)
   // and silently revalidate the series payload after a batch mutation.
   const refreshAfterBatch = () => {
@@ -395,11 +409,17 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
             markingFinishedRef.current = true;
             setMarkingFinished(true);
             try {
+              const targets = freshTargets().unfinished;
+              if (targets.length === 0) {
+                showSnackbar({ message: "Every book in this series is already finished." });
+                return;
+              }
               await batchUpdateProgress(
-                unfinishedBooks.map((b) => ({ libraryItemId: b.id, isFinished: true }))
+                targets.map((b) => ({ libraryItemId: b.id, isFinished: true }))
               );
+              const n = targets.length;
               showSnackbar({
-                message: `${count} ${count === 1 ? "book" : "books"} marked finished`,
+                message: `${n} ${n === 1 ? "book" : "books"} marked finished`,
               });
               refreshAfterBatch();
             } catch (e: any) {
@@ -438,16 +458,22 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
             resettingProgressRef.current = true;
             setResettingProgress(true);
             try {
+              const targets = freshTargets().withProgress;
+              if (targets.length === 0) {
+                showSnackbar({ message: "No progress to reset in this series." });
+                return;
+              }
               await batchUpdateProgress(
-                booksWithProgress.map((b) => ({
+                targets.map((b) => ({
                   libraryItemId: b.id,
                   isFinished: false,
                   currentTime: 0,
                   progress: 0,
                 }))
               );
+              const n = targets.length;
               showSnackbar({
-                message: `Progress reset on ${count} ${count === 1 ? "book" : "books"}`,
+                message: `Progress reset on ${n} ${n === 1 ? "book" : "books"}`,
               });
               refreshAfterBatch();
             } catch (e: any) {
