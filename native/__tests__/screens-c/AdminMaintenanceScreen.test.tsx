@@ -240,6 +240,27 @@ describe("AdminMaintenanceScreen — tags", () => {
     expect(subtitles.length).toBe(2);
   });
 
+  it("counts still resolve when libraries load AFTER a row was seen (queue isn't dropped)", async () => {
+    // No libraries yet — the viewability enqueue can't fetch. The queued work
+    // must survive until libraries arrive, then drain.
+    useLibraryStore.setState({ libraries: [] as any, currentLibraryId: null });
+    await renderScreen();
+    expect(await screen.findByText("Fiction")).toBeTruthy();
+
+    await revealRows(["Fiction"]);
+    // Nothing counted while libraries were absent.
+    expect((api.get as jest.Mock).mock.calls.some(([u]) => /\/items$/.test(u))).toBe(false);
+
+    // Libraries arrive → the queued value drains and its count appears.
+    await act(async () => {
+      useLibraryStore.setState({
+        libraries: [{ id: "lib1", name: "Books", mediaType: "book", settings: {} }] as any,
+        currentLibraryId: "lib1",
+      });
+    });
+    expect(await screen.findByText("5 items")).toBeTruthy();
+  });
+
   it("a count-fetch failure degrades gracefully — name stays, no subtitle, no ErrorState", async () => {
     (api.get as jest.Mock).mockImplementation((url: string) => {
       if (url === "/api/tags") return Promise.resolve({ data: { tags: TAGS } });

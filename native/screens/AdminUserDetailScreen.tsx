@@ -395,6 +395,10 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
     // any newer-server key) round-trips unchanged — an edit here only ever
     // touches the fields the form actually controls. This is the same
     // clobber-safety guarantee the tag/library lists carry.
+    // Create mode always grants all tags (per-tag restriction is an edit-only
+    // affordance); derive BOTH tag fields from this single value so the payload
+    // can't go internally inconsistent (accessAllTags:true + a non-empty list).
+    const effectiveAllTags = isCreate ? true : allTags;
     const loadedPerms: any = loadedUser?.permissions || {};
     const permissions: any = {
       ...(isCreate ? {} : loadedPerms),
@@ -404,7 +408,7 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       upload: perms.upload,
       accessExplicitContent: perms.accessExplicitContent,
       accessAllLibraries: allLibraries,
-      accessAllTags: isCreate ? true : allTags,
+      accessAllTags: effectiveAllTags,
     };
     const payload: AbsUserPayload = {
       username: username.trim(),
@@ -412,7 +416,7 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       isActive,
       permissions,
       librariesAccessible: allLibraries ? [] : [...selectedLibs],
-      itemTagsSelected: allTags ? [] : [...selectedTags],
+      itemTagsSelected: effectiveAllTags ? [] : [...selectedTags],
     };
     // Older servers keep the accessible-tags list top-level — echo it too.
     if (!isCreate && Array.isArray((loadedUser as any)?.itemTagsAccessible)) {
@@ -820,12 +824,21 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
                   })
                 : null}
 
+              {/* Per-tag restriction is an EDIT-only affordance — a new user
+                  starts with all tags (create-mode saves force accessAllTags),
+                  so the checklist would be misleading during create. */}
+              {!isCreate ? (
+                <>
               <SectionHeader label="Tag access" colors={colors} />
               <ToggleRow
                 icon="bookmark"
                 title="All tags"
                 value={allTags}
-                onValueChange={setAllTags}
+                onValueChange={(v) => {
+                  setAllTags(v);
+                  // Turning "all tags" back on abandons any partial selection.
+                  if (v) setSelectedTags([]);
+                }}
                 colors={colors}
               />
               {!allTags ? (
@@ -879,6 +892,8 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
                       : "No tags are defined on this server yet."}
                   </Text>
                 )
+              ) : null}
+                </>
               ) : null}
             </>
           ) : null}

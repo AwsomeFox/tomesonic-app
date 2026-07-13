@@ -180,6 +180,9 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   const libIdsRef = useRef<string[]>([]);
   useEffect(() => {
     libIdsRef.current = storeLibraries.map((l) => l.id).filter(Boolean);
+    // Libraries may load AFTER rows were seen and queued — drain the queue now
+    // that there's something to count over.
+    pumpRef.current();
   }, [storeLibraries]);
   useEffect(() => {
     mountedRef.current = true;
@@ -195,14 +198,13 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       countQueueRef.current = [];
       return;
     }
+    // Libraries not loaded yet — leave the queue INTACT (don't shift/drop) so
+    // the pump triggered by the storeLibraries effect can still process it.
+    const libIds = libIdsRef.current;
+    if (libIds.length === 0) return;
     const CONCURRENCY = 4;
     while (countActiveRef.current < CONCURRENCY && countQueueRef.current.length > 0) {
       const { type, value } = countQueueRef.current.shift()!;
-      const libIds = libIdsRef.current;
-      if (libIds.length === 0) {
-        // No libraries to sum over — nothing to show; leave it attempted.
-        continue;
-      }
       countActiveRef.current += 1;
       (async () => {
         let total = 0;

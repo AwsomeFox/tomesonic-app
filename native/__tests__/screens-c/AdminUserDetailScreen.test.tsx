@@ -182,6 +182,17 @@ describe("AdminUserDetailScreen — create mode", () => {
     expect(navigation.goBack).toHaveBeenCalled();
   });
 
+  it("hides the Tag access section in create mode (per-tag restriction is edit-only)", async () => {
+    await renderScreen({});
+    await screen.findByText("New user");
+    // The "All tags" toggle and the tag checklist never render during create,
+    // so the create payload's forced accessAllTags:true can't be contradicted.
+    expect(screen.queryByText("Tag access")).toBeNull();
+    expect(screen.queryByLabelText("All tags")).toBeNull();
+    // Library access (which IS editable in create) still renders.
+    expect(screen.getByText("Library access")).toBeTruthy();
+  });
+
   it("blocks create without a password — INLINE field error, no dialog, no POST", async () => {
     await renderScreen({});
     await screen.findByText("New user");
