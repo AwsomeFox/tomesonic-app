@@ -326,8 +326,9 @@ describe("AdminBackupsScreen", () => {
       await renderScreen();
       await screen.findByText("2026-07-01T0300.audiobookshelf");
 
-      // The row a11y label falls back past the missing datePretty too.
-      fireEvent.press(screen.getByLabelText("Download backup b9"));
+      // The button a11y label falls back past the missing datePretty to the
+      // FILENAME (matching the row title/dialog chain), not straight to the id.
+      fireEvent.press(screen.getByLabelText("Download backup 2026-07-01T0300.audiobookshelf"));
 
       await waitFor(() =>
         expect(showAppDialog).toHaveBeenCalledWith(

@@ -259,16 +259,18 @@ export default function AdminApiKeysScreen({ navigation }: any) {
     setKeys((cur) => (cur || []).map((k) => (k.id === key.id ? { ...k, isActive: next } : k)));
     try {
       const updated = await updateApiKey(key.id, { isActive: next });
-      // Merge the echo ONTO the previous row — the PATCH response has no
-      // joined `user`, and replacing the row wholesale would drop the
-      // "Acts as …" subtitle. `isActive: next` is pinned BEFORE the echo so a
-      // shapeless response (e.g. { success: true }) can't revert the flip —
-      // the echo is Partial at runtime even though the util types it fully.
+      // Merge the echo ONTO the CURRENT row from state (`k`, not the captured
+      // `key` argument, which could reintroduce fields that changed while the
+      // PATCH was in flight) — the PATCH response has no joined `user`, and
+      // replacing the row wholesale would drop the "Acts as …" subtitle.
+      // `isActive: next` is pinned BEFORE the echo so a shapeless response
+      // (e.g. { success: true }) can't revert the flip — the echo is Partial
+      // at runtime even though the util types it fully.
       if (mountedRef.current) {
         setKeys((cur) =>
           (cur || []).map((k) =>
             k.id === key.id
-              ? { ...key, isActive: next, ...(updated as Partial<AbsApiKey>) }
+              ? { ...k, isActive: next, ...(updated as Partial<AbsApiKey>) }
               : k
           )
         );

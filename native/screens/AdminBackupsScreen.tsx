@@ -409,7 +409,7 @@ export default function AdminBackupsScreen({ navigation }: any) {
                           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", marginRight: 4 }}
                           hitSlop={8}
                           accessibilityRole="button"
-                          accessibilityLabel={`Download backup ${backup.datePretty || backup.id}`}
+                          accessibilityLabel={`Download backup ${backup.datePretty || backup.filename || backup.id}`}
                           android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
                         >
                           <Icon name="download" size={22} color={colors.onSurfaceVariant} />
@@ -420,7 +420,7 @@ export default function AdminBackupsScreen({ navigation }: any) {
                           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
                           hitSlop={8}
                           accessibilityRole="button"
-                          accessibilityLabel={`Delete backup ${backup.datePretty || backup.id}`}
+                          accessibilityLabel={`Delete backup ${backup.datePretty || backup.filename || backup.id}`}
                           android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
                         >
                           <Icon name="trash" size={22} color={colors.error} />
