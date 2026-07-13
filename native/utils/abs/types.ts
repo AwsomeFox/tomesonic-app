@@ -105,8 +105,8 @@ export interface AbsChapter {
 export interface AbsEreaderDevice {
   name: string;
   email: string;
-  /** "adminAndUp" | "userAndUp" | "guestAndUp" | "specificUsers" */
-  availabilityOption?: string;
+  availabilityOption?: "adminAndUp" | "userAndUp" | "guestAndUp" | "specificUsers";
+  /** User ids — only meaningful when availabilityOption === "specificUsers". */
   users?: string[];
   [key: string]: any;
 }

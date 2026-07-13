@@ -65,9 +65,18 @@ const KEYS = [
   },
 ];
 
-function mockKeysList(apiKeys: any[] = KEYS) {
+// Server users for the act-as picker (GET /api/users): a root, a plain user,
+// and a non-root admin.
+const USERS = [
+  { id: "u1", username: "root", type: "root", isActive: true },
+  { id: "u2", username: "bob", type: "user", isActive: true },
+  { id: "u3", username: "adminA", type: "admin", isActive: true },
+];
+
+function mockKeysList(apiKeys: any[] = KEYS, users: any[] = USERS) {
   (api.get as jest.Mock).mockImplementation((url: string) => {
     if (url === "/api/api-keys") return Promise.resolve({ data: { apiKeys } });
+    if (url === "/api/users") return Promise.resolve({ data: { users } });
     return Promise.resolve({ data: {} });
   });
 }
@@ -92,6 +101,16 @@ beforeEach(() => {
   mockKeysList();
   (api.delete as jest.Mock).mockResolvedValue({ data: {} });
   setStringSpy = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
+});
+
+// Settle any trailing async continuations (sheet close animations, create
+// refreshes) INSIDE act before RNTL cleanup unmounts — a leaked update
+// otherwise corrupts the async act queue for the next test (see the Copy-key
+// test's comment for the same failure mode).
+afterEach(async () => {
+  await act(async () => {
+    await new Promise((r) => setImmediate(r));
+  });
 });
 
 describe("AdminApiKeysScreen", () => {
@@ -347,5 +366,241 @@ describe("AdminApiKeysScreen", () => {
     await renderScreen();
 
     expect(await screen.findByText("No API keys yet")).toBeTruthy();
+  });
+
+  describe("per-key enable/disable switch", () => {
+    it("toggling PATCHes /api/api-keys/:id, syncs the Inactive subtitle, and keeps the joined user", async () => {
+      // The PATCH echo has NO joined `user` object (only the list join does) —
+      // the screen must merge it onto the previous row, not replace the row.
+      (api.patch as jest.Mock).mockResolvedValue({
+        data: {
+          apiKey: { id: "k1", name: "CI key", expiresAt: null, isActive: false, userId: "u1" },
+        },
+      });
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      const sw = screen.getByLabelText("CI key active");
+      expect(sw.props.accessibilityRole).toBe("switch");
+      expect(sw.props.accessibilityState.checked).toBe(true);
+      fireEvent.press(sw);
+
+      await waitFor(() =>
+        expect(api.patch).toHaveBeenCalledWith("/api/api-keys/k1", { isActive: false })
+      );
+      // Subtitle gains "Inactive" AND keeps "Acts as root" from the join.
+      await waitFor(() =>
+        expect(screen.getByText(/Inactive · Never expires · Acts as root/)).toBeTruthy()
+      );
+      expect(screen.getByLabelText("CI key active").props.accessibilityState.checked).toBe(false);
+      expect(showSnackbar).toHaveBeenCalledWith({ message: "API key disabled" });
+    });
+
+    it("rolls the switch back with a failure dialog when the PATCH 500s", async () => {
+      (api.patch as jest.Mock).mockRejectedValue(
+        Object.assign(new Error("bad"), { response: { status: 500, data: "DB locked" } })
+      );
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      fireEvent.press(screen.getByLabelText("CI key active"));
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Couldn't update the API key", message: "DB locked" })
+        )
+      );
+      // Rolled back: still checked, no "Inactive" prefix on the CI key row.
+      expect(screen.getByLabelText("CI key active").props.accessibilityState.checked).toBe(true);
+      expect(screen.getByText(/^Never expires · Acts as root/)).toBeTruthy();
+      expect(showSnackbar).not.toHaveBeenCalled();
+    });
+
+    it("ignores a second press while that key's PATCH is still in flight", async () => {
+      let resolvePatch: (v: any) => void = () => {};
+      (api.patch as jest.Mock).mockImplementation(
+        () => new Promise((res) => (resolvePatch = res))
+      );
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      fireEvent.press(screen.getByLabelText("CI key active"));
+      await waitFor(() => expect(api.patch).toHaveBeenCalledTimes(1));
+      // Second press while in flight: the guard swallows it, so it causes NO
+      // re-render — act-wrapped, or the bare fireEvent corrupts the async act
+      // queue for later tests (same failure mode as the Copy-key test).
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("CI key active"));
+      });
+      expect(api.patch).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolvePatch({ data: { apiKey: { id: "k1", isActive: false } } });
+      });
+      // The settled PATCH landed: the switch reflects the new value.
+      await waitFor(() =>
+        expect(screen.getByLabelText("CI key active").props.accessibilityState.checked).toBe(
+          false
+        )
+      );
+    });
+  });
+
+  describe("act-as-user picker", () => {
+    it("loads users lazily (once) and the create POST carries the chosen userId", async () => {
+      (api.post as jest.Mock).mockResolvedValue({
+        data: { apiKey: { id: "k9", name: "Phone", apiKey: "raw" } },
+      });
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      // Defaults to yourself.
+      const row = screen.getByLabelText("Acts as, You");
+      fireEvent.press(row);
+      // Options come from GET /api/users; root users are tagged.
+      expect(await screen.findByLabelText("bob")).toBeTruthy();
+      expect(screen.getByLabelText("root (root)")).toBeTruthy();
+      fireEvent.press(screen.getByLabelText("bob"));
+      await waitFor(() => expect(screen.getByLabelText("Acts as, bob")).toBeTruthy());
+
+      // Reopening does NOT refetch — the list is cached for the screen.
+      fireEvent.press(screen.getByLabelText("Acts as, bob"));
+      await screen.findByLabelText("root (root)");
+      const userGets = (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/users");
+      expect(userGets.length).toBe(1);
+      // Reselecting the SAME user changes no state on select (only the close
+      // does) — act-wrapped so the bare fireEvent can't corrupt the act queue.
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("bob")); // close via reselect
+      });
+
+      fireEvent.changeText(screen.getByLabelText("API key name"), "Phone");
+      await waitFor(() =>
+        expect(screen.getByLabelText("API key name").props.value).toBe("Phone")
+      );
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Create API key"));
+      });
+
+      // Exact body: the CHOSEN user, default 30-day preset.
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/api-keys", {
+          name: "Phone",
+          userId: "u2",
+          expiresIn: 30 * 24 * 60 * 60,
+        })
+      );
+      // Settle the create continuation (list refresh + reveal dialog) inside
+      // act so its trailing setStates don't corrupt the next test's queue.
+      await act(async () => {
+        await new Promise((r) => setImmediate(r));
+      });
+    });
+
+    it("a non-root admin does not see OTHER root users in the picker (self stays)", async () => {
+      useUserStore.setState({
+        user: { id: "u3", username: "adminA", type: "admin", permissions: {} },
+      } as any);
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      fireEvent.press(screen.getByLabelText("Acts as, You"));
+      expect(await screen.findByLabelText("bob")).toBeTruthy();
+      expect(screen.getByLabelText("adminA")).toBeTruthy();
+      // The root user u1 is filtered out — no privilege escalation via keys.
+      expect(screen.queryByLabelText("root (root)")).toBeNull();
+    });
+
+    it("a users fetch failure keeps the default (You) and shows a dialog", async () => {
+      (api.get as jest.Mock).mockImplementation((url: string) => {
+        if (url === "/api/api-keys") return Promise.resolve({ data: { apiKeys: KEYS } });
+        if (url === "/api/users")
+          return Promise.reject(
+            Object.assign(new Error("bad"), { response: { status: 500, data: "boom" } })
+          );
+        return Promise.resolve({ data: {} });
+      });
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      // The failed fetch leaves the screen unchanged (dialog only, and the
+      // spy drives the real store with no host mounted) — act-wrapped press.
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Acts as, You"));
+      });
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Couldn't load users" })
+        )
+      );
+      expect(screen.getByLabelText("Acts as, You")).toBeTruthy();
+    });
+  });
+
+  describe("custom expiry", () => {
+    it("the Custom chip reveals the days input and 14 days POSTs expiresIn 1209600", async () => {
+      (api.post as jest.Mock).mockResolvedValue({
+        data: { apiKey: { id: "k9", name: "Phone", apiKey: "raw" } },
+      });
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      // No days input until the Custom chip is active.
+      expect(screen.queryByLabelText("Custom expiry in days")).toBeNull();
+      fireEvent.press(screen.getByLabelText("Key expires: Custom…"));
+      const daysInput = await screen.findByLabelText("Custom expiry in days");
+      fireEvent.changeText(daysInput, "14");
+      await waitFor(() =>
+        expect(screen.getByLabelText("Custom expiry in days").props.value).toBe("14")
+      );
+
+      fireEvent.changeText(screen.getByLabelText("API key name"), "Phone");
+      await waitFor(() =>
+        expect(screen.getByLabelText("API key name").props.value).toBe("Phone")
+      );
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Create API key"));
+      });
+
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/api-keys", {
+          name: "Phone",
+          userId: "u1",
+          expiresIn: 14 * 86400, // 1209600
+        })
+      );
+    });
+
+    it("blocks invalid, zero, and empty custom expiries with a dialog and NO POST", async () => {
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      fireEvent.press(screen.getByLabelText("Key expires: Custom…"));
+      await screen.findByLabelText("Custom expiry in days");
+      fireEvent.changeText(screen.getByLabelText("API key name"), "Phone");
+      await waitFor(() =>
+        expect(screen.getByLabelText("API key name").props.value).toBe("Phone")
+      );
+
+      for (const bad of ["", "0", "abc", "1.5"]) {
+        // act-wrapped: "" → "" changes nothing, and a BLOCKED create only
+        // shows a dialog (no re-render) — bare fireEvents here poison the
+        // async act queue for the rest of the suite.
+        await act(async () => {
+          fireEvent.changeText(screen.getByLabelText("Custom expiry in days"), bad);
+        });
+        await act(async () => {
+          fireEvent.press(screen.getByLabelText("Create API key"));
+        });
+        await waitFor(() =>
+          expect(showAppDialog).toHaveBeenCalledWith(
+            expect.objectContaining({ title: "Invalid expiry" })
+          )
+        );
+        (showAppDialog as jest.Mock).mockClear();
+      }
+      expect(api.post).not.toHaveBeenCalled();
+    });
   });
 });

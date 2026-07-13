@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, RefreshControl } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, RefreshControl, Linking } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -10,7 +10,7 @@ import EmptyState from "../components/EmptyState";
 import { SectionHeader, RowBase, Divider } from "../components/SettingsRows";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
-import { getBackups, createBackup, deleteBackup } from "../utils/abs/server";
+import { getBackups, createBackup, deleteBackup, buildBackupDownloadUrl } from "../utils/abs/server";
 import { absErrorToErrorStateProps, absErrorToActionMessage } from "../utils/abs/errors";
 import { formatBytes } from "../utils/format";
 import type { AbsBackup } from "../utils/abs/types";
@@ -175,6 +175,49 @@ export default function AdminBackupsScreen({ navigation }: any) {
     } finally {
       setDeletingId(null);
     }
+  };
+
+  // Download-to-device (ItemDetail's handleZipDownload structure): tokened URL
+  // for the OS download manager, since it can't send our auth header.
+  const handleDownload = (backup: AbsBackup) => {
+    const url = buildBackupDownloadUrl(backup.id);
+    if (!url) {
+      showAppDialog({
+        title: "Can't download",
+        message: "No server session available. Reconnect and try again.",
+      });
+      return;
+    }
+    showAppDialog({
+      title: "Download backup",
+      message:
+        `Download the backup from ${backup.datePretty} (${formatBytes(backup.fileSize)})? ` +
+        "The archive contains the full server database. It's handed to your browser's " +
+        "download manager, so large files stream straight to storage.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Download",
+          onPress: () => {
+            // Deliberately NOT axios and NOT the in-app downloads store: the
+            // archive must stream via the OS download manager, and it isn't a
+            // playable in-app download. Success feedback only once the OS
+            // actually took the URL — a device with no browser lands in the
+            // catch, which must not claim the handoff happened.
+            Linking.openURL(url)
+              .then(() => {
+                showSnackbar({ message: "Backup download handed to your browser" });
+              })
+              .catch(() => {
+                showAppDialog({
+                  title: "Couldn't download",
+                  message: "Couldn't open a browser for the download.",
+                });
+              });
+          },
+        },
+      ],
+    });
   };
 
   const confirmDelete = (backup: AbsBackup) => {
@@ -352,17 +395,30 @@ export default function AdminBackupsScreen({ navigation }: any) {
                     }`}
                     colors={colors}
                     trailing={
-                      <HintPressable
-                        onPress={() => confirmDelete(backup)}
-                        disabled={deletingId === backup.id}
-                        style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
-                        hitSlop={8}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Delete backup ${backup.datePretty || backup.id}`}
-                        android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
-                      >
-                        <Icon name="trash" size={22} color={colors.error} />
-                      </HintPressable>
+                      <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <HintPressable
+                          onPress={() => handleDownload(backup)}
+                          disabled={deletingId === backup.id}
+                          style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", marginRight: 4 }}
+                          hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Download backup ${backup.datePretty || backup.id}`}
+                          android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
+                        >
+                          <Icon name="download" size={22} color={colors.onSurfaceVariant} />
+                        </HintPressable>
+                        <HintPressable
+                          onPress={() => confirmDelete(backup)}
+                          disabled={deletingId === backup.id}
+                          style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" }}
+                          hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete backup ${backup.datePretty || backup.id}`}
+                          android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
+                        >
+                          <Icon name="trash" size={22} color={colors.error} />
+                        </HintPressable>
+                      </View>
                     }
                   />
                 </View>

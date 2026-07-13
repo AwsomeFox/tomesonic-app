@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -14,14 +14,16 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
-import { SectionHeader, Divider } from "../components/SettingsRows";
+import { SectionHeader, Divider, SelectRow, M3Switch } from "../components/SettingsRows";
+import SettingSelectModal from "../components/SettingSelectModal";
 import { useUserStore } from "../store/useUserStore";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { useServerCapabilities, MIN_VERSION_API_KEYS } from "../utils/abs/capabilities";
-import { getApiKeys, createApiKey, deleteApiKey } from "../utils/abs/server";
+import { getApiKeys, createApiKey, updateApiKey, deleteApiKey } from "../utils/abs/server";
+import { getUsers } from "../utils/abs/users";
 import { AbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
-import type { AbsApiKey } from "../utils/abs/types";
+import type { AbsApiKey, AbsUser } from "../utils/abs/types";
 
 /**
  * AdminApiKeysScreen — list / create / delete server API keys.
@@ -61,8 +63,17 @@ export default function AdminApiKeysScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<AbsError | null>(null);
   const [name, setName] = useState("");
-  const [expiry, setExpiry] = useState<number | null>(EXPIRY_PRESETS[0].seconds);
+  // number = preset seconds, null = never expires, "custom" = the days input.
+  const [expiry, setExpiry] = useState<number | null | "custom">(EXPIRY_PRESETS[0].seconds);
+  const [customDays, setCustomDays] = useState("");
   const [creating, setCreating] = useState(false);
+  // Act-as-user picker: keys run with the CHOSEN user's permissions; default
+  // is the signed-in admin. The users list is fetched lazily on first open.
+  const [actAsUserId, setActAsUserId] = useState<string | null>(user?.id ?? null);
+  const [users, setUsers] = useState<AbsUser[] | null>(null);
+  const [userPickerOpen, setUserPickerOpen] = useState(false);
+  // Per-key PATCH in-flight guard for the enable/disable switches.
+  const togglingIds = useRef<Set<string>>(new Set());
 
   const supports = caps.supportsApiKeys;
 
@@ -90,16 +101,58 @@ export default function AdminApiKeysScreen({ navigation }: any) {
     return unsub;
   }, [supports, load, navigation]);
 
+  // Lazy users fetch for the act-as picker. On failure the picker stays shut
+  // and the current default (yourself) remains selected.
+  const openUserPicker = async () => {
+    if (users) {
+      setUserPickerOpen(true);
+      return;
+    }
+    try {
+      const all = await getUsers();
+      // A non-root admin must not mint keys that act as OTHER root users —
+      // that would be a privilege escalation. Root sees everyone; self is
+      // always available regardless of type.
+      const visible =
+        user?.type === "root" ? all : all.filter((u) => u.type !== "root" || u.id === user?.id);
+      setUsers(visible);
+      setUserPickerOpen(true);
+    } catch (e: any) {
+      showAppDialog({
+        title: "Couldn't load users",
+        message: e?.message || "Something went wrong. Please try again.",
+      });
+    }
+  };
+
+  const actAsUser = users?.find((u) => u.id === actAsUserId);
+  const actsAsSelf = actAsUserId === user?.id;
+
   const handleCreate = async () => {
     const trimmed = name.trim();
-    const userId = user?.id;
+    const userId = actAsUserId || user?.id;
     if (!trimmed || !userId || creating) return;
+    let expiresIn: number | undefined;
+    if (expiry === "custom") {
+      const raw = customDays.trim();
+      // Whole positive days only — "0", "", "1.5" and garbage all block the POST.
+      if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
+        showAppDialog({
+          title: "Invalid expiry",
+          message: "Enter a whole number of days greater than zero.",
+        });
+        return;
+      }
+      expiresIn = Number(raw) * 86400;
+    } else if (expiry != null) {
+      expiresIn = expiry;
+    }
     setCreating(true);
     try {
       const created = await createApiKey({
         name: trimmed,
         userId,
-        ...(expiry != null ? { expiresIn: expiry } : {}),
+        ...(expiresIn != null ? { expiresIn } : {}),
       });
       setName("");
       // Refresh the list so the new key row appears (best-effort — the reveal
@@ -165,6 +218,30 @@ export default function AdminApiKeysScreen({ navigation }: any) {
         { text: "Delete", style: "destructive", onPress: () => doDelete(key) },
       ],
     });
+  };
+
+  const handleToggleActive = async (key: AbsApiKey, next: boolean) => {
+    if (togglingIds.current.has(key.id)) return; // one PATCH per key at a time
+    togglingIds.current.add(key.id);
+    // Optimistic flip (also keeps the "Inactive" subtitle in sync).
+    setKeys((cur) => (cur || []).map((k) => (k.id === key.id ? { ...k, isActive: next } : k)));
+    try {
+      const updated = await updateApiKey(key.id, { isActive: next });
+      // Merge the echo ONTO the previous row — the PATCH response has no
+      // joined `user`, and replacing the row wholesale would drop the
+      // "Acts as …" subtitle.
+      setKeys((cur) => (cur || []).map((k) => (k.id === key.id ? { ...key, ...updated } : k)));
+      showSnackbar({ message: next ? "API key enabled" : "API key disabled" });
+    } catch (e: any) {
+      // Roll back to the pre-toggle row; failure gets a dialog (screen convention).
+      setKeys((cur) => (cur || []).map((k) => (k.id === key.id ? key : k)));
+      showAppDialog({
+        title: "Couldn't update the API key",
+        message: e?.message || "Something went wrong. Please try again.",
+      });
+    } finally {
+      togglingIds.current.delete(key.id);
+    }
   };
 
   const unsupported = !supports || error?.kind === "unsupported";
@@ -258,12 +335,16 @@ export default function AdminApiKeysScreen({ navigation }: any) {
               }}
             />
             <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 10 }}>
-              {EXPIRY_PRESETS.map((preset) => {
-                const active = expiry === preset.seconds;
+              {[
+                ...EXPIRY_PRESETS.map((p) => ({ label: p.label, value: p.seconds })),
+                // "Custom…" reveals the days input below instead of a fixed span.
+                { label: "Custom…", value: "custom" as const },
+              ].map((preset) => {
+                const active = expiry === preset.value;
                 return (
                   <Pressable
                     key={preset.label}
-                    onPress={() => setExpiry(preset.seconds)}
+                    onPress={() => setExpiry(preset.value)}
                     accessibilityRole="button"
                     accessibilityState={{ selected: active }}
                     accessibilityLabel={`Key expires: ${preset.label}`}
@@ -296,6 +377,42 @@ export default function AdminApiKeysScreen({ navigation }: any) {
                 );
               })}
             </View>
+            {expiry === "custom" ? (
+              <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
+                <TextInput
+                  value={customDays}
+                  onChangeText={setCustomDays}
+                  editable={!creating}
+                  keyboardType="number-pad"
+                  placeholder="14"
+                  placeholderTextColor={colors.onSurfaceVariant}
+                  accessibilityLabel="Custom expiry in days"
+                  style={{
+                    backgroundColor: colors.surfaceContainer,
+                    color: colors.onSurface,
+                    borderRadius: 12,
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                    fontSize: 15,
+                    minWidth: 96,
+                  }}
+                />
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginLeft: 10 }}>
+                  days
+                </Text>
+              </View>
+            ) : null}
+          </View>
+          {/* Whose permissions the key runs with; full-bleed row so it lines up
+              with the settings-row family (options load lazily on first open). */}
+          <SelectRow
+            icon="person"
+            title="Acts as"
+            subtitle={actsAsSelf ? "You" : actAsUser?.username || "Selected user"}
+            onPress={openUserPicker}
+            colors={colors}
+          />
+          <View style={{ paddingHorizontal: 20 }}>
             <Pressable
               onPress={handleCreate}
               disabled={creating || !name.trim()}
@@ -324,8 +441,11 @@ export default function AdminApiKeysScreen({ navigation }: any) {
               )}
             </Pressable>
             <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 8 }}>
-              The key is shown once, right after it's created — copy it then. It acts with your
-              account's permissions.
+              The key is shown once, right after it's created — copy it then. It acts with{" "}
+              {actsAsSelf
+                ? "your account's"
+                : `${actAsUser?.username ?? "the selected user"}'s`}{" "}
+              permissions.
             </Text>
           </View>
 
@@ -366,6 +486,25 @@ export default function AdminApiKeysScreen({ navigation }: any) {
                         {subtitleParts.join(" · ")}
                       </Text>
                     </View>
+                    {/* Enable/disable — the wrapper Pressable is the accessible
+                        switch; the visual M3 knob is hidden from readers (the
+                        ToggleRow pattern) and its own press is inert. */}
+                    <Pressable
+                      onPress={() => handleToggleActive(k, !k.isActive)}
+                      hitSlop={8}
+                      accessibilityRole="switch"
+                      accessibilityLabel={`${k.name} active`}
+                      accessibilityState={{ checked: k.isActive }}
+                      style={{ marginRight: 8 }}
+                    >
+                      <View
+                        pointerEvents="none"
+                        importantForAccessibility="no-hide-descendants"
+                        accessibilityElementsHidden
+                      >
+                        <M3Switch value={k.isActive} onValueChange={() => {}} colors={colors} />
+                      </View>
+                    </Pressable>
                     <Pressable
                       onPress={() => confirmDelete(k)}
                       hitSlop={8}
@@ -382,6 +521,19 @@ export default function AdminApiKeysScreen({ navigation }: any) {
           )}
         </ScrollView>
       )}
+
+      {/* Act-as user picker (options seeded by openUserPicker's lazy fetch). */}
+      <SettingSelectModal
+        visible={userPickerOpen}
+        title="Acts as"
+        options={(users || []).map((u) => ({
+          label: u.username + (u.type === "root" ? " (root)" : ""),
+          value: u.id,
+        }))}
+        selected={actAsUserId}
+        onSelect={(v) => setActAsUserId(v)}
+        onClose={() => setUserPickerOpen(false)}
+      />
     </SafeAreaView>
   );
 }

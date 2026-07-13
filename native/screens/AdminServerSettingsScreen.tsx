@@ -1,11 +1,26 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ScrollView,
+  ActivityIndicator,
+  TextInput,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
+  AccessibilityInfo,
+  findNodeHandle,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
+import { withAlpha } from "../theme/palette";
 import Icon, { IconName } from "../components/Icon";
 import ErrorState from "../components/ErrorState";
-import { SectionHeader, ToggleRow, RowBase, Divider } from "../components/SettingsRows";
+import { SectionHeader, ToggleRow, RowBase, Divider, SelectRow } from "../components/SettingsRows";
+import SettingSelectModal from "../components/SettingSelectModal";
 import { useUserStore } from "../store/useUserStore";
+import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { refreshCapabilities } from "../utils/abs/capabilities";
 import { updateServerSettings } from "../utils/abs/server";
@@ -107,6 +122,53 @@ const SECTIONS: { label: string; toggles: ToggleSpec[] }[] = [
   },
 ];
 
+// --- Localization selects (single-key PATCHes, same as the toggles) ---------
+
+// The date formats the ABS web client offers (server stores the raw pattern).
+const DATE_FORMAT_OPTIONS = [
+  "MM/dd/yyyy",
+  "dd/MM/yyyy",
+  "dd.MM.yyyy",
+  "yyyy-MM-dd",
+  "MMM do, yyyy",
+  "MMMM do, yyyy",
+  "dd MMM yyyy",
+  "dd MMMM yyyy",
+].map((v) => ({ label: v, value: v }));
+
+const TIME_FORMAT_OPTIONS = [
+  { label: "24-hour", value: "HH:mm" },
+  { label: "12-hour", value: "h:mma" },
+];
+
+// Curated subset of the server's language list, labeled with native names.
+const LANGUAGE_OPTIONS = [
+  { label: "English", value: "en-us" },
+  { label: "Deutsch", value: "de" },
+  { label: "Español", value: "es" },
+  { label: "Français", value: "fr" },
+  { label: "Italiano", value: "it" },
+  { label: "Nederlands", value: "nl" },
+  { label: "Polski", value: "pl" },
+  { label: "Português (Brasil)", value: "pt-br" },
+  { label: "简体中文", value: "zh-cn" },
+];
+
+interface SelectSpec {
+  key: string;
+  icon: IconName;
+  title: string;
+  options: { label: string; value: string }[];
+  /** Server default, shown when the store blob predates the key. */
+  fallback: string;
+}
+
+const LOCALIZATION_SELECTS: SelectSpec[] = [
+  { key: "dateFormat", icon: "calendar", title: "Date format", options: DATE_FORMAT_OPTIONS, fallback: "MM/dd/yyyy" },
+  { key: "timeFormat", icon: "clock", title: "Time format", options: TIME_FORMAT_OPTIONS, fallback: "HH:mm" },
+  { key: "language", icon: "globe", title: "Language", options: LANGUAGE_OPTIONS, fallback: "en-us" },
+];
+
 export default function AdminServerSettingsScreen({ navigation }: any) {
   const colors = useThemeColors();
   const serverSettings = useUserStore((s) => s.serverSettings);
@@ -118,8 +180,15 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
   // the PATCH settles. On success the store already holds the echoed new blob
   // (same value); on failure clearing falls back to the untouched store value,
   // which IS the rollback.
-  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+  const [overrides, setOverrides] = useState<Record<string, any>>({});
   const inFlight = useRef<Record<string, boolean>>({});
+  // Which SettingSelectModal (if any) is open, by settings key.
+  const [openPicker, setOpenPicker] = useState<string | null>(null);
+  // Sorting-prefixes editor modal.
+  const [prefixModalOpen, setPrefixModalOpen] = useState(false);
+  const [prefixDraft, setPrefixDraft] = useState<string[]>([]);
+  const [prefixInput, setPrefixInput] = useState("");
+  const [savingPrefixes, setSavingPrefixes] = useState(false);
   // The classified failure behind an empty settings blob, for the load-error
   // ErrorState (offline vs 403 vs 5xx). refreshCapabilities() swallows its
   // error, so on a failed seed we re-probe /api/authorize once to classify it.
@@ -202,6 +271,101 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
       }
     }
   };
+
+  // handleToggle's sibling for non-boolean settings (selects, arrays): same
+  // per-key in-flight guard, optimistic override, and clear-on-settle rollback.
+  // Still ONE key per PATCH — never the whole blob. Returns success so modal
+  // callers (the prefix editor) know whether to close.
+  const handleSelect = async (key: string, value: any): Promise<boolean> => {
+    if (inFlight.current[key]) return false;
+    inFlight.current[key] = true;
+    setOverrides((o) => ({ ...o, [key]: value }));
+    try {
+      await updateServerSettings({ [key]: value });
+      return true;
+    } catch (e: any) {
+      showSnackbar({ message: e?.message || "Couldn't update the setting." });
+      return false;
+    } finally {
+      inFlight.current[key] = false;
+      if (mountedRef.current) {
+        setOverrides((o) => {
+          const { [key]: _drop, ...rest } = o;
+          return rest;
+        });
+      }
+    }
+  };
+
+  // Override-aware read for the select rows / prefix editor.
+  const settingValue = (key: string) =>
+    key in overrides ? overrides[key] : serverSettings?.[key];
+
+  const selectSubtitle = (spec: SelectSpec): string => {
+    const value = settingValue(spec.key) ?? spec.fallback;
+    return spec.options.find((o) => o.value === value)?.label ?? String(value);
+  };
+
+  const currentPrefixes: string[] = Array.isArray(settingValue("sortingPrefixes"))
+    ? settingValue("sortingPrefixes")
+    : [];
+
+  const openPrefixEditor = () => {
+    setPrefixDraft(currentPrefixes);
+    setPrefixInput("");
+    setPrefixModalOpen(true);
+  };
+
+  const addPrefix = () => {
+    // Normalize like the server stores them: trimmed + lowercased, no dupes.
+    const p = prefixInput.trim().toLowerCase();
+    if (!p) return;
+    setPrefixDraft((cur) => (cur.includes(p) ? cur : [...cur, p]));
+    setPrefixInput("");
+  };
+
+  const savePrefixes = async () => {
+    if (savingPrefixes) return;
+    if (prefixDraft.length === 0) {
+      // The ABS server SILENTLY IGNORES an empty sortingPrefixes array (the
+      // PATCH "succeeds" but nothing changes) — surface that instead of
+      // letting the save look like it worked.
+      showAppDialog({
+        title: "At least one prefix required",
+        message:
+          "The server ignores an empty prefix list. Keep at least one prefix, or turn off " +
+          "“Ignore prefixes when sorting” instead.",
+      });
+      return;
+    }
+    setSavingPrefixes(true);
+    const ok = await handleSelect("sortingPrefixes", prefixDraft);
+    if (mountedRef.current) {
+      setSavingPrefixes(false);
+      if (ok) {
+        setPrefixModalOpen(false);
+        showSnackbar({ message: "Sorting prefixes saved" });
+      }
+    }
+  };
+
+  // Prefix-modal a11y (mirrors the AdminEmail device modal / AppDialog on-open
+  // pattern): RN Modal doesn't move screen-reader focus or announce itself on
+  // Android, so on open we focus the title and announce the editor's purpose.
+  const prefixModalTitleRef = useRef<Text>(null);
+  useEffect(() => {
+    if (!prefixModalOpen) return;
+    const t = setTimeout(() => {
+      if (Platform.OS === "android") {
+        const node = findNodeHandle(prefixModalTitleRef.current);
+        if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
+      }
+      AccessibilityInfo.announceForAccessibility(
+        "Sorting prefixes. Add or remove the prefixes ignored when sorting titles."
+      );
+    }, 50);
+    return () => clearTimeout(t);
+  }, [prefixModalOpen]);
 
   const retry = () => {
     setSeeding(true);
@@ -290,8 +454,35 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
                     onValueChange={(v) => handleToggle(t, v)}
                     colors={colors}
                   />
+                  {/* The prefix LIST rides directly under its master toggle. */}
+                  {t.key === "sortingIgnorePrefix" ? (
+                    <>
+                      <Divider colors={colors} />
+                      <SelectRow
+                        icon="sort"
+                        title="Sorting prefixes"
+                        subtitle={currentPrefixes.length ? currentPrefixes.join(", ") : "None"}
+                        onPress={openPrefixEditor}
+                        colors={colors}
+                      />
+                    </>
+                  ) : null}
                 </View>
               ))}
+            </View>
+          ))}
+
+          <SectionHeader label="Localization" colors={colors} />
+          {LOCALIZATION_SELECTS.map((spec, i) => (
+            <View key={spec.key}>
+              {i > 0 ? <Divider colors={colors} /> : null}
+              <SelectRow
+                icon={spec.icon}
+                title={spec.title}
+                subtitle={selectSubtitle(spec)}
+                onPress={() => setOpenPicker(spec.key)}
+                colors={colors}
+              />
             </View>
           ))}
 
@@ -299,6 +490,175 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
           <RowBase icon="info" title="Server version" subtitle={version} colors={colors} />
         </ScrollView>
       )}
+
+      {/* Localization pickers — selecting PATCHes that single key. */}
+      {LOCALIZATION_SELECTS.map((spec) => (
+        <SettingSelectModal
+          key={spec.key}
+          visible={openPicker === spec.key}
+          title={spec.title}
+          options={spec.options}
+          selected={settingValue(spec.key) ?? spec.fallback}
+          onSelect={(v) => handleSelect(spec.key, v)}
+          onClose={() => setOpenPicker(null)}
+        />
+      ))}
+
+      {/* Sorting-prefixes editor (RN Modal, AdminEmail device-modal skeleton). */}
+      <Modal
+        visible={prefixModalOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setPrefixModalOpen(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }}
+        >
+          <ScrollView
+            contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View
+              accessibilityViewIsModal
+              style={{
+                backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
+                borderRadius: 28,
+                padding: 24,
+                elevation: 5,
+              }}
+            >
+              <Text
+                ref={prefixModalTitleRef}
+                accessibilityRole="header"
+                style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}
+              >
+                Sorting prefixes
+              </Text>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginBottom: 20 }}>
+                Titles starting with these words sort as if the prefix weren't there. Tap a
+                prefix to remove it.
+              </Text>
+
+              {/* Removable chips (expiry-chip styling from AdminApiKeys). */}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", marginBottom: 8 }}>
+                {prefixDraft.map((p) => (
+                  <Pressable
+                    key={p}
+                    onPress={() => setPrefixDraft((cur) => cur.filter((x) => x !== p))}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove prefix ${p}`}
+                    android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+                    hitSlop={{ top: 6, bottom: 6 }}
+                    style={{
+                      flexDirection: "row",
+                      paddingHorizontal: 14,
+                      height: 34,
+                      borderRadius: 17,
+                      overflow: "hidden",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginRight: 8,
+                      marginBottom: 8,
+                      backgroundColor: colors.secondaryContainer,
+                      borderWidth: 1,
+                      borderColor: colors.secondaryContainer,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: colors.onSecondaryContainer,
+                        fontSize: 13,
+                        fontWeight: "600",
+                        marginRight: 6,
+                      }}
+                    >
+                      {p}
+                    </Text>
+                    <Icon name="close" size={14} color={colors.onSecondaryContainer} />
+                  </Pressable>
+                ))}
+                {prefixDraft.length === 0 ? (
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginBottom: 8 }}>
+                    No prefixes yet — add one below.
+                  </Text>
+                ) : null}
+              </View>
+
+              <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 24 }}>
+                <TextInput
+                  value={prefixInput}
+                  onChangeText={setPrefixInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="the"
+                  placeholderTextColor={colors.onSurfaceVariant}
+                  accessibilityLabel="New sorting prefix"
+                  onSubmitEditing={addPrefix}
+                  returnKeyType="done"
+                  style={{
+                    flex: 1,
+                    backgroundColor: colors.surface,
+                    color: colors.onSurface,
+                    borderRadius: 12,
+                    padding: 12,
+                    fontSize: 16,
+                    borderWidth: 1,
+                    borderColor: colors.outline,
+                    marginRight: 8,
+                  }}
+                />
+                <Pressable
+                  onPress={addPrefix}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add prefix"
+                  style={{ paddingHorizontal: 16, paddingVertical: 12 }}
+                >
+                  <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "600" }}>Add</Text>
+                </Pressable>
+              </View>
+
+              <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+                <Pressable
+                  onPress={() => setPrefixModalOpen(false)}
+                  accessibilityRole="button"
+                  style={{ paddingHorizontal: 20, paddingVertical: 12, marginRight: 8 }}
+                >
+                  <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "600" }}>
+                    Cancel
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={savePrefixes}
+                  disabled={savingPrefixes}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save sorting prefixes"
+                  accessibilityState={{ disabled: savingPrefixes, busy: savingPrefixes }}
+                  style={{
+                    backgroundColor: colors.primary,
+                    paddingHorizontal: 20,
+                    paddingVertical: 12,
+                    borderRadius: 24,
+                    flexDirection: "row",
+                    alignItems: "center",
+                  }}
+                >
+                  {savingPrefixes ? (
+                    <ActivityIndicator
+                      size="small"
+                      color={colors.onPrimary}
+                      style={{ marginRight: 8 }}
+                    />
+                  ) : null}
+                  <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600" }}>
+                    Save
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
