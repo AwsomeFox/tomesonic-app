@@ -2,8 +2,10 @@
  * AdminMaintenanceScreen — bulk library cleanup (tags / genres rename+delete,
  * per-library narrator rename via the derived base64 narrator id) and the two
  * server cache purges. Every mutation is confirm-gated through showAppDialog
- * (nothing fires before the confirm button), rename collisions read as merges,
- * and load errors branch on the normalized AbsError kind (offline vs 403).
+ * (nothing fires before the confirm button), rename collisions read as
+ * DESTRUCTIVE merges, the narrator library comes from a select-sheet and is
+ * DERIVED from the library store (late store loads populate it), and load
+ * errors branch on the normalized AbsError kind (offline vs 403).
  */
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -16,7 +18,7 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminMaintenanceScreen from "../../screens/AdminMaintenanceScreen";
 import { api } from "../../utils/api";
 import { showAppDialog } from "../../store/useDialogStore";
@@ -32,6 +34,8 @@ const NARRATORS = [
   { id: narratorNameToId("John Doe"), name: "John Doe", numBooks: 3 },
   { id: narratorNameToId("Jane Roe"), name: "Jane Roe", numBooks: 1 },
 ];
+// A second book library, for the library select-sheet.
+const LIB3_NARRATORS = [{ id: narratorNameToId("Alt Narrator"), name: "Alt Narrator", numBooks: 2 }];
 
 function mockGets({
   tags = TAGS,
@@ -43,6 +47,8 @@ function mockGets({
     if (url === "/api/genres") return Promise.resolve({ data: { genres } });
     if (url === "/api/libraries/lib1/narrators")
       return Promise.resolve({ data: { narrators } });
+    if (url === "/api/libraries/lib3/narrators")
+      return Promise.resolve({ data: { narrators: LIB3_NARRATORS } });
     return Promise.resolve({ data: {} });
   });
 }
@@ -70,6 +76,7 @@ beforeEach(() => {
     libraries: [
       { id: "lib1", name: "Audiobooks", mediaType: "book", settings: {} },
       { id: "lib2", name: "Podcasts", mediaType: "podcast", settings: {} },
+      { id: "lib3", name: "More Books", mediaType: "book", settings: {} },
     ] as any,
     currentLibraryId: "lib1",
   });
@@ -134,7 +141,10 @@ describe("AdminMaintenanceScreen — tags", () => {
 
     const dialog = dialogWithTitle("Rename tag");
     expect(dialog.message).toContain("merged");
-    expect(dialog.buttons.find((b: any) => b.text === "Merge")).toBeTruthy();
+    const merge = dialog.buttons.find((b: any) => b.text === "Merge");
+    expect(merge).toBeTruthy();
+    // A merge is a no-undo collapse across every item — styled destructive.
+    expect(merge.style).toBe("destructive");
   });
 
   it("delete is confirm-gated (destructive) and URI-encodes the tag path", async () => {
@@ -248,6 +258,49 @@ describe("AdminMaintenanceScreen — narrators", () => {
         expect.objectContaining({ message: expect.stringContaining("Narrator renamed") })
       )
     );
+  });
+
+  it("library picker is a select-sheet listing BOOK libraries; picking one refetches its narrators", async () => {
+    await renderScreen();
+    await screen.findByText("Fiction");
+    await fireEvent.press(screen.getByLabelText("Narrators"));
+    await screen.findByText("John Doe");
+
+    // The Library row opens the select sheet (SettingSelectModal idiom).
+    await fireEvent.press(screen.getByLabelText("Library, Audiobooks"));
+    const current = await screen.findByLabelText("Audiobooks");
+    expect(current.props.accessibilityRole).toBe("radio");
+    expect(current.props.accessibilityState.checked).toBe(true);
+    // Podcast libraries have no narrators — not offered.
+    expect(screen.queryByLabelText("Podcasts")).toBeNull();
+
+    await fireEvent.press(screen.getByLabelText("More Books"));
+
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/api/libraries/lib3/narrators"));
+    expect(await screen.findByText("Alt Narrator")).toBeTruthy();
+    expect(screen.getByLabelText("Library, More Books")).toBeTruthy();
+  });
+
+  it("a library list that loads AFTER mount still populates the narrator library (derived, not seeded once)", async () => {
+    useLibraryStore.setState({ libraries: [] as any, currentLibraryId: null as any });
+    await renderScreen();
+    await screen.findByText("Fiction");
+
+    await fireEvent.press(screen.getByLabelText("Narrators"));
+    expect(await screen.findByText("No library")).toBeTruthy();
+
+    // The store finishes loading late — the screen must pick the library up
+    // without a remount.
+    await act(async () => {
+      useLibraryStore.setState({
+        libraries: [{ id: "lib1", name: "Audiobooks", mediaType: "book", settings: {} }] as any,
+        currentLibraryId: "lib1",
+      });
+    });
+
+    expect(await screen.findByText("John Doe")).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith("/api/libraries/lib1/narrators");
+    expect(screen.queryByText("No library")).toBeNull();
   });
 });
 

@@ -92,6 +92,16 @@ export default function AdminLibrariesScreen({ navigation }: any) {
     load();
   }, [load, retryTick]);
 
+  // Silent reload on focus (AdminApiKeys idiom) so a create/edit/delete made
+  // on AdminLibraryEdit is reflected when the admin pops back to this list.
+  // isRefresh=true skips the full-screen spinner — the stale list stays up
+  // until the fresh one lands.
+  useEffect(() => {
+    if (!navigation?.addListener) return undefined;
+    const unsub = navigation.addListener("focus", () => load(true));
+    return unsub;
+  }, [navigation, load]);
+
   // Live task chips while focused: the shared poller is ref-counted, so this
   // subscription is exactly what starts/stops it for this screen.
   useFocusEffect(
@@ -120,6 +130,11 @@ export default function AdminLibrariesScreen({ navigation }: any) {
     try {
       await scanLibrary(lib.id, force ? { force: true } : undefined);
       showSnackbar({ message: `Scanning "${lib.name}"…` });
+      // The watch resolves when the task reports finished OR when it vanishes
+      // from the snapshot (ABS drops completed tasks from GET /api/tasks — the
+      // result then carries inferredCompletion with no exit status). Only an
+      // explicit isFailed gets the failure copy; anything else — including an
+      // inferred completion — reads as generic success.
       const task = await startTaskWatch(
         (t) => typeof t.action === "string" && t.action.includes("scan") && t.data?.libraryId === lib.id
       );
@@ -152,6 +167,8 @@ export default function AdminLibrariesScreen({ navigation }: any) {
     try {
       await matchAllLibrary(lib.id);
       showSnackbar({ message: `Matching all items in "${lib.name}"…` });
+      // Same terminal semantics as runScan: isFailed → failure copy, everything
+      // else (finished OR inferredCompletion) → generic finished copy.
       const task = await startTaskWatch(
         (t) => typeof t.action === "string" && t.action.includes("match") && t.data?.libraryId === lib.id
       );

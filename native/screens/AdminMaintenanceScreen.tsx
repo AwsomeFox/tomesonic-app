@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
   Pressable,
   TextInput,
@@ -14,6 +14,7 @@ import Icon, { IconName } from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import { SectionHeader, RowBase, Divider } from "../components/SettingsRows";
+import SettingSelectModal from "../components/SettingSelectModal";
 import { AbsError, normalizeAbsError } from "../utils/abs/errors";
 import {
   getTags,
@@ -93,11 +94,14 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   const [error, setError] = useState<AbsError | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
-  // Narrators are per-library; default to the app's current library.
-  const [narratorLibraryId, setNarratorLibraryId] = useState<string | null>(
-    currentLibraryId || storeLibraries[0]?.id || null
-  );
+  // Narrators are per-library. The id is DERIVED from the store (falling back
+  // to the current library, then the first one) rather than seeded once at
+  // mount, so a library list that loads late still populates the picker —
+  // an explicit pick simply overrides the derivation.
+  const [narratorLibraryChoice, setNarratorLibraryChoice] = useState<string | null>(null);
+  const narratorLibraryId = narratorLibraryChoice || currentLibraryId || storeLibraries[0]?.id || null;
   const narratorLibrary = storeLibraries.find((l) => l.id === narratorLibraryId) || null;
+  const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
 
   // Inline rename state: which row is being edited and the draft value.
   const [editingName, setEditingName] = useState<string | null>(null);
@@ -193,7 +197,13 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
         : `Rename "${oldName}" to "${newName}" across all items on the server?`,
       buttons: [
         { text: "Cancel", style: "cancel" },
-        { text: isMerge ? "Merge" : "Rename", onPress: () => doRename(oldName, newName) },
+        {
+          text: isMerge ? "Merge" : "Rename",
+          // A merge collapses two names across every item with no undo —
+          // destructive styling, matching delete.
+          ...(isMerge ? { style: "destructive" as const } : {}),
+          onPress: () => doRename(oldName, newName),
+        },
       ],
     });
   };
@@ -274,21 +284,10 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   };
 
   // ---- narrator library picker ----------------------------------------------
+  // Select-sheet idiom (SettingsScreen's SettingSelectModal) rather than a
+  // dialog with buttons-as-menu.
 
-  const pickNarratorLibrary = () => {
-    const bookLibraries = storeLibraries.filter((l) => l.mediaType !== "podcast");
-    if (!bookLibraries.length) return;
-    showAppDialog({
-      title: "Choose a library",
-      buttons: [
-        ...bookLibraries.map((l) => ({
-          text: l.name,
-          onPress: () => setNarratorLibraryId(l.id),
-        })),
-        { text: "Cancel", style: "cancel" as const },
-      ],
-    });
-  };
+  const bookLibraries = storeLibraries.filter((l) => l.mediaType !== "podcast");
 
   // ---- rows -----------------------------------------------------------------
 
@@ -368,7 +367,23 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
     );
   };
 
-  const renderSegmentContent = () => {
+  // Row models for the FlatList (tags/genres/narrators can run to hundreds of
+  // entries on a big server — virtualize instead of ScrollView+map).
+  type ValueRow = { name: string; subtitle?: string; canDelete: boolean };
+  const rows: ValueRow[] = useMemo(() => {
+    if (loading || error) return [];
+    if (segment === "tags") return tags.map((t) => ({ name: t, canDelete: true }));
+    if (segment === "genres") return genres.map((g) => ({ name: g, canDelete: true }));
+    if (!narratorLibraryId) return [];
+    return narrators.map((n) => ({
+      name: n.name,
+      subtitle: `${n.numBooks} book${n.numBooks === 1 ? "" : "s"}`,
+      // No delete endpoint for narrators — rename-to-merge is the cleanup.
+      canDelete: false,
+    }));
+  }, [loading, error, segment, tags, genres, narrators, narratorLibraryId]);
+
+  const renderListEmpty = () => {
     if (loading) {
       return (
         <View style={{ paddingVertical: 60, alignItems: "center", justifyContent: "center" }}>
@@ -380,20 +395,11 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       return <ErrorState {...errorStateProps(error)} onRetry={reload} />;
     }
     if (segment === "tags") {
-      return tags.length === 0 ? (
-        <EmptyState icon="bookmark" title="No tags" message="Items on this server have no tags yet." />
-      ) : (
-        tags.map((t) => renderValueRow(t))
-      );
+      return <EmptyState icon="bookmark" title="No tags" message="Items on this server have no tags yet." />;
     }
     if (segment === "genres") {
-      return genres.length === 0 ? (
-        <EmptyState icon="books" title="No genres" message="Items on this server have no genres yet." />
-      ) : (
-        genres.map((g) => renderValueRow(g))
-      );
+      return <EmptyState icon="books" title="No genres" message="Items on this server have no genres yet." />;
     }
-    // Narrators
     if (!narratorLibraryId) {
       return (
         <EmptyState
@@ -403,30 +409,7 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
         />
       );
     }
-    return (
-      <>
-        <RowBase
-          icon="library"
-          title="Library"
-          subtitle={narratorLibrary?.name || narratorLibraryId}
-          onPress={pickNarratorLibrary}
-          colors={colors}
-        />
-        <Divider colors={colors} />
-        {narrators.length === 0 ? (
-          <EmptyState icon="mic" title="No narrators" message="This library has no narrators yet." />
-        ) : (
-          narrators.map((n) =>
-            renderValueRow(
-              n.name,
-              `${n.numBooks} book${n.numBooks === 1 ? "" : "s"}`,
-              // No delete endpoint for narrators — rename-to-merge is the cleanup.
-              false
-            )
-          )
-        )}
-      </>
-    );
+    return <EmptyState icon="mic" title="No narrators" message="This library has no narrators yet." />;
   };
 
   return (
@@ -460,67 +443,104 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
         </Text>
       </View>
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
-        {/* Segment chips */}
-        <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingVertical: 12 }}>
-          {SEGMENTS.map(({ key, label }) => {
-            const selected = segment === key;
-            return (
-              <Pressable
-                key={key}
-                onPress={() => setSegment(key)}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                accessibilityLabel={label}
-                android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
-                hitSlop={{ top: 6, bottom: 6 }}
-                style={{
-                  paddingHorizontal: 16,
-                  height: 36,
-                  borderRadius: 18,
-                  overflow: "hidden",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  marginRight: 8,
-                  backgroundColor: selected ? colors.secondaryContainer : "transparent",
-                  borderWidth: 1,
-                  borderColor: selected ? colors.secondaryContainer : colors.outlineVariant,
-                }}
-              >
-                <Text
-                  style={{
-                    color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
-                    fontSize: 14,
-                    fontWeight: "600",
-                  }}
-                >
-                  {label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
+      <FlatList
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 40 }}
+        data={rows}
+        keyExtractor={(item) => item.name}
+        renderItem={({ item }) => renderValueRow(item.name, item.subtitle, item.canDelete)}
+        // Inline rename state lives outside the rows — make sure an edit
+        // toggle re-renders the virtualized items.
+        extraData={`${editingName ?? ""}:${editValue}`}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={
+          <>
+            {/* Segment chips */}
+            <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingVertical: 12 }}>
+              {SEGMENTS.map(({ key, label }) => {
+                const selected = segment === key;
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => setSegment(key)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={label}
+                    android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+                    hitSlop={{ top: 6, bottom: 6 }}
+                    style={{
+                      paddingHorizontal: 16,
+                      height: 36,
+                      borderRadius: 18,
+                      overflow: "hidden",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginRight: 8,
+                      backgroundColor: selected ? colors.secondaryContainer : "transparent",
+                      borderWidth: 1,
+                      borderColor: selected ? colors.secondaryContainer : colors.outlineVariant,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                        fontSize: 14,
+                        fontWeight: "600",
+                      }}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
-        {renderSegmentContent()}
+            {segment === "narrators" && narratorLibraryId && !loading && !error ? (
+              <>
+                <RowBase
+                  icon="library"
+                  title="Library"
+                  subtitle={narratorLibrary?.name || narratorLibraryId}
+                  onPress={() => setLibraryPickerOpen(true)}
+                  colors={colors}
+                />
+                <Divider colors={colors} />
+              </>
+            ) : null}
+          </>
+        }
+        ListEmptyComponent={renderListEmpty()}
+        ListFooterComponent={
+          <>
+            {/* Cache maintenance — always available below the cleanup segments. */}
+            <SectionHeader label="Cache" colors={colors} />
+            <RowBase
+              icon="trash"
+              title="Purge all cache"
+              subtitle="Clears the server's cache directory"
+              onPress={confirmPurgeCache}
+              colors={colors}
+            />
+            <Divider colors={colors} />
+            <RowBase
+              icon="image"
+              title="Purge items cache"
+              subtitle="Clears cached item covers and metadata"
+              onPress={confirmPurgeItemsCache}
+              colors={colors}
+            />
+          </>
+        }
+      />
 
-        {/* Cache maintenance — always available below the cleanup segments. */}
-        <SectionHeader label="Cache" colors={colors} />
-        <RowBase
-          icon="trash"
-          title="Purge all cache"
-          subtitle="Clears the server's cache directory"
-          onPress={confirmPurgeCache}
-          colors={colors}
-        />
-        <Divider colors={colors} />
-        <RowBase
-          icon="image"
-          title="Purge items cache"
-          subtitle="Clears cached item covers and metadata"
-          onPress={confirmPurgeItemsCache}
-          colors={colors}
-        />
-      </ScrollView>
+      <SettingSelectModal
+        visible={libraryPickerOpen}
+        title="Choose a library"
+        options={bookLibraries.map((l) => ({ label: l.name, value: l.id }))}
+        selected={narratorLibraryId}
+        onSelect={(v) => setNarratorLibraryChoice(String(v))}
+        onClose={() => setLibraryPickerOpen(false)}
+      />
     </SafeAreaView>
   );
 }

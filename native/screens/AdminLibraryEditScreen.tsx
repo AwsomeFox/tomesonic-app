@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon, { IconName } from "../components/Icon";
 import ErrorState from "../components/ErrorState";
+import { SectionHeader } from "../components/SettingsRows";
 import { api } from "../utils/api";
 import { AbsError, normalizeAbsError } from "../utils/abs/errors";
 import { createLibrary, updateLibrary, deleteLibrary } from "../utils/abs/libraries";
@@ -28,7 +29,9 @@ import { showSnackbar } from "../store/useSnackbarStore";
  *  - Removing an EXISTING folder is Tier-3: typed confirm of the folder's last
  *    path segment (items in it leave the library on save; files stay on disk).
  *  - Deleting the library is Tier-3: typed confirm of the library name.
- *  - Dirty back is Tier-2 (discard confirm). Saving itself needs no confirm.
+ *  - Dirty removal is Tier-2 (discard confirm) via a beforeRemove listener,
+ *    so header back, hardware back, and gestures are all guarded. Saving
+ *    itself (header Save, disabled until dirty && valid) needs no confirm.
  */
 
 interface FolderDraft {
@@ -60,6 +63,21 @@ function errorStateProps(err: AbsError): { icon: IconName; title: string; messag
 
 const BOOK_DEFAULT_PROVIDER = "google";
 const PODCAST_DEFAULT_PROVIDER = "itunes";
+
+// Metadata providers ABS ships per media type (superset of EditMetadata's
+// match-tab list — the library provider also drives quick-match and cover
+// search). A loaded library whose provider isn't listed here (regional
+// Audible like "audible.de", custom providers) still renders as an extra
+// selected chip so existing configs survive a round-trip untouched.
+const BOOK_PROVIDERS: { id: string; label: string }[] = [
+  { id: "google", label: "Google Books" },
+  { id: "audible", label: "Audible" },
+  { id: "itunes", label: "iTunes" },
+  { id: "openlibrary", label: "Open Library" },
+  { id: "fantlab", label: "FantLab" },
+  { id: "audiobookcovers", label: "AudiobookCovers" },
+];
+const PODCAST_PROVIDERS: { id: string; label: string }[] = [{ id: "itunes", label: "iTunes" }];
 
 /** Last path segment ("/books/audiobooks/" → "audiobooks") for the typed confirm. */
 function lastPathSegment(fullPath: string): string {
@@ -139,20 +157,37 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
     );
   }, [name, provider, folders, original]);
 
-  const handleBack = () => {
-    if (!dirty) {
-      navigation.goBack();
-      return;
-    }
-    showAppDialog({
-      title: "Discard changes?",
-      message: "Your library edits haven't been saved.",
-      buttons: [
-        { text: "Keep editing", style: "cancel" },
-        { text: "Discard", style: "destructive", onPress: () => navigation.goBack() },
-      ],
+  // Saveable = something changed AND the form is complete. Create mode is
+  // implicitly dirty once valid (any name differs from the pristine "").
+  const valid = name.trim().length > 0 && folders.some((f) => f.fullPath.trim().length > 0);
+  const canSave = !saving && dirty && valid;
+
+  // Unsaved-changes guard (ChapterEditor pattern): intercept ANY navigation
+  // that would remove this screen — header back, hardware back, gestures all
+  // flow through beforeRemove. Refs keep the listener stable; `saving` is
+  // excluded so the post-save goBack() isn't re-guarded.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty && !saving;
+  useEffect(() => {
+    if (!navigation?.addListener) return undefined;
+    const unsub = navigation.addListener("beforeRemove", (e: any) => {
+      if (!dirtyRef.current) return;
+      e.preventDefault();
+      showAppDialog({
+        title: "Discard changes?",
+        message: "Your library edits haven't been saved.",
+        buttons: [
+          { text: "Keep editing", style: "cancel" },
+          {
+            text: "Discard",
+            style: "destructive",
+            onPress: () => navigation.dispatch(e.data.action),
+          },
+        ],
+      });
     });
-  };
+    return unsub;
+  }, [navigation]);
 
   const setMediaTypeChecked = (type: "book" | "podcast") => {
     setMediaType(type);
@@ -182,7 +217,7 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
     const segment = lastPathSegment(folder.fullPath);
     showAppDialog({
       title: "Remove folder",
-      message: `Items in "${folder.fullPath}" will be removed from this library when you save. Files on disk are NOT deleted.`,
+      message: `Items in "${folder.fullPath}" will be removed from this library when you save. Files on disk are NOT deleted. Type the folder's last path segment to confirm.`,
       confirmInput: {
         placeholder: segment,
         requiredText: segment,
@@ -244,6 +279,9 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
     try {
       await deleteLibrary(libraryId!);
       showSnackbar({ message: "Library deleted" });
+      // The library is gone — any pending edits are moot, so bypass the
+      // dirty guard for this programmatic pop.
+      dirtyRef.current = false;
       navigation.goBack();
     } catch (e) {
       const err = normalizeAbsError(e);
@@ -266,29 +304,15 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
     });
   };
 
-  const sectionLabel = (text: string) => (
-    <Text
-      style={{
-        color: colors.primary,
-        fontSize: 13,
-        fontWeight: "700",
-        textTransform: "uppercase",
-        letterSpacing: 1,
-        paddingTop: 24,
-        paddingBottom: 8,
-        paddingHorizontal: 16,
-      }}
-    >
-      {text}
-    </Text>
-  );
-
+  // Borderless Field skin (AdminUserDetail/EditMetadata idiom): label +
+  // optional helper over a surfaceContainer-filled, borderless input.
   const textField = (
     label: string,
     value: string,
     onChangeText: (t: string) => void,
     accessibilityLabel: string,
-    helper?: string
+    helper?: string,
+    autoCapitalize: "none" | "words" = "none"
   ) => (
     <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
       <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600" }}>{label}</Text>
@@ -302,7 +326,7 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
       <TextInput
         value={value}
         onChangeText={onChangeText}
-        autoCapitalize="none"
+        autoCapitalize={autoCapitalize}
         autoCorrect={false}
         accessibilityLabel={accessibilityLabel}
         placeholderTextColor={colors.onSurfaceVariant}
@@ -317,6 +341,14 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
       />
     </View>
   );
+
+  // Provider options for the current media type, plus the loaded value as an
+  // extra chip when the server config uses one we don't list.
+  const providerOptions = useMemo(() => {
+    const base = mediaType === "podcast" ? PODCAST_PROVIDERS : BOOK_PROVIDERS;
+    if (!provider || base.some((p) => p.id === provider)) return base;
+    return [...base, { id: provider, label: provider }];
+  }, [mediaType, provider]);
 
   const mediaTypeChip = (type: "book" | "podcast", label: string) => {
     const selected = mediaType === type;
@@ -369,7 +401,7 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
         }}
       >
         <Pressable
-          onPress={handleBack}
+          onPress={() => navigation.goBack()}
           style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", marginRight: 4 }}
           hitSlop={8}
           accessibilityRole="button"
@@ -395,6 +427,27 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
             <Icon name="trash" size={22} color={colors.error} />
           </Pressable>
         ) : null}
+        {!loading && !error ? (
+          // Header Save text button (EditMetadata/ChapterEditor idiom) —
+          // disabled until the form is dirty AND valid.
+          <Pressable
+            onPress={doSave}
+            disabled={!canSave}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={isEdit ? "Save library" : "Create library"}
+            accessibilityState={{ disabled: !canSave, busy: saving }}
+            style={{ paddingHorizontal: 8, paddingVertical: 6, opacity: !canSave ? 0.4 : 1 }}
+          >
+            {saving ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "700" }}>
+                {isEdit ? "Save" : "Create"}
+              </Text>
+            )}
+          </Pressable>
+        ) : null}
       </View>
 
       {loading ? (
@@ -409,8 +462,8 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
         />
       ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
-          {sectionLabel("Library")}
-          {textField("Name", name, setName, "Library name")}
+          <SectionHeader label="Library" colors={colors} />
+          {textField("Name", name, setName, "Library name", undefined, "words")}
 
           {/* Media type: pickable on create, immutable after (server constraint). */}
           <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
@@ -429,15 +482,71 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
             )}
           </View>
 
-          {textField(
-            "Metadata provider",
-            provider,
-            setProvider,
-            "Metadata provider",
-            "Provider used for quick match and cover search (e.g. google, audible, itunes)."
-          )}
+          {/* Provider chip row — same idiom as EditMetadata's match tab. */}
+          <View style={{ paddingVertical: 10 }}>
+            <Text
+              style={{
+                color: colors.onSurface,
+                fontSize: 15,
+                fontWeight: "600",
+                paddingHorizontal: 16,
+              }}
+            >
+              Metadata provider
+            </Text>
+            <Text
+              style={{
+                color: colors.onSurfaceVariant,
+                fontSize: 12,
+                marginTop: 2,
+                paddingHorizontal: 16,
+              }}
+            >
+              Provider used for quick match and cover search.
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 10, alignItems: "center" }}
+            >
+              {providerOptions.map((p) => {
+                const active = provider === p.id;
+                return (
+                  <Pressable
+                    key={p.id}
+                    onPress={() => setProvider(p.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={`Provider: ${p.label}`}
+                    hitSlop={{ top: 6, bottom: 6 }}
+                    style={{
+                      paddingHorizontal: 14,
+                      height: 34,
+                      borderRadius: 17,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      marginRight: 8,
+                      backgroundColor: active ? colors.secondaryContainer : "transparent",
+                      borderWidth: 1,
+                      borderColor: active ? colors.secondaryContainer : colors.outlineVariant,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: active ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                        fontSize: 13,
+                        fontWeight: "600",
+                      }}
+                    >
+                      {p.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
 
-          {sectionLabel("Folders")}
+          <SectionHeader label="Folders" colors={colors} />
           <View
             style={{
               flexDirection: "row",
@@ -536,36 +645,6 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
           >
             <Icon name="add" size={22} color={colors.primary} style={{ marginRight: 10 }} />
             <Text style={{ color: colors.primary, fontSize: 15, fontWeight: "600" }}>Add folder</Text>
-          </Pressable>
-
-          {/* Save */}
-          <Pressable
-            onPress={doSave}
-            disabled={saving || (isEdit && !dirty)}
-            accessibilityRole="button"
-            accessibilityLabel={isEdit ? "Save library" : "Create library"}
-            accessibilityState={{ disabled: saving || (isEdit && !dirty) }}
-            android_ripple={{ color: withAlpha(colors.onPrimary, 0.16) }}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              marginHorizontal: 16,
-              marginTop: 20,
-              height: 48,
-              borderRadius: 24,
-              overflow: "hidden",
-              backgroundColor: colors.primary,
-              opacity: saving || (isEdit && !dirty) ? 0.5 : 1,
-            }}
-          >
-            {saving ? (
-              <ActivityIndicator size="small" color={colors.onPrimary} />
-            ) : (
-              <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "700" }}>
-                {isEdit ? "Save changes" : "Create library"}
-              </Text>
-            )}
           </Pressable>
         </ScrollView>
       )}
