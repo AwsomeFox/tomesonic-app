@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -112,15 +112,31 @@ export default function ServerAdminHubScreen({ navigation }: any) {
   const [summaries, setSummaries] = useState<Record<string, string>>({});
   const [offline, setOffline] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Request-id + mounted guards: focus refetch and pull-to-refresh both call
+  // loadSummaries, so a slow earlier fetch must not clobber a newer one's
+  // counts, and none may setState after unmount.
+  const latestSummaryReq = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const loadSummaries = useCallback(async () => {
     // Never throws: allSettled means one failing endpoint can't block the hub
-    // or wipe the others' subtitles. A failed row simply keeps its static one.
+    // or wipe the others' subtitles. A failed row keeps its last-known subtitle
+    // (static until its first success).
+    const reqId = ++latestSummaryReq.current;
     const [usersR, backupsR, librariesR] = await Promise.allSettled([
       getUsersSummary(),
       getBackupsSummary(),
       getLibrariesSummary(),
     ]);
+    // A newer load started (or we unmounted) while this one was in flight —
+    // drop this stale result rather than overwrite the fresher counts.
+    if (!mountedRef.current || reqId !== latestSummaryReq.current) return;
 
     setSummaries((prev) => {
       const next = { ...prev };

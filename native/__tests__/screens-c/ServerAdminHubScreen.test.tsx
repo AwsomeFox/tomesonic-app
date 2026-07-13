@@ -447,5 +447,18 @@ describe("ServerAdminHubScreen", () => {
       await fireEvent.press(screen.getByLabelText(/^Users,/));
       expect(navigation.navigate).toHaveBeenCalledWith("AdminUsers");
     });
+
+    it("does NOT show the offline hint when all summaries fail for a non-offline reason", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      // All three fail, but with server (not offline) errors — the hub is
+      // reachable, just couldn't compute counts. No "offline" cue.
+      (getUsersSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+      (getBackupsSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+      (getLibrariesSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+
+      await renderHub();
+
+      expect(screen.queryByTestId("admin-hub-offline")).toBeNull();
+    });
   });
 });

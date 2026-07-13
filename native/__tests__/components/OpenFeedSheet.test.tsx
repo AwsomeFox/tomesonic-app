@@ -61,6 +61,19 @@ it("defaults the address to the slugified title", async () => {
   expect(input.props.value).toBe("the-wheel-of-time");
 });
 
+it("blocks opening with no server session (serverAddress absent)", async () => {
+  useUserStore.setState({ serverConnectionConfig: { token: "tok" } } as any);
+  await render(<OpenFeedSheet entity={itemEntity} onClose={() => {}} />);
+  await screen.findByLabelText("RSS feed address");
+
+  await fireEvent.press(screen.getByLabelText("Open RSS feed"));
+  expect(showAppDialog).toHaveBeenCalledWith(
+    expect.objectContaining({ message: expect.stringContaining("No server session") })
+  );
+  // Never even reaches the public-access confirm or a request.
+  expect(mockedPost).not.toHaveBeenCalled();
+});
+
 it("warns (public-access confirm) BEFORE opening — no request until confirmed", async () => {
   await render(<OpenFeedSheet entity={itemEntity} onClose={() => {}} />);
   await screen.findByLabelText("RSS feed address");

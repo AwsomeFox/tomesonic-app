@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, Text, TextInput, ActivityIndicator, Clipboard } from "react-native";
 import BottomSheet from "./BottomSheet";
 import Pressable from "./HintPressable";
@@ -82,7 +82,16 @@ export default function OpenFeedSheet({
       setFeed(null);
       setBusy(false);
     }
-  }, [entity?.kind, entity?.id]);
+  }, [entity?.kind, entity?.id, entity?.title]);
+
+  // Guard post-await setState against unmount mid-request (navigation away).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Feed routes are admin-only — never render the affordance otherwise.
   if (!capabilities.isAdmin) return null;
@@ -97,9 +106,11 @@ export default function OpenFeedSheet({
     setBusy(true);
     try {
       const result = await openFeedFor(display.kind, display.id, { serverAddress, slug: s });
+      if (!mountedRef.current) return;
       setFeed(result);
       showSnackbar({ message: "RSS feed opened" });
     } catch (e: any) {
+      if (!mountedRef.current) return;
       // A 400 on these routes is (almost always) a slug collision — the slug
       // must be unique across every open feed. Give it dedicated copy; anything
       // else surfaces the normalized AbsError message (offline/forbidden/server).
@@ -168,13 +179,15 @@ export default function OpenFeedSheet({
           <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
             <Text
               selectable
-              accessibilityLabel={`RSS feed URL: ${feedUrl}`}
+              accessibilityLabel={feedUrl ? `RSS feed URL: ${feedUrl}` : "RSS feed opened"}
               style={{ color: colors.onSurface, fontSize: 14 }}
             >
-              {feedUrl}
+              {feedUrl || "Feed opened. Find its link in the server's RSS feeds."}
             </Text>
           </View>
-          <RowBase icon="copy" title="Copy link" colors={colors} onPress={handleCopy} />
+          {feedUrl ? (
+            <RowBase icon="copy" title="Copy link" colors={colors} onPress={handleCopy} />
+          ) : null}
         </>
       ) : (
         <>
@@ -186,7 +199,6 @@ export default function OpenFeedSheet({
               autoCapitalize="none"
               autoCorrect={false}
               accessibilityLabel="RSS feed address"
-              placeholderTextColor={colors.onSurfaceVariant}
               style={{
                 backgroundColor: colors.surfaceContainer,
                 color: colors.onSurface,
