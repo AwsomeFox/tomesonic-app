@@ -55,6 +55,11 @@ export async function deleteBackup(backupId: string): Promise<{ backups: AbsBack
  * Tokened URL for GET /api/backups/:id/download — for the OS download
  * manager, which can't send our auth header. Null when the session is
  * missing pieces.
+ *
+ * SECURITY: the ADMIN session JWT rides in the query string, so it lands in
+ * browser / download-manager history (and potentially server access logs).
+ * An in-app streaming download that keeps the token in headers is tracked
+ * in issue #68.
  */
 export function buildBackupDownloadUrl(backupId: string): string | null {
   const cfg = storageHelper.getServerConfig();

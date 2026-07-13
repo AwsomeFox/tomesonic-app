@@ -17,9 +17,11 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { Linking } from "react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminBackupsScreen from "../../screens/AdminBackupsScreen";
 import { api } from "../../utils/api";
+import { storageHelper } from "../../utils/storage";
 import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
 
@@ -267,5 +269,121 @@ describe("AdminBackupsScreen", () => {
 
     expect(await screen.findByText("Admin access required")).toBeTruthy();
     expect(screen.queryByText("You're offline")).toBeNull();
+  });
+
+  describe("download to device", () => {
+    // buildBackupDownloadUrl reads the REAL (in-memory-MMKV) stored session —
+    // seed it like the server.test contract does; the missing-session test
+    // clears it explicitly.
+    beforeEach(() => {
+      storageHelper.setServerConfig({ address: "https://abs.example.com", token: "tok" });
+    });
+
+    it("press download → informational confirm → hands the tokened URL to the OS + snackbar", async () => {
+      const openSpy = jest.spyOn(Linking, "openURL").mockResolvedValue(true as any);
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+      fireEvent.press(screen.getByLabelText("Download backup Jun 1, 2026, 3:00 AM"));
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Download backup" })
+        )
+      );
+      const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+      // Size + what-it-is + download-manager handoff + token warning, all in
+      // the confirm copy.
+      expect(dialog.message).toContain("50 MB");
+      expect(dialog.message).toMatch(/full server database/);
+      expect(dialog.message).toMatch(/download manager/);
+      // The tokened URL leaks the admin session into browser history — the
+      // confirm must say so (see buildBackupDownloadUrl's SECURITY note / #68).
+      expect(dialog.message).toMatch(/admin session token/);
+      // Nothing handed to the OS until the dialog is confirmed.
+      expect(openSpy).not.toHaveBeenCalled();
+
+      await act(async () => {
+        dialog.buttons.find((b: any) => b.text === "Download").onPress();
+      });
+
+      expect(openSpy).toHaveBeenCalledWith(
+        "https://abs.example.com/api/backups/b1/download?token=tok"
+      );
+      await waitFor(() =>
+        expect(showSnackbar).toHaveBeenCalledWith({
+          message: "Backup download handed to your browser",
+        })
+      );
+    });
+
+    it("download confirm falls back to the filename and omits the size when the backup has neither", async () => {
+      // A sparse backup row (older server / interrupted backup): no datePretty,
+      // no fileSize. The dialog must not read "undefined" or claim "0 MB".
+      const BARE = { id: "b9", filename: "2026-07-01T0300.audiobookshelf" };
+      mockGetBackups([BARE as any]);
+      jest.spyOn(Linking, "openURL").mockResolvedValue(true as any);
+      await renderScreen();
+      await screen.findByText("2026-07-01T0300.audiobookshelf");
+
+      // The button a11y label falls back past the missing datePretty to the
+      // FILENAME (matching the row title/dialog chain), not straight to the id.
+      fireEvent.press(screen.getByLabelText("Download backup 2026-07-01T0300.audiobookshelf"));
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Download backup" })
+        )
+      );
+      const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+      expect(dialog.message).toContain("2026-07-01T0300.audiobookshelf");
+      expect(dialog.message).not.toContain("undefined");
+      expect(dialog.message).not.toContain("0 MB");
+    });
+
+    it("openURL rejection shows the failure dialog and never the success snackbar", async () => {
+      // No browser on the device — openURL rejects.
+      const openSpy = jest.spyOn(Linking, "openURL").mockRejectedValue(new Error("no handler"));
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+      fireEvent.press(screen.getByLabelText("Download backup Jun 1, 2026, 3:00 AM"));
+      await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+      const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+      await act(async () => {
+        dialog.buttons.find((b: any) => b.text === "Download").onPress();
+      });
+
+      expect(openSpy).toHaveBeenCalled();
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Couldn't download" })
+        )
+      );
+      expect(showSnackbar).not.toHaveBeenCalled();
+    });
+
+    it("missing session config short-circuits to the reconnect dialog (no confirm, no openURL)", async () => {
+      storageHelper.clearServerConfig();
+      const openSpy = jest.spyOn(Linking, "openURL").mockResolvedValue(true as any);
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+      fireEvent.press(screen.getByLabelText("Download backup Jun 1, 2026, 3:00 AM"));
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Can't download",
+            message: "No server session available. Reconnect and try again.",
+          })
+        )
+      );
+      expect(openSpy).not.toHaveBeenCalled();
+      // No confirm dialog was offered at all.
+      expect(
+        (showAppDialog as jest.Mock).mock.calls.find((c) => c[0].title === "Download backup")
+      ).toBeUndefined();
+    });
   });
 });

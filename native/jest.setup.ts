@@ -216,6 +216,11 @@ jest.mock("expo-secure-store", () => {
   };
 });
 
+jest.mock("expo-clipboard", () => ({
+  setStringAsync: jest.fn().mockResolvedValue(true),
+  getStringAsync: jest.fn().mockResolvedValue(""),
+}));
+
 jest.mock("expo-crypto", () => ({
   getRandomBytes: jest.fn((n: number) => new Uint8Array(n).fill(7)),
   getRandomBytesAsync: jest.fn(async (n: number) => new Uint8Array(n).fill(7)),

@@ -11,11 +11,16 @@ jest.mock("../../utils/api", () => ({
 jest.mock("../../store/useSnackbarStore", () => ({
   showSnackbar: jest.fn(),
 }));
+jest.mock("../../store/useDialogStore", () => ({
+  showAppDialog: jest.fn(),
+}));
 
 import React from "react";
+import { useReducedMotion } from "react-native-reanimated";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminServerSettingsScreen from "../../screens/AdminServerSettingsScreen";
 import { api } from "../../utils/api";
+import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
 import { useUserStore } from "../../store/useUserStore";
 
@@ -68,6 +73,10 @@ async function renderScreen() {
 }
 
 beforeEach(() => {
+  // Snap the picker sheets open/closed (BottomSheet honors reduced motion):
+  // their 160–280ms close-animation end-callbacks otherwise setState mid-way
+  // through the NEXT test and corrupt its act queue.
+  (useReducedMotion as jest.Mock).mockReturnValue(true);
   useUserStore.setState(initialUserState, true);
   useUserStore.setState({
     user: ADMIN,
@@ -80,6 +89,15 @@ beforeEach(() => {
     if (url === "/api/settings")
       return Promise.resolve({ data: { serverSettings: { ...SETTINGS, ...body } } });
     return Promise.resolve({ data: {} });
+  });
+});
+
+// Settle trailing async continuations (PATCH echoes) INSIDE act before RNTL
+// cleanup unmounts — a leaked update otherwise corrupts the async act queue
+// for the next test.
+afterEach(async () => {
+  await act(async () => {
+    await new Promise((r) => setImmediate(r));
   });
 });
 
@@ -229,12 +247,225 @@ describe("AdminServerSettingsScreen", () => {
     await renderScreen();
     const row = await screen.findByLabelText(/^Find covers/);
 
-    fireEvent.press(row);
-    fireEvent.press(row);
+    // Both presses act-wrapped: the first returns handleToggle's PENDING
+    // promise (fireEvent would hand React an async act nobody awaits), the
+    // second is guard-swallowed with no re-render — either leak corrupts the
+    // async act queue for the tests that now run after this one.
+    await act(async () => {
+      fireEvent.press(row);
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(/^Find covers/));
+    });
     expect(api.patch).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       resolvePatch({ data: { serverSettings: { ...SETTINGS, scannerFindCovers: true } } });
+    });
+  });
+
+  describe("localization selects", () => {
+    it("selecting a date format PATCHes EXACTLY that single key and the echo updates the subtitle", async () => {
+      await renderScreen();
+
+      // Blob predates the key → the server-default subtitle renders.
+      await fireEvent.press(await screen.findByLabelText("Date format, MM/dd/yyyy"));
+      // Selecting fires handleSelect as a FLOATING async continuation —
+      // act-wrapped so the bare fireEvent can't corrupt the act queue.
+      const option = await screen.findByLabelText("yyyy-MM-dd");
+      await act(async () => {
+        fireEvent.press(option);
+        // Drain the PATCH continuation (a multi-tick promise chain ending in
+        // a zustand store write) INSIDE act — setImmediate runs after all
+        // pending microtasks.
+        await new Promise((r) => setImmediate(r));
+      });
+
+      await waitFor(() =>
+        expect(api.patch).toHaveBeenCalledWith("/api/settings", { dateFormat: "yyyy-MM-dd" })
+      );
+      // Single-key clobber tripwire: nothing else may ride along.
+      expect(api.patch).toHaveBeenCalledTimes(1);
+      expect(Object.keys((api.patch as jest.Mock).mock.calls[0][1])).toEqual(["dateFormat"]);
+
+      // The PATCH echo landed in the store and re-rendered the subtitle.
+      await waitFor(() => expect(screen.getByLabelText("Date format, yyyy-MM-dd")).toBeTruthy());
+      expect(useUserStore.getState().serverSettings.dateFormat).toBe("yyyy-MM-dd");
+    });
+
+    it("renders time format / language subtitles as labels, not raw values", async () => {
+      useUserStore.setState({
+        serverSettings: { ...SETTINGS, timeFormat: "h:mma", language: "de" },
+      } as any);
+      mockAuthorize({ ...SETTINGS, timeFormat: "h:mma", language: "de" });
+      await renderScreen();
+
+      expect(await screen.findByLabelText("Time format, 12-hour")).toBeTruthy();
+      expect(screen.getByLabelText("Language, Deutsch")).toBeTruthy();
+    });
+
+    it("a rejected select rolls the subtitle back and snackbars", async () => {
+      (api.patch as jest.Mock).mockRejectedValue(
+        Object.assign(new Error("nope"), { response: { status: 403 } })
+      );
+      await renderScreen();
+
+      await fireEvent.press(await screen.findByLabelText("Date format, MM/dd/yyyy"));
+      const option = await screen.findByLabelText("yyyy-MM-dd");
+      await act(async () => {
+        fireEvent.press(option);
+      });
+
+      await waitFor(() =>
+        expect(showSnackbar).toHaveBeenCalledWith(
+          expect.objectContaining({ message: expect.stringContaining("permission") })
+        )
+      );
+      // Rolled back to the store value; nothing leaked into the store.
+      expect(screen.getByLabelText("Date format, MM/dd/yyyy")).toBeTruthy();
+      expect(useUserStore.getState().serverSettings.dateFormat).toBeUndefined();
+    });
+  });
+
+  describe("sorting-prefixes editor", () => {
+    it("add/remove chips then Save PATCHes exactly the trimmed/lowercased/deduped list", async () => {
+      useUserStore.setState({
+        serverSettings: { ...SETTINGS, sortingPrefixes: ["the", "a"] },
+      } as any);
+      // The focus/mount re-seed must not clobber the prefixes away.
+      mockAuthorize({ ...SETTINGS, sortingPrefixes: ["the", "a"] });
+      (api.patch as jest.Mock).mockImplementation((url: string, body: any) => {
+        if (url === "/api/settings")
+          return Promise.resolve({
+            data: { serverSettings: { ...SETTINGS, sortingPrefixes: ["the", "a"], ...body } },
+          });
+        return Promise.resolve({ data: {} });
+      });
+      await renderScreen();
+
+      await fireEvent.press(await screen.findByLabelText("Sorting prefixes, the, a"));
+      await screen.findByLabelText("New sorting prefix");
+
+      // "The " → trimmed + lowercased → dupe of "the" → NOT added twice.
+      await fireEvent.changeText(screen.getByLabelText("New sorting prefix"), "The ");
+      await waitFor(() =>
+        expect(screen.getByLabelText("New sorting prefix").props.value).toBe("The ")
+      );
+      await fireEvent.press(screen.getByLabelText("Add prefix"));
+      // "El" → lowercased new entry.
+      await fireEvent.changeText(screen.getByLabelText("New sorting prefix"), "El");
+      await waitFor(() =>
+        expect(screen.getByLabelText("New sorting prefix").props.value).toBe("El")
+      );
+      await fireEvent.press(screen.getByLabelText("Add prefix"));
+      await screen.findByLabelText("Remove prefix el");
+      // Chip tap removes.
+      await fireEvent.press(screen.getByLabelText("Remove prefix a"));
+      await waitFor(() => expect(screen.queryByLabelText("Remove prefix a")).toBeNull());
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Save sorting prefixes"));
+      });
+
+      await waitFor(() =>
+        expect(api.patch).toHaveBeenCalledWith("/api/settings", {
+          sortingPrefixes: ["the", "el"],
+        })
+      );
+      expect(api.patch).toHaveBeenCalledTimes(1);
+      await waitFor(() =>
+        expect(showSnackbar).toHaveBeenCalledWith({ message: "Sorting prefixes saved" })
+      );
+      // Echo re-rendered the row subtitle and the modal closed.
+      await waitFor(() =>
+        expect(screen.getByLabelText("Sorting prefixes, the, el")).toBeTruthy()
+      );
+      await waitFor(() => expect(screen.queryByLabelText("Save sorting prefixes")).toBeNull());
+    });
+
+    it("Save folds a typed-but-not-Added prefix into the PATCH (pending input isn't dropped)", async () => {
+      useUserStore.setState({
+        serverSettings: { ...SETTINGS, sortingPrefixes: ["a"] },
+      } as any);
+      mockAuthorize({ ...SETTINGS, sortingPrefixes: ["a"] });
+      (api.patch as jest.Mock).mockImplementation((url: string, body: any) => {
+        if (url === "/api/settings")
+          return Promise.resolve({
+            data: { serverSettings: { ...SETTINGS, sortingPrefixes: ["a"], ...body } },
+          });
+        return Promise.resolve({ data: {} });
+      });
+      await renderScreen();
+
+      await fireEvent.press(await screen.findByLabelText("Sorting prefixes, a"));
+      await screen.findByLabelText("New sorting prefix");
+
+      // Type "the" and hit Save DIRECTLY — no Add press. The input is folded
+      // in with the same trim/lowercase normalization as Add.
+      await fireEvent.changeText(screen.getByLabelText("New sorting prefix"), "The ");
+      await waitFor(() =>
+        expect(screen.getByLabelText("New sorting prefix").props.value).toBe("The ")
+      );
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Save sorting prefixes"));
+      });
+
+      await waitFor(() =>
+        expect(api.patch).toHaveBeenCalledWith("/api/settings", {
+          sortingPrefixes: ["a", "the"],
+        })
+      );
+      await waitFor(() =>
+        expect(showSnackbar).toHaveBeenCalledWith({ message: "Sorting prefixes saved" })
+      );
+      await waitFor(() => expect(screen.queryByLabelText("Save sorting prefixes")).toBeNull());
+    });
+
+    it("seeds a case-duplicated server blob as a single normalized chip", async () => {
+      // Another client can store ["The", "the"] — the editor must not render
+      // two colliding chips (or duplicate React keys) for the same prefix.
+      useUserStore.setState({
+        serverSettings: { ...SETTINGS, sortingPrefixes: ["The", "the"] },
+      } as any);
+      mockAuthorize({ ...SETTINGS, sortingPrefixes: ["The", "the"] });
+      await renderScreen();
+
+      await fireEvent.press(await screen.findByLabelText("Sorting prefixes, The, the"));
+      await screen.findByLabelText("New sorting prefix");
+
+      expect(screen.getAllByLabelText("Remove prefix the")).toHaveLength(1);
+      expect(screen.queryByLabelText("Remove prefix The")).toBeNull();
+
+      // Close cleanly (no save) so no modal state leaks into the next test.
+      await fireEvent.press(screen.getByText("Cancel"));
+      await waitFor(() => expect(screen.queryByLabelText("Save sorting prefixes")).toBeNull());
+    });
+
+    it("blocks saving an EMPTY prefix list with a dialog before any PATCH (server ignores [])", async () => {
+      useUserStore.setState({
+        serverSettings: { ...SETTINGS, sortingPrefixes: ["the"] },
+      } as any);
+      mockAuthorize({ ...SETTINGS, sortingPrefixes: ["the"] });
+      await renderScreen();
+
+      await fireEvent.press(await screen.findByLabelText("Sorting prefixes, the"));
+      await screen.findByLabelText("Remove prefix the");
+      await fireEvent.press(screen.getByLabelText("Remove prefix the"));
+      await waitFor(() => expect(screen.queryByLabelText("Remove prefix the")).toBeNull());
+
+      // A BLOCKED save shows only a dialog (no re-render) — act-wrapped.
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Save sorting prefixes"));
+      });
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "At least one prefix required" })
+        )
+      );
+      expect(api.patch).not.toHaveBeenCalled();
+      // The editor stays open so the admin can add a prefix instead.
+      expect(screen.getByLabelText("Save sorting prefixes")).toBeTruthy();
     });
   });
 });

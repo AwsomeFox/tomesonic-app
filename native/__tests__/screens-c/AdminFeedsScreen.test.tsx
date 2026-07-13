@@ -17,7 +17,7 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
-import { Clipboard } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
 import AdminFeedsScreen from "../../screens/AdminFeedsScreen";
 import { api } from "../../utils/api";
@@ -163,7 +163,7 @@ describe("AdminFeedsScreen", () => {
   });
 
   it("copy puts the feed URL on the clipboard and confirms with a snackbar", async () => {
-    const setString = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
+    const setString = jest.spyOn(Clipboard, "setStringAsync").mockResolvedValue(true);
     await renderScreen();
     await screen.findByText("My Great Podcast");
 

@@ -56,7 +56,8 @@ jest.mock("react-native-reanimated", () => {
 });
 
 import React from "react";
-import { Clipboard, Share } from "react-native";
+import { Share } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import LogsScreen from "../../screens/LogsScreen";
 import { appLogger } from "../../utils/logger";
@@ -82,7 +83,7 @@ let shareSpy: jest.SpyInstance;
 
 beforeEach(() => {
   appLogger.clearLogs();
-  setStringSpy = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
+  setStringSpy = jest.spyOn(Clipboard, "setStringAsync").mockResolvedValue(true);
   shareSpy = jest.spyOn(Share, "share").mockResolvedValue({ action: "sharedAction" } as any);
 });
 

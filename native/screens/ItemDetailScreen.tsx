@@ -7,8 +7,8 @@ import {
   useWindowDimensions,
   TextInput,
   Linking,
-  Clipboard,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -808,7 +808,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
 
   const handleCopyShareLink = () => {
     if (!shareUrl) return;
-    Clipboard.setString(shareUrl);
+    Clipboard.setStringAsync(shareUrl).catch(() => {});
     showSnackbar({ message: "Link copied" });
   };
 

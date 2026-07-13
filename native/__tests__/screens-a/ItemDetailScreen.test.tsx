@@ -1313,7 +1313,8 @@ describe("ItemDetailScreen — open reader (linked catch-up is reader-owned)", (
 
 // --- Overflow (More actions): capability-gated admin/tools/share/zip/history --
 describe("ItemDetailScreen — overflow (More actions)", () => {
-  const { Linking, Clipboard } = require("react-native");
+  const { Linking } = require("react-native");
+  const Clipboard = require("expo-clipboard");
 
   /** admin session on a share-capable server version. */
   const setAdmin = () =>
@@ -1640,7 +1641,7 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     setAdmin();
     (createShareLink as jest.Mock).mockResolvedValue({ id: "share1", slug: "the-hobbit" });
     (deleteShareLink as jest.Mock).mockResolvedValue(undefined);
-    const clipSpy = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
+    const clipSpy = jest.spyOn(Clipboard, "setStringAsync").mockResolvedValue(true);
     routeApi(bothFormatItem);
     await render(
       <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />

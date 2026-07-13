@@ -17,6 +17,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import { SectionHeader, Divider, RowBase, ToggleRow } from "../components/SettingsRows";
+import SettingSelectModal from "../components/SettingSelectModal";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import {
@@ -25,8 +26,27 @@ import {
   sendTestEmail,
   updateAdminEreaderDevices,
 } from "../utils/abs/email";
+import { getUsers } from "../utils/abs/users";
 import { absErrorToErrorStateProps } from "../utils/abs/errors";
-import type { AbsEmailSettings, AbsEreaderDevice } from "../utils/abs/types";
+import type { AbsEmailSettings, AbsEreaderDevice, AbsUser } from "../utils/abs/types";
+
+type AvailabilityOption = NonNullable<AbsEreaderDevice["availabilityOption"]>;
+
+// Picker options for a device's availability; the same labels (sans ellipsis)
+// annotate each device row's subtitle.
+const AVAILABILITY_OPTIONS: { label: string; value: AvailabilityOption }[] = [
+  { label: "Admins", value: "adminAndUp" },
+  { label: "All users", value: "userAndUp" },
+  { label: "Everyone including guests", value: "guestAndUp" },
+  { label: "Specific users…", value: "specificUsers" },
+];
+
+function availabilityLabel(option: AbsEreaderDevice["availabilityOption"]): string {
+  if (option === "specificUsers") return "Specific users";
+  return (
+    AVAILABILITY_OPTIONS.find((o) => o.value === (option ?? "adminAndUp"))?.label ?? "Admins"
+  );
+}
 
 /**
  * Admin Email screen (route "AdminEmail", entered from the Server Admin hub):
@@ -157,6 +177,15 @@ export default function AdminEmailScreen({ navigation }: any) {
   const [editingDeviceIndex, setEditingDeviceIndex] = React.useState<number | null>(null);
   const [deviceName, setDeviceName] = React.useState("");
   const [deviceEmail, setDeviceEmail] = React.useState("");
+  const [deviceAvailability, setDeviceAvailability] =
+    React.useState<AvailabilityOption>("adminAndUp");
+  // User IDs a "specificUsers" device is restricted to.
+  const [deviceUsers, setDeviceUsers] = React.useState<string[]>([]);
+  const [availabilityPickerOpen, setAvailabilityPickerOpen] = React.useState(false);
+  // Server users for the specific-users checklist — fetched lazily the first
+  // time a device needs them, then cached for the screen's lifetime.
+  const [allUsers, setAllUsers] = React.useState<AbsUser[] | null>(null);
+  const [loadingUsers, setLoadingUsers] = React.useState(false);
   const [savingDevice, setSavingDevice] = React.useState(false);
 
   // Device-modal a11y (mirrors AppDialog's on-open pattern): RN Modal doesn't
@@ -172,7 +201,7 @@ export default function AdminEmailScreen({ navigation }: any) {
         if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
       }
       AccessibilityInfo.announceForAccessibility(
-        `${title}. Server-wide e-reader device — enter a name and email.`
+        `${title}. Server-wide e-reader device — enter a name, email, and who can use it.`
       );
     }, 50);
     return () => clearTimeout(t);
@@ -310,10 +339,25 @@ export default function AdminEmailScreen({ navigation }: any) {
     }
   };
 
+  // Fetch the user list for the specific-users checklist (once per screen).
+  const ensureUsers = React.useCallback(async () => {
+    if (allUsers || loadingUsers) return;
+    setLoadingUsers(true);
+    try {
+      setAllUsers(await getUsers());
+    } catch (e: any) {
+      showAppDialog({ title: "Couldn't load users", message: e?.message || "Please try again." });
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, [allUsers, loadingUsers]);
+
   const openAddDevice = () => {
     setEditingDeviceIndex(null);
     setDeviceName("");
     setDeviceEmail("");
+    setDeviceAvailability("adminAndUp");
+    setDeviceUsers([]);
     setShowDeviceModal(true);
   };
 
@@ -323,6 +367,10 @@ export default function AdminEmailScreen({ navigation }: any) {
     setEditingDeviceIndex(index);
     setDeviceName(d.name || "");
     setDeviceEmail(d.email || "");
+    const availability = d.availabilityOption ?? "adminAndUp";
+    setDeviceAvailability(availability);
+    setDeviceUsers(Array.isArray(d.users) ? d.users : []);
+    if (availability === "specificUsers") ensureUsers();
     setShowDeviceModal(true);
   };
 
@@ -330,7 +378,21 @@ export default function AdminEmailScreen({ navigation }: any) {
     setShowDeviceModal(false);
     setDeviceName("");
     setDeviceEmail("");
+    setDeviceAvailability("adminAndUp");
+    setDeviceUsers([]);
+    setAvailabilityPickerOpen(false);
     setEditingDeviceIndex(null);
+  };
+
+  const handleSelectAvailability = (value: AvailabilityOption) => {
+    setDeviceAvailability(value);
+    if (value === "specificUsers") ensureUsers();
+  };
+
+  const toggleDeviceUser = (userId: string) => {
+    setDeviceUsers((cur) =>
+      cur.includes(userId) ? cur.filter((id) => id !== userId) : [...cur, userId]
+    );
   };
 
   const handleSaveDevice = async () => {
@@ -361,10 +423,51 @@ export default function AdminEmailScreen({ navigation }: any) {
       });
       return;
     }
+    // A device seeded from a stale server blob can carry ids of users that
+    // were since deleted — once the real user list is loaded, ghosts must not
+    // round-trip back to the server. (Unfiltered when allUsers never loaded:
+    // better to keep unverifiable ids than silently drop live ones.)
+    const effectiveUsers = allUsers
+      ? deviceUsers.filter((id) => allUsers.some((u) => u.id === id))
+      : deviceUsers;
+    // A specific-users device with nobody (real) selected would be unusable by
+    // everyone — block it before the POST.
+    if (deviceAvailability === "specificUsers" && effectiveUsers.length === 0) {
+      showAppDialog({
+        title: "Select at least one user",
+        message: "Pick who can send to this device, or choose a broader availability.",
+      });
+      return;
+    }
     const next =
       editingDeviceIndex == null
-        ? [...devices, { name, email, availabilityOption: "adminAndUp" }]
-        : devices.map((d, i) => (i === editingDeviceIndex ? { ...d, name, email } : d));
+        ? [
+            ...devices,
+            {
+              name,
+              email,
+              availabilityOption: deviceAvailability,
+              ...(deviceAvailability === "specificUsers" ? { users: effectiveUsers } : {}),
+            },
+          ]
+        : devices.map((d, i) => {
+            if (i !== editingDeviceIndex) return d;
+            // Spread-merge keeps any server-side fields we don't edit, but the
+            // availability fields are OVERRIDDEN — and a stale users array is
+            // STRIPPED when the device no longer targets specific users.
+            const merged: AbsEreaderDevice = {
+              ...d,
+              name,
+              email,
+              availabilityOption: deviceAvailability,
+            };
+            if (deviceAvailability === "specificUsers") {
+              merged.users = effectiveUsers;
+            } else {
+              delete merged.users;
+            }
+            return merged;
+          });
     setSavingDevice(true);
     try {
       const list = await updateAdminEreaderDevices(next);
@@ -554,7 +657,7 @@ export default function AdminEmailScreen({ navigation }: any) {
             key={`${d.name}-${i}`}
             icon="auto-stories"
             title={d.name}
-            subtitle={d.email}
+            subtitle={`${d.email} · ${availabilityLabel(d.availabilityOption)}`}
             onPress={() => openEditDevice(i)}
             colors={colors}
             trailing={
@@ -715,11 +818,77 @@ export default function AdminEmailScreen({ navigation }: any) {
                 fontSize: 16,
                 borderWidth: 1,
                 borderColor: colors.outline,
-                marginBottom: 24,
+                marginBottom: 16,
               }}
             />
 
-            <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontWeight: "500", marginBottom: 6 }}>
+              Who can use it
+            </Text>
+            <Pressable
+              onPress={() => setAvailabilityPickerOpen(true)}
+              accessibilityRole="button"
+              // The current value rides in the label — a screen reader must
+              // hear the selection, not just the field's name.
+              accessibilityLabel={`Who can use it: ${
+                AVAILABILITY_OPTIONS.find((o) => o.value === deviceAvailability)?.label ??
+                "Admins"
+              }`}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                backgroundColor: colors.surface,
+                borderRadius: 12,
+                padding: 12,
+                borderWidth: 1,
+                borderColor: colors.outline,
+                marginBottom: 16,
+              }}
+            >
+              <Text style={{ flex: 1, color: colors.onSurface, fontSize: 16 }}>
+                {AVAILABILITY_OPTIONS.find((o) => o.value === deviceAvailability)?.label}
+              </Text>
+              <Icon name="chevron-down" size={22} color={colors.onSurfaceVariant} />
+            </Pressable>
+
+            {deviceAvailability === "specificUsers" ? (
+              <View style={{ marginBottom: 8 }}>
+                {loadingUsers ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={colors.primary}
+                    accessibilityLabel="Loading users"
+                    style={{ marginVertical: 12 }}
+                  />
+                ) : (
+                  (allUsers || []).map((u) => {
+                    const checked = deviceUsers.includes(u.id);
+                    return (
+                      <Pressable
+                        key={u.id}
+                        onPress={() => toggleDeviceUser(u.id)}
+                        accessibilityRole="checkbox"
+                        accessibilityLabel={u.username}
+                        accessibilityState={{ checked }}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          paddingVertical: 10,
+                          paddingHorizontal: 4,
+                        }}
+                      >
+                        <Text style={{ flex: 1, color: colors.onSurface, fontSize: 16 }}>
+                          {u.username}
+                        </Text>
+                        {checked ? <Icon name="check" size={20} color={colors.primary} /> : null}
+                      </Pressable>
+                    );
+                  })
+                )}
+              </View>
+            ) : null}
+
+            <View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 8 }}>
               <Pressable
                 onPress={closeDeviceModal}
                 accessibilityRole="button"
@@ -751,6 +920,17 @@ export default function AdminEmailScreen({ navigation }: any) {
             </View>
           </View>
           </ScrollView>
+
+          {/* Availability picker — rendered INSIDE the device Modal so it can
+              layer above it on iOS (sibling modals don't stack there). */}
+          <SettingSelectModal
+            visible={availabilityPickerOpen}
+            title="Who can use it"
+            options={AVAILABILITY_OPTIONS}
+            selected={deviceAvailability}
+            onSelect={(v) => handleSelectAvailability(v)}
+            onClose={() => setAvailabilityPickerOpen(false)}
+          />
         </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>

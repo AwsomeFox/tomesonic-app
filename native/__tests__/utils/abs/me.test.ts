@@ -79,7 +79,7 @@ describe("updateMyEreaderDevices", () => {
   const myDevice = {
     name: "My Kindle",
     email: "me@kindle.com",
-    availabilityOption: "specificUsers",
+    availabilityOption: "specificUsers" as const,
     users: ["u1"],
   };
 

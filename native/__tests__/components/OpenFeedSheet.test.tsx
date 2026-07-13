@@ -21,7 +21,7 @@ import { showSnackbar } from "../../store/useSnackbarStore";
 import { useUserStore } from "../../store/useUserStore";
 
 const mockedPost = api.post as jest.Mock;
-const { Clipboard } = require("react-native");
+const Clipboard = require("expo-clipboard");
 
 const initialUser = useUserStore.getState();
 
@@ -96,7 +96,7 @@ it("on success shows the public feed URL with Copy + a snackbar", async () => {
   mockedPost.mockResolvedValue({
     data: { feed: { id: "the-wheel-of-time", slug: "the-wheel-of-time", feedUrl: "https://abs.test/feed/the-wheel-of-time" } },
   });
-  const clipSpy = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
+  const clipSpy = jest.spyOn(Clipboard, "setStringAsync").mockResolvedValue(true);
   await render(<OpenFeedSheet entity={itemEntity} onClose={() => {}} />);
   await screen.findByLabelText("RSS feed address");
 

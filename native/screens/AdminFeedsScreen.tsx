@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, Clipboard, RefreshControl } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, RefreshControl } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -120,7 +121,7 @@ export default function AdminFeedsScreen({ navigation }: any) {
 
   const handleCopy = (feed: AbsFeed) => {
     if (!feed.feedUrl) return;
-    Clipboard.setString(feed.feedUrl);
+    Clipboard.setStringAsync(feed.feedUrl).catch(() => {});
     showSnackbar({ message: "Link copied" });
   };
 

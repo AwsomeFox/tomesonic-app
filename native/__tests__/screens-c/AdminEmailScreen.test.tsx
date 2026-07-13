@@ -27,6 +27,18 @@ import { useSnackbarStore } from "../../store/useSnackbarStore";
 const alertSpy = showAppDialog as jest.Mock;
 
 const KINDLE = { name: "Kindle", email: "k@kindle.com", availabilityOption: "adminAndUp" };
+// A device already restricted to specific users (for the edit-preserve tests).
+const BOOX = {
+  name: "Boox",
+  email: "boox@x.com",
+  availabilityOption: "specificUsers",
+  users: ["u2"],
+};
+// GET /api/users payload for the specific-users checklist.
+const SERVER_USERS = [
+  { id: "u1", username: "root", type: "root", isActive: true },
+  { id: "u2", username: "bob", type: "user", isActive: true },
+];
 
 // The server should never return the real pass, but the form must stay safe
 // even if it does (older servers echo the stored value).
@@ -47,8 +59,29 @@ function mockGetSettings(settings: any = SETTINGS) {
     if (url === "/api/emails/settings") {
       return Promise.resolve({ data: { settings } });
     }
+    if (url === "/api/users") {
+      return Promise.resolve({ data: { users: SERVER_USERS } });
+    }
     return Promise.resolve({ data: {} });
   });
+}
+
+// The devices endpoint echoes the replacement list (server behavior).
+function mockDevicesPost() {
+  (api.post as jest.Mock).mockImplementation((url: string, body: any) => {
+    if (url === "/api/emails/ereader-devices") {
+      return Promise.resolve({ data: { ereaderDevices: body.ereaderDevices } });
+    }
+    return Promise.resolve({ data: {} });
+  });
+}
+
+/** The device list the LAST /api/emails/ereader-devices POST carried. */
+function lastPostedDevices(): any[] {
+  const call = (api.post as jest.Mock).mock.calls
+    .filter((c) => c[0] === "/api/emails/ereader-devices")
+    .at(-1);
+  return call ? call[1].ereaderDevices : [];
 }
 
 function makeNavigation() {
@@ -101,9 +134,9 @@ describe("AdminEmailScreen", () => {
     expect(passInput.props.placeholder).toMatch(/leave blank/i);
     expect(passInput.props.secureTextEntry).toBe(true);
 
-    // Server-wide device list rendered.
+    // Server-wide device list rendered; the subtitle carries the availability.
     expect(screen.getByText("Kindle")).toBeTruthy();
-    expect(screen.getByText("k@kindle.com")).toBeTruthy();
+    expect(screen.getByText("k@kindle.com · Admins")).toBeTruthy();
   });
 
   it("uses the borderless field skin and a returnKeyType focus chain ending in done", async () => {
@@ -426,7 +459,198 @@ describe("AdminEmailScreen", () => {
       expect(screen.getByRole("header", { name: "Email" })).toBeTruthy();
       expect(screen.getByLabelText("Go back")).toBeTruthy();
     });
+  });
 
+  describe("device availability", () => {
+    it("shows availability labels on device rows for every option", async () => {
+      mockGetSettings({
+        ...SETTINGS,
+        ereaderDevices: [
+          KINDLE,
+          { name: "Family", email: "f@x.com", availabilityOption: "userAndUp" },
+          { name: "Lobby", email: "l@x.com", availabilityOption: "guestAndUp" },
+          BOOX,
+          { name: "Legacy", email: "old@x.com" }, // older servers omit the field
+        ],
+      });
+      await renderLoaded();
+
+      expect(screen.getByText("k@kindle.com · Admins")).toBeTruthy();
+      expect(screen.getByText("f@x.com · All users")).toBeTruthy();
+      expect(screen.getByText("l@x.com · Everyone including guests")).toBeTruthy();
+      expect(screen.getByText("boox@x.com · Specific users")).toBeTruthy();
+      expect(screen.getByText("old@x.com · Admins")).toBeTruthy();
+    });
+
+    it("adding with 'All users' posts availabilityOption userAndUp and NO users field", async () => {
+      mockGetSettings();
+      mockDevicesPost();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByText("Add device"));
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Kobo");
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "kobo@example.com");
+      // The availability row's a11y label carries the CURRENT value…
+      await fireEvent.press(screen.getByLabelText("Who can use it: Admins"));
+      await fireEvent.press(await screen.findByLabelText("All users"));
+      // …and updates when the selection changes.
+      await waitFor(() =>
+        expect(screen.getByLabelText("Who can use it: All users")).toBeTruthy()
+      );
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/emails/ereader-devices", {
+          ereaderDevices: [
+            KINDLE,
+            { name: "Kobo", email: "kobo@example.com", availabilityOption: "userAndUp" },
+          ],
+        })
+      );
+      // Not restricted to specific users → no users key at all.
+      expect(Object.prototype.hasOwnProperty.call(lastPostedDevices()[1], "users")).toBe(false);
+      // Never loaded the user list for a non-specific device.
+      expect((api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/users").length).toBe(
+        0
+      );
+    });
+
+    it("specific users: checklist loads lazily and the checked user ids are posted", async () => {
+      mockGetSettings();
+      mockDevicesPost();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByText("Add device"));
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Kobo");
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "kobo@example.com");
+      await fireEvent.press(screen.getByLabelText(/^Who can use it/));
+      await fireEvent.press(await screen.findByLabelText("Specific users…"));
+
+      // Checklist fetched from GET /api/users, rows are checkboxes.
+      const bob = await screen.findByLabelText("bob");
+      expect(bob.props.accessibilityRole).toBe("checkbox");
+      expect(bob.props.accessibilityState.checked).toBe(false);
+      await fireEvent.press(bob);
+      await waitFor(() =>
+        expect(screen.getByLabelText("bob").props.accessibilityState.checked).toBe(true)
+      );
+
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/emails/ereader-devices", {
+          ereaderDevices: [
+            KINDLE,
+            {
+              name: "Kobo",
+              email: "kobo@example.com",
+              availabilityOption: "specificUsers",
+              users: ["u2"],
+            },
+          ],
+        })
+      );
+    });
+
+    it("specific users with NOBODY checked blocks with a dialog and no POST", async () => {
+      mockGetSettings();
+      mockDevicesPost();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByText("Add device"));
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Kobo");
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "kobo@example.com");
+      await fireEvent.press(screen.getByLabelText(/^Who can use it/));
+      await fireEvent.press(await screen.findByLabelText("Specific users…"));
+      await screen.findByLabelText("bob");
+
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Select at least one user" })
+      );
+      expect(api.post).not.toHaveBeenCalled();
+    });
+
+    it("editing preserves an existing device's availabilityOption and users", async () => {
+      mockGetSettings({ ...SETTINGS, ereaderDevices: [KINDLE, BOOX] });
+      mockDevicesPost();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByLabelText("Boox, boox@x.com · Specific users"));
+      // Seeded from the device: bob (u2) is already checked.
+      await waitFor(() =>
+        expect(screen.getByLabelText("bob").props.accessibilityState.checked).toBe(true)
+      );
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Boox 2");
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/emails/ereader-devices", {
+          ereaderDevices: [
+            KINDLE,
+            { name: "Boox 2", email: "boox@x.com", availabilityOption: "specificUsers", users: ["u2"] },
+          ],
+        })
+      );
+    });
+
+    it("editing a device whose users were deleted server-side blocks the save (no ghost ids POSTed)", async () => {
+      // "ghost" is not in GET /api/users anymore — once the checklist loads,
+      // the save must treat the device as having NOBODY selected instead of
+      // round-tripping the stale id back to the server.
+      mockGetSettings({
+        ...SETTINGS,
+        ereaderDevices: [
+          KINDLE,
+          {
+            name: "Boox",
+            email: "boox@x.com",
+            availabilityOption: "specificUsers",
+            users: ["ghost"],
+          },
+        ],
+      });
+      mockDevicesPost();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByLabelText("Boox, boox@x.com · Specific users"));
+      // The checklist loaded (so the ghost id is verifiable) and shows nothing checked.
+      const bob = await screen.findByLabelText("bob");
+      expect(bob.props.accessibilityState.checked).toBe(false);
+
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Select at least one user" })
+      );
+      expect(api.post).not.toHaveBeenCalled();
+    });
+
+    it("switching an edit away from specific users STRIPS the stale users array", async () => {
+      mockGetSettings({ ...SETTINGS, ereaderDevices: [KINDLE, BOOX] });
+      mockDevicesPost();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByLabelText("Boox, boox@x.com · Specific users"));
+      await fireEvent.press(screen.getByLabelText(/^Who can use it/));
+      await fireEvent.press(await screen.findByLabelText("Admins"));
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/emails/ereader-devices", {
+          ereaderDevices: [
+            KINDLE,
+            { name: "Boox", email: "boox@x.com", availabilityOption: "adminAndUp" },
+          ],
+        })
+      );
+      // The stale restriction list must NOT ride along.
+      expect(Object.prototype.hasOwnProperty.call(lastPostedDevices()[1], "users")).toBe(false);
+    });
+  });
+
+  describe("device-modal on-open accessibility", () => {
     it("device modal announces on open, marks its title as a header, and caps the name in words", async () => {
       const announceSpy = jest
         .spyOn(AccessibilityInfo, "announceForAccessibility")
@@ -440,9 +664,13 @@ describe("AdminEmailScreen", () => {
       expect(screen.getByRole("header", { name: "Add device" })).toBeTruthy();
       // Device names are proper nouns → words autocapitalize.
       expect(screen.getByLabelText("Device name").props.autoCapitalize).toBe("words");
-      // Mirrors AppDialog's on-open announce (RN Modal is silent by default).
+      // Mirrors AppDialog's on-open announce (RN Modal is silent by default);
+      // the copy names every field, including the availability picker.
       await waitFor(() =>
         expect(announceSpy).toHaveBeenCalledWith(expect.stringContaining("Add device"))
+      );
+      expect(announceSpy).toHaveBeenCalledWith(
+        expect.stringContaining("enter a name, email, and who can use it")
       );
     });
   });
