@@ -1,6 +1,6 @@
 {
   "name": "native",
-  "version": "2.6.6",
+  "version": "2.6.7",
   "main": "index.ts",
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
