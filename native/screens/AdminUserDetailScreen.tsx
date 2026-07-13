@@ -255,7 +255,10 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
 
   // Server tag vocabulary for the tag-access checklist — best-effort: a tag
   // load failure leaves the list empty (helper text) but never blocks editing.
+  // The Tag access section only exists in EDIT mode, so skip the fetch entirely
+  // during create (no point paying for a checklist that never renders).
   useEffect(() => {
+    if (isCreate) return;
     let cancelled = false;
     Promise.allSettled([getTags()]).then(([res]) => {
       if (cancelled) return;
@@ -269,7 +272,7 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isCreate]);
 
   const seedFromUser = (u: AbsUser) => {
     const p = u.permissions || ({} as any);

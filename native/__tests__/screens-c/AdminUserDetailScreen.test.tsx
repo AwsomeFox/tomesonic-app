@@ -191,6 +191,8 @@ describe("AdminUserDetailScreen — create mode", () => {
     expect(screen.queryByLabelText("All tags")).toBeNull();
     // Library access (which IS editable in create) still renders.
     expect(screen.getByText("Library access")).toBeTruthy();
+    // ...and no tag vocabulary is fetched for a section that never renders.
+    expect(getTags).not.toHaveBeenCalled();
   });
 
   it("blocks create without a password — INLINE field error, no dialog, no POST", async () => {
