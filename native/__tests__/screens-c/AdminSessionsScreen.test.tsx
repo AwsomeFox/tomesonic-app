@@ -7,10 +7,22 @@
  * row accessibility semantics (custom longpress action, no fake button role),
  * and the offline / 403 / 404-as-non-admin error states.
  */
+// Capture the useFocusEffect callback (usePolling's focus gate) so tests can
+// drive "focus" explicitly — exactly what react-navigation does on focus.
+let mockFocusCb: (() => void | (() => void)) | null = null;
+jest.mock("@react-navigation/native", () => ({
+  useFocusEffect: (cb: any) => {
+    mockFocusCb = cb;
+  },
+}));
+
 jest.mock("../../utils/abs/sessions", () => ({
   getAllSessions: jest.fn(),
   deleteSession: jest.fn(),
   batchDeleteSessions: jest.fn(),
+}));
+jest.mock("../../utils/abs/users", () => ({
+  getOnlineUsers: jest.fn(),
 }));
 jest.mock("../../store/useDialogStore", () => ({ showAppDialog: jest.fn() }));
 jest.mock("../../store/useSnackbarStore", () => ({ showSnackbar: jest.fn() }));
@@ -20,6 +32,7 @@ import { AccessibilityInfo } from "react-native";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminSessionsScreen from "../../screens/AdminSessionsScreen";
 import { getAllSessions, deleteSession, batchDeleteSessions } from "../../utils/abs/sessions";
+import { getOnlineUsers } from "../../utils/abs/users";
 import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
 import { AbsError } from "../../utils/abs/errors";
@@ -68,10 +81,19 @@ function lastDialog() {
   return calls[calls.length - 1][0];
 }
 
+// Fire the captured focus callback so usePolling runs its first open-sessions poll.
+async function focusScreen() {
+  await act(async () => {
+    mockFocusCb?.();
+  });
+}
+
 beforeEach(() => {
+  mockFocusCb = null;
   (getAllSessions as jest.Mock).mockResolvedValue(pageResponse([S1, S2]));
   (deleteSession as jest.Mock).mockResolvedValue(undefined);
   (batchDeleteSessions as jest.Mock).mockResolvedValue(undefined);
+  (getOnlineUsers as jest.Mock).mockResolvedValue({ usersOnline: [], openSessions: [] });
 });
 
 describe("AdminSessionsScreen", () => {
@@ -311,15 +333,15 @@ describe("AdminSessionsScreen", () => {
     expect(screen.getByText("Listening sessions")).toBeTruthy();
   });
 
-  it("normal-mode rows are NOT buttons and expose a longpress accessibility action instead", async () => {
+  it("normal-mode rows are buttons that open details, and still expose a longpress accessibility action", async () => {
     await renderScreen();
     await screen.findByText("Book One");
 
     const row = screen.getByLabelText(/^Session: Book One/);
-    // No tap action in normal mode ⇒ no button role ("double tap to activate"
-    // announcing a no-op is an a11y lie) — the long-press affordance is a
-    // custom action.
-    expect(row.props.accessibilityRole).toBeUndefined();
+    // Normal mode now opens the read-only detail sheet on tap ⇒ button role,
+    // while the long-press (selection) affordance stays a custom action so a
+    // screen reader still hears both.
+    expect(row.props.accessibilityRole).toBe("button");
     expect(row.props.accessibilityActions).toEqual([
       { name: "longpress", label: "Select session" },
     ]);
@@ -331,6 +353,76 @@ describe("AdminSessionsScreen", () => {
     const selectedRow = screen.getByLabelText(/^Session: Book One/);
     expect(selectedRow.props.accessibilityRole).toBe("checkbox");
     expect(selectedRow.props.accessibilityState).toEqual({ checked: true });
+  });
+
+  it("tapping a normal-mode row opens the read-only session detail sheet", async () => {
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    fireEvent.press(screen.getByLabelText(/^Session: Book One/));
+
+    // The sheet surfaces the full session anatomy (labels + values) that the
+    // compact row can't. `joe` also appears in the row subtitle, so assert on
+    // the sheet-only rows.
+    expect(await screen.findByText("User")).toBeTruthy();
+    expect(screen.getByText("Device")).toBeTruthy();
+    expect(screen.getByText("Listening time")).toBeTruthy();
+    // Device value comes from mediaPlayer.
+    expect(screen.getAllByText("TomeSonic").length).toBeGreaterThan(0);
+    // libraryItemId row (mono/selectable).
+    expect(screen.getByText("li-s1")).toBeTruthy();
+  });
+
+  it("renders an Open chip only on sessions the online poll reports as open", async () => {
+    (getOnlineUsers as jest.Mock).mockResolvedValue({
+      usersOnline: [],
+      openSessions: [{ id: "s1" }],
+    });
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    // No chip before the poll answers.
+    expect(screen.queryByText("Open")).toBeNull();
+
+    await focusScreen();
+
+    await waitFor(() => expect(screen.getByText("Open")).toBeTruthy());
+    // Exactly one row is open (s1), not s2.
+    expect(screen.getAllByText("Open")).toHaveLength(1);
+    // The a11y label folds the open state in.
+    expect(screen.getByLabelText(/^Session: Book One.*, open$/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^Session: Book Two.*, open$/)).toBeNull();
+  });
+
+  it("an online-poll failure never surfaces an error state — the list stays intact", async () => {
+    (getOnlineUsers as jest.Mock).mockRejectedValue(new AbsError("server", "boom", 500));
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    await focusScreen();
+
+    // Rows still render; no error screen, no Open chips.
+    expect(screen.getByText("Book One")).toBeTruthy();
+    expect(screen.getByText("Book Two")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load sessions")).toBeNull();
+    expect(screen.queryByText("Open")).toBeNull();
+  });
+
+  it("the open state flows into the detail sheet header (Open chip in the sheet)", async () => {
+    (getOnlineUsers as jest.Mock).mockResolvedValue({
+      usersOnline: [],
+      openSessions: [{ id: "s1" }],
+    });
+    await renderScreen();
+    await screen.findByText("Book One");
+    await focusScreen();
+    await waitFor(() => expect(screen.getAllByText("Open")).toHaveLength(1));
+
+    // Open the sheet for the OPEN session → its header carries the Open chip too
+    // (row chip + sheet chip = two).
+    fireEvent.press(screen.getByLabelText(/^Session: Book One/));
+    await screen.findByText("User");
+    await waitFor(() => expect(screen.getAllByText("Open")).toHaveLength(2));
   });
 
   it("announces entering and leaving selection mode to screen readers", async () => {

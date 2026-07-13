@@ -35,6 +35,63 @@ export const ABS_ICON_MAP: Record<string, IconName> = {
   heart: "heart",
 };
 
+/**
+ * The pickable ABS library icons, in the ABS web-UI order. Sourced from the
+ * ABS_ICON_MAP keys so the picker can never offer a name LibraryIcon can't
+ * render (an unknown key would fall back to the media-type default). Raw ABS
+ * keys — the value stored on the library and sent back to the server.
+ */
+export const ABS_LIBRARY_ICONS: string[] = [
+  "database",
+  "audiobookshelf",
+  "books-1",
+  "books-2",
+  "book-1",
+  "microphone-1",
+  "microphone-3",
+  "radio",
+  "podcast",
+  "rss",
+  "headphones",
+  "music",
+  "file-picture",
+  "rocket",
+  "power",
+  "star",
+  "heart",
+].filter((key) => key in ABS_ICON_MAP);
+
+/**
+ * Human-readable labels for the ABS icon keys — the raw keys ("books-1",
+ * "microphone-3") are meaningless to a screen reader (and two mic keys share a
+ * glyph), so the picker announces these instead. Numbered variants are
+ * disambiguated so TalkBack users can tell them apart.
+ */
+export const ABS_ICON_LABELS: Record<string, string> = {
+  database: "Database",
+  audiobookshelf: "Audiobookshelf",
+  "books-1": "Books",
+  "books-2": "Book stack",
+  "book-1": "Book",
+  "microphone-1": "Microphone",
+  "microphone-3": "Microphone (alt)",
+  radio: "Radio",
+  podcast: "Podcast",
+  rss: "RSS",
+  headphones: "Headphones",
+  music: "Music",
+  "file-picture": "Picture",
+  rocket: "Rocket",
+  power: "Power",
+  star: "Star",
+  heart: "Heart",
+};
+
+/** Human label for an ABS icon key (falls back to the raw key). */
+export function libraryIconLabel(icon: string): string {
+  return ABS_ICON_LABELS[icon] || icon;
+}
+
 export function libraryIconName(icon?: string | null, mediaType?: string | null): IconName {
   if (icon && ABS_ICON_MAP[icon]) return ABS_ICON_MAP[icon];
   return mediaType === "podcast" ? "podcast" : "library";

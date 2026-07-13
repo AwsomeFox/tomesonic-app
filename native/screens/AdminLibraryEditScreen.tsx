@@ -12,10 +12,14 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
-import { SectionHeader } from "../components/SettingsRows";
+import { SectionHeader, SelectRow, ToggleRow } from "../components/SettingsRows";
+import LibraryIcon, { libraryIconLabel } from "../components/LibraryIcon";
+import LibraryIconPickerSheet from "../components/LibraryIconPickerSheet";
+import SettingSelectModal from "../components/SettingSelectModal";
 import { api } from "../utils/api";
 import { AbsError, normalizeAbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
 import { createLibrary, updateLibrary, deleteLibrary } from "../utils/abs/libraries";
+import type { AbsLibrarySettings } from "../utils/abs/types";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 
@@ -91,6 +95,12 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
   const [mediaType, setMediaType] = useState<"book" | "podcast">("book");
   const [provider, setProvider] = useState(BOOK_DEFAULT_PROVIDER);
   const [folders, setFolders] = useState<FolderDraft[]>([]);
+  // Server-assigned icon key (see components/LibraryIcon ABS_ICON_MAP) and the
+  // library display settings. undefined icon = the server picks its default.
+  const [icon, setIcon] = useState<string | undefined>(undefined);
+  const [settings, setSettings] = useState<AbsLibrarySettings>({});
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
+  const [aspectPickerOpen, setAspectPickerOpen] = useState(false);
 
   // Loaded snapshot for the dirty check (create mode compares against the
   // pristine defaults).
@@ -99,7 +109,16 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
     mediaType: "book" | "podcast";
     provider: string;
     folders: FolderDraft[];
-  }>({ name: "", mediaType: "book", provider: BOOK_DEFAULT_PROVIDER, folders: [] });
+    icon: string | undefined;
+    settings: AbsLibrarySettings;
+  }>({
+    name: "",
+    mediaType: "book",
+    provider: BOOK_DEFAULT_PROVIDER,
+    folders: [],
+    icon: undefined,
+    settings: {},
+  });
 
   useEffect(() => {
     if (!isEdit) return;
@@ -119,15 +138,22 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
               .filter((f: any) => f && f.fullPath)
               .map((f: any) => ({ id: f.id, fullPath: String(f.fullPath) }))
           : [];
+        const seededIcon: string | undefined = lib.icon || undefined;
+        const seededSettings: AbsLibrarySettings =
+          lib.settings && typeof lib.settings === "object" ? lib.settings : {};
         setName(lib.name || "");
         setMediaType(lib.mediaType === "podcast" ? "podcast" : "book");
         setProvider(lib.provider || BOOK_DEFAULT_PROVIDER);
         setFolders(seededFolders);
+        setIcon(seededIcon);
+        setSettings(seededSettings);
         setOriginal({
           name: lib.name || "",
           mediaType: lib.mediaType === "podcast" ? "podcast" : "book",
           provider: lib.provider || BOOK_DEFAULT_PROVIDER,
           folders: seededFolders,
+          icon: seededIcon,
+          settings: seededSettings,
         });
       } catch (e) {
         if (!cancelled) setError(normalizeAbsError(e));
@@ -148,11 +174,18 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
     // type — include it so such a change is still saveable and guarded.
     if (mediaType !== original.mediaType) return true;
     if (provider.trim() !== original.provider.trim()) return true;
+    if (icon !== original.icon) return true;
+    // Shallow-unequal settings: any key present on either side whose values
+    // differ (covers a flipped toggle and a changed aspect-ratio enum).
+    const settingKeys = new Set([...Object.keys(settings), ...Object.keys(original.settings)]);
+    for (const key of settingKeys) {
+      if (settings[key] !== original.settings[key]) return true;
+    }
     if (folders.length !== original.folders.length) return true;
     return folders.some(
       (f, i) => f.fullPath !== original.folders[i]?.fullPath || f.id !== original.folders[i]?.id
     );
-  }, [name, mediaType, provider, folders, original]);
+  }, [name, mediaType, provider, folders, icon, settings, original]);
 
   // Saveable = something changed AND the form is complete. Create mode is
   // implicitly dirty once valid (any name differs from the pristine "").
@@ -245,19 +278,35 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
     setSaving(true);
     try {
       if (isEdit) {
-        await updateLibrary(libraryId!, {
+        // CLOBBER-SAFETY: the server's settings object carries keys this editor
+        // doesn't expose (metadata precedence, scan cron, mark-finished
+        // thresholds, …). PATCH the FULL MERGED settings — loaded snapshot with
+        // our edits layered on — never a bare partial, or those keys are lost.
+        const payload: any = {
           name: trimmedName,
           provider: provider.trim(),
-          folders: cleanFolders.map((f) => (f.id ? { id: f.id, fullPath: f.fullPath } : { fullPath: f.fullPath })),
-        });
+          folders: cleanFolders.map((f) =>
+            f.id ? { id: f.id, fullPath: f.fullPath } : { fullPath: f.fullPath }
+          ),
+          settings: { ...original.settings, ...settings },
+          // Always send icon in edit mode so clearing it back to the server
+          // default (empty) actually persists — ABS represents "no icon" as "".
+          icon: icon ?? "",
+        };
+        await updateLibrary(libraryId!, payload);
         showSnackbar({ message: "Library saved" });
       } else {
-        await createLibrary({
+        const payload: any = {
           name: trimmedName,
           mediaType,
           provider: provider.trim(),
           folders: cleanFolders.map((f) => ({ fullPath: f.fullPath })),
-        });
+        };
+        // Create mode: only carry icon/settings the admin actually set, so a
+        // pristine create falls back to the server defaults.
+        if (icon !== undefined) payload.icon = icon;
+        if (Object.keys(settings).length > 0) payload.settings = settings;
+        await createLibrary(payload);
         showSnackbar({ message: "Library created" });
       }
       navigation.goBack();
@@ -545,6 +594,109 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
             </ScrollView>
           </View>
 
+          {/* Library icon — RowBase (not SelectRow) so the trailing can show the
+              current glyph next to the picker chevron. undefined = server default. */}
+          <Pressable
+            onPress={() => setIconPickerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Library icon"
+            android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                paddingVertical: 16,
+                paddingHorizontal: 20,
+              }}
+            >
+              <Icon name="image" size={26} color={colors.onSurface} style={{ marginRight: 20 }} />
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={{ color: colors.onSurface, fontSize: 18 }}>Library icon</Text>
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 2 }}>
+                  {icon ? libraryIconLabel(icon) : "Server default"}
+                </Text>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <LibraryIcon icon={icon} mediaType={mediaType} size={24} color={colors.onSurface} />
+                <Icon name="chevron-down" size={26} color={colors.onSurface} style={{ marginLeft: 8 }} />
+              </View>
+            </View>
+          </Pressable>
+
+          <SectionHeader label="Settings" colors={colors} />
+
+          {/* Cover aspect ratio is an ENUM (0=Standard, 1=Square) — a select, not
+              a toggle. */}
+          <SelectRow
+            icon="image"
+            title="Cover aspect ratio"
+            subtitle={(settings.coverAspectRatio ?? 0) === 1 ? "Square" : "Standard"}
+            onPress={() => setAspectPickerOpen(true)}
+            colors={colors}
+          />
+
+          {mediaType === "book" ? (
+            <ToggleRow
+              icon="headphones"
+              title="Audiobooks only"
+              subtitle="Hide ebook-only items"
+              value={!!settings.audiobooksOnly}
+              onValueChange={(v) => setSettings((s) => ({ ...s, audiobooksOnly: v }))}
+              colors={colors}
+            />
+          ) : null}
+          {mediaType === "book" ? (
+            <ToggleRow
+              icon="books"
+              title="Hide single-book series"
+              subtitle="Don't show series with one book"
+              value={!!settings.hideSingleBookSeries}
+              onValueChange={(v) => setSettings((s) => ({ ...s, hideSingleBookSeries: v }))}
+              colors={colors}
+            />
+          ) : null}
+          {mediaType === "book" ? (
+            <ToggleRow
+              icon="collections"
+              title="Continue series: later books only"
+              subtitle="Only show later books in Continue Series"
+              value={!!settings.onlyShowLaterBooksInContinueSeries}
+              onValueChange={(v) =>
+                setSettings((s) => ({ ...s, onlyShowLaterBooksInContinueSeries: v }))
+              }
+              colors={colors}
+            />
+          ) : null}
+          <ToggleRow
+            icon="power"
+            title="Disable folder watcher"
+            subtitle="Don't auto-scan on file changes"
+            value={!!settings.disableWatcher}
+            onValueChange={(v) => setSettings((s) => ({ ...s, disableWatcher: v }))}
+            colors={colors}
+          />
+          {mediaType === "book" ? (
+            <ToggleRow
+              icon="book"
+              title="Skip matching with ASIN"
+              subtitle="Ignore items that already have an ASIN"
+              value={!!settings.skipMatchingMediaWithAsin}
+              onValueChange={(v) => setSettings((s) => ({ ...s, skipMatchingMediaWithAsin: v }))}
+              colors={colors}
+            />
+          ) : null}
+          {mediaType === "book" ? (
+            <ToggleRow
+              icon="book"
+              title="Skip matching with ISBN"
+              subtitle="Ignore items that already have an ISBN"
+              value={!!settings.skipMatchingMediaWithIsbn}
+              onValueChange={(v) => setSettings((s) => ({ ...s, skipMatchingMediaWithIsbn: v }))}
+              colors={colors}
+            />
+          ) : null}
+
           <SectionHeader label="Folders" colors={colors} />
           <View
             style={{
@@ -647,6 +799,26 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
           </Pressable>
         </ScrollView>
       )}
+
+      <LibraryIconPickerSheet
+        visible={iconPickerOpen}
+        selected={icon}
+        mediaType={mediaType}
+        onSelect={(key) => setIcon(key)}
+        onClose={() => setIconPickerOpen(false)}
+      />
+
+      <SettingSelectModal
+        visible={aspectPickerOpen}
+        title="Cover aspect ratio"
+        options={[
+          { label: "Standard", value: 0 },
+          { label: "Square", value: 1 },
+        ]}
+        selected={settings.coverAspectRatio ?? 0}
+        onSelect={(v) => setSettings((s) => ({ ...s, coverAspectRatio: v }))}
+        onClose={() => setAspectPickerOpen(false)}
+      />
     </SafeAreaView>
   );
 }

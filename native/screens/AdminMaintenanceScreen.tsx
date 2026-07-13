@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -30,6 +30,7 @@ import {
   getLibraryNarrators,
   updateNarrator,
   narratorNameToId,
+  getLibraryItemFilterCount,
 } from "../utils/abs/libraries";
 import type { AbsNarrator } from "../utils/abs/types";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -78,6 +79,12 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   const currentLibraryId = useLibraryStore((s) => s.currentLibraryId);
 
   const [segment, setSegment] = useState<Segment>("tags");
+  // Mirror of `segment` for the stable FlatList viewability callback (which is
+  // created once and must not close over a stale segment value).
+  const segmentRef = useRef<Segment>("tags");
+  useEffect(() => {
+    segmentRef.current = segment;
+  }, [segment]);
   const [tags, setTags] = useState<string[]>([]);
   const [genres, setGenres] = useState<string[]>([]);
   const [narrators, setNarrators] = useState<AbsNarrator[]>([]);
@@ -153,6 +160,102 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       cancelled = true;
     };
   }, [segment, retryTick, narratorLibraryId]);
+
+  // ---- tag/genre item counts -----------------------------------------------
+  // Tags/genres are server-wide, but item counts are PER-LIBRARY, so a value's
+  // displayed count is the SUM of getLibraryItemFilterCount across every
+  // library. Fetched LAZILY and ON DEMAND for the rows the user actually SEES
+  // (FlatList viewability), so the fan-out scales with what's scrolled into
+  // view rather than the whole vocabulary — a server with hundreds of tags is
+  // never stormed up front. A shared queue caps TOTAL in-flight requests at 4;
+  // each value is fetched at most once per session (countAttemptedRef); a fetch
+  // failure degrades to no subtitle, never a screen-level ErrorState.
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const countAttemptedRef = useRef<Set<string>>(new Set());
+  const countQueueRef = useRef<{ type: "tags" | "genres"; value: string }[]>([]);
+  const countActiveRef = useRef(0);
+  const mountedRef = useRef(true);
+  // Libraries change rarely; read them off a ref so the stable viewability
+  // callback always sees the current set without being re-created.
+  const libIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    libIdsRef.current = storeLibraries.map((l) => l.id).filter(Boolean);
+    // Libraries may load AFTER rows were seen and queued — drain the queue now
+    // that there's something to count over.
+    pumpRef.current();
+  }, [storeLibraries]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const pumpRef = useRef<() => void>(() => {});
+  pumpRef.current = () => {
+    // Screen gone — stop starting new requests and drop any queued work.
+    if (!mountedRef.current) {
+      countQueueRef.current = [];
+      return;
+    }
+    // Libraries not loaded yet — leave the queue INTACT (don't shift/drop) so
+    // the pump triggered by the storeLibraries effect can still process it.
+    const libIds = libIdsRef.current;
+    if (libIds.length === 0) return;
+    const CONCURRENCY = 4;
+    while (countActiveRef.current < CONCURRENCY && countQueueRef.current.length > 0) {
+      const { type, value } = countQueueRef.current.shift()!;
+      countActiveRef.current += 1;
+      (async () => {
+        let total = 0;
+        let ok = true;
+        // Sum sequentially across libraries; a single failure drops the whole
+        // value (no understated partial), matching the graceful-degrade rule.
+        for (const libId of libIds) {
+          try {
+            total += await getLibraryItemFilterCount(libId, type, value);
+          } catch {
+            ok = false;
+            break;
+          }
+        }
+        if (ok && mountedRef.current) {
+          setCounts((prev) => ({ ...prev, [`${type}:${value}`]: total }));
+        }
+      })().finally(() => {
+        countActiveRef.current -= 1;
+        pumpRef.current();
+      });
+    }
+  };
+
+  // Enqueue a single value's count once. Called from FlatList viewability, so
+  // only on-screen rows ever trigger a fetch.
+  const requestCount = (type: "tags" | "genres", value: string) => {
+    const key = `${type}:${value}`;
+    if (countAttemptedRef.current.has(key)) return;
+    countAttemptedRef.current.add(key);
+    countQueueRef.current.push({ type, value });
+    pumpRef.current();
+  };
+
+  const onValueRowsViewable = useRef(
+    ({ viewableItems }: { viewableItems: Array<{ item?: { name?: string } }> }) => {
+      const seg = segmentRef.current;
+      if (seg === "narrators") return;
+      for (const vi of viewableItems) {
+        const name = vi.item?.name;
+        if (name) requestCount(seg, name);
+      }
+    }
+  ).current;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 1 }).current;
+
+  const countSubtitle = (type: "tags" | "genres", value: string): string | undefined => {
+    const n = counts[`${type}:${value}`];
+    if (n === undefined) return undefined;
+    return `${n} item${n === 1 ? "" : "s"}`;
+  };
 
   const reload = () => setRetryTick((t) => t + 1);
 
@@ -390,8 +493,10 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   type ValueRow = { name: string; subtitle?: string; canDelete: boolean };
   const rows: ValueRow[] = useMemo(() => {
     if (loading || error) return [];
-    if (segment === "tags") return tags.map((t) => ({ name: t, canDelete: true }));
-    if (segment === "genres") return genres.map((g) => ({ name: g, canDelete: true }));
+    if (segment === "tags")
+      return tags.map((t) => ({ name: t, subtitle: countSubtitle("tags", t), canDelete: true }));
+    if (segment === "genres")
+      return genres.map((g) => ({ name: g, subtitle: countSubtitle("genres", g), canDelete: true }));
     if (!narratorLibraryId) return [];
     return narrators.map((n) => ({
       name: n.name,
@@ -399,7 +504,7 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       // No delete endpoint for narrators — rename-to-merge is the cleanup.
       canDelete: false,
     }));
-  }, [loading, error, segment, tags, genres, narrators, narratorLibraryId]);
+  }, [loading, error, segment, tags, genres, narrators, narratorLibraryId, counts]);
 
   const renderListEmpty = () => {
     if (loading) {
@@ -462,11 +567,15 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       </View>
 
       <FlatList
+        testID="maintenance-list"
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 40 }}
         data={rows}
         keyExtractor={(item) => item.name}
         renderItem={({ item }) => renderValueRow(item.name, item.subtitle, item.canDelete)}
+        // Fetch tag/genre item counts only for rows scrolled into view.
+        onViewableItemsChanged={onValueRowsViewable}
+        viewabilityConfig={viewabilityConfig}
         // Inline rename state lives outside the rows — make sure an edit
         // toggle re-renders the virtualized items.
         extraData={`${editingName ?? ""}:${editValue}`}

@@ -25,6 +25,7 @@ import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { narratorNameToId } from "../../utils/abs/libraries";
+import { encodeFilterValue } from "../../utils/filters";
 
 const initialLibraryState = useLibraryStore.getState();
 
@@ -49,6 +50,14 @@ function mockGets({
       return Promise.resolve({ data: { narrators } });
     if (url === "/api/libraries/lib3/narrators")
       return Promise.resolve({ data: { narrators: LIB3_NARRATORS } });
+    // Per-library item counts for tags/genres. Distinct per library so a
+    // summed total (5 + 0 + 2 = 7) is verifiable across all three libraries.
+    const items = url.match(/^\/api\/libraries\/(\w+)\/items$/);
+    if (items) {
+      const id = items[1];
+      const total = id === "lib1" ? 5 : id === "lib3" ? 2 : 0;
+      return Promise.resolve({ data: { total } });
+    }
     return Promise.resolve({ data: {} });
   });
 }
@@ -61,6 +70,20 @@ async function renderScreen() {
   const navigation = makeNavigation();
   await render(<AdminMaintenanceScreen navigation={navigation} route={{ params: {} }} />);
   return navigation;
+}
+
+/**
+ * Tag/genre counts fetch only for rows scrolled into view — simulate the
+ * FlatList reporting the given row names as viewable so their counts enqueue.
+ */
+async function revealRows(names: string[]) {
+  const list = screen.getByTestId("maintenance-list");
+  await act(async () => {
+    list.props.onViewableItemsChanged?.({
+      viewableItems: names.map((name) => ({ item: { name } })),
+      changed: [],
+    });
+  });
 }
 
 function dialogWithTitle(title: string | RegExp) {
@@ -184,6 +207,87 @@ describe("AdminMaintenanceScreen — tags", () => {
       });
     });
     expect(tagCalls()).toBe(1);
+  });
+
+  it("fills an 'N items' subtitle lazily, summed across every library", async () => {
+    await renderScreen();
+    // Names render first (no blocking spinner gated on counts).
+    expect(await screen.findByText("Fiction")).toBeTruthy();
+    expect(screen.getByText("Science Fiction")).toBeTruthy();
+
+    // No count request fires until a row is actually seen.
+    expect((api.get as jest.Mock).mock.calls.some(([u]) => /\/items$/.test(u))).toBe(false);
+    await revealRows(["Fiction", "Science Fiction"]);
+
+    // The count endpoint is hit per library with the base64+URI filter the UI
+    // filter modal uses, limit:0 so only the total comes back.
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith("/api/libraries/lib1/items", {
+        // The filter carries the DECODED base64 — Axios URI-encodes params
+        // once when building the URL, so pre-encoding would double-encode.
+        params: {
+          filter: `tags.${decodeURIComponent(encodeFilterValue("Fiction"))}`,
+          limit: 0,
+          minified: 1,
+        },
+      })
+    );
+    expect(api.get).toHaveBeenCalledWith("/api/libraries/lib2/items", expect.anything());
+    expect(api.get).toHaveBeenCalledWith("/api/libraries/lib3/items", expect.anything());
+
+    // Summed 5 + 0 + 2 = 7 across the three libraries, for each of the 2 tags.
+    const subtitles = await screen.findAllByText("7 items");
+    expect(subtitles.length).toBe(2);
+  });
+
+  it("counts still resolve when libraries load AFTER a row was seen (queue isn't dropped)", async () => {
+    // No libraries yet — the viewability enqueue can't fetch. The queued work
+    // must survive until libraries arrive, then drain.
+    useLibraryStore.setState({ libraries: [] as any, currentLibraryId: null });
+    await renderScreen();
+    expect(await screen.findByText("Fiction")).toBeTruthy();
+
+    await revealRows(["Fiction"]);
+    // Nothing counted while libraries were absent.
+    expect((api.get as jest.Mock).mock.calls.some(([u]) => /\/items$/.test(u))).toBe(false);
+
+    // Libraries arrive → the queued value drains and its count appears.
+    await act(async () => {
+      useLibraryStore.setState({
+        libraries: [{ id: "lib1", name: "Books", mediaType: "book", settings: {} }] as any,
+        currentLibraryId: "lib1",
+      });
+    });
+    expect(await screen.findByText("5 items")).toBeTruthy();
+  });
+
+  it("a count-fetch failure degrades gracefully — name stays, no subtitle, no ErrorState", async () => {
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/tags") return Promise.resolve({ data: { tags: TAGS } });
+      if (url === "/api/genres") return Promise.resolve({ data: { genres: GENRES } });
+      if (/^\/api\/libraries\/\w+\/items$/.test(url))
+        return Promise.reject(
+          Object.assign(new Error("boom"), { response: { status: 500, data: "" } })
+        );
+      return Promise.resolve({ data: {} });
+    });
+    await renderScreen();
+
+    expect(await screen.findByText("Fiction")).toBeTruthy();
+    await revealRows(["Fiction", "Science Fiction"]);
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/libraries\/\w+\/items$/),
+        expect.anything()
+      )
+    );
+
+    // The name persists; no count subtitle was set and the screen never
+    // swapped to an ErrorState.
+    expect(screen.getByText("Fiction")).toBeTruthy();
+    expect(screen.queryByText(/\d+ items?$/)).toBeNull();
+    expect(screen.queryByText("Something went wrong")).toBeNull();
+    expect(screen.queryByText("You're offline")).toBeNull();
   });
 
   it("cancelling an inline rename restores the row without a dialog", async () => {

@@ -21,9 +21,19 @@ jest.mock("../../store/useSnackbarStore", () => ({
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminLibraryEditScreen from "../../screens/AdminLibraryEditScreen";
+import { libraryIconLabel } from "../../components/LibraryIcon";
 import { api } from "../../utils/api";
 import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
+
+// The server's settings object carries keys this editor doesn't expose
+// (metadataPrecedence here) — the PATCH must preserve them (clobber-safety).
+const LOADED_SETTINGS = {
+  coverAspectRatio: 1,
+  audiobooksOnly: false,
+  disableWatcher: true,
+  metadataPrecedence: ["folderStructure", "audioMetatags"],
+};
 
 const LIB_RESPONSE = {
   library: {
@@ -31,6 +41,8 @@ const LIB_RESPONSE = {
     name: "Audiobooks",
     mediaType: "book",
     provider: "audible",
+    icon: "books-1",
+    settings: LOADED_SETTINGS,
     folders: [
       { id: "fol1", fullPath: "/srv/audiobooks" },
       { id: "fol2", fullPath: "/srv/more-books" },
@@ -226,6 +238,9 @@ describe("AdminLibraryEditScreen — edit mode", () => {
           { id: "fol1", fullPath: "/srv/audiobooks" },
           { id: "fol2", fullPath: "/srv/more-books" },
         ],
+        // Full merged settings (unchanged here) + loaded icon go out too.
+        settings: LOADED_SETTINGS,
+        icon: "books-1",
       })
     );
     await waitFor(() =>
@@ -306,6 +321,8 @@ describe("AdminLibraryEditScreen — edit mode", () => {
         name: "Audiobooks",
         provider: "audible",
         folders: [{ id: "fol1", fullPath: "/srv/audiobooks" }],
+        settings: LOADED_SETTINGS,
+        icon: "books-1",
       })
     );
   });
@@ -453,5 +470,177 @@ describe("AdminLibraryEditScreen — edit mode", () => {
     await renderScreen({ libraryId: "lib1" });
 
     expect(await screen.findByText("Admin access required")).toBeTruthy();
+  });
+});
+
+describe("AdminLibraryEditScreen — icon + settings", () => {
+  it("seeds the loaded icon and settings into the form", async () => {
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    // Library icon row shows the loaded ABS key.
+    expect(screen.getByText(libraryIconLabel("books-1"))).toBeTruthy();
+    // coverAspectRatio:1 renders as the "Square" subtitle on the select row.
+    expect(screen.getByText("Square")).toBeTruthy();
+    // disableWatcher:true was loaded → its toggle reads checked.
+    expect(
+      screen.getByLabelText(/Disable folder watcher/).props.accessibilityState.checked
+    ).toBe(true);
+    // audiobooksOnly:false → unchecked.
+    expect(screen.getByLabelText(/Audiobooks only/).props.accessibilityState.checked).toBe(false);
+  });
+
+  it("coverAspectRatio renders as a select (button), never a switch", async () => {
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    const row = screen.getByLabelText(/Cover aspect ratio/);
+    expect(row.props.accessibilityRole).toBe("button");
+    expect(row.props.accessibilityRole).not.toBe("switch");
+  });
+
+  it("toggling a setting flips dirty and enables Save", async () => {
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    expect(screen.getByLabelText("Save library").props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByLabelText(/Audiobooks only/));
+    expect(screen.getByLabelText("Save library").props.accessibilityState.disabled).toBe(false);
+  });
+
+  it("PATCH sends the FULL MERGED settings (untouched keys preserved) plus the flipped one and the icon", async () => {
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    await fireEvent.press(screen.getByLabelText(/Audiobooks only/));
+    await fireEvent.press(screen.getByLabelText("Save library"));
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        "/api/libraries/lib1",
+        expect.objectContaining({
+          icon: "books-1",
+          settings: {
+            // Clobber guard: the unexposed key round-trips untouched...
+            metadataPrecedence: ["folderStructure", "audioMetatags"],
+            coverAspectRatio: 1,
+            disableWatcher: true,
+            // ...alongside the one the admin actually flipped.
+            audiobooksOnly: true,
+          },
+        })
+      )
+    );
+  });
+
+  it("picking an icon flips dirty and lands the raw ABS key in the PATCH payload", async () => {
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    // Open the picker and choose a different glyph.
+    await fireEvent.press(screen.getByLabelText("Library icon"));
+    const tile = await screen.findByLabelText(libraryIconLabel("rocket"));
+    expect(tile.props.accessibilityRole).toBe("radio");
+    await fireEvent.press(tile);
+
+    // Dirty now, Save enabled.
+    expect(screen.getByLabelText("Save library").props.accessibilityState.disabled).toBe(false);
+    await fireEvent.press(screen.getByLabelText("Save library"));
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        "/api/libraries/lib1",
+        expect.objectContaining({ icon: "rocket" })
+      )
+    );
+  });
+
+  it("reverting to 'Server default' clears the icon and persists an empty icon", async () => {
+    // lib1 loads with icon "books-1"; the admin must be able to revert to the
+    // server default (empty), which edit-mode saves persist as icon:"".
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    await fireEvent.press(screen.getByLabelText("Library icon"));
+    await fireEvent.press(await screen.findByLabelText("Server default"));
+
+    // Row now reads the default, Save enabled.
+    expect(screen.getByText("Server default")).toBeTruthy();
+    expect(screen.getByLabelText("Save library").props.accessibilityState.disabled).toBe(false);
+    await fireEvent.press(screen.getByLabelText("Save library"));
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        "/api/libraries/lib1",
+        expect.objectContaining({ icon: "" })
+      )
+    );
+  });
+
+  it("the icon picker lists the ABS options with the loaded one marked selected", async () => {
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    await fireEvent.press(screen.getByLabelText("Library icon"));
+    // A spread of the known ABS keys is offered.
+    expect(await screen.findByLabelText(libraryIconLabel("database"))).toBeTruthy();
+    expect(screen.getByLabelText(libraryIconLabel("podcast"))).toBeTruthy();
+    expect(screen.getByLabelText(libraryIconLabel("heart"))).toBeTruthy();
+    // The loaded icon is the checked radio.
+    expect(screen.getByLabelText(libraryIconLabel("books-1")).props.accessibilityState.checked).toBe(true);
+    expect(screen.getByLabelText(libraryIconLabel("database")).props.accessibilityState.checked).toBe(false);
+  });
+
+  it("book-only setting rows are hidden for a podcast library", async () => {
+    await renderScreen({});
+    await screen.findByText("New library");
+
+    // Book create form: the book-only rows are present.
+    expect(screen.getByLabelText(/Audiobooks only/)).toBeTruthy();
+    expect(screen.getByLabelText(/Hide single-book series/)).toBeTruthy();
+    expect(screen.getByLabelText(/Skip matching with ASIN/)).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText("Media type: Podcasts"));
+
+    // Book-only rows gone; the both-types watcher toggle stays.
+    expect(screen.queryByLabelText(/Audiobooks only/)).toBeNull();
+    expect(screen.queryByLabelText(/Hide single-book series/)).toBeNull();
+    expect(screen.queryByLabelText(/Skip matching with ASIN/)).toBeNull();
+    expect(screen.getByLabelText(/Disable folder watcher/)).toBeTruthy();
+  });
+
+  it("create mode omits icon and settings from the POST when untouched", async () => {
+    await renderScreen({});
+    await screen.findByText("New library");
+
+    await fireEvent.changeText(screen.getByLabelText("Library name"), "Fresh");
+    await fireEvent.press(screen.getByLabelText("Add folder"));
+    await fireEvent.changeText(await screen.findByLabelText("Folder path 1"), "/data/fresh");
+    await fireEvent.press(screen.getByLabelText("Create library"));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    const payload = (api.post as jest.Mock).mock.calls.find((c) => c[0] === "/api/libraries")![1];
+    expect(payload).not.toHaveProperty("icon");
+    expect(payload).not.toHaveProperty("settings");
+  });
+
+  it("create mode carries an explicitly set icon into the POST", async () => {
+    await renderScreen({});
+    await screen.findByText("New library");
+
+    await fireEvent.changeText(screen.getByLabelText("Library name"), "Fresh");
+    await fireEvent.press(screen.getByLabelText("Add folder"));
+    await fireEvent.changeText(await screen.findByLabelText("Folder path 1"), "/data/fresh");
+
+    await fireEvent.press(screen.getByLabelText("Library icon"));
+    await fireEvent.press(await screen.findByLabelText(libraryIconLabel("star")));
+    await fireEvent.press(screen.getByLabelText("Create library"));
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        "/api/libraries",
+        expect.objectContaining({ icon: "star" })
+      )
+    );
   });
 });

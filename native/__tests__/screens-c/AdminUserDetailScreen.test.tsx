@@ -17,6 +17,9 @@ jest.mock("../../utils/abs/users", () => ({
   deleteUser: jest.fn(),
   getUserListeningStats: jest.fn(),
 }));
+jest.mock("../../utils/abs/server", () => ({
+  getTags: jest.fn(),
+}));
 jest.mock("../../store/useDialogStore", () => ({ showAppDialog: jest.fn() }));
 jest.mock("../../store/useSnackbarStore", () => ({ showSnackbar: jest.fn() }));
 
@@ -25,6 +28,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-
 import AdminUserDetailScreen from "../../screens/AdminUserDetailScreen";
 import { api } from "../../utils/api";
 import { getUser, createUser, updateUser, deleteUser, getUserListeningStats } from "../../utils/abs/users";
+import { getTags } from "../../utils/abs/server";
 import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -135,6 +139,7 @@ beforeEach(() => {
   (createUser as jest.Mock).mockResolvedValue(JOE);
   (updateUser as jest.Mock).mockResolvedValue(JOE);
   (deleteUser as jest.Mock).mockResolvedValue(undefined);
+  (getTags as jest.Mock).mockResolvedValue(["kids", "teen", "adult"]);
 });
 
 describe("AdminUserDetailScreen — create mode", () => {
@@ -175,6 +180,19 @@ describe("AdminUserDetailScreen — create mode", () => {
     );
     expect(showSnackbar).toHaveBeenCalledWith({ message: "User created" });
     expect(navigation.goBack).toHaveBeenCalled();
+  });
+
+  it("hides the Tag access section in create mode (per-tag restriction is edit-only)", async () => {
+    await renderScreen({});
+    await screen.findByText("New user");
+    // The "All tags" toggle and the tag checklist never render during create,
+    // so the create payload's forced accessAllTags:true can't be contradicted.
+    expect(screen.queryByText("Tag access")).toBeNull();
+    expect(screen.queryByLabelText("All tags")).toBeNull();
+    // Library access (which IS editable in create) still renders.
+    expect(screen.getByText("Library access")).toBeTruthy();
+    // ...and no tag vocabulary is fetched for a section that never renders.
+    expect(getTags).not.toHaveBeenCalled();
   });
 
   it("blocks create without a password — INLINE field error, no dialog, no POST", async () => {
@@ -304,6 +322,61 @@ describe("AdminUserDetailScreen — edit mode", () => {
     expect(payload.itemTagsAccessible).toEqual(["kids"]);
   });
 
+  it("renders Tag access read-only for a BLOCK-LIST user and echoes their tag fields", async () => {
+    // selectedTagsNotAccessible inverts the list to a block-list — the allow-list
+    // checklist can't represent it, so the section is read-only and the tag
+    // fields must round-trip unchanged through an unrelated edit.
+    (getUser as jest.Mock).mockResolvedValue({
+      ...JOE,
+      permissions: { ...JOE.permissions, accessAllTags: false, selectedTagsNotAccessible: true },
+      itemTagsSelected: ["spicy"],
+    });
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    // No editable tag controls — a read-only note instead.
+    expect(screen.queryByLabelText("All tags")).toBeNull();
+    expect(screen.queryByLabelText(/^Tag access:/)).toBeNull();
+    expect(screen.getByText(/block-list on the server/)).toBeTruthy();
+
+    fireEvent.press(screen.getByLabelText("Can upload"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Can upload").props.accessibilityState.checked).toBe(true)
+    );
+    fireEvent.press(screen.getByLabelText("Save user"));
+
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.upload).toBe(true); // the actual edit
+    // Block-list semantics preserved verbatim.
+    expect(payload.permissions.selectedTagsNotAccessible).toBe(true);
+    expect(payload.permissions.accessAllTags).toBe(false);
+    expect(payload.itemTagsSelected).toEqual(["spicy"]);
+  });
+
+  it("preserves an unmodeled server permission key (createEreader) on an unrelated edit", async () => {
+    // buildPayload seeds permissions from the LOADED object, so a newer-server
+    // key we don't surface in the form must round-trip untouched rather than be
+    // dropped (which, on a replace-semantics server, would revoke it).
+    (getUser as jest.Mock).mockResolvedValue({
+      ...JOE,
+      permissions: { ...JOE.permissions, createEreader: true },
+    });
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    fireEvent.press(screen.getByLabelText("Can upload"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Can upload").props.accessibilityState.checked).toBe(true)
+    );
+    fireEvent.press(screen.getByLabelText("Save user"));
+
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.upload).toBe(true); // the actual edit
+    expect(payload.permissions.createEreader).toBe(true); // untouched key survives
+  });
+
   it("the header Save button stays disabled until the form is dirty", async () => {
     await renderScreen({ userId: "u2" });
     await screen.findByText("joe");
@@ -331,6 +404,102 @@ describe("AdminUserDetailScreen — edit mode", () => {
     expect(await screen.findByText("joe")).toBeTruthy();
     expect(screen.getByLabelText("Save user")).toBeTruthy();
     expect(screen.queryByText(/Total listening time/)).toBeNull();
+  });
+});
+
+describe("AdminUserDetailScreen — tag access", () => {
+  // A tag-restricted user: allow-list of ["kids"], block-list flag + old-server
+  // top-level accessible-tags list present, to prove both are preserved.
+  const RESTRICTED = {
+    ...JOE,
+    permissions: {
+      ...JOE.permissions,
+      accessAllTags: false,
+      selectedTagsNotAccessible: false,
+    },
+    itemTagsSelected: ["kids"],
+    itemTagsAccessible: ["kids"],
+  };
+
+  it("renders the tag checklist with the user's tags checked and All-tags off", async () => {
+    (getUser as jest.Mock).mockResolvedValue(RESTRICTED);
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    // "All tags" toggle is OFF for a restricted user.
+    expect(screen.getByLabelText("All tags").props.accessibilityState.checked).toBe(false);
+    // Checklist reflects the loaded selection.
+    const kids = await screen.findByLabelText("Tag access: kids");
+    expect(kids.props.accessibilityState.checked).toBe(true);
+    expect(screen.getByLabelText("Tag access: teen").props.accessibilityState.checked).toBe(false);
+    expect(screen.getByLabelText("Tag access: adult").props.accessibilityState.checked).toBe(false);
+  });
+
+  it("checking another tag and saving sends the updated itemTagsSelected, preserving the block-list flag + old-server echo", async () => {
+    (getUser as jest.Mock).mockResolvedValue(RESTRICTED);
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    fireEvent.press(await screen.findByLabelText("Tag access: teen"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Tag access: teen").props.accessibilityState.checked).toBe(true)
+    );
+    fireEvent.press(screen.getByLabelText("Save user"));
+
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.accessAllTags).toBe(false);
+    expect([...payload.itemTagsSelected].sort()).toEqual(["kids", "teen"]);
+    // The no-UI block-list flag is echoed back UNCHANGED.
+    expect(payload.permissions.selectedTagsNotAccessible).toBe(false);
+    // Old-server top-level accessible-tags list still echoed.
+    expect(payload.itemTagsAccessible).toEqual(["kids"]);
+  });
+
+  it("flipping All-tags ON clears the selection (accessAllTags:true + itemTagsSelected:[])", async () => {
+    (getUser as jest.Mock).mockResolvedValue(RESTRICTED);
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    fireEvent.press(screen.getByLabelText("All tags"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("All tags").props.accessibilityState.checked).toBe(true)
+    );
+    // Checklist disappears once "All tags" is on.
+    expect(screen.queryByLabelText("Tag access: kids")).toBeNull();
+
+    fireEvent.press(screen.getByLabelText("Save user"));
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.accessAllTags).toBe(true);
+    expect(payload.itemTagsSelected).toEqual([]);
+    // Block-list flag still preserved even when granting all tags.
+    expect(payload.permissions.selectedTagsNotAccessible).toBe(false);
+  });
+
+  it("a getTags failure never blocks saving — the checklist just shows a helper", async () => {
+    (getTags as jest.Mock).mockRejectedValue(new AbsError("server", "boom", 500));
+    (getUser as jest.Mock).mockResolvedValue({
+      ...JOE,
+      permissions: { ...JOE.permissions, accessAllTags: false },
+      itemTagsSelected: [],
+    });
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    // The fetch FAILED ⇒ a distinct "couldn't load" helper (not the misleading
+    // "no tags defined" empty-server copy), and no rows.
+    expect(await screen.findByText(/Couldn't load the server's tags/)).toBeTruthy();
+    expect(screen.queryByText("No tags are defined on this server yet.")).toBeNull();
+    expect(screen.queryByLabelText(/^Tag access:/)).toBeNull();
+
+    // Saving still works (an unrelated edit).
+    await setField("Username", "joe2");
+    fireEvent.press(screen.getByLabelText("Save user"));
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.accessAllTags).toBe(false);
+    expect(payload.itemTagsSelected).toEqual([]);
   });
 });
 

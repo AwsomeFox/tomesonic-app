@@ -35,6 +35,12 @@ export interface AbsUserPermissions {
   upload: boolean;
   accessAllLibraries: boolean;
   accessAllTags: boolean;
+  /**
+   * Inverts the itemTagsSelected list from an allow-list into a block-list.
+   * There's no in-app UI to flip this; the user detail editor echoes it back
+   * unchanged so a server-configured block-list survives an unrelated edit.
+   */
+  selectedTagsNotAccessible?: boolean;
   accessExplicitContent: boolean;
   /** Added in newer servers — absent on older ones. */
   createEreader?: boolean;
@@ -171,6 +177,37 @@ export interface AbsListeningSession {
   updatedAt: number;
   /** Present on GET /api/sessions rows (admin listing joins the user). */
   user?: { id: string; username: string };
+  [key: string]: any;
+}
+
+/**
+ * A subset of ABS LibrarySettings the admin library editor exposes. The server
+ * carries more keys than this (metadata precedence, scan cron, mark-finished
+ * thresholds, …); an editor MUST merge its edits onto the loaded settings and
+ * send the whole object back, never a bare partial, or unexposed keys are lost.
+ */
+export interface AbsLibrarySettings {
+  /** 0 = Standard (book) cover, 1 = Square. */
+  coverAspectRatio?: number;
+  audiobooksOnly?: boolean;
+  hideSingleBookSeries?: boolean;
+  onlyShowLaterBooksInContinueSeries?: boolean;
+  disableWatcher?: boolean;
+  skipMatchingMediaWithAsin?: boolean;
+  skipMatchingMediaWithIsbn?: boolean;
+  [key: string]: any;
+}
+
+/** A library as returned by GET /api/libraries / GET /api/libraries/:id. */
+export interface AbsLibrary {
+  id: string;
+  name: string;
+  mediaType: "book" | "podcast";
+  provider?: string;
+  /** ABS icon key (see components/LibraryIcon ABS_ICON_MAP), e.g. "books-1". */
+  icon?: string;
+  folders?: Array<{ id?: string; fullPath: string }>;
+  settings?: AbsLibrarySettings;
   [key: string]: any;
 }
 
