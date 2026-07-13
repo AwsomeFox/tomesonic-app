@@ -35,6 +35,32 @@ export const ABS_ICON_MAP: Record<string, IconName> = {
   heart: "heart",
 };
 
+/**
+ * The pickable ABS library icons, in the ABS web-UI order. Sourced from the
+ * ABS_ICON_MAP keys so the picker can never offer a name LibraryIcon can't
+ * render (an unknown key would fall back to the media-type default). Raw ABS
+ * keys — the value stored on the library and sent back to the server.
+ */
+export const ABS_LIBRARY_ICONS: string[] = [
+  "database",
+  "audiobookshelf",
+  "books-1",
+  "books-2",
+  "book-1",
+  "microphone-1",
+  "microphone-3",
+  "radio",
+  "podcast",
+  "rss",
+  "headphones",
+  "music",
+  "file-picture",
+  "rocket",
+  "power",
+  "star",
+  "heart",
+].filter((key) => key in ABS_ICON_MAP);
+
 export function libraryIconName(icon?: string | null, mediaType?: string | null): IconName {
   if (icon && ABS_ICON_MAP[icon]) return ABS_ICON_MAP[icon];
   return mediaType === "podcast" ? "podcast" : "library";

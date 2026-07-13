@@ -19,6 +19,7 @@
  */
 import { api } from "../api";
 import { absRequest } from "./errors";
+import { encodeFilterValue } from "../filters";
 import type { AbsLibraryStats, AbsNarrator } from "./types";
 
 /**
@@ -109,4 +110,24 @@ export async function updateNarrator(
 
 export async function getLibraryFilterData(libraryId: string): Promise<any> {
   return absRequest(() => api.get(`/api/libraries/${libraryId}/filterdata`));
+}
+
+/**
+ * How many items in a library carry a given tag/genre. Uses the items endpoint
+ * with the same base64-then-URI filter encoding the UI filter modal uses
+ * (`tags.<enc>` / `genres.<enc>`) and limit:0 so the server returns only the
+ * `total` count, no item payloads. Tags/genres are server-wide but item counts
+ * are per-library — callers SUM this across every library for a global count.
+ */
+export async function getLibraryItemFilterCount(
+  libraryId: string,
+  type: "tags" | "genres",
+  value: string
+): Promise<number> {
+  const data = await absRequest<any>(() =>
+    api.get(`/api/libraries/${libraryId}/items`, {
+      params: { filter: `${type}.${encodeFilterValue(value)}`, limit: 0, minified: 1 },
+    })
+  );
+  return data?.total ?? 0;
 }

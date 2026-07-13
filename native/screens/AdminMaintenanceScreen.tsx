@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -30,6 +30,7 @@ import {
   getLibraryNarrators,
   updateNarrator,
   narratorNameToId,
+  getLibraryItemFilterCount,
 } from "../utils/abs/libraries";
 import type { AbsNarrator } from "../utils/abs/types";
 import { useLibraryStore } from "../store/useLibraryStore";
@@ -153,6 +154,79 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       cancelled = true;
     };
   }, [segment, retryTick, narratorLibraryId]);
+
+  // ---- tag/genre item counts -----------------------------------------------
+  // Tags/genres are server-wide, but item counts are PER-LIBRARY, so a value's
+  // displayed count is the SUM of getLibraryItemFilterCount across every
+  // library. Fetched LAZILY (only for the segment on screen), capped at 4
+  // in-flight requests via a global (value × library) task queue, and cached
+  // for the session so re-renders/segment-switches never refetch. A fetch
+  // failure degrades to no subtitle — it never swaps the screen to ErrorState.
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const countAttemptedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (segment === "narrators") return;
+    if (loading || error) return;
+    const type: "tags" | "genres" = segment;
+    const values = segment === "tags" ? tags : genres;
+    const libIds = storeLibraries.map((l) => l.id).filter(Boolean);
+    if (values.length === 0 || libIds.length === 0) return;
+
+    // Only enqueue values we haven't already tried this session.
+    const pending = values.filter((v) => !countAttemptedRef.current.has(`${type}:${v}`));
+    if (pending.length === 0) return;
+    pending.forEach((v) => countAttemptedRef.current.add(`${type}:${v}`));
+
+    let cancelled = false;
+    // One task per (value, library) pair so TOTAL in-flight requests stay
+    // capped regardless of how many libraries the server has.
+    const tasks: { value: string; libId: string }[] = [];
+    pending.forEach((value) => libIds.forEach((libId) => tasks.push({ value, libId })));
+    const acc: Record<string, number> = {};
+    const remaining: Record<string, number> = {};
+    const failed = new Set<string>();
+    pending.forEach((v) => {
+      acc[v] = 0;
+      remaining[v] = libIds.length;
+    });
+
+    let index = 0;
+    const CONCURRENCY = 4;
+    const worker = async () => {
+      while (!cancelled && index < tasks.length) {
+        const { value, libId } = tasks[index++];
+        try {
+          const n = await getLibraryItemFilterCount(libId, type, value);
+          acc[value] += n;
+        } catch {
+          // A failing library marks the whole value failed → no subtitle,
+          // rather than an understated partial or a screen-level error.
+          failed.add(value);
+        }
+        if (cancelled) return;
+        remaining[value] -= 1;
+        if (remaining[value] === 0 && !failed.has(value)) {
+          const total = acc[value];
+          setCounts((prev) => ({ ...prev, [`${type}:${value}`]: total }));
+        }
+      }
+    };
+    const workers = Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, () => worker());
+    Promise.all(workers).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // `counts` is deliberately NOT a dep — the attempted-set guard already
+    // prevents refetch, and depending on it would respawn workers per resolve.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segment, tags, genres, loading, error, storeLibraries]);
+
+  const countSubtitle = (type: "tags" | "genres", value: string): string | undefined => {
+    const n = counts[`${type}:${value}`];
+    if (n === undefined) return undefined;
+    return `${n} item${n === 1 ? "" : "s"}`;
+  };
 
   const reload = () => setRetryTick((t) => t + 1);
 
@@ -390,8 +464,10 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   type ValueRow = { name: string; subtitle?: string; canDelete: boolean };
   const rows: ValueRow[] = useMemo(() => {
     if (loading || error) return [];
-    if (segment === "tags") return tags.map((t) => ({ name: t, canDelete: true }));
-    if (segment === "genres") return genres.map((g) => ({ name: g, canDelete: true }));
+    if (segment === "tags")
+      return tags.map((t) => ({ name: t, subtitle: countSubtitle("tags", t), canDelete: true }));
+    if (segment === "genres")
+      return genres.map((g) => ({ name: g, subtitle: countSubtitle("genres", g), canDelete: true }));
     if (!narratorLibraryId) return [];
     return narrators.map((n) => ({
       name: n.name,
@@ -399,7 +475,7 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       // No delete endpoint for narrators — rename-to-merge is the cleanup.
       canDelete: false,
     }));
-  }, [loading, error, segment, tags, genres, narrators, narratorLibraryId]);
+  }, [loading, error, segment, tags, genres, narrators, narratorLibraryId, counts]);
 
   const renderListEmpty = () => {
     if (loading) {

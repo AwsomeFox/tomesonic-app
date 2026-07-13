@@ -25,6 +25,7 @@ import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { narratorNameToId } from "../../utils/abs/libraries";
+import { encodeFilterValue } from "../../utils/filters";
 
 const initialLibraryState = useLibraryStore.getState();
 
@@ -49,6 +50,14 @@ function mockGets({
       return Promise.resolve({ data: { narrators } });
     if (url === "/api/libraries/lib3/narrators")
       return Promise.resolve({ data: { narrators: LIB3_NARRATORS } });
+    // Per-library item counts for tags/genres. Distinct per library so a
+    // summed total (5 + 0 + 2 = 7) is verifiable across all three libraries.
+    const items = url.match(/^\/api\/libraries\/(\w+)\/items$/);
+    if (items) {
+      const id = items[1];
+      const total = id === "lib1" ? 5 : id === "lib3" ? 2 : 0;
+      return Promise.resolve({ data: { total } });
+    }
     return Promise.resolve({ data: {} });
   });
 }
@@ -184,6 +193,55 @@ describe("AdminMaintenanceScreen — tags", () => {
       });
     });
     expect(tagCalls()).toBe(1);
+  });
+
+  it("fills an 'N items' subtitle lazily, summed across every library", async () => {
+    await renderScreen();
+    // Names render first (no blocking spinner gated on counts).
+    expect(await screen.findByText("Fiction")).toBeTruthy();
+    expect(screen.getByText("Science Fiction")).toBeTruthy();
+
+    // The count endpoint is hit per library with the base64+URI filter the UI
+    // filter modal uses, limit:0 so only the total comes back.
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith("/api/libraries/lib1/items", {
+        params: { filter: `tags.${encodeFilterValue("Fiction")}`, limit: 0, minified: 1 },
+      })
+    );
+    expect(api.get).toHaveBeenCalledWith("/api/libraries/lib2/items", expect.anything());
+    expect(api.get).toHaveBeenCalledWith("/api/libraries/lib3/items", expect.anything());
+
+    // Summed 5 + 0 + 2 = 7 across the three libraries, for each of the 2 tags.
+    const subtitles = await screen.findAllByText("7 items");
+    expect(subtitles.length).toBe(2);
+  });
+
+  it("a count-fetch failure degrades gracefully — name stays, no subtitle, no ErrorState", async () => {
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/tags") return Promise.resolve({ data: { tags: TAGS } });
+      if (url === "/api/genres") return Promise.resolve({ data: { genres: GENRES } });
+      if (/^\/api\/libraries\/\w+\/items$/.test(url))
+        return Promise.reject(
+          Object.assign(new Error("boom"), { response: { status: 500, data: "" } })
+        );
+      return Promise.resolve({ data: {} });
+    });
+    await renderScreen();
+
+    expect(await screen.findByText("Fiction")).toBeTruthy();
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/api\/libraries\/\w+\/items$/),
+        expect.anything()
+      )
+    );
+
+    // The name persists; no count subtitle was set and the screen never
+    // swapped to an ErrorState.
+    expect(screen.getByText("Fiction")).toBeTruthy();
+    expect(screen.queryByText(/\d+ items?$/)).toBeNull();
+    expect(screen.queryByText("Something went wrong")).toBeNull();
+    expect(screen.queryByText("You're offline")).toBeNull();
   });
 
   it("cancelling an inline rename restores the row without a dialog", async () => {
