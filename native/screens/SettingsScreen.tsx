@@ -25,6 +25,7 @@ import {
   NavRow,
 } from '../components/SettingsRows';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
+import { refreshCapabilities, useServerCapabilities } from '../utils/abs/capabilities';
 import BottomSheet from '../components/BottomSheet';
 import RmabSsoLoginModal from '../components/RmabSsoLoginModal';
 import RmabSessionExpiredBanner from '../components/RmabSessionExpiredBanner';
@@ -76,6 +77,19 @@ export default function SettingsScreen({ navigation, route }: any) {
   const settings = useUserStore((state) => state.settings);
   const updateUserSettings = useUserStore((state) => state.updateUserSettings);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
+
+  // Server-admin entry gating. A cold-restored session only persists a thin
+  // {id, username} user — no `type` — so the admin section would stay hidden
+  // for an admin until something rehydrates the full user. Fire the (never-
+  // throwing) refresh once when the role is unknown; the row then appears as
+  // soon as /api/authorize answers. Row visibility itself always reads the
+  // store's CURRENT knowledge via useServerCapabilities().
+  const capabilities = useServerCapabilities();
+  React.useEffect(() => {
+    if (user && user.type === undefined) void refreshCapabilities();
+    // Mount-only: one hydration attempt per visit is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Which dropdown modal is open (null = none).
   const [openPicker, setOpenPicker] = React.useState<
@@ -248,6 +262,24 @@ export default function SettingsScreen({ navigation, route }: any) {
           onPress={() => navigation.navigate('Account')}
           colors={colors}
         />
+
+        {/* ── SERVER ADMINISTRATION (admin/root only) ── */}
+        {capabilities.isAdmin ? (
+          <>
+            <SectionHeader label="Server administration" colors={colors} />
+            <NavRow
+              icon="settings"
+              title="Manage server"
+              subtitle={
+                capabilities.serverVersion
+                  ? `Audiobookshelf v${capabilities.serverVersion}`
+                  : 'Libraries, users, and server tools'
+              }
+              onPress={() => navigation.navigate('ServerAdmin')}
+              colors={colors}
+            />
+          </>
+        ) : null}
 
         {/* ── USER INTERFACE SETTINGS ── */}
         <SectionHeader label="User Interface Settings" colors={colors} />

@@ -67,11 +67,20 @@ jest.mock("../../utils/rmab", () => {
   return { ...actual, getRmabAuthProviders: jest.fn() };
 });
 
+// Real capability math (useServerCapabilities reads the user store), but a
+// mocked refreshCapabilities so the cold-restore hydration effect can't fire a
+// live POST /api/authorize and tests can assert it was requested.
+jest.mock("../../utils/abs/capabilities", () => {
+  const actual = jest.requireActual("../../utils/abs/capabilities");
+  return { ...actual, refreshCapabilities: jest.fn().mockResolvedValue(undefined) };
+});
+
 import React from "react";
 import { Linking } from "react-native";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import SettingsScreen from "../../screens/SettingsScreen";
 import { getRmabAuthProviders } from "../../utils/rmab";
+import { refreshCapabilities } from "../../utils/abs/capabilities";
 import { useUserStore } from "../../store/useUserStore";
 import { useThemeStore } from "../../store/useThemeStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -233,6 +242,56 @@ describe("SettingsScreen", () => {
 
     await fireEvent.press(screen.getByLabelText(/^GitHub/));
     expect(openSpy).toHaveBeenCalledWith("https://github.com/AwsomeFox/tomesonic-app");
+  });
+
+  describe("Server administration section", () => {
+    it("shows the section for an admin and navigates to the ServerAdmin hub", async () => {
+      useUserStore.setState({
+        user: { id: "u1", username: "tony", type: "admin", permissions: {} },
+      } as any);
+      const navigation = await renderSettings();
+
+      expect(screen.getByText("Server administration")).toBeTruthy();
+      await fireEvent.press(screen.getByLabelText(/^Manage server/));
+      expect(navigation.navigate).toHaveBeenCalledWith("ServerAdmin");
+    });
+
+    it("shows the known server version as the row subtitle", async () => {
+      useUserStore.setState({
+        user: { id: "u1", username: "tony", type: "root", permissions: {} },
+        serverConnectionConfig: { address: "https://abs.test", token: "t", version: "2.26.3" },
+      } as any);
+      await renderSettings();
+      expect(screen.getByLabelText("Manage server, Audiobookshelf v2.26.3")).toBeTruthy();
+    });
+
+    it("hides the section for a non-admin user (even with the update permission)", async () => {
+      useUserStore.setState({
+        user: { id: "u2", username: "pat", type: "user", permissions: { update: true } },
+      } as any);
+      await renderSettings();
+      expect(screen.queryByText("Server administration")).toBeNull();
+      expect(screen.queryByLabelText(/^Manage server/)).toBeNull();
+      // Role already known → no hydration round-trip.
+      expect(refreshCapabilities).not.toHaveBeenCalled();
+    });
+
+    it("cold-restore thin user: section hidden but a capability refresh is requested", async () => {
+      // Restored session persists only {id, username} — no role yet.
+      useUserStore.setState({ user: { id: "u1", username: "tony" } } as any);
+      await renderSettings();
+
+      expect(screen.queryByText("Server administration")).toBeNull();
+      expect(refreshCapabilities).toHaveBeenCalledTimes(1);
+
+      // The row appears as soon as /api/authorize hydrates the full admin user.
+      await act(async () => {
+        useUserStore.setState({
+          user: { id: "u1", username: "tony", type: "admin", permissions: {} },
+        } as any);
+      });
+      expect(screen.getByText("Server administration")).toBeTruthy();
+    });
   });
 
   describe("ReadMeABook section", () => {
