@@ -7,6 +7,10 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  AccessibilityInfo,
+  findNodeHandle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -124,6 +128,29 @@ export default function AdminEmailScreen({ navigation }: any) {
   const [deviceEmail, setDeviceEmail] = React.useState("");
   const [savingDevice, setSavingDevice] = React.useState(false);
 
+  // Device-modal a11y (mirrors AppDialog's on-open pattern): RN Modal doesn't
+  // move screen-reader focus or announce itself on Android, so on open we
+  // focus the title and announce the dialog's purpose.
+  const deviceModalTitleRef = React.useRef<Text>(null);
+  React.useEffect(() => {
+    if (!showDeviceModal) return;
+    const title = editingDeviceIndex == null ? "Add device" : "Edit device";
+    const t = setTimeout(() => {
+      if (Platform.OS === "android") {
+        const node = findNodeHandle(deviceModalTitleRef.current);
+        if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
+      }
+      AccessibilityInfo.announceForAccessibility(
+        `${title}. Server-wide e-reader device — enter a name and email.`
+      );
+    }, 50);
+    return () => clearTimeout(t);
+    // editingDeviceIndex is part of the title but only changes while the modal
+    // is CLOSED (openAdd/openEdit set it before opening) — keying on the modal
+    // visibility alone avoids re-announcing mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDeviceModal]);
+
   // Seed the form from a server settings blob. The pass field is ALWAYS reset
   // to empty — even if the server echoed a stored/masked password, it must
   // never appear (or round-trip) through the form.
@@ -179,6 +206,32 @@ export default function AdminEmailScreen({ navigation }: any) {
   }, [settings, host, port, secure, smtpUser, fromAddress, testAddress, pass]);
 
   const dirty = React.useMemo(() => Object.keys(buildPatch()).length > 0, [buildPatch]);
+
+  // Unsaved-changes guard (ChapterEditor pattern): intercept ANY navigation
+  // that would remove this screen — header back AND hardware back — while the
+  // SMTP form is dirty. Refs keep the listener stable across re-renders.
+  const dirtyRef = React.useRef(false);
+  dirtyRef.current = dirty && !saving;
+  React.useEffect(() => {
+    if (!navigation?.addListener) return;
+    const unsub = navigation.addListener("beforeRemove", (e: any) => {
+      if (!dirtyRef.current) return;
+      e.preventDefault();
+      showAppDialog({
+        title: "Discard email changes?",
+        message: "You have unsaved SMTP settings edits. Nothing has been sent to the server yet.",
+        buttons: [
+          { text: "Keep editing", style: "cancel" },
+          {
+            text: "Discard",
+            style: "destructive",
+            onPress: () => navigation.dispatch(e.data.action),
+          },
+        ],
+      });
+    });
+    return unsub;
+  }, [navigation]);
 
   const handleSave = async () => {
     if (!dirty || saving || !settings) return;
@@ -253,8 +306,17 @@ export default function AdminEmailScreen({ navigation }: any) {
     if (savingDevice) return;
     const name = deviceName.trim();
     const email = deviceEmail.trim();
-    if (!name || !email || !email.includes("@")) {
-      showAppDialog({ title: "Error", message: "Enter a device name and a valid email address." });
+    // Specific validation titles (not a generic "Error") so the dialog itself
+    // says what to fix.
+    if (!name) {
+      showAppDialog({ title: "Device name required", message: "Enter a name for the device." });
+      return;
+    }
+    if (!email || !email.includes("@")) {
+      showAppDialog({
+        title: "Valid email required",
+        message: "Enter a valid email address for the device.",
+      });
       return;
     }
     // ABS requires device names to be unique — catch it before the server 400s.
@@ -262,7 +324,10 @@ export default function AdminEmailScreen({ navigation }: any) {
       (d, i) => i !== editingDeviceIndex && (d.name || "").toLowerCase() === name.toLowerCase()
     );
     if (clash) {
-      showAppDialog({ title: "Error", message: "A device with that name already exists." });
+      showAppDialog({
+        title: "Device name already used",
+        message: "A device with that name already exists.",
+      });
       return;
     }
     const next =
@@ -466,27 +531,33 @@ export default function AdminEmailScreen({ navigation }: any) {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }}>
-      {/* Settings-family header: back + title + trailing Save */}
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
+      {/* Settings-family header (20/700 + hairline, same spec as the other
+          admin screens): back + title + trailing Save */}
       <View
         style={{
           flexDirection: "row",
           alignItems: "center",
-          paddingTop: 8,
-          paddingBottom: 12,
           paddingHorizontal: 16,
+          paddingVertical: 14,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.outlineVariant,
         }}
       >
         <Pressable
           onPress={() => navigation.goBack()}
           hitSlop={8}
-          style={{ paddingRight: 16, paddingVertical: 4 }}
+          style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", marginRight: 4 }}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
-          <Icon name="back" size={26} color={colors.onSurface} />
+          <Icon name="back" size={24} color={colors.onSurface} />
         </Pressable>
-        <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "600", flex: 1 }}>
+        <Text
+          accessibilityRole="header"
+          numberOfLines={1}
+          style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700", flex: 1 }}
+        >
           Email
         </Text>
         {settings ? (
@@ -525,8 +596,18 @@ export default function AdminEmailScreen({ navigation }: any) {
         transparent
         onRequestClose={closeDeviceModal}
       >
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
+        {/* KeyboardAvoidingView + ScrollView so the email field (and Save row)
+            stay reachable while the keyboard is up on small screens. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }}
+        >
+          <ScrollView
+            contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}
+            keyboardShouldPersistTaps="handled"
+          >
           <View
+            accessibilityViewIsModal
             style={{
               backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
               borderRadius: 28,
@@ -534,7 +615,11 @@ export default function AdminEmailScreen({ navigation }: any) {
               elevation: 5,
             }}
           >
-            <Text style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}>
+            <Text
+              ref={deviceModalTitleRef}
+              accessibilityRole="header"
+              style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}
+            >
               {editingDeviceIndex == null ? "Add device" : "Edit device"}
             </Text>
             <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginBottom: 20 }}>
@@ -547,7 +632,7 @@ export default function AdminEmailScreen({ navigation }: any) {
             <TextInput
               value={deviceName}
               onChangeText={setDeviceName}
-              autoCapitalize="none"
+              autoCapitalize="words"
               autoCorrect={false}
               placeholder="Kindle"
               placeholderTextColor={colors.onSurfaceVariant}
@@ -619,7 +704,8 @@ export default function AdminEmailScreen({ navigation }: any) {
               </Pressable>
             </View>
           </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

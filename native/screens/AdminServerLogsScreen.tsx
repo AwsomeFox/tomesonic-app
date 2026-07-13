@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, Pressable } from "react-native";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { View, Text, FlatList, ActivityIndicator, Pressable, RefreshControl } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -126,14 +126,62 @@ export default function AdminServerLogsScreen({ navigation }: any) {
     [entries, levelFilter]
   );
 
-  const LEVEL_COLORS: Record<string, string> = {
-    FATAL: colors.error,
-    ERROR: colors.error,
-    WARN: colors.tertiary,
-    INFO: colors.primary,
-    DEBUG: colors.onSurfaceVariant,
-    TRACE: colors.onSurfaceVariant,
-  };
+  const LEVEL_COLORS: Record<string, string> = useMemo(
+    () => ({
+      FATAL: colors.error,
+      ERROR: colors.error,
+      WARN: colors.tertiary,
+      INFO: colors.primary,
+      DEBUG: colors.onSurfaceVariant,
+      TRACE: colors.onSurfaceVariant,
+    }),
+    [colors]
+  );
+
+  // FlatList row — a busy server's snapshot can run to thousands of lines, so
+  // the list is virtualized (ScrollView+map rendered every row up front).
+  const renderLogEntry = useCallback(
+    ({ item: entry, index }: { item: any; index: number }) => {
+      const level = levelOf(entry);
+      return (
+        <View
+          style={{
+            paddingVertical: 10,
+            paddingHorizontal: 16,
+            backgroundColor: index % 2 === 0 ? colors.surfaceContainerLowest : "transparent",
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
+            <Text
+              style={{
+                color: LEVEL_COLORS[level] || colors.primary,
+                fontSize: 12,
+                fontWeight: "700",
+                letterSpacing: 0.5,
+              }}
+            >
+              {level}
+            </Text>
+            {entry?.timestamp ? (
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginLeft: 12 }}>
+                {String(entry.timestamp)}
+              </Text>
+            ) : null}
+            <View style={{ flex: 1 }} />
+            {entry?.source ? (
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }} numberOfLines={1}>
+                {String(entry.source)}
+              </Text>
+            ) : null}
+          </View>
+          <Text style={{ color: colors.onSurface, fontSize: 13, lineHeight: 19 }}>
+            {String(entry?.message ?? "")}
+          </Text>
+        </View>
+      );
+    },
+    [colors, LEVEL_COLORS]
+  );
 
   const unsupported = error?.kind === "unsupported";
 
@@ -208,110 +256,86 @@ export default function AdminServerLogsScreen({ navigation }: any) {
           onRetry={() => setRetryTick((t) => t + 1)}
         />
       ) : (
-        <>
-          {/* Snapshot caption — sets expectations that this is not a live tail. */}
-          <Text
-            style={{
-              color: colors.onSurfaceVariant,
-              fontSize: 12,
-              paddingHorizontal: 16,
-              paddingTop: 8,
-              paddingBottom: 4,
-            }}
-          >
-            Snapshot of today's server log
-            {updatedAt ? ` · updated ${updatedAt.toLocaleTimeString()}` : ""} — refresh for new
-            entries.
-          </Text>
+        <FlatList
+          testID="server-logs-list"
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 24 }}
+          data={visibleEntries}
+          keyExtractor={(entry, index) => `${entry?.timestamp ?? ""}-${index}`}
+          renderItem={renderLogEntry}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={colors.primary}
+            />
+          }
+          ListHeaderComponent={
+            <>
+              {/* Snapshot caption — sets expectations that this is not a live tail. */}
+              <Text
+                style={{
+                  color: colors.onSurfaceVariant,
+                  fontSize: 12,
+                  paddingHorizontal: 16,
+                  paddingTop: 8,
+                  paddingBottom: 4,
+                }}
+              >
+                Snapshot of today's server log
+                {updatedAt ? ` · updated ${updatedAt.toLocaleTimeString()}` : ""} — refresh for new
+                entries.
+              </Text>
 
-          {/* Level filter chips (LogsScreen idiom) */}
-          <View style={{ flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 16, paddingBottom: 8, columnGap: 8, rowGap: 8 }}>
-            {levelChips.map((lvl) => {
-              const selected = levelFilter === lvl;
-              return (
-                <Pressable
-                  key={lvl}
-                  onPress={() => setLevelFilter(lvl)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={lvl === "ALL" ? "Show all logs" : `Show ${lvl.toLowerCase()} logs`}
-                  style={{
-                    paddingHorizontal: 14,
-                    paddingVertical: 6,
-                    borderRadius: 16,
-                    backgroundColor: selected ? colors.secondaryContainer : "transparent",
-                    borderWidth: 1,
-                    borderColor: selected ? "transparent" : colors.outlineVariant,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
-                      fontSize: 13,
-                      fontWeight: "600",
-                    }}
-                  >
-                    {lvl === "ALL" ? "All" : lvl.charAt(0) + lvl.slice(1).toLowerCase()}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }}>
-            {visibleEntries.length === 0 ? (
-              <View style={{ paddingTop: 48, alignItems: "center" }}>
-                <Text style={{ color: colors.onSurfaceVariant, fontSize: 14 }}>
-                  {entries.length === 0
-                    ? "No log entries in today's snapshot"
-                    : `No ${levelFilter.toLowerCase()} logs`}
-                </Text>
-              </View>
-            ) : (
-              visibleEntries.map((entry, index) => {
-                const level = levelOf(entry);
-                return (
-                  <View
-                    key={index}
-                    style={{
-                      paddingVertical: 10,
-                      paddingHorizontal: 16,
-                      backgroundColor:
-                        index % 2 === 0 ? colors.surfaceContainerLowest : "transparent",
-                    }}
-                  >
-                    <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
+              {/* Level filter chips (LogsScreen idiom; 34dp + vertical hitSlop for
+                  a ~46dp effective touch target, matching the sibling chips). */}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 16, paddingBottom: 8, columnGap: 8, rowGap: 8 }}>
+                {levelChips.map((lvl) => {
+                  const selected = levelFilter === lvl;
+                  return (
+                    <Pressable
+                      key={lvl}
+                      onPress={() => setLevelFilter(lvl)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={lvl === "ALL" ? "Show all logs" : `Show ${lvl.toLowerCase()} logs`}
+                      hitSlop={{ top: 6, bottom: 6 }}
+                      style={{
+                        paddingHorizontal: 14,
+                        height: 34,
+                        borderRadius: 17,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: selected ? colors.secondaryContainer : "transparent",
+                        borderWidth: 1,
+                        borderColor: selected ? "transparent" : colors.outlineVariant,
+                      }}
+                    >
                       <Text
                         style={{
-                          color: LEVEL_COLORS[level] || colors.primary,
-                          fontSize: 12,
-                          fontWeight: "700",
-                          letterSpacing: 0.5,
+                          color: selected ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                          fontSize: 13,
+                          fontWeight: "600",
                         }}
                       >
-                        {level}
+                        {lvl === "ALL" ? "All" : lvl.charAt(0) + lvl.slice(1).toLowerCase()}
                       </Text>
-                      {entry?.timestamp ? (
-                        <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginLeft: 12 }}>
-                          {String(entry.timestamp)}
-                        </Text>
-                      ) : null}
-                      <View style={{ flex: 1 }} />
-                      {entry?.source ? (
-                        <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }} numberOfLines={1}>
-                          {String(entry.source)}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Text style={{ color: colors.onSurface, fontSize: 13, lineHeight: 19 }}>
-                      {String(entry?.message ?? "")}
-                    </Text>
-                  </View>
-                );
-              })
-            )}
-          </ScrollView>
-        </>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </>
+          }
+          ListEmptyComponent={
+            <View style={{ paddingTop: 48, alignItems: "center" }}>
+              <Text style={{ color: colors.onSurfaceVariant, fontSize: 14 }}>
+                {entries.length === 0
+                  ? "No log entries in today's snapshot"
+                  : `No ${levelFilter.toLowerCase()} logs`}
+              </Text>
+            </View>
+          }
+        />
       )}
     </SafeAreaView>
   );

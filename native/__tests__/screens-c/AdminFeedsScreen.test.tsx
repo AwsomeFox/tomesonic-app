@@ -173,11 +173,15 @@ describe("AdminFeedsScreen", () => {
     expect(showSnackbar).toHaveBeenCalledWith({ message: "Link copied" });
   });
 
-  it("shows the empty state when no feeds are open", async () => {
+  it("shows the empty state when no feeds are open, pointing at the web dashboard (no in-app open flow)", async () => {
     mockFeeds([]);
     await renderScreen();
 
     expect(await screen.findByText("No open feeds")).toBeTruthy();
+    // The copy must reflect reality: feeds are opened from the Audiobookshelf
+    // web dashboard — the app has no open-feed flow (tracked separately).
+    expect(screen.getByText(/web dashboard/)).toBeTruthy();
+    expect(screen.queryByText(/podcast, series, or collection/)).toBeNull();
   });
 
   it("offline load failure shows the offline error state, and Retry refetches", async () => {

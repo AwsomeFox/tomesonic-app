@@ -52,6 +52,27 @@ function describeLoadError(e: any): { title: string; message: string } {
   }
 }
 
+// Human text for the server's backup cron ("30 1 * * *" → "daily at 1:30 AM").
+// Only the common daily/weekly shapes are prettified; anything else falls back
+// to showing the raw cron so the admin still sees SOMETHING accurate.
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function describeCron(cron: string): string {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length === 5) {
+    const [min, hour, dom, mon, dow] = parts;
+    if (dom === "*" && mon === "*" && /^\d+$/.test(min) && /^\d+$/.test(hour)) {
+      const d = new Date();
+      d.setHours(Number(hour), Number(min), 0, 0);
+      const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      if (dow === "*") return `daily at ${time}`;
+      if (/^\d+$/.test(dow) && WEEKDAYS[Number(dow) % 7]) {
+        return `weekly on ${WEEKDAYS[Number(dow) % 7]} at ${time}`;
+      }
+    }
+  }
+  return `on schedule ${cron}`;
+}
+
 // Action failures (create/delete) surface as dialogs so the list stays put.
 function actionErrorMessage(e: any): string {
   if (e?.kind === "offline") return "You're offline. Reconnect and try again.";
@@ -64,6 +85,11 @@ export default function AdminBackupsScreen({ navigation }: any) {
 
   const [backups, setBackups] = useState<AbsBackup[]>([]);
   const [backupLocation, setBackupLocation] = useState<string>("");
+  // Automatic-backup config from GET /api/backups: the cron (or false when
+  // disabled) and the rotation count. Read-only here — editing the schedule
+  // stays on the web dashboard.
+  const [backupSchedule, setBackupSchedule] = useState<string | false | null>(null);
+  const [backupsToKeep, setBackupsToKeep] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<any>(null);
@@ -71,6 +97,20 @@ export default function AdminBackupsScreen({ navigation }: any) {
   const [creating, setCreating] = useState(false);
   // Backup id currently being deleted (dims its row, guards double-taps).
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Seed list + automatic-backup summary from a GET /api/backups payload. The
+  // schedule fields ride along on the same response (typed loosely because the
+  // utils return type only declares the list fields).
+  const applySnapshot = (data: any) => {
+    setBackups(Array.isArray(data?.backups) ? data.backups : []);
+    setBackupLocation(data?.backupLocation || "");
+    setBackupSchedule(
+      typeof data?.backupSchedule === "string" || data?.backupSchedule === false
+        ? data.backupSchedule
+        : null
+    );
+    setBackupsToKeep(typeof data?.backupsToKeep === "number" ? data.backupsToKeep : null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -80,8 +120,7 @@ export default function AdminBackupsScreen({ navigation }: any) {
       try {
         const data = await getBackups();
         if (cancelled) return;
-        setBackups(Array.isArray(data?.backups) ? data.backups : []);
-        setBackupLocation(data?.backupLocation || "");
+        applySnapshot(data);
       } catch (e) {
         if (cancelled) return;
         setError(e);
@@ -99,8 +138,7 @@ export default function AdminBackupsScreen({ navigation }: any) {
     setRefreshing(true);
     try {
       const data = await getBackups();
-      setBackups(Array.isArray(data?.backups) ? data.backups : []);
-      setBackupLocation(data?.backupLocation || "");
+      applySnapshot(data);
       setError(null);
     } catch (e) {
       // Pull-to-refresh failure on an already-rendered list: keep the stale
@@ -259,17 +297,43 @@ export default function AdminBackupsScreen({ navigation }: any) {
             </Text>
           </View>
 
-          {backupLocation ? (
-            <Text
+          {/* Automatic-backup summary (read-only): the server's cron schedule,
+              rotation count, and target location — so an admin can tell at a
+              glance that scheduled backups are configured. Editing the
+              schedule stays on the web dashboard. */}
+          {backupSchedule != null || backupsToKeep != null || backupLocation ? (
+            <View
               style={{
-                color: colors.onSurfaceVariant,
-                fontSize: 12,
-                paddingHorizontal: 20,
-                paddingTop: 12,
+                marginHorizontal: 16,
+                marginTop: 12,
+                padding: 12,
+                borderRadius: 12,
+                backgroundColor: colors.surfaceContainer,
               }}
             >
-              Backup location: {backupLocation}
-            </Text>
+              <Text style={{ color: colors.onSurface, fontSize: 14, fontWeight: "600", marginBottom: 4 }}>
+                Automatic backups
+              </Text>
+              {typeof backupSchedule === "string" && backupSchedule ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>
+                  Runs {describeCron(backupSchedule)}
+                </Text>
+              ) : backupSchedule === false ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>
+                  Off — backups only run when you create one
+                </Text>
+              ) : null}
+              {backupsToKeep != null ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>
+                  Keeps the {backupsToKeep} most recent {backupsToKeep === 1 ? "backup" : "backups"}
+                </Text>
+              ) : null}
+              {backupLocation ? (
+                <Text style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>
+                  Backup location: {backupLocation}
+                </Text>
+              ) : null}
+            </View>
           ) : null}
 
           {backups.length === 0 ? (

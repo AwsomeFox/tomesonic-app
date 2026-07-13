@@ -17,6 +17,7 @@ jest.mock("../../store/useDialogStore", () => ({
 }));
 
 import React from "react";
+import { AccessibilityInfo } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import AdminEmailScreen from "../../screens/AdminEmailScreen";
 import { api } from "../../utils/api";
@@ -51,7 +52,20 @@ function mockGetSettings(settings: any = SETTINGS) {
 }
 
 function makeNavigation() {
-  return { goBack: jest.fn(), navigate: jest.fn() } as any;
+  // Capture listeners so tests can emit navigation events (beforeRemove) at
+  // the screen, ChapterEditor-suite style.
+  const listeners: Record<string, Array<(e: any) => void>> = {};
+  const navigation: any = {
+    goBack: jest.fn(),
+    navigate: jest.fn(),
+    dispatch: jest.fn(),
+    addListener: jest.fn((event: string, cb: (e: any) => void) => {
+      (listeners[event] ||= []).push(cb);
+      return jest.fn();
+    }),
+    emit: (event: string, e: any) => (listeners[event] || []).forEach((cb) => cb(e)),
+  };
+  return navigation;
 }
 
 async function renderLoaded() {
@@ -227,14 +241,26 @@ describe("AdminEmailScreen", () => {
     expect(snackbarMessage()).toBe("Device added");
   });
 
-  it("validates device name/email and duplicate names before posting", async () => {
+  it("validates device name/email and duplicate names before posting, with specific dialog titles", async () => {
     mockGetSettings();
     await renderLoaded();
 
+    // Nothing entered → the missing NAME is called out first (not a generic
+    // "Error").
     await fireEvent.press(screen.getByText("Add device"));
     await fireEvent.press(screen.getByLabelText("Save device"));
     expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Error", message: expect.stringMatching(/valid email/i) })
+      expect.objectContaining({ title: "Device name required" })
+    );
+
+    // Name present but no usable email.
+    await fireEvent.changeText(screen.getByLabelText("Device name"), "Kobo");
+    await fireEvent.press(screen.getByLabelText("Save device"));
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Valid email required",
+        message: expect.stringMatching(/valid email/i),
+      })
     );
 
     // Duplicate of the existing "Kindle" device (case-insensitive).
@@ -242,7 +268,10 @@ describe("AdminEmailScreen", () => {
     await fireEvent.changeText(screen.getByLabelText("Device email"), "x@kindle.com");
     await fireEvent.press(screen.getByLabelText("Save device"));
     expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Error", message: expect.stringMatching(/already exists/i) })
+      expect.objectContaining({
+        title: "Device name already used",
+        message: expect.stringMatching(/already exists/i),
+      })
     );
     expect(api.post).not.toHaveBeenCalled();
   });
@@ -318,5 +347,79 @@ describe("AdminEmailScreen", () => {
     // Edits preserved for another attempt.
     expect(screen.getByDisplayValue("smtp2.example.com")).toBeTruthy();
     expect(snackbarMessage()).toBeUndefined();
+  });
+
+  describe("unsaved-changes guard (beforeRemove)", () => {
+    it("intercepts leaving with a dirty form; Discard proceeds with the blocked action", async () => {
+      mockGetSettings();
+      const navigation = await renderLoaded();
+
+      await fireEvent.changeText(screen.getByLabelText("SMTP host"), "smtp2.example.com");
+
+      const event = { preventDefault: jest.fn(), data: { action: { type: "GO_BACK" } } };
+      await act(async () => {
+        navigation.emit("beforeRemove", event);
+      });
+
+      // Navigation blocked + discard confirm shown.
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Discard email changes?" })
+      );
+
+      const dialog = alertSpy.mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Discard email changes?");
+      expect(dialog.buttons.find((b: any) => b.text === "Keep editing").style).toBe("cancel");
+      const discard = dialog.buttons.find((b: any) => b.text === "Discard");
+      expect(discard.style).toBe("destructive");
+
+      discard.onPress();
+      expect(navigation.dispatch).toHaveBeenCalledWith({ type: "GO_BACK" });
+    });
+
+    it("lets a clean form leave without interception", async () => {
+      mockGetSettings();
+      const navigation = await renderLoaded();
+
+      const event = { preventDefault: jest.fn(), data: { action: { type: "GO_BACK" } } };
+      await act(async () => {
+        navigation.emit("beforeRemove", event);
+      });
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(alertSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Discard email changes?" })
+      );
+    });
+  });
+
+  describe("header + device-modal accessibility", () => {
+    it("renders the admin-family header with a header-role title", async () => {
+      mockGetSettings();
+      await renderLoaded();
+
+      expect(screen.getByRole("header", { name: "Email" })).toBeTruthy();
+      expect(screen.getByLabelText("Go back")).toBeTruthy();
+    });
+
+    it("device modal announces on open, marks its title as a header, and caps the name in words", async () => {
+      const announceSpy = jest
+        .spyOn(AccessibilityInfo, "announceForAccessibility")
+        .mockImplementation(() => {});
+      mockGetSettings();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByText("Add device"));
+
+      // Title carries the header role (screen readers can jump to it).
+      expect(screen.getByRole("header", { name: "Add device" })).toBeTruthy();
+      // Device names are proper nouns → words autocapitalize.
+      expect(screen.getByLabelText("Device name").props.autoCapitalize).toBe("words");
+      // Mirrors AppDialog's on-open announce (RN Modal is silent by default).
+      await waitFor(() =>
+        expect(announceSpy).toHaveBeenCalledWith(expect.stringContaining("Add device"))
+      );
+    });
   });
 });

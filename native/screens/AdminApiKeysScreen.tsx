@@ -108,17 +108,26 @@ export default function AdminApiKeysScreen({ navigation }: any) {
       const token = created?.apiKey;
       if (token) {
         // The one-time reveal: the token exists ONLY in this dialog closure.
+        // Copy must NOT dismiss the dialog — it's the only place the secret
+        // ever exists, so the user closes it explicitly via Done.
         showAppDialog({
           title: "API key created",
           message: `Copy the key now — the server never shows it again.\n\n${token}`,
           cancelable: false,
           buttons: [
-            { text: "Copy key", onPress: () => Clipboard.setString(token) },
+            {
+              text: "Copy key",
+              keepOpenOnPress: true,
+              onPress: () => {
+                Clipboard.setString(token);
+                showSnackbar({ message: "Key copied" });
+              },
+            },
             { text: "Done" },
           ],
         });
       } else {
-        showSnackbar({ message: "API key created." });
+        showSnackbar({ message: "API key created" });
       }
     } catch (e: any) {
       showAppDialog({
@@ -134,9 +143,14 @@ export default function AdminApiKeysScreen({ navigation }: any) {
     try {
       await deleteApiKey(key.id);
       setKeys((cur) => (cur || []).filter((k) => k.id !== key.id));
-      showSnackbar({ message: "API key deleted." });
+      showSnackbar({ message: "API key deleted" });
     } catch (e: any) {
-      showSnackbar({ message: e?.message || "Couldn't delete the API key." });
+      // Failure gets a dialog (matching every other op failure on this
+      // screen) — a snackbar is too easy to miss for a failed delete.
+      showAppDialog({
+        title: "Couldn't delete the API key",
+        message: e?.message || "Something went wrong. Please try again.",
+      });
     }
   };
 

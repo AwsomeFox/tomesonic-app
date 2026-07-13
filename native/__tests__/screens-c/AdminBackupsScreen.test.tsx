@@ -48,9 +48,16 @@ const NEW_BACKUP = {
   filename: "2026-07-13T0900.audiobookshelf",
 };
 
-function mockGetBackups(backups: any[] = [BACKUP_1, BACKUP_2], backupLocation = "/backups") {
+function mockGetBackups(
+  backups: any[] = [BACKUP_1, BACKUP_2],
+  backupLocation = "/backups",
+  // Automatic-backup config rides along on the same GET /api/backups payload:
+  // a cron string (or false when disabled) and the rotation count.
+  extra: Record<string, any> = { backupSchedule: "30 1 * * *", backupsToKeep: 2 }
+) {
   (api.get as jest.Mock).mockImplementation((url: string) => {
-    if (url === "/api/backups") return Promise.resolve({ data: { backups, backupLocation } });
+    if (url === "/api/backups")
+      return Promise.resolve({ data: { backups, backupLocation, ...extra } });
     return Promise.resolve({ data: {} });
   });
 }
@@ -102,6 +109,26 @@ describe("AdminBackupsScreen", () => {
     expect(screen.getByText(/Use the web dashboard to restore/)).toBeTruthy();
     // No apply/restore affordance anywhere.
     expect(screen.queryByText(/^Restore$/)).toBeNull();
+  });
+
+  it("renders the read-only automatic-backup summary card from the schedule fields", async () => {
+    await renderScreen();
+    await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+    expect(screen.getByText("Automatic backups")).toBeTruthy();
+    // "30 1 * * *" prettifies to a daily run time.
+    expect(screen.getByText(/Runs daily at/)).toBeTruthy();
+    expect(screen.getByText("Keeps the 2 most recent backups")).toBeTruthy();
+    expect(screen.getByText("Backup location: /backups")).toBeTruthy();
+  });
+
+  it("shows automatic backups as off when the server schedule is disabled", async () => {
+    mockGetBackups([BACKUP_1], "/backups", { backupSchedule: false, backupsToKeep: 2 });
+    await renderScreen();
+    await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+    expect(screen.getByText("Off — backups only run when you create one")).toBeTruthy();
+    expect(screen.queryByText(/Runs daily at/)).toBeNull();
   });
 
   it("Back up now POSTs /api/backups and refreshes the list from the response", async () => {

@@ -10,19 +10,27 @@
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
-jest.mock("../../store/useDialogStore", () => ({
-  showAppDialog: jest.fn(),
-}));
+// Spy WRAPPING the real store (not a stub): most tests assert on the
+// showAppDialog calls, but the one-time-reveal test renders the real
+// <AppDialog/> host to prove the Copy button keeps the dialog open.
+jest.mock("../../store/useDialogStore", () => {
+  const actual = jest.requireActual("../../store/useDialogStore");
+  return {
+    ...actual,
+    showAppDialog: jest.fn((opts: any) => actual.showAppDialog(opts)),
+  };
+});
 jest.mock("../../store/useSnackbarStore", () => ({
   showSnackbar: jest.fn(),
 }));
 
 import React from "react";
 import { Clipboard } from "react-native";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminApiKeysScreen from "../../screens/AdminApiKeysScreen";
+import AppDialog from "../../components/AppDialog";
 import { api } from "../../utils/api";
-import { showAppDialog } from "../../store/useDialogStore";
+import { showAppDialog, useDialogStore } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
 import { useUserStore } from "../../store/useUserStore";
 
@@ -79,6 +87,8 @@ let setStringSpy: jest.SpyInstance;
 beforeEach(() => {
   useUserStore.setState(initialUserState, true);
   useUserStore.setState({ user: ROOT, serverConnectionConfig: CONFIG } as any);
+  // The dialog spy drives the REAL store — clear any dialog left by a test.
+  useDialogStore.setState({ current: null } as any);
   mockKeysList();
   (api.delete as jest.Mock).mockResolvedValue({ data: {} });
   setStringSpy = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
@@ -156,6 +166,53 @@ describe("AdminApiKeysScreen", () => {
     await waitFor(() => expect(screen.getByLabelText("API key name").props.value).toBe(""));
   });
 
+  it("Copy key keeps the one-time reveal dialog open (only Done closes it) and snackbars", async () => {
+    const RAW = "abs_supersecret_token_12345";
+    (api.post as jest.Mock).mockResolvedValue({
+      data: { apiKey: { id: "k9", name: "Phone", apiKey: RAW } },
+    });
+    // Render the REAL dialog host next to the screen: this test is about the
+    // dialog staying visible after Copy, so the store spy alone isn't enough.
+    const navigation = makeNavigation();
+    await render(
+      <>
+        <AdminApiKeysScreen navigation={navigation} route={{ params: {} }} />
+        <AppDialog />
+      </>
+    );
+    await screen.findByText("CI key");
+
+    fireEvent.changeText(screen.getByLabelText("API key name"), "Phone");
+    await waitFor(() =>
+      expect(screen.getByLabelText("API key name").props.value).toBe("Phone")
+    );
+    fireEvent.press(screen.getByLabelText("Create API key"));
+
+    // The reveal dialog renders for real…
+    expect(await screen.findByTestId("app-dialog-modal")).toBeTruthy();
+    expect(screen.getByText("API key created")).toBeTruthy();
+
+    // …and Copy does NOT dismiss it: the token exists only in this dialog.
+    // (act-wrapped: a keep-open press causes no re-render, and the bare
+    // fireEvent + follow-up dismiss press otherwise corrupts the async act
+    // queue for later tests.)
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Copy key"));
+    });
+
+    expect(screen.getByTestId("app-dialog-modal")).toBeTruthy();
+    expect(useDialogStore.getState().current).not.toBeNull();
+    expect(setStringSpy).toHaveBeenCalledWith(RAW);
+    expect(showSnackbar).toHaveBeenCalledWith({ message: "Key copied" });
+
+    // The explicit Done closes it.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Done"));
+    });
+    expect(useDialogStore.getState().current).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("app-dialog-modal")).toBeNull());
+  });
+
   it("sends the selected expiry preset as expiresIn seconds (default 30 days)", async () => {
     (api.post as jest.Mock).mockResolvedValue({
       data: { apiKey: { id: "k9", name: "Phone", apiKey: "raw" } },
@@ -217,8 +274,34 @@ describe("AdminApiKeysScreen", () => {
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith("/api/api-keys/k1"));
     await waitFor(() => expect(screen.queryByText("CI key")).toBeNull());
     expect(showSnackbar).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "API key deleted." })
+      expect.objectContaining({ message: "API key deleted" })
     );
+  });
+
+  it("surfaces a delete failure as a dialog (not a snackbar) and keeps the row", async () => {
+    (api.delete as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("nope"), { response: { status: 500, data: "Key in use" } })
+    );
+    await renderScreen();
+    await screen.findByText("CI key");
+
+    fireEvent.press(screen.getByLabelText("Delete API key CI key"));
+    await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+    (showAppDialog as jest.Mock).mock.calls[0][0].buttons
+      .find((b: any) => b.text === "Delete")
+      .onPress();
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't delete the API key",
+          message: "Key in use",
+        })
+      )
+    );
+    // Row stays; no success/failure snackbar for the failed delete.
+    expect(screen.getByText("CI key")).toBeTruthy();
+    expect(showSnackbar).not.toHaveBeenCalled();
   });
 
   it("renders the unsupported state (and never fetches) when the capability gate says the server is too old", async () => {

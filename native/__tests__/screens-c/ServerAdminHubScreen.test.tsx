@@ -221,6 +221,16 @@ describe("ServerAdminHubScreen", () => {
       expect(navigation.navigate).toHaveBeenCalledTimes(expected.length);
     });
 
+    it("renders the admin-family header (header-role title) and an accurate feeds subtitle", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      await renderHub();
+
+      expect(screen.getByRole("header", { name: "Server administration" })).toBeTruthy();
+      // Feeds are opened from the web dashboard — the row manages them.
+      expect(screen.getByText("Manage open RSS feeds")).toBeTruthy();
+      expect(screen.queryByText("Open podcast feeds")).toBeNull();
+    });
+
     it("back button goes back", async () => {
       useUserStore.setState({ user: ADMIN_USER } as any);
       const navigation = await renderHub();

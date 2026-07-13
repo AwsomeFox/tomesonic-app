@@ -120,7 +120,10 @@ export default function ServerAdminHubScreen({ navigation }: any) {
         {
           icon: "rss",
           title: "RSS feeds",
-          subtitle: "Open podcast feeds",
+          // "Manage", not "Open": feeds are OPENED from the web dashboard —
+          // this screen lists and closes them (in-app opening is tracked
+          // separately).
+          subtitle: "Manage open RSS feeds",
           route: "AdminFeeds",
         },
       ],
@@ -218,25 +221,32 @@ export default function ServerAdminHubScreen({ navigation }: any) {
       style={{ flex: 1, backgroundColor: colors.surface }}
       edges={["top", "left", "right"]}
     >
-      {/* Settings-family header (back + title) so the admin area reads as part
-          of the Settings family, not a pushed content screen. */}
+      {/* Settings-family header (back + title), on the same 20/700 + hairline
+          spec as every admin child screen so the whole family reads as one. */}
       <View
         style={{
           flexDirection: "row",
           alignItems: "center",
-          paddingVertical: 12,
-          paddingHorizontal: 8,
+          paddingHorizontal: 16,
+          paddingVertical: 14,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.outlineVariant,
         }}
       >
         <TouchableOpacity
           onPress={() => navigation.goBack()}
-          style={{ padding: 8, marginRight: 4 }}
+          style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", marginRight: 4 }}
+          hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
           <Icon name="back" size={24} color={colors.onSurface} />
         </TouchableOpacity>
-        <Text style={{ color: colors.onSurface, fontSize: 22, fontWeight: "600" }}>
+        <Text
+          accessibilityRole="header"
+          numberOfLines={1}
+          style={{ color: colors.onSurface, fontSize: 20, fontWeight: "700", flex: 1 }}
+        >
           Server administration
         </Text>
       </View>

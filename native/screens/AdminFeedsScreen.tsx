@@ -20,10 +20,11 @@ import type { AbsFeed } from "../utils/abs/types";
  *
  * Route: "AdminFeeds" (no params)
  *
- * Scope: list + copy link + close (destructive confirm). OPENING a feed lives
- * with the entity it feeds (item/series/collection sheets — other packages),
- * because opening requires picking an entity plus a serverAddress+slug; a
- * server-wide list is the wrong place to start that flow.
+ * Scope: list + copy link + close (destructive confirm). OPENING a feed is NOT
+ * offered anywhere in the app yet — feeds are opened from the Audiobookshelf
+ * web dashboard (in-app opening from item/series/collection surfaces is
+ * tracked in a follow-up issue). Copy in this screen must not promise an
+ * in-app open flow.
  *
  * Feeds are PUBLIC unauthenticated URLs — the banner up top says so, and the
  * close confirm spells out what closing does to listeners.
@@ -222,7 +223,7 @@ export default function AdminFeedsScreen({ navigation }: any) {
             <EmptyState
               icon="rss"
               title="No open feeds"
-              message="Open a feed from a podcast, series, or collection to listen in other apps."
+              message="Feeds opened from the Audiobookshelf web dashboard appear here, where you can copy their links or close them."
             />
           ) : (
             <>

@@ -19,7 +19,8 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { StyleSheet } from "react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminServerLogsScreen from "../../screens/AdminServerLogsScreen";
 import { api } from "../../utils/api";
 
@@ -134,6 +135,35 @@ describe("AdminServerLogsScreen", () => {
     fireEvent.press(debugChip);
     await waitFor(() => expect(screen.queryByText("Server started")).toBeNull());
     expect(screen.getByText("debug detail line")).toBeTruthy();
+  });
+
+  it("renders the snapshot through a virtualized FlatList with pull-to-refresh wired to the fetch", async () => {
+    await renderScreen();
+    await screen.findByText("Server started");
+
+    // Virtualized list (not ScrollView+map): the entries ride in as data.
+    const list = screen.getByTestId("server-logs-list");
+    expect(list.props.data).toHaveLength(3);
+
+    const NEW_LINE = { ...INFO_LOG, message: "Line from pull refresh" };
+    mockLogs([INFO_LOG, WARN_LOG, ERROR_LOG, NEW_LINE]);
+    await act(async () => {
+      list.props.refreshControl.props.onRefresh();
+    });
+
+    expect(await screen.findByText("Line from pull refresh")).toBeTruthy();
+    expect(
+      (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/logger-data").length
+    ).toBe(2);
+  });
+
+  it("level chips carry a 34dp fixed height plus vertical hitSlop (comfortable touch target)", async () => {
+    await renderScreen();
+    await screen.findByText("Server started");
+
+    const chip = screen.getByLabelText("Show all logs");
+    expect(StyleSheet.flatten(chip.props.style).height).toBe(34);
+    expect(chip.props.hitSlop).toEqual({ top: 6, bottom: 6 });
   });
 
   it("the refresh button refetches the snapshot", async () => {
