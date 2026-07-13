@@ -201,7 +201,7 @@ export default function AdminEmailScreen({ navigation }: any) {
         if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
       }
       AccessibilityInfo.announceForAccessibility(
-        `${title}. Server-wide e-reader device — enter a name and email.`
+        `${title}. Server-wide e-reader device — enter a name, email, and who can use it.`
       );
     }, 50);
     return () => clearTimeout(t);
@@ -423,9 +423,16 @@ export default function AdminEmailScreen({ navigation }: any) {
       });
       return;
     }
-    // A specific-users device with nobody selected would be unusable by
+    // A device seeded from a stale server blob can carry ids of users that
+    // were since deleted — once the real user list is loaded, ghosts must not
+    // round-trip back to the server. (Unfiltered when allUsers never loaded:
+    // better to keep unverifiable ids than silently drop live ones.)
+    const effectiveUsers = allUsers
+      ? deviceUsers.filter((id) => allUsers.some((u) => u.id === id))
+      : deviceUsers;
+    // A specific-users device with nobody (real) selected would be unusable by
     // everyone — block it before the POST.
-    if (deviceAvailability === "specificUsers" && deviceUsers.length === 0) {
+    if (deviceAvailability === "specificUsers" && effectiveUsers.length === 0) {
       showAppDialog({
         title: "Select at least one user",
         message: "Pick who can send to this device, or choose a broader availability.",
@@ -440,7 +447,7 @@ export default function AdminEmailScreen({ navigation }: any) {
               name,
               email,
               availabilityOption: deviceAvailability,
-              ...(deviceAvailability === "specificUsers" ? { users: deviceUsers } : {}),
+              ...(deviceAvailability === "specificUsers" ? { users: effectiveUsers } : {}),
             },
           ]
         : devices.map((d, i) => {
@@ -455,7 +462,7 @@ export default function AdminEmailScreen({ navigation }: any) {
               availabilityOption: deviceAvailability,
             };
             if (deviceAvailability === "specificUsers") {
-              merged.users = deviceUsers;
+              merged.users = effectiveUsers;
             } else {
               delete merged.users;
             }
@@ -821,7 +828,12 @@ export default function AdminEmailScreen({ navigation }: any) {
             <Pressable
               onPress={() => setAvailabilityPickerOpen(true)}
               accessibilityRole="button"
-              accessibilityLabel="Who can use it"
+              // The current value rides in the label — a screen reader must
+              // hear the selection, not just the field's name.
+              accessibilityLabel={`Who can use it: ${
+                AVAILABILITY_OPTIONS.find((o) => o.value === deviceAvailability)?.label ??
+                "Admins"
+              }`}
               style={{
                 flexDirection: "row",
                 alignItems: "center",

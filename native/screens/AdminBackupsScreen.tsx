@@ -188,12 +188,17 @@ export default function AdminBackupsScreen({ navigation }: any) {
       });
       return;
     }
+    // Same fallback chain as the row title, and the size only when the server
+    // actually reported one (mirrors ItemDetail's zip-size guard).
+    const label = backup.datePretty || backup.filename || backup.id;
+    const size = backup.fileSize > 0 ? ` (${formatBytes(backup.fileSize)})` : "";
     showAppDialog({
       title: "Download backup",
       message:
-        `Download the backup from ${backup.datePretty} (${formatBytes(backup.fileSize)})? ` +
+        `Download the backup from ${label}${size}? ` +
         "The archive contains the full server database. It's handed to your browser's " +
-        "download manager, so large files stream straight to storage.",
+        "download manager, so large files stream straight to storage. " +
+        "The download link carries your admin session token.",
       buttons: [
         { text: "Cancel", style: "cancel" },
         {
@@ -223,7 +228,9 @@ export default function AdminBackupsScreen({ navigation }: any) {
   const confirmDelete = (backup: AbsBackup) => {
     showAppDialog({
       title: "Delete backup?",
-      message: `Delete the backup from ${backup.datePretty}? This can't be undone.`,
+      message: `Delete the backup from ${
+        backup.datePretty || backup.filename || backup.id
+      }? This can't be undone.`,
       buttons: [
         { text: "Cancel", style: "cancel" },
         { text: "Delete", style: "destructive", onPress: () => doDelete(backup) },

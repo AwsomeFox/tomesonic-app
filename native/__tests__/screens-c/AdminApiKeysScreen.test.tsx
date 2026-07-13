@@ -214,7 +214,9 @@ describe("AdminApiKeysScreen", () => {
     // …and Copy does NOT dismiss it: the token exists only in this dialog.
     // (act-wrapped: a keep-open press causes no re-render, and the bare
     // fireEvent + follow-up dismiss press otherwise corrupts the async act
-    // queue for later tests.)
+    // queue for later tests. The act flush also settles the clipboard-write
+    // microtask — the success snackbar only fires AFTER setStringAsync
+    // resolves, never as an unconditional confirm.)
     await act(async () => {
       fireEvent.press(screen.getByLabelText("Copy key"));
     });
@@ -230,6 +232,49 @@ describe("AdminApiKeysScreen", () => {
     });
     expect(useDialogStore.getState().current).toBeNull();
     await waitFor(() => expect(screen.queryByTestId("app-dialog-modal")).toBeNull());
+  });
+
+  it("a failed clipboard write shows the manual-copy snackbar — never a false 'Key copied'", async () => {
+    const RAW = "abs_supersecret_token_12345";
+    // Clipboard write fails (e.g. the OS clipboard is locked by another app).
+    setStringSpy.mockRejectedValue(new Error("clipboard unavailable"));
+    (api.post as jest.Mock).mockResolvedValue({
+      data: { apiKey: { id: "k9", name: "Phone", apiKey: RAW } },
+    });
+    const navigation = makeNavigation();
+    await render(
+      <>
+        <AdminApiKeysScreen navigation={navigation} route={{ params: {} }} />
+        <AppDialog />
+      </>
+    );
+    await screen.findByText("CI key");
+
+    fireEvent.changeText(screen.getByLabelText("API key name"), "Phone");
+    await waitFor(() =>
+      expect(screen.getByLabelText("API key name").props.value).toBe("Phone")
+    );
+    fireEvent.press(screen.getByLabelText("Create API key"));
+    expect(await screen.findByTestId("app-dialog-modal")).toBeTruthy();
+
+    // act flushes the rejected clipboard promise's .catch continuation.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Copy key"));
+    });
+
+    // The one-time secret was NOT copied — the confirm must not lie.
+    expect(showSnackbar).not.toHaveBeenCalledWith({ message: "Key copied" });
+    expect(showSnackbar).toHaveBeenCalledWith({
+      message: "Couldn't copy — select the key text manually",
+    });
+    // Recovery stays possible: the reveal dialog (and the key text) is still up.
+    expect(useDialogStore.getState().current).not.toBeNull();
+    expect(screen.getByTestId("app-dialog-modal")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Done"));
+    });
+    expect(useDialogStore.getState().current).toBeNull();
   });
 
   it("sends the selected expiry preset as expiresIn seconds (default 30 days)", async () => {
@@ -396,6 +441,28 @@ describe("AdminApiKeysScreen", () => {
       expect(showSnackbar).toHaveBeenCalledWith({ message: "API key disabled" });
     });
 
+    it("a shapeless PATCH echo ({ success: true }) cannot revert the optimistic flip", async () => {
+      // Some proxies/older servers answer PATCH with a bare success envelope
+      // instead of the key — merging it must not resurrect the OLD isActive.
+      (api.patch as jest.Mock).mockResolvedValue({ data: { success: true } });
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      fireEvent.press(screen.getByLabelText("CI key active"));
+
+      await waitFor(() =>
+        expect(api.patch).toHaveBeenCalledWith("/api/api-keys/k1", { isActive: false })
+      );
+      await waitFor(() =>
+        expect(showSnackbar).toHaveBeenCalledWith({ message: "API key disabled" })
+      );
+      // Switch stays in the NEW state; subtitle stays synced and keeps the join.
+      expect(screen.getByLabelText("CI key active").props.accessibilityState.checked).toBe(
+        false
+      );
+      expect(screen.getByText(/Inactive · Never expires · Acts as root/)).toBeTruthy();
+    });
+
     it("rolls the switch back with a failure dialog when the PATCH 500s", async () => {
       (api.patch as jest.Mock).mockRejectedValue(
         Object.assign(new Error("bad"), { response: { status: 500, data: "DB locked" } })
@@ -511,6 +578,39 @@ describe("AdminApiKeysScreen", () => {
       expect(screen.queryByLabelText("root (root)")).toBeNull();
     });
 
+    it("shows a loading spinner and swallows re-presses while the users fetch is in flight", async () => {
+      let resolveUsers: (v: any) => void = () => {};
+      (api.get as jest.Mock).mockImplementation((url: string) => {
+        if (url === "/api/api-keys") return Promise.resolve({ data: { apiKeys: KEYS } });
+        if (url === "/api/users") return new Promise((res) => (resolveUsers = res));
+        return Promise.resolve({ data: {} });
+      });
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      // First press starts the fetch (pending) — act-wrapped: the handler
+      // returns a pending promise a bare fireEvent would leak into the queue.
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Acts as, You"));
+      });
+      // The row shows the in-flight spinner…
+      expect(screen.getByLabelText("Loading users")).toBeTruthy();
+      // …and a second press is swallowed by the in-flight guard: one GET.
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Acts as, You"));
+      });
+      expect(
+        (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/users").length
+      ).toBe(1);
+
+      await act(async () => {
+        resolveUsers({ data: { users: USERS } });
+      });
+      // Fetch settled: the picker opened and the spinner is gone.
+      expect(await screen.findByLabelText("bob")).toBeTruthy();
+      expect(screen.queryByLabelText("Loading users")).toBeNull();
+    });
+
     it("a users fetch failure keeps the default (You) and shows a dialog", async () => {
       (api.get as jest.Mock).mockImplementation((url: string) => {
         if (url === "/api/api-keys") return Promise.resolve({ data: { apiKeys: KEYS } });
@@ -572,7 +672,37 @@ describe("AdminApiKeysScreen", () => {
       );
     });
 
-    it("blocks invalid, zero, and empty custom expiries with a dialog and NO POST", async () => {
+    it("accepts the 36500-day (100-year) upper boundary and POSTs its expiresIn", async () => {
+      (api.post as jest.Mock).mockResolvedValue({
+        data: { apiKey: { id: "k9", name: "Phone", apiKey: "raw" } },
+      });
+      await renderScreen();
+      await screen.findByText("CI key");
+
+      fireEvent.press(screen.getByLabelText("Key expires: Custom…"));
+      const daysInput = await screen.findByLabelText("Custom expiry in days");
+      fireEvent.changeText(daysInput, "36500");
+      await waitFor(() =>
+        expect(screen.getByLabelText("Custom expiry in days").props.value).toBe("36500")
+      );
+      fireEvent.changeText(screen.getByLabelText("API key name"), "Phone");
+      await waitFor(() =>
+        expect(screen.getByLabelText("API key name").props.value).toBe("Phone")
+      );
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Create API key"));
+      });
+
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/api-keys", {
+          name: "Phone",
+          userId: "u1",
+          expiresIn: 36500 * 86400,
+        })
+      );
+    });
+
+    it("blocks invalid, zero, empty, and over-100-year custom expiries with a dialog and NO POST", async () => {
       await renderScreen();
       await screen.findByText("CI key");
 
@@ -583,7 +713,7 @@ describe("AdminApiKeysScreen", () => {
         expect(screen.getByLabelText("API key name").props.value).toBe("Phone")
       );
 
-      for (const bad of ["", "0", "abc", "1.5"]) {
+      for (const bad of ["", "0", "abc", "1.5", "40000", "99999999999999999999"]) {
         // act-wrapped: "" → "" changes nothing, and a BLOCKED create only
         // shows a dialog (no re-render) — bare fireEvents here poison the
         // async act queue for the rest of the suite.

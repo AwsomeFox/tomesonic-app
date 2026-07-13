@@ -383,6 +383,64 @@ describe("AdminServerSettingsScreen", () => {
       await waitFor(() => expect(screen.queryByLabelText("Save sorting prefixes")).toBeNull());
     });
 
+    it("Save folds a typed-but-not-Added prefix into the PATCH (pending input isn't dropped)", async () => {
+      useUserStore.setState({
+        serverSettings: { ...SETTINGS, sortingPrefixes: ["a"] },
+      } as any);
+      mockAuthorize({ ...SETTINGS, sortingPrefixes: ["a"] });
+      (api.patch as jest.Mock).mockImplementation((url: string, body: any) => {
+        if (url === "/api/settings")
+          return Promise.resolve({
+            data: { serverSettings: { ...SETTINGS, sortingPrefixes: ["a"], ...body } },
+          });
+        return Promise.resolve({ data: {} });
+      });
+      await renderScreen();
+
+      await fireEvent.press(await screen.findByLabelText("Sorting prefixes, a"));
+      await screen.findByLabelText("New sorting prefix");
+
+      // Type "the" and hit Save DIRECTLY — no Add press. The input is folded
+      // in with the same trim/lowercase normalization as Add.
+      await fireEvent.changeText(screen.getByLabelText("New sorting prefix"), "The ");
+      await waitFor(() =>
+        expect(screen.getByLabelText("New sorting prefix").props.value).toBe("The ")
+      );
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText("Save sorting prefixes"));
+      });
+
+      await waitFor(() =>
+        expect(api.patch).toHaveBeenCalledWith("/api/settings", {
+          sortingPrefixes: ["a", "the"],
+        })
+      );
+      await waitFor(() =>
+        expect(showSnackbar).toHaveBeenCalledWith({ message: "Sorting prefixes saved" })
+      );
+      await waitFor(() => expect(screen.queryByLabelText("Save sorting prefixes")).toBeNull());
+    });
+
+    it("seeds a case-duplicated server blob as a single normalized chip", async () => {
+      // Another client can store ["The", "the"] — the editor must not render
+      // two colliding chips (or duplicate React keys) for the same prefix.
+      useUserStore.setState({
+        serverSettings: { ...SETTINGS, sortingPrefixes: ["The", "the"] },
+      } as any);
+      mockAuthorize({ ...SETTINGS, sortingPrefixes: ["The", "the"] });
+      await renderScreen();
+
+      await fireEvent.press(await screen.findByLabelText("Sorting prefixes, The, the"));
+      await screen.findByLabelText("New sorting prefix");
+
+      expect(screen.getAllByLabelText("Remove prefix the")).toHaveLength(1);
+      expect(screen.queryByLabelText("Remove prefix The")).toBeNull();
+
+      // Close cleanly (no save) so no modal state leaks into the next test.
+      await fireEvent.press(screen.getByText("Cancel"));
+      await waitFor(() => expect(screen.queryByLabelText("Save sorting prefixes")).toBeNull());
+    });
+
     it("blocks saving an EMPTY prefix list with a dialog before any PATCH (server ignores [])", async () => {
       useUserStore.setState({
         serverSettings: { ...SETTINGS, sortingPrefixes: ["the"] },

@@ -490,8 +490,13 @@ describe("AdminEmailScreen", () => {
       await fireEvent.press(screen.getByText("Add device"));
       await fireEvent.changeText(screen.getByLabelText("Device name"), "Kobo");
       await fireEvent.changeText(screen.getByLabelText("Device email"), "kobo@example.com");
-      await fireEvent.press(screen.getByLabelText("Who can use it"));
+      // The availability row's a11y label carries the CURRENT value…
+      await fireEvent.press(screen.getByLabelText("Who can use it: Admins"));
       await fireEvent.press(await screen.findByLabelText("All users"));
+      // …and updates when the selection changes.
+      await waitFor(() =>
+        expect(screen.getByLabelText("Who can use it: All users")).toBeTruthy()
+      );
       await fireEvent.press(screen.getByLabelText("Save device"));
 
       await waitFor(() =>
@@ -518,7 +523,7 @@ describe("AdminEmailScreen", () => {
       await fireEvent.press(screen.getByText("Add device"));
       await fireEvent.changeText(screen.getByLabelText("Device name"), "Kobo");
       await fireEvent.changeText(screen.getByLabelText("Device email"), "kobo@example.com");
-      await fireEvent.press(screen.getByLabelText("Who can use it"));
+      await fireEvent.press(screen.getByLabelText(/^Who can use it/));
       await fireEvent.press(await screen.findByLabelText("Specific users…"));
 
       // Checklist fetched from GET /api/users, rows are checkboxes.
@@ -555,7 +560,7 @@ describe("AdminEmailScreen", () => {
       await fireEvent.press(screen.getByText("Add device"));
       await fireEvent.changeText(screen.getByLabelText("Device name"), "Kobo");
       await fireEvent.changeText(screen.getByLabelText("Device email"), "kobo@example.com");
-      await fireEvent.press(screen.getByLabelText("Who can use it"));
+      await fireEvent.press(screen.getByLabelText(/^Who can use it/));
       await fireEvent.press(await screen.findByLabelText("Specific users…"));
       await screen.findByLabelText("bob");
 
@@ -590,13 +595,45 @@ describe("AdminEmailScreen", () => {
       );
     });
 
+    it("editing a device whose users were deleted server-side blocks the save (no ghost ids POSTed)", async () => {
+      // "ghost" is not in GET /api/users anymore — once the checklist loads,
+      // the save must treat the device as having NOBODY selected instead of
+      // round-tripping the stale id back to the server.
+      mockGetSettings({
+        ...SETTINGS,
+        ereaderDevices: [
+          KINDLE,
+          {
+            name: "Boox",
+            email: "boox@x.com",
+            availabilityOption: "specificUsers",
+            users: ["ghost"],
+          },
+        ],
+      });
+      mockDevicesPost();
+      await renderLoaded();
+
+      await fireEvent.press(screen.getByLabelText("Boox, boox@x.com · Specific users"));
+      // The checklist loaded (so the ghost id is verifiable) and shows nothing checked.
+      const bob = await screen.findByLabelText("bob");
+      expect(bob.props.accessibilityState.checked).toBe(false);
+
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Select at least one user" })
+      );
+      expect(api.post).not.toHaveBeenCalled();
+    });
+
     it("switching an edit away from specific users STRIPS the stale users array", async () => {
       mockGetSettings({ ...SETTINGS, ereaderDevices: [KINDLE, BOOX] });
       mockDevicesPost();
       await renderLoaded();
 
       await fireEvent.press(screen.getByLabelText("Boox, boox@x.com · Specific users"));
-      await fireEvent.press(screen.getByLabelText("Who can use it"));
+      await fireEvent.press(screen.getByLabelText(/^Who can use it/));
       await fireEvent.press(await screen.findByLabelText("Admins"));
       await fireEvent.press(screen.getByLabelText("Save device"));
 
@@ -627,9 +664,13 @@ describe("AdminEmailScreen", () => {
       expect(screen.getByRole("header", { name: "Add device" })).toBeTruthy();
       // Device names are proper nouns → words autocapitalize.
       expect(screen.getByLabelText("Device name").props.autoCapitalize).toBe("words");
-      // Mirrors AppDialog's on-open announce (RN Modal is silent by default).
+      // Mirrors AppDialog's on-open announce (RN Modal is silent by default);
+      // the copy names every field, including the availability picker.
       await waitFor(() =>
         expect(announceSpy).toHaveBeenCalledWith(expect.stringContaining("Add device"))
+      );
+      expect(announceSpy).toHaveBeenCalledWith(
+        expect.stringContaining("enter a name, email, and who can use it")
       );
     });
   });

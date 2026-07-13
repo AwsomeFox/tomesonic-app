@@ -311,7 +311,14 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
     : [];
 
   const openPrefixEditor = () => {
-    setPrefixDraft(currentPrefixes);
+    // Normalize the server blob on seed (trim + lowercase + dedupe) — a blob
+    // edited elsewhere can carry case-duplicates like ["The", "the"], which
+    // would render as colliding chips (and `key={p}` collisions).
+    setPrefixDraft(
+      Array.from(
+        new Set(currentPrefixes.map((p) => String(p).trim().toLowerCase()).filter(Boolean))
+      )
+    );
     setPrefixInput("");
     setPrefixModalOpen(true);
   };
@@ -326,7 +333,16 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
 
   const savePrefixes = async () => {
     if (savingPrefixes) return;
-    if (prefixDraft.length === 0) {
+    // Fold a typed-but-not-Added prefix into the draft (same normalization +
+    // dedupe as addPrefix) — Save right after typing must not drop the input.
+    const pending = prefixInput.trim().toLowerCase();
+    const draft =
+      pending && !prefixDraft.includes(pending) ? [...prefixDraft, pending] : prefixDraft;
+    if (pending) {
+      setPrefixDraft(draft);
+      setPrefixInput("");
+    }
+    if (draft.length === 0) {
       // The ABS server SILENTLY IGNORES an empty sortingPrefixes array (the
       // PATCH "succeeds" but nothing changes) — surface that instead of
       // letting the save look like it worked.
@@ -339,7 +355,7 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
       return;
     }
     setSavingPrefixes(true);
-    const ok = await handleSelect("sortingPrefixes", prefixDraft);
+    const ok = await handleSelect("sortingPrefixes", draft);
     if (mountedRef.current) {
       setSavingPrefixes(false);
       if (ok) {

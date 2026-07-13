@@ -14,7 +14,7 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
-import { SectionHeader, Divider, SelectRow, M3Switch } from "../components/SettingsRows";
+import { SectionHeader, Divider, RowBase, M3Switch } from "../components/SettingsRows";
 import SettingSelectModal from "../components/SettingSelectModal";
 import { useUserStore } from "../store/useUserStore";
 import { showAppDialog } from "../store/useDialogStore";
@@ -37,6 +37,10 @@ import type { AbsApiKey, AbsUser } from "../utils/abs/types";
  * reveal dialog (with a copy action) and deliberately kept OUT of any store,
  * MMKV, log, or component state: the token lives only in the dialog closure.
  */
+
+// Upper bound for the custom-expiry input: 100 years. Anything above is a
+// typo, and huge values can overflow the server's ms math.
+const MAX_CUSTOM_EXPIRY_DAYS = 36500;
 
 const EXPIRY_PRESETS: { label: string; seconds: number | null }[] = [
   { label: "30 days", seconds: 30 * 24 * 60 * 60 },
@@ -72,8 +76,20 @@ export default function AdminApiKeysScreen({ navigation }: any) {
   const [actAsUserId, setActAsUserId] = useState<string | null>(user?.id ?? null);
   const [users, setUsers] = useState<AbsUser[] | null>(null);
   const [userPickerOpen, setUserPickerOpen] = useState(false);
+  // In-flight guard + row spinner for the lazy users fetch (mirrors
+  // AdminEmailScreen's ensureUsers).
+  const [loadingUsers, setLoadingUsers] = useState(false);
   // Per-key PATCH in-flight guard for the enable/disable switches.
   const togglingIds = useRef<Set<string>>(new Set());
+  // Guards post-await setStates from firing after unmount (users fetch,
+  // create-refresh, and per-key PATCHes all settle asynchronously).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const supports = caps.supportsApiKeys;
 
@@ -108,6 +124,8 @@ export default function AdminApiKeysScreen({ navigation }: any) {
       setUserPickerOpen(true);
       return;
     }
+    if (loadingUsers) return; // one users fetch at a time
+    setLoadingUsers(true);
     try {
       const all = await getUsers();
       // A non-root admin must not mint keys that act as OTHER root users —
@@ -115,6 +133,7 @@ export default function AdminApiKeysScreen({ navigation }: any) {
       // always available regardless of type.
       const visible =
         user?.type === "root" ? all : all.filter((u) => u.type !== "root" || u.id === user?.id);
+      if (!mountedRef.current) return;
       setUsers(visible);
       setUserPickerOpen(true);
     } catch (e: any) {
@@ -122,6 +141,8 @@ export default function AdminApiKeysScreen({ navigation }: any) {
         title: "Couldn't load users",
         message: e?.message || "Something went wrong. Please try again.",
       });
+    } finally {
+      if (mountedRef.current) setLoadingUsers(false);
     }
   };
 
@@ -135,11 +156,12 @@ export default function AdminApiKeysScreen({ navigation }: any) {
     let expiresIn: number | undefined;
     if (expiry === "custom") {
       const raw = customDays.trim();
-      // Whole positive days only — "0", "", "1.5" and garbage all block the POST.
-      if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
+      // Whole positive days only, capped at 100 years — "0", "", "1.5",
+      // garbage, and absurdly large values all block the POST.
+      if (!/^\d+$/.test(raw) || Number(raw) <= 0 || Number(raw) > MAX_CUSTOM_EXPIRY_DAYS) {
         showAppDialog({
           title: "Invalid expiry",
-          message: "Enter a whole number of days greater than zero.",
+          message: `Enter a whole number of days between 1 and ${MAX_CUSTOM_EXPIRY_DAYS}.`,
         });
         return;
       }
@@ -154,12 +176,15 @@ export default function AdminApiKeysScreen({ navigation }: any) {
         userId,
         ...(expiresIn != null ? { expiresIn } : {}),
       });
-      setName("");
-      // Refresh the list so the new key row appears (best-effort — the reveal
-      // dialog matters more than the row refresh).
-      try {
-        setKeys(await getApiKeys());
-      } catch {}
+      if (mountedRef.current) {
+        setName("");
+        // Refresh the list so the new key row appears (best-effort — the reveal
+        // dialog matters more than the row refresh).
+        try {
+          const fresh = await getApiKeys();
+          if (mountedRef.current) setKeys(fresh);
+        } catch {}
+      }
       const token = created?.apiKey;
       if (token) {
         // The one-time reveal: the token exists ONLY in this dialog closure.
@@ -174,8 +199,15 @@ export default function AdminApiKeysScreen({ navigation }: any) {
               text: "Copy key",
               keepOpenOnPress: true,
               onPress: () => {
-                Clipboard.setStringAsync(token).catch(() => {});
-                showSnackbar({ message: "Key copied" });
+                // Only confirm AFTER the clipboard write actually resolved — a
+                // false "copied" for a one-time secret is unrecoverable. On
+                // failure the dialog is still open (keepOpenOnPress), so the
+                // user can select the key text manually.
+                Clipboard.setStringAsync(token)
+                  .then(() => showSnackbar({ message: "Key copied" }))
+                  .catch(() =>
+                    showSnackbar({ message: "Couldn't copy — select the key text manually" })
+                  );
               },
             },
             { text: "Done" },
@@ -190,7 +222,7 @@ export default function AdminApiKeysScreen({ navigation }: any) {
         message: e?.message || "Something went wrong. Please try again.",
       });
     } finally {
-      setCreating(false);
+      if (mountedRef.current) setCreating(false);
     }
   };
 
@@ -229,12 +261,24 @@ export default function AdminApiKeysScreen({ navigation }: any) {
       const updated = await updateApiKey(key.id, { isActive: next });
       // Merge the echo ONTO the previous row — the PATCH response has no
       // joined `user`, and replacing the row wholesale would drop the
-      // "Acts as …" subtitle.
-      setKeys((cur) => (cur || []).map((k) => (k.id === key.id ? { ...key, ...updated } : k)));
+      // "Acts as …" subtitle. `isActive: next` is pinned BEFORE the echo so a
+      // shapeless response (e.g. { success: true }) can't revert the flip —
+      // the echo is Partial at runtime even though the util types it fully.
+      if (mountedRef.current) {
+        setKeys((cur) =>
+          (cur || []).map((k) =>
+            k.id === key.id
+              ? { ...key, isActive: next, ...(updated as Partial<AbsApiKey>) }
+              : k
+          )
+        );
+      }
       showSnackbar({ message: next ? "API key enabled" : "API key disabled" });
     } catch (e: any) {
       // Roll back to the pre-toggle row; failure gets a dialog (screen convention).
-      setKeys((cur) => (cur || []).map((k) => (k.id === key.id ? key : k)));
+      if (mountedRef.current) {
+        setKeys((cur) => (cur || []).map((k) => (k.id === key.id ? key : k)));
+      }
       showAppDialog({
         title: "Couldn't update the API key",
         message: e?.message || "Something went wrong. Please try again.",
@@ -404,13 +448,26 @@ export default function AdminApiKeysScreen({ navigation }: any) {
             ) : null}
           </View>
           {/* Whose permissions the key runs with; full-bleed row so it lines up
-              with the settings-row family (options load lazily on first open). */}
-          <SelectRow
+              with the settings-row family (options load lazily on first open —
+              the trailing spinner mirrors that fetch, and openUserPicker's
+              in-flight guard swallows presses while it runs). */}
+          <RowBase
             icon="person"
             title="Acts as"
             subtitle={actsAsSelf ? "You" : actAsUser?.username || "Selected user"}
             onPress={openUserPicker}
             colors={colors}
+            trailing={
+              loadingUsers ? (
+                <ActivityIndicator
+                  size="small"
+                  color={colors.primary}
+                  accessibilityLabel="Loading users"
+                />
+              ) : (
+                <Icon name="chevron-down" size={26} color={colors.onSurface} />
+              )
+            }
           />
           <View style={{ paddingHorizontal: 20 }}>
             <Pressable

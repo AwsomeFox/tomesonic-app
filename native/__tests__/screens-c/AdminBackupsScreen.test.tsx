@@ -292,10 +292,14 @@ describe("AdminBackupsScreen", () => {
         )
       );
       const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
-      // Size + what-it-is + download-manager handoff, all in the confirm copy.
+      // Size + what-it-is + download-manager handoff + token warning, all in
+      // the confirm copy.
       expect(dialog.message).toContain("50 MB");
       expect(dialog.message).toMatch(/full server database/);
       expect(dialog.message).toMatch(/download manager/);
+      // The tokened URL leaks the admin session into browser history — the
+      // confirm must say so (see buildBackupDownloadUrl's SECURITY note / #68).
+      expect(dialog.message).toMatch(/admin session token/);
       // Nothing handed to the OS until the dialog is confirmed.
       expect(openSpy).not.toHaveBeenCalled();
 
@@ -311,6 +315,29 @@ describe("AdminBackupsScreen", () => {
           message: "Backup download handed to your browser",
         })
       );
+    });
+
+    it("download confirm falls back to the filename and omits the size when the backup has neither", async () => {
+      // A sparse backup row (older server / interrupted backup): no datePretty,
+      // no fileSize. The dialog must not read "undefined" or claim "0 MB".
+      const BARE = { id: "b9", filename: "2026-07-01T0300.audiobookshelf" };
+      mockGetBackups([BARE as any]);
+      jest.spyOn(Linking, "openURL").mockResolvedValue(true as any);
+      await renderScreen();
+      await screen.findByText("2026-07-01T0300.audiobookshelf");
+
+      // The row a11y label falls back past the missing datePretty too.
+      fireEvent.press(screen.getByLabelText("Download backup b9"));
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Download backup" })
+        )
+      );
+      const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+      expect(dialog.message).toContain("2026-07-01T0300.audiobookshelf");
+      expect(dialog.message).not.toContain("undefined");
+      expect(dialog.message).not.toContain("0 MB");
     });
 
     it("openURL rejection shows the failure dialog and never the success snackbar", async () => {
