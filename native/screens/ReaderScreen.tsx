@@ -772,7 +772,10 @@ ${FOLIATE_BUNDLE}
             clone.style.width = fullW + 'px';
             clone.style.height = fullH + 'px';
 
-            var holder = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+            // Same-document holder: the clone is owned by the section doc;
+            // building the wrapper there avoids cross-document appendChild
+            // entirely (spec auto-adopts, but strict same-doc is free).
+            var holder = doc.createElementNS('http://www.w3.org/1999/xhtml', 'div');
             holder.appendChild(clone);
             var xml = new XMLSerializer().serializeToString(holder);
             var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + fullW + '" height="' + fullH + '">' +

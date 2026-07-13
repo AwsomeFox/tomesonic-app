@@ -48,7 +48,11 @@ export default function PlayerOverflowModal({
   const handleItemPress = (action: () => void) => {
     onClose();
     if (pendingActionRef.current) clearTimeout(pendingActionRef.current);
-    pendingActionRef.current = setTimeout(action, 200);
+    pendingActionRef.current = setTimeout(() => {
+      // Clear BEFORE running so the ref never points at a fired timer.
+      pendingActionRef.current = null;
+      action();
+    }, 200);
   };
 
   return (

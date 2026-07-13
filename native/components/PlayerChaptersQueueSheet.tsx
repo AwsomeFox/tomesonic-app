@@ -3,6 +3,7 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
   Pressable,
   useWindowDimensions,
   StyleSheet,
@@ -93,7 +94,7 @@ export default function PlayerChaptersQueueSheet({
   const animDuration = reduceMotion ? 0 : 250;
 
   const subProgress = useSharedValue(0);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<FlatList>(null);
   // True while the handle is being dragged: the body + backdrop must render
   // DURING the gesture, not only after release commits `expanded` — otherwise
   // dragging up reveals an empty sheet that pops its content in at the end.
@@ -107,25 +108,24 @@ export default function PlayerChaptersQueueSheet({
     setDragging(v);
   };
 
-  const hasChapters = chapters && chapters.length > 0;
-
   useEffect(() => {
     subProgress.value = withTiming(expanded ? 1 : 0, { duration: animDuration });
     // animDuration in deps: a live reduce-motion change re-runs toward the
     // same target with the fresh duration (harmless), instead of going stale.
   }, [expanded, animDuration]);
 
-  // Scroll to active chapter when chapters tab is selected or opened
+  // Scroll to active chapter when chapters tab is selected or opened. With
+  // the virtualized list, scrollToIndex + getItemLayout replaces the manual
+  // pitch math (ROW_H + 4px of vertical margins).
   useEffect(() => {
     if (expanded && activeTab === "chapters" && currentChapterIndex > 2) {
       const timer = setTimeout(() => {
-        scrollRef.current?.scrollTo({
-          // Row pitch = height + vertical margins (marginVertical: 2 → 4px),
-          // not bare ROW_H — the bare value drifts further per row on long
-          // chapter lists.
-          y: (currentChapterIndex - 2) * (ROW_H + 4),
-          animated: false,
-        });
+        try {
+          scrollRef.current?.scrollToIndex({
+            index: Math.max(0, currentChapterIndex - 2),
+            animated: false,
+          });
+        } catch {}
       }, 50);
       return () => clearTimeout(timer);
     }
@@ -403,90 +403,99 @@ export default function PlayerChaptersQueueSheet({
 
             {/* Tab Contents */}
             {activeTab === "chapters" ? (
-              /* Chapters List Content */
-              <ScrollView
+              /* Chapters list — VIRTUALIZED: chapter-heavy books (hundreds of
+                 rows) must not mount every row at once. Fixed row pitch
+                 (ROW_H + 2px margin top/bottom) gives getItemLayout exact
+                 offsets, which also powers the scroll-to-current-chapter. */
+              <FlatList
                 ref={scrollRef}
+                data={chapters}
+                keyExtractor={(ch: any, i: number) => String(ch?.id ?? i)}
                 style={{ flex: 1 }}
                 contentContainerStyle={{
                   paddingHorizontal: 16,
                   paddingBottom: insets.bottom + 16,
                 }}
-              >
-                {hasChapters ? (
-                  chapters.map((ch: any, i: number) => {
-                    const active = i === currentChapterIndex;
-                    return (
-                      <Pressable
-                        key={ch.id ?? i}
-                        onPress={() => {
-                          haptic();
-                          // Fire-and-forget with an explicit catch — a
-                          // rejected TrackPlayer seek must not surface as an
-                          // unhandled rejection (same pattern as play-next).
-                          Promise.resolve(onSeekToChapter(i)).catch(() => {});
-                          onToggleExpand(false);
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${ch.title || `Chapter ${i + 1}`}, starts at ${secondsToTimestamp(ch.start || 0)}`}
-                        // Parity with the old ChaptersModal: announce the
-                        // currently-playing chapter as selected.
-                        accessibilityState={{ selected: active }}
+                getItemLayout={(_, index) => ({
+                  length: ROW_H + 4,
+                  offset: (ROW_H + 4) * index,
+                  index,
+                })}
+                initialNumToRender={14}
+                windowSize={7}
+                renderItem={({ item: ch, index: i }: { item: any; index: number }) => {
+                  const active = i === currentChapterIndex;
+                  return (
+                    <Pressable
+                      onPress={() => {
+                        haptic();
+                        // Fire-and-forget with an explicit catch — a
+                        // rejected TrackPlayer seek must not surface as an
+                        // unhandled rejection (same pattern as play-next).
+                        Promise.resolve(onSeekToChapter(i)).catch(() => {});
+                        onToggleExpand(false);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${ch.title || `Chapter ${i + 1}`}, starts at ${secondsToTimestamp(ch.start || 0)}`}
+                      // Parity with the old ChaptersModal: announce the
+                      // currently-playing chapter as selected.
+                      accessibilityState={{ selected: active }}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        paddingHorizontal: 16,
+                        borderRadius: 24,
+                        height: ROW_H,
+                        backgroundColor: active
+                          ? colors.secondaryContainer
+                          : "transparent",
+                        marginVertical: 2,
+                      }}
+                    >
+                      {active ? (
+                        <Icon
+                          name="play-triangle"
+                          size={16}
+                          color={colors.onSecondaryContainer}
+                          style={{ marginRight: 8 }}
+                        />
+                      ) : null}
+                      <Text
+                        numberOfLines={1}
                         style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          paddingHorizontal: 16,
-                          borderRadius: 24,
-                          height: ROW_H,
-                          backgroundColor: active
-                            ? colors.secondaryContainer
-                            : "transparent",
-                          marginVertical: 2,
+                          flex: 1,
+                          fontSize: 15,
+                          color: active
+                            ? colors.onSecondaryContainer
+                            : colors.onSurface,
+                          fontWeight: active ? "600" : "400",
                         }}
                       >
-                        {active ? (
-                          <Icon
-                            name="play-triangle"
-                            size={16}
-                            color={colors.onSecondaryContainer}
-                            style={{ marginRight: 8 }}
-                          />
-                        ) : null}
-                        <Text
-                          numberOfLines={1}
-                          style={{
-                            flex: 1,
-                            fontSize: 15,
-                            color: active
-                              ? colors.onSecondaryContainer
-                              : colors.onSurface,
-                            fontWeight: active ? "600" : "400",
-                          }}
-                        >
-                          {ch.title || `Chapter ${i + 1}`}
-                        </Text>
-                        <Text
-                          style={{
-                            fontFamily: "monospace",
-                            fontSize: 13,
-                            color: active
-                              ? colors.onSecondaryContainer
-                              : colors.onSurfaceVariant,
-                            marginLeft: 8,
-                          }}
-                        >
-                          {secondsToTimestamp(ch.start || 0)}
-                        </Text>
-                      </Pressable>
-                    );
-                  })
-                ) : (
+                        {ch.title || `Chapter ${i + 1}`}
+                      </Text>
+                      <Text
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: 13,
+                          color: active
+                            ? colors.onSecondaryContainer
+                            : colors.onSurfaceVariant,
+                          marginLeft: 8,
+                        }}
+                      >
+                        {secondsToTimestamp(ch.start || 0)}
+                      </Text>
+                    </Pressable>
+                  );
+                }}
+                ListEmptyComponent={
                   <View style={{ paddingVertical: 40, alignItems: "center" }}>
                     <Text style={{ color: colors.onSurfaceVariant, fontSize: 14 }}>
                       No chapters available
                     </Text>
                   </View>
-                )}
-              </ScrollView>
+                }
+              />
             ) : (
               /* Up Next Queue Content */
               <ScrollView
