@@ -116,6 +116,8 @@ import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUiStore } from "../../store/useUiStore";
 import { storage } from "../../utils/storage";
 import { encodeFilterValue } from "../../components/FilterModal";
+import { useDialogStore } from "../../store/useDialogStore";
+import { useSnackbarStore } from "../../store/useSnackbarStore";
 
 const mockedGet = api.get as jest.Mock;
 const mockedPost = api.post as jest.Mock;
@@ -208,6 +210,10 @@ beforeEach(() => {
   usePlaybackStore.setState(initialPlayback, true);
   useUiStore.setState(initialUi, true);
   useFavoritesStore.setState({ favorites: [] } as any);
+  // Dialog/snackbar hosts are module singletons — clear anything a prior test
+  // raised so it can't leak into the next.
+  useDialogStore.setState({ current: null } as any);
+  useSnackbarStore.setState({ current: null } as any);
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
   mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true, isOffline: false });
   // Series-list revalidation fetch (parallel effect) — empty by default.
@@ -912,6 +918,110 @@ describe("BookshelfScreen online", () => {
 
     await screen.findByText("Recently Added");
     expect(screen.getAllByText("Audio Book One").length).toBeGreaterThanOrEqual(1);
+  });
+
+  describe("continue-listening hide (long-press)", () => {
+    const HIDE_URL = "/api/me/progress/prog-b1/remove-from-continue-listening";
+    // The media-progress row carries its own id — the hide route is keyed by
+    // THAT id, never the libraryItemId.
+    const progressFixture = { b1: { id: "prog-b1", libraryItemId: "b1", progress: 0.5 } };
+
+    it("confirms, sends the PROGRESS id (not the item id), removes the card optimistically and refetches", async () => {
+      seedOnline([baseShelves[0]], progressFixture);
+      const loadShelves = useLibraryStore.getState().loadPersonalizedShelves as jest.Mock;
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      const card = await screen.findByLabelText(/Audio Book One by Alice Author/);
+      await act(async () => {
+        fireEvent(card, "longPress");
+      });
+
+      // Long-press raises the themed confirm — nothing hidden or sent yet.
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.title).toBe("Remove from Continue Listening?");
+      expect(mockedGet).not.toHaveBeenCalledWith(HIDE_URL);
+      expect(screen.getByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
+
+      const remove = dialog.buttons.find((b) => b.text === "Remove")!;
+      await act(async () => {
+        await remove.onPress!();
+      });
+
+      // The dedicated hide route, addressed by the media-PROGRESS id.
+      expect(mockedGet).toHaveBeenCalledWith(HIDE_URL);
+      // Optimistic removal: the card is gone without waiting for the refetch.
+      expect(screen.queryByLabelText(/Audio Book One by Alice Author/)).toBeNull();
+      // The shelves + progress refetch converge with the server.
+      expect(loadShelves).toHaveBeenCalledWith(true);
+      expect(useUserStore.getState().loadMediaProgress).toHaveBeenCalled();
+      expect(useSnackbarStore.getState().current?.message).toBe("Removed from Continue Listening");
+    });
+
+    it("tap (not long-press) still opens the item detail", async () => {
+      seedOnline([baseShelves[0]], progressFixture);
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      const card = await screen.findByLabelText(/Audio Book One by Alice Author/);
+      await fireEvent.press(card);
+      expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "b1" });
+      expect(useDialogStore.getState().current).toBeNull();
+    });
+
+    it("restores the card when the hide fails on the server", async () => {
+      seedOnline([baseShelves[0]], progressFixture);
+      mockedGet.mockImplementation((url: string) =>
+        url.includes("remove-from-continue-listening")
+          ? Promise.reject({ response: { status: 500 } })
+          : Promise.resolve({ data: { results: [] } })
+      );
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      const card = await screen.findByLabelText(/Audio Book One by Alice Author/);
+      await act(async () => {
+        fireEvent(card, "longPress");
+      });
+      const remove = useDialogStore.getState().current!.buttons.find((b) => b.text === "Remove")!;
+      await act(async () => {
+        await remove.onPress!();
+      });
+
+      // The optimistically-removed card comes back and the failure surfaces.
+      expect(await screen.findByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
+      const msg = useSnackbarStore.getState().current?.message;
+      expect(msg).toBeTruthy();
+      expect(msg).not.toBe("Removed from Continue Listening");
+    });
+
+    it("never guesses an id: long-press without a progress row shows a snackbar, no dialog, no request", async () => {
+      // No mediaProgress entry (and no embedded userMediaProgress) for b1.
+      seedOnline([baseShelves[0]]);
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      const card = await screen.findByLabelText(/Audio Book One by Alice Author/);
+      await act(async () => {
+        fireEvent(card, "longPress");
+      });
+
+      expect(useDialogStore.getState().current).toBeNull();
+      expect(useSnackbarStore.getState().current?.message).toMatch(/refresh/i);
+      expect(mockedGet).not.toHaveBeenCalledWith(expect.stringContaining("remove-from-continue-listening"));
+    });
+
+    it("exposes the hide as a custom accessibility action (no timed long-press needed)", async () => {
+      seedOnline([baseShelves[0]], progressFixture);
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      const card = await screen.findByLabelText(/Audio Book One by Alice Author/);
+      await act(async () => {
+        fireEvent(card, "accessibilityAction", { nativeEvent: { actionName: "longpress" } });
+      });
+      expect(useDialogStore.getState().current?.title).toBe("Remove from Continue Listening?");
+    });
   });
 
   it("renders Browse genres AFTER the personalized shelves (Continue Listening stays first)", async () => {

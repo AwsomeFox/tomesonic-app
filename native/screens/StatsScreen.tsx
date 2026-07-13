@@ -14,6 +14,7 @@ import HintPressable from '../components/HintPressable';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import { useUserStore } from '../store/useUserStore';
+import { useLibraryStore } from '../store/useLibraryStore';
 import { usePlaybackStore } from '../store/usePlaybackStore';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { hasAnyPendingSyncs } from '../utils/progressSync';
@@ -143,6 +144,9 @@ export default function StatsScreen({ navigation }: any) {
   const colors = useThemeColors();
   const progressMap = useUserStore((state) => state.mediaProgress);
   const loadMediaProgress = useUserStore((state) => state.loadMediaProgress);
+  // Entry point to the LIBRARY-wide stats screen (totals/genres/authors for
+  // the current library) — hidden when no library is selected yet.
+  const currentLibraryId = useLibraryStore((s) => s.currentLibraryId);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
   const [stats, setStats] = useState<ListeningStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -451,6 +455,41 @@ export default function StatsScreen({ navigation }: any) {
               color={seasonal ? colors.onPrimaryContainer : colors.onSurfaceVariant}
             />
           </HintPressable>
+
+          {/* Library stats entry — library-wide totals/genres/authors */}
+          {currentLibraryId ? (
+            <HintPressable
+              onPress={() => navigation.navigate('LibraryStats', { libraryId: currentLibraryId })}
+              accessibilityRole="button"
+              accessibilityLabel="Library stats"
+              android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                marginHorizontal: 20,
+                marginBottom: 20,
+                paddingVertical: 14,
+                paddingHorizontal: 16,
+                borderRadius: 14,
+                overflow: 'hidden',
+                backgroundColor: colors.surfaceContainerHigh,
+              }}
+            >
+              <Icon name="stats" size={22} color={colors.onSurface} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: '700' }}>
+                  Library stats
+                </Text>
+                <Text
+                  style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}
+                  numberOfLines={1}
+                >
+                  Totals, top genres and authors for this library
+                </Text>
+              </View>
+              <Icon name="chevron-right" size={22} color={colors.onSurfaceVariant} />
+            </HintPressable>
+          ) : null}
 
           {/* Listening goal */}
           <View

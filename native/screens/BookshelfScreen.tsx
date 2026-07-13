@@ -28,6 +28,10 @@ import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import { flushPendingSyncs } from "../utils/progressSync";
 import { hasEbook, isEbookOnly } from "../utils/bookMatch";
 import { shelfOverflows, shelfToLibraryParams } from "../utils/shelfLayout";
+import { hideFromContinueListening } from "../utils/abs/me";
+import { showAppDialog } from "../store/useDialogStore";
+import { showSnackbar } from "../store/useSnackbarStore";
+import { bookStatusA11yLabel } from "../components/BookProgressBadge";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -89,6 +93,11 @@ export default function BookshelfScreen({ navigation }: any) {
   // with already-finished/in-progress items filtered back out. Null whenever
   // there's no affinity/data or we're offline — the shelf is purely additive.
   const [affinityShelf, setAffinityShelf] = useState<any | null>(null);
+  // Continue-Listening entries the user hid via long-press, removed
+  // OPTIMISTICALLY (before the server confirms) so the card disappears the
+  // moment they confirm; restored if the request fails. Cleared on library
+  // switch and superseded by the post-hide shelf refetch.
+  const [hiddenContinueIds, setHiddenContinueIds] = useState<string[]>([]);
   // Starts true so the very first frame of a fresh install shows the skeleton
   // (not an empty screen). Warm starts hydrate shelves synchronously from the
   // MMKV cache, so the `shelves.length === 0` half of the gate skips it.
@@ -379,6 +388,56 @@ export default function BookshelfScreen({ navigation }: any) {
     }
   };
 
+  // The Continue Listening hide route is keyed by the MEDIA-PROGRESS row id
+  // (user.mediaProgress[].id) — NOT the libraryItemId. Podcast rows live under
+  // composite `${itemId}-${episodeId}` keys, so try the episode key first.
+  const resolveContinueProgress = (item: any) => {
+    const mp = useUserStore.getState().mediaProgress || {};
+    const epId = item?.recentEpisode?.id;
+    return (epId ? mp[`${item?.id}-${epId}`] : null) || mp[item?.id] || item?.userMediaProgress || null;
+  };
+
+  // Long-press action on a Continue Listening card: confirm → optimistic
+  // removal → server hide (progress id) → shelf/progress refetch. Failure
+  // restores the card, so the shelf never silently disagrees with the server.
+  const promptHideFromContinueListening = (item: any) => {
+    const title = item?.media?.metadata?.title || item?.title || "This item";
+    const progressId = resolveContinueProgress(item)?.id;
+    if (!progressId) {
+      // Without the media-progress row id the server route can't be addressed
+      // (e.g. a shelf payload that raced the progress fetch) — never guess.
+      showSnackbar({ message: "Can't hide this right now — pull to refresh and try again." });
+      return;
+    }
+    showAppDialog({
+      title: "Remove from Continue Listening?",
+      message: `"${title}" will be hidden from this shelf. Your progress is kept and it stays in your library.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          onPress: async () => {
+            setHiddenContinueIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
+            try {
+              await hideFromContinueListening(progressId);
+              showSnackbar({ message: "Removed from Continue Listening" });
+              // Converge with the server: the refreshed shelf no longer carries
+              // the hidden entry, and the progress map picks up the flag.
+              loadPersonalizedShelves(true).catch(() => {});
+              loadMediaProgress().catch(() => {});
+            } catch (e: any) {
+              // Restore the optimistically-removed card — the hide didn't land.
+              if (mountedRef.current) {
+                setHiddenContinueIds((prev) => prev.filter((id) => id !== item.id));
+              }
+              showSnackbar({ message: e?.message || "Couldn't remove it. Try again." });
+            }
+          },
+        },
+      ],
+    });
+  };
+
   // Bumped by pull-to-refresh so the series-list effect below revalidates too
   // (otherwise Continue Series folders keep stale covers/counts).
   const [seriesRefreshTick, setSeriesRefreshTick] = useState(0);
@@ -433,6 +492,9 @@ export default function BookshelfScreen({ navigation }: any) {
       // Want to Read is scoped to the current library — clear the old library's
       // items so they don't flash under the new header before the refetch lands.
       setWantToReadItems([]);
+      // Optimistically-hidden Continue Listening entries belong to the OLD
+      // library's shelf — never suppress the new library's cards by shared id.
+      setHiddenContinueIds([]);
       // Shelf GEOMETRY caches are keyed by bare shelf.id, which repeats across
       // libraries (recently-added, continue-listening, …) while the rows now
       // remount per-library. Without a reset, the new library's rows briefly
@@ -708,7 +770,12 @@ export default function BookshelfScreen({ navigation }: any) {
         result.push({ ...shelf, type: "series", entities: continueSeries });
       } else if (shelf.id === "continue-listening") {
         const entities = (shelf.entities || []).filter(
-          (e: any) => !isEbookOnly(e) && !ebookOnlyProgress(e)
+          (e: any) =>
+            !isEbookOnly(e) &&
+            !ebookOnlyProgress(e) &&
+            // Optimistically hidden via long-press "Remove from Continue
+            // Listening" — dropped here until the shelf refetch converges.
+            !hiddenContinueIds.includes(e?.id)
         );
         result.push({ ...shelf, entities });
       } else if (shelf.id === "continue-reading") {
@@ -769,7 +836,7 @@ export default function BookshelfScreen({ navigation }: any) {
       result.push(affinityShelf);
     }
     return result;
-  }, [activeShelves, hideNonAudiobooks, continueSeries, continueReadingItems, wantToReadItems, affinityShelf, isOffline]);
+  }, [activeShelves, hideNonAudiobooks, continueSeries, continueReadingItems, wantToReadItems, affinityShelf, isOffline, hiddenContinueIds]);
 
   // Prune per-shelf geometry state/refs for shelves that have left the list.
   // Otherwise stale entries linger: a chevron can flash from a previous shelf's
@@ -796,13 +863,61 @@ export default function BookshelfScreen({ navigation }: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shelfIdsKey]);
 
-  const renderBookCard = (item: any, index: number) => {
+  const renderBookCard = (item: any, index: number, shelfId?: string) => {
+    if (shelfId !== "continue-listening") {
+      return (
+        <Animated.View
+          key={item.id || index}
+          entering={shelfCardEnter(index)}
+        >
+          <BookCard item={item} size={165} navigation={navigation} />
+        </Animated.View>
+      );
+    }
+    // Continue Listening cards gain a long-press "Remove from Continue
+    // Listening" action. BookCard exposes no long-press, so a transparent
+    // overlay Pressable captures the touches instead: tap keeps opening the
+    // item, long-press opens the hide confirm. The card underneath is hidden
+    // from accessibility so the overlay (which mirrors BookCard's label,
+    // status included) is the single accessible element.
+    const clTitle = item?.media?.metadata?.title || item?.title || "";
+    const clAuthor =
+      item?.media?.metadata?.authorName || item?.media?.metadata?.author || item?.author || "";
+    const clLabel = [
+      clAuthor ? `${clTitle} by ${clAuthor}` : clTitle || "Book",
+      bookStatusA11yLabel(
+        item,
+        useUserStore.getState().mediaProgress,
+        !!useDownloadStore.getState().completedDownloads?.[item?.id]
+      ),
+    ]
+      .filter(Boolean)
+      .join(". ");
     return (
       <Animated.View
         key={item.id || index}
         entering={shelfCardEnter(index)}
       >
-        <BookCard item={item} size={165} navigation={navigation} />
+        <View importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+          <BookCard item={item} size={165} navigation={navigation} />
+        </View>
+        <Pressable
+          onPress={() => {
+            if (item?.id) navigation.navigate("ItemDetail", { itemId: item.id });
+          }}
+          onLongPress={() => promptHideFromContinueListening(item)}
+          accessibilityRole="button"
+          accessibilityLabel={clLabel}
+          accessibilityHint="Long press to remove from Continue Listening"
+          // TalkBack users shouldn't depend on long-press timing — expose the
+          // shelf action as a standard custom accessibility action too.
+          accessibilityActions={[{ name: "longpress", label: "Remove from Continue Listening" }]}
+          onAccessibilityAction={(e) => {
+            if (e.nativeEvent.actionName === "longpress") promptHideFromContinueListening(item);
+          }}
+          // Match BookCard's footprint (165² with 4dp horizontal margins).
+          style={{ position: "absolute", top: 0, bottom: 0, left: 4, right: 4, borderRadius: 20 }}
+        />
       </Animated.View>
     );
   };
@@ -1287,7 +1402,7 @@ export default function BookshelfScreen({ navigation }: any) {
                     } else if (shelf.type === "authors" || shelf.type === "author") {
                       return renderAuthorCard(entity, index);
                     } else {
-                      return renderBookCard(entity, index);
+                      return renderBookCard(entity, index, shelf.id);
                     }
                   })}
                 </ScrollView>

@@ -61,12 +61,13 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react-native";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import CollectionDetailScreen from "../../screens/CollectionDetailScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useDialogStore } from "../../store/useDialogStore";
+import { useSnackbarStore } from "../../store/useSnackbarStore";
 
 // Pull the destructive "Delete" button out of the confirm dialog the trash
 // icon opens (no AppDialog host is mounted in the unit render) and invoke it.
@@ -140,6 +141,7 @@ beforeEach(() => {
   (api.get as jest.Mock).mockResolvedValue({ data: COLLECTION });
   (api.delete as jest.Mock).mockReset();
   useDialogStore.setState({ current: null });
+  useSnackbarStore.setState({ current: null } as any);
 });
 
 describe("CollectionDetailScreen", () => {
@@ -272,6 +274,145 @@ describe("CollectionDetailScreen", () => {
     await fireEvent.press(screen.getByLabelText("Retry"));
 
     expect(await screen.findByText("Finished Book")).toBeTruthy();
+  });
+
+  describe("create playlist from collection", () => {
+    it("POSTs the playlists-from-collection route and shows a success snackbar", async () => {
+      (api.post as jest.Mock).mockResolvedValue({ data: { id: "pl1" } });
+      await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Create playlist from collection"));
+
+      await waitFor(() => {
+        expect(api.post).toHaveBeenCalledWith("/api/playlists/collection/col1");
+        expect(useSnackbarStore.getState().current?.message).toBe(
+          'Playlist created from "Space Operas"'
+        );
+      });
+      // Success is transient feedback, never a blocking dialog.
+      expect(useDialogStore.getState().current).toBeNull();
+    });
+
+    it("surfaces a dialog (not a snackbar) when the playlist POST fails", async () => {
+      (api.post as jest.Mock).mockRejectedValue({ response: { status: 500 } });
+      await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Create playlist from collection"));
+
+      await waitFor(() => {
+        expect(useDialogStore.getState().current?.title).toBe("Couldn't create playlist");
+      });
+      expect(useSnackbarStore.getState().current).toBeNull();
+    });
+  });
+
+  describe("batch mark-finished", () => {
+    beforeEach(() => {
+      // The post-batch progress refresh must not hit the real /api/me loader.
+      useUserStore.setState({
+        loadMediaProgress: jest.fn().mockResolvedValue(undefined),
+      } as any);
+    });
+
+    it("confirms with the unfinished count, then PATCHes a BARE-ARRAY body", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Mark all as finished"));
+
+      // Confirm first — nothing sent yet. b1 is already finished, so the
+      // count covers only the 3 unfinished books.
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.title).toBe("Mark all as finished?");
+      expect(dialog.message).toContain("3 books");
+      expect(api.patch).not.toHaveBeenCalled();
+
+      const confirm = dialog.buttons.find((b) => b.text === "Mark finished")!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      // The batch body is the bare ARRAY of progress payloads (verified server
+      // contract) — NOT wrapped in an object.
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
+        { libraryItemId: "b2", isFinished: true },
+        { libraryItemId: "b3", isFinished: true },
+        { libraryItemId: "b4", isFinished: true },
+      ]);
+      const [, body] = (api.patch as jest.Mock).mock.calls[0];
+      expect(Array.isArray(body)).toBe(true);
+
+      expect(useSnackbarStore.getState().current?.message).toBe("3 books marked finished");
+      // The progress map refresh + silent collection revalidation both fire.
+      expect(useUserStore.getState().loadMediaProgress).toHaveBeenCalled();
+      await waitFor(() => {
+        expect(
+          (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/collections/col1").length
+        ).toBeGreaterThanOrEqual(2);
+      });
+    });
+
+    it("excludes books the progress MAP marks finished (not just the payload snapshot)", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      // The global map is authoritative: b2 finished there since the payload
+      // snapshot was taken.
+      useUserStore.setState({
+        mediaProgress: { b2: { libraryItemId: "b2", isFinished: true } },
+      } as any);
+      await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Mark all as finished"));
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.message).toContain("2 books");
+      const confirm = dialog.buttons.find((b) => b.text === "Mark finished")!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
+        { libraryItemId: "b3", isFinished: true },
+        { libraryItemId: "b4", isFinished: true },
+      ]);
+    });
+
+    it("shows an already-finished snackbar (no dialog, no request) when nothing is unfinished", async () => {
+      useUserStore.setState({
+        mediaProgress: {
+          b2: { libraryItemId: "b2", isFinished: true },
+          b3: { libraryItemId: "b3", isFinished: true },
+          b4: { libraryItemId: "b4", isFinished: true },
+        },
+      } as any);
+      await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Mark all as finished"));
+
+      expect(useDialogStore.getState().current).toBeNull();
+      expect(api.patch).not.toHaveBeenCalled();
+      expect(useSnackbarStore.getState().current?.message).toMatch(/already finished/i);
+    });
+
+    it("surfaces a dialog and no success snackbar when the batch PATCH fails", async () => {
+      (api.patch as jest.Mock).mockRejectedValue({ response: { status: 500 } });
+      await renderCollection();
+      await screen.findByText("Finished Book");
+
+      await fireEvent.press(screen.getByLabelText("Mark all as finished"));
+      const confirm = useDialogStore.getState().current!.buttons.find(
+        (b) => b.text === "Mark finished"
+      )!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      expect(useDialogStore.getState().current?.title).toBe("Couldn't mark as finished");
+      expect(useSnackbarStore.getState().current).toBeNull();
+    });
   });
 
   describe("delete (admin-gated)", () => {

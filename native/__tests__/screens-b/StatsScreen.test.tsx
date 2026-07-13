@@ -82,6 +82,7 @@ import { api } from "../../utils/api";
 import { hasAnyPendingSyncs } from "../../utils/progressSync";
 import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useUserStore } from "../../store/useUserStore";
+import { useLibraryStore } from "../../store/useLibraryStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { storage } from "../../utils/storage";
 import { useDialogStore } from "../../store/useDialogStore";
@@ -91,6 +92,7 @@ const mockedPending = hasAnyPendingSyncs as jest.Mock;
 
 const initialUser = useUserStore.getState();
 const initialPlayback = usePlaybackStore.getState();
+const initialLibrary = useLibraryStore.getState();
 
 // Mirror the screen's local-calendar helpers so the fixture keys land on the
 // exact same YYYY-MM-DD strings regardless of the machine's timezone.
@@ -145,6 +147,7 @@ beforeEach(() => {
 
   useUserStore.setState(initialUser, true);
   usePlaybackStore.setState(initialPlayback, true);
+  useLibraryStore.setState(initialLibrary, true);
   usePlaybackStore.setState({ currentSession: null } as any);
   mockedNet.mockReturnValue({ isConnected: true, isInternetReachable: true });
   mockedPending.mockReturnValue(false);
@@ -535,6 +538,23 @@ describe("StatsScreen", () => {
     // Local day (10 min), not the naive server `today` (would be 167 min).
     expect(screen.getByText("10 / 30 min")).toBeTruthy();
     expect(screen.queryByText("167 / 30 min")).toBeNull();
+  });
+
+  it("links to the library-wide stats screen with the CURRENT libraryId", async () => {
+    useLibraryStore.setState({ currentLibraryId: "lib1" } as any);
+    const navigation = await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    await fireEvent.press(screen.getByLabelText("Library stats"));
+    expect(navigation.navigate).toHaveBeenCalledWith("LibraryStats", { libraryId: "lib1" });
+  });
+
+  it("hides the library stats entry when no library is selected", async () => {
+    useLibraryStore.setState({ currentLibraryId: null } as any);
+    await renderStats();
+    await screen.findByText("Recent Sessions");
+
+    expect(screen.queryByLabelText("Library stats")).toBeNull();
   });
 
   it("defaults the Year in Review to the previous year in January", async () => {
