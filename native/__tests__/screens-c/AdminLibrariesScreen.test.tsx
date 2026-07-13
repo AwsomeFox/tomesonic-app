@@ -1,0 +1,448 @@
+/**
+ * AdminLibrariesScreen — lists the server's libraries fresh from
+ * GET /api/libraries, fires scan / force re-scan / match-all ONLY after a
+ * showAppDialog confirm (then watches the task queue and snackbars the
+ * outcome), navigates to AdminLibraryEdit for create/edit, and branches its
+ * load-error state on the normalized AbsError kind (offline vs 403 vs 5xx).
+ */
+jest.mock("../../utils/api", () => ({
+  api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+jest.mock("../../store/useDialogStore", () => ({
+  showAppDialog: jest.fn(),
+}));
+jest.mock("../../store/useSnackbarStore", () => ({
+  showSnackbar: jest.fn(),
+}));
+// The shared task poller is exercised in its own suite — here it's stubbed so
+// no timers run; tests inject snapshots / watch results directly. Watch
+// contract: startTaskWatch resolves the finished task, OR (when ABS drops the
+// task from GET /api/tasks before we see it finish) the last-seen task with
+// inferredCompletion: true, or null on timeout.
+jest.mock("../../utils/abs/tasks", () => ({
+  subscribeTasks: jest.fn(() => jest.fn()),
+  getTasksSnapshot: jest.fn(() => []),
+  startTaskWatch: jest.fn(() => Promise.resolve(null)),
+}));
+jest.mock("@react-navigation/native", () => ({
+  useFocusEffect: (cb: any) => require("react").useEffect(cb, [cb]),
+}));
+
+import React from "react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
+import AdminLibrariesScreen from "../../screens/AdminLibrariesScreen";
+import { api } from "../../utils/api";
+import { showAppDialog } from "../../store/useDialogStore";
+import { showSnackbar } from "../../store/useSnackbarStore";
+import { subscribeTasks, getTasksSnapshot, startTaskWatch } from "../../utils/abs/tasks";
+
+const LIBS = [
+  {
+    id: "lib1",
+    name: "Audiobooks",
+    mediaType: "book",
+    icon: "books-1",
+    folders: [{ id: "fol1", fullPath: "/srv/audiobooks" }, { id: "fol2", fullPath: "/srv/more" }],
+  },
+  {
+    id: "lib2",
+    name: "Podcasts",
+    mediaType: "podcast",
+    icon: "podcast",
+    folders: [{ id: "fol3", fullPath: "/srv/podcasts" }],
+  },
+];
+
+function mockLibrariesGet(libs: any[] = LIBS) {
+  (api.get as jest.Mock).mockImplementation((url: string) => {
+    if (url === "/api/libraries") return Promise.resolve({ data: { libraries: libs } });
+    return Promise.resolve({ data: {} });
+  });
+}
+
+function makeNavigation() {
+  const listeners: Record<string, (e?: any) => void> = {};
+  const navigation = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    dispatch: jest.fn(),
+    addListener: jest.fn((name: string, cb: (e?: any) => void) => {
+      listeners[name] = cb;
+      return jest.fn();
+    }),
+  } as any;
+  return { navigation, listeners };
+}
+
+async function renderScreen() {
+  const { navigation, listeners } = makeNavigation();
+  await render(<AdminLibrariesScreen navigation={navigation} route={{ params: {} }} />);
+  return { navigation, listeners };
+}
+
+// Find the most recent dialog whose title matches.
+function dialogWithTitle(title: string | RegExp) {
+  const calls = (showAppDialog as jest.Mock).mock.calls.map((c) => c[0]);
+  return [...calls]
+    .reverse()
+    .find((d) => (typeof title === "string" ? d?.title === title : title.test(d?.title ?? "")));
+}
+
+beforeEach(() => {
+  (api.get as jest.Mock).mockReset();
+  (api.post as jest.Mock).mockReset();
+  (api.post as jest.Mock).mockResolvedValue({ data: {} });
+  (showAppDialog as jest.Mock).mockClear();
+  (showSnackbar as jest.Mock).mockClear();
+  (subscribeTasks as jest.Mock).mockReturnValue(jest.fn());
+  (getTasksSnapshot as jest.Mock).mockReturnValue([]);
+  (startTaskWatch as jest.Mock).mockResolvedValue(null);
+  mockLibrariesGet();
+});
+
+describe("AdminLibrariesScreen", () => {
+  it("lists the server's libraries with media type + folder count subtitles", async () => {
+    await renderScreen();
+
+    expect(await screen.findByText("Audiobooks")).toBeTruthy();
+    expect(screen.getByText("Podcasts")).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith("/api/libraries");
+    expect(screen.getByText("Books · 2 folders")).toBeTruthy();
+    expect(screen.getByText("Podcasts · 1 folder")).toBeTruthy();
+  });
+
+  it("silently reloads the list when the screen regains focus (edits made elsewhere show up)", async () => {
+    const { listeners } = await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    // First focus == the initial-mount focus React Navigation fires; it's
+    // skipped (firstFocusRef) so entry doesn't double-fetch.
+    await act(async () => listeners["focus"]());
+
+    // A library was created on AdminLibraryEdit while we were away; the NEXT
+    // focus (a real return to the screen) reloads.
+    mockLibrariesGet([
+      ...LIBS,
+      { id: "lib3", name: "Freshly Created", mediaType: "book", icon: "books-1", folders: [] },
+    ]);
+    await act(async () => listeners["focus"]());
+
+    expect(await screen.findByText("Freshly Created")).toBeTruthy();
+    // Silent refresh: the existing rows stayed rendered (no full-screen spinner wipe).
+    expect(screen.getByText("Audiobooks")).toBeTruthy();
+  });
+
+  it("skips the focus-driven refetch on first mount (single GET /api/libraries on entry)", async () => {
+    const { listeners } = await renderScreen();
+    await screen.findByText("Audiobooks");
+    const libCalls = () =>
+      (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/libraries").length;
+
+    // Mount already loaded once.
+    expect(libCalls()).toBe(1);
+    // The initial-mount focus event must NOT trigger a second fetch.
+    await act(async () => listeners["focus"]());
+    expect(libCalls()).toBe(1);
+    // A subsequent (real re-)focus DOES refetch.
+    await act(async () => listeners["focus"]());
+    expect(libCalls()).toBe(2);
+  });
+
+  it("clears the load error only on a SUCCESSFUL refetch — no empty-state flash mid-retry", async () => {
+    // Mount fails → ErrorState.
+    (api.get as jest.Mock).mockRejectedValueOnce(new Error("Network Error"));
+    const { listeners } = await renderScreen();
+    expect(await screen.findByText("You're offline")).toBeTruthy();
+
+    // Consume the initial-mount focus (skipped).
+    await act(async () => listeners["focus"]());
+
+    // The next focus triggers a silent refetch we hold pending.
+    let resolveGet: (v: any) => void;
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/libraries") return new Promise((res) => (resolveGet = res));
+      return Promise.resolve({ data: {} });
+    });
+    await act(async () => listeners["focus"]());
+
+    // While the refetch is in flight the ErrorState must stay — the error is
+    // NOT cleared at the top, so the "No libraries" empty state never flashes.
+    expect(screen.getByText("You're offline")).toBeTruthy();
+    expect(screen.queryByText("No libraries")).toBeNull();
+
+    // On success it heals to the list.
+    await act(async () => {
+      resolveGet!({ data: { libraries: LIBS } });
+    });
+    expect(await screen.findByText("Audiobooks")).toBeTruthy();
+  });
+
+  it("header add navigates to AdminLibraryEdit in create mode; row tap edits", async () => {
+    const { navigation } = await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Add library"));
+    expect(navigation.navigate).toHaveBeenCalledWith("AdminLibraryEdit", {});
+
+    await fireEvent.press(screen.getByLabelText("Edit Audiobooks"));
+    expect(navigation.navigate).toHaveBeenCalledWith("AdminLibraryEdit", { libraryId: "lib1" });
+  });
+
+  it("scan fires the POST only after the confirm dialog's Scan button", async () => {
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Scan Audiobooks"));
+
+    // Confirm requested, nothing fired yet.
+    expect(api.post).not.toHaveBeenCalled();
+    const dialog = dialogWithTitle('Scan "Audiobooks"');
+    expect(dialog).toBeTruthy();
+
+    dialog.buttons.find((b: any) => b.text === "Scan").onPress();
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect((api.post as jest.Mock).mock.calls[0][0]).toBe("/api/libraries/lib1/scan");
+    // Plain scan carries no force param.
+    expect((api.post as jest.Mock).mock.calls[0][2]?.params).toBeUndefined();
+    // Kickoff snackbar + task watch for the scan's completion.
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('Scanning "Audiobooks"') })
+      )
+    );
+    expect(startTaskWatch).toHaveBeenCalled();
+  });
+
+  it("force re-scan passes force=1", async () => {
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Scan Audiobooks"));
+    dialogWithTitle('Scan "Audiobooks"').buttons
+      .find((b: any) => b.text === "Force re-scan")
+      .onPress();
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        "/api/libraries/lib1/scan",
+        undefined,
+        expect.objectContaining({ params: { force: 1 } })
+      )
+    );
+  });
+
+  it("snackbars the terminal task state once the watched scan finishes", async () => {
+    (startTaskWatch as jest.Mock).mockResolvedValue({
+      id: "t1",
+      action: "library-scan",
+      data: { libraryId: "lib1" },
+      title: "Scanning Audiobooks",
+      error: null,
+      isFailed: false,
+      isFinished: true,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Scan Audiobooks"));
+    dialogWithTitle('Scan "Audiobooks"').buttons.find((b: any) => b.text === "Scan").onPress();
+
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Scan of "Audiobooks" finished' })
+      )
+    );
+  });
+
+  it("a FAILED scan's terminal snackbar carries the task's error text", async () => {
+    (startTaskWatch as jest.Mock).mockResolvedValue({
+      id: "t1",
+      action: "library-scan",
+      data: { libraryId: "lib1" },
+      title: "Scanning Audiobooks",
+      error: "Folder not found",
+      isFailed: true,
+      isFinished: true,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Scan Audiobooks"));
+    dialogWithTitle('Scan "Audiobooks"').buttons.find((b: any) => b.text === "Scan").onPress();
+
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Scan of "Audiobooks" failed: Folder not found' })
+      )
+    );
+  });
+
+  it("a scan watch resolved by task DISAPPEARANCE (inferredCompletion) reads as generic success", async () => {
+    // ABS removes completed tasks from GET /api/tasks — the watch then
+    // resolves the last-seen (still unfinished) task with inferredCompletion.
+    // No exit status is available, so the copy is the neutral "finished".
+    (startTaskWatch as jest.Mock).mockResolvedValue({
+      id: "t1",
+      action: "library-scan",
+      data: { libraryId: "lib1" },
+      title: "Scanning Audiobooks",
+      error: null,
+      isFailed: false,
+      isFinished: false,
+      startedAt: 1,
+      finishedAt: null,
+      inferredCompletion: true,
+    });
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Scan Audiobooks"));
+    dialogWithTitle('Scan "Audiobooks"').buttons.find((b: any) => b.text === "Scan").onPress();
+
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Scan of "Audiobooks" finished' })
+      )
+    );
+    expect(showSnackbar).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("failed") })
+    );
+  });
+
+  it("a match-all watch with inferredCompletion also snackbars the generic finished copy", async () => {
+    (startTaskWatch as jest.Mock).mockResolvedValue({
+      id: "t2",
+      action: "library-match-all",
+      data: { libraryId: "lib1" },
+      title: "Matching Audiobooks",
+      error: null,
+      isFailed: false,
+      isFinished: false,
+      startedAt: 1,
+      finishedAt: null,
+      inferredCompletion: true,
+    });
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Match all in Audiobooks"));
+    dialogWithTitle('Match all items in "Audiobooks"')
+      .buttons.find((b: any) => b.text === "Match all")
+      .onPress();
+
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Match-all in "Audiobooks" finished' })
+      )
+    );
+  });
+
+  it("match-all is confirm-gated (destructive) and fires the verified GET route", async () => {
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+    const matchallCalls = () =>
+      (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/libraries/lib1/matchall");
+
+    await fireEvent.press(screen.getByLabelText("Match all in Audiobooks"));
+    expect(matchallCalls()).toHaveLength(0);
+
+    const dialog = dialogWithTitle('Match all items in "Audiobooks"');
+    expect(dialog).toBeTruthy();
+    const confirm = dialog.buttons.find((b: any) => b.text === "Match all");
+    expect(confirm.style).toBe("destructive");
+    confirm.onPress();
+
+    await waitFor(() => expect(matchallCalls()).toHaveLength(1));
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("Matching all items") })
+      )
+    );
+  });
+
+  it("hides match-all for podcast libraries (book-library feature)", async () => {
+    await renderScreen();
+    await screen.findByText("Podcasts");
+
+    expect(screen.queryByLabelText("Match all in Podcasts")).toBeNull();
+    // Scanning still available for podcast libraries.
+    expect(screen.getByLabelText("Scan Podcasts")).toBeTruthy();
+  });
+
+  it("a 403 on scan surfaces the forbidden message in a dialog", async () => {
+    (api.post as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("forbidden"), { response: { status: 403, data: "" } })
+    );
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    await fireEvent.press(screen.getByLabelText("Scan Audiobooks"));
+    dialogWithTitle('Scan "Audiobooks"').buttons.find((b: any) => b.text === "Scan").onPress();
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't start the scan",
+          message: expect.stringContaining("permission"),
+        })
+      )
+    );
+    expect(showSnackbar).not.toHaveBeenCalled();
+  });
+
+  it("offline load failure renders the offline ErrorState and retry refetches", async () => {
+    (api.get as jest.Mock).mockRejectedValue(new Error("Network Error")); // no .response
+    await renderScreen();
+
+    expect(await screen.findByText("You're offline")).toBeTruthy();
+
+    // Server back — retry reloads the list.
+    mockLibrariesGet();
+    await fireEvent.press(screen.getByLabelText("Retry"));
+    expect(await screen.findByText("Audiobooks")).toBeTruthy();
+  });
+
+  it("403 load failure renders the admin-access ErrorState (not offline)", async () => {
+    (api.get as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("forbidden"), { response: { status: 403, data: "" } })
+    );
+    await renderScreen();
+
+    expect(await screen.findByText("Admin access required")).toBeTruthy();
+    expect(screen.queryByText("You're offline")).toBeNull();
+  });
+
+  it("shows a live status chip on rows with a running scan task", async () => {
+    (getTasksSnapshot as jest.Mock).mockReturnValue([
+      {
+        id: "t1",
+        action: "library-scan",
+        data: { libraryId: "lib1" },
+        title: "Scanning Audiobooks",
+        error: null,
+        isFailed: false,
+        isFinished: false,
+        startedAt: 1,
+        finishedAt: null,
+      },
+    ]);
+    await renderScreen();
+    await screen.findByText("Audiobooks");
+
+    expect(screen.getByText("Scanning")).toBeTruthy();
+    // The screen subscribed to the shared poller while focused.
+    expect(subscribeTasks).toHaveBeenCalled();
+  });
+
+  it("shows the empty state when the server has no libraries", async () => {
+    mockLibrariesGet([]);
+    await renderScreen();
+
+    expect(await screen.findByText("No libraries")).toBeTruthy();
+  });
+});

@@ -11,6 +11,8 @@ import { api } from "../utils/api";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { showAppDialog } from "../store/useDialogStore";
+import { showSnackbar } from "../store/useSnackbarStore";
+import { batchUpdateProgress, createPlaylistFromCollection } from "../utils/abs/me";
 import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
@@ -65,12 +67,16 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
 
+  const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
+
   const [collection, setCollection] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   const [starting, setStarting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [creatingPlaylist, setCreatingPlaylist] = useState(false);
+  const [markingFinished, setMarkingFinished] = useState(false);
 
   const serverAddress = serverConnectionConfig?.address?.replace(/\/$/, "") || "";
   const token = serverConnectionConfig?.token || "";
@@ -296,6 +302,88 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
     });
   };
 
+  // "Create playlist from collection": the server copies this collection's
+  // books into a NEW playlist (POST /api/playlists/collection/:id). Additive
+  // and non-destructive, so no confirm — a success snackbar whose "View"
+  // action jumps straight to the created playlist (same PlaylistDetail route
+  // the Collections & Playlists list uses).
+  const handleCreatePlaylist = async () => {
+    if (!collectionId || creatingPlaylist) return;
+    setCreatingPlaylist(true);
+    try {
+      const created = await createPlaylistFromCollection(collectionId);
+      const playlistId = created?.id;
+      showSnackbar({
+        message: `Playlist created from "${collectionName || "collection"}"`,
+        action: playlistId
+          ? { label: "View", onPress: () => navigation.navigate("PlaylistDetail", { playlistId }) }
+          : undefined,
+      });
+    } catch (e: any) {
+      // createPlaylistFromCollection throws a normalized AbsError whose
+      // message already distinguishes offline / forbidden / server failures.
+      showAppDialog({
+        title: "Couldn't create playlist",
+        message: e?.message || "Something went wrong. Please try again.",
+      });
+    } finally {
+      setCreatingPlaylist(false);
+    }
+  };
+
+  // Batch mark-finished for the whole collection, via the batch progress
+  // endpoint whose body is a BARE ARRAY of progress payloads (one PATCH for N
+  // books instead of N requests). Only unfinished books are included.
+  const unfinishedItems = bookItems.filter(
+    (b) => !(progressMap[b.id] || b.userMediaProgress)?.isFinished
+  );
+
+  const handleMarkAllFinished = () => {
+    const count = unfinishedItems.length;
+    if (count === 0) {
+      showSnackbar({ message: "Everything here is already finished." });
+      return;
+    }
+    showAppDialog({
+      title: "Mark all as finished?",
+      message: `${count} ${count === 1 ? "book" : "books"} in "${
+        collectionName || "this collection"
+      }" will be marked as finished.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Mark finished",
+          onPress: async () => {
+            if (markingFinished) return;
+            setMarkingFinished(true);
+            try {
+              await batchUpdateProgress(
+                unfinishedItems.map((b) => ({ libraryItemId: b.id, isFinished: true }))
+              );
+              showSnackbar({
+                message: `${count} ${count === 1 ? "book" : "books"} marked finished`,
+              });
+              // Refresh the global progress map (drives the row badges) and
+              // silently revalidate the collection payload.
+              loadMediaProgress().catch(() => {});
+              api
+                .get(`/api/collections/${collectionId}`)
+                .then((r) => setCollection(r.data))
+                .catch(() => {});
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't mark as finished",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            } finally {
+              setMarkingFinished(false);
+            }
+          },
+        },
+      ],
+    });
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       {/* Header bar */}
@@ -322,6 +410,34 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
           {collectionName || "Collection"}
         </Text>
+        {collection ? (
+          <Pressable
+            onPress={handleCreatePlaylist}
+            disabled={creatingPlaylist}
+            hitSlop={8}
+            android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+            accessibilityRole="button"
+            accessibilityLabel="Create playlist from collection"
+            accessibilityState={{ disabled: creatingPlaylist, busy: creatingPlaylist }}
+            style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: creatingPlaylist ? 0.5 : 1 }}
+          >
+            <Icon name="playlist-add" size={20} color={colors.onSurfaceVariant} />
+          </Pressable>
+        ) : null}
+        {collection && bookItems.length > 0 ? (
+          <Pressable
+            onPress={handleMarkAllFinished}
+            disabled={markingFinished}
+            hitSlop={8}
+            android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+            accessibilityRole="button"
+            accessibilityLabel="Mark all as finished"
+            accessibilityState={{ disabled: markingFinished, busy: markingFinished }}
+            style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: markingFinished ? 0.5 : 1 }}
+          >
+            <Icon name="check" size={20} color={colors.onSurfaceVariant} />
+          </Pressable>
+        ) : null}
         {collection && isAdmin ? (
           <Pressable
             onPress={handleDelete}

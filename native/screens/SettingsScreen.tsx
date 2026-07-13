@@ -15,8 +15,17 @@ import { usePlaybackStore, applyJumpOptions, applyVoiceBoost } from '../store/us
 import { showAppDialog } from '../store/useDialogStore';
 import { useThemeColors } from '../theme/useThemeColors';
 import { withAlpha } from '../theme/palette';
-import Icon, { IconName } from '../components/Icon';
+import Icon from '../components/Icon';
+import {
+  SectionHeader,
+  Divider,
+  RowBase,
+  ToggleRow,
+  SelectRow,
+  NavRow,
+} from '../components/SettingsRows';
 import SettingSelectModal, { SelectOption } from '../components/SettingSelectModal';
+import { refreshCapabilities, useServerCapabilities } from '../utils/abs/capabilities';
 import BottomSheet from '../components/BottomSheet';
 import RmabSsoLoginModal from '../components/RmabSsoLoginModal';
 import RmabSessionExpiredBanner from '../components/RmabSessionExpiredBanner';
@@ -68,6 +77,19 @@ export default function SettingsScreen({ navigation, route }: any) {
   const settings = useUserStore((state) => state.settings);
   const updateUserSettings = useUserStore((state) => state.updateUserSettings);
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
+
+  // Server-admin entry gating. A cold-restored session only persists a thin
+  // {id, username} user — no `type` — so the admin section would stay hidden
+  // for an admin until something rehydrates the full user. Fire the (never-
+  // throwing) refresh once when the role is unknown; the row then appears as
+  // soon as /api/authorize answers. Row visibility itself always reads the
+  // store's CURRENT knowledge via useServerCapabilities().
+  const capabilities = useServerCapabilities();
+  React.useEffect(() => {
+    if (user && user.type === undefined) void refreshCapabilities();
+    // Mount-only: one hydration attempt per visit is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Which dropdown modal is open (null = none).
   const [openPicker, setOpenPicker] = React.useState<
@@ -241,6 +263,24 @@ export default function SettingsScreen({ navigation, route }: any) {
           colors={colors}
         />
 
+        {/* ── SERVER ADMINISTRATION (admin/root only) ── */}
+        {capabilities.isAdmin ? (
+          <>
+            <SectionHeader label="Server administration" colors={colors} />
+            <NavRow
+              icon="settings"
+              title="Manage server"
+              subtitle={
+                capabilities.serverVersion
+                  ? `Audiobookshelf v${capabilities.serverVersion}`
+                  : 'Libraries, users, and server tools'
+              }
+              onPress={() => navigation.navigate('ServerAdmin')}
+              colors={colors}
+            />
+          </>
+        ) : null}
+
         {/* ── USER INTERFACE SETTINGS ── */}
         <SectionHeader label="User Interface Settings" colors={colors} />
 
@@ -412,7 +452,9 @@ export default function SettingsScreen({ navigation, route }: any) {
         <Divider colors={colors} />
         <NavRow
           icon="logs"
-          title="Logs"
+          // "App logs" (not just "Logs") — the admin hub now has a sibling
+          // "Server logs" screen, and this row is the DEVICE-side log viewer.
+          title="App logs"
           onPress={() => navigation.navigate('Logs')}
           colors={colors}
         />
@@ -754,239 +796,3 @@ export default function SettingsScreen({ navigation, route }: any) {
   );
 }
 
-function SectionHeader({ label, colors }: { label: string; colors: any }) {
-  return (
-    <Text
-      style={{
-        color: colors.primary,
-        fontSize: 13,
-        fontWeight: '700',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-        paddingTop: 28,
-        paddingBottom: 12,
-        paddingHorizontal: 20,
-      }}
-    >
-      {label}
-    </Text>
-  );
-}
-
-function Divider({ colors }: { colors: any }) {
-  return (
-    <View
-      style={{
-        height: 1,
-        backgroundColor: colors.outlineVariant,
-        marginHorizontal: 20,
-        opacity: 0.6,
-      }}
-    />
-  );
-}
-
-// Leading icon + title/subtitle stack. Trailing content passed by callers.
-function RowBase({
-  icon,
-  title,
-  subtitle,
-  trailing,
-  onPress,
-  colors,
-  accessibilityRole,
-  accessibilityState,
-}: {
-  icon: IconName;
-  title: string;
-  subtitle?: string;
-  trailing?: React.ReactNode;
-  onPress?: () => void;
-  colors: any;
-  accessibilityRole?: 'button' | 'switch';
-  accessibilityState?: { checked?: boolean };
-}) {
-  const inner = (
-    <View
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 16,
-        paddingHorizontal: 20,
-      }}
-    >
-      <Icon name={icon} size={26} color={colors.onSurface} style={{ marginRight: 20 }} />
-      <View style={{ flex: 1, marginRight: 12 }}>
-        <Text style={{ color: colors.onSurface, fontSize: 18 }}>{title}</Text>
-        {subtitle ? (
-          <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 2 }}>
-            {subtitle}
-          </Text>
-        ) : null}
-      </View>
-      {trailing}
-    </View>
-  );
-  if (onPress) {
-    return (
-      <TouchableOpacity
-        onPress={onPress}
-        accessibilityRole={accessibilityRole || 'button'}
-        accessibilityState={accessibilityState}
-        accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
-      >
-        {inner}
-      </TouchableOpacity>
-    );
-  }
-  return inner;
-}
-
-function ToggleRow({
-  icon,
-  title,
-  subtitle,
-  info,
-  value,
-  onValueChange,
-  colors,
-}: {
-  icon: IconName;
-  title: string;
-  subtitle?: string;
-  info?: boolean;
-  value: boolean;
-  onValueChange: (v: boolean) => void;
-  colors: any;
-}) {
-  return (
-    <RowBase
-      icon={icon}
-      title={title}
-      subtitle={subtitle}
-      onPress={() => onValueChange(!value)}
-      colors={colors}
-      accessibilityRole="switch"
-      accessibilityState={{ checked: value }}
-      trailing={
-        // The row itself is the accessible switch — hide the visual knob so
-        // screen readers don't announce a second, redundant control.
-        <View
-          style={{ flexDirection: 'row', alignItems: 'center' }}
-          importantForAccessibility="no-hide-descendants"
-          accessibilityElementsHidden
-        >
-          {info ? (
-            <Icon
-              name="info"
-              size={22}
-              color={colors.onSurfaceVariant}
-              style={{ marginRight: 16 }}
-            />
-          ) : null}
-          <M3Switch value={value} onValueChange={onValueChange} colors={colors} />
-        </View>
-      }
-    />
-  );
-}
-
-// Row that opens a picker sheet (trailing chevron-down = "expands a menu").
-function SelectRow({
-  icon,
-  title,
-  subtitle,
-  onPress,
-  colors,
-}: {
-  icon: IconName;
-  title: string;
-  subtitle?: string;
-  onPress?: () => void;
-  colors: any;
-}) {
-  return (
-    <RowBase
-      icon={icon}
-      title={title}
-      subtitle={subtitle}
-      onPress={onPress}
-      colors={colors}
-      trailing={<Icon name="chevron-down" size={26} color={colors.onSurface} />}
-    />
-  );
-}
-
-// Row that navigates to another screen (trailing chevron-right = "goes somewhere").
-function NavRow({
-  icon,
-  title,
-  subtitle,
-  onPress,
-  colors,
-}: {
-  icon: IconName;
-  title: string;
-  subtitle?: string;
-  onPress?: () => void;
-  colors: any;
-}) {
-  return (
-    <RowBase
-      icon={icon}
-      title={title}
-      subtitle={subtitle}
-      onPress={onPress}
-      colors={colors}
-      trailing={<Icon name="chevron-right" size={26} color={colors.onSurfaceVariant} />}
-    />
-  );
-}
-
-// M3 switch: pill track, white knob that grows and gains a ✓ when ON.
-function M3Switch({
-  value,
-  onValueChange,
-  colors,
-}: {
-  value: boolean;
-  onValueChange: (v: boolean) => void;
-  colors: any;
-}) {
-  const TRACK_W = 52;
-  const TRACK_H = 32;
-  const KNOB_ON = 24;
-  const KNOB_OFF = 16;
-  const knob = value ? KNOB_ON : KNOB_OFF;
-  const pad = (TRACK_H - knob) / 2;
-  return (
-    <Pressable
-      onPress={() => onValueChange(!value)}
-      hitSlop={8}
-      style={{
-        width: TRACK_W,
-        height: TRACK_H,
-        borderRadius: TRACK_H / 2,
-        backgroundColor: value ? colors.primary : colors.surfaceContainerHighest,
-        borderWidth: value ? 0 : 2,
-        borderColor: colors.outline,
-        justifyContent: 'center',
-      }}
-    >
-      <View
-        style={{
-          position: 'absolute',
-          left: value ? TRACK_W - knob - pad : pad,
-          width: knob,
-          height: knob,
-          borderRadius: knob / 2,
-          backgroundColor: value ? colors.onPrimary : colors.outline,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {value ? <Icon name="check" size={16} color={colors.primary} /> : null}
-      </View>
-    </Pressable>
-  );
-}

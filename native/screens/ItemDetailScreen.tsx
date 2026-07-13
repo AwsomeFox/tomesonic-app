@@ -1,5 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, useWindowDimensions } from "react-native";
+import {
+  View,
+  Text,
+  ScrollView,
+  ActivityIndicator,
+  useWindowDimensions,
+  TextInput,
+  Linking,
+  Clipboard,
+} from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -32,6 +41,36 @@ import { useRmabStore } from "../store/useRmabStore";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
 import { formatBytes } from "../utils/format";
 import Pressable from "../components/HintPressable";
+import { RowBase } from "../components/SettingsRows";
+import { showSnackbar } from "../store/useSnackbarStore";
+import { useServerCapabilities } from "../utils/abs/capabilities";
+import {
+  encodeM4b,
+  embedMetadata,
+  createShareLink,
+  deleteShareLink,
+  buildItemZipDownloadUrl,
+} from "../utils/abs/items";
+import { startTaskWatch, subscribeTasks, getTasksSnapshot } from "../utils/abs/tasks";
+import type { AbsTask } from "../utils/abs/types";
+
+// Share-link expiry presets (ms). 0 = never (the server expects numeric
+// expiresAt with 0 for "no expiry" — never null).
+const SHARE_EXPIRY_OPTIONS: { label: string; ms: number }[] = [
+  { label: "1 day", ms: 24 * 60 * 60 * 1000 },
+  { label: "1 week", ms: 7 * 24 * 60 * 60 * 1000 },
+  { label: "30 days", ms: 30 * 24 * 60 * 60 * 1000 },
+  { label: "Never", ms: 0 },
+];
+
+/** "The Long Way!" → "the-long-way" — default slug for a new share link. */
+export function slugifyTitle(title: string): string {
+  return String(title || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
 
 /** Strip HTML tags/entities from ABS descriptions (which contain markup). */
 function stripHtml(html: string): string {
@@ -75,6 +114,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [startingEpisodeId, setStartingEpisodeId] = useState<string | null>(null);
   const [chaptersVisible, setChaptersVisible] = useState(false);
   const [addToVisible, setAddToVisible] = useState(false);
+  // Overflow ("More actions") sheet + the admin flows it fans out to.
+  const [overflowVisible, setOverflowVisible] = useState(false);
+  const [toolsVisible, setToolsVisible] = useState(false);
+  const [shareVisible, setShareVisible] = useState(false);
+  const [shareSlug, setShareSlug] = useState("");
+  const [shareExpiryMs, setShareExpiryMs] = useState(SHARE_EXPIRY_OPTIONS[1].ms); // 1 week
+  const [shareBusy, setShareBusy] = useState(false);
+  // The created link for THIS sheet session (ABS has no per-item share GET, so
+  // we only know about links we just minted).
+  const [shareLink, setShareLink] = useState<any>(null);
+  const capabilities = useServerCapabilities();
   const [sendToVisible, setSendToVisible] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
   const [sendResult, setSendResult] = useState<null | { ok: boolean; device: string }>(null);
@@ -405,9 +455,66 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     loadItem();
   }, [itemId]);
 
+  // SILENT refetch on navigation focus so edits made on pushed screens
+  // (metadata editor, chapter editor, match apply) show on return — no
+  // spinner over already-rendered content (refetchItem never sets loading).
+  useEffect(() => {
+    if (!itemId) return;
+    const unsub = navigation?.addListener?.("focus", () => {
+      refetchItem();
+    });
+    return () => unsub?.();
+  }, [navigation, itemId]);
+
+  // --- Server task activity for THIS item (encode/embed) --------------------
+  // Poller subscription held only while focused (ServerAdminHub's focus/blur
+  // handoff) and only for admins — the Tools rows are admin-gated anyway.
+  const [tasks, setTasks] = useState<AbsTask[]>(() => getTasksSnapshot());
+  useEffect(() => {
+    if (!capabilities.isAdmin || !itemId) return;
+    let unsub: (() => void) | null = subscribeTasks(setTasks);
+    const focusUnsub = navigation?.addListener?.("focus", () => {
+      if (!unsub) {
+        setTasks(getTasksSnapshot());
+        unsub = subscribeTasks(setTasks);
+      }
+    });
+    const blurUnsub = navigation?.addListener?.("blur", () => {
+      unsub?.();
+      unsub = null;
+    });
+    return () => {
+      unsub?.();
+      focusUnsub?.();
+      blurUnsub?.();
+    };
+  }, [navigation, capabilities.isAdmin, itemId]);
+
+  // An UNFINISHED encode/embed task targeting this item — drives the
+  // in-progress banner and disables the Tools rows (no double kickoff).
+  const hasRunningItemTask = (fragment: string) =>
+    tasks.some(
+      (t) =>
+        !t.isFinished &&
+        typeof t.action === "string" &&
+        t.action.includes(fragment) &&
+        t.data?.libraryItemId === itemId
+    );
+  const encodeTaskRunning = hasRunningItemTask("encode");
+  const embedTaskRunning = hasRunningItemTask("embed");
+  const itemTaskRunning = encodeTaskRunning || embedTaskRunning;
+
   const metadata = item?.media?.metadata || {};
+  // `ts` cache-busts on the item's updatedAt so a cover changed in the editor
+  // actually re-renders here (expo-image would otherwise serve the old cached
+  // bitmap for the same URI). coverSource() strips only the token from its
+  // cacheKey, so a new ts is a new cache entry — exactly what a changed cover
+  // needs.
+  const coverBust = item?.updatedAt ? `&ts=${item.updatedAt}` : "";
   const coverUrl =
-    itemId && serverAddress && token ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}` : null;
+    itemId && serverAddress && token
+      ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}${coverBust}`
+      : null;
 
   const description = stripHtml(metadata.description || "");
   const duration = item?.media?.duration || 0;
@@ -516,6 +623,217 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         ebookLocation: progress?.ebookLocation || "",
       });
     }
+  };
+
+  // --- Overflow (More actions): metadata / chapters / tools / zip / share /
+  // history. Entries are capability-gated (utils/abs/capabilities) — the
+  // server would 403 anyway, but a dead row is worse than a hidden one.
+
+  const handleZipDownload = () => {
+    const url = buildItemZipDownloadUrl(itemId);
+    setOverflowVisible(false);
+    if (!url) {
+      showAppDialog({
+        title: "Can't download",
+        message: "No server session available. Reconnect and try again.",
+      });
+      return;
+    }
+    showAppDialog({
+      title: "Download all files",
+      message:
+        `Download this item's folder as a single zip${
+          sizeBytes > 0 ? ` (~${formatBytes(sizeBytes)})` : ""
+        }? ` +
+        "It's handed to your browser's download manager, so large files stream straight to storage.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Download",
+          onPress: () => {
+            // Deliberately NOT axios and NOT the in-app downloads store: a
+            // multi-GB zip must stream via the OS download manager, and it
+            // isn't a playable in-app download. Success feedback only once
+            // the OS actually took the URL — a device with no browser lands
+            // in the catch, which must not claim the handoff happened.
+            Linking.openURL(url)
+              .then(() => {
+                showSnackbar({ message: "Zip download handed to your browser" });
+              })
+              .catch(() => {
+                showAppDialog({
+                  title: "Couldn't download",
+                  message: "Couldn't open a browser for the download.",
+                });
+              });
+          },
+        },
+      ],
+    });
+  };
+
+  const startEncodeM4b = () => {
+    showAppDialog({
+      title: "Encode as M4B",
+      message:
+        "The server merges the audio files into a single M4B with embedded metadata and chapters. " +
+        "This modifies files on the server and can take a long time.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Start encode",
+          // Server-side file mutation with no undo — destructive tier.
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await encodeM4b(itemId);
+              setToolsVisible(false);
+              showSnackbar({ message: "M4B encode started" });
+              // The watch may resolve via INFERRED completion (the task
+              // vanished from a snapshot — ABS removes finished tasks): treat
+              // that as generic success; failure copy comes ONLY from
+              // isFailed/error.
+              const task = await startTaskWatch(
+                (t) =>
+                  typeof t.action === "string" &&
+                  t.action.includes("encode") &&
+                  t.data?.libraryItemId === itemId
+              );
+              if (task) {
+                showSnackbar({
+                  message: task.isFailed
+                    ? `Encode failed: ${task.error || "unknown error"}`
+                    : "M4B encode finished",
+                });
+                if (!task.isFailed) refetchItem();
+              }
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't start encode",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            }
+          },
+        },
+      ],
+    });
+  };
+
+  const startEmbedMetadata = () => {
+    showAppDialog({
+      title: "Embed metadata",
+      message:
+        "The server writes the current metadata and cover into the audio files on disk. " +
+        "A backup of the original tags is kept only if enabled on the server.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Embed",
+          // Writes into the audio files on disk — destructive tier.
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await embedMetadata(itemId);
+              setToolsVisible(false);
+              showSnackbar({ message: "Metadata embed started" });
+              // Same inferred-completion contract as the encode watch above.
+              const task = await startTaskWatch(
+                (t) =>
+                  typeof t.action === "string" &&
+                  t.action.includes("embed") &&
+                  t.data?.libraryItemId === itemId
+              );
+              if (task) {
+                showSnackbar({
+                  message: task.isFailed
+                    ? `Embed failed: ${task.error || "unknown error"}`
+                    : "Metadata embed finished",
+                });
+              }
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't start embed",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            }
+          },
+        },
+      ],
+    });
+  };
+
+  const openShareSheet = () => {
+    setOverflowVisible(false);
+    setShareSlug((s) => s || slugifyTitle(item?.media?.metadata?.title || ""));
+    setShareVisible(true);
+  };
+
+  const handleCreateShareLink = async () => {
+    if (shareBusy) return;
+    // Share links key on the MEDIA id (book.id), NOT the libraryItemId.
+    const mediaItemId = item?.media?.id;
+    const slug = shareSlug.trim();
+    if (!mediaItemId || !slug) {
+      showAppDialog({
+        title: "Couldn't create link",
+        message: !slug ? "Enter a slug for the link." : "This item can't be shared.",
+      });
+      return;
+    }
+    setShareBusy(true);
+    try {
+      const link = await createShareLink({
+        slug,
+        mediaItemId,
+        mediaItemType: "book",
+        // Numeric, 0 = never (the server rejects null).
+        expiresAt: shareExpiryMs === 0 ? 0 : Date.now() + shareExpiryMs,
+      });
+      setShareLink(link);
+      showSnackbar({ message: "Share link created" });
+    } catch (e: any) {
+      showAppDialog({
+        title: "Couldn't create link",
+        message: e?.message || "Something went wrong. Please try again.",
+      });
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const shareUrl = shareLink?.slug ? `${serverAddress}/share/${shareLink.slug}` : "";
+
+  const handleCopyShareLink = () => {
+    if (!shareUrl) return;
+    Clipboard.setString(shareUrl);
+    showSnackbar({ message: "Link copied" });
+  };
+
+  const handleDeleteShareLink = () => {
+    if (!shareLink?.id) return;
+    showAppDialog({
+      title: "Delete share link",
+      message: "Anyone with the link will immediately lose access.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteShareLink(shareLink.id);
+              setShareLink(null);
+              showSnackbar({ message: "Share link deleted" });
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't delete link",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            }
+          },
+        },
+      ],
+    });
   };
 
   const chapters = item?.media?.chapters || [];
@@ -1125,6 +1443,38 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             ) : null}
           </View>
 
+          {/* Persistent in-progress banner while the server runs an encode/
+              embed task against THIS item (plan §G6) — otherwise a long file
+              mutation is invisible outside a transient snackbar. Also drives
+              the disabled Tools rows below (no double kickoff). */}
+          {itemTaskRunning ? (
+            <View style={{ paddingHorizontal: 20, marginTop: 16 }} accessibilityLiveRegion="polite">
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: colors.tertiaryContainer,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                }}
+              >
+                <ActivityIndicator size="small" color={colors.onTertiaryContainer} />
+                <Text
+                  style={{
+                    flex: 1,
+                    color: colors.onTertiaryContainer,
+                    fontSize: 14,
+                    fontWeight: "600",
+                    marginLeft: 10,
+                  }}
+                >
+                  {encodeTaskRunning ? "Encoding in progress…" : "Embedding metadata…"}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           {/* Action row. Primary is Play for audiobooks; for an ebook-only item
               it becomes Read (in the play button's place). A matched sibling in
               the other format adds the secondary Play/Read button. */}
@@ -1454,6 +1804,27 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 <Icon name="settings" size={22} color={colors.onSecondaryContainer} />
               </Pressable>
             ) : null}
+
+            {/* Overflow — item admin/tools/history entries live in a sheet so
+                the everyday action row stays uncluttered. Always shown:
+                Listening history applies to every account. */}
+            <Pressable
+              onPress={() => setOverflowVisible(true)}
+              accessibilityRole="button"
+              accessibilityLabel="More actions"
+              android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.15) }}
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: 26,
+                overflow: "hidden",
+                backgroundColor: colors.secondaryContainer,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon name="more-vert" size={22} color={colors.onSecondaryContainer} />
+            </Pressable>
           </View>
 
           {/* Podcasts have no item-level Download button (there's no
@@ -2244,6 +2615,254 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 {sendingTo === d.name ? <ActivityIndicator size="small" color={colors.primary} /> : null}
               </Pressable>
             ))}
+          </>
+        )}
+      </BottomSheet>
+
+      {/* Overflow: capability-gated item actions. */}
+      <BottomSheet visible={overflowVisible} onClose={() => setOverflowVisible(false)}>
+        <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 6 }}>
+          <Text
+            accessibilityRole="header"
+            style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}
+          >
+            More actions
+          </Text>
+        </View>
+        {/* Books only: the editor is book-shaped (authors/series/ISBN) —
+            podcast metadata editing rides with issue #56. */}
+        {capabilities.canEditMetadata && !isPodcastItem ? (
+          <RowBase
+            icon="edit"
+            title="Edit metadata"
+            subtitle="Details, cover, and provider match"
+            colors={colors}
+            onPress={() => {
+              setOverflowVisible(false);
+              navigation.navigate("EditMetadata", { libraryItemId: itemId });
+            }}
+          />
+        ) : null}
+        {capabilities.canEditMetadata && !isPodcastItem && selfHasAudio ? (
+          <RowBase
+            icon="list"
+            title="Edit chapters"
+            colors={colors}
+            onPress={() => {
+              setOverflowVisible(false);
+              navigation.navigate("ChapterEditor", { libraryItemId: itemId });
+            }}
+          />
+        ) : null}
+        {capabilities.isAdmin && !isPodcastItem && selfHasAudio ? (
+          <RowBase
+            icon="settings"
+            title="Tools"
+            subtitle="M4B encode, embed metadata"
+            colors={colors}
+            onPress={() => {
+              setOverflowVisible(false);
+              setToolsVisible(true);
+            }}
+          />
+        ) : null}
+        {capabilities.canDownload ? (
+          <RowBase
+            icon="download"
+            title="Download all (zip)"
+            subtitle={sizeBytes > 0 ? `~${formatBytes(sizeBytes)}` : undefined}
+            colors={colors}
+            onPress={handleZipDownload}
+          />
+        ) : null}
+        {capabilities.isAdmin && capabilities.supportsShareLinks && !isPodcastItem ? (
+          <RowBase
+            icon="share"
+            title="Share link"
+            subtitle="Public streaming link"
+            colors={colors}
+            onPress={openShareSheet}
+          />
+        ) : null}
+        <RowBase
+          icon="clock"
+          title="Listening history"
+          colors={colors}
+          onPress={() => {
+            setOverflowVisible(false);
+            navigation.navigate("ItemHistory", { libraryItemId: itemId });
+          }}
+        />
+      </BottomSheet>
+
+      {/* Tools: server-side file operations (admin). Both rows disable while
+          an encode/embed task already targets this item — kicking off a second
+          file mutation mid-run is never valid. */}
+      <BottomSheet visible={toolsVisible} onClose={() => setToolsVisible(false)}>
+        <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 6 }}>
+          <Text
+            accessibilityRole="header"
+            style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}
+          >
+            Tools
+          </Text>
+          <Text style={{ fontSize: 13, color: colors.onSurfaceVariant, marginTop: 2 }}>
+            These run on the server and modify the item's files.
+          </Text>
+        </View>
+        <View style={{ opacity: itemTaskRunning ? 0.5 : 1 }}>
+          <RowBase
+            icon="music"
+            title="Encode as M4B"
+            subtitle={encodeTaskRunning ? "Encoding in progress…" : "Merge audio files into one M4B"}
+            colors={colors}
+            accessibilityState={{ disabled: itemTaskRunning } as any}
+            onPress={() => {
+              if (itemTaskRunning) return;
+              startEncodeM4b();
+            }}
+          />
+          <RowBase
+            icon="edit"
+            title="Embed metadata"
+            subtitle={
+              embedTaskRunning
+                ? "Embedding metadata…"
+                : "Write metadata and cover into the audio files"
+            }
+            colors={colors}
+            accessibilityState={{ disabled: itemTaskRunning } as any}
+            onPress={() => {
+              if (itemTaskRunning) return;
+              startEmbedMetadata();
+            }}
+          />
+        </View>
+      </BottomSheet>
+
+      {/* Share link: create/copy/delete a public streaming link. */}
+      <BottomSheet visible={shareVisible} onClose={() => setShareVisible(false)}>
+        <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 12 }}>
+          <Text
+            accessibilityRole="header"
+            style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}
+          >
+            Share link
+          </Text>
+          <Text style={{ fontSize: 13, color: colors.onSurfaceVariant, marginTop: 2 }}>
+            This link is public — anyone with it can stream this book without logging in.
+          </Text>
+        </View>
+        {shareLink ? (
+          <>
+            <View style={{ paddingHorizontal: 24, paddingBottom: 8 }}>
+              <Text
+                selectable
+                accessibilityLabel={`Share link URL: ${shareUrl}`}
+                style={{ color: colors.onSurface, fontSize: 14 }}
+              >
+                {shareUrl}
+              </Text>
+            </View>
+            <RowBase icon="copy" title="Copy link" colors={colors} onPress={handleCopyShareLink} />
+            <RowBase
+              icon="trash"
+              title="Delete link"
+              colors={colors}
+              onPress={handleDeleteShareLink}
+            />
+          </>
+        ) : (
+          <>
+            <View style={{ paddingHorizontal: 24, paddingBottom: 4 }}>
+              <Text style={{ color: colors.onSurface, fontSize: 14, fontWeight: "600" }}>Slug</Text>
+              <TextInput
+                value={shareSlug}
+                onChangeText={setShareSlug}
+                autoCapitalize="none"
+                autoCorrect={false}
+                accessibilityLabel="Share link slug"
+                placeholderTextColor={colors.onSurfaceVariant}
+                style={{
+                  backgroundColor: colors.surfaceContainer,
+                  color: colors.onSurface,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  fontSize: 15,
+                  marginTop: 6,
+                }}
+              />
+              <Text style={{ color: colors.onSurface, fontSize: 14, fontWeight: "600", marginTop: 12 }}>
+                Expires
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 6 }}>
+                {SHARE_EXPIRY_OPTIONS.map((opt) => {
+                  const active = shareExpiryMs === opt.ms;
+                  return (
+                    <Pressable
+                      key={opt.label}
+                      onPress={() => setShareExpiryMs(opt.ms)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={`Expires: ${opt.label}`}
+                      hitSlop={{ top: 6, bottom: 6 }}
+                      style={{
+                        paddingHorizontal: 14,
+                        height: 34,
+                        borderRadius: 17,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        marginRight: 8,
+                        marginBottom: 8,
+                        backgroundColor: active ? colors.secondaryContainer : "transparent",
+                        borderWidth: 1,
+                        borderColor: active ? colors.secondaryContainer : colors.outlineVariant,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: active ? colors.onSecondaryContainer : colors.onSurfaceVariant,
+                          fontSize: 13,
+                          fontWeight: "600",
+                        }}
+                      >
+                        {opt.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+            <Pressable
+              onPress={handleCreateShareLink}
+              disabled={shareBusy}
+              accessibilityRole="button"
+              accessibilityLabel="Create share link"
+              accessibilityState={{ disabled: shareBusy, busy: shareBusy }}
+              android_ripple={{ color: withAlpha(colors.onPrimary, 0.16) }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                marginHorizontal: 24,
+                marginTop: 8,
+                marginBottom: 16,
+                height: 48,
+                borderRadius: 24,
+                overflow: "hidden",
+                backgroundColor: colors.primary,
+                opacity: shareBusy ? 0.6 : 1,
+              }}
+            >
+              {shareBusy ? (
+                <ActivityIndicator size="small" color={colors.onPrimary} />
+              ) : (
+                <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "700" }}>
+                  Create link
+                </Text>
+              )}
+            </Pressable>
           </>
         )}
       </BottomSheet>

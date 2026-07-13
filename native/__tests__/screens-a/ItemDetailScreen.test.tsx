@@ -48,10 +48,45 @@ jest.mock("../../utils/downloader", () => ({
 jest.mock("../../store/useDialogStore", () => ({
   showAppDialog: jest.fn(),
 }));
+jest.mock("../../store/useSnackbarStore", () => ({
+  showSnackbar: jest.fn(),
+}));
+// Pass-through spy: the cover cache-bust test asserts the URI handed to the
+// image pipeline (the expo-image jest mock strips `source`, so the rendered
+// tree can't be inspected for it).
+jest.mock("../../utils/coverSource", () => ({
+  coverSource: jest.fn((uri?: string | null) => (uri ? { uri } : undefined)),
+}));
+// Item admin actions (overflow entries). Capabilities are NOT mocked — they
+// compute from the real useUserStore state, so the gating matrix below
+// exercises the actual permission logic.
+jest.mock("../../utils/abs/items", () => ({
+  encodeM4b: jest.fn(),
+  embedMetadata: jest.fn(),
+  createShareLink: jest.fn(),
+  deleteShareLink: jest.fn(),
+  buildItemZipDownloadUrl: jest.fn(),
+}));
+jest.mock("../../utils/abs/tasks", () => ({
+  startTaskWatch: jest.fn(),
+  // Poller subscription used by the in-progress encode/embed banner. Tests
+  // that need a live snapshot override these per-case.
+  subscribeTasks: jest.fn(() => jest.fn()),
+  getTasksSnapshot: jest.fn(() => []),
+}));
 
-import ItemDetailScreen from "../../screens/ItemDetailScreen";
+import ItemDetailScreen, { slugifyTitle } from "../../screens/ItemDetailScreen";
 import { showAppDialog } from "../../store/useDialogStore";
+import { showSnackbar } from "../../store/useSnackbarStore";
 import { api } from "../../utils/api";
+import {
+  encodeM4b,
+  embedMetadata,
+  createShareLink,
+  deleteShareLink,
+  buildItemZipDownloadUrl,
+} from "../../utils/abs/items";
+import { startTaskWatch, subscribeTasks, getTasksSnapshot } from "../../utils/abs/tasks";
 import {
   queueFinishedPatch,
   queueProgressPatch,
@@ -77,10 +112,18 @@ const initialDownloads = useDownloadStore.getState();
 const initialLibrary = useLibraryStore.getState();
 
 const makeNavigation = () => {
+  // Multiple effects register "focus"/"blur" listeners — record them ALL so a
+  // test can emit a navigation event (focus-refetch, poller handoff).
+  const listeners: Record<string, ((e?: any) => void)[]> = {};
   const navigation: any = {
     navigate: jest.fn(),
     goBack: jest.fn(),
-    addListener: jest.fn(() => jest.fn()),
+    dispatch: jest.fn(),
+    addListener: jest.fn((name: string, cb: (e?: any) => void) => {
+      (listeners[name] = listeners[name] || []).push(cb);
+      return jest.fn();
+    }),
+    emit: (name: string, event?: any) => (listeners[name] || []).forEach((cb) => cb(event)),
   };
   navigation.getParent = jest.fn(() => navigation);
   return navigation;
@@ -95,6 +138,7 @@ const bothFormatItem = {
   libraryId: "lib1",
   size: 123456789,
   media: {
+    id: "book-media-1",
     duration: 3600,
     numTracks: 5,
     numAudioFiles: 5,
@@ -205,6 +249,10 @@ beforeEach(() => {
   storage.getAllKeys().forEach((k: string) => storage.remove(k));
   useFavoritesStore.setState({ favorites: [] });
   mockedPatch.mockResolvedValue({ data: {} });
+  // clearMocks resets CALLS but keeps implementations — re-pin the task
+  // poller defaults so one test's live snapshot never leaks into the next.
+  (subscribeTasks as jest.Mock).mockImplementation(() => jest.fn());
+  (getTasksSnapshot as jest.Mock).mockReturnValue([]);
 });
 
 describe("ItemDetailScreen", () => {
@@ -1260,5 +1308,615 @@ describe("ItemDetailScreen — open reader (linked catch-up is reader-owned)", (
     await fireEvent.press(await screen.findByLabelText("Read ebook"));
 
     expect(readerParams(navigation).initialFraction).toBeUndefined();
+  });
+});
+
+// --- Overflow (More actions): capability-gated admin/tools/share/zip/history --
+describe("ItemDetailScreen — overflow (More actions)", () => {
+  const { Linking, Clipboard } = require("react-native");
+
+  /** admin session on a share-capable server version. */
+  const setAdmin = () =>
+    useUserStore.setState({
+      user: { id: "u1", username: "boss", type: "admin", permissions: {} },
+      serverConnectionConfig: { address: "https://abs.test", token: "tok", version: "2.35.1" },
+    } as any);
+
+  /** plain user with NO permission flags. */
+  const setPlainUser = () =>
+    useUserStore.setState({
+      user: {
+        id: "u2",
+        username: "joe",
+        type: "user",
+        permissions: { download: false, update: false, delete: false, upload: false },
+      },
+    } as any);
+
+  const openOverflow = async () => {
+    await screen.findByText("Listening");
+    await fireEvent.press(screen.getByLabelText("More actions"));
+  };
+
+  it("admin: overflow lists every capability-gated entry", async () => {
+    setAdmin();
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+
+    expect(screen.getByText("Edit metadata")).toBeTruthy();
+    expect(screen.getByText("Edit chapters")).toBeTruthy();
+    expect(screen.getByText("Tools")).toBeTruthy();
+    expect(screen.getByText("Download all (zip)")).toBeTruthy();
+    expect(screen.getByText("Share link")).toBeTruthy();
+    expect(screen.getByText("Listening history")).toBeTruthy();
+  });
+
+  it("non-privileged user: only Listening history remains", async () => {
+    setPlainUser();
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+
+    expect(screen.queryByText("Edit metadata")).toBeNull();
+    expect(screen.queryByText("Edit chapters")).toBeNull();
+    expect(screen.queryByText("Tools")).toBeNull();
+    expect(screen.queryByText("Download all (zip)")).toBeNull();
+    expect(screen.queryByText("Share link")).toBeNull();
+    expect(screen.getByText("Listening history")).toBeTruthy();
+  });
+
+  it("update+download permissions (non-admin) unlock metadata/chapters/zip but NOT admin-only Tools/Share", async () => {
+    useUserStore.setState({
+      user: {
+        id: "u3",
+        username: "editor",
+        type: "user",
+        permissions: { update: true, download: true, delete: false, upload: false },
+      },
+      serverConnectionConfig: { address: "https://abs.test", token: "tok", version: "2.35.1" },
+    } as any);
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+
+    expect(screen.getByText("Edit metadata")).toBeTruthy();
+    expect(screen.getByText("Edit chapters")).toBeTruthy();
+    expect(screen.getByText("Download all (zip)")).toBeTruthy();
+    // Tools + share links are admin-typed operations, not permission flags.
+    expect(screen.queryByText("Tools")).toBeNull();
+    expect(screen.queryByText("Share link")).toBeNull();
+  });
+
+  it("admin WITHOUT a known server version: Share link hidden (version gate), rest intact", async () => {
+    useUserStore.setState({
+      user: { id: "u1", username: "boss", type: "admin", permissions: {} },
+      serverConnectionConfig: { address: "https://abs.test", token: "tok" }, // no version
+    } as any);
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+
+    expect(screen.queryByText("Share link")).toBeNull();
+    expect(screen.getByText("Edit metadata")).toBeTruthy();
+    expect(screen.getByText("Tools")).toBeTruthy();
+  });
+
+  it("podcast: book-shaped entries (metadata/chapters/tools/share) hidden; history offered", async () => {
+    setAdmin();
+    routeApi(podcastItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+    await fireEvent.press(screen.getByLabelText("More actions"));
+
+    // Edit metadata is book-shaped (authors/series/ISBN) — podcasts ride with
+    // issue #56, so the row must not be offered on a podcast item.
+    expect(screen.queryByText("Edit metadata")).toBeNull();
+    expect(screen.getByText("Listening history")).toBeTruthy();
+    expect(screen.queryByText("Edit chapters")).toBeNull();
+    expect(screen.queryByText("Tools")).toBeNull();
+    expect(screen.queryByText("Share link")).toBeNull();
+  });
+
+  it("navigates to EditMetadata / ChapterEditor / ItemHistory by route name + libraryItemId", async () => {
+    setAdmin();
+    routeApi(bothFormatItem);
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Edit metadata"));
+    expect(navigation.navigate).toHaveBeenCalledWith("EditMetadata", { libraryItemId: "item1" });
+
+    await fireEvent.press(screen.getByLabelText("More actions"));
+    await fireEvent.press(screen.getByText("Edit chapters"));
+    expect(navigation.navigate).toHaveBeenCalledWith("ChapterEditor", { libraryItemId: "item1" });
+
+    await fireEvent.press(screen.getByLabelText("More actions"));
+    await fireEvent.press(screen.getByText("Listening history"));
+    expect(navigation.navigate).toHaveBeenCalledWith("ItemHistory", { libraryItemId: "item1" });
+  });
+
+  it("zip download: confirm dialog → URL builder → OS handoff (never axios)", async () => {
+    setAdmin();
+    (buildItemZipDownloadUrl as jest.Mock).mockReturnValue(
+      "https://abs.test/api/items/item1/download?token=tok"
+    );
+    const openSpy = jest.spyOn(Linking, "openURL").mockResolvedValue(true as any);
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+
+    await fireEvent.press(screen.getByText("Download all (zip)"));
+    expect(buildItemZipDownloadUrl).toHaveBeenCalledWith("item1");
+    // Informational confirm first (size + download-manager handoff note).
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Download all files");
+    expect(dialog.message).toContain("118 MB"); // fixture size, surfaced pre-confirm
+    expect(openSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      dialog.buttons.find((b: any) => b.text === "Download").onPress();
+    });
+    expect(openSpy).toHaveBeenCalledWith("https://abs.test/api/items/item1/download?token=tok");
+    expect(showSnackbar).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("download") })
+    );
+    openSpy.mockRestore();
+  });
+
+  it("tools: M4B encode = confirm → POST → task watch → completion snackbar", async () => {
+    setAdmin();
+    (encodeM4b as jest.Mock).mockResolvedValue(undefined);
+    (startTaskWatch as jest.Mock).mockResolvedValue({
+      id: "t1",
+      action: "encode-m4b",
+      data: { libraryItemId: "item1" },
+      title: "Encoding",
+      error: null,
+      isFailed: false,
+      isFinished: true,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Tools"));
+    await fireEvent.press(await screen.findByText("Encode as M4B"));
+
+    // Nothing fires before the Tier-2 confirm.
+    expect(encodeM4b).not.toHaveBeenCalled();
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Encode as M4B");
+    // File-mutating with no undo — the confirm is destructive-styled.
+    const startBtn = dialog.buttons.find((b: any) => b.text === "Start encode");
+    expect(startBtn.style).toBe("destructive");
+
+    await act(async () => {
+      await startBtn.onPress();
+    });
+    expect(encodeM4b).toHaveBeenCalledWith("item1");
+    expect(showSnackbar).toHaveBeenCalledWith({ message: "M4B encode started" });
+    // The watch matcher keys on the encode action AND this item's id.
+    const matcher = (startTaskWatch as jest.Mock).mock.calls[0][0];
+    expect(matcher({ action: "encode-m4b", data: { libraryItemId: "item1" } })).toBe(true);
+    expect(matcher({ action: "encode-m4b", data: { libraryItemId: "other" } })).toBe(false);
+    expect(matcher({ action: "library-scan", data: { libraryItemId: "item1" } })).toBe(false);
+    // Malformed task without a string action must be rejected, not thrown on.
+    expect(matcher({ data: { libraryItemId: "item1" } })).toBe(false);
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith({ message: "M4B encode finished" })
+    );
+  });
+
+  it("tools: embed metadata confirm → POST → failure snackbar carries the task error", async () => {
+    setAdmin();
+    (embedMetadata as jest.Mock).mockResolvedValue(undefined);
+    (startTaskWatch as jest.Mock).mockResolvedValue({
+      id: "t2",
+      action: "embed-metadata",
+      data: { libraryItemId: "item1" },
+      title: "Embedding",
+      error: "ffmpeg exploded",
+      isFailed: true,
+      isFinished: true,
+      startedAt: 1,
+      finishedAt: 2,
+    });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Tools"));
+    await fireEvent.press(await screen.findByText("Embed metadata"));
+
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Embed metadata");
+    // Writes into audio files on disk — destructive-styled confirm.
+    const embedBtn = dialog.buttons.find((b: any) => b.text === "Embed");
+    expect(embedBtn.style).toBe("destructive");
+    await act(async () => {
+      await embedBtn.onPress();
+    });
+    expect(embedMetadata).toHaveBeenCalledWith("item1");
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith({
+        message: expect.stringContaining("ffmpeg exploded"),
+      })
+    );
+  });
+
+  it("share link: create posts the MEDIA id (not libraryItemId) with numeric expiresAt 0 for Never", async () => {
+    setAdmin();
+    (createShareLink as jest.Mock).mockResolvedValue({
+      id: "share1",
+      slug: "the-hobbit",
+      expiresAt: 0,
+      mediaItemId: "book-media-1",
+    });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Share link"));
+
+    // Slug prefilled from the title.
+    const slugInput = await screen.findByLabelText("Share link slug");
+    expect(slugInput.props.value).toBe("the-hobbit");
+
+    await fireEvent.press(screen.getByLabelText("Expires: Never"));
+    await fireEvent.press(screen.getByLabelText("Create share link"));
+
+    await waitFor(() =>
+      expect(createShareLink).toHaveBeenCalledWith({
+        slug: "the-hobbit",
+        mediaItemId: "book-media-1", // media id, NOT "item1"
+        mediaItemType: "book",
+        expiresAt: 0,
+      })
+    );
+    // The minted public URL renders for copying.
+    await screen.findByText("https://abs.test/share/the-hobbit");
+  });
+
+  it("share link: default expiry produces a future numeric timestamp", async () => {
+    setAdmin();
+    (createShareLink as jest.Mock).mockResolvedValue({ id: "share1", slug: "the-hobbit" });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Share link"));
+    await screen.findByLabelText("Share link slug");
+    const before = Date.now();
+    await fireEvent.press(screen.getByLabelText("Create share link"));
+
+    await waitFor(() => expect(createShareLink).toHaveBeenCalled());
+    const payload = (createShareLink as jest.Mock).mock.calls[0][0];
+    // Default preset is 1 week — a real epoch-ms number, never null.
+    expect(typeof payload.expiresAt).toBe("number");
+    expect(payload.expiresAt).toBeGreaterThanOrEqual(before + 6 * 24 * 60 * 60 * 1000);
+  });
+
+  it("share link: copy uses the clipboard; delete confirms then DELETEs", async () => {
+    setAdmin();
+    (createShareLink as jest.Mock).mockResolvedValue({ id: "share1", slug: "the-hobbit" });
+    (deleteShareLink as jest.Mock).mockResolvedValue(undefined);
+    const clipSpy = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Share link"));
+    await screen.findByLabelText("Share link slug");
+    await fireEvent.press(screen.getByLabelText("Create share link"));
+    await screen.findByText("Copy link");
+
+    await fireEvent.press(screen.getByText("Copy link"));
+    expect(clipSpy).toHaveBeenCalledWith("https://abs.test/share/the-hobbit");
+    expect(showSnackbar).toHaveBeenCalledWith({ message: "Link copied" });
+
+    await fireEvent.press(screen.getByText("Delete link"));
+    expect(deleteShareLink).not.toHaveBeenCalled(); // Tier-2 confirm first
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Delete share link");
+    await act(async () => {
+      await dialog.buttons.find((b: any) => b.text === "Delete").onPress();
+    });
+    expect(deleteShareLink).toHaveBeenCalledWith("share1");
+    clipSpy.mockRestore();
+  });
+
+  it("slugifyTitle produces url-safe slugs", () => {
+    expect(slugifyTitle("The Hobbit")).toBe("the-hobbit");
+    expect(slugifyTitle("  Dune: Messiah! (Unabridged)  ")).toBe("dune-messiah-unabridged");
+    expect(slugifyTitle("")).toBe("");
+  });
+
+  it("zip download: OS handoff FAILURE shows a dialog, not the success snackbar", async () => {
+    setAdmin();
+    (buildItemZipDownloadUrl as jest.Mock).mockReturnValue(
+      "https://abs.test/api/items/item1/download?token=tok"
+    );
+    // No browser on the device — openURL rejects.
+    const openSpy = jest.spyOn(Linking, "openURL").mockRejectedValue(new Error("no handler"));
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Download all (zip)"));
+
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      dialog.buttons.find((b: any) => b.text === "Download").onPress();
+    });
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't download",
+          message: expect.stringContaining("Couldn't open a browser for the download"),
+        })
+      )
+    );
+    // The success snackbar must NOT fire when the handoff never happened.
+    expect(showSnackbar).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("handed to your browser") })
+    );
+    openSpy.mockRestore();
+  });
+
+  it("INFERRED completion (task vanished from a snapshot) reads as generic success", async () => {
+    setAdmin();
+    (encodeM4b as jest.Mock).mockResolvedValue(undefined);
+    // The reworked startTaskWatch resolves with the last-seen task flagged
+    // inferredCompletion when it disappears — treated exactly like success
+    // (failure copy comes ONLY from isFailed/error).
+    (startTaskWatch as jest.Mock).mockResolvedValue({
+      id: "t1",
+      action: "encode-m4b",
+      data: { libraryItemId: "item1" },
+      title: "Encoding",
+      error: null,
+      isFailed: false,
+      isFinished: false,
+      startedAt: 1,
+      finishedAt: null,
+      inferredCompletion: true,
+    });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Tools"));
+    await fireEvent.press(await screen.findByText("Encode as M4B"));
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      await dialog.buttons.find((b: any) => b.text === "Start encode").onPress();
+    });
+
+    await waitFor(() =>
+      expect(showSnackbar).toHaveBeenCalledWith({ message: "M4B encode finished" })
+    );
+    expect(showSnackbar).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("failed") })
+    );
+  });
+
+  it("sheet titles carry the accessibility header role", async () => {
+    setAdmin();
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    expect(screen.getByText("More actions").props.accessibilityRole).toBe("header");
+
+    // "Tools"/"Share link" also exist as row titles — assert the sheet HEADER
+    // instance carries the role (the row keeps its button semantics).
+    await fireEvent.press(screen.getByText("Tools"));
+    await screen.findByText("Encode as M4B");
+    expect(
+      screen.getAllByText("Tools").some((t) => t.props.accessibilityRole === "header")
+    ).toBe(true);
+  });
+
+  it("the Share link sheet title carries the accessibility header role", async () => {
+    setAdmin();
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Share link"));
+    await screen.findByLabelText("Share link slug");
+    expect(
+      screen.getAllByText("Share link").some((t) => t.props.accessibilityRole === "header")
+    ).toBe(true);
+  });
+});
+
+// --- Encode/embed in-progress affordance (plan §G6) ---------------------------
+describe("ItemDetailScreen — encode/embed in-progress banner", () => {
+  const setAdmin = () =>
+    useUserStore.setState({
+      user: { id: "u1", username: "boss", type: "admin", permissions: {} },
+      serverConnectionConfig: { address: "https://abs.test", token: "tok", version: "2.35.1" },
+    } as any);
+
+  const runningEncodeTask = {
+    id: "t-enc",
+    action: "encode-m4b",
+    data: { libraryItemId: "item1" },
+    title: "Encoding",
+    error: null,
+    isFailed: false,
+    isFinished: false,
+    startedAt: 1,
+    finishedAt: null,
+  };
+
+  it("shows the banner and disables the Tools rows while an encode task targets this item", async () => {
+    setAdmin();
+    (getTasksSnapshot as jest.Mock).mockReturnValue([runningEncodeTask]);
+    (subscribeTasks as jest.Mock).mockImplementation((listener: any) => {
+      listener([runningEncodeTask]);
+      return jest.fn();
+    });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+
+    // Persistent banner above the action row.
+    await screen.findByText("Encoding in progress…");
+
+    // Tools rows are disabled — no double kickoff.
+    await fireEvent.press(screen.getByLabelText("More actions"));
+    await fireEvent.press(screen.getByText("Tools"));
+    const encodeRow = await screen.findByLabelText(/^Encode as M4B/);
+    expect(encodeRow.props.accessibilityState?.disabled).toBe(true);
+    await fireEvent.press(encodeRow);
+    // The confirm dialog never opens while a task is already running.
+    expect(showAppDialog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Encode as M4B" })
+    );
+    const embedRow = screen.getByLabelText(/^Embed metadata/);
+    expect(embedRow.props.accessibilityState?.disabled).toBe(true);
+    await fireEvent.press(embedRow);
+    expect(showAppDialog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Embed metadata" })
+    );
+  });
+
+  it("embed task shows the embed copy; another item's task shows nothing", async () => {
+    setAdmin();
+    const embedTask = {
+      ...runningEncodeTask,
+      id: "t-emb",
+      action: "embed-metadata",
+    };
+    (getTasksSnapshot as jest.Mock).mockReturnValue([embedTask]);
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Embedding metadata…");
+
+    // A running task for a DIFFERENT item must not light this banner.
+    (getTasksSnapshot as jest.Mock).mockReturnValue([
+      { ...runningEncodeTask, data: { libraryItemId: "other" } },
+    ]);
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("Listening");
+    expect(screen.queryByText("Encoding in progress…")).toBeNull();
+  });
+
+  it("a FINISHED task clears the banner and re-enables the Tools rows", async () => {
+    setAdmin();
+    let capturedListener: any = null;
+    (getTasksSnapshot as jest.Mock).mockReturnValue([runningEncodeTask]);
+    (subscribeTasks as jest.Mock).mockImplementation((listener: any) => {
+      capturedListener = listener;
+      return jest.fn();
+    });
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Encoding in progress…");
+
+    // Next poll: the task finished.
+    await act(async () => {
+      capturedListener([{ ...runningEncodeTask, isFinished: true, finishedAt: 2 }]);
+    });
+    expect(screen.queryByText("Encoding in progress…")).toBeNull();
+
+    await fireEvent.press(screen.getByLabelText("More actions"));
+    await fireEvent.press(screen.getByText("Tools"));
+    const encodeRow = await screen.findByLabelText(/^Encode as M4B/);
+    expect(encodeRow.props.accessibilityState?.disabled).toBe(false);
+  });
+
+  it("non-admins never subscribe to the task poller", async () => {
+    useUserStore.setState({
+      user: { id: "u2", username: "joe", type: "user", permissions: {} },
+    } as any);
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+    expect(subscribeTasks).not.toHaveBeenCalled();
+  });
+});
+
+// --- Stale-after-edits: focus refetch + cover cache-bust ----------------------
+describe("ItemDetailScreen — freshness after edits", () => {
+  it("refetches the item SILENTLY on navigation focus", async () => {
+    routeApi(bothFormatItem);
+    const navigation = makeNavigation();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={navigation} />
+    );
+    await screen.findByText("Listening");
+
+    // Returning from the metadata/chapter editor with fresh server data.
+    const updated = {
+      ...bothFormatItem,
+      media: {
+        ...bothFormatItem.media,
+        metadata: { ...bothFormatItem.media.metadata, title: "The Hobbit, Revised" },
+      },
+    };
+    routeApi(updated);
+    await act(async () => {
+      navigation.emit("focus");
+    });
+
+    // New title renders without any loading spinner having interrupted.
+    await screen.findAllByText("The Hobbit, Revised");
+  });
+
+  it("cover URL carries a cache-bust component derived from item.updatedAt", async () => {
+    const { coverSource } = require("../../utils/coverSource");
+    const stamped = { ...bothFormatItem, updatedAt: 1720000000000 };
+    routeApi(stamped);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    const coverUris = (coverSource as jest.Mock).mock.calls
+      .map((c: any[]) => c[0])
+      .filter((u: any) => typeof u === "string" && u.includes("/api/items/item1/cover"));
+    expect(coverUris.length).toBeGreaterThan(0);
+    // A changed cover only re-renders if the URI changes with the item.
+    expect(coverUris.some((u: string) => u.includes("ts=1720000000000"))).toBe(true);
   });
 });

@@ -12,6 +12,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import OfflineBanner from "./components/OfflineBanner";
 import RotationCurtain from "./components/RotationCurtain";
 import AppDialog from "./components/AppDialog";
+import AppSnackbar from "./components/AppSnackbar";
 import { useUserStore } from "./store/useUserStore";
 import { useThemeStore } from "./store/useThemeStore";
 import { useThemeColors } from "./theme/useThemeColors";
@@ -48,6 +49,9 @@ function AppShell() {
       <RotationCurtain />
       {/* Themed Alert.alert replacement — last child so it sits above all. */}
       <AppDialog />
+      {/* Transient feedback host (showSnackbar) — sits below AppDialog, which
+          renders in its own Modal window and so stays on top regardless. */}
+      <AppSnackbar />
     </View>
   );
 }

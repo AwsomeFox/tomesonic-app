@@ -11,6 +11,26 @@ export interface AppDialogButton {
   text: string;
   onPress?: () => void;
   style?: AppDialogButtonStyle;
+  /**
+   * Run onPress WITHOUT dismissing the dialog — for in-dialog actions like
+   * "Copy key" where the content (a secret shown only once) must stay
+   * visible. The default (undefined/false) keeps Alert.alert semantics:
+   * every button press dismisses.
+   */
+  keepOpenOnPress?: boolean;
+}
+
+/**
+ * Typed-confirm gate for high-stakes destructive dialogs: when present,
+ * AppDialog renders a TextInput between the message and the buttons, and the
+ * LAST button (the destructive/confirm action by convention) stays disabled
+ * until the input matches requiredText.
+ */
+export interface AppDialogConfirmInput {
+  placeholder: string;
+  requiredText: string;
+  /** Defaults to false — matching is case-insensitive unless set. */
+  caseSensitive?: boolean;
 }
 
 export interface AppDialogOptions {
@@ -20,6 +40,8 @@ export interface AppDialogOptions {
   buttons?: AppDialogButton[];
   /** When false, the scrim/back-button can't dismiss without choosing a button. */
   cancelable?: boolean;
+  /** Require typing requiredText before the last (confirm) button enables. */
+  confirmInput?: AppDialogConfirmInput;
 }
 
 interface DialogState {

@@ -9,6 +9,7 @@ import { useUserStore } from "../store/useUserStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon, { IconName } from "../components/Icon";
+import { TAB_BAR_HEIGHT } from "../utils/layoutConstants";
 
 // Import Screens
 import ConnectScreen from "../screens/ConnectScreen";
@@ -33,6 +34,23 @@ import DiscoverScreen from "../screens/DiscoverScreen";
 import GenreBrowseScreen from "../screens/GenreBrowseScreen";
 import YearInReviewScreen from "../screens/YearInReviewScreen";
 import PodcastSettingsScreen from "../screens/PodcastSettingsScreen";
+import ServerAdminHubScreen from "../screens/ServerAdminHubScreen";
+import AdminLibrariesScreen from "../screens/AdminLibrariesScreen";
+import AdminLibraryEditScreen from "../screens/AdminLibraryEditScreen";
+import AdminUsersScreen from "../screens/AdminUsersScreen";
+import AdminUserDetailScreen from "../screens/AdminUserDetailScreen";
+import AdminSessionsScreen from "../screens/AdminSessionsScreen";
+import AdminBackupsScreen from "../screens/AdminBackupsScreen";
+import AdminEmailScreen from "../screens/AdminEmailScreen";
+import AdminServerLogsScreen from "../screens/AdminServerLogsScreen";
+import AdminFeedsScreen from "../screens/AdminFeedsScreen";
+import AdminMaintenanceScreen from "../screens/AdminMaintenanceScreen";
+import AdminServerSettingsScreen from "../screens/AdminServerSettingsScreen";
+import AdminApiKeysScreen from "../screens/AdminApiKeysScreen";
+import EditMetadataScreen from "../screens/EditMetadataScreen";
+import ChapterEditorScreen from "../screens/ChapterEditorScreen";
+import ItemHistoryScreen from "../screens/ItemHistoryScreen";
+import LibraryStatsScreen from "../screens/LibraryStatsScreen";
 import { useRmabStore } from "../store/useRmabStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { libraryIconName } from "../components/LibraryIcon";
@@ -132,7 +150,7 @@ function TabNavigator() {
           borderTopWidth: 1,
           borderTopColor: withAlpha(colors.outlineVariant, 0.5),
           elevation: 0,
-          height: 64 + insets.bottom,
+          height: TAB_BAR_HEIGHT + insets.bottom,
           paddingBottom: 8 + insets.bottom,
           paddingTop: 8,
         },
@@ -226,6 +244,32 @@ export default function AppNavigator() {
             <Stack.Screen name="YearInReview" component={YearInReviewScreen} />
             <Stack.Screen name="PodcastSettings" component={PodcastSettingsScreen} />
             <Stack.Screen name="Reader" component={ReaderScreen} />
+            {/* Server administration (entry gated in SettingsScreen). Each
+                screen surfaces a fetch-time 403 as a "forbidden" ErrorState
+                rather than pre-gating; only the hub, AdminUserDetail, and
+                AdminApiKeys consult useServerCapabilities directly. Route
+                names are the frozen §3 contract of the admin-features
+                architecture plan. */}
+            <Stack.Screen name="ServerAdmin" component={ServerAdminHubScreen} />
+            <Stack.Screen name="AdminLibraries" component={AdminLibrariesScreen} />
+            <Stack.Screen name="AdminLibraryEdit" component={AdminLibraryEditScreen} />
+            <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
+            <Stack.Screen name="AdminUserDetail" component={AdminUserDetailScreen} />
+            <Stack.Screen name="AdminSessions" component={AdminSessionsScreen} />
+            <Stack.Screen name="AdminBackups" component={AdminBackupsScreen} />
+            <Stack.Screen name="AdminEmail" component={AdminEmailScreen} />
+            {/* "AdminServerLogs" is deliberately distinct from the app-log
+                "Logs" route above. */}
+            <Stack.Screen name="AdminServerLogs" component={AdminServerLogsScreen} />
+            <Stack.Screen name="AdminFeeds" component={AdminFeedsScreen} />
+            <Stack.Screen name="AdminMaintenance" component={AdminMaintenanceScreen} />
+            <Stack.Screen name="AdminServerSettings" component={AdminServerSettingsScreen} />
+            <Stack.Screen name="AdminApiKeys" component={AdminApiKeysScreen} />
+            {/* Item-scoped editors + non-admin extras from the same plan. */}
+            <Stack.Screen name="EditMetadata" component={EditMetadataScreen} />
+            <Stack.Screen name="ChapterEditor" component={ChapterEditorScreen} />
+            <Stack.Screen name="ItemHistory" component={ItemHistoryScreen} />
+            <Stack.Screen name="LibraryStats" component={LibraryStatsScreen} />
           </>
         )}
       </Stack.Navigator>
