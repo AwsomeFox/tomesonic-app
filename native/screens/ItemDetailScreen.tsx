@@ -36,6 +36,7 @@ import TopAppBar from "../components/TopAppBar";
 import ChaptersModal from "../components/ChaptersModal";
 import AddToListModal from "../components/AddToListModal";
 import BottomSheet from "../components/BottomSheet";
+import OpenFeedSheet, { type OpenFeedEntity } from "../components/OpenFeedSheet";
 import ResultBurst from "../components/ResultBurst";
 import { useRmabStore } from "../store/useRmabStore";
 import { hasAudio, hasEbook as itemHasEbook, getEbookFormat, bestCounterpart } from "../utils/bookMatch";
@@ -124,6 +125,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // The created link for THIS sheet session (ABS has no per-item share GET, so
   // we only know about links we just minted).
   const [shareLink, setShareLink] = useState<any>(null);
+  // Open-RSS-feed flow (admin-only) — null when the sheet is closed.
+  const [feedEntity, setFeedEntity] = useState<OpenFeedEntity | null>(null);
   const capabilities = useServerCapabilities();
   const [sendToVisible, setSendToVisible] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
@@ -2684,6 +2687,20 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             onPress={openShareSheet}
           />
         ) : null}
+        {/* Open a public RSS feed for this item (podcast or audiobook) —
+            admin-only, every feed route is admin-gated server-side. */}
+        {capabilities.isAdmin ? (
+          <RowBase
+            icon="rss"
+            title="Open RSS feed"
+            subtitle="Public podcast-style feed"
+            colors={colors}
+            onPress={() => {
+              setOverflowVisible(false);
+              setFeedEntity({ kind: "item", id: itemId, title: metadata.title || "this item" });
+            }}
+          />
+        ) : null}
         <RowBase
           icon="clock"
           title="Listening history"
@@ -2866,6 +2883,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           </>
         )}
       </BottomSheet>
+
+      {/* Open RSS feed (admin-only shared flow). */}
+      <OpenFeedSheet entity={feedEntity} onClose={() => setFeedEntity(null)} />
     </SafeAreaView>
   );
 }

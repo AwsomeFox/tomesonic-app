@@ -689,3 +689,28 @@ describe("SeriesDetailScreen — missing-books section on empty series", () => {
     expect(screen.getByLabelText("Request Missing Volume")).toBeTruthy();
   });
 });
+
+describe("SeriesDetailScreen — Open RSS feed (admin-only)", () => {
+  const setAdmin = () =>
+    useUserStore.setState({
+      user: { id: "u1", username: "boss", type: "admin", permissions: {} },
+      serverConnectionConfig: { address: "https://abs.example.com", token: "tok", version: "2.35.1" },
+    } as any);
+
+  it("admin: the header action opens the shared feed flow (address seeded from the series name)", async () => {
+    setAdmin();
+    await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    await fireEvent.press(screen.getByLabelText("Open RSS feed"));
+    const input = await screen.findByLabelText("RSS feed address");
+    expect(input.props.value).toBe("wax-wayne");
+  });
+
+  it("non-admin: no Open RSS feed action is shown", async () => {
+    // Default restored user is a plain (non-admin) session.
+    await renderSeries();
+    await screen.findByText("#1 Alpha");
+    expect(screen.queryByLabelText("Open RSS feed")).toBeNull();
+  });
+});

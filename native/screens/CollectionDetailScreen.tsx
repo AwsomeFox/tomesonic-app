@@ -19,6 +19,8 @@ import ErrorState from "../components/ErrorState";
 import { isEbookOnly, hasAudio } from "../utils/bookMatch";
 import BookProgressBadge from "../components/BookProgressBadge";
 import { ListSkeleton } from "../components/Skeleton";
+import OpenFeedSheet, { type OpenFeedEntity } from "../components/OpenFeedSheet";
+import { useServerCapabilities } from "../utils/abs/capabilities";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -64,6 +66,11 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
   const { collectionId } = route.params || {};
   const { serverConnectionConfig } = useUserStore();
   const isAdmin = useUserStore((s) => isAdminUser(s.user));
+  // Feed routes are admin-ONLY server-side — isAdminUser above also passes
+  // update-permission non-admins, so gate the RSS affordance on the stricter
+  // role-only capability instead.
+  const capabilities = useServerCapabilities();
+  const [feedEntity, setFeedEntity] = useState<OpenFeedEntity | null>(null);
   const startPlayback = usePlaybackStore((state) => state.startPlayback);
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
 
@@ -424,6 +431,25 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
             <Icon name="playlist-add" size={20} color={colors.onSurfaceVariant} />
           </Pressable>
         ) : null}
+        {collection && capabilities.isAdmin ? (
+          <Pressable
+            onPress={() =>
+              setFeedEntity({
+                kind: "collection",
+                id: collectionId,
+                title: collectionName || "this collection",
+              })
+            }
+            hitSlop={8}
+            android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+            accessibilityRole="button"
+            accessibilityLabel="Open RSS feed"
+            accessibilityHint="Creates a public RSS feed for this collection"
+            style={{ marginLeft: 8, padding: 8, borderRadius: 20 }}
+          >
+            <Icon name="rss" size={20} color={colors.onSurfaceVariant} />
+          </Pressable>
+        ) : null}
         {collection && bookItems.length > 0 ? (
           <Pressable
             onPress={handleMarkAllFinished}
@@ -529,6 +555,9 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
           )}
         </ScrollView>
       ) : null}
+
+      {/* Open RSS feed (admin-only shared flow). */}
+      <OpenFeedSheet entity={feedEntity} onClose={() => setFeedEntity(null)} />
     </SafeAreaView>
   );
 }

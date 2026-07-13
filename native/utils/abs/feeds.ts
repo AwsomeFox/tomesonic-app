@@ -2,8 +2,10 @@
  * RSS feed administration. Endpoints verified against the ABS v2.35.1
  * ApiRouter/RSSFeedController (ALL feed routes are admin-and-up — the
  * controller middleware rejects non-admins):
- *   GET  /api/feeds                        → { feeds, minified }
- *   POST /api/feeds/item/:itemId/open      { serverAddress, slug, metadataDetails? } → { feed }
+ *   GET  /api/feeds                              → { feeds, minified }
+ *   POST /api/feeds/item/:itemId/open            { serverAddress, slug, metadataDetails? } → { feed }
+ *   POST /api/feeds/collection/:collectionId/open { serverAddress, slug, metadataDetails? } → { feed }
+ *   POST /api/feeds/series/:seriesId/open        { serverAddress, slug, metadataDetails? } → { feed }
  *   POST /api/feeds/:id/close
  *
  * VERIFIED payload details: openRSSFeedForItem REQUIRES both `serverAddress`
@@ -35,6 +37,42 @@ export async function openItemFeed(
   }
 ): Promise<AbsFeed> {
   const data = await absRequest<any>(() => api.post(`/api/feeds/item/${itemId}/open`, params));
+  return data?.feed ?? data;
+}
+
+/** Open a public RSS feed for a collection. Same payload contract as items. */
+export async function openCollectionFeed(
+  collectionId: string,
+  params: {
+    /** Public base address the feed URL is built on (usually the connect address). */
+    serverAddress: string;
+    /** URL slug — becomes the feed id; must be unique across open feeds. */
+    slug: string;
+    /** Include full episode metadata in the feed XML. */
+    metadataDetails?: boolean;
+  }
+): Promise<AbsFeed> {
+  const data = await absRequest<any>(() =>
+    api.post(`/api/feeds/collection/${collectionId}/open`, params)
+  );
+  return data?.feed ?? data;
+}
+
+/** Open a public RSS feed for a series. Same payload contract as items. */
+export async function openSeriesFeed(
+  seriesId: string,
+  params: {
+    /** Public base address the feed URL is built on (usually the connect address). */
+    serverAddress: string;
+    /** URL slug — becomes the feed id; must be unique across open feeds. */
+    slug: string;
+    /** Include full episode metadata in the feed XML. */
+    metadataDetails?: boolean;
+  }
+): Promise<AbsFeed> {
+  const data = await absRequest<any>(() =>
+    api.post(`/api/feeds/series/${seriesId}/open`, params)
+  );
   return data?.feed ?? data;
 }
 

@@ -479,3 +479,29 @@ describe("CollectionDetailScreen", () => {
     });
   });
 });
+
+describe("CollectionDetailScreen — Open RSS feed (admin-only)", () => {
+  it("admin: the header action opens the shared feed flow (address seeded from the collection name)", async () => {
+    useUserStore.setState({
+      user: { id: "u1", username: "boss", type: "admin", permissions: {} },
+      serverConnectionConfig: { address: "https://abs.example.com", token: "tok", version: "2.35.1" },
+    } as any);
+    await renderCollection();
+    await screen.findByText("Finished Book");
+
+    await fireEvent.press(screen.getByLabelText("Open RSS feed"));
+    const input = await screen.findByLabelText("RSS feed address");
+    expect(input.props.value).toBe("space-operas");
+  });
+
+  it("non-admin: no Open RSS feed action is shown (feed routes are admin-only)", async () => {
+    // An update-permission NON-admin can delete-gate elsewhere, but feed routes
+    // are strictly admin — the affordance must stay hidden.
+    useUserStore.setState({
+      user: { id: "u2", username: "editor", type: "user", permissions: { update: true } },
+    } as any);
+    await renderCollection();
+    await screen.findByText("Finished Book");
+    expect(screen.queryByLabelText("Open RSS feed")).toBeNull();
+  });
+});

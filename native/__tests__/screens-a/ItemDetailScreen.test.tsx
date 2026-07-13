@@ -1368,6 +1368,24 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     expect(screen.queryByText("Download all (zip)")).toBeNull();
     expect(screen.queryByText("Share link")).toBeNull();
     expect(screen.getByText("Listening history")).toBeTruthy();
+    // The RSS-feed row is admin-only too.
+    expect(screen.queryByText("Open RSS feed")).toBeNull();
+  });
+
+  it("admin: 'Open RSS feed' row opens the shared admin feed flow", async () => {
+    setAdmin();
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+
+    expect(screen.getByText("Open RSS feed")).toBeTruthy();
+    await fireEvent.press(screen.getByText("Open RSS feed"));
+    // The shared OpenFeedSheet is now on screen (its address field, seeded
+    // from the item title).
+    const input = await screen.findByLabelText("RSS feed address");
+    expect(input.props.value).toBe("the-hobbit");
   });
 
   it("update+download permissions (non-admin) unlock metadata/chapters/zip but NOT admin-only Tools/Share", async () => {

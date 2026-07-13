@@ -24,11 +24,25 @@ jest.mock("../../utils/abs/capabilities", () => {
   return { ...actual, refreshCapabilities: jest.fn() };
 });
 
+// Row-summary fetches (issue #64) are injected: mock the whole helper module so
+// tests drive the fulfilled/rejected shapes the hub reduces into subtitles.
+jest.mock("../../utils/abs/adminSummaries", () => ({
+  getUsersSummary: jest.fn(),
+  getBackupsSummary: jest.fn(),
+  getLibrariesSummary: jest.fn(),
+}));
+
 import React from "react";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import ServerAdminHubScreen from "../../screens/ServerAdminHubScreen";
 import { refreshCapabilities } from "../../utils/abs/capabilities";
 import { subscribeTasks, getTasksSnapshot } from "../../utils/abs/tasks";
+import {
+  getUsersSummary,
+  getBackupsSummary,
+  getLibrariesSummary,
+} from "../../utils/abs/adminSummaries";
+import { AbsError } from "../../utils/abs/errors";
 import { useUserStore } from "../../store/useUserStore";
 
 const initialUser = useUserStore.getState();
@@ -83,6 +97,12 @@ beforeEach(() => {
   });
   (getTasksSnapshot as jest.Mock).mockReturnValue([]);
   (refreshCapabilities as jest.Mock).mockResolvedValue(undefined);
+  // Default: every summary fetch fails with a non-offline error, so rows keep
+  // their static subtitles and no offline hint shows — the pre-#64 baseline
+  // that the untouched suites assert against. Individual #64 tests override.
+  (getUsersSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+  (getBackupsSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+  (getLibrariesSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
 });
 
 async function renderHub() {
@@ -327,18 +347,132 @@ describe("ServerAdminHubScreen", () => {
       useUserStore.setState({ user: ADMIN_USER } as any);
       const navigation = await renderHub();
 
-      const listeners: Record<string, () => void> = {};
+      // The hub now registers more than one focus listener (task strip + the
+      // #64 summary refresh). Real react-navigation fires them all, so collect
+      // and invoke every listener per event rather than keeping only the last.
+      const focusListeners: Array<() => void> = [];
+      const blurListeners: Array<() => void> = [];
       for (const call of (navigation.addListener as jest.Mock).mock.calls) {
-        listeners[call[0]] = call[1];
+        if (call[0] === "focus") focusListeners.push(call[1]);
+        if (call[0] === "blur") blurListeners.push(call[1]);
       }
-      expect(listeners.focus).toBeTruthy();
-      expect(listeners.blur).toBeTruthy();
+      expect(focusListeners.length).toBeGreaterThan(0);
+      expect(blurListeners.length).toBeGreaterThan(0);
 
-      await act(async () => listeners.blur());
+      await act(async () => blurListeners.forEach((f) => f()));
       expect(taskUnsubscribe).toHaveBeenCalledTimes(1);
 
-      await act(async () => listeners.focus());
+      await act(async () => focusListeners.forEach((f) => f()));
       expect(subscribeTasks).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("row summary subtitles (issue #64)", () => {
+    it("annotates the Users, Backups and Libraries rows from the injected fetch results", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      (getUsersSummary as jest.Mock).mockResolvedValue({ total: 5, online: 2 });
+      (getBackupsSummary as jest.Mock).mockResolvedValue({
+        lastCreatedAt: Date.now() - 60 * 60 * 1000, // ~1h ago
+      });
+      (getLibrariesSummary as jest.Mock).mockResolvedValue({ count: 4 });
+
+      await renderHub();
+
+      expect(screen.getByText("5 users · 2 online")).toBeTruthy();
+      expect(screen.getByText("Last backup 1h ago")).toBeTruthy();
+      expect(screen.getByText("4 libraries")).toBeTruthy();
+      // No offline hint when everything loaded.
+      expect(screen.queryByTestId("admin-hub-offline")).toBeNull();
+    });
+
+    it("treats a lastCreatedAt of 0 as a real backup time, not 'No backups yet' or a blank date", async () => {
+      // Epoch 0 is falsy but a valid timestamp — the row must format it to a
+      // real date (1970), never fall through to the empty-state copy nor render
+      // "Last backup on " with a blank tail.
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      (getBackupsSummary as jest.Mock).mockResolvedValue({ lastCreatedAt: 0 });
+
+      await renderHub();
+
+      expect(screen.queryByText("No backups yet")).toBeNull();
+      // A concrete date renders (epoch 0 → 1970), not a trailing-blank "on ".
+      expect(screen.getByText(/^Last backup on .*1970/)).toBeTruthy();
+    });
+
+    it("omits the online count when only the online fetch is unavailable", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      (getUsersSummary as jest.Mock).mockResolvedValue({ total: 1, online: null });
+
+      await renderHub();
+
+      // Singular, and no "· online" tail.
+      expect(screen.getByText("1 user")).toBeTruthy();
+    });
+
+    it("leaves a row's static subtitle intact when its summary fetch fails (no crash)", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      (getUsersSummary as jest.Mock).mockResolvedValue({ total: 3, online: 0 });
+      // Backups fetch fails → the row keeps its static subtitle.
+      (getBackupsSummary as jest.Mock).mockRejectedValue(new AbsError("server", "boom"));
+      (getLibrariesSummary as jest.Mock).mockResolvedValue({ count: 2 });
+
+      await renderHub();
+
+      expect(screen.getByText("3 users · 0 online")).toBeTruthy();
+      // Static backups subtitle survives the failure.
+      expect(screen.getByText("Create and manage server backups")).toBeTruthy();
+      expect(screen.queryByTestId("admin-hub-offline")).toBeNull();
+    });
+
+    it("pull-to-refresh re-runs refreshCapabilities and the summary fetches", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      (getUsersSummary as jest.Mock).mockResolvedValue({ total: 5, online: 2 });
+      (getBackupsSummary as jest.Mock).mockResolvedValue({ lastCreatedAt: null });
+      (getLibrariesSummary as jest.Mock).mockResolvedValue({ count: 4 });
+
+      await renderHub();
+
+      // Once on mount.
+      expect(refreshCapabilities).toHaveBeenCalledTimes(1);
+      expect(getUsersSummary).toHaveBeenCalledTimes(1);
+
+      const scroll = screen.getByTestId("admin-hub-scroll");
+      await act(async () => {
+        await scroll.props.refreshControl.props.onRefresh();
+      });
+
+      expect(refreshCapabilities).toHaveBeenCalledTimes(2);
+      expect(getUsersSummary).toHaveBeenCalledTimes(2);
+      expect(getBackupsSummary).toHaveBeenCalledTimes(2);
+      expect(getLibrariesSummary).toHaveBeenCalledTimes(2);
+    });
+
+    it("shows a subtle offline hint when the summaries fail offline, keeping rows tappable", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      (getUsersSummary as jest.Mock).mockRejectedValue(new AbsError("offline", "off"));
+      (getBackupsSummary as jest.Mock).mockRejectedValue(new AbsError("offline", "off"));
+      (getLibrariesSummary as jest.Mock).mockRejectedValue(new AbsError("offline", "off"));
+
+      const navigation = await renderHub();
+
+      expect(screen.getByTestId("admin-hub-offline")).toBeTruthy();
+      // Rows keep their static subtitles and remain navigable — the offline
+      // hint is a visual cue, not a navigation block.
+      await fireEvent.press(screen.getByLabelText(/^Users,/));
+      expect(navigation.navigate).toHaveBeenCalledWith("AdminUsers");
+    });
+
+    it("does NOT show the offline hint when all summaries fail for a non-offline reason", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      // All three fail, but with server (not offline) errors — the hub is
+      // reachable, just couldn't compute counts. No "offline" cue.
+      (getUsersSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+      (getBackupsSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+      (getLibrariesSummary as jest.Mock).mockRejectedValue(new AbsError("server", "x"));
+
+      await renderHub();
+
+      expect(screen.queryByTestId("admin-hub-offline")).toBeNull();
     });
   });
 });

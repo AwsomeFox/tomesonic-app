@@ -21,6 +21,8 @@ import { ListSkeleton } from "../components/Skeleton";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import RmabMissingSection from "../components/RmabMissingSection";
+import OpenFeedSheet, { type OpenFeedEntity } from "../components/OpenFeedSheet";
+import { useServerCapabilities } from "../utils/abs/capabilities";
 
 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
 const base64Encode = (input: string = '') => {
@@ -109,6 +111,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const { serverConnectionConfig } = useUserStore();
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
   const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
+  const capabilities = useServerCapabilities();
+  // Open-RSS-feed flow (admin-only) — null when the sheet is closed.
+  const [feedEntity, setFeedEntity] = useState<OpenFeedEntity | null>(null);
 
   const [series, setSeries] = useState<SeriesData | null>(null);
 
@@ -744,6 +749,25 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
           {series?.name || seriesName || "Series"}
         </Text>
+        {series && capabilities.isAdmin ? (
+          <Pressable
+            onPress={() =>
+              setFeedEntity({
+                kind: "series",
+                id: seriesId,
+                title: series?.name || seriesName || "this series",
+              })
+            }
+            hitSlop={8}
+            android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+            accessibilityRole="button"
+            accessibilityLabel="Open RSS feed"
+            accessibilityHint="Creates a public RSS feed for this series"
+            style={{ marginLeft: 8, padding: 8, borderRadius: 20 }}
+          >
+            <Icon name="rss" size={20} color={colors.onSurfaceVariant} />
+          </Pressable>
+        ) : null}
         {series && bookCount > 0 ? (
           <>
             <Pressable
@@ -816,6 +840,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           }
         />
       )}
+
+      {/* Open RSS feed (admin-only shared flow). */}
+      <OpenFeedSheet entity={feedEntity} onClose={() => setFeedEntity(null)} />
     </SafeAreaView>
   );
 }
