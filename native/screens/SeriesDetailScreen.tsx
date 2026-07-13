@@ -11,6 +11,9 @@ import { useUserStore } from "../store/useUserStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { withAlpha } from "../theme/palette";
+import { showAppDialog } from "../store/useDialogStore";
+import { showSnackbar } from "../store/useSnackbarStore";
+import { batchUpdateProgress } from "../utils/abs/me";
 import Icon from "../components/Icon";
 import { isEbookOnly, getEbookFormat } from "../utils/bookMatch";
 import BookProgressBadge, { bookStatusA11yLabel } from "../components/BookProgressBadge";
@@ -105,10 +108,13 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const hasSession = usePlaybackStore((state) => state.currentSession !== null);
   const { serverConnectionConfig } = useUserStore();
   const startPlayback = usePlaybackStore((s) => s.startPlayback);
+  const loadMediaProgress = useUserStore((s) => s.loadMediaProgress);
 
   const [series, setSeries] = useState<SeriesData | null>(null);
 
   const [loading, setLoading] = useState(true);
+  const [markingFinished, setMarkingFinished] = useState(false);
+  const [resettingProgress, setResettingProgress] = useState(false);
 
   // Missing-books discovery straight off Audible's catalog API (fast, free) —
   // diffed locally against the library books this screen already loaded.
@@ -348,6 +354,107 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
 
   // First unfinished book in sequence order — what the header button starts.
   const nextUnfinished = books.find((b) => !progressOf(b)?.isFinished) || books[0];
+
+  // Batch progress over the whole series, via the batch progress endpoint whose
+  // body is a BARE ARRAY of progress payloads (one PATCH for N books). Managing
+  // your own progress needs no admin gate — any logged-in user can do it.
+  const unfinishedBooks = books.filter((b) => !progressOf(b)?.isFinished);
+  const booksWithProgress = books.filter(
+    (b) => progressOf(b)?.isFinished || (progressOf(b)?.progress || 0) > 0
+  );
+
+  // Refresh the authoritative progress map (drives header stats + row badges)
+  // and silently revalidate the series payload after a batch mutation.
+  const refreshAfterBatch = () => {
+    loadMediaProgress().catch(() => {});
+    loadSeries(true).catch(() => {});
+  };
+
+  const handleMarkSeriesFinished = () => {
+    const count = unfinishedBooks.length;
+    if (count === 0) {
+      showSnackbar({ message: "Every book in this series is already finished." });
+      return;
+    }
+    showAppDialog({
+      title: "Mark series as finished?",
+      message: `${count} ${count === 1 ? "book" : "books"} in "${
+        series?.name || "this series"
+      }" will be marked as finished.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Mark finished",
+          onPress: async () => {
+            if (markingFinished) return;
+            setMarkingFinished(true);
+            try {
+              await batchUpdateProgress(
+                unfinishedBooks.map((b) => ({ libraryItemId: b.id, isFinished: true }))
+              );
+              showSnackbar({
+                message: `${count} ${count === 1 ? "book" : "books"} marked finished`,
+              });
+              refreshAfterBatch();
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't mark as finished",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            } finally {
+              setMarkingFinished(false);
+            }
+          },
+        },
+      ],
+    });
+  };
+
+  const handleResetSeriesProgress = () => {
+    const count = booksWithProgress.length;
+    if (count === 0) {
+      showSnackbar({ message: "No progress to reset in this series." });
+      return;
+    }
+    showAppDialog({
+      title: "Reset series progress?",
+      message: `Progress on ${count} ${count === 1 ? "book" : "books"} in "${
+        series?.name || "this series"
+      }" will be reset to not started. This can't be undone.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: async () => {
+            if (resettingProgress) return;
+            setResettingProgress(true);
+            try {
+              await batchUpdateProgress(
+                booksWithProgress.map((b) => ({
+                  libraryItemId: b.id,
+                  isFinished: false,
+                  currentTime: 0,
+                  progress: 0,
+                }))
+              );
+              showSnackbar({
+                message: `Progress reset on ${count} ${count === 1 ? "book" : "books"}`,
+              });
+              refreshAfterBatch();
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't reset progress",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            } finally {
+              setResettingProgress(false);
+            }
+          },
+        },
+      ],
+    });
+  };
 
   const handlePlay = async (item?: SeriesBook) => {
     if (!item || startingId) return;
@@ -602,6 +709,36 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         <Text numberOfLines={1} style={{ flex: 1, color: colors.onSurface, fontSize: 20, fontWeight: "700" }}>
           {series?.name || seriesName || "Series"}
         </Text>
+        {series && bookCount > 0 ? (
+          <>
+            <Pressable
+              onPress={handleMarkSeriesFinished}
+              disabled={markingFinished}
+              hitSlop={8}
+              android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+              accessibilityRole="button"
+              accessibilityLabel="Mark series as finished"
+              accessibilityHint="Marks every book in this series as finished"
+              accessibilityState={{ disabled: markingFinished, busy: markingFinished }}
+              style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: markingFinished ? 0.5 : 1 }}
+            >
+              <Icon name="check" size={20} color={colors.onSurfaceVariant} />
+            </Pressable>
+            <Pressable
+              onPress={handleResetSeriesProgress}
+              disabled={resettingProgress}
+              hitSlop={8}
+              android_ripple={{ color: colors.surfaceContainerHighest, borderless: true, radius: 22 }}
+              accessibilityRole="button"
+              accessibilityLabel="Reset series progress"
+              accessibilityHint="Resets progress on every book in this series to not started"
+              accessibilityState={{ disabled: resettingProgress, busy: resettingProgress }}
+              style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: resettingProgress ? 0.5 : 1 }}
+            >
+              <Icon name="undo" size={20} color={colors.onSurfaceVariant} />
+            </Pressable>
+          </>
+        ) : null}
       </View>
 
       {loading ? (
