@@ -555,6 +555,28 @@ describe("AdminLibraryEditScreen — icon + settings", () => {
     );
   });
 
+  it("reverting to 'Server default' clears the icon and persists an empty icon", async () => {
+    // lib1 loads with icon "books-1"; the admin must be able to revert to the
+    // server default (empty), which edit-mode saves persist as icon:"".
+    await renderScreen({ libraryId: "lib1" });
+    await screen.findByText("Edit library");
+
+    await fireEvent.press(screen.getByLabelText("Library icon"));
+    await fireEvent.press(await screen.findByLabelText("Server default"));
+
+    // Row now reads the default, Save enabled.
+    expect(screen.getByText("Server default")).toBeTruthy();
+    expect(screen.getByLabelText("Save library").props.accessibilityState.disabled).toBe(false);
+    await fireEvent.press(screen.getByLabelText("Save library"));
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        "/api/libraries/lib1",
+        expect.objectContaining({ icon: "" })
+      )
+    );
+  });
+
   it("the icon picker lists the ABS options with the loaded one marked selected", async () => {
     await renderScreen({ libraryId: "lib1" });
     await screen.findByText("Edit library");

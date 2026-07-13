@@ -26,10 +26,12 @@ export default function LibraryIconPickerSheet({
   visible: boolean;
   selected?: string;
   mediaType: "book" | "podcast";
-  onSelect: (iconName: string) => void;
+  /** Receives the raw ABS key, or undefined to revert to the server default. */
+  onSelect: (iconName: string | undefined) => void;
   onClose: () => void;
 }) {
   const colors = useThemeColors();
+  const noneSelected = !selected;
   return (
     <BottomSheet visible={visible} onClose={onClose} maxHeight="70%">
       <Text
@@ -50,6 +52,52 @@ export default function LibraryIconPickerSheet({
           accessibilityLabel="Library icon"
           style={{ flexDirection: "row", flexWrap: "wrap" }}
         >
+          {/* Revert to the server default (no explicit icon). */}
+          <Pressable
+            onPress={() => {
+              onSelect(undefined);
+              onClose();
+            }}
+            android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+            accessibilityRole="radio"
+            accessibilityLabel="Server default"
+            accessibilityState={{ checked: noneSelected }}
+            style={{
+              width: TILE,
+              height: TILE,
+              margin: 4,
+              borderRadius: 12,
+              overflow: "hidden",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: noneSelected ? colors.secondaryContainer : colors.surfaceContainerHighest,
+              borderWidth: 1,
+              borderColor: noneSelected ? colors.secondaryContainer : colors.outlineVariant,
+            }}
+          >
+            <Icon
+              name="close"
+              size={24}
+              color={noneSelected ? colors.onSecondaryContainer : colors.onSurfaceVariant}
+            />
+            {noneSelected ? (
+              <View
+                style={{
+                  position: "absolute",
+                  top: 2,
+                  right: 2,
+                  width: 18,
+                  height: 18,
+                  borderRadius: 9,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: colors.secondaryContainer,
+                }}
+              >
+                <Icon name="check" size={14} color={colors.onSecondaryContainer} />
+              </View>
+            ) : null}
+          </Pressable>
           {ABS_LIBRARY_ICONS.map((key) => {
             const isSel = key === selected;
             return (

@@ -289,8 +289,10 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
             f.id ? { id: f.id, fullPath: f.fullPath } : { fullPath: f.fullPath }
           ),
           settings: { ...original.settings, ...settings },
+          // Always send icon in edit mode so clearing it back to the server
+          // default (empty) actually persists — ABS represents "no icon" as "".
+          icon: icon ?? "",
         };
-        if (icon !== undefined) payload.icon = icon;
         await updateLibrary(libraryId!, payload);
         showSnackbar({ message: "Library saved" });
       } else {

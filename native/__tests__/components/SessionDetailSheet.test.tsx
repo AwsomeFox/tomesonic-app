@@ -59,6 +59,14 @@ it("shows the Open chip only when isOpen is true", async () => {
   expect(await screen.findByText("Open")).toBeTruthy();
 });
 
+it("shows an 'Unknown (N)' play method for an unmapped numeric value", async () => {
+  // A newer-server play method the label map doesn't know must still surface
+  // (with its raw value) rather than dropping the row.
+  await render(<SessionDetailSheet session={{ ...SESSION, playMethod: 7 }} onClose={() => {}} />);
+  expect(await screen.findByText("Play method")).toBeTruthy();
+  expect(screen.getByText("Unknown (7)")).toBeTruthy();
+});
+
 it("falls back to deviceInfo when mediaPlayer is absent, and hides play-method when unset", async () => {
   const noPlayer: any = {
     ...SESSION,

@@ -190,6 +190,11 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
 
   const pumpRef = useRef<() => void>(() => {});
   pumpRef.current = () => {
+    // Screen gone — stop starting new requests and drop any queued work.
+    if (!mountedRef.current) {
+      countQueueRef.current = [];
+      return;
+    }
     const CONCURRENCY = 4;
     while (countActiveRef.current < CONCURRENCY && countQueueRef.current.length > 0) {
       const { type, value } = countQueueRef.current.shift()!;

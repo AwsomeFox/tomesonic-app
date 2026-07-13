@@ -442,8 +442,10 @@ describe("AdminUserDetailScreen — tag access", () => {
     await renderScreen({ userId: "u2" });
     await screen.findByText("joe");
 
-    // No server tags loaded ⇒ helper text, no rows.
-    expect(await screen.findByText("No tags are defined on this server yet.")).toBeTruthy();
+    // The fetch FAILED ⇒ a distinct "couldn't load" helper (not the misleading
+    // "no tags defined" empty-server copy), and no rows.
+    expect(await screen.findByText(/Couldn't load the server's tags/)).toBeTruthy();
+    expect(screen.queryByText("No tags are defined on this server yet.")).toBeNull();
     expect(screen.queryByLabelText(/^Tag access:/)).toBeNull();
 
     // Saving still works (an unrelated edit).

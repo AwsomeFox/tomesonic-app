@@ -83,8 +83,12 @@ export default function SessionDetailSheet({
       ? `${clientName} ${clientVersion}`
       : clientName
     : "Unknown";
+  // Keep the row for any numeric playMethod — an unmapped (newer-server) value
+  // shows "Unknown (N)" rather than vanishing, so it's still visible for debugging.
   const playMethod =
-    typeof s?.playMethod === "number" ? PLAY_METHOD_LABELS[s.playMethod] : undefined;
+    typeof s?.playMethod === "number"
+      ? PLAY_METHOD_LABELS[s.playMethod] ?? `Unknown (${s.playMethod})`
+      : undefined;
 
   return (
     <BottomSheet visible={!!session} onClose={onClose}>

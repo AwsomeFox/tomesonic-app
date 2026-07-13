@@ -226,6 +226,9 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   // Every tag defined on the server — the checklist source (best-effort load).
   const [allServerTags, setAllServerTags] = useState<string[]>([]);
+  // Distinguishes "the fetch failed" from "the server genuinely has no tags",
+  // so the empty state doesn't misreport a network error as an empty server.
+  const [tagsLoadFailed, setTagsLoadFailed] = useState(false);
   const [seed, setSeed] = useState<FormSnapshot | null>(isCreate ? CREATE_SEED : null);
   // Inline validation errors (cleared as the admin retypes).
   const [usernameError, setUsernameError] = useState<string | null>(null);
@@ -254,6 +257,9 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       if (cancelled) return;
       if (res.status === "fulfilled" && Array.isArray(res.value)) {
         setAllServerTags([...res.value].sort());
+        setTagsLoadFailed(false);
+      } else {
+        setTagsLoadFailed(true);
       }
     });
     return () => {
@@ -868,7 +874,9 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
                       paddingVertical: 12,
                     }}
                   >
-                    No tags are defined on this server yet.
+                    {tagsLoadFailed
+                      ? "Couldn't load the server's tags. Pull back and reopen to retry."
+                      : "No tags are defined on this server yet."}
                   </Text>
                 )
               ) : null}
