@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -15,9 +15,13 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
+import StatusChip from "../components/StatusChip";
+import SessionDetailSheet from "../components/SessionDetailSheet";
+import { usePolling } from "../hooks/usePolling";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { getAllSessions, deleteSession, batchDeleteSessions } from "../utils/abs/sessions";
+import { getOnlineUsers } from "../utils/abs/users";
 import { absErrorToErrorStateProps } from "../utils/abs/errors";
 import { formatListeningTime, formatDateTime } from "../utils/format";
 import type { AbsListeningSession } from "../utils/abs/types";
@@ -90,6 +94,11 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
   const [retryTick, setRetryTick] = useState(0);
   // null = normal mode; a Set = selection (batch) mode.
   const [selected, setSelected] = useState<Set<string> | null>(null);
+  // Live "open" (in-progress) session ids from the /api/users/online poll —
+  // decoupled from the sessions load: poll failures NEVER set the screen error.
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+  // The session whose detail sheet is open (read-only), or null.
+  const [detail, setDetail] = useState<AbsListeningSession | null>(null);
 
   // Pagination race guards. `loadMoreInFlightRef` is a REF (not state) so an
   // onEndReached storm can't start a second fetch of the same page before the
@@ -162,6 +171,9 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
   const onRefresh = async () => {
     listGenRef.current += 1; // any in-flight loadMore page is now stale
     setRefreshing(true);
+    // Best-effort: refresh the open-session overlay alongside the list, but a
+    // poll failure must never fail the pull-to-refresh (or set the error).
+    void refreshOpen().catch(() => {});
     try {
       const res = await fetchPage(0, userFilter);
       setSessions(res.sessions || []);
@@ -177,6 +189,15 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
   };
 
   const reload = () => setRetryTick((t) => t + 1);
+
+  // Live "open sessions" overlay: focus-gated poll (30s), fully decoupled from
+  // the list's load/error state — a poll failure is swallowed by usePolling's
+  // backoff and just leaves the "Open" chips stale, never a screen error.
+  const pollOpen = useCallback(async () => {
+    const { openSessions } = await getOnlineUsers();
+    setOpenIds(new Set(openSessions.map((s: any) => s?.id).filter(Boolean)));
+  }, []);
+  const { refresh: refreshOpen } = usePolling(pollOpen, { intervalMs: 30_000 });
 
   // ---- Single delete (Tier-2 confirm) ----
   const handleDeleteOne = (s: AbsListeningSession) => {
@@ -275,18 +296,24 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
 
   const renderRow = ({ item }: { item: AbsListeningSession }) => {
     const checked = !!selected?.has(item.id);
+    const isOpen = openIds.has(item.id);
     return (
       <Pressable
-        // Normal mode has NO tap action (delete/long-press only), so no
-        // onPress and no button role — a "double tap to activate" that does
-        // nothing is an a11y lie. The long-press affordance is exposed as a
-        // custom accessibility action instead (Bookshelf overlay pattern).
-        onPress={selectionMode ? () => toggleSelected(item.id) : undefined}
+        // Normal mode opens the read-only detail sheet on tap; the long-press
+        // affordance (selection mode) stays a custom accessibility action so a
+        // screen reader still hears both. Selection mode swaps to checkbox.
+        onPress={selectionMode ? () => toggleSelected(item.id) : () => setDetail(item)}
         onLongPress={() => enterSelectionWith(item.id)}
-        accessibilityRole={selectionMode ? "checkbox" : undefined}
+        accessibilityRole={selectionMode ? "checkbox" : "button"}
         accessibilityState={selectionMode ? { checked } : undefined}
-        accessibilityLabel={`Session: ${item.displayTitle}, ${sessionSubtitle(item)}`}
-        accessibilityHint={selectionMode ? undefined : "Long press to select multiple sessions"}
+        accessibilityLabel={
+          `Session: ${item.displayTitle}, ${sessionSubtitle(item)}` + (isOpen ? ", open" : "")
+        }
+        accessibilityHint={
+          selectionMode
+            ? undefined
+            : "Opens session details. Long press to select multiple sessions"
+        }
         accessibilityActions={
           selectionMode ? undefined : [{ name: "longpress", label: "Select session" }]
         }
@@ -327,6 +354,11 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
             {sessionSubtitle(item)}
           </Text>
         </View>
+        {!selectionMode && isOpen ? (
+          <View style={{ marginRight: 8 }}>
+            <StatusChip label="Open" tone="success" dot />
+          </View>
+        ) : null}
         {!selectionMode ? (
           <Pressable
             onPress={() => handleDeleteOne(item)}
@@ -479,6 +511,12 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
           contentContainerStyle={{ paddingBottom: 40 }}
         />
       )}
+
+      <SessionDetailSheet
+        session={detail}
+        isOpen={detail ? openIds.has(detail.id) : false}
+        onClose={() => setDetail(null)}
+      />
     </SafeAreaView>
   );
 }

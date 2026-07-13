@@ -20,6 +20,7 @@ import { useUserStore } from "../store/useUserStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useServerCapabilities } from "../utils/abs/capabilities";
 import { getUser, createUser, updateUser, deleteUser, getUserListeningStats } from "../utils/abs/users";
+import { getTags } from "../utils/abs/server";
 import { absErrorToErrorStateProps } from "../utils/abs/errors";
 import { formatListeningTime } from "../utils/format";
 import type { AbsUser, AbsUserPayload, AbsUserType } from "../utils/abs/types";
@@ -45,9 +46,10 @@ import type { AbsUser, AbsUserPayload, AbsUserType } from "../utils/abs/types";
  *  - Deleting a user is Tier-3 destructive: typed username confirm.
  *
  * A dirty form arms a beforeRemove discard guard (ChapterEditor idiom), and
- * saving happens from a header "Save" text button enabled once dirty. Tag
- * restrictions (accessAllTags/itemTagsSelected) have no UI here — they're
- * echoed back from the loaded user unchanged so edits never clobber them.
+ * saving happens from a header "Save" text button enabled once dirty. Per-tag
+ * library access (accessAllTags/itemTagsSelected) is editable via the "Tag
+ * access" section; the block-list flag (selectedTagsNotAccessible) has no UI
+ * and is echoed back from the loaded user unchanged so edits never clobber it.
  */
 
 const TYPE_OPTIONS: { label: string; value: AbsUserType }[] = [
@@ -80,6 +82,8 @@ interface FormSnapshot {
   perms: PermFlags;
   allLibraries: boolean;
   libs: string[]; // sorted
+  allTags: boolean;
+  tags: string[]; // sorted
 }
 
 // Create mode compares against the server defaults, so `dirty` means "the
@@ -92,6 +96,8 @@ const CREATE_SEED: FormSnapshot = {
   perms: DEFAULT_PERMS,
   allLibraries: true,
   libs: [],
+  allTags: true,
+  tags: [],
 };
 
 // This screen historically lumped auth/server/unsupported into the generic
@@ -216,6 +222,10 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
   const [perms, setPerms] = useState<PermFlags>(DEFAULT_PERMS);
   const [allLibraries, setAllLibraries] = useState(true);
   const [selectedLibs, setSelectedLibs] = useState<string[]>([]);
+  const [allTags, setAllTags] = useState(true);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  // Every tag defined on the server — the checklist source (best-effort load).
+  const [allServerTags, setAllServerTags] = useState<string[]>([]);
   const [seed, setSeed] = useState<FormSnapshot | null>(isCreate ? CREATE_SEED : null);
   // Inline validation errors (cleared as the admin retypes).
   const [usernameError, setUsernameError] = useState<string | null>(null);
@@ -236,6 +246,21 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       .catch(() => {});
   }, []);
 
+  // Server tag vocabulary for the tag-access checklist — best-effort: a tag
+  // load failure leaves the list empty (helper text) but never blocks editing.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.allSettled([getTags()]).then(([res]) => {
+      if (cancelled) return;
+      if (res.status === "fulfilled" && Array.isArray(res.value)) {
+        setAllServerTags([...res.value].sort());
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const seedFromUser = (u: AbsUser) => {
     const p = u.permissions || ({} as any);
     const permFlags: PermFlags = {
@@ -247,6 +272,8 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
     };
     const all = p.accessAllLibraries !== false;
     const libs = Array.isArray(u.librariesAccessible) ? [...u.librariesAccessible].sort() : [];
+    const allTagsAccess = p.accessAllTags !== false;
+    const tags = Array.isArray(u.itemTagsSelected) ? [...u.itemTagsSelected].sort() : [];
     setUsername(u.username || "");
     setPassword("");
     setType(u.type === "root" ? "admin" : u.type); // type is never PATCHed for root (chips hidden)
@@ -254,6 +281,8 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
     setPerms(permFlags);
     setAllLibraries(all);
     setSelectedLibs(libs);
+    setAllTags(allTagsAccess);
+    setSelectedTags(tags);
     setSeed({
       username: u.username || "",
       type: u.type === "root" ? "admin" : u.type,
@@ -261,6 +290,8 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       perms: permFlags,
       allLibraries: all,
       libs,
+      allTags: allTagsAccess,
+      tags,
     });
   };
 
@@ -296,6 +327,7 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
   const dirty = useMemo(() => {
     if (!seed) return false;
     const libsNow = [...selectedLibs].sort();
+    const tagsNow = [...selectedTags].sort();
     return (
       username.trim() !== seed.username ||
       password.length > 0 ||
@@ -307,9 +339,11 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       perms.upload !== seed.perms.upload ||
       perms.accessExplicitContent !== seed.perms.accessExplicitContent ||
       allLibraries !== seed.allLibraries ||
-      libsNow.join("\n") !== seed.libs.join("\n")
+      libsNow.join("\n") !== seed.libs.join("\n") ||
+      allTags !== seed.allTags ||
+      tagsNow.join("\n") !== seed.tags.join("\n")
     );
-  }, [isCreate, seed, username, password, type, isActive, perms, allLibraries, selectedLibs]);
+  }, [isCreate, seed, username, password, type, isActive, perms, allLibraries, selectedLibs, allTags, selectedTags]);
 
   // Unsaved-changes guard (ChapterEditorScreen idiom): intercept ANY
   // navigation that would remove this screen while the form is dirty —
@@ -348,28 +382,32 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       if (password) p.password = password;
       return p;
     }
-    // Tag restrictions have no UI here (yet) — echo the loaded user's values
-    // back UNCHANGED so an unrelated edit can never grant a tag-restricted
-    // user access to everything. Create mode uses the server defaults.
+    // Per-tag access IS editable (Tag access section). Create mode always
+    // grants all tags; edit mode sends the toggled value + the chosen tags.
+    // The block-list flag (selectedTagsNotAccessible) has NO UI — it's echoed
+    // back from the loaded user UNCHANGED so an edit here can never flip a
+    // user's allow-list into a block-list (or vice versa).
     const loadedPerms: any = loadedUser?.permissions || {};
+    const permissions: any = {
+      download: perms.download,
+      update: perms.update,
+      delete: perms.delete,
+      upload: perms.upload,
+      accessExplicitContent: perms.accessExplicitContent,
+      accessAllLibraries: allLibraries,
+      accessAllTags: isCreate ? true : allTags,
+    };
+    // Preserve the block-list flag exactly as loaded (no UI, echo-only).
+    if (!isCreate && typeof loadedPerms.selectedTagsNotAccessible === "boolean") {
+      permissions.selectedTagsNotAccessible = loadedPerms.selectedTagsNotAccessible;
+    }
     const payload: AbsUserPayload = {
       username: username.trim(),
       type,
       isActive,
-      permissions: {
-        download: perms.download,
-        update: perms.update,
-        delete: perms.delete,
-        upload: perms.upload,
-        accessExplicitContent: perms.accessExplicitContent,
-        accessAllLibraries: allLibraries,
-        accessAllTags: isCreate ? true : loadedPerms.accessAllTags !== false,
-      },
+      permissions,
       librariesAccessible: allLibraries ? [] : [...selectedLibs],
-      itemTagsSelected:
-        !isCreate && Array.isArray(loadedUser?.itemTagsSelected)
-          ? [...loadedUser!.itemTagsSelected]
-          : [],
+      itemTagsSelected: allTags ? [] : [...selectedTags],
     };
     // Older servers keep the accessible-tags list top-level — echo it too.
     if (!isCreate && Array.isArray((loadedUser as any)?.itemTagsAccessible)) {
@@ -470,6 +508,12 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
   const toggleLib = (libId: string) => {
     setSelectedLibs((cur) =>
       cur.includes(libId) ? cur.filter((id) => id !== libId) : [...cur, libId]
+    );
+  };
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags((cur) =>
+      cur.includes(tag) ? cur.filter((t) => t !== tag) : [...cur, tag]
     );
   };
 
@@ -770,6 +814,65 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
                     );
                   })
                 : null}
+
+              <SectionHeader label="Tag access" colors={colors} />
+              <ToggleRow
+                icon="bookmark"
+                title="All tags"
+                value={allTags}
+                onValueChange={setAllTags}
+                colors={colors}
+              />
+              {!allTags ? (
+                allServerTags.length > 0 ? (
+                  allServerTags.map((tag) => {
+                    const checked = selectedTags.includes(tag);
+                    return (
+                      <TouchableOpacity
+                        key={tag}
+                        onPress={() => toggleTag(tag)}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked }}
+                        accessibilityLabel={`Tag access: ${tag}`}
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          paddingVertical: 14,
+                          paddingHorizontal: 20,
+                        }}
+                      >
+                        <View
+                          style={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 6,
+                            borderWidth: 2,
+                            borderColor: checked ? colors.primary : colors.outline,
+                            backgroundColor: checked ? colors.primary : "transparent",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginRight: 16,
+                          }}
+                        >
+                          {checked ? <Icon name="check" size={16} color={colors.onPrimary} /> : null}
+                        </View>
+                        <Text style={{ color: colors.onSurface, fontSize: 16, flex: 1 }}>{tag}</Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                ) : (
+                  <Text
+                    style={{
+                      color: colors.onSurfaceVariant,
+                      fontSize: 13,
+                      paddingHorizontal: 20,
+                      paddingVertical: 12,
+                    }}
+                  >
+                    No tags are defined on this server yet.
+                  </Text>
+                )
+              ) : null}
             </>
           ) : null}
 
