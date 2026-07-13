@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import Icon, { IconName } from "../components/Icon";
@@ -10,6 +10,27 @@ import { refreshCapabilities, useServerCapabilities } from "../utils/abs/capabil
 import { getTasksSnapshot, subscribeTasks } from "../utils/abs/tasks";
 import type { AbsTask } from "../utils/abs/types";
 import { usePlaybackStore } from "../store/usePlaybackStore";
+import { formatDateTime } from "../utils/format";
+import {
+  getUsersSummary,
+  getBackupsSummary,
+  getLibrariesSummary,
+} from "../utils/abs/adminSummaries";
+
+// Compact "time since" for the Backups row subtitle (issue #64). utils/format
+// has no relative helper, so this small inline formatter covers it, falling
+// back to the shared calendar formatDateTime for anything older than a month.
+function formatRelativeTime(ts: number, now: number = Date.now()): string {
+  const diff = Math.max(0, now - ts);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  return `on ${formatDateTime(ts)}`;
+}
 
 /**
  * ServerAdminHubScreen — the one hub for every server-administration surface
@@ -83,6 +104,78 @@ export default function ServerAdminHubScreen({ navigation }: any) {
       blurUnsub?.();
     };
   }, [navigation, caps.isAdmin]);
+
+  // Row summary subtitles (issue #64): cheap parallel fetches, refreshed on
+  // focus, that annotate a few rows with a live count / recency. Keyed by route
+  // so a row falls back to its static subtitle whenever its fetch is missing or
+  // failed. `offline` drives the subtle offline hint (see loadSummaries).
+  const [summaries, setSummaries] = useState<Record<string, string>>({});
+  const [offline, setOffline] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadSummaries = useCallback(async () => {
+    // Never throws: allSettled means one failing endpoint can't block the hub
+    // or wipe the others' subtitles. A failed row simply keeps its static one.
+    const [usersR, backupsR, librariesR] = await Promise.allSettled([
+      getUsersSummary(),
+      getBackupsSummary(),
+      getLibrariesSummary(),
+    ]);
+
+    setSummaries((prev) => {
+      const next = { ...prev };
+      if (usersR.status === "fulfilled") {
+        const { total, online } = usersR.value;
+        const users = `${total} user${total === 1 ? "" : "s"}`;
+        next.AdminUsers = online != null ? `${users} · ${online} online` : users;
+      }
+      if (backupsR.status === "fulfilled") {
+        next.AdminBackups = backupsR.value.lastCreatedAt
+          ? `Last backup ${formatRelativeTime(backupsR.value.lastCreatedAt)}`
+          : "No backups yet";
+      }
+      if (librariesR.status === "fulfilled") {
+        const n = librariesR.value.count;
+        next.AdminLibraries = `${n} librar${n === 1 ? "y" : "ies"}`;
+      }
+      return next;
+    });
+
+    // Offline hint only when nothing loaded AND the reason was offline — a lone
+    // offline blip on one endpoint while others answered isn't "the hub is
+    // offline". The rows stay tappable regardless (destinations render their
+    // own offline state); this is a visual hint, not a navigation block.
+    const results = [usersR, backupsR, librariesR];
+    const anyOk = results.some((r) => r.status === "fulfilled");
+    const anyOffline = results.some(
+      (r) => r.status === "rejected" && (r.reason as any)?.kind === "offline"
+    );
+    setOffline(anyOffline && !anyOk);
+  }, []);
+
+  // Fetch summaries once we know the viewer is an admin, and again on every
+  // focus so a count changed on a sub-screen (a deleted user, a new backup) is
+  // reflected when the admin pops back.
+  useEffect(() => {
+    if (!caps.isAdmin) return;
+    loadSummaries();
+    const focusUnsub = navigation?.addListener?.("focus", () => {
+      loadSummaries();
+    });
+    return () => {
+      focusUnsub?.();
+    };
+  }, [caps.isAdmin, navigation, loadSummaries]);
+
+  // Pull-to-refresh re-runs both the capability probe and the summary fetches.
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refreshCapabilities(), loadSummaries()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadSummaries]);
 
   const groups: { label: string; rows: HubRow[] }[] = [
     {
@@ -171,9 +264,34 @@ export default function ServerAdminHubScreen({ navigation }: any) {
   if (caps.isAdmin) {
     body = (
       <ScrollView
+        testID="admin-hub-scroll"
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: hasSession ? 100 : 48 }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+        }
       >
+        {offline ? (
+          <View
+            testID="admin-hub-offline"
+            accessibilityRole="alert"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginHorizontal: 20,
+              marginTop: 16,
+              paddingVertical: 10,
+              paddingHorizontal: 14,
+              borderRadius: 12,
+              backgroundColor: colors.surfaceContainerHighest,
+            }}
+          >
+            <Icon name="cloud-off" size={18} color={colors.onSurfaceVariant} style={{ marginRight: 10 }} />
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, flex: 1 }}>
+              Offline — live counts unavailable. Pull to refresh once you're back online.
+            </Text>
+          </View>
+        ) : null}
         <TaskActivityCard tasks={tasks} />
         {groups.map((group) => {
           const rows = group.rows.filter((r) => !r.hidden);
@@ -187,7 +305,7 @@ export default function ServerAdminHubScreen({ navigation }: any) {
                   <NavRow
                     icon={row.icon}
                     title={row.title}
-                    subtitle={row.subtitle}
+                    subtitle={summaries[row.route] ?? row.subtitle}
                     onPress={() => navigation.navigate(row.route)}
                     colors={colors}
                   />
