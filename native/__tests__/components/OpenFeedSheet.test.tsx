@@ -132,6 +132,27 @@ it("a slug collision (400) gets its own copy, not the generic failure", async ()
   );
 });
 
+it("a NON-collision 400 surfaces the server's own reason, not the collision copy", async () => {
+  // 400 is also used for bad-request cases like an invalid slug format — those
+  // must show the server's message, not "already in use".
+  mockedPost.mockRejectedValue({ response: { status: 400, data: "Invalid slug format" } });
+  await render(<OpenFeedSheet entity={itemEntity} onClose={() => {}} />);
+  await screen.findByLabelText("RSS feed address");
+
+  await fireEvent.press(screen.getByLabelText("Open RSS feed"));
+  await confirmOpen();
+
+  await waitFor(() =>
+    expect(showAppDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Couldn't open feed", message: "Invalid slug format" })
+    )
+  );
+  // Never mislabeled as a slug collision.
+  expect(showAppDialog).not.toHaveBeenCalledWith(
+    expect.objectContaining({ message: "That address is already in use — pick a different one." })
+  );
+});
+
 it("a generic failure surfaces the normalized AbsError message", async () => {
   mockedPost.mockRejectedValue({ response: { status: 500 } });
   await render(<OpenFeedSheet entity={itemEntity} onClose={() => {}} />);

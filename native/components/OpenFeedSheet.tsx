@@ -119,10 +119,17 @@ export default function OpenFeedSheet({
       showSnackbar({ message: "RSS feed opened" });
     } catch (e: any) {
       if (!mountedRef.current) return;
-      // A 400 on these routes is (almost always) a slug collision — the slug
-      // must be unique across every open feed. Give it dedicated copy; anything
-      // else surfaces the normalized AbsError message (offline/forbidden/server).
-      if (e instanceof AbsError && e.status === 400) {
+      // A 400 whose server reason names a slug collision gets dedicated copy —
+      // the slug must be unique across every open feed. normalizeAbsError keeps
+      // the server's plain-text 400 body on e.message, so a 400 for any OTHER
+      // reason (e.g. an invalid slug format) surfaces the server's own message
+      // rather than being mislabeled "already in use".
+      // ABS returns a plain-text "Slug already in use" on a collision; key on
+      // "in use" (not "slug", which also appears in benign copy like "invalid
+      // slug format") so only a real collision gets the dedicated message.
+      const isCollision =
+        e instanceof AbsError && e.status === 400 && /in use/i.test(e.message || "");
+      if (isCollision) {
         showAppDialog({
           title: "Couldn't open feed",
           message: "That address is already in use — pick a different one.",
