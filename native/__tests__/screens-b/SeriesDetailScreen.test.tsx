@@ -89,13 +89,15 @@ jest.mock("../../utils/rmab", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import SeriesDetailScreen from "../../screens/SeriesDetailScreen";
 import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { useLibraryStore } from "../../store/useLibraryStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useRmabStore } from "../../store/useRmabStore";
+import { useDialogStore } from "../../store/useDialogStore";
+import { useSnackbarStore } from "../../store/useSnackbarStore";
 
 const initialUser = useUserStore.getState();
 const initialLibrary = useLibraryStore.getState();
@@ -193,6 +195,8 @@ beforeEach(() => {
   useLibraryStore.setState({ currentLibraryId: "lib1" } as any);
   startPlayback = jest.fn().mockResolvedValue(true);
   usePlaybackStore.setState({ startPlayback, currentSession: null } as any);
+  useDialogStore.setState({ current: null } as any);
+  useSnackbarStore.setState({ current: null } as any);
   mockSeriesApi();
 });
 
@@ -364,6 +368,229 @@ describe("SeriesDetailScreen", () => {
     await renderSeries();
 
     expect(await screen.findByText("No books in this series")).toBeTruthy();
+  });
+});
+
+describe("SeriesDetailScreen — batch progress (mark finished / reset)", () => {
+  beforeEach(() => {
+    // The post-batch progress refresh must not hit the real /api/me loader.
+    useUserStore.setState({
+      loadMediaProgress: jest.fn().mockResolvedValue(undefined),
+    } as any);
+  });
+
+  // RAW_ITEMS: b1 finished, b2 no progress, b3 half progress. Sorted order is
+  // #1 Alpha (b1), #2 Beta (b2), #3 Gamma (b3).
+
+  it("is available to any logged-in user (not admin-gated)", async () => {
+    // Default user is null (non-admin): personal progress is never admin-gated.
+    await renderSeries();
+    await screen.findByText("#1 Alpha");
+
+    expect(screen.getByLabelText("Mark series as finished")).toBeTruthy();
+    expect(screen.getByLabelText("Reset series progress")).toBeTruthy();
+  });
+
+  describe("mark series as finished", () => {
+    it("confirms with the unfinished count, then PATCHes a BARE-ARRAY body of finish payloads", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+
+      // Confirm first — nothing sent yet. b1 is already finished, so the count
+      // covers only the 2 unfinished books (b2, b3).
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.title).toBe("Mark series as finished?");
+      expect(dialog.message).toContain("2 books");
+      expect(api.patch).not.toHaveBeenCalled();
+
+      const confirm = dialog.buttons!.find((b) => b.text === "Mark finished")!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      // The batch body is the bare ARRAY of finish payloads — NOT wrapped.
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
+        { libraryItemId: "b2", isFinished: true },
+        { libraryItemId: "b3", isFinished: true },
+      ]);
+      const [, body] = (api.patch as jest.Mock).mock.calls[0];
+      expect(Array.isArray(body)).toBe(true);
+
+      expect(useSnackbarStore.getState().current?.message).toBe("2 books marked finished");
+      // The progress map refresh fires (drives the header stats + row badges).
+      expect(useUserStore.getState().loadMediaProgress).toHaveBeenCalled();
+    });
+
+    it("double-tapping the finish confirm only sends one batch (ref mutex)", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+      const confirm = useDialogStore.getState().current!.buttons!.find(
+        (b) => b.text === "Mark finished"
+      )!;
+      // Two rapid taps before the in-flight state re-renders → one PATCH.
+      await act(async () => {
+        confirm.onPress!();
+        confirm.onPress!();
+      });
+      expect(api.patch).toHaveBeenCalledTimes(1);
+    });
+
+    it("recomputes targets from the live progress map at confirm time (not dialog-open time)", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      // Open the dialog with b2 + b3 unfinished (b1 already finished).
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+      // While the dialog is open, b2 becomes finished (e.g. a background sync).
+      await act(async () => {
+        useUserStore.setState({
+          mediaProgress: { b2: { libraryItemId: "b2", isFinished: true } },
+        } as any);
+      });
+      const confirm = useDialogStore.getState().current!.buttons!.find(
+        (b) => b.text === "Mark finished"
+      )!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      // Only b3 is sent, and the snackbar count reflects the recomputed target.
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
+        { libraryItemId: "b3", isFinished: true },
+      ]);
+      expect(useSnackbarStore.getState().current?.message).toBe("1 book marked finished");
+    });
+
+    it("uses the progress MAP (not just the payload snapshot) for the finished check", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      // b2 finished in the authoritative map since the payload was taken.
+      useUserStore.setState({
+        mediaProgress: { b2: { libraryItemId: "b2", isFinished: true } },
+      } as any);
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+      const dialog = useDialogStore.getState().current!;
+      // b1 (payload finished) + b2 (map finished) excluded -> only b3 left.
+      expect(dialog.message).toContain("1 book");
+      const confirm = dialog.buttons!.find((b) => b.text === "Mark finished")!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
+        { libraryItemId: "b3", isFinished: true },
+      ]);
+    });
+
+    it("shows an already-finished snackbar (no dialog, no request) when every book is finished", async () => {
+      useUserStore.setState({
+        mediaProgress: {
+          b2: { libraryItemId: "b2", isFinished: true },
+          b3: { libraryItemId: "b3", isFinished: true },
+        },
+      } as any);
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+
+      expect(useDialogStore.getState().current).toBeNull();
+      expect(api.patch).not.toHaveBeenCalled();
+      expect(useSnackbarStore.getState().current?.message).toMatch(/already finished/i);
+    });
+
+    it("surfaces a dialog and no success snackbar when the finish PATCH fails", async () => {
+      (api.patch as jest.Mock).mockRejectedValue({ response: { status: 500 } });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+      const confirm = useDialogStore
+        .getState()
+        .current!.buttons!.find((b) => b.text === "Mark finished")!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      expect(useDialogStore.getState().current?.title).toBe("Couldn't mark as finished");
+      expect(useSnackbarStore.getState().current).toBeNull();
+    });
+  });
+
+  describe("reset series progress", () => {
+    it("confirms (destructive) with the has-progress count, then PATCHes a BARE-ARRAY body of reset payloads", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Reset series progress"));
+
+      // Confirm first — nothing sent yet. b1 (finished) + b3 (half) have
+      // progress; b2 has none -> count is 2.
+      const dialog = useDialogStore.getState().current!;
+      expect(dialog.title).toBe("Reset series progress?");
+      expect(dialog.message).toContain("2 books");
+      expect(api.patch).not.toHaveBeenCalled();
+
+      const confirm = dialog.buttons!.find((b) => b.text === "Reset")!;
+      // The reset action is styled destructive (data loss).
+      expect(confirm.style).toBe("destructive");
+
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      // Reset payloads zero out currentTime + progress and clear isFinished.
+      expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
+        { libraryItemId: "b1", isFinished: false, currentTime: 0, progress: 0 },
+        { libraryItemId: "b3", isFinished: false, currentTime: 0, progress: 0 },
+      ]);
+      const [, body] = (api.patch as jest.Mock).mock.calls[0];
+      expect(Array.isArray(body)).toBe(true);
+
+      expect(useSnackbarStore.getState().current?.message).toBe("Progress reset on 2 books");
+      expect(useUserStore.getState().loadMediaProgress).toHaveBeenCalled();
+    });
+
+    it("shows a nothing-to-reset snackbar (no dialog, no request) when no book has progress", async () => {
+      mockSeriesApi({
+        items: RAW_ITEMS.map((i) => ({ ...i, userMediaProgress: null })),
+      });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Reset series progress"));
+
+      expect(useDialogStore.getState().current).toBeNull();
+      expect(api.patch).not.toHaveBeenCalled();
+      expect(useSnackbarStore.getState().current?.message).toMatch(/no progress to reset/i);
+    });
+
+    it("surfaces a dialog and no success snackbar when the reset PATCH fails", async () => {
+      (api.patch as jest.Mock).mockRejectedValue({ response: { status: 500 } });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Reset series progress"));
+      const confirm = useDialogStore
+        .getState()
+        .current!.buttons!.find((b) => b.text === "Reset")!;
+      await act(async () => {
+        await confirm.onPress!();
+      });
+
+      expect(useDialogStore.getState().current?.title).toBe("Couldn't reset progress");
+      expect(useSnackbarStore.getState().current).toBeNull();
+    });
   });
 });
 
