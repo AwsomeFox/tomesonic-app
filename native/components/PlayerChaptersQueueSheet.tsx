@@ -55,6 +55,13 @@ function secondsToTimestamp(seconds: number) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+/**
+ * Height of the collapsed "Chapters & Up Next" peek handle. Exported so the
+ * landscape player pane can budget exactly this much bottom padding — a
+ * drifted copy would let the transport/pill slide under the handle.
+ */
+export const PEEK_HANDLE_H = 54;
+
 export default function PlayerChaptersQueueSheet({
   mainPlayerProgress,
   chapters,
@@ -73,8 +80,13 @@ export default function PlayerChaptersQueueSheet({
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
-  const sheetHeight = screenHeight * 0.72; // covers 72% of the screen
-  const peekHeight = 54;
+  // Portrait: covers 72% of the screen. Landscape viewports are SHORT
+  // (~400dp on phones), where 72% leaves only a couple of list rows — use
+  // nearly the full height instead, stopping under the status bar.
+  const sheetHeight = isLandscape
+    ? Math.max(screenHeight * 0.72, screenHeight - insets.top - 12)
+    : screenHeight * 0.72;
+  const peekHeight = PEEK_HANDLE_H;
   // Round-11 convention: every animated surface collapses to instant
   // transitions under the system reduce-motion setting.
   const reduceMotion = useReducedMotion();
@@ -179,10 +191,11 @@ export default function PlayerChaptersQueueSheet({
     const mainP = mainPlayerProgress.value;
     const subP = subProgress.value;
 
+    // The peek is enabled in BOTH orientations (it used to be pushed
+    // offscreen in landscape; the landscape player now relies on it for
+    // chapters + queue, and budgets 54dp of bottom padding for the handle).
     const offScreenY = sheetHeight + insets.bottom;
-    const peekY = isLandscape
-      ? offScreenY
-      : (sheetHeight - peekHeight - insets.bottom);
+    const peekY = sheetHeight - peekHeight - insets.bottom;
     const expandedY = 0;
 
     // Slide peek up as parent expands

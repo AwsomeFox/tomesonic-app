@@ -48,19 +48,28 @@ export interface PlayerLayout {
   SOURCE_LABEL_H: number;
   /** Source label bottom → cover top gap. */
   SOURCE_TO_COVER: number;
-  /** Cover bottom → numeric info row gap. */
-  COVER_TO_NUMERIC: number;
-  /** Numeric info row (chapter/book times) height. */
-  NUMERIC_H: number;
-  /** Book WavyProgress row marginTop (the row only renders when shown). */
-  BOOK_BAR_GAP: number;
-  /** Book WavyProgress row height (the row only renders when shown). */
+  /**
+   * Cover bottom → first progress-bar row gap. The old separate numeric info
+   * row is gone — each bar now carries its elapsed/remaining labels INLINE
+   * (flanking the wave), so the bar rows take the numeric row's place in the
+   * cascade (with their own gap value, not the old row's exact offset).
+   */
+  COVER_TO_BARS: number;
+  /** Book bar row height — wave + inline flanking time labels (when shown). */
+  BOOK_ROW_H: number;
+  /** The book WavyProgress wave height inside its row. */
   BOOK_BAR_H: number;
-  /** The bar's whole box (BOOK_BAR_GAP + BOOK_BAR_H) — 0 when hidden. */
+  /** Book row bottom → chapter scrubber row gap (when the book row is shown). */
+  BARS_GAP: number;
+  /** The book row's whole box (BOOK_ROW_H + BARS_GAP) — 0 when hidden. */
   BOOK_BAR_BOX: number;
-  /** Gap before the chapter scrubber (12 with book bar, 8 without). */
-  NUMERIC_TO_SCRUBBER: number;
-  /** Chapter scrubber row height. */
+  /**
+   * The chapter scrubber row's marginTop: BARS_GAP under the book row, or
+   * COVER_TO_BARS directly under the cover when the book row is hidden. One
+   * exported delta so the component never re-encodes the ternary.
+   */
+  SCRUBBER_TOP_GAP: number;
+  /** Chapter scrubber row height (wave + inline flanking labels). */
   SCRUBBER_H: number;
   /** Bars → title gap (both modes). */
   SCRUBBER_TO_TITLE: number;
@@ -91,6 +100,7 @@ export interface PlayerLayout {
   // Absolute overlay Y cascade.
   SOURCE_LABEL_Y: number;
   COVER_Y_EXP: number;
+  /** Top of the book bar row (== scrubber top when the book row is hidden). */
   BOOK_PROGRESS_Y: number;
   CHAPTER_PROGRESS_Y: number;
   TITLE_Y_EXP: number;
@@ -132,18 +142,20 @@ export function computePlayerLayout({
   // section occupies (marginTop + height). The absolute-overlay Y cascade
   // (SOURCE_LABEL_Y…TRANSPORT_Y_EXP) AND the tablet-centering block height are
   // BOTH derived from these deltas, so the two coordinate systems can't drift.
-  // When the book-progress bar is hidden, its whole box (marginTop 8 + height
-  // 12) drops out and the numeric row sits directly above the chapter scrubber.
+  // The bars carry their time labels INLINE (elapsed left, -remaining right,
+  // flanking the wave) — the old standalone numeric info row is gone. When the
+  // book-progress bar is hidden its whole box (row + gap) drops out and the
+  // chapter scrubber sits directly under the cover.
   const showBook = showBookProgress;
   const TOPBAR_TO_SOURCE = 12;          // top bar bottom → source label
   const SOURCE_LABEL_H = 20;            // source label row
   const SOURCE_TO_COVER = 8;            // source label bottom → cover top
-  const COVER_TO_NUMERIC = 12;          // cover bottom → numeric info row
-  const NUMERIC_H = 28;                 // numeric info row (chapter/book times)
-  const BOOK_BAR_GAP = 8;               // book WavyProgress marginTop (when shown)
-  const BOOK_BAR_H = 12;                // book WavyProgress height (when shown)
-  const BOOK_BAR_BOX = showBook ? BOOK_BAR_GAP + BOOK_BAR_H : 0;
-  const NUMERIC_TO_SCRUBBER = showBook ? 12 : 8; // gap before the chapter scrubber
+  const COVER_TO_BARS = 14;             // cover bottom → first bar row
+  const BOOK_ROW_H = 20;                // book bar row: wave + inline labels (when shown)
+  const BOOK_BAR_H = 12;                // the book wave's own height inside the row
+  const BARS_GAP = 12;                  // book row → chapter scrubber (when shown)
+  const BOOK_BAR_BOX = showBook ? BOOK_ROW_H + BARS_GAP : 0;
+  const SCRUBBER_TOP_GAP = showBook ? BARS_GAP : COVER_TO_BARS; // scrubber row marginTop
   const SCRUBBER_H = 36;                // chapter scrubber row
   const SCRUBBER_TO_TITLE = 20;         // comfortable bars → title gap (both modes)
   const TITLE_H = 64;                   // title+author block (text capped at maxFontSizeMultiplier 1.3 — see interface doc)
@@ -154,18 +166,20 @@ export function computePlayerLayout({
   // Height of the cover→pill block, used to vertically center it on tablets.
   // Derived from the same deltas as the cascade so it stays book-bar-aware.
   const CONTENT_BLOCK_H =
-    COVER_SIZE_EXP + COVER_TO_NUMERIC + NUMERIC_H + BOOK_BAR_BOX + NUMERIC_TO_SCRUBBER +
+    COVER_SIZE_EXP + COVER_TO_BARS + BOOK_BAR_BOX +
     SCRUBBER_H + SCRUBBER_TO_TITLE + TITLE_H + TITLE_TO_TRANSPORT + TRANSPORT_H +
     TRANSPORT_TO_PILL + PILL_H;
   const availH = screenHeight - (TOP_BAR_Y + 56) - insetBottom - 20;
   const extraTop = isTablet ? Math.max(0, (availH - CONTENT_BLOCK_H) / 2) : 0;
   const SOURCE_LABEL_Y = TOP_BAR_Y + 56 + TOPBAR_TO_SOURCE + extraTop;
   const COVER_Y_EXP = SOURCE_LABEL_Y + SOURCE_LABEL_H + SOURCE_TO_COVER;
-  const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + COVER_TO_NUMERIC;
-  // Scrubber top. When the book bar is shown its box sits between the numeric
-  // row and the scrubber; when hidden only the 8px gap remains. (The scrubber's
-  // own marginTop ternary in the component reconciles both cases against this.)
-  const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + NUMERIC_H + BOOK_BAR_BOX + NUMERIC_TO_SCRUBBER;
+  // Top of the book bar row. When the book row is hidden this is where the
+  // chapter scrubber sits instead (BOOK_BAR_BOX is 0 in that mode).
+  const BOOK_PROGRESS_Y = COVER_Y_EXP + COVER_SIZE_EXP + COVER_TO_BARS;
+  // Scrubber top: directly under the cover, or under the book row's box.
+  // (The scrubber's own SCRUBBER_TOP_GAP marginTop in the component
+  // reconciles both cases against this.)
+  const CHAPTER_PROGRESS_Y = BOOK_PROGRESS_Y + BOOK_BAR_BOX;
   const TITLE_Y_EXP = CHAPTER_PROGRESS_Y + SCRUBBER_H + SCRUBBER_TO_TITLE;
   const TRANSPORT_Y_EXP = TITLE_Y_EXP + TITLE_H + TITLE_TO_TRANSPORT;
 
@@ -192,12 +206,12 @@ export function computePlayerLayout({
     TOPBAR_TO_SOURCE,
     SOURCE_LABEL_H,
     SOURCE_TO_COVER,
-    COVER_TO_NUMERIC,
-    NUMERIC_H,
-    BOOK_BAR_GAP,
+    COVER_TO_BARS,
+    BOOK_ROW_H,
     BOOK_BAR_H,
+    BARS_GAP,
     BOOK_BAR_BOX,
-    NUMERIC_TO_SCRUBBER,
+    SCRUBBER_TOP_GAP,
     SCRUBBER_H,
     SCRUBBER_TO_TITLE,
     TITLE_H,
