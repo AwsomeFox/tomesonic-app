@@ -115,7 +115,12 @@ describe("AdminLibrariesScreen", () => {
     const { listeners } = await renderScreen();
     await screen.findByText("Audiobooks");
 
-    // A library was created on AdminLibraryEdit while we were away.
+    // First focus == the initial-mount focus React Navigation fires; it's
+    // skipped (firstFocusRef) so entry doesn't double-fetch.
+    await act(async () => listeners["focus"]());
+
+    // A library was created on AdminLibraryEdit while we were away; the NEXT
+    // focus (a real return to the screen) reloads.
     mockLibrariesGet([
       ...LIBS,
       { id: "lib3", name: "Freshly Created", mediaType: "book", icon: "books-1", folders: [] },
@@ -125,6 +130,51 @@ describe("AdminLibrariesScreen", () => {
     expect(await screen.findByText("Freshly Created")).toBeTruthy();
     // Silent refresh: the existing rows stayed rendered (no full-screen spinner wipe).
     expect(screen.getByText("Audiobooks")).toBeTruthy();
+  });
+
+  it("skips the focus-driven refetch on first mount (single GET /api/libraries on entry)", async () => {
+    const { listeners } = await renderScreen();
+    await screen.findByText("Audiobooks");
+    const libCalls = () =>
+      (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/libraries").length;
+
+    // Mount already loaded once.
+    expect(libCalls()).toBe(1);
+    // The initial-mount focus event must NOT trigger a second fetch.
+    await act(async () => listeners["focus"]());
+    expect(libCalls()).toBe(1);
+    // A subsequent (real re-)focus DOES refetch.
+    await act(async () => listeners["focus"]());
+    expect(libCalls()).toBe(2);
+  });
+
+  it("clears the load error only on a SUCCESSFUL refetch — no empty-state flash mid-retry", async () => {
+    // Mount fails → ErrorState.
+    (api.get as jest.Mock).mockRejectedValueOnce(new Error("Network Error"));
+    const { listeners } = await renderScreen();
+    expect(await screen.findByText("You're offline")).toBeTruthy();
+
+    // Consume the initial-mount focus (skipped).
+    await act(async () => listeners["focus"]());
+
+    // The next focus triggers a silent refetch we hold pending.
+    let resolveGet: (v: any) => void;
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/libraries") return new Promise((res) => (resolveGet = res));
+      return Promise.resolve({ data: {} });
+    });
+    await act(async () => listeners["focus"]());
+
+    // While the refetch is in flight the ErrorState must stay — the error is
+    // NOT cleared at the top, so the "No libraries" empty state never flashes.
+    expect(screen.getByText("You're offline")).toBeTruthy();
+    expect(screen.queryByText("No libraries")).toBeNull();
+
+    // On success it heals to the list.
+    await act(async () => {
+      resolveGet!({ data: { libraries: LIBS } });
+    });
+    expect(await screen.findByText("Audiobooks")).toBeTruthy();
   });
 
   it("header add navigates to AdminLibraryEdit in create mode; row tap edits", async () => {

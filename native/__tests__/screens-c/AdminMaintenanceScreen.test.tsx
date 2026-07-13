@@ -166,6 +166,26 @@ describe("AdminMaintenanceScreen — tags", () => {
     );
   });
 
+  it("a late library-list load does not refetch tags (narratorLibraryId drives only narrators)", async () => {
+    // Start with an empty store so the derived narratorLibraryId is null.
+    useLibraryStore.setState({ libraries: [] as any, currentLibraryId: null as any });
+    await renderScreen();
+    await screen.findByText("Fiction");
+    const tagCalls = () =>
+      (api.get as jest.Mock).mock.calls.filter((c) => c[0] === "/api/tags").length;
+    expect(tagCalls()).toBe(1);
+
+    // The library store finishes loading late — this changes the derived
+    // narratorLibraryId, but we're on the Tags segment, so tags must NOT refetch.
+    await act(async () => {
+      useLibraryStore.setState({
+        libraries: [{ id: "lib1", name: "Audiobooks", mediaType: "book", settings: {} }] as any,
+        currentLibraryId: "lib1",
+      });
+    });
+    expect(tagCalls()).toBe(1);
+  });
+
   it("cancelling an inline rename restores the row without a dialog", async () => {
     await renderScreen();
     await screen.findByText("Fiction");

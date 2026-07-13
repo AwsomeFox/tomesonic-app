@@ -37,6 +37,18 @@ function formatNumber(n: number): string {
   return Number(n || 0).toLocaleString("en-US");
 }
 
+// Single place that maps the raw /stats payload into the shape the screen
+// renders. Any field-name drift across ABS versions is reconciled HERE (not
+// re-guessed inline at each read site) — currently just the audio-track count,
+// which older servers name numAudioTrack (singular).
+function normalizeStats(raw: any): AbsLibraryStats | null {
+  if (!raw) return null;
+  return {
+    ...raw,
+    numAudioTracks: Number(raw.numAudioTracks ?? raw.numAudioTrack ?? 0),
+  };
+}
+
 export default function LibraryStatsScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const libraryId: string | undefined = route?.params?.libraryId;
@@ -56,6 +68,12 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
     statsRef.current = stats;
   }, [stats]);
 
+  // Request-id guard: every fetch takes the next id, and a resolve/reject only
+  // writes state if it's still the latest. A superseded fetch (libraryId
+  // changed mid-flight) or one that resolves after unmount is dropped, so it
+  // can't overwrite fresh data or set state on a gone component.
+  const reqIdRef = useRef(0);
+
   const loadStats = useCallback(
     async (opts?: { silent?: boolean }) => {
       if (!libraryId) {
@@ -63,14 +81,17 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
         setLoading(false);
         return;
       }
+      const myId = ++reqIdRef.current;
       if (!opts?.silent) setLoading(true);
       setError(null);
       try {
         // getLibraryStats throws a normalized AbsError — its message is
         // already user-facing (offline vs forbidden vs unsupported vs server).
         const data = await getLibraryStats(libraryId);
-        setStats(data || null);
+        if (myId !== reqIdRef.current) return; // superseded / unmounted
+        setStats(normalizeStats(data));
       } catch (e: any) {
+        if (myId !== reqIdRef.current) return; // superseded / unmounted
         // Keep already-rendered stats through a failed silent refresh: surface
         // the failure as transient feedback instead of nuking the screen. Read
         // through the ref (NOT the closed-over `stats`) — see statsRef above.
@@ -80,7 +101,7 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
           setError(e?.message || "Couldn't load library stats.");
         }
       } finally {
-        setLoading(false);
+        if (myId === reqIdRef.current) setLoading(false);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,6 +110,11 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
 
   useEffect(() => {
     loadStats();
+    // Invalidate any in-flight fetch on unmount / libraryId change so its late
+    // resolve is dropped by the request-id guard above.
+    return () => {
+      reqIdRef.current++;
+    };
   }, [loadStats]);
 
   const onRefresh = async () => {
@@ -136,8 +162,9 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
         { label: "Size on disk", value: formatSize(Number(stats.totalSize || 0)) },
         {
           label: "Audio tracks",
-          // Older servers name this field numAudioTrack (singular).
-          value: formatNumber(Number(stats.numAudioTracks ?? (stats as any).numAudioTrack ?? 0)),
+          // Field-name drift (numAudioTrack singular) is reconciled once in
+          // normalizeStats — read the canonical field here.
+          value: formatNumber(Number(stats.numAudioTracks ?? 0)),
         },
       ]
     : [];

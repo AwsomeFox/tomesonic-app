@@ -98,7 +98,12 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
 
+  // Tags / genres load. Deliberately NOT keyed on narratorLibraryId: a late
+  // library-list load (which changes the derived narratorLibraryId) must not
+  // pointlessly refetch tags/genres — only the narrators effect below depends
+  // on it.
   useEffect(() => {
+    if (segment === "narrators") return;
     let cancelled = false;
     const load = async () => {
       setLoading(true);
@@ -108,10 +113,32 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
         if (segment === "tags") {
           const list = await getTags();
           if (!cancelled) setTags(list);
-        } else if (segment === "genres") {
+        } else {
           const list = await getGenres();
           if (!cancelled) setGenres(list);
-        } else if (narratorLibraryId) {
+        }
+      } catch (e) {
+        if (!cancelled) setError(normalizeAbsError(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [segment, retryTick]);
+
+  // Narrators load — per-library, so narratorLibraryId drives ONLY this fetch.
+  useEffect(() => {
+    if (segment !== "narrators") return;
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      setEditingName(null);
+      try {
+        if (narratorLibraryId) {
           const list = await getLibraryNarrators(narratorLibraryId);
           if (!cancelled) setNarrators(list);
         }

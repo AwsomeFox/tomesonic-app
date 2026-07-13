@@ -207,7 +207,7 @@ describe("AccountScreen", () => {
     // All empty -> error.
     await fireEvent.press(screen.getByText("Save"));
     expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Error", message: "Please fill in all fields." })
+      expect.objectContaining({ title: "Missing fields", message: "Please fill in all fields." })
     );
 
     // Mismatch -> error, no PATCH.
@@ -216,7 +216,7 @@ describe("AccountScreen", () => {
     await fireEvent.changeText(inputs[2], "different");
     await fireEvent.press(screen.getByText("Save"));
     expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Error", message: "New passwords do not match." })
+      expect.objectContaining({ title: "Passwords don't match", message: "New passwords do not match." })
     );
     expect(api.patch).not.toHaveBeenCalled();
   });
@@ -238,7 +238,7 @@ describe("AccountScreen", () => {
       newPassword: "newpass",
     });
     expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Success", message: "Password changed successfully!" })
+      expect.objectContaining({ title: "Password changed", message: "Password changed successfully!" })
     );
     // Modal closed -> inputs are gone (typed passwords not retained).
     expect(screen.queryByDisplayValue("oldpass")).toBeNull();
@@ -261,7 +261,7 @@ describe("AccountScreen", () => {
     await act(async () => {});
 
     expect(alertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Error", message: "Invalid password" })
+      expect.objectContaining({ title: "Couldn't change password", message: "Invalid password" })
     );
     // Modal stays open for another attempt.
     expect(screen.getByDisplayValue("wrong")).toBeTruthy();
@@ -491,7 +491,7 @@ describe("AccountScreen", () => {
       await fireEvent.press(screen.getByLabelText("Add e-reader device"));
       await fireEvent.press(screen.getByLabelText("Save device"));
       expect(alertSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Error", message: expect.stringMatching(/valid email/i) })
+        expect.objectContaining({ title: "Missing device details", message: expect.stringMatching(/valid email/i) })
       );
 
       // Email without an @ is rejected too.

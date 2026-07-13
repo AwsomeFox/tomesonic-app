@@ -143,6 +143,25 @@ describe("AdminLibraryEditScreen — create mode", () => {
     );
   });
 
+  it("a media-type switch marks the form dirty (mediaType is part of the dirty check)", async () => {
+    const { listeners } = await renderScreen({});
+    await screen.findByText("New library");
+
+    // Pristine create form: original.mediaType is seeded to "book", so a clean
+    // beforeRemove must proceed silently (not treated as dirty).
+    const clean = { preventDefault: jest.fn(), data: { action: { type: "GO_BACK" } } };
+    await act(async () => listeners["beforeRemove"](clean));
+    expect(clean.preventDefault).not.toHaveBeenCalled();
+
+    // Switching Books → Podcasts changes the media type → the form is dirty and
+    // discard is now guarded.
+    await fireEvent.press(screen.getByLabelText("Media type: Podcasts"));
+    const dirtyEvent = { preventDefault: jest.fn(), data: { action: { type: "GO_BACK" } } };
+    await act(async () => listeners["beforeRemove"](dirtyEvent));
+    expect(dirtyEvent.preventDefault).toHaveBeenCalled();
+    expect(dialogWithTitle("Discard changes?")).toBeTruthy();
+  });
+
   it("header Create stays disabled until the form is valid (name + one folder) — no POST", async () => {
     await renderScreen({});
     await screen.findByText("New library");

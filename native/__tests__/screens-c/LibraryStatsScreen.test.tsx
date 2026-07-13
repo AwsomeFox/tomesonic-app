@@ -172,6 +172,47 @@ describe("LibraryStatsScreen", () => {
     );
   });
 
+  it("normalizes the singular numAudioTrack field name (older servers)", async () => {
+    // Older servers name the field numAudioTrack (singular). The normalization
+    // maps it once so the totals row reads the canonical numAudioTracks.
+    const { numAudioTracks, ...rest } = STATS;
+    mockedGet.mockResolvedValue({ data: { ...rest, numAudioTrack: 77 } });
+    await renderStats();
+    await screen.findByText("Totals");
+
+    expect(screen.getByLabelText("Audio tracks: 77")).toBeTruthy();
+  });
+
+  it("drops a superseded stats response when libraryId changes mid-fetch", async () => {
+    let resolveStale: (v: any) => void;
+    mockedGet
+      // lib1 fetch: held pending until after the library switches.
+      .mockImplementationOnce(() => new Promise((res) => (resolveStale = res)))
+      // lib2 fetch: resolves immediately with distinct data.
+      .mockResolvedValueOnce({ data: { ...STATS, totalItems: 999 } });
+
+    const navigation = makeNavigation();
+    const { rerender } = await render(
+      <LibraryStatsScreen navigation={navigation} route={{ params: { libraryId: "lib1" } }} />
+    );
+
+    // Switch libraries before lib1's fetch resolves.
+    await act(async () => {
+      rerender(
+        <LibraryStatsScreen navigation={navigation} route={{ params: { libraryId: "lib2" } }} />
+      );
+    });
+    expect(await screen.findByLabelText("Items: 999")).toBeTruthy();
+
+    // The stale lib1 response finally arrives — the request-id guard must drop
+    // it so it can't overwrite lib2's rendered stats.
+    await act(async () => {
+      resolveStale!({ data: { ...STATS, totalItems: 111 } });
+    });
+    expect(screen.getByLabelText("Items: 999")).toBeTruthy();
+    expect(screen.queryByLabelText("Items: 111")).toBeNull();
+  });
+
   it("errors without a libraryId and never fetches", async () => {
     await renderStats({});
 

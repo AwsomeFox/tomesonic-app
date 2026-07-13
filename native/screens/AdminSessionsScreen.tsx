@@ -19,7 +19,7 @@ import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { getAllSessions, deleteSession, batchDeleteSessions } from "../utils/abs/sessions";
 import { absErrorToErrorStateProps } from "../utils/abs/errors";
-import { formatListeningTime } from "../utils/format";
+import { formatListeningTime, formatDateTime } from "../utils/format";
 import type { AbsListeningSession } from "../utils/abs/types";
 
 /**
@@ -42,20 +42,14 @@ import type { AbsListeningSession } from "../utils/abs/types";
 
 const PER_PAGE = 30;
 
-// Date-only with an "Unknown" fallback — close to (but not the same as)
-// ItemHistoryScreen's formatDate; see utils/format.ts before adding another.
-function formatWhen(ts: number | null | undefined): string {
-  if (!ts) return "Unknown";
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return "Unknown";
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
 function sessionSubtitle(s: AbsListeningSession): string {
   const who = s.user?.username || "Unknown user";
   const device =
     s.mediaPlayer || s.deviceInfo?.deviceName || s.deviceInfo?.clientName || "Unknown device";
-  return `${who} · ${device} · ${formatListeningTime(s.timeListening)} · ${formatWhen(s.updatedAt)}`;
+  // Date-only, en-US, "Unknown" fallback — the shared formatDateTime reproduces
+  // the former local formatWhen exactly.
+  const when = formatDateTime(s.updatedAt, { locale: "en-US", fallback: "Unknown" });
+  return `${who} · ${device} · ${formatListeningTime(s.timeListening)} · ${when}`;
 }
 
 // Non-admins get 404 (`unsupported`) from this endpoint, not just 403, so

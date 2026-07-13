@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -63,16 +63,25 @@ export default function AdminLibrariesScreen({ navigation }: any) {
   const [tasks, setTasks] = useState<AbsTask[]>([]);
 
   const load = useCallback(async (isRefresh = false) => {
-    if (!isRefresh) setLoading(true);
-    setError(null);
+    // A silent refresh (isRefresh) keeps the current view up while it fetches:
+    // don't clear the error at the top, or a screen currently showing an
+    // ErrorState briefly flashes the "No libraries" empty state before a failed
+    // refetch re-sets the error. Clear the error only on SUCCESS instead
+    // (AdminUsersScreen idiom) — a stale error state then heals on a good load.
+    if (!isRefresh) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const res = await api.get("/api/libraries");
       const raw = res.data?.libraries || res.data || [];
       setLibraries(
         Array.isArray(raw) ? raw.filter((l: any) => l && typeof l === "object" && l.id) : []
       );
+      if (isRefresh) setError(null);
     } catch (e) {
-      setError(normalizeAbsError(e));
+      // Silent refresh failures keep whatever's already rendered.
+      if (!isRefresh) setError(normalizeAbsError(e));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -86,10 +95,19 @@ export default function AdminLibrariesScreen({ navigation }: any) {
   // Silent reload on focus (AdminApiKeys idiom) so a create/edit/delete made
   // on AdminLibraryEdit is reflected when the admin pops back to this list.
   // isRefresh=true skips the full-screen spinner — the stale list stays up
-  // until the fresh one lands.
+  // until the fresh one lands. React Navigation fires "focus" on initial mount
+  // too, which would double the mount useEffect's fetch — firstFocusRef skips
+  // that first focus (BookshelfScreen idiom) so entry is a single GET.
+  const firstFocusRef = useRef(true);
   useEffect(() => {
     if (!navigation?.addListener) return undefined;
-    const unsub = navigation.addListener("focus", () => load(true));
+    const unsub = navigation.addListener("focus", () => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return;
+      }
+      load(true);
+    });
     return unsub;
   }, [navigation, load]);
 

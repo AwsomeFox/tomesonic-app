@@ -96,9 +96,10 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
   // pristine defaults).
   const [original, setOriginal] = useState<{
     name: string;
+    mediaType: "book" | "podcast";
     provider: string;
     folders: FolderDraft[];
-  }>({ name: "", provider: BOOK_DEFAULT_PROVIDER, folders: [] });
+  }>({ name: "", mediaType: "book", provider: BOOK_DEFAULT_PROVIDER, folders: [] });
 
   useEffect(() => {
     if (!isEdit) return;
@@ -124,6 +125,7 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
         setFolders(seededFolders);
         setOriginal({
           name: lib.name || "",
+          mediaType: lib.mediaType === "podcast" ? "podcast" : "book",
           provider: lib.provider || BOOK_DEFAULT_PROVIDER,
           folders: seededFolders,
         });
@@ -141,12 +143,16 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
 
   const dirty = useMemo(() => {
     if (name.trim() !== original.name.trim()) return true;
+    // mediaType is only pickable in create mode (immutable after), but a
+    // book↔podcast switch that keeps a custom provider changes ONLY the media
+    // type — include it so such a change is still saveable and guarded.
+    if (mediaType !== original.mediaType) return true;
     if (provider.trim() !== original.provider.trim()) return true;
     if (folders.length !== original.folders.length) return true;
     return folders.some(
       (f, i) => f.fullPath !== original.folders[i]?.fullPath || f.id !== original.folders[i]?.id
     );
-  }, [name, provider, folders, original]);
+  }, [name, mediaType, provider, folders, original]);
 
   // Saveable = something changed AND the form is complete. Create mode is
   // implicitly dirty once valid (any name differs from the pristine "").
@@ -509,11 +515,13 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
                     accessibilityRole="button"
                     accessibilityState={{ selected: active }}
                     accessibilityLabel={`Provider: ${p.label}`}
+                    android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
                     hitSlop={{ top: 6, bottom: 6 }}
                     style={{
                       paddingHorizontal: 14,
                       height: 34,
                       borderRadius: 17,
+                      overflow: "hidden",
                       alignItems: "center",
                       justifyContent: "center",
                       marginRight: 8,

@@ -8,6 +8,7 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
+  KeyboardAvoidingView,
   Platform,
   AccessibilityInfo,
   findNodeHandle,
@@ -133,11 +134,11 @@ export default function AccountScreen({ navigation }: any) {
 
   const handleChangePassword = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
-      showAppDialog({ title: "Error", message: "Please fill in all fields." });
+      showAppDialog({ title: "Missing fields", message: "Please fill in all fields." });
       return;
     }
     if (newPassword !== confirmPassword) {
-      showAppDialog({ title: "Error", message: "New passwords do not match." });
+      showAppDialog({ title: "Passwords don't match", message: "New passwords do not match." });
       return;
     }
     try {
@@ -146,12 +147,12 @@ export default function AccountScreen({ navigation }: any) {
         password: currentPassword,
         newPassword: newPassword,
       });
-      showAppDialog({ title: "Success", message: "Password changed successfully!" });
+      showAppDialog({ title: "Password changed", message: "Password changed successfully!" });
       closePasswordModal();
     } catch (err: any) {
       console.warn("[Account] Change password failed:", err);
       const msg = err?.response?.data || err?.message || "Failed to update password.";
-      showAppDialog({ title: "Error", message: typeof msg === "string" ? msg : "Failed to change password. Make sure your current password is correct." });
+      showAppDialog({ title: "Couldn't change password", message: typeof msg === "string" ? msg : "Failed to change password. Make sure your current password is correct." });
     } finally {
       setChangingPassword(false);
     }
@@ -224,7 +225,7 @@ export default function AccountScreen({ navigation }: any) {
     const name = deviceName.trim();
     const email = deviceEmail.trim();
     if (!name || !email || !email.includes("@")) {
-      showAppDialog({ title: "Error", message: "Enter a device name and a valid email address." });
+      showAppDialog({ title: "Missing device details", message: "Enter a device name and a valid email address." });
       return;
     }
     // Device names are unique server-wide (including admin-managed ones).
@@ -234,7 +235,7 @@ export default function AccountScreen({ navigation }: any) {
         !(editingDeviceIndex != null && d === myDevices[editingDeviceIndex])
     );
     if (clash) {
-      showAppDialog({ title: "Error", message: "A device with that name already exists." });
+      showAppDialog({ title: "Duplicate device name", message: "A device with that name already exists." });
       return;
     }
     const next =
@@ -606,7 +607,16 @@ export default function AccountScreen({ navigation }: any) {
         transparent
         onRequestClose={() => setShowAddressModal(false)}
       >
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
+        {/* KeyboardAvoidingView + ScrollView so the field and Save row stay
+            reachable while the keyboard is up on small screens. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }}
+        >
+          <ScrollView
+            contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}
+            keyboardShouldPersistTaps="handled"
+          >
           <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
             <Text
               ref={addressTitleRef}
@@ -676,7 +686,8 @@ export default function AccountScreen({ navigation }: any) {
               </Pressable>
             </View>
           </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Change Password Modal */}
@@ -686,7 +697,17 @@ export default function AccountScreen({ navigation }: any) {
         transparent
         onRequestClose={closePasswordModal}
       >
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
+        {/* KeyboardAvoidingView + ScrollView: this modal stacks three inputs and
+            a Save button — on keyboard-open the lower field and Save would
+            otherwise be covered. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }}
+        >
+          <ScrollView
+            contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}
+            keyboardShouldPersistTaps="handled"
+          >
           <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
             <Text
               ref={passwordTitleRef}
@@ -787,7 +808,8 @@ export default function AccountScreen({ navigation }: any) {
               </Pressable>
             </View>
           </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Add / edit e-reader device modal (per-user devices only) */}
@@ -797,7 +819,16 @@ export default function AccountScreen({ navigation }: any) {
         transparent
         onRequestClose={closeDeviceModal}
       >
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
+        {/* KeyboardAvoidingView + ScrollView so the email field and Save row
+            stay reachable while the keyboard is up on small screens. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }}
+        >
+          <ScrollView
+            contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 20 }}
+            keyboardShouldPersistTaps="handled"
+          >
           <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
             <Text
               ref={deviceTitleRef}
@@ -900,7 +931,8 @@ export default function AccountScreen({ navigation }: any) {
               </Pressable>
             </View>
           </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
