@@ -223,7 +223,13 @@ describe("AdminMaintenanceScreen — tags", () => {
     // filter modal uses, limit:0 so only the total comes back.
     await waitFor(() =>
       expect(api.get).toHaveBeenCalledWith("/api/libraries/lib1/items", {
-        params: { filter: `tags.${encodeFilterValue("Fiction")}`, limit: 0, minified: 1 },
+        // The filter carries the DECODED base64 — Axios URI-encodes params
+        // once when building the URL, so pre-encoding would double-encode.
+        params: {
+          filter: `tags.${decodeURIComponent(encodeFilterValue("Fiction"))}`,
+          limit: 0,
+          minified: 1,
+        },
       })
     );
     expect(api.get).toHaveBeenCalledWith("/api/libraries/lib2/items", expect.anything());

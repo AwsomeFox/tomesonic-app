@@ -114,19 +114,27 @@ export async function getLibraryFilterData(libraryId: string): Promise<any> {
 
 /**
  * How many items in a library carry a given tag/genre. Uses the items endpoint
- * with the same base64-then-URI filter encoding the UI filter modal uses
- * (`tags.<enc>` / `genres.<enc>`) and limit:0 so the server returns only the
+ * with the same base64 filter encoding the UI filter modal uses
+ * (`tags.<b64>` / `genres.<b64>`) and limit:0 so the server returns only the
  * `total` count, no item payloads. Tags/genres are server-wide but item counts
  * are per-library — callers SUM this across every library for a global count.
+ *
+ * encodeFilterValue() returns base64 that is ALREADY URI-encoded (it's built
+ * for direct interpolation into a URL string, as the shelf/series screens do).
+ * Here we pass the value through Axios `params`, which URI-encodes it AGAIN —
+ * so strip the URI layer first and let Axios apply the single required
+ * encoding. Otherwise "=" → "%3D" → "%253D" and the server can't decode the
+ * filter (counts would silently be 0).
  */
 export async function getLibraryItemFilterCount(
   libraryId: string,
   type: "tags" | "genres",
   value: string
 ): Promise<number> {
+  const filterValue = decodeURIComponent(encodeFilterValue(value));
   const data = await absRequest<any>(() =>
     api.get(`/api/libraries/${libraryId}/items`, {
-      params: { filter: `${type}.${encodeFilterValue(value)}`, limit: 0, minified: 1 },
+      params: { filter: `${type}.${filterValue}`, limit: 0, minified: 1 },
     })
   );
   return data?.total ?? 0;
