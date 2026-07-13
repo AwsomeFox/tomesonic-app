@@ -87,6 +87,22 @@ describe("TaskProgressRow", () => {
     expect(screen.getByText("Failed")).toBeTruthy();
   });
 
+  it("renders a dash (not 'NaNs') when a task from an older server omits startedAt", async () => {
+    // task is `any` from older servers — startedAt may be absent or 0, and
+    // Date.now() - undefined is NaN, which would render "Running for NaNs".
+    await renderRow(makeTask({ startedAt: undefined }));
+    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.queryByText(/NaN/)).toBeNull();
+    // The right side still reflects the running state.
+    expect(screen.getByTestId("task-row-spinner")).toBeTruthy();
+  });
+
+  it("renders a dash for a finished task whose startedAt is 0", async () => {
+    await renderRow(makeTask({ isFinished: true, startedAt: 0, finishedAt: 62_000 }));
+    expect(screen.getByText("—")).toBeTruthy();
+    expect(screen.queryByText(/NaN/)).toBeNull();
+  });
+
   it.each([
     ["library-scan", "refresh"], // real ABS action strings are compound
     ["encode-m4b", "music-note"],

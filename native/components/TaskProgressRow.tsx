@@ -83,8 +83,15 @@ export default function TaskProgressRow({
     }).start();
   }, [finished, reduceMotion, checkScale]);
 
+  // `task` is `any` from older servers, so startedAt/finishedAt may be absent
+  // or 0 — subtracting those yields NaN, which formatElapsed would render as
+  // "NaNs". Only show an elapsed line when startedAt is a real positive epoch.
+  const startedValid =
+    typeof task.startedAt === "number" && Number.isFinite(task.startedAt) && task.startedAt > 0;
   const sublabel = task.isFailed
     ? task.error || "Failed"
+    : !startedValid
+    ? "—"
     : task.isFinished && task.finishedAt
     ? `Finished in ${formatElapsed(task.finishedAt - task.startedAt)}`
     : `Running for ${formatElapsed(Date.now() - task.startedAt)}`;

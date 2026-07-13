@@ -1,38 +1,9 @@
 import {
-  secondsToTimestamp,
   formatBytes,
   formatListeningTime,
   formatSize,
-  remainingPretty,
+  formatDateTime,
 } from "../../utils/format";
-
-describe("secondsToTimestamp", () => {
-  it("formats M:SS when under an hour", () => {
-    expect(secondsToTimestamp(0)).toBe("0:00");
-    expect(secondsToTimestamp(5)).toBe("0:05");
-    expect(secondsToTimestamp(59)).toBe("0:59");
-    expect(secondsToTimestamp(60)).toBe("1:00");
-    expect(secondsToTimestamp(61.9)).toBe("1:01");
-    expect(secondsToTimestamp(3599)).toBe("59:59");
-  });
-
-  it("formats H:MM:SS when an hour or more", () => {
-    expect(secondsToTimestamp(3600)).toBe("1:00:00");
-    expect(secondsToTimestamp(3661)).toBe("1:01:01");
-    expect(secondsToTimestamp(7325)).toBe("2:02:05");
-    expect(secondsToTimestamp(36000 + 600 + 6)).toBe("10:10:06");
-  });
-
-  it("clamps negatives / falsy to 0:00", () => {
-    expect(secondsToTimestamp(-5)).toBe("0:00");
-    expect(secondsToTimestamp(NaN as any)).toBe("0:00");
-    expect(secondsToTimestamp(undefined as any)).toBe("0:00");
-  });
-
-  it("handles huge values", () => {
-    expect(secondsToTimestamp(360000)).toBe("100:00:00");
-  });
-});
 
 describe("formatBytes", () => {
   it("returns 0 MB for zero, negative or falsy input", () => {
@@ -139,27 +110,32 @@ describe("formatSize", () => {
   });
 });
 
-describe("remainingPretty", () => {
-  it("returns empty string for <= 0 / falsy", () => {
-    expect(remainingPretty(0)).toBe("");
-    expect(remainingPretty(-10)).toBe("");
-    expect(remainingPretty(NaN as any)).toBe("");
-    expect(remainingPretty(undefined as any)).toBe("");
+describe("formatDateTime", () => {
+  // A fixed epoch-ms instant. Assert against the same toLocaleDateString the
+  // helper uses so the expectations don't hinge on the CI box's timezone.
+  const ts = Date.UTC(2024, 2, 5, 12, 0, 0); // 2024-03-05
+  const opts = { month: "short", day: "numeric", year: "numeric" } as const;
+
+  it("reproduces AdminSessionsScreen.formatWhen (en-US locale, 'Unknown' fallback)", () => {
+    const expected = new Date(ts).toLocaleDateString("en-US", opts);
+    expect(formatDateTime(ts, { locale: "en-US", fallback: "Unknown" })).toBe(expected);
+    expect(formatDateTime(0, { locale: "en-US", fallback: "Unknown" })).toBe("Unknown");
+    expect(formatDateTime(null as any, { locale: "en-US", fallback: "Unknown" })).toBe("Unknown");
+    expect(formatDateTime(undefined, { locale: "en-US", fallback: "Unknown" })).toBe("Unknown");
+    expect(formatDateTime("not-a-date", { locale: "en-US", fallback: "Unknown" })).toBe("Unknown");
   });
 
-  it("formats seconds only under a minute", () => {
-    expect(remainingPretty(59)).toBe("59 sec remaining");
-    expect(remainingPretty(1.7)).toBe("1 sec remaining");
+  it("reproduces ItemHistoryScreen.formatDate (device-default locale, '' fallback)", () => {
+    const expected = new Date(ts).toLocaleDateString(undefined, opts);
+    expect(formatDateTime(ts)).toBe(expected);
+    expect(formatDateTime(0)).toBe("");
+    expect(formatDateTime(null as any)).toBe("");
+    expect(formatDateTime(undefined)).toBe("");
+    expect(formatDateTime("not-a-date")).toBe("");
   });
 
-  it("formats minutes under an hour", () => {
-    expect(remainingPretty(60)).toBe("1 min remaining");
-    expect(remainingPretty(59 * 60 + 59)).toBe("59 min remaining");
-  });
-
-  it("formats hours and minutes", () => {
-    expect(remainingPretty(3600)).toBe("1 hr 0 min remaining");
-    expect(remainingPretty(3600 * 2 + 60 * 5 + 30)).toBe("2 hr 5 min remaining");
-    expect(remainingPretty(100 * 3600)).toBe("100 hr 0 min remaining");
+  it("accepts date strings", () => {
+    const expected = new Date("2024-03-05T12:00:00Z").toLocaleDateString("en-US", opts);
+    expect(formatDateTime("2024-03-05T12:00:00Z", { locale: "en-US" })).toBe(expected);
   });
 });

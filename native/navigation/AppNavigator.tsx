@@ -9,6 +9,7 @@ import { useUserStore } from "../store/useUserStore";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon, { IconName } from "../components/Icon";
+import { TAB_BAR_HEIGHT } from "../utils/layoutConstants";
 
 // Import Screens
 import ConnectScreen from "../screens/ConnectScreen";
@@ -149,7 +150,7 @@ function TabNavigator() {
           borderTopWidth: 1,
           borderTopColor: withAlpha(colors.outlineVariant, 0.5),
           elevation: 0,
-          height: 64 + insets.bottom,
+          height: TAB_BAR_HEIGHT + insets.bottom,
           paddingBottom: 8 + insets.bottom,
           paddingTop: 8,
         },

@@ -4,6 +4,10 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { useDialogStore, AppDialogButton } from "../store/useDialogStore";
 
+// Delay before moving screen-reader focus / announcing on open — mirrors the
+// PlayerBottomSheet's a11y-focus timing so the modal has mounted first.
+const A11Y_ANNOUNCE_DELAY_MS = 50;
+
 /**
  * Material 3 dialog host — the themed replacement for native Alert.alert. Mount
  * once at the top of AppShell (last child = topmost). It renders nothing until
@@ -51,7 +55,7 @@ export default function AppDialog() {
       if (dialog.confirmInput) parts.push(`Type ${dialog.confirmInput.requiredText} to confirm.`);
       const announcement = parts.join(" ");
       if (announcement) AccessibilityInfo.announceForAccessibility(announcement);
-    }, 50);
+    }, A11Y_ANNOUNCE_DELAY_MS);
     return () => clearTimeout(t);
   }, [dialog]);
 

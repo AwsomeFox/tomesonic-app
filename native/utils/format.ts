@@ -1,20 +1,6 @@
-// Shared display formatters. Consolidated from duplicated copies in
-// PlayerScreen (secondsToTimestamp), LocalMediaScreen (formatBytes), and
-// BookCard (remainingPretty) — behavior matches those originals exactly so
-// existing callers are unaffected if migrated later.
-
-/** H:MM:SS when hours>0, else M:SS. Mirrors the original app's $secondsToTimestamp. */
-export function secondsToTimestamp(seconds: number): string {
-  let s = seconds;
-  if (!s || s < 0) s = 0;
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  if (h > 0) {
-    return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
-  }
-  return `${m}:${sec.toString().padStart(2, "0")}`;
-}
+// Shared display formatters. Consolidated from duplicated copies across the
+// admin/library screens — behavior matches those originals exactly so existing
+// callers are unaffected if migrated later.
 
 /** Human-readable byte size, switching from MB to GB at 1024MB. */
 export function formatBytes(bytes: number): string {
@@ -32,6 +18,11 @@ export function formatBytes(bytes: number): string {
  * Moved verbatim from the identical copies AdminSessionsScreen and
  * AdminUserDetailScreen used to carry (both import it from here now).
  * Sub-minute shows seconds; sub-hour shows whole minutes only.
+ *
+ * NOT the same contract as two nearby per-screen duration formatters, kept
+ * separate on purpose (different UX): ItemHistoryScreen.formatListened is
+ * compact but floors at "0m" (never shows "0s"), and
+ * LibraryStatsScreen.durationPretty is verbose ("1 hr 5 min"). Do not merge.
  */
 export function formatListeningTime(sec: number | null | undefined): string {
   const s = Math.max(0, Math.round(sec || 0));
@@ -61,13 +52,22 @@ export function formatSize(bytes: number): string {
   return `${rounded} ${units[i]}`;
 }
 
-/** "H hr M min remaining" / "M min remaining" / "S sec remaining" / "" when <=0. */
-export function remainingPretty(seconds: number): string {
-  // < 1s rounds to "0 sec remaining" — treat sub-second remainders as done.
-  if (!seconds || seconds < 1) return "";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h} hr ${m} min remaining`;
-  if (m > 0) return `${m} min remaining`;
-  return `${Math.floor(seconds)} sec remaining`;
+/**
+ * Short calendar date ("Mar 5, 2024") from an epoch-ms number or a date string.
+ * Consolidates AdminSessionsScreen.formatWhen (en-US locale, "Unknown"
+ * fallback) and ItemHistoryScreen.formatDate (device-default locale, ""
+ * fallback) — pass the matching opts to reproduce either exactly:
+ *   formatDateTime(ts, { locale: "en-US", fallback: "Unknown" })  // formatWhen
+ *   formatDateTime(ts)                                            // formatDate
+ * Falsy or unparseable input returns the fallback (default "").
+ */
+export function formatDateTime(
+  ts: number | string | undefined,
+  opts?: { locale?: string; fallback?: string }
+): string {
+  const fallback = opts?.fallback ?? "";
+  if (!ts) return fallback;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return fallback;
+  return d.toLocaleDateString(opts?.locale, { month: "short", day: "numeric", year: "numeric" });
 }

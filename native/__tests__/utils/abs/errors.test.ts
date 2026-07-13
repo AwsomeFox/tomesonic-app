@@ -12,6 +12,7 @@ import {
   isForbiddenError,
   isUnsupportedError,
   absErrorToErrorStateProps,
+  absErrorToActionMessage,
   absRequest,
 } from "../../../utils/abs/errors";
 
@@ -171,6 +172,48 @@ describe("absErrorToErrorStateProps", () => {
     const onRetry = jest.fn();
     const props = absErrorToErrorStateProps(new AbsError("server", "m", 500), { onRetry });
     expect(props.onRetry).toBe(onRetry);
+  });
+});
+
+describe("absErrorToActionMessage", () => {
+  // Pins the exact ladder AdminBackupsScreen / AdminFeedsScreen hand-rolled for
+  // their mutation-failure dialogs (they adopt this helper in a later pass).
+  it("offline → the fixed offline action line", () => {
+    expect(absErrorToActionMessage(new AbsError("offline", "raw"))).toBe(
+      "You're offline. Reconnect and try again."
+    );
+    // Normalizes raw axios errors first (no response → offline idiom).
+    expect(absErrorToActionMessage(new Error("Network Error"))).toBe(
+      "You're offline. Reconnect and try again."
+    );
+  });
+
+  it("forbidden → the caller's screen-specific admin copy", () => {
+    expect(
+      absErrorToActionMessage(new AbsError("forbidden", "generic", 403), {
+        forbidden: "Only server admins can manage backups.",
+      })
+    ).toBe("Only server admins can manage backups.");
+    expect(
+      absErrorToActionMessage(httpError(403), {
+        forbidden: "Only server admins can manage RSS feeds.",
+      })
+    ).toBe("Only server admins can manage RSS feeds.");
+  });
+
+  it("forbidden without opts falls back to the canonical forbidden default", () => {
+    expect(absErrorToActionMessage(new AbsError("forbidden", "x", 403))).toBe(
+      "You don't have permission to do that."
+    );
+  });
+
+  it("else → the (possibly server-provided) message, then the server default", () => {
+    expect(absErrorToActionMessage(new AbsError("server", "Slug already in use", 500))).toBe(
+      "Slug already in use"
+    );
+    expect(absErrorToActionMessage(httpError(500))).toBe(
+      "The server hit an error handling this request."
+    );
   });
 });
 

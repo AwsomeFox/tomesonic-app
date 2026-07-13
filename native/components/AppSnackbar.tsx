@@ -6,11 +6,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import { useSnackbarStore } from "../store/useSnackbarStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
-
-// Keep in sync with PlayerBottomSheet's MINIPLAYER_HEIGHT and the tab bar
-// height AppNavigator/PlayerBottomSheet assume (64).
-const MINIPLAYER_HEIGHT = 68;
-const TAB_BAR_HEIGHT = 64;
+import { MINIPLAYER_HEIGHT, TAB_BAR_HEIGHT } from "../utils/layoutConstants";
 
 /**
  * Material 3 snackbar host — mount once in AppShell (just below AppDialog).

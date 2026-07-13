@@ -42,7 +42,7 @@ export class AbsError extends Error {
  *   normalizeAbsError(e, { 404: "unknown" })            // 404 is a real miss here
  *   normalizeAbsError(e, { 403: { kind: "forbidden", message: "Admins only" } })
  */
-export type AbsErrorOverrides = Record<
+export type AbsErrorStatusOverrides = Record<
   number,
   AbsErrorKind | { kind?: AbsErrorKind; message?: string }
 >;
@@ -70,7 +70,7 @@ function kindForStatus(status: number): AbsErrorKind {
  * Normalize any thrown value into an AbsError. Already-normalized errors pass
  * through untouched (so nested helpers can re-throw safely).
  */
-export function normalizeAbsError(e: any, overrides?: AbsErrorOverrides): AbsError {
+export function normalizeAbsError(e: any, overrides?: AbsErrorStatusOverrides): AbsError {
   if (e instanceof AbsError) return e;
 
   // The ItemDetailScreen.tsx idiom: no response object means the request never
@@ -215,13 +215,30 @@ export function absErrorToErrorStateProps(
 }
 
 /**
+ * AbsError → a single-line message string for a mutation-FAILURE dialog or
+ * snackbar (as opposed to absErrorToErrorStateProps, which drives a full-screen
+ * <ErrorState/>). Reproduces the identical hand-rolled ladder AdminBackupsScreen
+ * and AdminFeedsScreen carry:
+ *   offline   → "You're offline. Reconnect and try again."
+ *   forbidden → opts.forbidden (a screen-specific "Only server admins…" line)
+ *   else      → the (possibly server-provided) error message.
+ * Accepts any thrown value; raw axios errors are normalized first.
+ */
+export function absErrorToActionMessage(err: any, opts?: { forbidden?: string }): string {
+  const e = normalizeAbsError(err);
+  if (e.kind === "offline") return "You're offline. Reconnect and try again.";
+  if (e.kind === "forbidden") return opts?.forbidden ?? DEFAULT_MESSAGES.forbidden;
+  return e.message || DEFAULT_MESSAGES.server;
+}
+
+/**
  * Shared request wrapper for the utils/abs domain modules: unwraps `.data`
  * and rethrows everything as AbsError. (Internal convenience — dependents
  * should call the named domain functions, not this.)
  */
 export async function absRequest<T = any>(
   fn: () => Promise<{ data: T }>,
-  overrides?: AbsErrorOverrides
+  overrides?: AbsErrorStatusOverrides
 ): Promise<T> {
   try {
     const res = await fn();

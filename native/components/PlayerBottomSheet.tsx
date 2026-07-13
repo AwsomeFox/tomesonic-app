@@ -47,8 +47,7 @@ import { resolveEbookTarget, readingFractionForAudioPosition, canJumpToFraction 
 import { haptic } from "../utils/haptics";
 import { computePlayerLayout } from "../utils/playerLayout";
 import Pressable from "./HintPressable";
-
-const MINIPLAYER_HEIGHT = 68;
+import { MINIPLAYER_HEIGHT } from "../utils/layoutConstants";
 
 function secondsToTimestamp(seconds: number) {
   let s = seconds;
