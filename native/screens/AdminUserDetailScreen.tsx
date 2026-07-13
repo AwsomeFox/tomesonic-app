@@ -236,6 +236,10 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
   const passwordInputRef = useRef<TextInput | null>(null);
 
   const targetIsRoot = loadedUser?.type === "root";
+  // A user whose tag list is a BLOCK-list (selectedTagsNotAccessible) can't be
+  // faithfully represented by the allow-list checklist — editing it here would
+  // silently invert their access. Show it read-only and echo the fields.
+  const tagBlockList = !isCreate && loadedUser?.permissions?.selectedTagsNotAccessible === true;
   // Root/permission edge case: only root may edit the root account.
   const readOnly = targetIsRoot && !caps.isRoot;
   const isSelf = !isCreate && !!me?.id && me.id === userId;
@@ -408,7 +412,10 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       upload: perms.upload,
       accessExplicitContent: perms.accessExplicitContent,
       accessAllLibraries: allLibraries,
-      accessAllTags: effectiveAllTags,
+      // A block-list user's tag access is read-only here — echo it unchanged
+      // (the loadedPerms spread already carried accessAllTags, restore it in
+      // case a later field overrode it).
+      accessAllTags: tagBlockList ? loadedPerms.accessAllTags : effectiveAllTags,
     };
     const payload: AbsUserPayload = {
       username: username.trim(),
@@ -416,7 +423,11 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       isActive,
       permissions,
       librariesAccessible: allLibraries ? [] : [...selectedLibs],
-      itemTagsSelected: effectiveAllTags ? [] : [...selectedTags],
+      itemTagsSelected: tagBlockList
+        ? [...(loadedUser?.itemTagsSelected ?? [])]
+        : effectiveAllTags
+          ? []
+          : [...selectedTags],
     };
     // Older servers keep the accessible-tags list top-level — echo it too.
     if (!isCreate && Array.isArray((loadedUser as any)?.itemTagsAccessible)) {
@@ -830,6 +841,20 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
               {!isCreate ? (
                 <>
               <SectionHeader label="Tag access" colors={colors} />
+              {tagBlockList ? (
+                <Text
+                  style={{
+                    color: colors.onSurfaceVariant,
+                    fontSize: 13,
+                    paddingHorizontal: 20,
+                    paddingVertical: 12,
+                  }}
+                >
+                  This user's tag access is configured as a block-list on the server. Manage it from
+                  the web admin — it's shown here read-only so an edit can't invert their access.
+                </Text>
+              ) : (
+                <>
               <ToggleRow
                 icon="bookmark"
                 title="All tags"
@@ -893,6 +918,8 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
                   </Text>
                 )
               ) : null}
+                </>
+              )}
                 </>
               ) : null}
             </>

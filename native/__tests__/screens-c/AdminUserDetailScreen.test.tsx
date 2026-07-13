@@ -320,6 +320,38 @@ describe("AdminUserDetailScreen — edit mode", () => {
     expect(payload.itemTagsAccessible).toEqual(["kids"]);
   });
 
+  it("renders Tag access read-only for a BLOCK-LIST user and echoes their tag fields", async () => {
+    // selectedTagsNotAccessible inverts the list to a block-list — the allow-list
+    // checklist can't represent it, so the section is read-only and the tag
+    // fields must round-trip unchanged through an unrelated edit.
+    (getUser as jest.Mock).mockResolvedValue({
+      ...JOE,
+      permissions: { ...JOE.permissions, accessAllTags: false, selectedTagsNotAccessible: true },
+      itemTagsSelected: ["spicy"],
+    });
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    // No editable tag controls — a read-only note instead.
+    expect(screen.queryByLabelText("All tags")).toBeNull();
+    expect(screen.queryByLabelText(/^Tag access:/)).toBeNull();
+    expect(screen.getByText(/block-list on the server/)).toBeTruthy();
+
+    fireEvent.press(screen.getByLabelText("Can upload"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Can upload").props.accessibilityState.checked).toBe(true)
+    );
+    fireEvent.press(screen.getByLabelText("Save user"));
+
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.upload).toBe(true); // the actual edit
+    // Block-list semantics preserved verbatim.
+    expect(payload.permissions.selectedTagsNotAccessible).toBe(true);
+    expect(payload.permissions.accessAllTags).toBe(false);
+    expect(payload.itemTagsSelected).toEqual(["spicy"]);
+  });
+
   it("preserves an unmodeled server permission key (createEreader) on an unrelated edit", async () => {
     // buildPayload seeds permissions from the LOADED object, so a newer-server
     // key we don't surface in the form must round-trip untouched rather than be
