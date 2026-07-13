@@ -62,7 +62,7 @@ jest.mock("../../store/useDialogStore", () => ({
 }));
 
 import React from "react";
-import { Linking } from "react-native";
+import { Linking, AccessibilityInfo } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import AccountScreen from "../../screens/AccountScreen";
 import { api } from "../../utils/api";
@@ -544,6 +544,8 @@ describe("AccountScreen", () => {
     });
 
     it("hides the section when the user explicitly lacks the createEreader permission", async () => {
+      // Consumed via capabilities.canCreateEreader (explicit-false-denies):
+      // the real capabilities module runs against the store user set here.
       useUserStore.setState({
         user: { id: "u1", username: "tony", permissions: { createEreader: false } },
       } as any);
@@ -551,6 +553,67 @@ describe("AccountScreen", () => {
 
       expect(screen.queryByText("E-reader devices")).toBeNull();
       expect(screen.queryByLabelText("Add e-reader device")).toBeNull();
+    });
+
+    it("keeps the section for a cold-restore thin user (no permissions hydrated yet)", async () => {
+      // canCreateEreader is true unless the permission is EXPLICITLY false —
+      // a thin {id, username} user must not lose the section.
+      expect(useUserStore.getState().user).toEqual({ id: "u1", username: "tony" });
+      await renderAccount();
+      expect(screen.getByText("E-reader devices")).toBeTruthy();
+      expect(screen.getByLabelText("Add e-reader device")).toBeTruthy();
+    });
+  });
+
+  /**
+   * The bespoke RN Modals must mirror AppDialog's on-open a11y behavior:
+   * the title is a header (screen-reader landmark) and opening announces it
+   * (nothing else grabs TalkBack focus in a plain RN Modal on Android).
+   */
+  describe("modal accessibility (header titles + on-open announce)", () => {
+    let announceSpy: jest.SpyInstance;
+    beforeEach(() => {
+      jest.useFakeTimers();
+      announceSpy = jest
+        .spyOn(AccessibilityInfo, "announceForAccessibility")
+        .mockImplementation(() => {});
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+      announceSpy.mockRestore();
+    });
+
+    it("change-password modal: header title, announced on open", async () => {
+      await renderAccount();
+      await fireEvent.press(screen.getByLabelText("Change Password"));
+
+      expect(screen.getByRole("header", { name: "Change Password" })).toBeTruthy();
+      await act(async () => {
+        jest.advanceTimersByTime(100);
+      });
+      expect(announceSpy).toHaveBeenCalledWith("Change Password");
+    });
+
+    it("server-address modal: header title, announced on open", async () => {
+      await renderAccount();
+      await fireEvent.press(screen.getByLabelText("Edit server address"));
+
+      expect(screen.getByRole("header", { name: "Edit server address" })).toBeTruthy();
+      await act(async () => {
+        jest.advanceTimersByTime(100);
+      });
+      expect(announceSpy).toHaveBeenCalledWith("Edit server address");
+    });
+
+    it("device modal: header title, announced on open (add flow)", async () => {
+      await renderAccount();
+      await fireEvent.press(screen.getByLabelText("Add e-reader device"));
+
+      expect(screen.getByRole("header", { name: "Add e-reader device" })).toBeTruthy();
+      await act(async () => {
+        jest.advanceTimersByTime(100);
+      });
+      expect(announceSpy).toHaveBeenCalledWith("Add e-reader device");
     });
   });
 });

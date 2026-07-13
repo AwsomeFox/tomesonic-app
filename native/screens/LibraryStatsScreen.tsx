@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,9 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import HintPressable from "../components/HintPressable";
 import ErrorState from "../components/ErrorState";
+import { showSnackbar } from "../store/useSnackbarStore";
 import { getLibraryStats } from "../utils/abs/libraries";
+import { formatSize } from "../utils/format";
 import type { AbsLibraryStats } from "../utils/abs/types";
 
 /**
@@ -31,19 +33,6 @@ function durationPretty(seconds: number): string {
   return `${m} min`;
 }
 
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let v = bytes;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  const rounded = v >= 100 ? Math.round(v) : Math.round(v * 10) / 10;
-  return `${rounded} ${units[i]}`;
-}
-
 function formatNumber(n: number): string {
   return Number(n || 0).toLocaleString("en-US");
 }
@@ -56,6 +45,16 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Latest stats mirrored into a ref. loadStats is memoized on [libraryId]
+  // only, so its closure captures the mount-time (null) `stats` binding
+  // forever — a plain `if (!stats)` check in the catch below would ALWAYS be
+  // true, replacing fully rendered stats with a full-screen ErrorState on a
+  // failed silent refresh (the exact case it's meant to avoid).
+  const statsRef = useRef<AbsLibraryStats | null>(null);
+  useEffect(() => {
+    statsRef.current = stats;
+  }, [stats]);
 
   const loadStats = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -72,8 +71,14 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
         const data = await getLibraryStats(libraryId);
         setStats(data || null);
       } catch (e: any) {
-        // Keep already-rendered stats through a failed silent refresh.
-        if (!stats) setError(e?.message || "Couldn't load library stats.");
+        // Keep already-rendered stats through a failed silent refresh: surface
+        // the failure as transient feedback instead of nuking the screen. Read
+        // through the ref (NOT the closed-over `stats`) — see statsRef above.
+        if (statsRef.current) {
+          showSnackbar({ message: e?.message || "Couldn't refresh library stats." });
+        } else {
+          setError(e?.message || "Couldn't load library stats.");
+        }
       } finally {
         setLoading(false);
       }
@@ -128,7 +133,7 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
         { label: "Authors", value: formatNumber(stats.totalAuthors || 0) },
         { label: "Genres", value: formatNumber(stats.totalGenres || 0) },
         { label: "Total time", value: durationPretty(Number(stats.totalDuration || 0)) },
-        { label: "Size on disk", value: formatBytes(Number(stats.totalSize || 0)) },
+        { label: "Size on disk", value: formatSize(Number(stats.totalSize || 0)) },
         {
           label: "Audio tracks",
           // Older servers name this field numAudioTrack (singular).
@@ -159,7 +164,7 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
           <Icon name="back" size={24} color={colors.onSurface} />
         </HintPressable>
         <Text accessibilityRole="header" style={{ color: colors.onSurface, fontSize: 22, fontWeight: "600" }}>
-          Library Stats
+          Library stats
         </Text>
       </View>
 
@@ -308,7 +313,7 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
                   onPress={() => openItem(it?.id)}
                   android_ripple={{ color: withAlpha(colors.onSurface, 0.08) }}
                   accessibilityRole="button"
-                  accessibilityLabel={`${it?.title || "Item"}, ${formatBytes(Number(it?.size || 0))}`}
+                  accessibilityLabel={`${it?.title || "Item"}, ${formatSize(Number(it?.size || 0))}`}
                   style={{ flexDirection: "row", alignItems: "center", paddingVertical: 6 }}
                 >
                   <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, width: 28 }}>{i + 1}.</Text>
@@ -316,7 +321,7 @@ export default function LibraryStatsScreen({ route, navigation }: any) {
                     {it?.title || ""}
                   </Text>
                   <Text style={{ color: colors.onSurfaceVariant, fontSize: 13 }}>
-                    {formatBytes(Number(it?.size || 0))}
+                    {formatSize(Number(it?.size || 0))}
                   </Text>
                 </Pressable>
               ))}

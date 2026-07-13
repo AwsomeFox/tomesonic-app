@@ -226,8 +226,11 @@ describe("SettingsScreen", () => {
     await fireEvent.press(screen.getByLabelText("Listening History"));
     expect(navigation.navigate).toHaveBeenCalledWith("ListeningHistory");
 
-    await fireEvent.press(screen.getByLabelText("Logs"));
+    // "App logs" — renamed from "Logs" now that the admin hub has a sibling
+    // "Server logs" screen (this row is the device-side viewer).
+    await fireEvent.press(screen.getByLabelText("App logs"));
     expect(navigation.navigate).toHaveBeenCalledWith("Logs");
+    expect(screen.queryByLabelText("Logs")).toBeNull();
 
     await fireEvent.press(screen.getByLabelText(/^Server/));
     expect(navigation.navigate).toHaveBeenCalledWith("Account");

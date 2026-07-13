@@ -925,8 +925,20 @@ describe("BookshelfScreen online", () => {
     // The media-progress row carries its own id — the hide route is keyed by
     // THAT id, never the libraryItemId.
     const progressFixture = { b1: { id: "prog-b1", libraryItemId: "b1", progress: 0.5 } };
+    // The undo window: the server commit is DEFERRED this long (matching the
+    // snackbar duration) because ABS has no un-hide route — Undo cancels the
+    // pending timer instead of trying to reverse a landed request.
+    const UNDO_MS = 4000;
 
-    it("confirms, sends the PROGRESS id (not the item id), removes the card optimistically and refetches", async () => {
+    // These tests drive the deferred commit with fake timers.
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("long-press hides optimistically (no confirm dialog), then commits the PROGRESS id after the undo window", async () => {
       seedOnline([baseShelves[0]], progressFixture);
       const loadShelves = useLibraryStore.getState().loadPersonalizedShelves as jest.Mock;
       const navigation = makeNavigation();
@@ -937,25 +949,50 @@ describe("BookshelfScreen online", () => {
         fireEvent(card, "longPress");
       });
 
-      // Long-press raises the themed confirm — nothing hidden or sent yet.
-      const dialog = useDialogStore.getState().current!;
-      expect(dialog.title).toBe("Remove from Continue Listening?");
+      // Tier-1: no confirm dialog — the card is gone IMMEDIATELY...
+      expect(useDialogStore.getState().current).toBeNull();
+      expect(screen.queryByLabelText(/Audio Book One by Alice Author/)).toBeNull();
+      // ...with an Undo snackbar, and the server call DEFERRED until the undo
+      // window closes (nothing sent yet).
+      const snack = useSnackbarStore.getState().current!;
+      expect(snack.message).toBe("Removed from Continue Listening");
+      expect(snack.action?.label).toBe("Undo");
       expect(mockedGet).not.toHaveBeenCalledWith(HIDE_URL);
-      expect(screen.getByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
 
-      const remove = dialog.buttons.find((b) => b.text === "Remove")!;
       await act(async () => {
-        await remove.onPress!();
+        jest.advanceTimersByTime(UNDO_MS);
       });
 
-      // The dedicated hide route, addressed by the media-PROGRESS id.
+      // The dedicated hide route, addressed by the media-PROGRESS id, then the
+      // shelves + progress refetch converge with the server.
       expect(mockedGet).toHaveBeenCalledWith(HIDE_URL);
-      // Optimistic removal: the card is gone without waiting for the refetch.
-      expect(screen.queryByLabelText(/Audio Book One by Alice Author/)).toBeNull();
-      // The shelves + progress refetch converge with the server.
       expect(loadShelves).toHaveBeenCalledWith(true);
       expect(useUserStore.getState().loadMediaProgress).toHaveBeenCalled();
-      expect(useSnackbarStore.getState().current?.message).toBe("Removed from Continue Listening");
+    });
+
+    it("Undo restores the card and the server call never fires", async () => {
+      seedOnline([baseShelves[0]], progressFixture);
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      const card = await screen.findByLabelText(/Audio Book One by Alice Author/);
+      await act(async () => {
+        fireEvent(card, "longPress");
+      });
+      expect(screen.queryByLabelText(/Audio Book One by Alice Author/)).toBeNull();
+
+      const undo = useSnackbarStore.getState().current!.action!;
+      await act(async () => {
+        undo.onPress();
+      });
+
+      // Card restored...
+      expect(screen.getByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
+      // ...and even well past the undo window, nothing was (or will be) sent.
+      await act(async () => {
+        jest.advanceTimersByTime(UNDO_MS * 3);
+      });
+      expect(mockedGet).not.toHaveBeenCalledWith(HIDE_URL);
     });
 
     it("tap (not long-press) still opens the item detail", async () => {
@@ -967,9 +1004,10 @@ describe("BookshelfScreen online", () => {
       await fireEvent.press(card);
       expect(navigation.navigate).toHaveBeenCalledWith("ItemDetail", { itemId: "b1" });
       expect(useDialogStore.getState().current).toBeNull();
+      expect(screen.getByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
     });
 
-    it("restores the card when the hide fails on the server", async () => {
+    it("restores the card when the deferred hide fails, with the exact failure copy", async () => {
       seedOnline([baseShelves[0]], progressFixture);
       mockedGet.mockImplementation((url: string) =>
         url.includes("remove-from-continue-listening")
@@ -983,19 +1021,21 @@ describe("BookshelfScreen online", () => {
       await act(async () => {
         fireEvent(card, "longPress");
       });
-      const remove = useDialogStore.getState().current!.buttons.find((b) => b.text === "Remove")!;
       await act(async () => {
-        await remove.onPress!();
+        jest.advanceTimersByTime(UNDO_MS);
       });
 
-      // The optimistically-removed card comes back and the failure surfaces.
-      expect(await screen.findByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
-      const msg = useSnackbarStore.getState().current?.message;
-      expect(msg).toBeTruthy();
-      expect(msg).not.toBe("Removed from Continue Listening");
+      // The optimistically-removed card comes back and the failure surfaces
+      // with the normalized AbsError copy for a 500 — pinned EXACTLY so a
+      // wording regression (or an accidental success message) can't slip by.
+      expect(mockedGet).toHaveBeenCalledWith(HIDE_URL);
+      expect(screen.getByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
+      expect(useSnackbarStore.getState().current?.message).toBe(
+        "The server hit an error handling this request."
+      );
     });
 
-    it("never guesses an id: long-press without a progress row shows a snackbar, no dialog, no request", async () => {
+    it("never guesses an id: long-press without a progress row shows a snackbar, no removal, no request", async () => {
       // No mediaProgress entry (and no embedded userMediaProgress) for b1.
       seedOnline([baseShelves[0]]);
       const navigation = makeNavigation();
@@ -1008,6 +1048,11 @@ describe("BookshelfScreen online", () => {
 
       expect(useDialogStore.getState().current).toBeNull();
       expect(useSnackbarStore.getState().current?.message).toMatch(/refresh/i);
+      // Card still on the shelf; nothing sent now or later.
+      expect(screen.getByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
+      await act(async () => {
+        jest.advanceTimersByTime(UNDO_MS);
+      });
       expect(mockedGet).not.toHaveBeenCalledWith(expect.stringContaining("remove-from-continue-listening"));
     });
 
@@ -1020,7 +1065,70 @@ describe("BookshelfScreen online", () => {
       await act(async () => {
         fireEvent(card, "accessibilityAction", { nativeEvent: { actionName: "longpress" } });
       });
-      expect(useDialogStore.getState().current?.title).toBe("Remove from Continue Listening?");
+      // Same Tier-1 flow as a physical long-press: optimistic hide + Undo.
+      expect(screen.queryByLabelText(/Audio Book One by Alice Author/)).toBeNull();
+      const snack = useSnackbarStore.getState().current!;
+      expect(snack.message).toBe("Removed from Continue Listening");
+      expect(snack.action?.label).toBe("Undo");
+    });
+
+    it("prunes hidden ids once a refetch drops them, so a server re-surface shows the card again", async () => {
+      seedOnline([baseShelves[0]], progressFixture);
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      const card = await screen.findByLabelText(/Audio Book One by Alice Author/);
+      await act(async () => {
+        fireEvent(card, "longPress");
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(UNDO_MS);
+      });
+      expect(mockedGet).toHaveBeenCalledWith(HIDE_URL);
+
+      // The converged refetch no longer carries the item — its id must be
+      // PRUNED from the hidden list, not kept suppressing it all session.
+      await act(async () => {
+        useLibraryStore.setState({
+          personalizedShelves: [
+            { id: "continue-listening", label: "Continue Listening", type: "book", entities: [] },
+          ],
+        } as any);
+      });
+      // The server later legitimately re-surfaces the book (new listening
+      // resets the hide flag) — the card must render again.
+      await act(async () => {
+        useLibraryStore.setState({ personalizedShelves: [baseShelves[0]] } as any);
+      });
+      expect(screen.getByLabelText(/Audio Book One by Alice Author/)).toBeTruthy();
+    });
+
+    it("also gates the Continue Reading shelf — the server flag hides an item from BOTH shelves", async () => {
+      seedOnline(
+        [
+          baseShelves[0],
+          { id: "continue-reading", label: "Continue Reading", type: "book", entities: [audioBook] },
+        ],
+        progressFixture
+      );
+      const navigation = makeNavigation();
+      await render(<BookshelfScreen navigation={navigation} />);
+
+      // Both shelves carry a card for b1 (the Continue Listening overlay + the
+      // Continue Reading book card).
+      const cards = await screen.findAllByLabelText(/Audio Book One by Alice Author/);
+      expect(cards.length).toBeGreaterThanOrEqual(2);
+      // Long-press the CONTINUE LISTENING card (the one with the hide hint).
+      const clCard = cards.find((c) =>
+        String(c.props.accessibilityHint || "").includes("remove from Continue Listening")
+      )!;
+      expect(clCard).toBeTruthy();
+      await act(async () => {
+        fireEvent(clCard, "longPress");
+      });
+
+      // The optimistic hide clears the item from BOTH continue shelves.
+      expect(screen.queryAllByLabelText(/Audio Book One by Alice Author/)).toHaveLength(0);
     });
   });
 

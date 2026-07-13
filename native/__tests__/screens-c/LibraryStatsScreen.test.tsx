@@ -12,9 +12,11 @@ jest.mock("../../utils/api", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { RefreshControl } from "react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import LibraryStatsScreen from "../../screens/LibraryStatsScreen";
 import { api } from "../../utils/api";
+import { useSnackbarStore } from "../../store/useSnackbarStore";
 
 const mockedGet = api.get as jest.Mock;
 
@@ -60,6 +62,8 @@ async function renderStats(params: any = { libraryId: "lib1" }) {
 
 beforeEach(() => {
   mockedGet.mockResolvedValue({ data: STATS });
+  // The snackbar host is a module singleton — never leak across tests.
+  useSnackbarStore.setState({ current: null } as any);
 });
 
 describe("LibraryStatsScreen", () => {
@@ -68,6 +72,9 @@ describe("LibraryStatsScreen", () => {
 
     expect(await screen.findByText("Totals")).toBeTruthy();
     expect(mockedGet).toHaveBeenCalledWith("/api/libraries/lib1/stats");
+
+    // Sentence-case title per the header spec ("Library Stats" was wrong).
+    expect(screen.getByText("Library stats")).toBeTruthy();
 
     // Label: value pairs are grouped into single accessible rows.
     expect(screen.getByLabelText("Items: 42")).toBeTruthy();
@@ -135,6 +142,34 @@ describe("LibraryStatsScreen", () => {
 
     expect(await screen.findByText("Couldn't load library stats")).toBeTruthy();
     expect(screen.getByText("Can't reach the server. Check your connection.")).toBeTruthy();
+  });
+
+  it("keeps rendered stats and surfaces a snackbar when a silent pull-to-refresh fails", async () => {
+    await renderStats();
+    await screen.findByText("Totals");
+
+    // Fail ONLY the refresh fetch — the screen already has rendered stats.
+    // (Guards the stale-closure regression: loadStats is memoized on
+    // [libraryId], so a naive `if (!stats)` read the mount-time null forever
+    // and replaced the rendered screen with a full-screen ErrorState.)
+    mockedGet.mockRejectedValueOnce(new Error("Network Error"));
+    // Drive the RefreshControl's onRefresh directly: RN's jest mock renders a
+    // bare RCTRefreshControl (props stripped) but stashes the mounted instance
+    // on RefreshControlMock.latestRef for exactly this purpose.
+    const rcInstance: any = (RefreshControl as any).latestRef;
+    expect(typeof rcInstance?.props?.onRefresh).toBe("function");
+    await act(async () => {
+      await rcInstance.props.onRefresh();
+    });
+
+    // The rendered stats stay — no destructive ErrorState takeover...
+    expect(screen.getByText("Totals")).toBeTruthy();
+    expect(screen.getByLabelText("Items: 42")).toBeTruthy();
+    expect(screen.queryByText("Couldn't load library stats")).toBeNull();
+    // ...and the failure surfaces non-destructively as a snackbar.
+    expect(useSnackbarStore.getState().current?.message).toBe(
+      "Can't reach the server. Check your connection."
+    );
   });
 
   it("errors without a libraryId and never fetches", async () => {

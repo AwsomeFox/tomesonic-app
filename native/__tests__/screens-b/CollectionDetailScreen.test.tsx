@@ -277,9 +277,9 @@ describe("CollectionDetailScreen", () => {
   });
 
   describe("create playlist from collection", () => {
-    it("POSTs the playlists-from-collection route and shows a success snackbar", async () => {
+    it("POSTs the playlists-from-collection route and shows a success snackbar with a View action", async () => {
       (api.post as jest.Mock).mockResolvedValue({ data: { id: "pl1" } });
-      await renderCollection();
+      const navigation = await renderCollection();
       await screen.findByText("Finished Book");
 
       await fireEvent.press(screen.getByLabelText("Create playlist from collection"));
@@ -292,6 +292,15 @@ describe("CollectionDetailScreen", () => {
       });
       // Success is transient feedback, never a blocking dialog.
       expect(useDialogStore.getState().current).toBeNull();
+
+      // The snackbar's "View" action jumps straight to the created playlist's
+      // detail screen (the id comes from the POST response).
+      const action = useSnackbarStore.getState().current?.action;
+      expect(action?.label).toBe("View");
+      await act(async () => {
+        action!.onPress();
+      });
+      expect(navigation.navigate).toHaveBeenCalledWith("PlaylistDetail", { playlistId: "pl1" });
     });
 
     it("surfaces a dialog (not a snackbar) when the playlist POST fails", async () => {

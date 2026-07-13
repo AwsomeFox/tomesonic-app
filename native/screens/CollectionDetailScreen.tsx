@@ -304,13 +304,21 @@ export default function CollectionDetailScreen({ route, navigation }: any) {
 
   // "Create playlist from collection": the server copies this collection's
   // books into a NEW playlist (POST /api/playlists/collection/:id). Additive
-  // and non-destructive, so no confirm — just a success snackbar.
+  // and non-destructive, so no confirm — a success snackbar whose "View"
+  // action jumps straight to the created playlist (same PlaylistDetail route
+  // the Collections & Playlists list uses).
   const handleCreatePlaylist = async () => {
     if (!collectionId || creatingPlaylist) return;
     setCreatingPlaylist(true);
     try {
-      await createPlaylistFromCollection(collectionId);
-      showSnackbar({ message: `Playlist created from "${collectionName || "collection"}"` });
+      const created = await createPlaylistFromCollection(collectionId);
+      const playlistId = created?.id;
+      showSnackbar({
+        message: `Playlist created from "${collectionName || "collection"}"`,
+        action: playlistId
+          ? { label: "View", onPress: () => navigation.navigate("PlaylistDetail", { playlistId }) }
+          : undefined,
+      });
     } catch (e: any) {
       // createPlaylistFromCollection throws a normalized AbsError whose
       // message already distinguishes offline / forbidden / server failures.

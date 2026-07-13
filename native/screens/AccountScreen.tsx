@@ -8,6 +8,9 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
+  Platform,
+  AccessibilityInfo,
+  findNodeHandle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -17,10 +20,33 @@ import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { api } from "../utils/api";
 import { updateMyEreaderDevices } from "../utils/abs/me";
+import { useServerCapabilities } from "../utils/abs/capabilities";
 import type { AbsEreaderDevice } from "../utils/abs/types";
 import Icon from "../components/Icon";
 
 const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
+
+/**
+ * On-open focus + announce for this screen's bespoke RN Modals, mirroring
+ * AppDialog: accessibilityViewIsModal is iOS-only, so on Android nothing would
+ * grab TalkBack focus or announce the modal otherwise. Returns the ref to put
+ * on the modal's title <Text> (which also carries accessibilityRole="header").
+ */
+function useModalA11y(visible: boolean, announcement: string) {
+  const titleRef = React.useRef<Text>(null);
+  React.useEffect(() => {
+    if (!visible) return;
+    const t = setTimeout(() => {
+      if (Platform.OS === "android") {
+        const node = findNodeHandle(titleRef.current);
+        if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
+      }
+      if (announcement) AccessibilityInfo.announceForAccessibility(announcement);
+    }, 50);
+    return () => clearTimeout(t);
+  }, [visible, announcement]);
+  return titleRef;
+}
 
 /**
  * Account screen mirroring the original tomesonic pages/account.vue and
@@ -151,10 +177,12 @@ export default function AccountScreen({ navigation }: any) {
   const allDevices: any[] = Array.isArray(ereaderDevices) ? ereaderDevices : [];
   const myDevices = allDevices.filter(isMyDevice);
   const sharedDevices = allDevices.filter((d) => !isMyDevice(d));
-  // permissions.createEreader gates self-managed devices server-side; the
-  // cold-restore thin user carries no permissions, so only an EXPLICIT false
-  // hides the section (a wrong guess just surfaces as a 403 dialog on save).
-  const canManageDevices = !!myUserId && user?.permissions?.createEreader !== false;
+  // permissions.createEreader gates self-managed devices server-side —
+  // consumed through the shared capabilities module (canCreateEreader is true
+  // unless the permission is EXPLICITLY false, so the cold-restore thin user
+  // still sees the section; a wrong guess just surfaces as a 403 on save).
+  const capabilities = useServerCapabilities();
+  const canManageDevices = !!myUserId && capabilities.canCreateEreader;
 
   const [showDeviceModal, setShowDeviceModal] = React.useState(false);
   // null = adding a new device; a number = index into myDevices being edited.
@@ -257,6 +285,13 @@ export default function AccountScreen({ navigation }: any) {
       ],
     });
   };
+
+  // On-open focus/announce for each bespoke modal (see useModalA11y above).
+  const deviceModalTitle =
+    editingDeviceIndex == null ? "Add e-reader device" : "Edit e-reader device";
+  const addressTitleRef = useModalA11y(showAddressModal, "Edit server address");
+  const passwordTitleRef = useModalA11y(showPasswordModal, "Change Password");
+  const deviceTitleRef = useModalA11y(showDeviceModal, deviceModalTitle);
 
   // Read-only field with a label above (matches ui-text-input-with-label)
   const LabeledField = ({ label, value }: { label: string; value: string }) => (
@@ -573,7 +608,11 @@ export default function AccountScreen({ navigation }: any) {
       >
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
           <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
-            <Text style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}>
+            <Text
+              ref={addressTitleRef}
+              accessibilityRole="header"
+              style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}
+            >
               Edit server address
             </Text>
             <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginBottom: 20 }}>
@@ -649,7 +688,11 @@ export default function AccountScreen({ navigation }: any) {
       >
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
           <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
-            <Text style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 20 }}>
+            <Text
+              ref={passwordTitleRef}
+              accessibilityRole="header"
+              style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 20 }}
+            >
               Change Password
             </Text>
 
@@ -756,8 +799,12 @@ export default function AccountScreen({ navigation }: any) {
       >
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
           <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
-            <Text style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}>
-              {editingDeviceIndex == null ? "Add e-reader device" : "Edit e-reader device"}
+            <Text
+              ref={deviceTitleRef}
+              accessibilityRole="header"
+              style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}
+            >
+              {deviceModalTitle}
             </Text>
             <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginBottom: 20 }}>
               For Kindle, use the device's @kindle.com address and make sure the server's

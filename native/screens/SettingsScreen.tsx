@@ -452,7 +452,9 @@ export default function SettingsScreen({ navigation, route }: any) {
         <Divider colors={colors} />
         <NavRow
           icon="logs"
-          title="Logs"
+          // "App logs" (not just "Logs") — the admin hub now has a sibling
+          // "Server logs" screen, and this row is the DEVICE-side log viewer.
+          title="App logs"
           onPress={() => navigation.navigate('Logs')}
           colors={colors}
         />

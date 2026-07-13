@@ -29,7 +29,6 @@ import { flushPendingSyncs } from "../utils/progressSync";
 import { hasEbook, isEbookOnly } from "../utils/bookMatch";
 import { shelfOverflows, shelfToLibraryParams } from "../utils/shelfLayout";
 import { hideFromContinueListening } from "../utils/abs/me";
-import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { bookStatusA11yLabel } from "../components/BookProgressBadge";
 
@@ -94,9 +93,10 @@ export default function BookshelfScreen({ navigation }: any) {
   // there's no affinity/data or we're offline — the shelf is purely additive.
   const [affinityShelf, setAffinityShelf] = useState<any | null>(null);
   // Continue-Listening entries the user hid via long-press, removed
-  // OPTIMISTICALLY (before the server confirms) so the card disappears the
-  // moment they confirm; restored if the request fails. Cleared on library
-  // switch and superseded by the post-hide shelf refetch.
+  // OPTIMISTICALLY (before the server call even fires) so the card disappears
+  // immediately; restored by the snackbar's Undo or if the request fails.
+  // Cleared on library switch, superseded by the post-hide shelf refetch, and
+  // pruned once a refetched shelf no longer carries the id (see below).
   const [hiddenContinueIds, setHiddenContinueIds] = useState<string[]>([]);
   // Starts true so the very first frame of a fresh install shows the skeleton
   // (not an empty screen). Warm starts hydrate shelves synchronously from the
@@ -397,11 +397,24 @@ export default function BookshelfScreen({ navigation }: any) {
     return (epId ? mp[`${item?.id}-${epId}`] : null) || mp[item?.id] || item?.userMediaProgress || null;
   };
 
-  // Long-press action on a Continue Listening card: confirm → optimistic
-  // removal → server hide (progress id) → shelf/progress refetch. Failure
-  // restores the card, so the shelf never silently disagrees with the server.
+  // How long the Undo window stays open before the hide is committed to the
+  // server — matches the snackbar's visible duration, so Undo works for
+  // exactly as long as the affordance is on screen.
+  const HIDE_UNDO_MS = 4000;
+  // Pending hide commits, keyed by libraryItemId. The server call is DELAYED
+  // until the Undo window closes: ABS has no un-hide route (the flag only
+  // resets on new listening), so an immediate call could never honor Undo.
+  // This is the documented "delay + cancel on Undo" flow — Undo clears the
+  // timer and restores the card, and the request then never fires. Timers are
+  // deliberately NOT cleared on unmount/library switch: the user asked for the
+  // removal, and only Undo cancels it (the commit's setState is mount-guarded).
+  const pendingHideTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // Long-press action on a Continue Listening card (Tier-1, no confirm):
+  // optimistic removal right away + an Undo snackbar → delayed server hide
+  // (progress id) → shelf/progress refetch. Failure restores the card, so the
+  // shelf never silently disagrees with the server.
   const promptHideFromContinueListening = (item: any) => {
-    const title = item?.media?.metadata?.title || item?.title || "This item";
     const progressId = resolveContinueProgress(item)?.id;
     if (!progressId) {
       // Without the media-progress row id the server route can't be addressed
@@ -409,34 +422,64 @@ export default function BookshelfScreen({ navigation }: any) {
       showSnackbar({ message: "Can't hide this right now — pull to refresh and try again." });
       return;
     }
-    showAppDialog({
-      title: "Remove from Continue Listening?",
-      message: `"${title}" will be hidden from this shelf. Your progress is kept and it stays in your library.`,
-      buttons: [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          onPress: async () => {
-            setHiddenContinueIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
-            try {
-              await hideFromContinueListening(progressId);
-              showSnackbar({ message: "Removed from Continue Listening" });
-              // Converge with the server: the refreshed shelf no longer carries
-              // the hidden entry, and the progress map picks up the flag.
-              loadPersonalizedShelves(true).catch(() => {});
-              loadMediaProgress().catch(() => {});
-            } catch (e: any) {
-              // Restore the optimistically-removed card — the hide didn't land.
-              if (mountedRef.current) {
-                setHiddenContinueIds((prev) => prev.filter((id) => id !== item.id));
-              }
-              showSnackbar({ message: e?.message || "Couldn't remove it. Try again." });
-            }
-          },
+    const itemId = item?.id;
+    if (!itemId || pendingHideTimers.current[itemId]) return;
+    // Optimistic: the card disappears immediately; Undo (or a failure) restores it.
+    setHiddenContinueIds((prev) => (prev.includes(itemId) ? prev : [...prev, itemId]));
+    const commit = async () => {
+      delete pendingHideTimers.current[itemId];
+      try {
+        await hideFromContinueListening(progressId);
+        // Converge with the server: the refreshed shelf no longer carries
+        // the hidden entry, and the progress map picks up the flag.
+        loadPersonalizedShelves(true).catch(() => {});
+        loadMediaProgress().catch(() => {});
+      } catch (e: any) {
+        // Restore the optimistically-removed card — the hide didn't land.
+        if (mountedRef.current) {
+          setHiddenContinueIds((prev) => prev.filter((id) => id !== itemId));
+        }
+        showSnackbar({ message: e?.message || "Couldn't remove it. Try again." });
+      }
+    };
+    pendingHideTimers.current[itemId] = setTimeout(commit, HIDE_UNDO_MS);
+    showSnackbar({
+      message: "Removed from Continue Listening",
+      durationMs: HIDE_UNDO_MS,
+      action: {
+        label: "Undo",
+        onPress: () => {
+          const t = pendingHideTimers.current[itemId];
+          if (t) {
+            clearTimeout(t);
+            delete pendingHideTimers.current[itemId];
+          }
+          setHiddenContinueIds((prev) => prev.filter((id) => id !== itemId));
         },
-      ],
+      },
     });
   };
+
+  // Prune hidden ids that the server no longer surfaces at all: once a
+  // refetched shelf list omits an id (the hide converged, or the entry aged
+  // out), keeping it in hiddenContinueIds would suppress the book for the rest
+  // of the session even if the server legitimately RE-surfaces it (new
+  // listening resets the flag). Ids still present on either continue shelf are
+  // kept — that's the optimistic window doing its job.
+  useEffect(() => {
+    setHiddenContinueIds((prev) => {
+      if (prev.length === 0) return prev;
+      const present = new Set<string>();
+      for (const sh of personalizedShelves) {
+        if (sh?.id !== "continue-listening" && sh?.id !== "continue-reading") continue;
+        (Array.isArray(sh?.entities) ? sh.entities : []).forEach((e: any) => {
+          if (e?.id) present.add(e.id);
+        });
+      }
+      const next = prev.filter((id) => present.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [personalizedShelves]);
 
   // Bumped by pull-to-refresh so the series-list effect below revalidates too
   // (otherwise Continue Series folders keep stale covers/counts).
@@ -781,10 +824,14 @@ export default function BookshelfScreen({ navigation }: any) {
       } else if (shelf.id === "continue-reading") {
         // Prefer the locally-built list (ebook-progress aware); fall back to
         // the server's entities so the shelf shows instantly while ours loads.
+        // The hide gate applies here too: the server's hideFromContinueListening
+        // flag removes an item from BOTH continue shelves, so the optimistic
+        // filter must match until the refetch converges.
+        const source = continueReadingItems.length > 0 ? continueReadingItems : shelf.entities || [];
         result.push({
           ...shelf,
           type: "book",
-          entities: continueReadingItems.length > 0 ? continueReadingItems : shelf.entities || [],
+          entities: source.filter((e: any) => !hiddenContinueIds.includes(e?.id)),
         });
       } else if (shelf.type === "authors" || shelf.type === "author" || shelf.type === "series") {
         result.push(shelf);
@@ -793,7 +840,8 @@ export default function BookshelfScreen({ navigation }: any) {
       }
     }
     // Synthetic Continue Reading ONLY when the server sent none at all
-    // (older servers) — inserted right after Continue Listening.
+    // (older servers) — inserted right after Continue Listening. Same hide
+    // gate as the server-provided shelf above.
     if (!seenShelfIds.has("continue-reading") && continueReadingItems.length > 0 && !hideNonAudiobooks) {
       const idx = result.findIndex((s) => s.id === "continue-listening");
       // When there's no Continue Listening shelf (older server), findIndex
@@ -803,7 +851,7 @@ export default function BookshelfScreen({ navigation }: any) {
         id: "continue-reading",
         label: "Continue Reading",
         type: "book",
-        entities: continueReadingItems,
+        entities: continueReadingItems.filter((e: any) => !hiddenContinueIds.includes(e?.id)),
       });
     }
     // "Want to Read": the device-local favorites, surfaced near the top of the
