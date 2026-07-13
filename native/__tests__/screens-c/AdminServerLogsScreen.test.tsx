@@ -52,6 +52,13 @@ const DEBUG_LOG = {
   levelName: "DEBUG",
   level: 1,
 };
+const FATAL_LOG = {
+  timestamp: "2026-07-13 10:20:00.000",
+  source: "Server.js",
+  message: "fatal crash line",
+  levelName: "FATAL",
+  level: 5,
+};
 
 function mockLogs(currentDailyLogs: any[]) {
   (api.get as jest.Mock).mockImplementation((url: string) => {
@@ -135,6 +142,25 @@ describe("AdminServerLogsScreen", () => {
     fireEvent.press(debugChip);
     await waitFor(() => expect(screen.queryByText("Server started")).toBeNull());
     expect(screen.getByText("debug detail line")).toBeTruthy();
+  });
+
+  it("offers a Fatal chip only when the snapshot contains fatal entries, and it filters to them", async () => {
+    mockLogs([INFO_LOG, FATAL_LOG]);
+    await renderScreen();
+    await screen.findByText("Server started");
+
+    // FATAL (level 5) is present → its chip appears (it must not be reachable
+    // only under "All").
+    const fatalChip = await screen.findByLabelText("Show fatal logs");
+    fireEvent.press(fatalChip);
+
+    await waitFor(() => expect(screen.queryByText("Server started")).toBeNull());
+    expect(screen.getByText("fatal crash line")).toBeTruthy();
+
+    // No fatal lines → no dead Fatal chip.
+    mockLogs([INFO_LOG]);
+    fireEvent.press(screen.getByLabelText("Refresh logs"));
+    await waitFor(() => expect(screen.queryByLabelText("Show fatal logs")).toBeNull());
   });
 
   it("renders the snapshot through a virtualized FlatList with pull-to-refresh wired to the fetch", async () => {

@@ -122,6 +122,32 @@ describe("AdminBackupsScreen", () => {
     expect(screen.getByText("Backup location: /backups")).toBeTruthy();
   });
 
+  it("prettifies a daily cron to the exact local time", async () => {
+    mockGetBackups([BACKUP_1], "/backups", { backupSchedule: "30 1 * * *", backupsToKeep: 2 });
+    await renderScreen();
+    await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+    expect(screen.getByText(/Runs daily at 1:30\s?AM/)).toBeTruthy();
+  });
+
+  it("prettifies a weekly cron to a named weekday and time", async () => {
+    mockGetBackups([BACKUP_1], "/backups", { backupSchedule: "0 2 * * 1", backupsToKeep: 2 });
+    await renderScreen();
+    await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+    expect(screen.getByText(/Runs weekly on Monday at 2:00\s?AM/)).toBeTruthy();
+  });
+
+  it("falls back to the raw cron for shapes it can't prettify", async () => {
+    mockGetBackups([BACKUP_1], "/backups", { backupSchedule: "*/15 * * * *", backupsToKeep: 2 });
+    await renderScreen();
+    await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+    // Not a daily/weekly shape → the admin still sees the accurate raw cron.
+    expect(screen.getByText(/Runs on schedule \*\/15 \* \* \* \*/)).toBeTruthy();
+    expect(screen.queryByText(/Runs daily/)).toBeNull();
+  });
+
   it("shows automatic backups as off when the server schedule is disabled", async () => {
     mockGetBackups([BACKUP_1], "/backups", { backupSchedule: false, backupsToKeep: 2 });
     await renderScreen();

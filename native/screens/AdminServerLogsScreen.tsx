@@ -44,11 +44,13 @@ function levelOf(entry: any): string {
   return LEVEL_BY_NUM[entry?.level] || "INFO";
 }
 
-// Map a normalized AbsError to the full-screen error copy via the shared
-// engine (the call site pins its own themed icon, so the mapped icon is
-// unused). auth/server/unsupported keep this screen's historical generic title.
+// Map a normalized AbsError to full-screen ErrorState props via the shared
+// engine — including the mapper's SEMANTIC icon (offline → cloud-off, etc.),
+// spread at the call site so the error's kind reads consistently with the
+// sibling admin screens. auth/server/unsupported keep this screen's historical
+// generic title.
 const GENERIC_LOAD_ERROR = { title: "Couldn't load server logs" } as const;
-function describeLoadError(e: any): { title: string; message: string } {
+function describeLoadError(e: any) {
   return absErrorToErrorStateProps(e, {
     subject: "server logs",
     overrides: {
@@ -121,6 +123,10 @@ export default function AdminServerLogsScreen({ navigation }: any) {
     if (present.has("TRACE")) chips.push("TRACE");
     if (present.has("DEBUG")) chips.push("DEBUG");
     chips.push("INFO", "WARN", "ERROR");
+    // FATAL (level 5) is rare but the most severe — surface a chip for it when
+    // present so those lines aren't reachable only under "All". Ordered after
+    // ERROR to keep the chips in ascending severity.
+    if (present.has("FATAL")) chips.push("FATAL");
     return chips;
   }, [entries]);
 
@@ -254,9 +260,7 @@ export default function AdminServerLogsScreen({ navigation }: any) {
       ) : error ? (
         <ErrorState
           style={{ flex: 1 }}
-          icon="logs"
-          title={describeLoadError(error).title}
-          message={describeLoadError(error).message}
+          {...describeLoadError(error)}
           onRetry={() => setRetryTick((t) => t + 1)}
         />
       ) : (

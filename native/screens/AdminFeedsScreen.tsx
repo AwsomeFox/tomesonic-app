@@ -12,7 +12,7 @@ import StatusChip from "../components/StatusChip";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { getOpenFeeds, closeFeed } from "../utils/abs/feeds";
-import { absErrorToErrorStateProps } from "../utils/abs/errors";
+import { absErrorToErrorStateProps, absErrorToActionMessage } from "../utils/abs/errors";
 import type { AbsFeed } from "../utils/abs/types";
 
 /**
@@ -31,10 +31,11 @@ import type { AbsFeed } from "../utils/abs/types";
  * close confirm spells out what closing does to listeners.
  */
 
-// Map a normalized AbsError to the full-screen error copy via the shared
-// engine (the call site pins its own themed icon, so the mapped icon is
-// unused). auth/server keep this screen's historical generic title.
-function describeLoadError(e: any): { title: string; message: string } {
+// Map a normalized AbsError to full-screen ErrorState props via the shared
+// engine — including the mapper's SEMANTIC icon (offline → cloud-off, etc.),
+// spread at the call site for cross-screen consistency. auth/server keep this
+// screen's historical generic title.
+function describeLoadError(e: any) {
   return absErrorToErrorStateProps(e, {
     subject: "feeds",
     overrides: {
@@ -50,11 +51,8 @@ function describeLoadError(e: any): { title: string; message: string } {
   });
 }
 
-function actionErrorMessage(e: any): string {
-  if (e?.kind === "offline") return "You're offline. Reconnect and try again.";
-  if (e?.kind === "forbidden") return "Only server admins can manage RSS feeds.";
-  return e?.message || "The server hit an error handling this request.";
-}
+const actionErrorMessage = (e: any) =>
+  absErrorToActionMessage(e, { forbidden: "Only server admins can manage RSS feeds." });
 
 // Feed entityType → human chip label.
 function entityLabel(entityType?: string): string {
@@ -188,9 +186,7 @@ export default function AdminFeedsScreen({ navigation }: any) {
       ) : error ? (
         <ErrorState
           style={{ flex: 1 }}
-          icon="rss"
-          title={describeLoadError(error).title}
-          message={describeLoadError(error).message}
+          {...describeLoadError(error)}
           onRetry={() => setRetryTick((t) => t + 1)}
         />
       ) : (

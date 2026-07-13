@@ -58,6 +58,12 @@ function makeNavigation() {
 async function renderScreen() {
   const navigation = makeNavigation();
   await render(<AdminServerSettingsScreen navigation={navigation} route={{ params: {} }} />);
+  // Settle the mount seed (refreshCapabilities + optional error re-probe) inside
+  // act so its trailing setState (setSeeding(false), etc.) lands during the test
+  // rather than as a floating update that fires during the next test's cleanup.
+  await act(async () => {
+    await new Promise((r) => setImmediate(r));
+  });
   return navigation;
 }
 
@@ -120,6 +126,38 @@ describe("AdminServerSettingsScreen", () => {
     await waitFor(() =>
       expect(screen.getByLabelText(/^Find covers/).props.accessibilityState.checked).toBe(true)
     );
+  });
+
+  // Load-error states run before the mutation tests: those hold pending PATCH
+  // promises whose late settlement can otherwise destabilize a subsequent
+  // error-state mount in this suite.
+  it("shows the OFFLINE error state (distinguished by kind) with a working retry", async () => {
+    useUserStore.setState({ serverSettings: null } as any);
+    (api.post as jest.Mock).mockRejectedValue(new Error("Network Error")); // no .response
+    await renderScreen();
+
+    // The kind-aware mapper reads offline as offline, not a generic "couldn't load".
+    expect(await screen.findByText("You're offline")).toBeTruthy();
+
+    // Connectivity returns → retry hydrates and renders the toggles.
+    mockAuthorize();
+    fireEvent.press(screen.getByLabelText("Retry"));
+    expect(await screen.findByLabelText(/^Find covers/)).toBeTruthy();
+    // Settle the retry seed's trailing setState before the test unmounts.
+    await act(async () => {
+      await new Promise((r) => setImmediate(r));
+    });
+  });
+
+  it("distinguishes a 403 as the admin-access error state (not the offline copy)", async () => {
+    useUserStore.setState({ serverSettings: null } as any);
+    (api.post as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("nope"), { response: { status: 403 } })
+    );
+    await renderScreen();
+
+    expect(await screen.findByText("Admin access required")).toBeTruthy();
+    expect(screen.queryByText("You're offline")).toBeNull();
   });
 
   it("flipping a toggle PATCHes exactly that key and keeps the flip on success", async () => {
@@ -198,18 +236,5 @@ describe("AdminServerSettingsScreen", () => {
     await act(async () => {
       resolvePatch({ data: { serverSettings: { ...SETTINGS, scannerFindCovers: true } } });
     });
-  });
-
-  it("shows an error state with a working retry when no settings can be loaded", async () => {
-    useUserStore.setState({ serverSettings: null } as any);
-    (api.post as jest.Mock).mockRejectedValue(new Error("Network Error"));
-    await renderScreen();
-
-    expect(await screen.findByText("Couldn't load server settings")).toBeTruthy();
-
-    // Connectivity returns → retry hydrates and renders the toggles.
-    mockAuthorize();
-    fireEvent.press(screen.getByLabelText("Retry"));
-    expect(await screen.findByLabelText(/^Find covers/)).toBeTruthy();
   });
 });

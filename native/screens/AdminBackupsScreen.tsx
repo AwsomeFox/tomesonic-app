@@ -11,7 +11,7 @@ import { SectionHeader, RowBase, Divider } from "../components/SettingsRows";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { getBackups, createBackup, deleteBackup } from "../utils/abs/server";
-import { absErrorToErrorStateProps } from "../utils/abs/errors";
+import { absErrorToErrorStateProps, absErrorToActionMessage } from "../utils/abs/errors";
 import { formatBytes } from "../utils/format";
 import type { AbsBackup } from "../utils/abs/types";
 
@@ -30,10 +30,11 @@ import type { AbsBackup } from "../utils/abs/types";
  * (offline / forbidden / unsupported / ...) instead of sniffing axios shapes.
  */
 
-// Map a normalized AbsError to the full-screen error copy via the shared
-// engine (the call site pins its own themed icon, so the mapped icon is
-// unused). auth/server keep this screen's historical generic title.
-function describeLoadError(e: any): { title: string; message: string } {
+// Map a normalized AbsError to full-screen ErrorState props via the shared
+// engine — including the mapper's SEMANTIC icon (offline → cloud-off, etc.),
+// spread at the call site for cross-screen consistency. auth/server keep this
+// screen's historical generic title.
+function describeLoadError(e: any) {
   return absErrorToErrorStateProps(e, {
     subject: "backups",
     overrides: {
@@ -71,11 +72,8 @@ function describeCron(cron: string): string {
 }
 
 // Action failures (create/delete) surface as dialogs so the list stays put.
-function actionErrorMessage(e: any): string {
-  if (e?.kind === "offline") return "You're offline. Reconnect and try again.";
-  if (e?.kind === "forbidden") return "Only server admins can manage backups.";
-  return e?.message || "The server hit an error handling this request.";
-}
+const actionErrorMessage = (e: any) =>
+  absErrorToActionMessage(e, { forbidden: "Only server admins can manage backups." });
 
 export default function AdminBackupsScreen({ navigation }: any) {
   const colors = useThemeColors();
@@ -228,9 +226,7 @@ export default function AdminBackupsScreen({ navigation }: any) {
       ) : error ? (
         <ErrorState
           style={{ flex: 1 }}
-          icon="database"
-          title={describeLoadError(error).title}
-          message={describeLoadError(error).message}
+          {...describeLoadError(error)}
           onRetry={() => setRetryTick((t) => t + 1)}
         />
       ) : (

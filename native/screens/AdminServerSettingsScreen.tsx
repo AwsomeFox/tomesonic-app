@@ -9,6 +9,8 @@ import { useUserStore } from "../store/useUserStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { refreshCapabilities } from "../utils/abs/capabilities";
 import { updateServerSettings } from "../utils/abs/server";
+import { api } from "../utils/api";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
 
 /**
  * AdminServerSettingsScreen — a mobile subset of the ABS server settings as
@@ -118,14 +120,53 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
   // which IS the rollback.
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
   const inFlight = useRef<Record<string, boolean>>({});
+  // The classified failure behind an empty settings blob, for the load-error
+  // ErrorState (offline vs 403 vs 5xx). refreshCapabilities() swallows its
+  // error, so on a failed seed we re-probe /api/authorize once to classify it.
+  const [seedError, setSeedError] = useState<any>(null);
+  // Guards post-await setStates from firing after unmount (the seed and the
+  // per-toggle PATCH both settle asynchronously).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
+  // Dedupes the mount double-fire: React Navigation emits a "focus" the moment
+  // this screen mounts, which lands in the same tick as the direct seed() call
+  // below — without this guard refreshCapabilities() would run twice on entry.
+  // Set synchronously before the first await so the concurrent second call bails;
+  // cleared when the seed settles, so a LATER focus (a genuine revisit) re-seeds.
+  const seedInFlight = useRef(false);
   const seed = useCallback(async () => {
-    await refreshCapabilities(); // never throws; store stays as-is on failure
-    setSeeding(false);
+    if (seedInFlight.current) return;
+    seedInFlight.current = true;
+    try {
+      await refreshCapabilities(); // never throws; store stays as-is on failure
+      if (!mountedRef.current) return;
+      if (useUserStore.getState().serverSettings) {
+        setSeedError(null);
+      } else {
+        // Hydration didn't land — re-probe once purely to classify the failure
+        // (same conditions, so the kind is accurate) for the error state.
+        try {
+          await api.post("/api/authorize");
+          if (mountedRef.current) setSeedError(null);
+        } catch (e) {
+          if (mountedRef.current) setSeedError(e);
+        }
+      }
+    } finally {
+      seedInFlight.current = false;
+      if (mountedRef.current) setSeeding(false);
+    }
   }, []);
 
   // Seed on mount AND on every re-focus (staleness mitigation: another admin
-  // may have changed settings on the web dashboard while we were away).
+  // may have changed settings on the web dashboard while we were away). The
+  // seedInFlight guard collapses the mount-coincident focus into one seed.
   useEffect(() => {
     seed();
     const unsub = navigation.addListener("focus", seed);
@@ -152,10 +193,13 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
       inFlight.current[t.key] = false;
       // Drop the optimistic value either way: success → store already shows
       // the new value; failure → store still shows the old one (rollback).
-      setOverrides((o) => {
-        const { [t.key]: _drop, ...rest } = o;
-        return rest;
-      });
+      // Guarded: the PATCH may settle after the screen unmounts.
+      if (mountedRef.current) {
+        setOverrides((o) => {
+          const { [t.key]: _drop, ...rest } = o;
+          return rest;
+        });
+      }
     }
   };
 
@@ -205,12 +249,18 @@ export default function AdminServerSettingsScreen({ navigation }: any) {
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : !serverSettings ? (
+        // Distinguish offline / forbidden / server via the shared mapper (the
+        // static one-message-fits-all copy hid whether this was a connection or
+        // a permission problem). Admin-appropriate forbidden copy is kept.
         <ErrorState
           style={{ flex: 1 }}
-          icon="settings"
-          title="Couldn't load server settings"
-          message="Loading these needs a connection and an admin account. Check both, then retry."
-          onRetry={retry}
+          {...absErrorToErrorStateProps(seedError, {
+            subject: "server settings",
+            onRetry: retry,
+            overrides: {
+              forbidden: { message: "Only server admins can change server settings." },
+            },
+          })}
         />
       ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>

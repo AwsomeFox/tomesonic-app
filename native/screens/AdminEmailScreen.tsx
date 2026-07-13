@@ -50,9 +50,13 @@ function LabeledTextField({
   colors,
   placeholder,
   helper,
+  error,
   keyboardType,
   secureTextEntry,
   trailing,
+  inputRef,
+  returnKeyType,
+  onSubmitEditing,
 }: {
   label: string;
   value: string;
@@ -60,9 +64,14 @@ function LabeledTextField({
   colors: any;
   placeholder?: string;
   helper?: string;
+  /** Inline validation error rendered under the field (error-colored). */
+  error?: string | null;
   keyboardType?: any;
   secureTextEntry?: boolean;
   trailing?: React.ReactNode;
+  inputRef?: React.RefObject<TextInput | null>;
+  returnKeyType?: "next" | "done";
+  onSubmitEditing?: () => void;
 }) {
   return (
     <View style={{ marginBottom: 16 }}>
@@ -70,7 +79,11 @@ function LabeledTextField({
         {label}
       </Text>
       <View style={{ flexDirection: "row", alignItems: "center" }}>
+        {/* Borderless skin shared with AdminUserDetail/EditMetadata's Field:
+            surfaceContainer fill, fontSize 15, transparent border that turns
+            error-colored when there's an inline error. */}
         <TextInput
+          ref={inputRef}
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder}
@@ -79,21 +92,28 @@ function LabeledTextField({
           autoCorrect={false}
           keyboardType={keyboardType}
           secureTextEntry={secureTextEntry}
+          returnKeyType={returnKeyType}
+          onSubmitEditing={onSubmitEditing}
           accessibilityLabel={label}
           style={{
             flex: 1,
-            backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
+            backgroundColor: colors.surfaceContainer,
             color: colors.onSurface,
             borderRadius: 12,
-            padding: 12,
-            fontSize: 16,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            fontSize: 15,
             borderWidth: 1,
-            borderColor: colors.outline,
+            borderColor: error ? colors.error : "transparent",
           }}
         />
         {trailing}
       </View>
-      {helper ? (
+      {error ? (
+        <Text accessibilityRole="alert" style={{ color: colors.error, fontSize: 12, marginTop: 4 }}>
+          {error}
+        </Text>
+      ) : helper ? (
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 4 }}>{helper}</Text>
       ) : null}
     </View>
@@ -119,6 +139,16 @@ export default function AdminEmailScreen({ navigation }: any) {
   const [testAddress, setTestAddress] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [sendingTest, setSendingTest] = React.useState(false);
+
+  // returnKeyType="next" focus chain through the SMTP fields (host → port →
+  // user → pass → from → test); the last field submits "done". The Secure
+  // toggle sits visually between port and user but is a switch, so the chain
+  // skips it.
+  const portRef = React.useRef<TextInput>(null);
+  const userRef = React.useRef<TextInput>(null);
+  const passRef = React.useRef<TextInput>(null);
+  const fromRef = React.useRef<TextInput>(null);
+  const testRef = React.useRef<TextInput>(null);
 
   // Server-wide e-reader devices.
   const [devices, setDevices] = React.useState<AbsEreaderDevice[]>([]);
@@ -416,6 +446,8 @@ export default function AdminEmailScreen({ navigation }: any) {
             onChangeText={setHost}
             colors={colors}
             placeholder="smtp.example.com"
+            returnKeyType="next"
+            onSubmitEditing={() => portRef.current?.focus()}
           />
           <LabeledTextField
             label="SMTP port"
@@ -424,6 +456,9 @@ export default function AdminEmailScreen({ navigation }: any) {
             colors={colors}
             placeholder="465"
             keyboardType="number-pad"
+            inputRef={portRef}
+            returnKeyType="next"
+            onSubmitEditing={() => userRef.current?.focus()}
           />
         </View>
         <ToggleRow
@@ -440,6 +475,9 @@ export default function AdminEmailScreen({ navigation }: any) {
             value={smtpUser}
             onChangeText={setSmtpUser}
             colors={colors}
+            inputRef={userRef}
+            returnKeyType="next"
+            onSubmitEditing={() => passRef.current?.focus()}
           />
           {/* The stored password is never echoed here — blank means "keep". */}
           <LabeledTextField
@@ -450,6 +488,9 @@ export default function AdminEmailScreen({ navigation }: any) {
             secureTextEntry={!showPass}
             placeholder="Leave blank to keep the current password"
             helper="Only sent when you type a new one."
+            inputRef={passRef}
+            returnKeyType="next"
+            onSubmitEditing={() => fromRef.current?.focus()}
             trailing={
               <Pressable
                 onPress={() => setShowPass((v) => !v)}
@@ -469,6 +510,9 @@ export default function AdminEmailScreen({ navigation }: any) {
             colors={colors}
             placeholder="audiobookshelf@example.com"
             keyboardType="email-address"
+            inputRef={fromRef}
+            returnKeyType="next"
+            onSubmitEditing={() => testRef.current?.focus()}
           />
           <LabeledTextField
             label="Test address"
@@ -478,6 +522,8 @@ export default function AdminEmailScreen({ navigation }: any) {
             placeholder="you@example.com"
             helper="Where the test email below is sent."
             keyboardType="email-address"
+            inputRef={testRef}
+            returnKeyType="done"
           />
         </View>
 

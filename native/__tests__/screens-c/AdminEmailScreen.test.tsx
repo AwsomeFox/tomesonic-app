@@ -17,7 +17,7 @@ jest.mock("../../store/useDialogStore", () => ({
 }));
 
 import React from "react";
-import { AccessibilityInfo } from "react-native";
+import { AccessibilityInfo, StyleSheet } from "react-native";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react-native";
 import AdminEmailScreen from "../../screens/AdminEmailScreen";
 import { api } from "../../utils/api";
@@ -104,6 +104,30 @@ describe("AdminEmailScreen", () => {
     // Server-wide device list rendered.
     expect(screen.getByText("Kindle")).toBeTruthy();
     expect(screen.getByText("k@kindle.com")).toBeTruthy();
+  });
+
+  it("uses the borderless field skin and a returnKeyType focus chain ending in done", async () => {
+    mockGetSettings();
+    await renderLoaded();
+
+    // Borderless skin (matches AdminUserDetail/EditMetadata's Field): fontSize
+    // 15 with a transparent border, not the old bordered fontSize-16 outline.
+    const hostStyle = StyleSheet.flatten(screen.getByLabelText("SMTP host").props.style);
+    expect(hostStyle.fontSize).toBe(15);
+    expect(hostStyle.borderColor).toBe("transparent");
+
+    // Focus chain: host → port → user → pass → from → test("done").
+    expect(screen.getByLabelText("SMTP host").props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("SMTP port").props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("SMTP username").props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("SMTP password").props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("From address").props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("Test address").props.returnKeyType).toBe("done");
+
+    // Every non-terminal field carries a submit handler that advances the chain.
+    for (const label of ["SMTP host", "SMTP port", "SMTP username", "SMTP password", "From address"]) {
+      expect(typeof screen.getByLabelText(label).props.onSubmitEditing).toBe("function");
+    }
   });
 
   it("Save is disabled until dirty, then PATCHes ONLY the changed fields — no pass key when blank", async () => {
