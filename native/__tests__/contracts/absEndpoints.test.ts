@@ -86,6 +86,7 @@ const CONTRACT: Array<{
   { name: "getLibraryNarrators", invoke: () => libraries.getLibraryNarrators("LIB"), method: "get", path: "/api/libraries/LIB/narrators" },
   { name: "updateNarrator", invoke: () => libraries.updateNarrator("LIB", "NARR", "New Name"), method: "patch", path: "/api/libraries/LIB/narrators/NARR", body: { name: "New Name" } },
   { name: "getLibraryFilterData", invoke: () => libraries.getLibraryFilterData("LIB"), method: "get", path: "/api/libraries/LIB/filterdata" },
+  { name: "getLibraryItemFilterCount", invoke: () => libraries.getLibraryItemFilterCount("LIB", "tags", "kids"), method: "get", path: "/api/libraries/LIB/items" },
   // --- items ---------------------------------------------------------------
   { name: "updateItemMedia", invoke: () => items.updateItemMedia("ITEM", { tags: [] }), method: "patch", path: "/api/items/ITEM/media", body: { tags: [] } },
   { name: "searchBookMetadata", invoke: () => items.searchBookMetadata({ title: "t" }), method: "get", path: "/api/search/books" },
