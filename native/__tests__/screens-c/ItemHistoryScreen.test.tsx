@@ -154,7 +154,7 @@ describe("ItemHistoryScreen", () => {
     expect(labels[2]).toContain("Old Phone");
   });
 
-  it("a failed later page keeps page 0 usable and still reports the endpoint's total count", async () => {
+  it("a failed later page keeps page 0 usable and never pairs the full count with a partial time", async () => {
     mockedSessions.mockResolvedValue({
       sessions: SESSIONS,
       total: 5,
@@ -165,9 +165,12 @@ describe("ItemHistoryScreen", () => {
     mockedGet.mockRejectedValue(new Error("Network Error"));
     await renderScreen();
 
-    // The summary's session COUNT comes from the endpoint's total — honest
-    // even though only page 0 loaded; the two loaded rows stay rendered.
-    await screen.findByText("5 sessions · 1h 1m total");
+    // The COUNT comes from the endpoint's total (5) but only page 0's two
+    // sessions loaded, so the summed time (1h 1m) is partial. Pairing "5
+    // sessions" with a "total" time would contradict — the honest label is
+    // "loaded so far" until every page arrives (which never happens here).
+    await screen.findByText("5 sessions · 1h 1m loaded so far");
+    expect(screen.queryByText(/1h 1m total$/)).toBeNull();
     expect(screen.getAllByLabelText(/listened/)).toHaveLength(2);
     expect(screen.queryByText("Retry")).toBeNull(); // no error state
   });

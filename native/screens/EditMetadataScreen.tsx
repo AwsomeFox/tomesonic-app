@@ -22,6 +22,7 @@ import EmptyState from "../components/EmptyState";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { useServerCapabilities } from "../utils/abs/capabilities";
+import { AbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
 import {
   updateItemMedia,
   searchBookMetadata,
@@ -134,11 +135,20 @@ export function buildDirtyPatch(
   if (changed("seriesName") || changed("seriesSequence")) {
     const name = form.seriesName.trim();
     const sequence = form.seriesSequence.trim();
-    const head = name ? [{ name, ...(sequence ? { sequence } : {}) }] : [];
     // Preserve every series entry beyond the edited first one, verbatim
     // (ids intact so the server updates rather than re-creates them).
     const tail = (Array.isArray(originalSeries) ? originalSeries : []).slice(1);
-    md.series = [...head, ...tail];
+    if (name) {
+      // Name present → the edited entry heads the array (sequence rides along).
+      md.series = [{ name, ...(sequence ? { sequence } : {}) }, ...tail];
+    } else if (changed("seriesName")) {
+      // Name explicitly cleared → drop the edited entry (keep the tail).
+      md.series = [...tail];
+    }
+    // else: only the SEQUENCE changed while the name is (and stays) empty. A
+    // sequence with no series name is meaningless in ABS, so emit nothing —
+    // dropping it into an empty `head` would silently lose the typed value.
+    // The Details UI also disables the sequence field in this state.
   }
   if (changed("genres")) md.genres = splitList(form.genres);
   if (changed("description")) md.description = form.description.trim() || null;
@@ -285,6 +295,7 @@ function Field({
   returnKeyType,
   onSubmitEditing,
   inputRef,
+  editable,
 }: {
   label: string;
   helper?: string;
@@ -297,7 +308,9 @@ function Field({
   returnKeyType?: ReturnKeyTypeOptions;
   onSubmitEditing?: () => void;
   inputRef?: (r: TextInput | null) => void;
+  editable?: boolean;
 }) {
+  const isEditable = editable !== false;
   return (
     <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
       <Text style={{ color: colors.onSurface, fontSize: 15, fontWeight: "600" }}>{label}</Text>
@@ -308,8 +321,10 @@ function Field({
         ref={inputRef}
         value={value}
         onChangeText={onChangeText}
+        editable={isEditable}
         multiline={!!multiline}
         accessibilityLabel={label}
+        accessibilityState={{ disabled: !isEditable }}
         autoCapitalize={autoCapitalize ?? (multiline ? "sentences" : "none")}
         autoCorrect={false}
         keyboardType={keyboardType}
@@ -328,6 +343,7 @@ function Field({
           marginTop: 8,
           minHeight: multiline ? 120 : undefined,
           textAlignVertical: multiline ? "top" : "auto",
+          opacity: isEditable ? 1 : 0.5,
         }}
       />
     </View>
@@ -445,7 +461,9 @@ export default function EditMetadataScreen({ route, navigation }: any) {
   const [tab, setTab] = useState<Tab>("details");
   const [item, setItem] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Holds the raw thrown value (or a synthetic AbsError) — mapped to full
+  // ErrorState props (icon/title/kind) at render via absErrorToErrorStateProps.
+  const [error, setError] = useState<any>(null);
   const [retryTick, setRetryTick] = useState(0);
 
   // Details form
@@ -487,7 +505,7 @@ export default function EditMetadataScreen({ route, navigation }: any) {
 
   useEffect(() => {
     if (!libraryItemId) {
-      setError("No item provided.");
+      setError(new AbsError("unknown", "No item was provided to edit."));
       setLoading(false);
       return;
     }
@@ -502,11 +520,9 @@ export default function EditMetadataScreen({ route, navigation }: any) {
         reseed(res.data);
       } catch (err: any) {
         if (cancelled) return;
-        setError(
-          err?.response
-            ? "Failed to load this item."
-            : "You're offline. Reconnect to edit this item's details."
-        );
+        // Store the raw error — the render maps it through the shared helper so
+        // offline / forbidden / server failures get distinct icon+title+copy.
+        setError(err);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -890,6 +906,13 @@ export default function EditMetadataScreen({ route, navigation }: any) {
       />
       <Field
         label="Series sequence"
+        // A sequence is meaningless without a series name in ABS — disable the
+        // field (and say why) until a name is present, so a typed sequence can
+        // never be silently dropped on save.
+        helper={
+          form.seriesName.trim() ? undefined : "Add a series name to set a sequence."
+        }
+        editable={!!form.seriesName.trim()}
         value={form.seriesSequence}
         onChangeText={(t) => setField("seriesSequence", t)}
         keyboardType="decimal-pad"
@@ -1351,8 +1374,10 @@ export default function EditMetadataScreen({ route, navigation }: any) {
       ) : error ? (
         <ErrorState
           style={{ flex: 1 }}
-          message={error}
-          onRetry={libraryItemId ? () => setRetryTick((t) => t + 1) : undefined}
+          {...absErrorToErrorStateProps(error, {
+            subject: "this item",
+            onRetry: libraryItemId ? () => setRetryTick((t) => t + 1) : undefined,
+          })}
         />
       ) : !caps.canEditMetadata ? (
         // Read-only lock — entry points are gated, but deep links/stale caps

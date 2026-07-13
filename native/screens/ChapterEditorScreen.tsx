@@ -417,11 +417,15 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
   const setChapterTitle = (key: number, title: string) =>
     setDraft((d) => d.map((c) => (c.key === key ? { ...c, title } : c)));
 
-  const applyStart = (key: number, start: number) => {
+  // Returns the draft AFTER applying the start — a synchronous caller (Save)
+  // can use the flushed value without waiting for the setDraft re-render.
+  const applyStart = (key: number, start: number): DraftChapter[] => {
     const clamped = round3(Math.max(0, start));
-    setDraft((d) => d.map((c) => (c.key === key ? { ...c, start: clamped } : c)));
+    const next = draft.map((c) => (c.key === key ? { ...c, start: clamped } : c));
+    setDraft(next);
     setEditStart(formatTimestamp(clamped));
     startCommittedRef.current = true; // field now mirrors the draft
+    return next;
   };
 
   const handleEditStartChange = (text: string) => {
@@ -429,17 +433,19 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     setEditStart(text);
   };
 
-  const commitStartText = () => {
-    if (startCommittedRef.current) return; // already committed this edit session
+  // Commit any pending start-time text into the draft, returning the resulting
+  // draft (the current draft unchanged when there's nothing pending / invalid).
+  const commitStartText = (): DraftChapter[] => {
+    if (startCommittedRef.current) return draft; // already committed this edit session
     startCommittedRef.current = true;
-    if (!selectedChapter) return;
+    if (!selectedChapter) return draft;
     const parsed = parseTimestamp(editStart);
     if (parsed == null) {
       showSnackbar({ message: "Invalid time — use HH:MM:SS.mmm" });
       setEditStart(formatTimestamp(selectedChapter.start));
-      return;
+      return draft;
     }
-    applyStart(selectedChapter.key, parsed);
+    return applyStart(selectedChapter.key, parsed);
   };
 
   const toggleRow = (key: number) => {
@@ -621,16 +627,23 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
   // ------------------------------------------------------------------- save
 
   const handleSave = async () => {
-    if (!libraryItemId || saving || !dirty) return;
-    const errors = validateChapterDraft(draft, duration);
+    if (!libraryItemId || saving) return;
+    // Flush a typed-but-unblurred start-time edit BEFORE reading the draft:
+    // relying on the field's onEndEditing/blur to fire before this press isn't
+    // ordering-guaranteed (same reason toggleRow commits first), so a valid
+    // typed start could otherwise be dropped from the payload. Use the returned
+    // draft — the setDraft above won't have re-rendered this closure yet.
+    const flushed = commitStartText();
+    if (serializeDraft(flushed) === baseline) return; // nothing to save
+    const errors = validateChapterDraft(flushed, duration);
     if (errors.length) {
       showAppDialog({ title: "Can't save chapters", message: errors.join("\n") });
       return;
     }
     setSaving(true);
     try {
-      await updateChapters(libraryItemId, buildChaptersPayload(draft, duration));
-      setBaseline(serializeDraft(draft));
+      await updateChapters(libraryItemId, buildChaptersPayload(flushed, duration));
+      setBaseline(serializeDraft(flushed));
       showSnackbar({ message: "Chapters saved" });
     } catch (e: any) {
       // AbsError carries a user-facing message ("offline", "forbidden", ...).

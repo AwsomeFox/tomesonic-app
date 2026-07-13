@@ -257,6 +257,36 @@ describe("ChapterEditorScreen", () => {
     );
   });
 
+  it("Save flushes a typed-but-unblurred start-time edit into the payload", async () => {
+    await renderScreen();
+    await screen.findByText("Opening");
+
+    await expandRow(/^Chapter 2: Middle/);
+    // A committed title edit makes the draft dirty (Save enabled)…
+    fireEvent.changeText(screen.getByLabelText("Chapter title"), "Renamed");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter title").props.value).toBe("Renamed")
+    );
+    // …now type a NEW start but do NOT blur / submit the field.
+    fireEvent.changeText(screen.getByLabelText("Chapter start time"), "00:21:00");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:21:00")
+    );
+
+    // Press Save directly — onEndEditing has NOT fired. Without an explicit
+    // flush in handleSave the 00:21:00 (1260s) start would be dropped.
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/items/item1/chapters", {
+        chapters: [
+          { id: 0, start: 0, end: 1260, title: "Opening" },
+          { id: 1, start: 1260, end: 2400, title: "Renamed" },
+          { id: 2, start: 2400, end: 3600, title: "End" },
+        ],
+      })
+    );
+  });
+
   it("surfaces a normalized error dialog when the save is rejected (403), keeping the draft", async () => {
     (api.post as jest.Mock).mockRejectedValue(
       Object.assign(new Error("rejected"), { response: { status: 403, data: "" } })

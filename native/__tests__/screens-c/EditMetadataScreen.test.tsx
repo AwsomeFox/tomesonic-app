@@ -351,6 +351,53 @@ describe("EditMetadataScreen — details form", () => {
       },
     });
   });
+
+  it("buildDirtyPatch: a sequence-only edit with no series name is ignored (no silent data loss)", () => {
+    const seed: any = {
+      title: "T", subtitle: "", authors: "", narrators: "",
+      seriesName: "", seriesSequence: "", genres: "", tags: "",
+      description: "", publisher: "", publishedYear: "", language: "",
+      isbn: "", asin: "", explicit: false, abridged: false,
+    };
+    // Typing a sequence while the name is (and stays) empty is meaningless in
+    // ABS — it must NOT emit a series patch that drops the value into thin air.
+    expect(buildDirtyPatch({ ...seed, seriesSequence: "3" }, seed)).toEqual({});
+    // Clearing the name (with an original series present) still removes it.
+    expect(
+      buildDirtyPatch({ ...seed, seriesName: "" }, { ...seed, seriesName: "Old" }, [
+        { id: "s1", name: "Old", sequence: "1" },
+      ])
+    ).toEqual({ metadata: { series: [] } });
+  });
+
+  it("disables the series-sequence field until a series name is present", async () => {
+    await renderScreen();
+    await screen.findByLabelText("Title");
+    // Seeded book has a series → sequence is editable.
+    expect(screen.getByLabelText("Series sequence").props.editable).toBe(true);
+
+    // Clear the series name → the sequence field disables and explains why.
+    await fireEvent.changeText(screen.getByLabelText("Series"), "");
+    expect(screen.getByLabelText("Series sequence").props.editable).toBe(false);
+    expect(screen.getByText("Add a series name to set a sequence.")).toBeTruthy();
+  });
+
+  it("routes a load failure through the shared error mapper (offline vs server distinguished)", async () => {
+    // No `response` → offline: distinct icon+title, not a bare message.
+    (api.get as jest.Mock).mockRejectedValue(new Error("Network Error"));
+    await renderScreen();
+    await screen.findByText("You're offline");
+    expect(screen.getByLabelText("Retry")).toBeTruthy();
+  });
+
+  it("a server (500) load failure maps to the server error treatment", async () => {
+    (api.get as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("boom"), { response: { status: 500 } })
+    );
+    await renderScreen();
+    await screen.findByText("The server hit an error");
+    expect(screen.getByLabelText("Retry")).toBeTruthy();
+  });
 });
 
 describe("EditMetadataScreen — cover tab", () => {

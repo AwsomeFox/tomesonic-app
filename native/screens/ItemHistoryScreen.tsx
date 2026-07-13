@@ -15,6 +15,7 @@ import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import { getMyItemListeningSessions } from "../utils/abs/me";
 import { api } from "../utils/api";
+import { formatDateTime } from "../utils/format";
 
 /**
  * ItemHistoryScreen — MY listening sessions for one library item (optionally
@@ -26,9 +27,13 @@ import { api } from "../utils/api";
  * error state can distinguish offline from a server rejection. The endpoint
  * is PAGED (~10 sessions/response with a `total`): after the first page lands
  * the screen silently pages through the remainder, appending as batches
- * arrive, so the list AND the "N sessions · X total" summary reflect the real
- * history rather than one page of it. The summary's session count prefers the
- * endpoint's `total` so it's honest even before the last page arrives.
+ * arrive, so the list AND the summary reflect the real history rather than one
+ * page of it. The summary's session count prefers the endpoint's `total` so
+ * it's honest even before the last page arrives — but the endpoint returns no
+ * grand-total listening TIME, only a per-page `timeListening` we sum from the
+ * pages loaded so far. Pairing the full count with a partial time reads as a
+ * contradiction ("42 sessions · 8m total") mid-load, so the time is labelled
+ * "loaded so far" until the page-through completes, then flips to "total".
  */
 
 /** "Xh Ym" / "Xm" / "Xs" — a 40-second session must not read "0m". */
@@ -45,16 +50,6 @@ function sessionTimeMs(session: any): number | null {
   if (session?.updatedAt) return session.updatedAt;
   if (session?.startedAt) return session.startedAt;
   return null;
-}
-
-// Device-locale date with an empty-string fallback — close to (but not the
-// same as) AdminSessionsScreen's formatWhen (en-US, "Unknown"); see
-// utils/format.ts before adding another date formatter.
-function formatDate(ms: number | null): string {
-  if (!ms) return "";
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 /** A session's device line, from whichever deviceInfo fields are present. */
@@ -76,6 +71,10 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
   const [sessions, setSessions] = useState<any[]>([]);
   // The endpoint's `total` (all pages) — null when the server didn't send one.
   const [serverTotal, setServerTotal] = useState<number | null>(null);
+  // True once every page has been fetched (or there was nothing to page). While
+  // false, the summed listening time only covers the pages loaded so far, so
+  // the summary must not present it as the grand total.
+  const [fullyLoaded, setFullyLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +99,7 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
    */
   const fetchSessions = async () => {
     const seq = ++loadSeqRef.current;
+    setFullyLoaded(false);
     const first = await getMyItemListeningSessions(libraryItemId, episodeId);
     if (seq !== loadSeqRef.current) return;
     let list: any[] = Array.isArray(first?.sessions) ? [...first.sessions] : [];
@@ -107,7 +107,11 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
     const hasTotal = Number.isFinite(total) && total >= 0;
     setSessions(sortNewestFirst(list));
     setServerTotal(hasTotal ? total : null);
-    if (!hasTotal || total <= list.length || list.length === 0) return;
+    if (!hasTotal || total <= list.length || list.length === 0) {
+      // Nothing more to page: the summed time IS the grand total.
+      setFullyLoaded(true);
+      return;
+    }
 
     // Background page-through (not awaited by callers' loading/refreshing
     // spinners — batches render as they land).
@@ -119,7 +123,7 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
         try {
           data = (await api.get(`${sessionsPath}?page=${page}`)).data;
         } catch {
-          return; // keep the pages we have
+          return; // keep the pages we have (time stays "loaded so far")
         }
         if (seq !== loadSeqRef.current) return; // superseded by a newer load
         const batch = Array.isArray(data?.sessions) ? data.sessions : [];
@@ -127,6 +131,9 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
         list = list.concat(batch);
         setSessions(sortNewestFirst(list));
       }
+      // Only reached when every page was fetched without a gap — the summed
+      // time now covers the whole history and can be shown as the total.
+      if (seq === loadSeqRef.current) setFullyLoaded(true);
     })();
   };
 
@@ -246,7 +253,7 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
                 }}
               >
                 {sessionCount} {sessionCount === 1 ? "session" : "sessions"} ·{" "}
-                {formatListened(totalSeconds)} total
+                {formatListened(totalSeconds)} {fullyLoaded ? "total" : "loaded so far"}
               </Text>
             ) : null
           }
@@ -258,7 +265,7 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
             />
           }
           renderItem={({ item: session }) => {
-            const dateStr = formatDate(sessionTimeMs(session));
+            const dateStr = formatDateTime(sessionTimeMs(session) ?? undefined);
             const listenedStr = `${formatListened(session?.timeListening)} listened`;
             const device = deviceLabel(session);
             const subtitle = [listenedStr, device].filter(Boolean).join(" · ");
