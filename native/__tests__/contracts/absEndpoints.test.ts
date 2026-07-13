@@ -35,6 +35,7 @@ jest.mock("../../utils/autoCreds", () => ({
 }));
 
 import { api } from "../../utils/api";
+import { useUserStore } from "../../store/useUserStore";
 import * as libraries from "../../utils/abs/libraries";
 import * as items from "../../utils/abs/items";
 import * as users from "../../utils/abs/users";
@@ -43,7 +44,10 @@ import * as server from "../../utils/abs/server";
 import * as email from "../../utils/abs/email";
 import * as feeds from "../../utils/abs/feeds";
 import * as me from "../../utils/abs/me";
-import { fetchTasksOnce, _resetTasksForTest } from "../../utils/abs/tasks";
+import * as tasks from "../../utils/abs/tasks";
+import * as capabilities from "../../utils/abs/capabilities";
+
+const { fetchTasksOnce, _resetTasksForTest } = tasks;
 
 type Method = "get" | "post" | "patch" | "delete";
 
@@ -61,6 +65,17 @@ const CONTRACT: Array<{
 }> = [
   // --- tasks -----------------------------------------------------------
   { name: "fetchTasksOnce", invoke: () => fetchTasksOnce(), method: "get", path: "/api/tasks" },
+  // --- capabilities ------------------------------------------------------
+  {
+    name: "refreshCapabilities",
+    invoke: async () => {
+      // Needs a session token or it returns without calling the server.
+      useUserStore.setState({ serverConnectionConfig: { token: "tok" } as any });
+      await capabilities.refreshCapabilities();
+    },
+    method: "post",
+    path: "/api/authorize",
+  },
   // --- libraries ---------------------------------------------------------
   { name: "scanLibrary", invoke: () => libraries.scanLibrary("LIB"), method: "post", path: "/api/libraries/LIB/scan" },
   { name: "matchAllLibrary (GET!)", invoke: () => libraries.matchAllLibrary("LIB"), method: "get", path: "/api/libraries/LIB/matchall" },
@@ -170,12 +185,36 @@ describe("utils/abs endpoint table (fn → method + literal path)", () => {
       "buildItemZipDownloadUrl",
       "buildBackupDownloadUrl",
       "narratorNameToId",
+      // utils/abs/tasks — poller/watch machinery around the one pinned
+      // endpoint (fetchTasksOnce ↑); these never issue their own requests
+      // outside the shared poll loop.
+      "subscribeTasks",
+      "getTasksSnapshot",
+      "startTaskWatch",
+      "_resetTasksForTest",
+      // utils/abs/capabilities — pure predicates/store readers around the one
+      // pinned endpoint (refreshCapabilities → POST /api/authorize ↑).
+      "getCapabilities",
+      "useServerCapabilities",
+      "getServerSettings",
+      "meetsVersion",
+      "bumpSettingsWriteSeq",
     ]);
-    const exportedFns = [libraries, items, users, sessions, server, email, feeds, me].flatMap(
-      (mod) =>
-        Object.entries(mod)
-          .filter(([name, v]) => typeof v === "function" && !exempt.has(name))
-          .map(([name]) => name)
+    const exportedFns = [
+      libraries,
+      items,
+      users,
+      sessions,
+      server,
+      email,
+      feeds,
+      me,
+      tasks,
+      capabilities,
+    ].flatMap((mod) =>
+      Object.entries(mod)
+        .filter(([name, v]) => typeof v === "function" && !exempt.has(name))
+        .map(([name]) => name)
     );
     const pinned = new Set(CONTRACT.map((c) => c.name.split(" ")[0]));
     for (const fn of exportedFns) {

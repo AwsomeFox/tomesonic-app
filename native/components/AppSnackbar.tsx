@@ -60,11 +60,13 @@ export default function AppSnackbar() {
   };
 
   return (
+    // NO accessibilityLiveRegion here: the effect above already announces the
+    // message explicitly, and pairing that with a live region makes Android
+    // TalkBack speak every snackbar twice.
     <Animated.View
       key={snackbar.key}
       entering={FadeInDown.duration(250)}
       exiting={FadeOutDown.duration(200)}
-      accessibilityLiveRegion="polite"
       testID="app-snackbar"
       style={{
         position: "absolute",

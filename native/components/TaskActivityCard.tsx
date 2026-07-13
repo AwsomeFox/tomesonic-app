@@ -16,8 +16,12 @@ const COLLAPSED_ROWS = 2;
  * snapshot down; this component only decides what is worth showing:
  *
  *  - running tasks always;
- *  - failed tasks always (they persist until the server clears them, so the
- *    admin can read the error);
+ *  - failed tasks whenever a snapshot catches them — NOTE the upstream ABS
+ *    TaskManager removes completed tasks (failures included) from
+ *    GET /api/tasks immediately, so a failed row typically appears for at
+ *    most one poll tick before vanishing; durable failure surfacing belongs
+ *    to the flows that watch specific tasks (startTaskWatch → snackbar),
+ *    not this card;
  *  - successfully finished tasks are dropped (the strip collapses back to
  *    nothing when the queue drains — no empty card, per the UX plan).
  *

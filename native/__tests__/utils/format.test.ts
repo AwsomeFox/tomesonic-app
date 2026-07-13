@@ -1,4 +1,10 @@
-import { secondsToTimestamp, formatBytes, remainingPretty } from "../../utils/format";
+import {
+  secondsToTimestamp,
+  formatBytes,
+  formatListeningTime,
+  formatSize,
+  remainingPretty,
+} from "../../utils/format";
 
 describe("secondsToTimestamp", () => {
   it("formats M:SS when under an hour", () => {
@@ -60,6 +66,76 @@ describe("formatBytes", () => {
     expect(formatBytes(1023.9 * 1024 * 1024)).toBe("1.00 GB");
     // Just below the rounding boundary stays MB.
     expect(formatBytes(1023.4 * 1024 * 1024)).toBe("1023 MB");
+  });
+});
+
+describe("formatListeningTime", () => {
+  // Behavior matches the copies moved verbatim from AdminSessionsScreen /
+  // AdminUserDetailScreen — those screens adopt this in a later pass.
+  it("shows whole seconds under a minute (rounding)", () => {
+    expect(formatListeningTime(0)).toBe("0s");
+    expect(formatListeningTime(45)).toBe("45s");
+    expect(formatListeningTime(59.4)).toBe("59s");
+  });
+
+  it("rounds 59.5s up into the minute bucket", () => {
+    expect(formatListeningTime(59.5)).toBe("1m");
+  });
+
+  it("shows whole minutes under an hour (seconds dropped)", () => {
+    expect(formatListeningTime(60)).toBe("1m");
+    expect(formatListeningTime(119)).toBe("1m");
+    expect(formatListeningTime(59 * 60 + 59)).toBe("59m");
+  });
+
+  it("shows hours + remainder minutes from an hour up", () => {
+    expect(formatListeningTime(3600)).toBe("1h 0m");
+    expect(formatListeningTime(3600 * 2 + 60 * 5)).toBe("2h 5m");
+    expect(formatListeningTime(100 * 3600 + 30 * 60)).toBe("100h 30m");
+  });
+
+  it("clamps null/undefined/negative/NaN to 0s", () => {
+    expect(formatListeningTime(null)).toBe("0s");
+    expect(formatListeningTime(undefined)).toBe("0s");
+    expect(formatListeningTime(-30)).toBe("0s");
+    expect(formatListeningTime(NaN)).toBe("0s");
+  });
+});
+
+describe("formatSize", () => {
+  it("floors zero/negative/falsy/non-finite at '0 B'", () => {
+    expect(formatSize(0)).toBe("0 B");
+    expect(formatSize(-5)).toBe("0 B");
+    expect(formatSize(NaN)).toBe("0 B");
+    expect(formatSize(undefined as any)).toBe("0 B");
+    expect(formatSize(Infinity)).toBe("0 B");
+  });
+
+  it("walks the full ladder B → KB → MB → GB → TB", () => {
+    expect(formatSize(512)).toBe("512 B");
+    expect(formatSize(1024)).toBe("1 KB");
+    expect(formatSize(1536)).toBe("1.5 KB");
+    expect(formatSize(1024 * 1024)).toBe("1 MB");
+    expect(formatSize(5.25 * 1024 * 1024)).toBe("5.3 MB");
+    expect(formatSize(1024 ** 3)).toBe("1 GB");
+    expect(formatSize(1.5 * 1024 ** 3)).toBe("1.5 GB");
+    expect(formatSize(1024 ** 4)).toBe("1 TB");
+  });
+
+  it("uses one decimal below 100, whole numbers from 100 up", () => {
+    expect(formatSize(99.94 * 1024)).toBe("99.9 KB");
+    expect(formatSize(100 * 1024)).toBe("100 KB");
+    expect(formatSize(250.6 * 1024 * 1024)).toBe("251 MB");
+  });
+
+  it("caps at TB (no overflow past the ladder)", () => {
+    expect(formatSize(2048 * 1024 ** 4)).toBe("2048 TB");
+  });
+
+  it("is distinct from formatBytes (different display contracts, both kept)", () => {
+    // formatBytes is MB/GB-only with an MB floor; formatSize is the full ladder.
+    expect(formatBytes(512)).toBe("0.0 MB");
+    expect(formatSize(512)).toBe("512 B");
   });
 });
 

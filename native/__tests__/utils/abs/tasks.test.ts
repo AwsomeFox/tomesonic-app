@@ -245,7 +245,40 @@ describe("fetchTasksOnce", () => {
 });
 
 describe("startTaskWatch", () => {
-  it("resolves with the matching task once it is FINISHED", async () => {
+  // Upstream ABS removes a task from GET /api/tasks the moment it completes
+  // (failures too) — the watch's PRIMARY completion signal is disappearance.
+  const failedTask = (id = "t1") => ({
+    ...runningTask(id),
+    isFailed: true,
+    isFinished: true,
+    error: "Folder not found",
+    finishedAt: 2,
+  });
+
+  it("resolves with inferredCompletion when a tracked unfinished task VANISHES from a later snapshot", async () => {
+    jest
+      .mocked(api.get)
+      .mockResolvedValueOnce({ data: { tasks: [runningTask("scan1")] } } as any)
+      .mockResolvedValue({ data: { tasks: [] } } as any); // server removed it on completion
+
+    let resolved: any = "pending";
+    startTaskWatch((t) => t.id === "scan1").then((r) => (resolved = r));
+    await flush();
+    expect(resolved).toBe("pending"); // seen unfinished → tracked
+
+    await jest.advanceTimersByTimeAsync(3000); // next poll: task gone
+    await flush();
+    expect(resolved).toEqual({ ...runningTask("scan1"), inferredCompletion: true });
+    // No exit status when inferred — isFinished stays as last seen.
+    expect(resolved.isFinished).toBe(false);
+    expect(resolved.isFailed).toBe(false);
+    // Watch unsubscribed itself → poller stopped (no other subscribers).
+    const calls = jest.mocked(api.get).mock.calls.length;
+    await jest.advanceTimersByTimeAsync(60000);
+    expect(jest.mocked(api.get).mock.calls.length).toBe(calls);
+  });
+
+  it("still resolves normally when a later snapshot shows the task FINISHED (retaining servers)", async () => {
     jest
       .mocked(api.get)
       .mockResolvedValueOnce({ data: { tasks: [runningTask("scan1")] } } as any)
@@ -259,10 +292,43 @@ describe("startTaskWatch", () => {
     await jest.advanceTimersByTimeAsync(3000); // active cadence poll finds it finished
     await flush();
     expect(resolved).toEqual(finishedTask("scan1"));
-    // Watch unsubscribed itself → poller stopped (no other subscribers).
-    const calls = jest.mocked(api.get).mock.calls.length;
-    await jest.advanceTimersByTimeAsync(60000);
-    expect(jest.mocked(api.get).mock.calls.length).toBe(calls);
+    expect(resolved.inferredCompletion).toBeUndefined();
+  });
+
+  it("a FAILURE snapshot caught before removal resolves with isFailed/error intact", async () => {
+    jest
+      .mocked(api.get)
+      .mockResolvedValueOnce({ data: { tasks: [runningTask("scan1")] } } as any)
+      .mockResolvedValue({ data: { tasks: [failedTask("scan1")] } } as any);
+
+    let resolved: any = "pending";
+    startTaskWatch((t) => t.id === "scan1").then((r) => (resolved = r));
+    await flush();
+    await jest.advanceTimersByTimeAsync(3000);
+    await flush();
+    expect(resolved.isFailed).toBe(true);
+    expect(resolved.error).toBe("Folder not found");
+    expect(resolved.inferredCompletion).toBeUndefined();
+  });
+
+  it("does NOT resolve from a task already finished in the INITIAL snapshot (stale completion)", async () => {
+    jest.mocked(api.get).mockResolvedValue({ data: { tasks: [finishedTask("done")] } } as any);
+    await fetchTasksOnce(); // module snapshot now already holds the finished task
+
+    let resolved: any = "pending";
+    startTaskWatch((t) => t.id === "done", 30000).then((r) => (resolved = r));
+    await flush();
+    expect(resolved).toBe("pending"); // gated: finished-at-start can't satisfy a new watch
+
+    // Even later polls that STILL show it finished can't satisfy the watch…
+    await jest.advanceTimersByTimeAsync(10000); // idle cadence tick
+    await flush();
+    expect(resolved).toBe("pending");
+
+    // …only the timeout ends it.
+    await jest.advanceTimersByTimeAsync(20001);
+    await flush();
+    expect(resolved).toBeNull();
   });
 
   it("resolves null on timeout", async () => {
@@ -272,14 +338,5 @@ describe("startTaskWatch", () => {
     await jest.advanceTimersByTimeAsync(5001);
     await flush();
     expect(resolved).toBeNull();
-  });
-
-  it("resolves immediately when the snapshot already holds the finished task", async () => {
-    jest.mocked(api.get).mockResolvedValue({ data: { tasks: [finishedTask("done")] } } as any);
-    await fetchTasksOnce();
-    let resolved: any = "pending";
-    startTaskWatch((t) => t.id === "done").then((r) => (resolved = r));
-    await flush();
-    expect(resolved).toEqual(finishedTask("done"));
   });
 });

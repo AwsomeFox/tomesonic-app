@@ -22,6 +22,7 @@ import {
   getServerSettings,
   refreshCapabilities,
 } from "../../../utils/abs/capabilities";
+import { updateServerSettings } from "../../../utils/abs/server";
 
 const initialState = useUserStore.getState();
 
@@ -41,6 +42,7 @@ function seed(user: any, serverSettings: any = null, config: any = { token: "tok
 
 beforeEach(() => {
   jest.mocked(api.post).mockReset();
+  jest.mocked(api.patch).mockReset();
   useUserStore.setState(initialState, true);
 });
 
@@ -177,6 +179,30 @@ describe("getCapabilities role/permission matrix", () => {
     expect(c.supportsApiKeys).toBe(false);
     expect(c.supportsShareLinks).toBe(false);
   });
+
+  describe("canCreateEreader (only explicit false denies)", () => {
+    it("defaults TRUE when the permission flag is absent (server default-on)", () => {
+      seed({ id: "u", type: "user", permissions: NO_PERMS });
+      expect(getCapabilities().canCreateEreader).toBe(true);
+    });
+
+    it("stays TRUE for a thin cold-restored user with NO permissions object", () => {
+      // Restored sessions seed only { id, username } until refreshCapabilities
+      // hydrates — the Account button must not vanish in the meantime.
+      seed({ id: "u", username: "amy" });
+      expect(getCapabilities().canCreateEreader).toBe(true);
+    });
+
+    it("is FALSE only on an explicit permissions.createEreader === false", () => {
+      seed({ id: "u", type: "user", permissions: { ...NO_PERMS, createEreader: false } });
+      expect(getCapabilities().canCreateEreader).toBe(false);
+    });
+
+    it("explicit true is true", () => {
+      seed({ id: "u", type: "user", permissions: { ...NO_PERMS, createEreader: true } });
+      expect(getCapabilities().canCreateEreader).toBe(true);
+    });
+  });
 });
 
 describe("refreshCapabilities", () => {
@@ -245,6 +271,62 @@ describe("refreshCapabilities", () => {
     await refreshCapabilities();
     expect(useUserStore.getState().user).toEqual({ id: "u1" });
     expect(useUserStore.getState().serverSettings).toBeNull();
+  });
+
+  it("settings write race: a slow authorize landing AFTER a PATCH /api/settings echo must not clobber it", async () => {
+    const fullUser = { id: "u1", type: "admin", permissions: NO_PERMS };
+    seed({ id: "u1" }, { version: "2.30.0", scannerParseSubtitle: false }, { token: "tok" });
+
+    // A slow /api/authorize goes out first (it captured the PRE-PATCH blob)…
+    let resolveAuthorize: (v: any) => void;
+    jest.mocked(api.post).mockReturnValue(
+      new Promise((r) => {
+        resolveAuthorize = r;
+      }) as any
+    );
+    const refresh = refreshCapabilities();
+
+    // …then the user saves a setting: PATCH succeeds and stores its fresh echo.
+    jest.mocked(api.patch).mockResolvedValue({
+      data: { serverSettings: { version: "2.30.0", scannerParseSubtitle: true } },
+    } as any);
+    await updateServerSettings({ scannerParseSubtitle: true });
+    expect(useUserStore.getState().serverSettings).toEqual({
+      version: "2.30.0",
+      scannerParseSubtitle: true,
+    });
+
+    // The stale pre-PATCH blob finally arrives.
+    resolveAuthorize!({
+      data: {
+        user: fullUser,
+        serverSettings: { version: "2.30.0", scannerParseSubtitle: false },
+      },
+    });
+    await refresh;
+
+    // user/version hydration still applied; the stale serverSettings write was skipped.
+    expect(useUserStore.getState().user).toEqual(fullUser);
+    expect(useUserStore.getState().serverSettings).toEqual({
+      version: "2.30.0",
+      scannerParseSubtitle: true,
+    });
+  });
+
+  it("without an interleaved settings PATCH, a slow authorize still writes serverSettings", async () => {
+    seed({ id: "u1" }, null, { token: "tok" });
+    let resolveAuthorize: (v: any) => void;
+    jest.mocked(api.post).mockReturnValue(
+      new Promise((r) => {
+        resolveAuthorize = r;
+      }) as any
+    );
+    const refresh = refreshCapabilities();
+    resolveAuthorize!({
+      data: { user: { id: "u1", type: "admin" }, serverSettings: { version: "2.31.0" } },
+    });
+    await refresh;
+    expect(useUserStore.getState().serverSettings).toEqual({ version: "2.31.0" });
   });
 });
 

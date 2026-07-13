@@ -40,6 +40,14 @@ function formatElapsed(ms: number): string {
  * failed, and a one-shot scale-in check when it finished (the pop only plays
  * when the row transitions to finished while mounted; reduce-motion renders
  * the check statically).
+ *
+ * PERSISTENCE CAVEAT: the upstream ABS TaskManager REMOVES tasks from
+ * GET /api/tasks the moment they complete — failures included — so a
+ * finished/failed row usually vanishes on the next poll rather than settling
+ * here (it may flash for one tick, or never appear at all). This row must
+ * therefore never assume its terminal states persist: it just renders the
+ * snapshot it's given, and the check pop is best-effort (it plays only if a
+ * running→finished transition happens to be observed while mounted).
  */
 export default function TaskProgressRow({
   task,

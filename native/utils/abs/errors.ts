@@ -15,6 +15,9 @@
  * error WITH a response is a server-side rejection.
  */
 
+// Type-only import: no runtime dependency from utils/abs onto components.
+import type { IconName } from "../../components/Icon";
+
 export type AbsErrorKind = "offline" | "auth" | "forbidden" | "unsupported" | "server" | "unknown";
 
 export class AbsError extends Error {
@@ -115,6 +118,100 @@ export function isForbiddenError(e: any): boolean {
 export function isUnsupportedError(e: any): boolean {
   if (e instanceof AbsError) return e.kind === "unsupported";
   return e?.response?.status === 404;
+}
+
+// ---------------------------------------------------------------------------
+// AbsError → <ErrorState/> props
+// ---------------------------------------------------------------------------
+
+export interface AbsErrorStateProps {
+  icon: IconName;
+  title: string;
+  message: string;
+  onRetry?: () => void;
+}
+
+export interface AbsErrorStateOptions {
+  /**
+   * Short lowercase noun phrase for what failed to load — "users", "email
+   * settings". Feeds the generic titles ("Couldn't load users"). Omitted →
+   * "Couldn't load this".
+   */
+  subject?: string;
+  /** Passed through onto the returned props (ErrorState renders the retry pill). */
+  onRetry?: () => void;
+  /**
+   * Per-kind copy overrides for screen-specific context, e.g.
+   *   { forbidden: { message: "Only server admins can manage backups." },
+   *     offline: { message: "Reconnect to manage server backups." } }
+   * Unspecified fields keep the canonical defaults below.
+   */
+  overrides?: Partial<Record<AbsErrorKind, Partial<Omit<AbsErrorStateProps, "onRetry">>>>;
+}
+
+/**
+ * THE canonical AbsError → ErrorState-props mapping. Admin screens previously
+ * hand-rolled four divergent idioms of this (errorViewProps / errorStateProps
+ * / describeLoadError / inline ternaries) — new call sites should use this
+ * helper, and existing ones migrate in a consolidation pass. Accepts any
+ * thrown value (raw axios errors are normalized first).
+ */
+export function absErrorToErrorStateProps(
+  e: any,
+  opts?: AbsErrorStateOptions
+): AbsErrorStateProps {
+  const err = normalizeAbsError(e);
+  const subject = opts?.subject || "this";
+
+  let props: AbsErrorStateProps;
+  switch (err.kind) {
+    case "offline":
+      props = {
+        icon: "cloud-off",
+        title: "You're offline",
+        message: "Server administration needs a connection.",
+      };
+      break;
+    case "forbidden":
+      props = {
+        icon: "lock",
+        title: "Admin access required",
+        message: err.message || DEFAULT_MESSAGES.forbidden,
+      };
+      break;
+    case "unsupported":
+      props = {
+        icon: "info",
+        title: "Not supported by this server",
+        message: err.message || DEFAULT_MESSAGES.unsupported,
+      };
+      break;
+    case "auth":
+      props = {
+        icon: "lock",
+        title: "Session expired",
+        message: err.message || DEFAULT_MESSAGES.auth,
+      };
+      break;
+    case "server":
+      props = {
+        icon: "warning",
+        title: "The server hit an error",
+        message: err.message || DEFAULT_MESSAGES.server,
+      };
+      break;
+    default:
+      props = {
+        icon: "warning",
+        title: `Couldn't load ${subject}`,
+        message: err.message || DEFAULT_MESSAGES.unknown,
+      };
+  }
+
+  const override = opts?.overrides?.[err.kind];
+  if (override) props = { ...props, ...override };
+  if (opts?.onRetry) props.onRetry = opts.onRetry;
+  return props;
 }
 
 /**

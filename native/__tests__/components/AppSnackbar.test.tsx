@@ -46,6 +46,17 @@ describe("AppSnackbar", () => {
     announce.mockRestore();
   });
 
+  it("announces ONCE: no accessibilityLiveRegion on the container (Android would speak twice)", async () => {
+    await render(<AppSnackbar />);
+    await show({ message: "Backup started" });
+
+    // The explicit announceForAccessibility above is the single announcement
+    // channel — a polite live region on top of it double-speaks on TalkBack.
+    expect(
+      screen.getByTestId("app-snackbar").props.accessibilityLiveRegion
+    ).toBeUndefined();
+  });
+
   it("auto-dismisses after the default 3000ms", async () => {
     await render(<AppSnackbar />);
     await show({ message: "Saved" });

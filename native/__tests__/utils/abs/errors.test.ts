@@ -11,6 +11,7 @@ import {
   isOfflineError,
   isForbiddenError,
   isUnsupportedError,
+  absErrorToErrorStateProps,
   absRequest,
 } from "../../../utils/abs/errors";
 
@@ -106,6 +107,70 @@ describe("classifier helpers", () => {
     expect(isUnsupportedError(httpError(404))).toBe(true);
     expect(isUnsupportedError(httpError(403))).toBe(false);
     expect(isUnsupportedError(new AbsError("unsupported", "m", 404))).toBe(true);
+  });
+});
+
+describe("absErrorToErrorStateProps", () => {
+  it.each([
+    ["offline", new AbsError("offline", "Can't reach the server. Check your connection."), "cloud-off", "You're offline"],
+    ["forbidden", new AbsError("forbidden", "You don't have permission to do that.", 403), "lock", "Admin access required"],
+    ["unsupported", new AbsError("unsupported", "The server doesn't support this (it may need an update).", 404), "info", "Not supported by this server"],
+    ["auth", new AbsError("auth", "Your session has expired. Please log in again.", 401), "lock", "Session expired"],
+    ["server", new AbsError("server", "The server hit an error handling this request.", 500), "warning", "The server hit an error"],
+    ["unknown", new AbsError("unknown", "Something went wrong. Please try again.", 400), "warning", "Couldn't load this"],
+  ] as const)("kind %s → canonical icon + title", (_kind, err, icon, title) => {
+    const props = absErrorToErrorStateProps(err);
+    expect(props.icon).toBe(icon);
+    expect(props.title).toBe(title);
+    expect(typeof props.message).toBe("string");
+    expect(props.message.length).toBeGreaterThan(0);
+    expect(props.onRetry).toBeUndefined();
+  });
+
+  it("offline uses the shared admin copy, not the error's own message", () => {
+    const props = absErrorToErrorStateProps(new AbsError("offline", "raw axios text"));
+    expect(props.message).toBe("Server administration needs a connection.");
+  });
+
+  it("non-offline kinds surface the (possibly server-provided) error message", () => {
+    const props = absErrorToErrorStateProps(new AbsError("server", "Slug already in use", 500));
+    expect(props.message).toBe("Slug already in use");
+  });
+
+  it("subject feeds the generic unknown title", () => {
+    const props = absErrorToErrorStateProps(new AbsError("unknown", "boom", 400), {
+      subject: "email settings",
+    });
+    expect(props.title).toBe("Couldn't load email settings");
+  });
+
+  it("normalizes raw (non-AbsError) input first — the four screens pass `any`", () => {
+    expect(absErrorToErrorStateProps(new Error("Network Error")).title).toBe("You're offline");
+    expect(absErrorToErrorStateProps(httpError(403)).title).toBe("Admin access required");
+    expect(absErrorToErrorStateProps(undefined).icon).toBe("cloud-off"); // no response → offline idiom
+  });
+
+  it("per-kind overrides replace only the given fields (screen-specific context strings)", () => {
+    const props = absErrorToErrorStateProps(new AbsError("forbidden", "generic", 403), {
+      overrides: {
+        forbidden: { message: "Only server admins can manage backups." },
+        offline: { message: "Reconnect to manage server backups." },
+      },
+    });
+    expect(props.title).toBe("Admin access required"); // default kept
+    expect(props.icon).toBe("lock"); // default kept
+    expect(props.message).toBe("Only server admins can manage backups.");
+
+    const offline = absErrorToErrorStateProps(new AbsError("offline", "x"), {
+      overrides: { offline: { message: "Reconnect to manage server backups." } },
+    });
+    expect(offline.message).toBe("Reconnect to manage server backups.");
+  });
+
+  it("passes onRetry through onto the returned props", () => {
+    const onRetry = jest.fn();
+    const props = absErrorToErrorStateProps(new AbsError("server", "m", 500), { onRetry });
+    expect(props.onRetry).toBe(onRetry);
   });
 });
 

@@ -16,6 +16,14 @@
  *  - Poll errors are swallowed and the last good snapshot retained (the
  *    ONE deliberate error-swallow in utils/abs — a background poller has no
  *    caller to surface to; the explicit fetchTasksOnce() below throws).
+ *
+ * COMPLETION SEMANTICS (verified against the upstream ABS TaskManager): the
+ * server REMOVES a task from its `tasks` array the moment it finishes —
+ * failures included — and GET /api/tasks returns that array. A poller
+ * therefore usually sees a task present-and-unfinished on one tick and simply
+ * GONE on a later one, never with isFinished=true. startTaskWatch() below
+ * treats that disappearance as completion (inferredCompletion), while still
+ * handling servers/versions that briefly retain a finished snapshot.
  */
 import { AppState, type AppStateStatus, type NativeEventSubscription } from "react-native";
 import { api } from "../api";
@@ -165,33 +173,98 @@ export async function fetchTasksOnce(): Promise<AbsTask[]> {
 }
 
 /**
- * Watch for a task matching `match` to FINISH (isFinished true — check
- * task.isFailed/task.error yourself for the outcome). Resolves with the
- * finished task, or null when `timeoutMs` (default 5 minutes) elapses first.
+ * A watch result: the last-seen AbsTask snapshot. When `inferredCompletion`
+ * is true the task VANISHED from the queue between polls (the upstream
+ * TaskManager removes tasks the moment they finish, success and failure
+ * alike), so `isFinished` may still read false and there is NO exit status —
+ * consumers treat an inferred completion as generic success, branching on
+ * isFailed/error only when those were observed before removal.
+ */
+export type WatchedTask = AbsTask & { inferredCompletion?: boolean };
+
+/**
+ * Watch for a task matching `match` to COMPLETE. Resolves with the task's
+ * last-seen snapshot (see WatchedTask above), or null when `timeoutMs`
+ * (default 5 minutes) elapses first. Two completion signals:
+ *
+ *  1. INFERRED (the common case): the task was seen unfinished-and-matching,
+ *     then disappeared from a later snapshot → resolves with the last-seen
+ *     object plus `inferredCompletion: true`.
+ *  2. EXPLICIT: a snapshot shows the matched task with isFinished=true (some
+ *     server versions may retain finished tasks briefly) → resolves with it,
+ *     isFailed/error intact.
+ *
+ * The INITIAL snapshot is gated: a task that is ALREADY finished when the
+ * watch starts can never satisfy it (that would be a stale completion from
+ * before the caller's action) — only unfinished tasks are tracked from the
+ * first snapshot, and a finished task counts later only once its id was
+ * tracked or it wasn't finished-at-start.
+ *
  * Subscribes internally, so the poller runs (at its 3s "active" cadence,
  * since the watched task is unfinished) for the duration of the watch.
  */
 export function startTaskWatch(
   match: (task: AbsTask) => boolean,
   timeoutMs: number = 5 * 60 * 1000
-): Promise<AbsTask | null> {
+): Promise<WatchedTask | null> {
   return new Promise((resolve) => {
     let done = false;
+    let firstSnapshotSeen = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
-    const finish = (result: AbsTask | null) => {
+    // id → last snapshot seen while unfinished-and-matching.
+    const tracked = new Map<string, AbsTask>();
+    // Matching tasks that were ALREADY finished in the initial snapshot —
+    // permanently ineligible (stale completions from before this watch).
+    const finishedAtStart = new Set<string>();
+
+    const finish = (result: WatchedTask | null) => {
       if (done) return;
       done = true;
       if (timeout) clearTimeout(timeout);
       unsubscribe();
       resolve(result);
     };
+
     const check = (tasks: AbsTask[]) => {
-      const hit = tasks.find((t) => t.isFinished && match(t));
-      if (hit) finish(hit);
+      if (done) return;
+      const isFirst = !firstSnapshotSeen;
+      firstSnapshotSeen = true;
+
+      for (const t of tasks) {
+        if (!match(t)) continue;
+        if (!t.isFinished) {
+          // Track (and keep the freshest snapshot of) every unfinished match
+          // so a later disappearance can resolve with its last-seen state.
+          tracked.set(t.id, t);
+          continue;
+        }
+        if (isFirst) {
+          // Finished before the watch began — can never satisfy it.
+          finishedAtStart.add(t.id);
+          continue;
+        }
+        if (tracked.has(t.id) || !finishedAtStart.has(t.id)) {
+          finish(t); // explicit completion (server retained the snapshot)
+          return;
+        }
+      }
+
+      // Inferred completion: a tracked id vanished from this snapshot.
+      if (!isFirst) {
+        const present = new Set(tasks.map((t) => t.id));
+        for (const [id, last] of tracked) {
+          if (!present.has(id)) {
+            finish({ ...last, inferredCompletion: true });
+            return;
+          }
+        }
+      }
     };
+
     const unsubscribe = subscribeTasks(check);
     timeout = setTimeout(() => finish(null), timeoutMs);
-    // The current snapshot may already contain the finished task.
+    // Seed from the current snapshot (this is the gated INITIAL snapshot —
+    // it can only start tracking, never resolve).
     check(snapshot);
   });
 }

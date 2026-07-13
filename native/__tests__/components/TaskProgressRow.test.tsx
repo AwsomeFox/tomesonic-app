@@ -10,6 +10,17 @@ import { render, screen, fireEvent } from "@testing-library/react-native";
 import TaskProgressRow from "../../components/TaskProgressRow";
 import { useThemeColors } from "../../theme/useThemeColors";
 
+// Freeze the wall clock so relative-time fixtures ("started 5s ago") assert
+// deterministically — real Date.now() drifts past the literal "Running for 5s"
+// whenever render is slow.
+beforeEach(() => {
+  jest.useFakeTimers({ now: new Date("2026-01-01T12:00:00Z") });
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+});
+
 // Minimal AbsTask shape per the frozen utils/abs contract — typed loosely here
 // so this suite doesn't depend on the (concurrently developed) module.
 const makeTask = (overrides: Record<string, any> = {}) => ({

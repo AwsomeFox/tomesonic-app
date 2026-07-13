@@ -129,6 +129,24 @@ describe("pinned role matrix (client gates ≡ server 403 rules)", () => {
       { canDownload: true, canDelete: true, canUpload: false },
     ],
     [
+      // FROZEN NAME `canCreateEreader` — AccountScreen consumes it. Semantics:
+      // ONLY an explicit createEreader:false denies (the server defaults the
+      // flag on, and thin cold-restored users have no permissions object yet).
+      "user, no createEreader flag — e-reader creation defaults ON",
+      { id: "u", type: "user", permissions: perms() },
+      { canCreateEreader: true },
+    ],
+    [
+      "user, createEreader explicitly false — the ONLY denying value",
+      { id: "u", type: "user", permissions: perms({ createEreader: false }) },
+      { canCreateEreader: false },
+    ],
+    [
+      "thin cold-restored user ({id, username} only) — e-reader creation stays ON",
+      { id: "u", username: "amy" },
+      { canCreateEreader: true },
+    ],
+    [
       "guest",
       { id: "u", type: "guest", permissions: perms() },
       { isAdmin: false, canEditMetadata: false, canDelete: false },

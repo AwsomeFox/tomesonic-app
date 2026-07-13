@@ -260,7 +260,7 @@ describe("AppDialog", () => {
     expect(screen.getByLabelText("Delete").props.accessibilityState.disabled).toBe(true);
   });
 
-  it("announces the dialog to the screen reader when it opens", async () => {
+  it("announces the MESSAGE only on open (the focused title is already spoken — no double-speak)", async () => {
     const announce = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
     announce.mockClear();
     await render(<AppDialog />);
@@ -269,9 +269,102 @@ describe("AppDialog", () => {
     });
     await screen.findByText("Delete?");
 
+    await waitFor(() => expect(announce).toHaveBeenCalledWith("Are you sure?"));
+    // The title must NOT be in the announcement — screen-reader focus lands on
+    // the title element, which speaks it once already.
+    for (const [spoken] of announce.mock.calls) {
+      expect(spoken).not.toContain("Delete?");
+    }
+    announce.mockRestore();
+  });
+
+  it("appends the typed-confirm requirement to the on-open announcement", async () => {
+    const announce = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
+    announce.mockClear();
+    await render(<AppDialog />);
+    await showTypedConfirm();
+
     await waitFor(() =>
-      expect(announce).toHaveBeenCalledWith("Delete?. Are you sure?")
+      expect(announce).toHaveBeenCalledWith(
+        "This cannot be undone. Type Main Library to confirm."
+      )
     );
     announce.mockRestore();
+  });
+
+  it("announces nothing when the dialog has a title but no message or confirm input", async () => {
+    const announce = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
+    announce.mockClear();
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({ title: "Plain", buttons: [{ text: "OK" }] });
+    });
+    await screen.findByText("Plain");
+
+    // The announce (if any) is scheduled 50ms after open — wait past it.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
+    });
+    expect(announce).not.toHaveBeenCalled();
+    announce.mockRestore();
+  });
+
+  // ── keepOpenOnPress — in-dialog actions (e.g. AdminApiKeys "Copy key") ──
+
+  it("keepOpenOnPress runs onPress WITHOUT dismissing (and can fire repeatedly)", async () => {
+    const onCopy = jest.fn();
+    const onDone = jest.fn();
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({
+        title: "API key created",
+        message: "Copy it now — it can't be shown again.",
+        buttons: [
+          { text: "Copy key", onPress: onCopy, keepOpenOnPress: true },
+          { text: "Done", onPress: onDone },
+        ],
+      });
+    });
+    await screen.findByText("API key created");
+
+    await fireEvent.press(screen.getByText("Copy key"));
+    expect(onCopy).toHaveBeenCalledTimes(1);
+    expect(useDialogStore.getState().current).not.toBeNull();
+    expect(screen.getByText("API key created")).toBeTruthy();
+
+    // Still open — the user can copy again…
+    await fireEvent.press(screen.getByText("Copy key"));
+    expect(onCopy).toHaveBeenCalledTimes(2);
+    expect(useDialogStore.getState().current).not.toBeNull();
+
+    // …and a normal button still dismisses.
+    await fireEvent.press(screen.getByText("Done"));
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(useDialogStore.getState().current).toBeNull();
+    await waitFor(() => expect(screen.queryByText("API key created")).toBeNull());
+  });
+
+  it("keepOpenOnPress still respects the typed-confirm disabled gate on the last button", async () => {
+    const onPress = jest.fn();
+    await render(<AppDialog />);
+    await act(async () => {
+      showAppDialog({
+        title: "Gate",
+        confirmInput: { placeholder: "name", requiredText: "yes" },
+        buttons: [
+          { text: "Cancel", style: "cancel" },
+          { text: "Act", onPress, keepOpenOnPress: true },
+        ],
+      });
+    });
+    await screen.findByText("Gate");
+
+    await fireEvent.press(screen.getByLabelText("Act"));
+    expect(onPress).not.toHaveBeenCalled();
+
+    await fireEvent.changeText(screen.getByTestId("app-dialog-confirm-input"), "yes");
+    await fireEvent.press(screen.getByLabelText("Act"));
+    expect(onPress).toHaveBeenCalledTimes(1);
+    expect(useDialogStore.getState().current).not.toBeNull(); // still open
   });
 });

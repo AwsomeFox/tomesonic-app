@@ -27,6 +27,40 @@ export function formatBytes(bytes: number): string {
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
+/**
+ * "45s" / "12m" / "3h 5m" — compact listening-time totals for admin stats.
+ * Moved verbatim from the identical copies in AdminSessionsScreen and
+ * AdminUserDetailScreen (those screens adopt this in a later consolidation
+ * pass). Sub-minute shows seconds; sub-hour shows whole minutes only.
+ */
+export function formatListeningTime(sec: number | null | undefined): string {
+  const s = Math.max(0, Math.round(sec || 0));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+/**
+ * Full-ladder byte size, B → KB → MB → GB → TB with a "0 B" floor — for sizes
+ * that can be tiny (log files, backups) OR huge (library disk usage), unlike
+ * formatBytes above, which is deliberately MB/GB-only to match its original
+ * call sites (do NOT merge them; the two have different display contracts).
+ * One decimal below 100, whole numbers from 100 up.
+ */
+export function formatSize(bytes: number): string {
+  if (!bytes || bytes <= 0 || !Number.isFinite(bytes)) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const rounded = v >= 100 ? Math.round(v) : Math.round(v * 10) / 10;
+  return `${rounded} ${units[i]}`;
+}
+
 /** "H hr M min remaining" / "M min remaining" / "S sec remaining" / "" when <=0. */
 export function remainingPretty(seconds: number): string {
   // < 1s rounds to "0 sec remaining" — treat sub-second remainders as done.

@@ -33,6 +33,14 @@ export interface ServerCapabilities {
   canDelete: boolean;
   canDownload: boolean;
   canUpload: boolean;
+  /**
+   * Add personal e-reader devices (Account screen). ONLY an explicit
+   * `permissions.createEreader === false` denies — the server defaults the
+   * flag on, and a thin cold-restored user object (`{ id, username }`, no
+   * permissions at all) must not lose the button before refreshCapabilities()
+   * hydrates, so absent/undefined counts as allowed.
+   */
+  canCreateEreader: boolean;
   supportsApiKeys: boolean;
   supportsShareLinks: boolean;
   /** True once refreshCapabilities() has hydrated this session (serverSettings present). */
@@ -104,6 +112,9 @@ function compute(user: any, serverSettings: any, config: any): ServerCapabilitie
     canDelete: isAdmin || !!perms.delete,
     canDownload: isAdmin || !!perms.download,
     canUpload,
+    // Only-explicit-false-denies (see the interface doc): the server enables
+    // createEreader by default, so unknown/missing permissions stay allowed.
+    canCreateEreader: perms.createEreader !== false,
     supportsApiKeys: meetsVersion(MIN_VERSION_API_KEYS, serverVersion),
     supportsShareLinks: meetsVersion(MIN_VERSION_SHARE_LINKS, serverVersion),
     refreshed: !!serverSettings,
@@ -130,24 +141,44 @@ export function getServerSettings(): any | null {
 }
 
 /**
+ * Monotonic sequence over serverSettings STORE WRITES, shared with
+ * utils/abs/server.updateServerSettings (which bumps it when it stores the
+ * blob echoed by a successful PATCH /api/settings). refreshCapabilities()
+ * snapshots the counter before its request and, if it advanced while
+ * /api/authorize was in flight, skips its own serverSettings write — a slow
+ * authorize response must never clobber a fresher PATCH echo with the stale
+ * pre-PATCH blob. (user/version hydration still applies either way.)
+ */
+let settingsWriteSeq = 0;
+
+/** Called by updateServerSettings() right before it stores a fresh PATCH echo. */
+export function bumpSettingsWriteSeq(): void {
+  settingsWriteSeq++;
+}
+
+/**
  * (Re)hydrate the full user + serverSettings from POST /api/authorize.
  * NEVER throws — capabilities simply stay stale/degraded on failure. Uses the
  * same stale-session guard as useUserStore.loadEReaderDevices: snapshot the
  * session token first so a slow response can't write account A's role into
- * account B's (or a logged-out) store.
+ * account B's (or a logged-out) store. Additionally guarded against the
+ * settings write race (see settingsWriteSeq above).
  */
 export async function refreshCapabilities(): Promise<void> {
   const sessionToken = useUserStore.getState().serverConnectionConfig?.token;
   if (!sessionToken) return;
+  const seqAtRequest = settingsWriteSeq;
   try {
     const res = await api.post("/api/authorize");
     const user = res.data?.user;
     if (!user || typeof user !== "object" || !user.id) return;
     if (useUserStore.getState().serverConnectionConfig?.token !== sessionToken) return;
-    const patch: any = {
-      user,
-      serverSettings: res.data?.serverSettings ?? null,
-    };
+    const patch: any = { user };
+    // Skip the serverSettings write when a PATCH /api/settings echo landed
+    // while this authorize was in flight — ours is the stale pre-PATCH blob.
+    if (settingsWriteSeq === seqAtRequest) {
+      patch.serverSettings = res.data?.serverSettings ?? null;
+    }
     // /api/authorize also reports the user's e-reader devices — same source
     // loadEReaderDevices uses, so keep them fresh for free.
     if (Array.isArray(res.data?.ereaderDevices)) {

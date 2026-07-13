@@ -42,7 +42,14 @@ export default function AppDialog() {
         const node = findNodeHandle(titleRef.current) ?? findNodeHandle(containerRef.current);
         if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
       }
-      const announcement = [dialog.title, dialog.message].filter(Boolean).join(". ");
+      // Announce the MESSAGE only — the title is spoken by the focus move
+      // above (TalkBack) / the modal focus shift (VoiceOver), so including it
+      // here would speak it twice. A typed-confirm dialog also announces its
+      // requirement, which the visual input conveys only implicitly.
+      const parts: string[] = [];
+      if (dialog.message) parts.push(dialog.message);
+      if (dialog.confirmInput) parts.push(`Type ${dialog.confirmInput.requiredText} to confirm.`);
+      const announcement = parts.join(" ");
       if (announcement) AccessibilityInfo.announceForAccessibility(announcement);
     }, 50);
     return () => clearTimeout(t);
@@ -64,6 +71,11 @@ export default function AppDialog() {
 
   const onButton = (b: AppDialogButton, i: number) => {
     if (isButtonDisabled(i)) return;
+    if (b.keepOpenOnPress) {
+      // In-dialog action (e.g. "Copy key"): run it, keep the dialog up.
+      b.onPress?.();
+      return;
+    }
     dismiss();
     b.onPress?.();
   };

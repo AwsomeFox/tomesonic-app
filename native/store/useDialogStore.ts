@@ -11,6 +11,13 @@ export interface AppDialogButton {
   text: string;
   onPress?: () => void;
   style?: AppDialogButtonStyle;
+  /**
+   * Run onPress WITHOUT dismissing the dialog — for in-dialog actions like
+   * "Copy key" where the content (a secret shown only once) must stay
+   * visible. The default (undefined/false) keeps Alert.alert semantics:
+   * every button press dismisses.
+   */
+  keepOpenOnPress?: boolean;
 }
 
 /**

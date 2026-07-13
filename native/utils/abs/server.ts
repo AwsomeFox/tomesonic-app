@@ -27,6 +27,7 @@ import { api } from "../api";
 import { storageHelper } from "../storage";
 import { useUserStore } from "../../store/useUserStore";
 import { absRequest } from "./errors";
+import { bumpSettingsWriteSeq } from "./capabilities";
 import type { AbsApiKey, AbsBackup } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -103,11 +104,16 @@ export async function purgeItemsCache(): Promise<void> {
  * FULL updated serverSettings blob, which we write into useUserStore so
  * getCapabilities()/useServerCapabilities() (and any settings screen) see
  * the fresh values immediately.
+ *
+ * The write bumps capabilities' settingsWriteSeq so an /api/authorize
+ * response that was already in flight (refreshCapabilities) can detect it
+ * and skip overwriting this fresh echo with its stale pre-PATCH blob.
  */
 export async function updateServerSettings(update: Record<string, any>): Promise<any> {
   const data = await absRequest<any>(() => api.patch("/api/settings", update));
   const serverSettings = data?.serverSettings;
   if (serverSettings && typeof serverSettings === "object") {
+    bumpSettingsWriteSeq();
     useUserStore.setState({ serverSettings });
   }
   return serverSettings ?? null;
