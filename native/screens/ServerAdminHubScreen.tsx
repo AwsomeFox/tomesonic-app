@@ -146,9 +146,11 @@ export default function ServerAdminHubScreen({ navigation }: any) {
         next.AdminUsers = online != null ? `${users} · ${online} online` : users;
       }
       if (backupsR.status === "fulfilled") {
-        next.AdminBackups = backupsR.value.lastCreatedAt
-          ? `Last backup ${formatRelativeTime(backupsR.value.lastCreatedAt)}`
-          : "No backups yet";
+        // Explicit null check — a valid epoch of 0 is still a real backup time.
+        next.AdminBackups =
+          backupsR.value.lastCreatedAt != null
+            ? `Last backup ${formatRelativeTime(backupsR.value.lastCreatedAt)}`
+            : "No backups yet";
       }
       if (librariesR.status === "fulfilled") {
         const n = librariesR.value.count;

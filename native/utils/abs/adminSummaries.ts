@@ -45,8 +45,10 @@ export interface BackupsSummary {
 export async function getBackupsSummary(): Promise<BackupsSummary> {
   const { backups } = await getBackups();
   const last = backups.reduce<number | null>((max, b) => {
-    const t = typeof b?.createdAt === "number" ? b.createdAt : 0;
-    return max === null || t > max ? t : max;
+    // Ignore anything that isn't a real timestamp — coercing a missing/invalid
+    // createdAt to 0 would surface as a bogus "1970" backup time downstream.
+    if (typeof b?.createdAt !== "number" || !Number.isFinite(b.createdAt)) return max;
+    return max === null || b.createdAt > max ? b.createdAt : max;
   }, null);
   return { lastCreatedAt: last };
 }
