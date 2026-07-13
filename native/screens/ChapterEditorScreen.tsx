@@ -6,6 +6,8 @@ import {
   FlatList,
   ActivityIndicator,
   TextInput,
+  Platform,
+  AccessibilityInfo,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
@@ -172,6 +174,17 @@ function humanDuration(sec: number): string {
 const serializeDraft = (draft: DraftChapter[]) =>
   JSON.stringify(draft.map((c) => ({ t: c.title, s: c.start })));
 
+/**
+ * "numbers-and-punctuation" only exists on iOS — Android silently falls back
+ * to the default keyboard. Select it explicitly per platform so the Android
+ * behavior (default keyboard, which can type ':' and '.') is intentional
+ * rather than dead code.
+ */
+const TIME_KEYBOARD = Platform.select({
+  ios: "numbers-and-punctuation" as const,
+  android: undefined,
+});
+
 // ---------------------------------------------------------------------------
 // Small UI pieces (module scope so TextInput identity survives re-renders)
 // ---------------------------------------------------------------------------
@@ -247,6 +260,8 @@ function Stepper({
       accessibilityRole="button"
       accessibilityLabel={label}
       android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
+      // 40dp tall — pad the touch target up to the 48dp guideline.
+      hitSlop={{ top: 4, bottom: 4 }}
       style={{
         minWidth: 48,
         height: 40,
@@ -393,15 +408,11 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
   const selectedIndex = draft.findIndex((c) => c.key === selectedKey);
   const selectedChapter = selectedIndex >= 0 ? draft[selectedIndex] : null;
 
-  const toggleRow = (key: number) => {
-    if (selectedKey === key) {
-      setSelectedKey(null);
-      return;
-    }
-    const row = draft.find((c) => c.key === key);
-    setSelectedKey(key);
-    setEditStart(row ? formatTimestamp(row.start) : "");
-  };
+  // Commit-once guard for the start-time field. Android fires BOTH
+  // onSubmitEditing and onEndEditing for a single commit, so without this an
+  // invalid entry would snackbar twice. `true` means the field has no pending
+  // (uncommitted) text; typing flips it to false, committing flips it back.
+  const startCommittedRef = useRef(true);
 
   const setChapterTitle = (key: number, title: string) =>
     setDraft((d) => d.map((c) => (c.key === key ? { ...c, title } : c)));
@@ -410,9 +421,17 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     const clamped = round3(Math.max(0, start));
     setDraft((d) => d.map((c) => (c.key === key ? { ...c, start: clamped } : c)));
     setEditStart(formatTimestamp(clamped));
+    startCommittedRef.current = true; // field now mirrors the draft
+  };
+
+  const handleEditStartChange = (text: string) => {
+    startCommittedRef.current = false;
+    setEditStart(text);
   };
 
   const commitStartText = () => {
+    if (startCommittedRef.current) return; // already committed this edit session
+    startCommittedRef.current = true;
     if (!selectedChapter) return;
     const parsed = parseTimestamp(editStart);
     if (parsed == null) {
@@ -423,9 +442,43 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     applyStart(selectedChapter.key, parsed);
   };
 
+  const toggleRow = (key: number) => {
+    // Commit any pending start-time text BEFORE the active row changes — on
+    // Android the old input's blur events can land after the switch, which
+    // would otherwise discard (or misapply) what was typed.
+    commitStartText();
+    if (selectedKey === key) {
+      setSelectedKey(null);
+      return;
+    }
+    const row = draft.find((c) => c.key === key);
+    setSelectedKey(key);
+    setEditStart(row ? formatTimestamp(row.start) : "");
+  };
+
+  // The steppers update the TextInput silently as far as TalkBack/VoiceOver
+  // are concerned — announce the resulting timestamp, debounced so a burst of
+  // rapid taps announces only the final value.
+  const announceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (announceTimerRef.current) clearTimeout(announceTimerRef.current);
+    },
+    []
+  );
+  const announceStartChange = (formatted: string) => {
+    if (announceTimerRef.current) clearTimeout(announceTimerRef.current);
+    announceTimerRef.current = setTimeout(() => {
+      announceTimerRef.current = null;
+      AccessibilityInfo.announceForAccessibility(`Start time ${formatted}`);
+    }, 300);
+  };
+
   const nudgeStart = (deltaSeconds: number) => {
     if (!selectedChapter) return;
-    applyStart(selectedChapter.key, selectedChapter.start + deltaSeconds);
+    const next = round3(Math.max(0, selectedChapter.start + deltaSeconds));
+    applyStart(selectedChapter.key, next);
+    announceStartChange(formatTimestamp(next));
   };
 
   const useCurrentPlaybackPosition = () => {
@@ -464,6 +517,7 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     });
     setSelectedKey(row.key);
     setEditStart(formatTimestamp(row.start));
+    startCommittedRef.current = true; // fresh field mirrors the new row
   };
 
   const addChapterAtEnd = () => insertChapterAfter(draft.length - 1);
@@ -675,12 +729,14 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
             </Text>
             <TextInput
               value={editStart}
-              onChangeText={setEditStart}
+              onChangeText={handleEditStartChange}
+              // Both fire for one commit on Android — commitStartText dedupes
+              // via startCommittedRef.
               onEndEditing={commitStartText}
               onSubmitEditing={commitStartText}
               autoCapitalize="none"
               autoCorrect={false}
-              keyboardType="numbers-and-punctuation"
+              keyboardType={TIME_KEYBOARD}
               accessibilityLabel="Chapter start time"
               placeholder="00:00:00.000"
               placeholderTextColor={colors.onSurfaceVariant}
@@ -918,7 +974,7 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
               onChangeText={setShiftText}
               autoCapitalize="none"
               autoCorrect={false}
-              keyboardType="numbers-and-punctuation"
+              keyboardType={TIME_KEYBOARD}
               accessibilityLabel="Shift amount in seconds"
               placeholder="e.g. 1.5 or -2"
               placeholderTextColor={colors.onSurfaceVariant}

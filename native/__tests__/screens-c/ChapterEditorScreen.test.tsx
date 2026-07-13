@@ -16,6 +16,7 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
+import { AccessibilityInfo } from "react-native";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import ChapterEditorScreen, {
   parseTimestamp,
@@ -453,6 +454,95 @@ describe("ChapterEditorScreen", () => {
     await waitFor(() => expect(screen.queryByText("Chapter 4")).toBeNull());
     // Add + remove restores the seeded draft → clean again.
     expect(screen.queryByText("Unsaved changes")).toBeNull();
+  });
+
+  it("announces the final start time once (debounced) after rapid stepper taps", async () => {
+    const announce = jest
+      .spyOn(AccessibilityInfo, "announceForAccessibility")
+      .mockImplementation(() => {});
+    await renderScreen();
+    await screen.findByText("Opening");
+    await expandRow(/^Chapter 2: Middle/);
+
+    // Stepper buttons are 40dp tall — the touch target is padded via hitSlop.
+    expect(
+      screen.getByLabelText("Increase start time by 1 second").props.hitSlop
+    ).toEqual({ top: 4, bottom: 4 });
+
+    // Two rapid taps, both inside the ~300ms debounce window: each schedules
+    // an announcement, but TalkBack must hear only ONE (the final value).
+    fireEvent.press(screen.getByLabelText("Increase start time by 1 second"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:20:01")
+    );
+    // Second tap lands well inside the ~300ms debounce window of the first…
+    fireEvent.press(screen.getByLabelText("Increase start time by 1 second"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:20:02")
+    );
+    expect(announce).not.toHaveBeenCalled(); // debounced — nothing announced yet
+
+    await waitFor(() => expect(announce).toHaveBeenCalled(), { timeout: 2000 });
+    // Let any (buggy) per-tap announcement land before counting. Plain sleep —
+    // announcing triggers no React state update, so no act() wrapper needed.
+    await new Promise((r) => setTimeout(r, 400));
+    // …so TalkBack hears ONE announcement, carrying the FINAL value.
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenCalledWith(expect.stringContaining("00:20:02"));
+    announce.mockRestore();
+  });
+
+  it("commits once when submit and endEditing both fire (Android): ONE snackbar for an invalid entry", async () => {
+    await renderScreen();
+    await screen.findByText("Opening");
+    await expandRow(/^Chapter 2: Middle/);
+
+    fireEvent.changeText(screen.getByLabelText("Chapter start time"), "not a time");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter start time").props.value).toBe("not a time")
+    );
+    // Android fires BOTH events, as separate dispatches, for one keyboard "done".
+    fireEvent(screen.getByLabelText("Chapter start time"), "submitEditing");
+    // First event commits: snackbar + field reset to the last valid value.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:20:00")
+    );
+    fireEvent(screen.getByLabelText("Chapter start time"), "endEditing");
+    // The deduped path performs no state update — a plain settle is enough.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The trailing endEditing is deduped: exactly ONE error snackbar…
+    const invalidCalls = (showSnackbar as jest.Mock).mock.calls.filter((c) =>
+      /Invalid time/.test(c[0]?.message)
+    );
+    expect(invalidCalls).toHaveLength(1);
+    // …and the field stays on the committed value.
+    expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:20:00");
+  });
+
+  it("switching rows mid-edit commits the pending text instead of discarding it", async () => {
+    await renderScreen();
+    await screen.findByText("Opening");
+    await expandRow(/^Chapter 2: Middle/);
+
+    // Type a new start but DON'T blur — then tap another row header.
+    fireEvent.changeText(screen.getByLabelText("Chapter start time"), "00:21:00");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:21:00")
+    );
+    fireEvent.press(screen.getByLabelText(/^Chapter 3: End/));
+
+    // The typed value was committed to chapter 2 before the switch…
+    expect(
+      await screen.findByLabelText(/^Chapter 2: Middle, starts at 00:21:00$/)
+    ).toBeTruthy();
+    // …and the late blur from the old input (Android ordering) is a no-op:
+    // no snackbar, chapter 3's field untouched.
+    fireEvent(screen.getByLabelText("Chapter start time"), "endEditing");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:40:00")
+    );
+    expect(showSnackbar).not.toHaveBeenCalled();
   });
 
   it("shows a server error state (with retry) when the item fails to load", async () => {
