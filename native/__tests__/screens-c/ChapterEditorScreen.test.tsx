@@ -853,6 +853,71 @@ describe("ChapterEditorScreen", () => {
     expect(dialogByTitle("Chapters changed on the server")).toBeUndefined();
   });
 
+  it("re-baselines updatedAt after a save so a second save this session doesn't false-conflict", async () => {
+    // The server bumps media.updatedAt on every chapters POST; the POST itself
+    // echoes no updatedAt, so the editor must re-fetch to re-baseline.
+    let serverUpdatedAt = 1000;
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.startsWith("/api/items/")) {
+        const it = makeItem();
+        it.media.updatedAt = serverUpdatedAt;
+        return Promise.resolve({ data: it });
+      }
+      if (url === "/api/search/chapters") return Promise.resolve({ data: AUDNEXUS_RESULT });
+      return Promise.resolve({ data: {} });
+    });
+    (api.post as jest.Mock).mockImplementation(() => {
+      serverUpdatedAt += 1000; // the save bumps the server revision
+      return Promise.resolve({ data: { success: true } });
+    });
+
+    await renderScreen();
+    await screen.findByText("Opening");
+
+    await makeDirtyTitleEdit("Edit One");
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    // After the save the marker is re-based to the fresh server revision.
+    await waitFor(() => expect(screen.queryByText("Unsaved changes")).toBeNull());
+
+    // Second edit targets a different (untouched) row so the label still matches.
+    await expandRow(/^Chapter 3: End/);
+    fireEvent.changeText(screen.getByLabelText("Chapter title"), "Edit Two");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter title").props.value).toBe("Edit Two")
+    );
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
+    // No spurious "changed on the server" dialog for the same-device second save.
+    expect(dialogByTitle("Chapters changed on the server")).toBeUndefined();
+  });
+
+  it("double-tapping Overwrite only POSTs once (savingRef mutex)", async () => {
+    const v1 = makeItem();
+    v1.media.updatedAt = 1000;
+    const v2 = makeItem();
+    v2.media.updatedAt = 2000;
+    mockItemVersions(v1, v2);
+
+    await renderScreen();
+    await screen.findByText("Opening");
+    await makeDirtyTitleEdit("New Title");
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(dialogByTitle("Chapters changed on the server")).toBeTruthy()
+    );
+    const overwrite = dialogByTitle("Chapters changed on the server").buttons.find(
+      (b: any) => b.text === "Overwrite"
+    );
+    // Two rapid taps before the first POST settles → exactly one POST.
+    await act(async () => {
+      overwrite.onPress();
+      overwrite.onPress();
+    });
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+  });
+
   it("a failed pre-check re-fetch does not block the save", async () => {
     const v1 = makeItem();
     v1.media.updatedAt = 1000;

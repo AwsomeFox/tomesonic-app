@@ -351,6 +351,10 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   const [saving, setSaving] = useState(false);
+  // Synchronous mutex for the actual POST: the `saving` STATE lags a rapid
+  // double-tap (and performSave is also reachable from dialog buttons like
+  // conflict→Overwrite), so this ref prevents duplicate chapter POSTs.
+  const savingRef = useRef(false);
 
   // The local draft + the serialized snapshot it was seeded from (dirty test).
   const [draft, setDraft] = useState<DraftChapter[]>([]);
@@ -746,15 +750,30 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
   // The actual validated POST. Refreshes the captured revision marker from the
   // response when the server echoes one, so a follow-up save re-checks cleanly.
   const performSave = async (flushed: DraftChapter[]) => {
-    if (!libraryItemId) return;
+    if (!libraryItemId || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       const res: any = await updateChapters(libraryItemId, buildChaptersPayload(flushed, duration));
       setBaseline(serializeDraft(flushed));
-      const echoed =
-        readUpdatedAt(res?.libraryItem) ?? readUpdatedAt(res) ?? null;
-      if (echoed != null) updatedAtRef.current = echoed;
       showSnackbar({ message: "Chapters saved" });
+      // POST /chapters echoes no updatedAt, but the save DID bump the server's
+      // media.updatedAt — so re-baseline the conflict marker from a fresh read,
+      // otherwise a second save this session would false-conflict against the
+      // stale load-time value. Prefer an echoed marker if the server ever adds
+      // one; else re-fetch (best-effort — clear the marker on failure so we
+      // degrade to "no check" rather than a spurious conflict dialog).
+      const echoed = readUpdatedAt(res?.libraryItem) ?? readUpdatedAt(res) ?? null;
+      if (echoed != null) {
+        updatedAtRef.current = echoed;
+      } else {
+        try {
+          const fresh = await api.get(`/api/items/${libraryItemId}?expanded=1`);
+          updatedAtRef.current = readUpdatedAt(fresh?.data);
+        } catch {
+          updatedAtRef.current = null;
+        }
+      }
     } catch (e: any) {
       // AbsError carries a user-facing message ("offline", "forbidden", ...).
       showAppDialog({
@@ -763,6 +782,7 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
       });
     } finally {
       setSaving(false);
+      savingRef.current = false;
     }
   };
 

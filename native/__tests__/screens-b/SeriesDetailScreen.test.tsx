@@ -424,6 +424,23 @@ describe("SeriesDetailScreen — batch progress (mark finished / reset)", () => 
       expect(useUserStore.getState().loadMediaProgress).toHaveBeenCalled();
     });
 
+    it("double-tapping the finish confirm only sends one batch (ref mutex)", async () => {
+      (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+      await renderSeries();
+      await screen.findByText("#1 Alpha");
+
+      await fireEvent.press(screen.getByLabelText("Mark series as finished"));
+      const confirm = useDialogStore.getState().current!.buttons!.find(
+        (b) => b.text === "Mark finished"
+      )!;
+      // Two rapid taps before the in-flight state re-renders → one PATCH.
+      await act(async () => {
+        confirm.onPress!();
+        confirm.onPress!();
+      });
+      expect(api.patch).toHaveBeenCalledTimes(1);
+    });
+
     it("uses the progress MAP (not just the payload snapshot) for the finished check", async () => {
       (api.patch as jest.Mock).mockResolvedValue({ data: {} });
       // b2 finished in the authoritative map since the payload was taken.

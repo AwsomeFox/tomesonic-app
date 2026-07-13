@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, RefreshControl, ScrollView } from "react-native";
 import { Image } from "expo-image";
 import { coverSource } from "../utils/coverSource";
@@ -115,6 +115,11 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [markingFinished, setMarkingFinished] = useState(false);
   const [resettingProgress, setResettingProgress] = useState(false);
+  // Synchronous in-flight guards: the confirm-dialog button can be tapped
+  // again before the `saving` STATE re-renders, so guard the batch PATCH with
+  // a ref to prevent duplicate submits.
+  const markingFinishedRef = useRef(false);
+  const resettingProgressRef = useRef(false);
 
   // Missing-books discovery straight off Audible's catalog API (fast, free) —
   // diffed locally against the library books this screen already loaded.
@@ -386,7 +391,8 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
         {
           text: "Mark finished",
           onPress: async () => {
-            if (markingFinished) return;
+            if (markingFinishedRef.current) return;
+            markingFinishedRef.current = true;
             setMarkingFinished(true);
             try {
               await batchUpdateProgress(
@@ -403,6 +409,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
               });
             } finally {
               setMarkingFinished(false);
+              markingFinishedRef.current = false;
             }
           },
         },
@@ -427,7 +434,8 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           text: "Reset",
           style: "destructive",
           onPress: async () => {
-            if (resettingProgress) return;
+            if (resettingProgressRef.current) return;
+            resettingProgressRef.current = true;
             setResettingProgress(true);
             try {
               await batchUpdateProgress(
@@ -449,6 +457,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
               });
             } finally {
               setResettingProgress(false);
+              resettingProgressRef.current = false;
             }
           },
         },
@@ -735,7 +744,7 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
               accessibilityState={{ disabled: resettingProgress, busy: resettingProgress }}
               style={{ marginLeft: 8, padding: 8, borderRadius: 20, opacity: resettingProgress ? 0.5 : 1 }}
             >
-              <Icon name="undo" size={20} color={colors.onSurfaceVariant} />
+              <Icon name="undo" size={20} color={colors.error} />
             </Pressable>
           </>
         ) : null}
