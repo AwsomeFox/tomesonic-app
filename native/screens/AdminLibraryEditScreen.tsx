@@ -10,11 +10,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
-import Icon, { IconName } from "../components/Icon";
+import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import { SectionHeader } from "../components/SettingsRows";
 import { api } from "../utils/api";
-import { AbsError, normalizeAbsError } from "../utils/abs/errors";
+import { AbsError, normalizeAbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
 import { createLibrary, updateLibrary, deleteLibrary } from "../utils/abs/libraries";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
@@ -40,25 +40,16 @@ interface FolderDraft {
   fullPath: string;
 }
 
-// Map an AbsError kind onto the ErrorState idiom (offline vs forbidden vs
-// unsupported vs server all read differently).
-function errorStateProps(err: AbsError): { icon: IconName; title: string; message: string } {
-  switch (err.kind) {
-    case "offline":
-      return {
-        icon: "cloud-off",
-        title: "You're offline",
-        message: "Editing a library needs a connection to the server.",
-      };
-    case "forbidden":
-      return { icon: "lock", title: "Admin access required", message: err.message };
-    case "unsupported":
-      return { icon: "info", title: "Not supported by this server", message: err.message };
-    case "server":
-      return { icon: "warning", title: "The server hit an error", message: err.message };
-    default:
-      return { icon: "warning", title: "Couldn't load the library", message: err.message };
-  }
+// AbsError → ErrorState props via the shared engine; auth keeps this screen's
+// historical generic "Couldn't load the library" fallback.
+function errorStateProps(err: AbsError) {
+  return absErrorToErrorStateProps(err, {
+    subject: "the library",
+    overrides: {
+      offline: { message: "Editing a library needs a connection to the server." },
+      auth: { icon: "warning", title: "Couldn't load the library" },
+    },
+  });
 }
 
 const BOOK_DEFAULT_PROVIDER = "google";

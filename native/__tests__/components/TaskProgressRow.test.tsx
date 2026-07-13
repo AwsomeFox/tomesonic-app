@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 // Minimal AbsTask shape per the frozen utils/abs contract — typed loosely here
-// so this suite doesn't depend on the (concurrently developed) module.
+// so this suite stays decoupled from the utils/abs module's types.
 const makeTask = (overrides: Record<string, any> = {}) => ({
   id: "t1",
   action: "scan",

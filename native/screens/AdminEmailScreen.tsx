@@ -25,6 +25,7 @@ import {
   sendTestEmail,
   updateAdminEreaderDevices,
 } from "../utils/abs/email";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
 import type { AbsEmailSettings, AbsEreaderDevice } from "../utils/abs/types";
 
 /**
@@ -385,23 +386,22 @@ export default function AdminEmailScreen({ navigation }: any) {
       );
     }
     if (loadError) {
-      const kind = loadError?.kind;
+      // Shared engine; this screen historically used the warning icon for
+      // every non-offline kind and the generic "Couldn't load email settings"
+      // title for everything but offline/forbidden.
+      const generic = { icon: "warning", title: "Couldn't load email settings" } as const;
       return (
         <ErrorState
-          icon={kind === "offline" ? "cloud-off" : "warning"}
-          title={
-            kind === "offline"
-              ? "You're offline"
-              : kind === "forbidden"
-                ? "Admin access required"
-                : "Couldn't load email settings"
-          }
-          message={
-            kind === "offline"
-              ? "Server administration needs a connection."
-              : loadError?.message || undefined
-          }
-          onRetry={load}
+          {...absErrorToErrorStateProps(loadError, {
+            subject: "email settings",
+            onRetry: load,
+            overrides: {
+              forbidden: { icon: "warning" },
+              auth: generic,
+              server: generic,
+              unsupported: generic,
+            },
+          })}
           style={{ flex: 1 }}
         />
       );

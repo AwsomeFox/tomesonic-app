@@ -20,7 +20,7 @@ import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { useServerCapabilities, MIN_VERSION_API_KEYS } from "../utils/abs/capabilities";
 import { getApiKeys, createApiKey, deleteApiKey } from "../utils/abs/server";
-import { AbsError } from "../utils/abs/errors";
+import { AbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
 import type { AbsApiKey } from "../utils/abs/types";
 
 /**
@@ -43,6 +43,8 @@ const EXPIRY_PRESETS: { label: string; seconds: number | null }[] = [
   { label: "Never", seconds: null },
 ];
 
+// Date-only with an "Expires …" prefix — related to but not a duplicate of
+// the date formatters elsewhere; see utils/format.ts before adding another.
 function formatExpiry(expiresAt: string | null | undefined): string {
   if (!expiresAt) return "Never expires";
   const d = new Date(expiresAt);
@@ -167,38 +169,24 @@ export default function AdminApiKeysScreen({ navigation }: any) {
 
   const unsupported = !supports || error?.kind === "unsupported";
 
-  const renderError = (err: AbsError) => {
-    if (err.kind === "offline") {
-      return (
-        <ErrorState
-          style={{ flex: 1 }}
-          icon="cloud-off"
-          title="You're offline"
-          message={err.message}
-          onRetry={load}
-        />
-      );
-    }
-    if (err.kind === "forbidden") {
-      return (
-        <ErrorState
-          style={{ flex: 1 }}
-          icon="lock"
-          title="Admin access required"
-          message={err.message}
-          onRetry={load}
-        />
-      );
-    }
-    return (
-      <ErrorState
-        style={{ flex: 1 }}
-        title="Couldn't load API keys"
-        message={err.message}
-        onRetry={load}
-      />
-    );
-  };
+  // Shared engine; offline keeps this screen's historical use of the error's
+  // own message, and auth/server keep the generic "Couldn't load API keys"
+  // fallback. (`unsupported` never reaches here — it renders the dedicated
+  // unsupported view below instead.)
+  const renderError = (err: AbsError) => (
+    <ErrorState
+      style={{ flex: 1 }}
+      {...absErrorToErrorStateProps(err, {
+        subject: "API keys",
+        onRetry: load,
+        overrides: {
+          offline: { message: err.message },
+          auth: { icon: "warning", title: "Couldn't load API keys" },
+          server: { title: "Couldn't load API keys" },
+        },
+      })}
+    />
+  );
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>

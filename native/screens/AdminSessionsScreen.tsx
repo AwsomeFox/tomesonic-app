@@ -18,6 +18,8 @@ import EmptyState from "../components/EmptyState";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { getAllSessions, deleteSession, batchDeleteSessions } from "../utils/abs/sessions";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
+import { formatListeningTime } from "../utils/format";
 import type { AbsListeningSession } from "../utils/abs/types";
 
 /**
@@ -40,14 +42,8 @@ import type { AbsListeningSession } from "../utils/abs/types";
 
 const PER_PAGE = 30;
 
-function formatListeningTime(sec: number | null | undefined): string {
-  const s = Math.max(0, Math.round(sec || 0));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
+// Date-only with an "Unknown" fallback — close to (but not the same as)
+// ItemHistoryScreen's formatDate; see utils/format.ts before adding another.
 function formatWhen(ts: number | null | undefined): string {
   if (!ts) return "Unknown";
   const d = new Date(ts);
@@ -62,27 +58,25 @@ function sessionSubtitle(s: AbsListeningSession): string {
   return `${who} · ${device} · ${formatListeningTime(s.timeListening)} · ${formatWhen(s.updatedAt)}`;
 }
 
-function errorViewProps(e: any): { icon: any; title: string; message: string } {
-  if (e?.kind === "offline") {
-    return {
-      icon: "cloud-off",
-      title: "You're offline",
-      message: "Server administration needs a connection.",
-    };
-  }
-  // Non-admins get 404 (`unsupported`) from this endpoint, not just 403.
-  if (e?.kind === "forbidden" || e?.kind === "unsupported") {
-    return {
-      icon: "lock",
-      title: "Admin access required",
-      message: "Only server admins can view listening sessions.",
-    };
-  }
-  return {
-    icon: "warning",
-    title: "Couldn't load sessions",
-    message: e?.message || "Something went wrong. Please try again.",
-  };
+// Non-admins get 404 (`unsupported`) from this endpoint, not just 403, so
+// both kinds render the admin-required state. auth/server keep this screen's
+// historical generic "Couldn't load sessions" fallback.
+const ADMIN_REQUIRED = {
+  icon: "lock",
+  title: "Admin access required",
+  message: "Only server admins can view listening sessions.",
+} as const;
+const GENERIC_LOAD_ERROR = { icon: "warning", title: "Couldn't load sessions" } as const;
+function errorViewProps(e: any) {
+  return absErrorToErrorStateProps(e, {
+    subject: "sessions",
+    overrides: {
+      forbidden: ADMIN_REQUIRED,
+      unsupported: ADMIN_REQUIRED,
+      auth: GENERIC_LOAD_ERROR,
+      server: GENERIC_LOAD_ERROR,
+    },
+  });
 }
 
 export default function AdminSessionsScreen({ navigation, route }: any) {

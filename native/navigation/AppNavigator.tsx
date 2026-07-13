@@ -243,9 +243,12 @@ export default function AppNavigator() {
             <Stack.Screen name="YearInReview" component={YearInReviewScreen} />
             <Stack.Screen name="PodcastSettings" component={PodcastSettingsScreen} />
             <Stack.Screen name="Reader" component={ReaderScreen} />
-            {/* Server administration (entry gated in SettingsScreen; every
-                screen also gates itself on capabilities). Route names are the
-                frozen §3 contract of the admin-features architecture plan. */}
+            {/* Server administration (entry gated in SettingsScreen). Each
+                screen surfaces a fetch-time 403 as a "forbidden" ErrorState
+                rather than pre-gating; only the hub, AdminUserDetail, and
+                AdminApiKeys consult useServerCapabilities directly. Route
+                names are the frozen §3 contract of the admin-features
+                architecture plan. */}
             <Stack.Screen name="ServerAdmin" component={ServerAdminHubScreen} />
             <Stack.Screen name="AdminLibraries" component={AdminLibrariesScreen} />
             <Stack.Screen name="AdminLibraryEdit" component={AdminLibraryEditScreen} />

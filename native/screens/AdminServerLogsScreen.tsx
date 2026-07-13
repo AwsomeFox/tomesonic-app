@@ -8,6 +8,7 @@ import HintPressable from "../components/HintPressable";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import { getServerLogs } from "../utils/abs/server";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
 
 /**
  * AdminServerLogsScreen — read-only viewer for the SERVER's log snapshot
@@ -43,18 +44,21 @@ function levelOf(entry: any): string {
   return LEVEL_BY_NUM[entry?.level] || "INFO";
 }
 
+// Map a normalized AbsError to the full-screen error copy via the shared
+// engine (the call site pins its own themed icon, so the mapped icon is
+// unused). auth/server/unsupported keep this screen's historical generic title.
+const GENERIC_LOAD_ERROR = { title: "Couldn't load server logs" } as const;
 function describeLoadError(e: any): { title: string; message: string } {
-  switch (e?.kind) {
-    case "offline":
-      return { title: "You're offline", message: "Reconnect to view the server's logs." };
-    case "forbidden":
-      return { title: "Admin access required", message: "Only server admins can view server logs." };
-    default:
-      return {
-        title: "Couldn't load server logs",
-        message: e?.message || "The server hit an error handling this request.",
-      };
-  }
+  return absErrorToErrorStateProps(e, {
+    subject: "server logs",
+    overrides: {
+      offline: { message: "Reconnect to view the server's logs." },
+      forbidden: { message: "Only server admins can view server logs." },
+      auth: GENERIC_LOAD_ERROR,
+      server: GENERIC_LOAD_ERROR,
+      unsupported: GENERIC_LOAD_ERROR,
+    },
+  });
 }
 
 export default function AdminServerLogsScreen({ navigation }: any) {

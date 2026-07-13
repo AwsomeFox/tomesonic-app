@@ -15,6 +15,7 @@ import ErrorState from "../components/ErrorState";
 import StatusChip from "../components/StatusChip";
 import { usePolling } from "../hooks/usePolling";
 import { getUsers, getOnlineUsers } from "../utils/abs/users";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
 import type { AbsUser } from "../utils/abs/types";
 
 /**
@@ -29,6 +30,8 @@ import type { AbsUser } from "../utils/abs/types";
  * header's add button opens the same screen in create mode (no userId).
  */
 
+// Relative-time ladder ("just now" → "3d ago" → date) — unlike the date-only
+// formatters elsewhere; see utils/format.ts before adding another variant.
 function formatLastSeen(ts: number | null | undefined): string {
   if (!ts) return "Never";
   const d = new Date(ts);
@@ -43,32 +46,27 @@ function formatLastSeen(ts: number | null | undefined): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// Time-of-day only ("2:05 PM") for the freshness caption — not a candidate
+// for the utils/format date family (those render dates, not clocks).
 function formatClock(ts: number): string {
   return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
 // Map a (normalized) AbsError to the ErrorState treatment. 403 gets an
 // explicit "Admin access required" per the UX plan — never a silent screen.
-function errorViewProps(e: any): { icon: any; title: string; message: string } {
-  if (e?.kind === "offline") {
-    return {
-      icon: "cloud-off",
-      title: "You're offline",
-      message: "Server administration needs a connection.",
-    };
-  }
-  if (e?.kind === "forbidden") {
-    return {
-      icon: "lock",
-      title: "Admin access required",
-      message: "Only server admins can manage user accounts.",
-    };
-  }
-  return {
-    icon: "warning",
-    title: "Couldn't load users",
-    message: e?.message || "Something went wrong. Please try again.",
-  };
+// This screen historically lumped auth/server/unsupported into the generic
+// "Couldn't load users" fallback, so those overrides preserve that copy.
+const GENERIC_LOAD_ERROR = { icon: "warning", title: "Couldn't load users" } as const;
+function errorViewProps(e: any) {
+  return absErrorToErrorStateProps(e, {
+    subject: "users",
+    overrides: {
+      forbidden: { message: "Only server admins can manage user accounts." },
+      auth: GENERIC_LOAD_ERROR,
+      server: GENERIC_LOAD_ERROR,
+      unsupported: GENERIC_LOAD_ERROR,
+    },
+  });
 }
 
 export default function AdminUsersScreen({ navigation }: any) {

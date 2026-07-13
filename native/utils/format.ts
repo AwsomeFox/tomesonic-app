@@ -29,9 +29,9 @@ export function formatBytes(bytes: number): string {
 
 /**
  * "45s" / "12m" / "3h 5m" — compact listening-time totals for admin stats.
- * Moved verbatim from the identical copies in AdminSessionsScreen and
- * AdminUserDetailScreen (those screens adopt this in a later consolidation
- * pass). Sub-minute shows seconds; sub-hour shows whole minutes only.
+ * Moved verbatim from the identical copies AdminSessionsScreen and
+ * AdminUserDetailScreen used to carry (both import it from here now).
+ * Sub-minute shows seconds; sub-hour shows whole minutes only.
  */
 export function formatListeningTime(sec: number | null | undefined): string {
   const s = Math.max(0, Math.round(sec || 0));

@@ -12,6 +12,7 @@ import StatusChip from "../components/StatusChip";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { getOpenFeeds, closeFeed } from "../utils/abs/feeds";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
 import type { AbsFeed } from "../utils/abs/types";
 
 /**
@@ -30,23 +31,23 @@ import type { AbsFeed } from "../utils/abs/types";
  * close confirm spells out what closing does to listeners.
  */
 
+// Map a normalized AbsError to the full-screen error copy via the shared
+// engine (the call site pins its own themed icon, so the mapped icon is
+// unused). auth/server keep this screen's historical generic title.
 function describeLoadError(e: any): { title: string; message: string } {
-  switch (e?.kind) {
-    case "offline":
-      return { title: "You're offline", message: "Reconnect to manage RSS feeds." };
-    case "forbidden":
-      return { title: "Admin access required", message: "Only server admins can manage RSS feeds." };
-    case "unsupported":
-      return {
+  return absErrorToErrorStateProps(e, {
+    subject: "feeds",
+    overrides: {
+      offline: { message: "Reconnect to manage RSS feeds." },
+      forbidden: { message: "Only server admins can manage RSS feeds." },
+      unsupported: {
         title: "Not available on this server",
         message: "This server doesn't offer RSS feed management (it may need an update).",
-      };
-    default:
-      return {
-        title: "Couldn't load feeds",
-        message: e?.message || "The server hit an error handling this request.",
-      };
-  }
+      },
+      auth: { title: "Couldn't load feeds" },
+      server: { title: "Couldn't load feeds" },
+    },
+  });
 }
 
 function actionErrorMessage(e: any): string {

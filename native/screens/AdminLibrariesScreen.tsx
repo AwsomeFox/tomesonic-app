@@ -18,7 +18,7 @@ import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import StatusChip from "../components/StatusChip";
 import { api } from "../utils/api";
-import { AbsError, normalizeAbsError } from "../utils/abs/errors";
+import { AbsError, normalizeAbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
 import { scanLibrary, matchAllLibrary } from "../utils/abs/libraries";
 import { subscribeTasks, getTasksSnapshot, startTaskWatch } from "../utils/abs/tasks";
 import type { AbsTask } from "../utils/abs/types";
@@ -40,25 +40,16 @@ import { showSnackbar } from "../store/useSnackbarStore";
  *   scan/match show a live status chip.
  */
 
-// Map an AbsError kind onto the ErrorState idiom, one branch per kind so
-// offline / forbidden / unsupported / server failures each read differently.
-function errorStateProps(err: AbsError): { icon: IconName; title: string; message: string } {
-  switch (err.kind) {
-    case "offline":
-      return {
-        icon: "cloud-off",
-        title: "You're offline",
-        message: "Managing libraries needs a connection to the server.",
-      };
-    case "forbidden":
-      return { icon: "lock", title: "Admin access required", message: err.message };
-    case "unsupported":
-      return { icon: "info", title: "Not supported by this server", message: err.message };
-    case "server":
-      return { icon: "warning", title: "The server hit an error", message: err.message };
-    default:
-      return { icon: "warning", title: "Couldn't load libraries", message: err.message };
-  }
+// AbsError → ErrorState props via the shared engine; auth keeps this screen's
+// historical generic "Couldn't load libraries" fallback.
+function errorStateProps(err: AbsError) {
+  return absErrorToErrorStateProps(err, {
+    subject: "libraries",
+    overrides: {
+      offline: { message: "Managing libraries needs a connection to the server." },
+      auth: { icon: "warning", title: "Couldn't load libraries" },
+    },
+  });
 }
 
 export default function AdminLibrariesScreen({ navigation }: any) {

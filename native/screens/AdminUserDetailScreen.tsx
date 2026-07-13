@@ -20,6 +20,8 @@ import { useUserStore } from "../store/useUserStore";
 import { useLibraryStore } from "../store/useLibraryStore";
 import { useServerCapabilities } from "../utils/abs/capabilities";
 import { getUser, createUser, updateUser, deleteUser, getUserListeningStats } from "../utils/abs/users";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
+import { formatListeningTime } from "../utils/format";
 import type { AbsUser, AbsUserPayload, AbsUserType } from "../utils/abs/types";
 
 /**
@@ -92,34 +94,19 @@ const CREATE_SEED: FormSnapshot = {
   libs: [],
 };
 
-function formatListeningTime(sec: number | null | undefined): string {
-  const s = Math.max(0, Math.round(sec || 0));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-function errorViewProps(e: any): { icon: any; title: string; message: string } {
-  if (e?.kind === "offline") {
-    return {
-      icon: "cloud-off",
-      title: "You're offline",
-      message: "Server administration needs a connection.",
-    };
-  }
-  if (e?.kind === "forbidden") {
-    return {
-      icon: "lock",
-      title: "Admin access required",
-      message: "Only server admins can manage user accounts.",
-    };
-  }
-  return {
-    icon: "warning",
-    title: "Couldn't load this user",
-    message: e?.message || "Something went wrong. Please try again.",
-  };
+// This screen historically lumped auth/server/unsupported into the generic
+// "Couldn't load this user" fallback, so those overrides preserve that copy.
+const GENERIC_LOAD_ERROR = { icon: "warning", title: "Couldn't load this user" } as const;
+function errorViewProps(e: any) {
+  return absErrorToErrorStateProps(e, {
+    subject: "this user",
+    overrides: {
+      forbidden: { message: "Only server admins can manage user accounts." },
+      auth: GENERIC_LOAD_ERROR,
+      server: GENERIC_LOAD_ERROR,
+      unsupported: GENERIC_LOAD_ERROR,
+    },
+  });
 }
 
 // Operation-failure message (dialog body) keyed off the normalized error.

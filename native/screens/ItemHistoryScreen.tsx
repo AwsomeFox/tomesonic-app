@@ -47,6 +47,9 @@ function sessionTimeMs(session: any): number | null {
   return null;
 }
 
+// Device-locale date with an empty-string fallback — close to (but not the
+// same as) AdminSessionsScreen's formatWhen (en-US, "Unknown"); see
+// utils/format.ts before adding another date formatter.
 function formatDate(ms: number | null): string {
   if (!ms) return "";
   const d = new Date(ms);

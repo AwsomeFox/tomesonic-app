@@ -15,7 +15,7 @@ import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import { SectionHeader, RowBase, Divider } from "../components/SettingsRows";
 import SettingSelectModal from "../components/SettingSelectModal";
-import { AbsError, normalizeAbsError } from "../utils/abs/errors";
+import { AbsError, normalizeAbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
 import {
   getTags,
   renameTag,
@@ -53,25 +53,16 @@ import { showSnackbar } from "../store/useSnackbarStore";
 
 type Segment = "tags" | "genres" | "narrators";
 
-// Map an AbsError kind onto the ErrorState idiom (offline vs forbidden vs
-// unsupported vs server all read differently).
-function errorStateProps(err: AbsError): { icon: IconName; title: string; message: string } {
-  switch (err.kind) {
-    case "offline":
-      return {
-        icon: "cloud-off",
-        title: "You're offline",
-        message: "Server maintenance needs a connection.",
-      };
-    case "forbidden":
-      return { icon: "lock", title: "Admin access required", message: err.message };
-    case "unsupported":
-      return { icon: "info", title: "Not supported by this server", message: err.message };
-    case "server":
-      return { icon: "warning", title: "The server hit an error", message: err.message };
-    default:
-      return { icon: "warning", title: "Something went wrong", message: err.message };
-  }
+// AbsError → ErrorState props via the shared engine; auth and unknown keep
+// this screen's historical generic "Something went wrong" fallback.
+function errorStateProps(err: AbsError) {
+  return absErrorToErrorStateProps(err, {
+    overrides: {
+      offline: { message: "Server maintenance needs a connection." },
+      auth: { icon: "warning", title: "Something went wrong" },
+      unknown: { title: "Something went wrong" },
+    },
+  });
 }
 
 const SEGMENTS: { key: Segment; label: string }[] = [

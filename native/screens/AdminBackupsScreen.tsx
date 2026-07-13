@@ -11,6 +11,7 @@ import { SectionHeader, RowBase, Divider } from "../components/SettingsRows";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { getBackups, createBackup, deleteBackup } from "../utils/abs/server";
+import { absErrorToErrorStateProps } from "../utils/abs/errors";
 import { formatBytes } from "../utils/format";
 import type { AbsBackup } from "../utils/abs/types";
 
@@ -29,27 +30,23 @@ import type { AbsBackup } from "../utils/abs/types";
  * (offline / forbidden / unsupported / ...) instead of sniffing axios shapes.
  */
 
-// Map a normalized AbsError to the full-screen error treatment.
+// Map a normalized AbsError to the full-screen error copy via the shared
+// engine (the call site pins its own themed icon, so the mapped icon is
+// unused). auth/server keep this screen's historical generic title.
 function describeLoadError(e: any): { title: string; message: string } {
-  switch (e?.kind) {
-    case "offline":
-      return { title: "You're offline", message: "Reconnect to manage server backups." };
-    case "forbidden":
-      return {
-        title: "Admin access required",
-        message: "Only server admins can manage backups.",
-      };
-    case "unsupported":
-      return {
+  return absErrorToErrorStateProps(e, {
+    subject: "backups",
+    overrides: {
+      offline: { message: "Reconnect to manage server backups." },
+      forbidden: { message: "Only server admins can manage backups." },
+      unsupported: {
         title: "Not available on this server",
         message: "This server doesn't offer backup management (it may need an update).",
-      };
-    default:
-      return {
-        title: "Couldn't load backups",
-        message: e?.message || "The server hit an error handling this request.",
-      };
-  }
+      },
+      auth: { title: "Couldn't load backups" },
+      server: { title: "Couldn't load backups" },
+    },
+  });
 }
 
 // Human text for the server's backup cron ("30 1 * * *" → "daily at 1:30 AM").
