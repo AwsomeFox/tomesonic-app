@@ -385,16 +385,18 @@ describe("ServerAdminHubScreen", () => {
       expect(screen.queryByTestId("admin-hub-offline")).toBeNull();
     });
 
-    it("treats a lastCreatedAt of 0 as a real backup time, not 'No backups yet'", async () => {
-      // Epoch 0 is falsy but a valid timestamp — the row must format it, not
-      // fall through to the empty-state copy.
+    it("treats a lastCreatedAt of 0 as a real backup time, not 'No backups yet' or a blank date", async () => {
+      // Epoch 0 is falsy but a valid timestamp — the row must format it to a
+      // real date (1970), never fall through to the empty-state copy nor render
+      // "Last backup on " with a blank tail.
       useUserStore.setState({ user: ADMIN_USER } as any);
       (getBackupsSummary as jest.Mock).mockResolvedValue({ lastCreatedAt: 0 });
 
       await renderHub();
 
       expect(screen.queryByText("No backups yet")).toBeNull();
-      expect(screen.getByText(/^Last backup /)).toBeTruthy();
+      // A concrete date renders (epoch 0 → 1970), not a trailing-blank "on ".
+      expect(screen.getByText(/^Last backup on .*1970/)).toBeTruthy();
     });
 
     it("omits the online count when only the online fetch is unavailable", async () => {

@@ -10,7 +10,6 @@ import { refreshCapabilities, useServerCapabilities } from "../utils/abs/capabil
 import { getTasksSnapshot, subscribeTasks } from "../utils/abs/tasks";
 import type { AbsTask } from "../utils/abs/types";
 import { usePlaybackStore } from "../store/usePlaybackStore";
-import { formatDateTime } from "../utils/format";
 import {
   getUsersSummary,
   getBackupsSummary,
@@ -18,9 +17,12 @@ import {
 } from "../utils/abs/adminSummaries";
 
 // Compact "time since" for the Backups row subtitle (issue #64). utils/format
-// has no relative helper, so this small inline formatter covers it, falling
-// back to the shared calendar formatDateTime for anything older than a month.
+// has no relative helper, so this small inline formatter covers it, showing an
+// absolute date for anything older than a month.
 function formatRelativeTime(ts: number, now: number = Date.now()): string {
+  const d = new Date(ts);
+  // Unparseable timestamp — never render a blank subtitle.
+  if (Number.isNaN(d.getTime())) return "recently";
   const diff = Math.max(0, now - ts);
   const min = Math.floor(diff / 60000);
   if (min < 1) return "just now";
@@ -29,7 +31,10 @@ function formatRelativeTime(ts: number, now: number = Date.now()): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 30) return `${day}d ago`;
-  return `on ${formatDateTime(ts)}`;
+  // Absolute date for older backups. Format the Date directly rather than via
+  // formatDateTime(ts), which treats a valid-but-falsy epoch of 0 (1970) as
+  // "no value" and would leave the subtitle as "on " with a blank date.
+  return `on ${d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
 }
 
 /**
