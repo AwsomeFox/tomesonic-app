@@ -309,6 +309,29 @@ describe("AdminUserDetailScreen — edit mode", () => {
     expect(payload.itemTagsAccessible).toEqual(["kids"]);
   });
 
+  it("preserves an unmodeled server permission key (createEreader) on an unrelated edit", async () => {
+    // buildPayload seeds permissions from the LOADED object, so a newer-server
+    // key we don't surface in the form must round-trip untouched rather than be
+    // dropped (which, on a replace-semantics server, would revoke it).
+    (getUser as jest.Mock).mockResolvedValue({
+      ...JOE,
+      permissions: { ...JOE.permissions, createEreader: true },
+    });
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    fireEvent.press(screen.getByLabelText("Can upload"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Can upload").props.accessibilityState.checked).toBe(true)
+    );
+    fireEvent.press(screen.getByLabelText("Save user"));
+
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.upload).toBe(true); // the actual edit
+    expect(payload.permissions.createEreader).toBe(true); // untouched key survives
+  });
+
   it("the header Save button stays disabled until the form is dirty", async () => {
     await renderScreen({ userId: "u2" });
     await screen.findByText("joe");

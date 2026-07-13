@@ -72,6 +72,20 @@ async function renderScreen() {
   return navigation;
 }
 
+/**
+ * Tag/genre counts fetch only for rows scrolled into view — simulate the
+ * FlatList reporting the given row names as viewable so their counts enqueue.
+ */
+async function revealRows(names: string[]) {
+  const list = screen.getByTestId("maintenance-list");
+  await act(async () => {
+    list.props.onViewableItemsChanged?.({
+      viewableItems: names.map((name) => ({ item: { name } })),
+      changed: [],
+    });
+  });
+}
+
 function dialogWithTitle(title: string | RegExp) {
   const calls = (showAppDialog as jest.Mock).mock.calls.map((c) => c[0]);
   return [...calls]
@@ -201,6 +215,10 @@ describe("AdminMaintenanceScreen — tags", () => {
     expect(await screen.findByText("Fiction")).toBeTruthy();
     expect(screen.getByText("Science Fiction")).toBeTruthy();
 
+    // No count request fires until a row is actually seen.
+    expect((api.get as jest.Mock).mock.calls.some(([u]) => /\/items$/.test(u))).toBe(false);
+    await revealRows(["Fiction", "Science Fiction"]);
+
     // The count endpoint is hit per library with the base64+URI filter the UI
     // filter modal uses, limit:0 so only the total comes back.
     await waitFor(() =>
@@ -229,6 +247,7 @@ describe("AdminMaintenanceScreen — tags", () => {
     await renderScreen();
 
     expect(await screen.findByText("Fiction")).toBeTruthy();
+    await revealRows(["Fiction", "Science Fiction"]);
     await waitFor(() =>
       expect(api.get).toHaveBeenCalledWith(
         expect.stringMatching(/^\/api\/libraries\/\w+\/items$/),

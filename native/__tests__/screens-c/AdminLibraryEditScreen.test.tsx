@@ -21,6 +21,7 @@ jest.mock("../../store/useSnackbarStore", () => ({
 import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminLibraryEditScreen from "../../screens/AdminLibraryEditScreen";
+import { libraryIconLabel } from "../../components/LibraryIcon";
 import { api } from "../../utils/api";
 import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
@@ -478,7 +479,7 @@ describe("AdminLibraryEditScreen — icon + settings", () => {
     await screen.findByText("Edit library");
 
     // Library icon row shows the loaded ABS key.
-    expect(screen.getByText("books-1")).toBeTruthy();
+    expect(screen.getByText(libraryIconLabel("books-1"))).toBeTruthy();
     // coverAspectRatio:1 renders as the "Square" subtitle on the select row.
     expect(screen.getByText("Square")).toBeTruthy();
     // disableWatcher:true was loaded → its toggle reads checked.
@@ -538,7 +539,7 @@ describe("AdminLibraryEditScreen — icon + settings", () => {
 
     // Open the picker and choose a different glyph.
     await fireEvent.press(screen.getByLabelText("Library icon"));
-    const tile = await screen.findByLabelText("rocket");
+    const tile = await screen.findByLabelText(libraryIconLabel("rocket"));
     expect(tile.props.accessibilityRole).toBe("radio");
     await fireEvent.press(tile);
 
@@ -560,12 +561,12 @@ describe("AdminLibraryEditScreen — icon + settings", () => {
 
     await fireEvent.press(screen.getByLabelText("Library icon"));
     // A spread of the known ABS keys is offered.
-    expect(await screen.findByLabelText("database")).toBeTruthy();
-    expect(screen.getByLabelText("podcast")).toBeTruthy();
-    expect(screen.getByLabelText("heart")).toBeTruthy();
+    expect(await screen.findByLabelText(libraryIconLabel("database"))).toBeTruthy();
+    expect(screen.getByLabelText(libraryIconLabel("podcast"))).toBeTruthy();
+    expect(screen.getByLabelText(libraryIconLabel("heart"))).toBeTruthy();
     // The loaded icon is the checked radio.
-    expect(screen.getByLabelText("books-1").props.accessibilityState.checked).toBe(true);
-    expect(screen.getByLabelText("database").props.accessibilityState.checked).toBe(false);
+    expect(screen.getByLabelText(libraryIconLabel("books-1")).props.accessibilityState.checked).toBe(true);
+    expect(screen.getByLabelText(libraryIconLabel("database")).props.accessibilityState.checked).toBe(false);
   });
 
   it("book-only setting rows are hidden for a podcast library", async () => {
@@ -610,7 +611,7 @@ describe("AdminLibraryEditScreen — icon + settings", () => {
     await fireEvent.changeText(await screen.findByLabelText("Folder path 1"), "/data/fresh");
 
     await fireEvent.press(screen.getByLabelText("Library icon"));
-    await fireEvent.press(await screen.findByLabelText("star"));
+    await fireEvent.press(await screen.findByLabelText(libraryIconLabel("star")));
     await fireEvent.press(screen.getByLabelText("Create library"));
 
     await waitFor(() =>

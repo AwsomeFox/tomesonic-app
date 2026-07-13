@@ -13,7 +13,7 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import { SectionHeader, SelectRow, ToggleRow } from "../components/SettingsRows";
-import LibraryIcon from "../components/LibraryIcon";
+import LibraryIcon, { libraryIconLabel } from "../components/LibraryIcon";
 import LibraryIconPickerSheet from "../components/LibraryIconPickerSheet";
 import SettingSelectModal from "../components/SettingSelectModal";
 import { api } from "../utils/api";
@@ -612,7 +612,7 @@ export default function AdminLibraryEditScreen({ navigation, route }: any) {
               <View style={{ flex: 1, marginRight: 12 }}>
                 <Text style={{ color: colors.onSurface, fontSize: 18 }}>Library icon</Text>
                 <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginTop: 2 }}>
-                  {icon ? icon : "Server default"}
+                  {icon ? libraryIconLabel(icon) : "Server default"}
                 </Text>
               </View>
               <View style={{ flexDirection: "row", alignItems: "center" }}>

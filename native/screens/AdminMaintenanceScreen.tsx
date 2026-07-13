@@ -79,6 +79,12 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   const currentLibraryId = useLibraryStore((s) => s.currentLibraryId);
 
   const [segment, setSegment] = useState<Segment>("tags");
+  // Mirror of `segment` for the stable FlatList viewability callback (which is
+  // created once and must not close over a stale segment value).
+  const segmentRef = useRef<Segment>("tags");
+  useEffect(() => {
+    segmentRef.current = segment;
+  }, [segment]);
   const [tags, setTags] = useState<string[]>([]);
   const [genres, setGenres] = useState<string[]>([]);
   const [narrators, setNarrators] = useState<AbsNarrator[]>([]);
@@ -158,69 +164,85 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
   // ---- tag/genre item counts -----------------------------------------------
   // Tags/genres are server-wide, but item counts are PER-LIBRARY, so a value's
   // displayed count is the SUM of getLibraryItemFilterCount across every
-  // library. Fetched LAZILY (only for the segment on screen), capped at 4
-  // in-flight requests via a global (value × library) task queue, and cached
-  // for the session so re-renders/segment-switches never refetch. A fetch
-  // failure degrades to no subtitle — it never swaps the screen to ErrorState.
+  // library. Fetched LAZILY and ON DEMAND for the rows the user actually SEES
+  // (FlatList viewability), so the fan-out scales with what's scrolled into
+  // view rather than the whole vocabulary — a server with hundreds of tags is
+  // never stormed up front. A shared queue caps TOTAL in-flight requests at 4;
+  // each value is fetched at most once per session (countAttemptedRef); a fetch
+  // failure degrades to no subtitle, never a screen-level ErrorState.
   const [counts, setCounts] = useState<Record<string, number>>({});
   const countAttemptedRef = useRef<Set<string>>(new Set());
-
+  const countQueueRef = useRef<{ type: "tags" | "genres"; value: string }[]>([]);
+  const countActiveRef = useRef(0);
+  const mountedRef = useRef(true);
+  // Libraries change rarely; read them off a ref so the stable viewability
+  // callback always sees the current set without being re-created.
+  const libIdsRef = useRef<string[]>([]);
   useEffect(() => {
-    if (segment === "narrators") return;
-    if (loading || error) return;
-    const type: "tags" | "genres" = segment;
-    const values = segment === "tags" ? tags : genres;
-    const libIds = storeLibraries.map((l) => l.id).filter(Boolean);
-    if (values.length === 0 || libIds.length === 0) return;
+    libIdsRef.current = storeLibraries.map((l) => l.id).filter(Boolean);
+  }, [storeLibraries]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-    // Only enqueue values we haven't already tried this session.
-    const pending = values.filter((v) => !countAttemptedRef.current.has(`${type}:${v}`));
-    if (pending.length === 0) return;
-    pending.forEach((v) => countAttemptedRef.current.add(`${type}:${v}`));
-
-    let cancelled = false;
-    // One task per (value, library) pair so TOTAL in-flight requests stay
-    // capped regardless of how many libraries the server has.
-    const tasks: { value: string; libId: string }[] = [];
-    pending.forEach((value) => libIds.forEach((libId) => tasks.push({ value, libId })));
-    const acc: Record<string, number> = {};
-    const remaining: Record<string, number> = {};
-    const failed = new Set<string>();
-    pending.forEach((v) => {
-      acc[v] = 0;
-      remaining[v] = libIds.length;
-    });
-
-    let index = 0;
+  const pumpRef = useRef<() => void>(() => {});
+  pumpRef.current = () => {
     const CONCURRENCY = 4;
-    const worker = async () => {
-      while (!cancelled && index < tasks.length) {
-        const { value, libId } = tasks[index++];
-        try {
-          const n = await getLibraryItemFilterCount(libId, type, value);
-          acc[value] += n;
-        } catch {
-          // A failing library marks the whole value failed → no subtitle,
-          // rather than an understated partial or a screen-level error.
-          failed.add(value);
+    while (countActiveRef.current < CONCURRENCY && countQueueRef.current.length > 0) {
+      const { type, value } = countQueueRef.current.shift()!;
+      const libIds = libIdsRef.current;
+      if (libIds.length === 0) {
+        // No libraries to sum over — nothing to show; leave it attempted.
+        continue;
+      }
+      countActiveRef.current += 1;
+      (async () => {
+        let total = 0;
+        let ok = true;
+        // Sum sequentially across libraries; a single failure drops the whole
+        // value (no understated partial), matching the graceful-degrade rule.
+        for (const libId of libIds) {
+          try {
+            total += await getLibraryItemFilterCount(libId, type, value);
+          } catch {
+            ok = false;
+            break;
+          }
         }
-        if (cancelled) return;
-        remaining[value] -= 1;
-        if (remaining[value] === 0 && !failed.has(value)) {
-          const total = acc[value];
+        if (ok && mountedRef.current) {
           setCounts((prev) => ({ ...prev, [`${type}:${value}`]: total }));
         }
+      })().finally(() => {
+        countActiveRef.current -= 1;
+        pumpRef.current();
+      });
+    }
+  };
+
+  // Enqueue a single value's count once. Called from FlatList viewability, so
+  // only on-screen rows ever trigger a fetch.
+  const requestCount = (type: "tags" | "genres", value: string) => {
+    const key = `${type}:${value}`;
+    if (countAttemptedRef.current.has(key)) return;
+    countAttemptedRef.current.add(key);
+    countQueueRef.current.push({ type, value });
+    pumpRef.current();
+  };
+
+  const onValueRowsViewable = useRef(
+    ({ viewableItems }: { viewableItems: Array<{ item?: { name?: string } }> }) => {
+      const seg = segmentRef.current;
+      if (seg === "narrators") return;
+      for (const vi of viewableItems) {
+        const name = vi.item?.name;
+        if (name) requestCount(seg, name);
       }
-    };
-    const workers = Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, () => worker());
-    Promise.all(workers).catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-    // `counts` is deliberately NOT a dep — the attempted-set guard already
-    // prevents refetch, and depending on it would respawn workers per resolve.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segment, tags, genres, loading, error, storeLibraries]);
+    }
+  ).current;
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 1 }).current;
 
   const countSubtitle = (type: "tags" | "genres", value: string): string | undefined => {
     const n = counts[`${type}:${value}`];
@@ -538,11 +560,15 @@ export default function AdminMaintenanceScreen({ navigation }: any) {
       </View>
 
       <FlatList
+        testID="maintenance-list"
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 40 }}
         data={rows}
         keyExtractor={(item) => item.name}
         renderItem={({ item }) => renderValueRow(item.name, item.subtitle, item.canDelete)}
+        // Fetch tag/genre item counts only for rows scrolled into view.
+        onViewableItemsChanged={onValueRowsViewable}
+        viewabilityConfig={viewabilityConfig}
         // Inline rename state lives outside the rows — make sure an edit
         // toggle re-renders the virtualized items.
         extraData={`${editingName ?? ""}:${editValue}`}

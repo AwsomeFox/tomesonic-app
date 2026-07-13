@@ -4,7 +4,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "./Icon";
 import BottomSheet from "./BottomSheet";
-import LibraryIcon, { ABS_LIBRARY_ICONS } from "./LibraryIcon";
+import LibraryIcon, { ABS_LIBRARY_ICONS, libraryIconLabel } from "./LibraryIcon";
 
 const TILE = 56;
 
@@ -44,7 +44,12 @@ export default function LibraryIconPickerSheet({
         Library icon
       </Text>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 12 }}>
-        <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
+        <View
+          testID="library-icon-grid"
+          accessibilityRole="radiogroup"
+          accessibilityLabel="Library icon"
+          style={{ flexDirection: "row", flexWrap: "wrap" }}
+        >
           {ABS_LIBRARY_ICONS.map((key) => {
             const isSel = key === selected;
             return (
@@ -56,7 +61,7 @@ export default function LibraryIconPickerSheet({
                 }}
                 android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.12) }}
                 accessibilityRole="radio"
-                accessibilityLabel={key}
+                accessibilityLabel={libraryIconLabel(key)}
                 accessibilityState={{ checked: isSel }}
                 style={{
                   width: TILE,

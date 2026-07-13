@@ -1,16 +1,17 @@
 /**
  * LibraryIconPickerSheet — the glyph grid the library editor opens to pick the
- * ABS server icon. It offers every ABS_LIBRARY_ICONS key as a radio tile,
- * marks the current selection via accessibilityState.checked, and hands the
- * RAW ABS key (not the rendered glyph name) back to onSelect before closing.
+ * ABS server icon. It offers every ABS_LIBRARY_ICONS key as a radio tile
+ * (announced with a HUMAN label, not the raw key), marks the current selection
+ * via accessibilityState.checked, and hands the RAW ABS key (not the rendered
+ * glyph name) back to onSelect before closing.
  */
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react-native";
 import LibraryIconPickerSheet from "../../components/LibraryIconPickerSheet";
-import { ABS_LIBRARY_ICONS } from "../../components/LibraryIcon";
+import { ABS_LIBRARY_ICONS, libraryIconLabel } from "../../components/LibraryIcon";
 
 describe("LibraryIconPickerSheet", () => {
-  it("renders a radio tile for every ABS icon option", async () => {
+  it("renders a radio tile (human-labeled) for every ABS icon option, inside a radiogroup", async () => {
     await render(
       <LibraryIconPickerSheet
         visible
@@ -19,8 +20,9 @@ describe("LibraryIconPickerSheet", () => {
         onClose={() => {}}
       />
     );
+    expect(screen.getByTestId("library-icon-grid").props.accessibilityRole).toBe("radiogroup");
     for (const key of ABS_LIBRARY_ICONS) {
-      const tile = screen.getByLabelText(key);
+      const tile = screen.getByLabelText(libraryIconLabel(key));
       expect(tile).toBeTruthy();
       expect(tile.props.accessibilityRole).toBe("radio");
     }
@@ -37,7 +39,7 @@ describe("LibraryIconPickerSheet", () => {
         onClose={onClose}
       />
     );
-    await fireEvent.press(screen.getByLabelText("rocket"));
+    await fireEvent.press(screen.getByLabelText(libraryIconLabel("rocket")));
     expect(onSelect).toHaveBeenCalledWith("rocket");
     expect(onClose).toHaveBeenCalled();
   });
@@ -52,7 +54,11 @@ describe("LibraryIconPickerSheet", () => {
         onClose={() => {}}
       />
     );
-    expect(screen.getByLabelText("podcast").props.accessibilityState.checked).toBe(true);
-    expect(screen.getByLabelText("database").props.accessibilityState.checked).toBe(false);
+    expect(screen.getByLabelText(libraryIconLabel("podcast")).props.accessibilityState.checked).toBe(
+      true
+    );
+    expect(
+      screen.getByLabelText(libraryIconLabel("database")).props.accessibilityState.checked
+    ).toBe(false);
   });
 });

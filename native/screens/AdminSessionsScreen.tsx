@@ -193,8 +193,16 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
   // Live "open sessions" overlay: focus-gated poll (30s), fully decoupled from
   // the list's load/error state — a poll failure is swallowed by usePolling's
   // backoff and just leaves the "Open" chips stale, never a screen error.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const pollOpen = useCallback(async () => {
     const { openSessions } = await getOnlineUsers();
+    if (!mountedRef.current) return;
     setOpenIds(new Set(openSessions.map((s: any) => s?.id).filter(Boolean)));
   }, []);
   const { refresh: refreshOpen } = usePolling(pollOpen, { intervalMs: 30_000 });

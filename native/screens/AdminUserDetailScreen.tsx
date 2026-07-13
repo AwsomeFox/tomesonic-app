@@ -384,11 +384,14 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
     }
     // Per-tag access IS editable (Tag access section). Create mode always
     // grants all tags; edit mode sends the toggled value + the chosen tags.
-    // The block-list flag (selectedTagsNotAccessible) has NO UI — it's echoed
-    // back from the loaded user UNCHANGED so an edit here can never flip a
-    // user's allow-list into a block-list (or vice versa).
+    // Seed permissions from the LOADED object so every server-owned key we
+    // don't surface (createEreader, the block-list flag selectedTagsNotAccessible,
+    // any newer-server key) round-trips unchanged — an edit here only ever
+    // touches the fields the form actually controls. This is the same
+    // clobber-safety guarantee the tag/library lists carry.
     const loadedPerms: any = loadedUser?.permissions || {};
     const permissions: any = {
+      ...(isCreate ? {} : loadedPerms),
       download: perms.download,
       update: perms.update,
       delete: perms.delete,
@@ -397,10 +400,6 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       accessAllLibraries: allLibraries,
       accessAllTags: isCreate ? true : allTags,
     };
-    // Preserve the block-list flag exactly as loaded (no UI, echo-only).
-    if (!isCreate && typeof loadedPerms.selectedTagsNotAccessible === "boolean") {
-      permissions.selectedTagsNotAccessible = loadedPerms.selectedTagsNotAccessible;
-    }
     const payload: AbsUserPayload = {
       username: username.trim(),
       type,
