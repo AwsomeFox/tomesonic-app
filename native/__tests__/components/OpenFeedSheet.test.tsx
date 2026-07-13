@@ -150,6 +150,27 @@ it("a generic failure surfaces the normalized AbsError message", async () => {
   );
 });
 
+it("a rapid double-confirm fires only ONE open request (synchronous re-entrancy guard)", async () => {
+  // Never resolve — hold the first request in-flight so a second confirm tap
+  // arrives before setBusy(true) has been applied. Only the busyRef guard, which
+  // flips synchronously, can stop the second POST.
+  mockedPost.mockReturnValue(new Promise(() => {}));
+  await render(<OpenFeedSheet entity={itemEntity} onClose={() => {}} />);
+  await screen.findByLabelText("RSS feed address");
+
+  await fireEvent.press(screen.getByLabelText("Open RSS feed"));
+  // Grab the confirm dialog once, then invoke its Open button twice in a single
+  // act() — the two calls race before React flushes the setBusy(true) update.
+  const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+  const openBtn = dialog.buttons.find((b: any) => b.text === "Open feed");
+  await act(async () => {
+    openBtn.onPress();
+    openBtn.onPress();
+  });
+
+  expect(mockedPost).toHaveBeenCalledTimes(1);
+});
+
 it("routes to the SERIES open route for a series entity", async () => {
   await render(
     <OpenFeedSheet entity={{ kind: "series", id: "ser1", title: "Mistborn" }} onClose={() => {}} />

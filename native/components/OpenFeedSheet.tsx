@@ -81,6 +81,7 @@ export default function OpenFeedSheet({
       setSlug(slugifyFeedTitle(entity.title));
       setFeed(null);
       setBusy(false);
+      busyRef.current = false;
     }
   }, [entity?.kind, entity?.id, entity?.title]);
 
@@ -93,6 +94,12 @@ export default function OpenFeedSheet({
     };
   }, []);
 
+  // Synchronous re-entrancy guard. `busy` is React state, so a rapid double-tap
+  // on the confirm dialog can fire two doOpen() calls before the setBusy(true)
+  // from the first has been applied — both would read `busy === false` and both
+  // would POST. A ref flips synchronously, so the second call bails at once.
+  const busyRef = useRef(false);
+
   // Feed routes are admin-only — never render the affordance otherwise.
   if (!capabilities.isAdmin) return null;
 
@@ -102,7 +109,8 @@ export default function OpenFeedSheet({
   const feedUrl = feed?.feedUrl || (feed?.slug ? `${serverAddress}/feed/${feed.slug}` : "");
 
   const doOpen = async (s: string) => {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       const result = await openFeedFor(display.kind, display.id, { serverAddress, slug: s });
@@ -126,7 +134,10 @@ export default function OpenFeedSheet({
         });
       }
     } finally {
-      setBusy(false);
+      // Always release the synchronous guard; only touch state while mounted so
+      // an unmount mid-request doesn't setState on a torn-down component.
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(false);
     }
   };
 
