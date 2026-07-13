@@ -23,6 +23,7 @@ import ChapterEditorScreen, {
   formatTimestamp,
   validateChapterDraft,
   buildChaptersPayload,
+  deriveItemDuration,
 } from "../../screens/ChapterEditorScreen";
 import { api } from "../../utils/api";
 import { showAppDialog } from "../../store/useDialogStore";
@@ -30,7 +31,7 @@ import { showSnackbar } from "../../store/useSnackbarStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 
 // Fresh item per test — the screen must never mutate what the API returned.
-function makeItem() {
+function makeItem(): any {
   return {
     id: "item1",
     media: {
@@ -172,12 +173,61 @@ describe("draft validation + payload (pure)", () => {
   });
 });
 
+describe("deriveItemDuration (pure)", () => {
+  it("prefers a positive top-level media.duration", () => {
+    expect(deriveItemDuration({ duration: 3600, tracks: [{ duration: 10 }] })).toBe(3600);
+    expect(deriveItemDuration({ duration: 12.3456 })).toBe(12.346); // rounded to ms
+  });
+
+  it("falls back to summed track durations when there's no top-level duration", () => {
+    expect(deriveItemDuration({ tracks: [{ duration: 1200 }, { duration: 2400 }] })).toBe(3600);
+    // A zero/absent top-level duration still falls through to the tracks.
+    expect(deriveItemDuration({ duration: 0, tracks: [{ duration: 5 }, { duration: 5 }] })).toBe(10);
+  });
+
+  it("falls back to summed audioFiles durations when there are no tracks", () => {
+    expect(deriveItemDuration({ audioFiles: [{ duration: 600 }, { duration: 600 }] })).toBe(1200);
+  });
+
+  it("finally falls back to the last chapter's end", () => {
+    expect(deriveItemDuration({ chapters: [{ end: 100 }, { end: 250 }] })).toBe(250);
+    // Unordered ends: the MAX end wins, not the array's last element.
+    expect(deriveItemDuration({ chapters: [{ end: 250 }, { end: 100 }] })).toBe(250);
+  });
+
+  it("prefers tracks over audioFiles over chapters", () => {
+    expect(
+      deriveItemDuration({
+        tracks: [{ duration: 10 }],
+        audioFiles: [{ duration: 20 }],
+        chapters: [{ end: 30 }],
+      })
+    ).toBe(10);
+  });
+
+  it("returns 0 when nothing is derivable", () => {
+    expect(deriveItemDuration({})).toBe(0);
+    expect(deriveItemDuration(null)).toBe(0);
+    expect(deriveItemDuration(undefined)).toBe(0);
+    expect(deriveItemDuration({ tracks: [], audioFiles: [], chapters: [] })).toBe(0);
+  });
+
+  it("ignores NaN / non-numeric / negative entries when summing", () => {
+    expect(
+      deriveItemDuration({ tracks: [{ duration: "x" }, { duration: -5 }, { duration: 1000 }] })
+    ).toBe(1000);
+    expect(deriveItemDuration({ audioFiles: [{ duration: NaN }, { duration: 42 }] })).toBe(42);
+  });
+});
+
 describe("ChapterEditorScreen", () => {
   it("loads the item and renders the chapter rows + header count", async () => {
     await renderScreen();
 
     expect(await screen.findByText("Opening")).toBeTruthy();
-    expect(api.get).toHaveBeenCalledWith("/api/items/item1");
+    // The load fetch MUST include `?expanded=1` — the minified item omits the
+    // computed media.duration + full chapters/tracks (the "no audio duration" bug).
+    expect(api.get).toHaveBeenCalledWith("/api/items/item1?expanded=1");
     expect(screen.getByText("Middle")).toBeTruthy();
     expect(screen.getByText("End")).toBeTruthy();
     expect(screen.getByText("3 chapters · 1h 0m")).toBeTruthy();
@@ -573,6 +623,311 @@ describe("ChapterEditorScreen", () => {
       expect(screen.getByLabelText("Chapter start time").props.value).toBe("00:40:00")
     );
     expect(showSnackbar).not.toHaveBeenCalled();
+  });
+
+  // --- A.3: derived duration (the ebook-carrying book that arrives WITHOUT a
+  // top-level media.duration) still renders + drives derived ends ----------
+  it("renders the chapter list from a DERIVED duration when media.duration is absent", async () => {
+    const item = {
+      id: "item1",
+      media: {
+        // No top-level `duration` — the real ebook-book case that reported
+        // "no audio duration" before the fix.
+        metadata: { title: "My Book", asin: "B00TEST" },
+        tracks: [{ duration: 1800 }, { duration: 1800 }], // sums to 3600
+        audioFiles: [{ duration: 1800 }, { duration: 1800 }],
+        chapters: [
+          { id: 0, start: 0, end: 1200, title: "Opening" },
+          { id: 1, start: 1200, end: 2400, title: "Middle" },
+          { id: 2, start: 2400, end: 3600, title: "End" },
+        ],
+      },
+    };
+    mockRoutes({ item });
+    await renderScreen();
+
+    // The rows render — NOT the "No audio duration" empty state.
+    expect(await screen.findByText("Opening")).toBeTruthy();
+    expect(screen.queryByText("No audio duration")).toBeNull();
+    // Header reflects the derived 3600s.
+    expect(screen.getByText("3 chapters · 1h 0m")).toBeTruthy();
+
+    // …and the derived duration feeds buildChaptersPayload: the LAST chapter's
+    // end is the derived 3600, not 0.
+    await expandRow(/^Chapter 3: End/);
+    fireEvent.changeText(screen.getByLabelText("Chapter title"), "Finale");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter title").props.value).toBe("Finale")
+    );
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/items/item1/chapters", {
+        chapters: [
+          { id: 0, start: 0, end: 1200, title: "Opening" },
+          { id: 1, start: 1200, end: 2400, title: "Middle" },
+          { id: 2, start: 2400, end: 3600, title: "Finale" },
+        ],
+      })
+    );
+  });
+
+  // --- B1: Audnexus region picker ----------------------------------------
+  it("passes the chosen Audnexus region to the lookup call", async () => {
+    await renderScreen();
+    await screen.findByText("Opening");
+
+    fireEvent.press(screen.getByLabelText("Find chapters by ASIN"));
+    await screen.findByLabelText("ASIN");
+
+    // Default is "us"; switch to UK before looking up.
+    fireEvent.press(screen.getByLabelText("Region UK"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Region UK").props.accessibilityState).toEqual({
+        selected: true,
+      })
+    );
+    fireEvent.press(screen.getByLabelText("Look up chapters"));
+
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith("/api/search/chapters", {
+        params: { asin: "B00TEST", region: "uk" },
+      })
+    );
+    // The old hard-coded "us" region must NOT have been used for this lookup.
+    expect(api.get).not.toHaveBeenCalledWith("/api/search/chapters", {
+      params: { asin: "B00TEST", region: "us" },
+    });
+  });
+
+  // --- B2: "Remove all chapters" bulk action -----------------------------
+  it("'Remove all chapters' resets the draft to a single chapter at 0 after confirm", async () => {
+    await renderScreen();
+    await screen.findByText("Opening");
+
+    fireEvent.press(screen.getByLabelText("Remove all chapters"));
+    await waitFor(() => expect(dialogByTitle("Remove all chapters?")).toBeTruthy());
+    // Draft untouched until the confirm button.
+    expect(screen.getByText("Opening")).toBeTruthy();
+
+    const removeBtn = dialogByTitle("Remove all chapters?").buttons.find(
+      (b: any) => b.text === "Remove all"
+    );
+    await act(async () => removeBtn.onPress());
+
+    // Exactly one chapter, titled "Chapter 1", starting at 0 — never an empty list.
+    await waitFor(() => expect(screen.queryByText("Opening")).toBeNull());
+    expect(screen.getByText("Chapter 1")).toBeTruthy();
+    expect(screen.getByText("1 chapter · 1h 0m")).toBeTruthy();
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(api.post).not.toHaveBeenCalled();
+
+    // Saving proves the payload is a single {start:0} chapter.
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/items/item1/chapters", {
+        chapters: [{ id: 0, start: 0, end: 3600, title: "Chapter 1" }],
+      })
+    );
+  });
+
+  // --- B3: updatedAt concurrent-edit conflict check ----------------------
+  function mockItemVersions(v1: any, v2: any) {
+    let itemCalls = 0;
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.startsWith("/api/items/")) {
+        itemCalls++;
+        return Promise.resolve({ data: itemCalls === 1 ? v1 : v2 });
+      }
+      if (url === "/api/search/chapters") return Promise.resolve({ data: AUDNEXUS_RESULT });
+      return Promise.resolve({ data: {} });
+    });
+  }
+
+  async function makeDirtyTitleEdit(newTitle: string) {
+    await expandRow(/^Chapter 2: Middle/);
+    fireEvent.changeText(screen.getByLabelText("Chapter title"), newTitle);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Chapter title").props.value).toBe(newTitle)
+    );
+  }
+
+  it("changed server updatedAt shows a conflict dialog and does NOT POST yet", async () => {
+    const v1 = makeItem();
+    v1.media.updatedAt = 1000;
+    const v2 = makeItem();
+    v2.media.updatedAt = 2000;
+    mockItemVersions(v1, v2);
+
+    await renderScreen();
+    await screen.findByText("Opening");
+    await makeDirtyTitleEdit("New Title");
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(dialogByTitle("Chapters changed on the server")).toBeTruthy()
+    );
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("conflict → Overwrite proceeds with the POST", async () => {
+    const v1 = makeItem();
+    v1.media.updatedAt = 1000;
+    const v2 = makeItem();
+    v2.media.updatedAt = 2000;
+    mockItemVersions(v1, v2);
+
+    await renderScreen();
+    await screen.findByText("Opening");
+    await makeDirtyTitleEdit("New Title");
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(dialogByTitle("Chapters changed on the server")).toBeTruthy()
+    );
+
+    const overwrite = dialogByTitle("Chapters changed on the server").buttons.find(
+      (b: any) => b.text === "Overwrite"
+    );
+    await act(async () => overwrite.onPress());
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/items/item1/chapters", {
+        chapters: [
+          { id: 0, start: 0, end: 1200, title: "Opening" },
+          { id: 1, start: 1200, end: 2400, title: "New Title" },
+          { id: 2, start: 2400, end: 3600, title: "End" },
+        ],
+      })
+    );
+  });
+
+  it("conflict → Reload reseeds from the fresh item and never POSTs", async () => {
+    const v1 = makeItem();
+    v1.media.updatedAt = 1000;
+    const v2 = makeItem();
+    v2.media.updatedAt = 2000;
+    v2.media.chapters = [{ id: 0, start: 0, end: 3600, title: "Server Chapter" }];
+    mockItemVersions(v1, v2);
+
+    await renderScreen();
+    await screen.findByText("Opening");
+    await makeDirtyTitleEdit("New Title");
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(dialogByTitle("Chapters changed on the server")).toBeTruthy()
+    );
+
+    const reload = dialogByTitle("Chapters changed on the server").buttons.find(
+      (b: any) => b.text === "Reload"
+    );
+    await act(async () => reload.onPress());
+
+    // A dirty draft prompts a discard confirm before the reseed.
+    await waitFor(() => expect(dialogByTitle("Discard your changes?")).toBeTruthy());
+    const discard = dialogByTitle("Discard your changes?").buttons.find(
+      (b: any) => b.text === "Discard & reload"
+    );
+    await act(async () => discard.onPress());
+
+    // Reseeded from the server version; the local edit is gone; nothing POSTed.
+    await waitFor(() => expect(screen.getByText("Server Chapter")).toBeTruthy());
+    expect(screen.queryByText("New Title")).toBeNull();
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("unchanged server updatedAt saves directly (no conflict dialog)", async () => {
+    const v = makeItem();
+    v.media.updatedAt = 5000;
+    mockRoutes({ item: v }); // both load and pre-check return the same revision
+
+    await renderScreen();
+    await screen.findByText("Opening");
+    await makeDirtyTitleEdit("New Title");
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/items/item1/chapters", expect.any(Object))
+    );
+    expect(dialogByTitle("Chapters changed on the server")).toBeUndefined();
+  });
+
+  it("a failed pre-check re-fetch does not block the save", async () => {
+    const v1 = makeItem();
+    v1.media.updatedAt = 1000;
+    let itemCalls = 0;
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.startsWith("/api/items/")) {
+        itemCalls++;
+        if (itemCalls === 1) return Promise.resolve({ data: v1 });
+        // Pre-check re-fetch fails — save must still proceed.
+        return Promise.reject(Object.assign(new Error("boom"), { response: { status: 500 } }));
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    await renderScreen();
+    await screen.findByText("Opening");
+    await makeDirtyTitleEdit("New Title");
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/items/item1/chapters", expect.any(Object))
+    );
+    expect(dialogByTitle("Chapters changed on the server")).toBeUndefined();
+  });
+
+  // --- B4: "Auto-fix first chapter to 0" offer ---------------------------
+  it("offers 'Set first chapter to 0:00' when that is the ONLY blocker, then fixes + saves", async () => {
+    await renderScreen();
+    await screen.findByText("Opening");
+
+    // Push the first chapter off 0 — the only blocking error.
+    await expandRow(/^Chapter 1: Opening/);
+    await setStartTime("00:00:05");
+    // Wait for the committed (now invalid + dirty) draft before pressing Save.
+    expect(await screen.findByText(/must start at 00:00:00/)).toBeTruthy();
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() => expect(dialogByTitle("Can't save chapters")).toBeTruthy());
+
+    const fix = dialogByTitle("Can't save chapters").buttons.find(
+      (b: any) => b.text === "Set first chapter to 0:00"
+    );
+    expect(fix).toBeTruthy();
+    expect(api.post).not.toHaveBeenCalled();
+
+    await act(async () => fix.onPress());
+
+    // First chapter anchored back at 0 and the whole array saved.
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/items/item1/chapters", {
+        chapters: [
+          { id: 0, start: 0, end: 1200, title: "Opening" },
+          { id: 1, start: 1200, end: 2400, title: "Middle" },
+          { id: 2, start: 2400, end: 3600, title: "End" },
+        ],
+      })
+    );
+  });
+
+  it("does NOT offer the first-chapter auto-fix when another error also blocks", async () => {
+    await renderScreen();
+    await screen.findByText("Opening");
+
+    // Move chapter 2 PAST chapter 3 → a strictly-increasing error, while the
+    // first chapter is still fine. The auto-fix must not appear here…
+    await expandRow(/^Chapter 2: Middle/);
+    await setStartTime("00:45:00");
+    expect(await screen.findByText(/strictly increasing/)).toBeTruthy();
+
+    fireEvent.press(screen.getByLabelText("Save chapters"));
+    await waitFor(() => expect(dialogByTitle("Can't save chapters")).toBeTruthy());
+    const dlg = dialogByTitle("Can't save chapters");
+    const fix = (dlg.buttons || []).find((b: any) => b.text === "Set first chapter to 0:00");
+    expect(fix).toBeUndefined();
+    expect(api.post).not.toHaveBeenCalled();
   });
 
   it("shows a server error state (with retry) when the item fails to load", async () => {

@@ -101,6 +101,9 @@ export interface DraftChapter {
   start: number;
 }
 
+/** The exact validation message for a first chapter that doesn't start at 0. */
+export const FIRST_CHAPTER_ERROR = "The first chapter must start at 00:00:00.";
+
 /**
  * Validate a draft against ABS chapter semantics. Returns human-readable
  * error strings — an empty array means the draft is saveable.
@@ -111,7 +114,7 @@ export function validateChapterDraft(
 ): string[] {
   const errors: string[] = [];
   if (!draft.length) return errors;
-  if (draft[0].start !== 0) errors.push("The first chapter must start at 00:00:00.");
+  if (draft[0].start !== 0) errors.push(FIRST_CHAPTER_ERROR);
   for (let i = 1; i < draft.length; i++) {
     if (draft[i].start <= draft[i - 1].start) {
       errors.push("Chapter start times must be strictly increasing.");
@@ -175,6 +178,40 @@ const serializeDraft = (draft: DraftChapter[]) =>
   JSON.stringify(draft.map((c) => ({ t: c.title, s: c.start })));
 
 /**
+ * Resolve the item's audio duration in seconds. `media.duration` is a computed
+ * field ABS only serializes on the EXPANDED item (toOldJSONExpanded); the
+ * minified form omits it. We fetch with `?expanded=1` so it's present, but a
+ * book that carries an ebook (or any payload variance) can still arrive without
+ * a top-level duration — so fall back to summing the audio tracks / files, and
+ * finally to the last chapter's end. Returns 0 only when there is genuinely no
+ * audio to derive from.
+ */
+export function deriveItemDuration(media: any): number {
+  const top = Number(media?.duration);
+  if (Number.isFinite(top) && top > 0) return round3(top);
+
+  const sum = (arr: any): number =>
+    Array.isArray(arr)
+      ? arr.reduce((acc, x) => {
+          const d = Number(x?.duration);
+          return acc + (Number.isFinite(d) && d > 0 ? d : 0);
+        }, 0)
+      : 0;
+
+  const fromTracks = sum(media?.tracks);
+  if (fromTracks > 0) return round3(fromTracks);
+  const fromFiles = sum(media?.audioFiles);
+  if (fromFiles > 0) return round3(fromFiles);
+
+  const chapters: any[] = Array.isArray(media?.chapters) ? media.chapters : [];
+  const lastEnd = chapters.reduce((mx, c) => {
+    const e = Number(c?.end);
+    return Number.isFinite(e) && e > mx ? e : mx;
+  }, 0);
+  return lastEnd > 0 ? round3(lastEnd) : 0;
+}
+
+/**
  * "numbers-and-punctuation" only exists on iOS — Android silently falls back
  * to the default keyboard. Select it explicitly per platform so the Android
  * behavior (default keyboard, which can type ':' and '.') is intentional
@@ -184,6 +221,29 @@ const TIME_KEYBOARD = Platform.select({
   ios: "numbers-and-punctuation" as const,
   android: undefined,
 });
+
+/**
+ * Audible/Audnexus marketplace regions the chapter lookup accepts. An ASIN is
+ * marketplace-specific, so the region must match where the book was bought —
+ * "us" is the default because it's the largest catalog.
+ */
+export const AUDNEXUS_REGIONS = [
+  "us",
+  "uk",
+  "ca",
+  "au",
+  "fr",
+  "de",
+  "es",
+  "it",
+  "jp",
+  "in",
+] as const;
+
+/** Read the item's server-side revision marker (media-level wins, then item). */
+function readUpdatedAt(it: any): any {
+  return it?.media?.updatedAt ?? it?.updatedAt ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // Small UI pieces (module scope so TextInput identity survives re-renders)
@@ -298,6 +358,10 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
   const keyCounter = useRef(0);
   const nextKey = () => keyCounter.current++;
 
+  // The server revision marker captured at load/seed time. handleSave re-fetches
+  // and compares this before POSTing to catch a concurrent edit (issue #69).
+  const updatedAtRef = useRef<any>(null);
+
   // Row editor state: which row is expanded + its start-time text field.
   const [selectedKey, setSelectedKey] = useState<number | null>(null);
   const [editStart, setEditStart] = useState("");
@@ -308,10 +372,11 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
   const [asinLoading, setAsinLoading] = useState(false);
   const [asinPreview, setAsinPreview] = useState<{ title: string; start: number }[] | null>(null);
   const [asinNote, setAsinNote] = useState<string | null>(null);
+  const [asinRegion, setAsinRegion] = useState<string>("us");
   const [shiftOpen, setShiftOpen] = useState(false);
   const [shiftText, setShiftText] = useState("");
 
-  const duration: number = round3(Number(item?.media?.duration) || 0);
+  const duration: number = deriveItemDuration(item?.media);
   const dirty = useMemo(() => serializeDraft(draft) !== baseline, [draft, baseline]);
   const validationErrors = useMemo(
     () => validateChapterDraft(draft, duration),
@@ -336,6 +401,7 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     keyCounter.current = seeded.length;
     setDraft(seeded);
     setBaseline(serializeDraft(seeded));
+    updatedAtRef.current = readUpdatedAt(it);
   };
 
   useEffect(() => {
@@ -349,7 +415,10 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
       setLoading(true);
       setLoadError(null);
       try {
-        const res = await api.get(`/api/items/${libraryItemId}`);
+        // `?expanded=1` matches every other item fetch in the app and is
+        // required for the computed `media.duration` + full `chapters`/`tracks`
+        // (the minified item omits them, which reported "no audio duration").
+        const res = await api.get(`/api/items/${libraryItemId}?expanded=1`);
         if (cancelled) return;
         setItem(res?.data);
         seedFromItem(res?.data);
@@ -558,6 +627,31 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     showSnackbar({ message: `Shifted ${Math.max(0, next.length - 1)} chapters by ${offset}s` });
   };
 
+  // Reset to a single chapter at 0. ABS books need at least one chapter that
+  // starts at 0 — an empty list would fail validation — so "remove all" leaves
+  // exactly that. Draft-local: dirty until Save, like any other edit.
+  const removeAllChapters = () => {
+    showAppDialog({
+      title: "Remove all chapters?",
+      message:
+        "This replaces your draft with a single chapter starting at 00:00:00. Nothing is saved to the server until you press Save.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove all",
+          style: "destructive",
+          onPress: () => {
+            setDraft([{ key: nextKey(), title: "Chapter 1", start: 0 }]);
+            setSelectedKey(null);
+            setAsinOpen(false);
+            setShiftOpen(false);
+            showSnackbar({ message: "Chapters cleared — review and save" });
+          },
+        },
+      ],
+    });
+  };
+
   const lookupAsin = async () => {
     const asin = asinText.trim();
     if (!asin || asinLoading) return;
@@ -565,7 +659,7 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     setAsinPreview(null);
     setAsinNote(null);
     try {
-      const result = await searchChaptersByAsin(asin);
+      const result = await searchChaptersByAsin(asin, asinRegion);
       // The server signals a miss with 200 + { error } (see utils/abs/items.ts).
       if (result?.error) {
         showAppDialog({ title: "Chapter lookup failed", message: String(result.error) });
@@ -626,6 +720,89 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
 
   // ------------------------------------------------------------------- save
 
+  // Reseed the draft from a freshly-fetched item, discarding the local draft.
+  // Confirms first when the draft is dirty (which, at conflict time, it is).
+  const reloadFromServer = (fresh: any) => {
+    const doReload = () => {
+      setItem(fresh);
+      seedFromItem(fresh); // reseeds draft + baseline + captured updatedAt
+      setSelectedKey(null);
+      showSnackbar({ message: "Reloaded chapters from the server" });
+    };
+    if (dirtyRef.current) {
+      showAppDialog({
+        title: "Discard your changes?",
+        message: "Reloading replaces your local edits with the server's chapters.",
+        buttons: [
+          { text: "Keep editing", style: "cancel" },
+          { text: "Discard & reload", style: "destructive", onPress: doReload },
+        ],
+      });
+    } else {
+      doReload();
+    }
+  };
+
+  // The actual validated POST. Refreshes the captured revision marker from the
+  // response when the server echoes one, so a follow-up save re-checks cleanly.
+  const performSave = async (flushed: DraftChapter[]) => {
+    if (!libraryItemId) return;
+    setSaving(true);
+    try {
+      const res: any = await updateChapters(libraryItemId, buildChaptersPayload(flushed, duration));
+      setBaseline(serializeDraft(flushed));
+      const echoed =
+        readUpdatedAt(res?.libraryItem) ?? readUpdatedAt(res) ?? null;
+      if (echoed != null) updatedAtRef.current = echoed;
+      showSnackbar({ message: "Chapters saved" });
+    } catch (e: any) {
+      // AbsError carries a user-facing message ("offline", "forbidden", ...).
+      showAppDialog({
+        title: "Couldn't save chapters",
+        message: e?.message || "Something went wrong. Please try again.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Concurrent-edit guard (issue #69): re-fetch the item and compare its
+  // updatedAt to the one captured at load. On a mismatch, let the user Reload
+  // (discard local, take the server's) or Overwrite (POST anyway). A missing
+  // marker or a failed re-fetch never blocks the save — it just proceeds.
+  const saveWithConflictCheck = async (flushed: DraftChapter[]) => {
+    if (!libraryItemId) return;
+    const captured = updatedAtRef.current;
+    if (captured != null) {
+      try {
+        const res = await api.get(`/api/items/${libraryItemId}?expanded=1`);
+        const fresh = res?.data;
+        const serverUpdatedAt = readUpdatedAt(fresh);
+        if (serverUpdatedAt != null && serverUpdatedAt !== captured) {
+          showAppDialog({
+            title: "Chapters changed on the server",
+            message:
+              "Someone (or another device) edited this book's chapters since you opened it. Reload to take the server's version, or overwrite it with your edits.",
+            buttons: [
+              { text: "Cancel", style: "cancel" },
+              { text: "Reload", onPress: () => reloadFromServer(fresh) },
+              {
+                text: "Overwrite",
+                style: "destructive",
+                onPress: () => performSave(flushed),
+              },
+            ],
+          });
+          return;
+        }
+      } catch (e) {
+        // A failed pre-check must not block saving — fall through to the POST.
+        console.error("[ChapterEditor] updatedAt pre-check failed:", e);
+      }
+    }
+    await performSave(flushed);
+  };
+
   const handleSave = async () => {
     if (!libraryItemId || saving) return;
     // Flush a typed-but-unblurred start-time edit BEFORE reading the draft:
@@ -637,23 +814,32 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
     if (serializeDraft(flushed) === baseline) return; // nothing to save
     const errors = validateChapterDraft(flushed, duration);
     if (errors.length) {
-      showAppDialog({ title: "Can't save chapters", message: errors.join("\n") });
+      // When the ONLY blocker is a non-zero first chapter, offer a one-tap fix
+      // that anchors chapter 1 at 0 and re-validates (issue #69). Any other
+      // validation error still hard-blocks.
+      const canAutoFixFirst =
+        errors.length === 1 && errors[0] === FIRST_CHAPTER_ERROR && flushed.length > 0;
+      const buttons: any[] = [{ text: "OK", style: "cancel" }];
+      if (canAutoFixFirst) {
+        buttons.push({
+          text: "Set first chapter to 0:00",
+          onPress: () => {
+            const fixed = flushed.map((c, i) => (i === 0 ? { ...c, start: 0 } : c));
+            setDraft(fixed);
+            if (selectedKey === fixed[0].key) setEditStart(formatTimestamp(0));
+            const remaining = validateChapterDraft(fixed, duration);
+            if (remaining.length) {
+              showAppDialog({ title: "Can't save chapters", message: remaining.join("\n") });
+              return;
+            }
+            saveWithConflictCheck(fixed);
+          },
+        });
+      }
+      showAppDialog({ title: "Can't save chapters", message: errors.join("\n"), buttons });
       return;
     }
-    setSaving(true);
-    try {
-      await updateChapters(libraryItemId, buildChaptersPayload(flushed, duration));
-      setBaseline(serializeDraft(flushed));
-      showSnackbar({ message: "Chapters saved" });
-    } catch (e: any) {
-      // AbsError carries a user-facing message ("offline", "forbidden", ...).
-      showAppDialog({
-        title: "Couldn't save chapters",
-        message: e?.message || "Something went wrong. Please try again.",
-      });
-    } finally {
-      setSaving(false);
-    }
+    await saveWithConflictCheck(flushed);
   };
 
   // ------------------------------------------------------------------ render
@@ -850,6 +1036,14 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
             }}
             colors={colors}
           />
+          {draft.length > 0 ? (
+            <PillButton
+              label="Remove all chapters"
+              tone="error"
+              onPress={removeAllChapters}
+              colors={colors}
+            />
+          ) : null}
         </View>
       </View>
 
@@ -918,6 +1112,49 @@ export default function ChapterEditorScreen({ navigation, route }: any) {
                 </Text>
               )}
             </Pressable>
+          </View>
+
+          {/* Marketplace region — an ASIN is region-specific, so the lookup
+              must target the store the book came from. */}
+          <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 12 }}>
+            Region
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 6 }}>
+            {AUDNEXUS_REGIONS.map((r) => {
+              const active = r === asinRegion;
+              return (
+                <Pressable
+                  key={r}
+                  onPress={() => setAsinRegion(r)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Region ${r.toUpperCase()}`}
+                  accessibilityState={{ selected: active }}
+                  android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.14) }}
+                  hitSlop={{ top: 4, bottom: 4 }}
+                  style={{
+                    paddingHorizontal: 12,
+                    height: 32,
+                    borderRadius: 16,
+                    overflow: "hidden",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: active ? colors.primary : colors.surfaceContainerHighest,
+                    marginRight: 8,
+                    marginBottom: 8,
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: active ? colors.onPrimary : colors.onSurfaceVariant,
+                      fontSize: 12,
+                      fontWeight: active ? "700" : "600",
+                    }}
+                  >
+                    {r.toUpperCase()}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
 
           {asinPreview ? (
