@@ -25,7 +25,7 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
-import { Clipboard } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminApiKeysScreen from "../../screens/AdminApiKeysScreen";
 import AppDialog from "../../components/AppDialog";
@@ -100,7 +100,7 @@ beforeEach(() => {
   useDialogStore.setState({ current: null } as any);
   mockKeysList();
   (api.delete as jest.Mock).mockResolvedValue({ data: {} });
-  setStringSpy = jest.spyOn(Clipboard, "setString").mockImplementation(() => {});
+  setStringSpy = jest.spyOn(Clipboard, "setStringAsync").mockResolvedValue(true);
 });
 
 // Settle any trailing async continuations (sheet close animations, create

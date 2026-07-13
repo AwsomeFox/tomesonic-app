@@ -762,5 +762,6 @@ export const useUserStore = create<UserState>((set, get) => ({
       trailingTimer = null;
       write(useUserStore.getState().mediaProgress);
     }, Math.max(0, WRITE_WINDOW_MS - (now - lastWriteAt)));
+    (trailingTimer as any)?.unref?.(); // Node-only: never keep the process alive for a lazy disk flush; RN timers are numbers and skip this.
   });
 }

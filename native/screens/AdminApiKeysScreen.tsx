@@ -6,8 +6,8 @@ import {
   ScrollView,
   ActivityIndicator,
   TextInput,
-  Clipboard,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -174,7 +174,7 @@ export default function AdminApiKeysScreen({ navigation }: any) {
               text: "Copy key",
               keepOpenOnPress: true,
               onPress: () => {
-                Clipboard.setString(token);
+                Clipboard.setStringAsync(token).catch(() => {});
                 showSnackbar({ message: "Key copied" });
               },
             },

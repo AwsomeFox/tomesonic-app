@@ -157,6 +157,11 @@ export async function embedMetadata(
  * Tokened URL for the item zip download (GET /api/items/:id/download) — for
  * the OS download manager / share sheet, which can't send our auth header.
  * Null when the session is missing pieces (mirrors utils/urls.coverUrl).
+ *
+ * SECURITY: the session JWT rides in the query string, so it lands in
+ * browser / download-manager history (and potentially server access logs).
+ * An in-app streaming download that keeps the token in headers is tracked
+ * in issue #68.
  */
 export function buildItemZipDownloadUrl(itemId: string): string | null {
   const cfg = storageHelper.getServerConfig();

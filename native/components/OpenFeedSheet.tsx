@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, TextInput, ActivityIndicator, Clipboard } from "react-native";
+import { View, Text, TextInput, ActivityIndicator } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import BottomSheet from "./BottomSheet";
 import Pressable from "./HintPressable";
 import Icon from "./Icon";
@@ -174,7 +175,7 @@ export default function OpenFeedSheet({
 
   const handleCopy = () => {
     if (!feedUrl) return;
-    Clipboard.setString(feedUrl);
+    Clipboard.setStringAsync(feedUrl).catch(() => {});
     showSnackbar({ message: "Link copied" });
   };
 

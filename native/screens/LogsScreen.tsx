@@ -3,11 +3,11 @@ import {
   View,
   Text,
   ScrollView,
-  Clipboard,
   Share,
   Modal,
   Pressable,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { appLogger, type LogEntry, type LogLevel } from '../utils/logger';
 import { useThemeColors } from '../theme/useThemeColors';
@@ -81,7 +81,7 @@ export default function LogsScreen({ navigation }: any) {
   }
 
   function handleCopyAll() {
-    Clipboard.setString(getLogsString());
+    Clipboard.setStringAsync(getLogsString()).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
