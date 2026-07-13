@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -39,7 +39,13 @@ import type { AbsUser, AbsUserPayload, AbsUserType } from "../utils/abs/types";
  *  - You can't delete your own account (blocked with an explaining dialog).
  *  - You can't demote your own admin account (blocked with an explaining
  *    dialog — losing admin here would lock you out of this very screen).
+ *  - You can't disable your own account (same reasoning — explaining dialog).
  *  - Deleting a user is Tier-3 destructive: typed username confirm.
+ *
+ * A dirty form arms a beforeRemove discard guard (ChapterEditor idiom), and
+ * saving happens from a header "Save" text button enabled once dirty. Tag
+ * restrictions (accessAllTags/itemTagsSelected) have no UI here — they're
+ * echoed back from the loaded user unchanged so edits never clobber them.
  */
 
 const TYPE_OPTIONS: { label: string; value: AbsUserType }[] = [
@@ -73,6 +79,18 @@ interface FormSnapshot {
   allLibraries: boolean;
   libs: string[]; // sorted
 }
+
+// Create mode compares against the server defaults, so `dirty` means "the
+// admin has actually typed/toggled something" (drives both the header Save
+// enablement and the discard guard).
+const CREATE_SEED: FormSnapshot = {
+  username: "",
+  type: "user",
+  isActive: true,
+  perms: DEFAULT_PERMS,
+  allLibraries: true,
+  libs: [],
+};
 
 function formatListeningTime(sec: number | null | undefined): string {
   const s = Math.max(0, Math.round(sec || 0));
@@ -115,18 +133,29 @@ function failureMessage(e: any): string {
 function Field({
   label,
   helper,
+  error,
   value,
   onChangeText,
   editable,
   secure,
+  autoCapitalize,
+  returnKeyType,
+  onSubmitEditing,
+  inputRef,
   colors,
 }: {
   label: string;
   helper?: string;
+  /** Inline validation error rendered under the field (error-colored). */
+  error?: string | null;
   value: string;
   onChangeText: (t: string) => void;
   editable: boolean;
   secure?: boolean;
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  returnKeyType?: "next" | "done";
+  onSubmitEditing?: () => void;
+  inputRef?: React.RefObject<TextInput | null>;
   colors: any;
 }) {
   return (
@@ -140,12 +169,15 @@ function Field({
         <View style={{ height: 8 }} />
       )}
       <TextInput
+        ref={inputRef}
         value={value}
         onChangeText={onChangeText}
         editable={editable}
         secureTextEntry={secure}
-        autoCapitalize="none"
+        autoCapitalize={autoCapitalize}
         autoCorrect={false}
+        returnKeyType={returnKeyType}
+        onSubmitEditing={onSubmitEditing}
         accessibilityLabel={label}
         placeholderTextColor={colors.onSurfaceVariant}
         style={{
@@ -156,8 +188,18 @@ function Field({
           paddingVertical: 10,
           fontSize: 15,
           opacity: editable ? 1 : 0.6,
+          borderWidth: 1,
+          borderColor: error ? colors.error : "transparent",
         }}
       />
+      {error ? (
+        <Text
+          accessibilityRole="alert"
+          style={{ color: colors.error, fontSize: 12, marginTop: 4 }}
+        >
+          {error}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -187,7 +229,11 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
   const [perms, setPerms] = useState<PermFlags>(DEFAULT_PERMS);
   const [allLibraries, setAllLibraries] = useState(true);
   const [selectedLibs, setSelectedLibs] = useState<string[]>([]);
-  const [seed, setSeed] = useState<FormSnapshot | null>(null);
+  const [seed, setSeed] = useState<FormSnapshot | null>(isCreate ? CREATE_SEED : null);
+  // Inline validation errors (cleared as the admin retypes).
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const passwordInputRef = useRef<TextInput | null>(null);
 
   const targetIsRoot = loadedUser?.type === "root";
   // Root/permission edge case: only root may edit the root account.
@@ -261,7 +307,6 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
   }, [userId, isCreate, retryTick]);
 
   const dirty = useMemo(() => {
-    if (isCreate) return true;
     if (!seed) return false;
     const libsNow = [...selectedLibs].sort();
     return (
@@ -275,9 +320,38 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       perms.upload !== seed.perms.upload ||
       perms.accessExplicitContent !== seed.perms.accessExplicitContent ||
       allLibraries !== seed.allLibraries ||
-      libsNow.join(" ") !== seed.libs.join(" ")
+      libsNow.join("\n") !== seed.libs.join("\n")
     );
   }, [isCreate, seed, username, password, type, isActive, perms, allLibraries, selectedLibs]);
+
+  // Unsaved-changes guard (ChapterEditorScreen idiom): intercept ANY
+  // navigation that would remove this screen while the form is dirty —
+  // header back, hardware back, and gestures all funnel through beforeRemove.
+  // Refs keep the listener stable.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty && !saving && !readOnly;
+  useEffect(() => {
+    if (!navigation?.addListener) return;
+    const unsub = navigation.addListener("beforeRemove", (e: any) => {
+      if (!dirtyRef.current) return;
+      e.preventDefault();
+      showAppDialog({
+        title: "Discard changes?",
+        message: isCreate
+          ? "This user hasn't been created yet. Nothing has been sent to the server."
+          : "You have unsaved changes to this account. Nothing has been sent to the server yet.",
+        buttons: [
+          { text: "Keep editing", style: "cancel" },
+          {
+            text: "Discard",
+            style: "destructive",
+            onPress: () => navigation.dispatch(e.data.action),
+          },
+        ],
+      });
+    });
+    return unsub;
+  }, [navigation, isCreate]);
 
   const buildPayload = (): AbsUserPayload => {
     // Editing the root account (root viewer only): the ONLY safe fields are
@@ -287,6 +361,10 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       if (password) p.password = password;
       return p;
     }
+    // Tag restrictions have no UI here (yet) — echo the loaded user's values
+    // back UNCHANGED so an unrelated edit can never grant a tag-restricted
+    // user access to everything. Create mode uses the server defaults.
+    const loadedPerms: any = loadedUser?.permissions || {};
     const payload: AbsUserPayload = {
       username: username.trim(),
       type,
@@ -298,10 +376,18 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
         upload: perms.upload,
         accessExplicitContent: perms.accessExplicitContent,
         accessAllLibraries: allLibraries,
-        accessAllTags: true,
+        accessAllTags: isCreate ? true : loadedPerms.accessAllTags !== false,
       },
       librariesAccessible: allLibraries ? [] : [...selectedLibs],
+      itemTagsSelected:
+        !isCreate && Array.isArray(loadedUser?.itemTagsSelected)
+          ? [...loadedUser!.itemTagsSelected]
+          : [],
     };
+    // Older servers keep the accessible-tags list top-level — echo it too.
+    if (!isCreate && Array.isArray((loadedUser as any)?.itemTagsAccessible)) {
+      payload.itemTagsAccessible = [...(loadedUser as any).itemTagsAccessible];
+    }
     if (isCreate || password) payload.password = password;
     return payload;
   };
@@ -319,10 +405,16 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
       }
       navigation.goBack();
     } catch (e: any) {
-      showAppDialog({
-        title: isCreate ? "Couldn't create user" : "Couldn't save user",
-        message: failureMessage(e),
-      });
+      // A 409 means the username collided — that's a field problem, not an
+      // operation problem, so it lands inline under the field.
+      if (e?.status === 409) {
+        setUsernameError("Username already taken");
+      } else {
+        showAppDialog({
+          title: isCreate ? "Couldn't create user" : "Couldn't save user",
+          message: failureMessage(e),
+        });
+      }
     } finally {
       setSaving(false);
     }
@@ -330,14 +422,17 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
 
   const handleSave = () => {
     if (saving || readOnly) return;
+    // Required-field validation surfaces inline (not as dialogs).
+    let valid = true;
     if (!username.trim()) {
-      showAppDialog({ title: "Username required", message: "Enter a username for this account." });
-      return;
+      setUsernameError("Username required");
+      valid = false;
     }
     if (isCreate && !password) {
-      showAppDialog({ title: "Password required", message: "New accounts need a password." });
-      return;
+      setPasswordError("Password required");
+      valid = false;
     }
+    if (!valid) return;
     // Self-demotion guard: losing your own admin type would lock you out of
     // this admin area mid-session. Blocked — another admin has to do it.
     if (!isCreate && isSelf && loadedUser?.type === "admin" && type !== "admin") {
@@ -391,6 +486,21 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
     );
   };
 
+  // Self-disable guard (same class as self-delete/self-demote): disabling
+  // your own account would end your own session — blocked with an explainer.
+  const handleActiveToggle = (v: boolean) => {
+    if (readOnly) return;
+    if (!v && isSelf) {
+      showAppDialog({
+        title: "You can't disable your own account",
+        message:
+          "You're signed in as this user. Disabling your own account would sign you out and lock you out of server administration — ask another admin (or the root user) to disable it.",
+      });
+      return;
+    }
+    setIsActive(v);
+  };
+
   const title = isCreate ? "New user" : loadedUser?.username || "User";
   const showDelete = !isCreate && !loading && !error && !targetIsRoot;
   const showSave = !readOnly && !loading && !error;
@@ -435,6 +545,26 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
             <Icon name="trash" size={24} color={colors.error} />
           </Pressable>
         ) : null}
+        {/* Header Save (EditMetadata/ChapterEditor idiom) — enabled once dirty. */}
+        {showSave ? (
+          <Pressable
+            onPress={handleSave}
+            disabled={saving || !dirty}
+            accessibilityRole="button"
+            accessibilityLabel={isCreate ? "Create user" : "Save user"}
+            accessibilityState={{ disabled: saving || !dirty, busy: saving }}
+            hitSlop={8}
+            style={{ paddingHorizontal: 8, paddingVertical: 6, opacity: saving || !dirty ? 0.4 : 1 }}
+          >
+            {saving ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "700" }}>
+                {isCreate ? "Create" : "Save"}
+              </Text>
+            )}
+          </Pressable>
+        ) : null}
       </View>
 
       {loading ? (
@@ -470,18 +600,31 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
 
           <Field
             label="Username"
+            error={usernameError}
             value={username}
-            onChangeText={setUsername}
+            onChangeText={(t) => {
+              setUsername(t);
+              if (usernameError) setUsernameError(null);
+            }}
             editable={!readOnly}
+            autoCapitalize="none"
+            returnKeyType="next"
+            onSubmitEditing={() => passwordInputRef.current?.focus()}
             colors={colors}
           />
           <Field
             label={isCreate ? "Password" : "New password"}
             helper={isCreate ? undefined : "Leave blank to keep the current password."}
+            error={passwordError}
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(t) => {
+              setPassword(t);
+              if (passwordError) setPasswordError(null);
+            }}
             editable={!readOnly}
             secure
+            returnKeyType="done"
+            inputRef={passwordInputRef}
             colors={colors}
           />
 
@@ -548,7 +691,7 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
               title="Account enabled"
               subtitle="Disabled accounts can't sign in"
               value={isActive}
-              onValueChange={(v) => !readOnly && setIsActive(v)}
+              onValueChange={handleActiveToggle}
               colors={colors}
             />
           ) : null}
@@ -658,44 +801,18 @@ export default function AdminUserDetailScreen({ navigation, route }: any) {
                 icon="clock"
                 title="Listening sessions"
                 subtitle="View this user's playback sessions"
-                onPress={() => navigation.navigate("AdminSessions", { userId })}
+                onPress={() =>
+                  navigation.navigate("AdminSessions", {
+                    userId,
+                    username: loadedUser?.username || username.trim() || undefined,
+                  })
+                }
                 colors={colors}
               />
               <Divider colors={colors} />
             </>
           ) : null}
 
-          {/* Save */}
-          {showSave ? (
-            <Pressable
-              onPress={handleSave}
-              disabled={saving || (!isCreate && !dirty)}
-              accessibilityRole="button"
-              accessibilityLabel={isCreate ? "Create user" : "Save user"}
-              accessibilityState={{ disabled: saving || (!isCreate && !dirty) }}
-              android_ripple={{ color: withAlpha(colors.onPrimary, 0.16) }}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                marginHorizontal: 16,
-                marginTop: 20,
-                height: 48,
-                borderRadius: 24,
-                overflow: "hidden",
-                backgroundColor: colors.primary,
-                opacity: saving || (!isCreate && !dirty) ? 0.5 : 1,
-              }}
-            >
-              {saving ? (
-                <ActivityIndicator size="small" color={colors.onPrimary} />
-              ) : (
-                <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "700" }}>
-                  {isCreate ? "Create user" : "Save changes"}
-                </Text>
-              )}
-            </Pressable>
-          ) : null}
         </ScrollView>
       )}
     </SafeAreaView>

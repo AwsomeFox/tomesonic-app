@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
   FlatList,
   Pressable,
   ActivityIndicator,
+  AccessibilityInfo,
   RefreshControl,
   TouchableOpacity,
 } from "react-native";
@@ -23,8 +24,9 @@ import type { AbsListeningSession } from "../utils/abs/types";
  * AdminSessionsScreen — the server's listening sessions (admin-only).
  *
  * Route: "AdminSessions"
- * Params: { userId?: string } — when present (navigated from a user's detail
- * screen) the list is pre-filtered to that user, with a clearable filter chip.
+ * Params: { userId?: string; username?: string } — when userId is present
+ * (navigated from a user's detail screen) the list is pre-filtered to that
+ * user, with a clearable filter chip; username names the chip.
  *
  * Paginated via GET /api/sessions (infinite scroll). Single delete via each
  * row's trash button; batch delete via long-press selection mode (the M3
@@ -86,6 +88,7 @@ function errorViewProps(e: any): { icon: any; title: string; message: string } {
 export default function AdminSessionsScreen({ navigation, route }: any) {
   const colors = useThemeColors();
   const initialUserId: string | undefined = route?.params?.userId;
+  const filterUsername: string | undefined = route?.params?.username;
 
   const [userFilter, setUserFilter] = useState<string | undefined>(initialUserId);
   const [sessions, setSessions] = useState<AbsListeningSession[]>([]);
@@ -100,6 +103,15 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
   // null = normal mode; a Set = selection (batch) mode.
   const [selected, setSelected] = useState<Set<string> | null>(null);
 
+  // Pagination race guards. `loadMoreInFlightRef` is a REF (not state) so an
+  // onEndReached storm can't start a second fetch of the same page before the
+  // state update lands. `listGenRef` is a generation counter: any full list
+  // replacement (initial load, filter change, pull-to-refresh) bumps it, and a
+  // loadMore that resolves under an older generation discards its page instead
+  // of appending stale rows onto the fresh list.
+  const loadMoreInFlightRef = useRef(false);
+  const listGenRef = useRef(0);
+
   const fetchPage = (pageNum: number, user: string | undefined) =>
     getAllSessions({
       ...(user ? { user } : {}),
@@ -111,6 +123,7 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
 
   useEffect(() => {
     let cancelled = false;
+    listGenRef.current += 1; // invalidate any in-flight loadMore
     const load = async () => {
       setLoading(true);
       setError(null);
@@ -135,11 +148,17 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
   }, [userFilter, retryTick]);
 
   const loadMore = async () => {
+    if (loadMoreInFlightRef.current) return; // ref, not state: survives onEndReached storms
     if (loading || loadingMore || refreshing || error) return;
     if (page + 1 >= numPages) return;
+    loadMoreInFlightRef.current = true;
+    const gen = listGenRef.current;
     setLoadingMore(true);
     try {
       const res = await fetchPage(page + 1, userFilter);
+      // A refresh/reload replaced the list while we were fetching — this page
+      // belongs to the OLD list, so drop it.
+      if (gen !== listGenRef.current) return;
       setSessions((cur) => [...cur, ...(res.sessions || [])]);
       setPage(page + 1);
       setNumPages(res.numPages || numPages);
@@ -147,11 +166,13 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
     } catch {
       // Silent: the user can scroll again (or pull-to-refresh) to retry.
     } finally {
+      loadMoreInFlightRef.current = false;
       setLoadingMore(false);
     }
   };
 
   const onRefresh = async () => {
+    listGenRef.current += 1; // any in-flight loadMore page is now stale
     setRefreshing(true);
     try {
       const res = await fetchPage(0, userFilter);
@@ -247,18 +268,43 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
 
   const selectionMode = selected !== null;
 
+  // Announce selection-mode transitions — the header morph is visual-only, so
+  // screen-reader users need to hear that the interaction model just changed.
+  const prevSelectionModeRef = useRef(selectionMode);
+  useEffect(() => {
+    if (selectionMode === prevSelectionModeRef.current) return;
+    prevSelectionModeRef.current = selectionMode;
+    AccessibilityInfo.announceForAccessibility(
+      selectionMode
+        ? "Selection mode. Tap sessions to select, then delete from the header."
+        : "Selection mode off."
+    );
+  }, [selectionMode]);
+
+  const enterSelectionWith = (id: string) => {
+    if (!selectionMode) setSelected(new Set([id]));
+  };
+
   const renderRow = ({ item }: { item: AbsListeningSession }) => {
     const checked = !!selected?.has(item.id);
     return (
       <Pressable
-        onPress={() => (selectionMode ? toggleSelected(item.id) : undefined)}
-        onLongPress={() => {
-          if (!selectionMode) setSelected(new Set([item.id]));
-        }}
-        accessibilityRole={selectionMode ? "checkbox" : "button"}
+        // Normal mode has NO tap action (delete/long-press only), so no
+        // onPress and no button role — a "double tap to activate" that does
+        // nothing is an a11y lie. The long-press affordance is exposed as a
+        // custom accessibility action instead (Bookshelf overlay pattern).
+        onPress={selectionMode ? () => toggleSelected(item.id) : undefined}
+        onLongPress={() => enterSelectionWith(item.id)}
+        accessibilityRole={selectionMode ? "checkbox" : undefined}
         accessibilityState={selectionMode ? { checked } : undefined}
         accessibilityLabel={`Session: ${item.displayTitle}, ${sessionSubtitle(item)}`}
         accessibilityHint={selectionMode ? undefined : "Long press to select multiple sessions"}
+        accessibilityActions={
+          selectionMode ? undefined : [{ name: "longpress", label: "Select session" }]
+        }
+        onAccessibilityAction={(e) => {
+          if (e.nativeEvent.actionName === "longpress") enterSelectionWith(item.id);
+        }}
         android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.08) }}
         style={{
           flexDirection: "row",
@@ -388,7 +434,7 @@ export default function AdminSessionsScreen({ navigation, route }: any) {
             }}
           >
             <Text style={{ color: colors.onSecondaryContainer, fontSize: 13, fontWeight: "600", marginRight: 6 }}>
-              One user
+              {filterUsername ? `Sessions: ${filterUsername}` : "One user"}
             </Text>
             <Icon name="close" size={16} color={colors.onSecondaryContainer} />
           </Pressable>

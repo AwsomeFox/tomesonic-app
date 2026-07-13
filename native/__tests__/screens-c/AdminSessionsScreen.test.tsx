@@ -1,8 +1,11 @@
 /**
  * AdminSessionsScreen — admin listening sessions: pins the GET /api/sessions
- * query params (sort/pagination/user pre-filter), infinite-scroll pagination,
- * the confirmed single delete, long-press selection mode + confirmed batch
- * delete, and the offline / 403 / 404-as-non-admin error states.
+ * query params (sort/pagination/user pre-filter), infinite-scroll pagination
+ * (including the in-flight double-fetch guard and the refresh-vs-stale-page
+ * race), the confirmed single delete, long-press selection mode + confirmed
+ * batch delete (and both delete FAILURE paths), the named filter chip, the
+ * row accessibility semantics (custom longpress action, no fake button role),
+ * and the offline / 403 / 404-as-non-admin error states.
  */
 jest.mock("../../utils/abs/sessions", () => ({
   getAllSessions: jest.fn(),
@@ -13,7 +16,8 @@ jest.mock("../../store/useDialogStore", () => ({ showAppDialog: jest.fn() }));
 jest.mock("../../store/useSnackbarStore", () => ({ showSnackbar: jest.fn() }));
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { AccessibilityInfo } from "react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminSessionsScreen from "../../screens/AdminSessionsScreen";
 import { getAllSessions, deleteSession, batchDeleteSessions } from "../../utils/abs/sessions";
 import { showAppDialog } from "../../store/useDialogStore";
@@ -99,6 +103,21 @@ describe("AdminSessionsScreen", () => {
     await waitFor(() => expect(screen.queryByLabelText("Clear user filter")).toBeNull());
   });
 
+  it("names the filter chip after the username route param (FROZEN param name: username)", async () => {
+    await renderScreen({ userId: "u2", username: "joe" });
+    await screen.findByText("Book One");
+
+    expect(screen.getByText("Sessions: joe")).toBeTruthy();
+    expect(screen.queryByText("One user")).toBeNull();
+  });
+
+  it("falls back to the generic chip label when no username param is given", async () => {
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("Book One");
+
+    expect(screen.getByText("One user")).toBeTruthy();
+  });
+
   it("infinite scroll requests the next page and appends", async () => {
     (getAllSessions as jest.Mock)
       .mockResolvedValueOnce(pageResponse([S1, S2], { total: 3, numPages: 2, page: 0 }))
@@ -116,6 +135,61 @@ describe("AdminSessionsScreen", () => {
     // At the last page, further end-reached events fetch nothing more.
     fireEvent(screen.getByTestId("sessions-list"), "onEndReached");
     expect(getAllSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it("an onEndReached storm fires ONE fetch, not one per event (in-flight ref guard)", async () => {
+    let resolvePage1: (v: any) => void;
+    (getAllSessions as jest.Mock)
+      .mockResolvedValueOnce(pageResponse([S1, S2], { total: 3, numPages: 2, page: 0 }))
+      .mockImplementationOnce(() => new Promise((res) => (resolvePage1 = res)));
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    // Two synchronous onEndReached events BEFORE any re-render can flush
+    // state — only the ref guard can stop the second fetch.
+    const list = screen.getByTestId("sessions-list");
+    await act(async () => {
+      list.props.onEndReached();
+      list.props.onEndReached();
+    });
+    expect(getAllSessions).toHaveBeenCalledTimes(2); // mount + ONE loadMore
+
+    await act(async () => {
+      resolvePage1!(pageResponse([S3], { total: 3, numPages: 2, page: 1 }));
+    });
+    // Appended exactly once.
+    expect(screen.getAllByText("Book Three")).toHaveLength(1);
+  });
+
+  it("a pull-to-refresh invalidates an in-flight loadMore — the stale page never appends", async () => {
+    let resolveStalePage: (v: any) => void;
+    (getAllSessions as jest.Mock)
+      .mockResolvedValueOnce(pageResponse([S1, S2], { total: 3, numPages: 2, page: 0 }))
+      // loadMore for page 1: left hanging until AFTER the refresh lands.
+      .mockImplementationOnce(() => new Promise((res) => (resolveStalePage = res)))
+      // The refresh: the server list has shrunk to just S2.
+      .mockResolvedValueOnce(pageResponse([S2], { total: 1, numPages: 1, page: 0 }));
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    const list = screen.getByTestId("sessions-list");
+    await act(async () => {
+      list.props.onEndReached();
+    });
+
+    // Refresh completes while the loadMore is still in flight.
+    await act(async () => {
+      await list.props.refreshControl.props.onRefresh();
+    });
+    expect(screen.getByText("1 session")).toBeTruthy();
+    expect(screen.queryByText("Book One")).toBeNull();
+
+    // The stale page-1 response finally arrives — it must be DISCARDED.
+    await act(async () => {
+      resolveStalePage!(pageResponse([S3], { total: 3, numPages: 2, page: 1 }));
+    });
+    expect(screen.queryByText("Book Three")).toBeNull();
+    expect(screen.getByText("1 session")).toBeTruthy();
   });
 
   it("single delete confirms via dialog, then DELETEs and removes the row", async () => {
@@ -139,6 +213,31 @@ describe("AdminSessionsScreen", () => {
     await waitFor(() => expect(screen.queryByText("Book One")).toBeNull());
     expect(showSnackbar).toHaveBeenCalledWith({ message: "Session deleted" });
     expect(screen.getByText("1 session")).toBeTruthy();
+  });
+
+  it("a single-delete failure surfaces the exact dialog and the row persists", async () => {
+    (deleteSession as jest.Mock).mockRejectedValue(
+      new AbsError("server", "The server hit an error handling this request.", 500)
+    );
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    fireEvent.press(screen.getByLabelText("Delete session: Book One"));
+    await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+    await act(async () => {
+      lastDialog().buttons.find((b: any) => b.text === "Delete").onPress();
+    });
+
+    expect(showAppDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Couldn't delete session",
+        message: "The server hit an error handling this request.",
+      })
+    );
+    // Row and count untouched; no success snackbar.
+    expect(screen.getByText("Book One")).toBeTruthy();
+    expect(screen.getByText("2 sessions")).toBeTruthy();
+    expect(showSnackbar).not.toHaveBeenCalled();
   });
 
   it("long-press enters selection mode and batch delete posts all selected ids", async () => {
@@ -170,6 +269,36 @@ describe("AdminSessionsScreen", () => {
     expect(showSnackbar).toHaveBeenCalledWith({ message: "2 sessions deleted" });
   });
 
+  it("a batch-delete failure surfaces the exact dialog and every row persists", async () => {
+    (batchDeleteSessions as jest.Mock).mockRejectedValue(
+      new AbsError("server", "The server hit an error handling this request.", 500)
+    );
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    fireEvent(screen.getByLabelText(/^Session: Book One/), "longPress");
+    await screen.findByText("1 selected");
+    fireEvent.press(screen.getByLabelText(/^Session: Book Two/));
+    await screen.findByText("2 selected");
+
+    fireEvent.press(screen.getByLabelText("Delete selected sessions"));
+    await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+    await act(async () => {
+      lastDialog().buttons.find((b: any) => b.text === "Delete").onPress();
+    });
+
+    expect(showAppDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Couldn't delete sessions",
+        message: "The server hit an error handling this request.",
+      })
+    );
+    // Nothing removed; no success snackbar.
+    expect(screen.getByText("Book One")).toBeTruthy();
+    expect(screen.getByText("Book Two")).toBeTruthy();
+    expect(showSnackbar).not.toHaveBeenCalled();
+  });
+
   it("exiting selection mode restores the normal header", async () => {
     await renderScreen();
     await screen.findByText("Book One");
@@ -180,6 +309,43 @@ describe("AdminSessionsScreen", () => {
     fireEvent.press(screen.getByLabelText("Exit selection"));
     await waitFor(() => expect(screen.queryByText("1 selected")).toBeNull());
     expect(screen.getByText("Listening sessions")).toBeTruthy();
+  });
+
+  it("normal-mode rows are NOT buttons and expose a longpress accessibility action instead", async () => {
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    const row = screen.getByLabelText(/^Session: Book One/);
+    // No tap action in normal mode ⇒ no button role ("double tap to activate"
+    // announcing a no-op is an a11y lie) — the long-press affordance is a
+    // custom action.
+    expect(row.props.accessibilityRole).toBeUndefined();
+    expect(row.props.accessibilityActions).toEqual([
+      { name: "longpress", label: "Select session" },
+    ]);
+
+    // Performing the custom action enters selection mode with the row selected.
+    fireEvent(row, "accessibilityAction", { nativeEvent: { actionName: "longpress" } });
+    expect(await screen.findByText("1 selected")).toBeTruthy();
+    // In selection mode the row is a real checkbox.
+    const selectedRow = screen.getByLabelText(/^Session: Book One/);
+    expect(selectedRow.props.accessibilityRole).toBe("checkbox");
+    expect(selectedRow.props.accessibilityState).toEqual({ checked: true });
+  });
+
+  it("announces entering and leaving selection mode to screen readers", async () => {
+    const announce = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
+    await renderScreen();
+    await screen.findByText("Book One");
+
+    fireEvent(screen.getByLabelText(/^Session: Book One/), "longPress");
+    await screen.findByText("1 selected");
+    expect(announce).toHaveBeenCalledWith(
+      "Selection mode. Tap sessions to select, then delete from the header."
+    );
+
+    fireEvent.press(screen.getByLabelText("Exit selection"));
+    await waitFor(() => expect(announce).toHaveBeenCalledWith("Selection mode off."));
   });
 
   it("empty list renders the empty state", async () => {

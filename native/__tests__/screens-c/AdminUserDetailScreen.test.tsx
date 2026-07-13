@@ -1,9 +1,11 @@
 /**
  * AdminUserDetailScreen — create/edit a server user. Pins the POST/PATCH
- * payload shapes, the password-reset semantics (blank = unchanged), the
- * root-account guard (non-root sees read-only), the self-delete and
- * self-demote blocks, the Tier-3 typed-confirm delete, and the offline vs 403
- * load states.
+ * payload shapes (including tag restrictions echoed back UNCHANGED), the
+ * password-reset semantics (blank = unchanged), the root-account guard
+ * (non-root sees read-only), the self-delete / self-demote / self-disable
+ * blocks, the Tier-3 typed-confirm delete, the beforeRemove dirty guard, the
+ * inline required-field + 409 duplicate-username errors, and the offline vs
+ * 403 load states.
  */
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -19,7 +21,7 @@ jest.mock("../../store/useDialogStore", () => ({ showAppDialog: jest.fn() }));
 jest.mock("../../store/useSnackbarStore", () => ({ showSnackbar: jest.fn() }));
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminUserDetailScreen from "../../screens/AdminUserDetailScreen";
 import { api } from "../../utils/api";
 import { getUser, createUser, updateUser, deleteUser, getUserListeningStats } from "../../utils/abs/users";
@@ -82,16 +84,28 @@ const JOE_BASE_PAYLOAD = {
     accessAllTags: true,
   },
   librariesAccessible: [],
+  itemTagsSelected: [],
 };
 
+// Captures navigation listeners (beforeRemove) — the ChapterEditor test idiom.
 function makeNavigation() {
-  return { navigate: jest.fn(), goBack: jest.fn(), addListener: jest.fn(() => jest.fn()) } as any;
+  const listeners: Record<string, (e: any) => void> = {};
+  const navigation = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    dispatch: jest.fn(),
+    addListener: jest.fn((name: string, cb: (e: any) => void) => {
+      listeners[name] = cb;
+      return jest.fn();
+    }),
+  } as any;
+  return { navigation, listeners };
 }
 
 async function renderScreen(params: any = {}) {
-  const navigation = makeNavigation();
+  const { navigation, listeners } = makeNavigation();
   await render(<AdminUserDetailScreen navigation={navigation} route={{ params }} />);
-  return navigation;
+  return Object.assign(navigation, { listeners });
 }
 
 function lastDialog() {
@@ -156,24 +170,38 @@ describe("AdminUserDetailScreen — create mode", () => {
           accessAllTags: true,
         },
         librariesAccessible: [],
+        itemTagsSelected: [],
       })
     );
     expect(showSnackbar).toHaveBeenCalledWith({ message: "User created" });
     expect(navigation.goBack).toHaveBeenCalled();
   });
 
-  it("blocks create without a password (dialog, no POST)", async () => {
+  it("blocks create without a password — INLINE field error, no dialog, no POST", async () => {
     await renderScreen({});
     await screen.findByText("New user");
 
     await setField("Username", "newbie");
     fireEvent.press(screen.getByLabelText("Create user"));
 
-    await waitFor(() =>
-      expect(showAppDialog).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Password required" })
-      )
-    );
+    expect(await screen.findByText("Password required")).toBeTruthy();
+    expect(showAppDialog).not.toHaveBeenCalled();
+    expect(createUser).not.toHaveBeenCalled();
+
+    // Typing into the field clears the inline error.
+    await setField("Password", "p");
+    expect(screen.queryByText("Password required")).toBeNull();
+  });
+
+  it("blocks create without a username — INLINE field error, no dialog, no POST", async () => {
+    await renderScreen({});
+    await screen.findByText("New user");
+
+    await setField("Password", "pw123");
+    fireEvent.press(screen.getByLabelText("Create user"));
+
+    expect(await screen.findByText("Username required")).toBeTruthy();
+    expect(showAppDialog).not.toHaveBeenCalled();
     expect(createUser).not.toHaveBeenCalled();
   });
 
@@ -241,7 +269,59 @@ describe("AdminUserDetailScreen — edit mode", () => {
     await screen.findByText("joe");
 
     fireEvent.press(screen.getByText("Listening sessions"));
-    expect(navigation.navigate).toHaveBeenCalledWith("AdminSessions", { userId: "u2" });
+    // `username` names the filter chip on the sessions screen (FROZEN param name).
+    expect(navigation.navigate).toHaveBeenCalledWith("AdminSessions", {
+      userId: "u2",
+      username: "joe",
+    });
+  });
+
+  it("echoes a tag-restricted user's tag fields back UNCHANGED on an unrelated edit", async () => {
+    // Regression: buildPayload used to send accessAllTags:true unconditionally
+    // and drop itemTagsSelected — any edit silently un-restricted the user.
+    (getUser as jest.Mock).mockResolvedValue({
+      ...JOE,
+      permissions: { ...JOE.permissions, accessAllTags: false },
+      itemTagsSelected: ["kids", "teen"],
+      itemTagsAccessible: ["kids"],
+    });
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    // Toggle an UNRELATED permission, then save.
+    fireEvent.press(screen.getByLabelText("Can upload"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Can upload").props.accessibilityState.checked).toBe(true)
+    );
+    fireEvent.press(screen.getByLabelText("Save user"));
+
+    await waitFor(() => expect(updateUser).toHaveBeenCalled());
+    const payload = (updateUser as jest.Mock).mock.calls[0][1];
+    expect(payload.permissions.upload).toBe(true); // the actual edit
+    // Tag restriction preserved EXACTLY.
+    expect(payload.permissions.accessAllTags).toBe(false);
+    expect(payload.itemTagsSelected).toEqual(["kids", "teen"]);
+    expect(payload.itemTagsAccessible).toEqual(["kids"]);
+  });
+
+  it("the header Save button stays disabled until the form is dirty", async () => {
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    expect(screen.getByLabelText("Save user").props.accessibilityState.disabled).toBe(true);
+
+    await setField("Username", "joe2");
+    expect(screen.getByLabelText("Save user").props.accessibilityState.disabled).toBe(false);
+  });
+
+  it("username field is no-caps with next-key chaining; password submits with done", async () => {
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    const usernameInput = screen.getByLabelText("Username");
+    expect(usernameInput.props.autoCapitalize).toBe("none");
+    expect(usernameInput.props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("New password").props.returnKeyType).toBe("done");
   });
 
   it("a stats failure never blocks editing", async () => {
@@ -331,6 +411,100 @@ describe("AdminUserDetailScreen — self-account guards", () => {
     );
     expect(updateUser).not.toHaveBeenCalled();
   });
+
+  it("blocks disabling your own account with an explaining dialog (toggle stays on)", async () => {
+    useUserStore.setState({ user: { id: "u2", username: "joe", type: "admin" } } as any);
+    await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    fireEvent.press(screen.getByLabelText(/^Account enabled/));
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "You can't disable your own account" })
+      )
+    );
+    // The toggle never flips — the doomed PATCH can't even be staged.
+    expect(screen.getByLabelText(/^Account enabled/).props.accessibilityState.checked).toBe(true);
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
+  it("disabling SOMEONE ELSE'S account is not blocked", async () => {
+    await renderScreen({ userId: "u2" }); // me = admin1, target = u2
+    await screen.findByText("joe");
+
+    fireEvent.press(screen.getByLabelText(/^Account enabled/));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^Account enabled/).props.accessibilityState.checked).toBe(false)
+    );
+    expect(showAppDialog).not.toHaveBeenCalled();
+  });
+});
+
+describe("AdminUserDetailScreen — dirty-form guard (beforeRemove)", () => {
+  const goBackEvent = () => ({
+    preventDefault: jest.fn(),
+    data: { action: { type: "GO_BACK" } },
+  });
+
+  it("a DIRTY form blocks navigation until Discard is confirmed", async () => {
+    const navigation = await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    await setField("Username", "joe2");
+
+    const event = goBackEvent();
+    await act(async () => navigation.listeners["beforeRemove"](event));
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(showAppDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Discard changes?" })
+    );
+    expect(navigation.dispatch).not.toHaveBeenCalled();
+
+    const discard = lastDialog().buttons.find((b: any) => b.text === "Discard");
+    expect(discard.style).toBe("destructive");
+    await act(async () => discard.onPress());
+    expect(navigation.dispatch).toHaveBeenCalledWith({ type: "GO_BACK" });
+  });
+
+  it("a CLEAN form lets navigation proceed silently", async () => {
+    const navigation = await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    const event = goBackEvent();
+    await act(async () => navigation.listeners["beforeRemove"](event));
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(showAppDialog).not.toHaveBeenCalled();
+  });
+
+  it("an untouched CREATE form lets navigation proceed silently", async () => {
+    const navigation = await renderScreen({});
+    await screen.findByText("New user");
+
+    const event = goBackEvent();
+    await act(async () => navigation.listeners["beforeRemove"](event));
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(showAppDialog).not.toHaveBeenCalled();
+  });
+
+  it("a CREATE form with typed input arms the guard", async () => {
+    const navigation = await renderScreen({});
+    await screen.findByText("New user");
+
+    await setField("Username", "half-finished");
+
+    const event = goBackEvent();
+    await act(async () => navigation.listeners["beforeRemove"](event));
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(showAppDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Discard changes?" })
+    );
+  });
 });
 
 describe("AdminUserDetailScreen — delete (Tier-3 typed confirm)", () => {
@@ -354,6 +528,31 @@ describe("AdminUserDetailScreen — delete (Tier-3 typed confirm)", () => {
     await waitFor(() => expect(deleteUser).toHaveBeenCalledWith("u2"));
     await waitFor(() => expect(showSnackbar).toHaveBeenCalledWith({ message: "User deleted" }));
     expect(navigation.goBack).toHaveBeenCalled();
+  });
+
+  it("a delete failure surfaces the exact dialog, keeps the form, and does NOT pop back", async () => {
+    (deleteUser as jest.Mock).mockRejectedValue(
+      new AbsError("server", "The server hit an error handling this request.", 500)
+    );
+    const navigation = await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    fireEvent.press(screen.getByLabelText("Delete user"));
+    await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+    lastDialog().buttons.find((b: any) => b.text === "Delete").onPress();
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't delete user",
+          message: "The server hit an error handling this request.",
+        })
+      )
+    );
+    // Screen stays put with the form intact — nothing was deleted.
+    expect(navigation.goBack).not.toHaveBeenCalled();
+    expect(showSnackbar).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Username").props.value).toBe("joe");
   });
 });
 
@@ -396,5 +595,23 @@ describe("AdminUserDetailScreen — load failures", () => {
     );
     // Form state preserved (no goBack, edited value intact).
     expect(screen.getByLabelText("Username").props.value).toBe("joe2");
+  });
+
+  it("a 409 (duplicate username) becomes an INLINE username error, not a dialog", async () => {
+    (updateUser as jest.Mock).mockRejectedValue(
+      new AbsError("unknown", "Username already in use", 409)
+    );
+    const navigation = await renderScreen({ userId: "u2" });
+    await screen.findByText("joe");
+
+    await setField("Username", "marc");
+    fireEvent.press(screen.getByLabelText("Save user"));
+
+    expect(await screen.findByText("Username already taken")).toBeTruthy();
+    expect(showAppDialog).not.toHaveBeenCalled();
+    expect(navigation.goBack).not.toHaveBeenCalled();
+    // Retyping clears it.
+    await setField("Username", "marc2");
+    expect(screen.queryByText("Username already taken")).toBeNull();
   });
 });

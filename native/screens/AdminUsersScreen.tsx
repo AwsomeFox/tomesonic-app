@@ -81,25 +81,37 @@ export default function AdminUsersScreen({ navigation }: any) {
   const [retryTick, setRetryTick] = useState(0);
   const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
+  // `silent` refetches WITHOUT the full-screen spinner — used on focus so a
+  // list that's already on screen just updates in place.
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = !!opts?.silent;
+    if (!silent) {
       setLoading(true);
       setError(null);
-      try {
-        const list = await getUsers();
-        if (!cancelled) setUsers(list);
-      } catch (e) {
-        if (!cancelled) setError(e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
+    }
+    try {
+      const list = await getUsers();
+      setUsers(list);
+      if (silent) setError(null); // a stale error state heals on a good refetch
+    } catch (e) {
+      // Silent refetch failures keep whatever's already rendered.
+      if (!silent) setError(e);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [retryTick]);
+  }, [retryTick, load]);
+
+  // Reload on focus (AdminApiKeysScreen idiom) so a create/edit/delete done in
+  // AdminUserDetail is reflected the moment the admin navigates back.
+  useEffect(() => {
+    if (!navigation?.addListener) return;
+    const unsub = navigation.addListener("focus", () => void load({ silent: true }));
+    return unsub;
+  }, [navigation, load]);
 
   // Online badge: focus-gated poll (30s). Poll failures are swallowed by
   // usePolling's backoff — the badges just go stale, and the caption row

@@ -164,6 +164,53 @@ describe("AdminUsersScreen", () => {
     expect(screen.queryByText("Online")).toBeNull();
   });
 
+  it("refetches SILENTLY on navigation focus so edits made in detail show on return", async () => {
+    const navigation = await renderScreen();
+    await screen.findByText("joe");
+    expect(getUsers).toHaveBeenCalledTimes(1);
+
+    // Simulate returning from AdminUserDetail: the server now knows joe as
+    // "joe2". Keep the refetch pending at first to prove there's no
+    // full-screen spinner while fresh data is on its way.
+    let resolveRefetch: (v: any) => void;
+    (getUsers as jest.Mock).mockImplementationOnce(
+      () => new Promise((res) => (resolveRefetch = res))
+    );
+    const focusCall = (navigation.addListener as jest.Mock).mock.calls.find(
+      (c: any[]) => c[0] === "focus"
+    );
+    expect(focusCall).toBeTruthy();
+    await act(async () => {
+      focusCall[1]();
+    });
+
+    // Silent: the already-rendered list stays visible mid-refetch.
+    expect(getUsers).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("joe")).toBeTruthy();
+
+    await act(async () => {
+      resolveRefetch!([{ ...USERS[2], username: "joe2" }]);
+    });
+    expect(await screen.findByText("joe2")).toBeTruthy();
+    expect(screen.queryByText("marc")).toBeNull();
+  });
+
+  it("a failed focus refetch keeps the already-rendered list (no error nuke)", async () => {
+    const navigation = await renderScreen();
+    await screen.findByText("joe");
+
+    (getUsers as jest.Mock).mockRejectedValueOnce(new AbsError("server", "boom", 500));
+    const focusCall = (navigation.addListener as jest.Mock).mock.calls.find(
+      (c: any[]) => c[0] === "focus"
+    );
+    await act(async () => {
+      focusCall[1]();
+    });
+
+    expect(screen.getByText("joe")).toBeTruthy();
+    expect(screen.queryByText("boom")).toBeNull();
+  });
+
   it("403 renders the admin-access-required error state with a working retry", async () => {
     (getUsers as jest.Mock).mockRejectedValueOnce(
       new AbsError("forbidden", "You don't have permission to do that.", 403)
