@@ -51,7 +51,8 @@ import {
   deleteShareLink,
   buildItemZipDownloadUrl,
 } from "../utils/abs/items";
-import { startTaskWatch } from "../utils/abs/tasks";
+import { startTaskWatch, subscribeTasks, getTasksSnapshot } from "../utils/abs/tasks";
+import type { AbsTask } from "../utils/abs/types";
 
 // Share-link expiry presets (ms). 0 = never (the server expects numeric
 // expiresAt with 0 for "no expiry" — never null).
@@ -454,9 +455,66 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     loadItem();
   }, [itemId]);
 
+  // SILENT refetch on navigation focus so edits made on pushed screens
+  // (metadata editor, chapter editor, match apply) show on return — no
+  // spinner over already-rendered content (refetchItem never sets loading).
+  useEffect(() => {
+    if (!itemId) return;
+    const unsub = navigation?.addListener?.("focus", () => {
+      refetchItem();
+    });
+    return () => unsub?.();
+  }, [navigation, itemId]);
+
+  // --- Server task activity for THIS item (encode/embed) --------------------
+  // Poller subscription held only while focused (ServerAdminHub's focus/blur
+  // handoff) and only for admins — the Tools rows are admin-gated anyway.
+  const [tasks, setTasks] = useState<AbsTask[]>(() => getTasksSnapshot());
+  useEffect(() => {
+    if (!capabilities.isAdmin || !itemId) return;
+    let unsub: (() => void) | null = subscribeTasks(setTasks);
+    const focusUnsub = navigation?.addListener?.("focus", () => {
+      if (!unsub) {
+        setTasks(getTasksSnapshot());
+        unsub = subscribeTasks(setTasks);
+      }
+    });
+    const blurUnsub = navigation?.addListener?.("blur", () => {
+      unsub?.();
+      unsub = null;
+    });
+    return () => {
+      unsub?.();
+      focusUnsub?.();
+      blurUnsub?.();
+    };
+  }, [navigation, capabilities.isAdmin, itemId]);
+
+  // An UNFINISHED encode/embed task targeting this item — drives the
+  // in-progress banner and disables the Tools rows (no double kickoff).
+  const hasRunningItemTask = (fragment: string) =>
+    tasks.some(
+      (t) =>
+        !t.isFinished &&
+        typeof t.action === "string" &&
+        t.action.includes(fragment) &&
+        t.data?.libraryItemId === itemId
+    );
+  const encodeTaskRunning = hasRunningItemTask("encode");
+  const embedTaskRunning = hasRunningItemTask("embed");
+  const itemTaskRunning = encodeTaskRunning || embedTaskRunning;
+
   const metadata = item?.media?.metadata || {};
+  // `ts` cache-busts on the item's updatedAt so a cover changed in the editor
+  // actually re-renders here (expo-image would otherwise serve the old cached
+  // bitmap for the same URI). coverSource() strips only the token from its
+  // cacheKey, so a new ts is a new cache entry — exactly what a changed cover
+  // needs.
+  const coverBust = item?.updatedAt ? `&ts=${item.updatedAt}` : "";
   const coverUrl =
-    itemId && serverAddress && token ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}` : null;
+    itemId && serverAddress && token
+      ? `${serverAddress}/api/items/${itemId}/cover?width=800&format=webp&token=${token}${coverBust}`
+      : null;
 
   const description = stripHtml(metadata.description || "");
   const duration = item?.media?.duration || 0;
@@ -595,9 +653,19 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           onPress: () => {
             // Deliberately NOT axios and NOT the in-app downloads store: a
             // multi-GB zip must stream via the OS download manager, and it
-            // isn't a playable in-app download.
-            Linking.openURL(url).catch(() => {});
-            showSnackbar({ message: "Zip download handed to your browser" });
+            // isn't a playable in-app download. Success feedback only once
+            // the OS actually took the URL — a device with no browser lands
+            // in the catch, which must not claim the handoff happened.
+            Linking.openURL(url)
+              .then(() => {
+                showSnackbar({ message: "Zip download handed to your browser" });
+              })
+              .catch(() => {
+                showAppDialog({
+                  title: "Couldn't download",
+                  message: "Couldn't open a browser for the download.",
+                });
+              });
           },
         },
       ],
@@ -614,13 +682,22 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         { text: "Cancel", style: "cancel" },
         {
           text: "Start encode",
+          // Server-side file mutation with no undo — destructive tier.
+          style: "destructive",
           onPress: async () => {
             try {
               await encodeM4b(itemId);
               setToolsVisible(false);
               showSnackbar({ message: "M4B encode started" });
+              // The watch may resolve via INFERRED completion (the task
+              // vanished from a snapshot — ABS removes finished tasks): treat
+              // that as generic success; failure copy comes ONLY from
+              // isFailed/error.
               const task = await startTaskWatch(
-                (t) => t.action.includes("encode") && t.data?.libraryItemId === itemId
+                (t) =>
+                  typeof t.action === "string" &&
+                  t.action.includes("encode") &&
+                  t.data?.libraryItemId === itemId
               );
               if (task) {
                 showSnackbar({
@@ -652,13 +729,19 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         { text: "Cancel", style: "cancel" },
         {
           text: "Embed",
+          // Writes into the audio files on disk — destructive tier.
+          style: "destructive",
           onPress: async () => {
             try {
               await embedMetadata(itemId);
               setToolsVisible(false);
               showSnackbar({ message: "Metadata embed started" });
+              // Same inferred-completion contract as the encode watch above.
               const task = await startTaskWatch(
-                (t) => t.action.includes("embed") && t.data?.libraryItemId === itemId
+                (t) =>
+                  typeof t.action === "string" &&
+                  t.action.includes("embed") &&
+                  t.data?.libraryItemId === itemId
               );
               if (task) {
                 showSnackbar({
@@ -1359,6 +1442,38 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               </Text>
             ) : null}
           </View>
+
+          {/* Persistent in-progress banner while the server runs an encode/
+              embed task against THIS item (plan §G6) — otherwise a long file
+              mutation is invisible outside a transient snackbar. Also drives
+              the disabled Tools rows below (no double kickoff). */}
+          {itemTaskRunning ? (
+            <View style={{ paddingHorizontal: 20, marginTop: 16 }} accessibilityLiveRegion="polite">
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: colors.tertiaryContainer,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                }}
+              >
+                <ActivityIndicator size="small" color={colors.onTertiaryContainer} />
+                <Text
+                  style={{
+                    flex: 1,
+                    color: colors.onTertiaryContainer,
+                    fontSize: 14,
+                    fontWeight: "600",
+                    marginLeft: 10,
+                  }}
+                >
+                  {encodeTaskRunning ? "Encoding in progress…" : "Embedding metadata…"}
+                </Text>
+              </View>
+            </View>
+          ) : null}
 
           {/* Action row. Primary is Play for audiobooks; for an ebook-only item
               it becomes Read (in the play button's place). A matched sibling in
@@ -2507,11 +2622,16 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       {/* Overflow: capability-gated item actions. */}
       <BottomSheet visible={overflowVisible} onClose={() => setOverflowVisible(false)}>
         <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 6 }}>
-          <Text style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}>
+          <Text
+            accessibilityRole="header"
+            style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}
+          >
             More actions
           </Text>
         </View>
-        {capabilities.canEditMetadata ? (
+        {/* Books only: the editor is book-shaped (authors/series/ISBN) —
+            podcast metadata editing rides with issue #56. */}
+        {capabilities.canEditMetadata && !isPodcastItem ? (
           <RowBase
             icon="edit"
             title="Edit metadata"
@@ -2575,34 +2695,58 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         />
       </BottomSheet>
 
-      {/* Tools: server-side file operations (admin). */}
+      {/* Tools: server-side file operations (admin). Both rows disable while
+          an encode/embed task already targets this item — kicking off a second
+          file mutation mid-run is never valid. */}
       <BottomSheet visible={toolsVisible} onClose={() => setToolsVisible(false)}>
         <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 6 }}>
-          <Text style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}>Tools</Text>
+          <Text
+            accessibilityRole="header"
+            style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}
+          >
+            Tools
+          </Text>
           <Text style={{ fontSize: 13, color: colors.onSurfaceVariant, marginTop: 2 }}>
             These run on the server and modify the item's files.
           </Text>
         </View>
-        <RowBase
-          icon="music"
-          title="Encode as M4B"
-          subtitle="Merge audio files into one M4B"
-          colors={colors}
-          onPress={startEncodeM4b}
-        />
-        <RowBase
-          icon="edit"
-          title="Embed metadata"
-          subtitle="Write metadata and cover into the audio files"
-          colors={colors}
-          onPress={startEmbedMetadata}
-        />
+        <View style={{ opacity: itemTaskRunning ? 0.5 : 1 }}>
+          <RowBase
+            icon="music"
+            title="Encode as M4B"
+            subtitle={encodeTaskRunning ? "Encoding in progress…" : "Merge audio files into one M4B"}
+            colors={colors}
+            accessibilityState={{ disabled: itemTaskRunning } as any}
+            onPress={() => {
+              if (itemTaskRunning) return;
+              startEncodeM4b();
+            }}
+          />
+          <RowBase
+            icon="edit"
+            title="Embed metadata"
+            subtitle={
+              embedTaskRunning
+                ? "Embedding metadata…"
+                : "Write metadata and cover into the audio files"
+            }
+            colors={colors}
+            accessibilityState={{ disabled: itemTaskRunning } as any}
+            onPress={() => {
+              if (itemTaskRunning) return;
+              startEmbedMetadata();
+            }}
+          />
+        </View>
       </BottomSheet>
 
       {/* Share link: create/copy/delete a public streaming link. */}
       <BottomSheet visible={shareVisible} onClose={() => setShareVisible(false)}>
         <View style={{ paddingHorizontal: 24, paddingTop: 4, paddingBottom: 12 }}>
-          <Text style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}>
+          <Text
+            accessibilityRole="header"
+            style={{ fontSize: 18, fontWeight: "600", color: colors.onSurface }}
+          >
             Share link
           </Text>
           <Text style={{ fontSize: 13, color: colors.onSurfaceVariant, marginTop: 2 }}>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,9 @@ import {
   ScrollView,
   Pressable,
   ActivityIndicator,
+  AccessibilityInfo,
+  type KeyboardTypeOptions,
+  type ReturnKeyTypeOptions,
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -53,7 +56,7 @@ const PROVIDERS: { id: string; label: string }[] = [
   { id: "openlibrary", label: "Open Library" },
 ];
 
-/** "The Long Way, Home!" → "the-long-way-home" (comma-split list helper too). */
+/** Comma-splitter for list fields: "a, b, , c" → ["a", "b", "c"]. */
 export function splitList(s: string): string[] {
   return String(s || "")
     .split(",")
@@ -108,9 +111,18 @@ function seedFromItem(it: any): FormState {
 /**
  * Diff form vs seed into the PATCH /api/items/:id/media payload — ONLY dirty
  * keys are included (metadata fields under `metadata`, tags top-level).
+ *
+ * `originalSeries` is the item's FULL metadata.series array: the form only
+ * edits series[0], so a series patch is [edited head, ...untouched tail].
+ * Without it a book in 2+ series would have every other series DROPPED
+ * server-side (the PATCH replaces the whole array).
  * Exported for direct unit assertion.
  */
-export function buildDirtyPatch(form: FormState, seed: FormState): any {
+export function buildDirtyPatch(
+  form: FormState,
+  seed: FormState,
+  originalSeries: any[] = []
+): any {
   const md: any = {};
   const patch: any = {};
   const changed = (k: keyof FormState) => form[k] !== seed[k];
@@ -122,7 +134,11 @@ export function buildDirtyPatch(form: FormState, seed: FormState): any {
   if (changed("seriesName") || changed("seriesSequence")) {
     const name = form.seriesName.trim();
     const sequence = form.seriesSequence.trim();
-    md.series = name ? [{ name, ...(sequence ? { sequence } : {}) }] : [];
+    const head = name ? [{ name, ...(sequence ? { sequence } : {}) }] : [];
+    // Preserve every series entry beyond the edited first one, verbatim
+    // (ids intact so the server updates rather than re-creates them).
+    const tail = (Array.isArray(originalSeries) ? originalSeries : []).slice(1);
+    md.series = [...head, ...tail];
   }
   if (changed("genres")) md.genres = splitList(form.genres);
   if (changed("description")) md.description = form.description.trim() || null;
@@ -264,6 +280,11 @@ function Field({
   onChangeText,
   multiline,
   colors,
+  keyboardType,
+  autoCapitalize,
+  returnKeyType,
+  onSubmitEditing,
+  inputRef,
 }: {
   label: string;
   helper?: string;
@@ -271,6 +292,11 @@ function Field({
   onChangeText: (t: string) => void;
   multiline?: boolean;
   colors: any;
+  keyboardType?: KeyboardTypeOptions;
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  returnKeyType?: ReturnKeyTypeOptions;
+  onSubmitEditing?: () => void;
+  inputRef?: (r: TextInput | null) => void;
 }) {
   return (
     <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
@@ -279,12 +305,18 @@ function Field({
         <Text style={{ color: colors.onSurfaceVariant, fontSize: 12, marginTop: 2 }}>{helper}</Text>
       ) : null}
       <TextInput
+        ref={inputRef}
         value={value}
         onChangeText={onChangeText}
         multiline={!!multiline}
         accessibilityLabel={label}
-        autoCapitalize={multiline ? "sentences" : "none"}
+        autoCapitalize={autoCapitalize ?? (multiline ? "sentences" : "none")}
         autoCorrect={false}
+        keyboardType={keyboardType}
+        returnKeyType={returnKeyType}
+        onSubmitEditing={onSubmitEditing}
+        // Keep the keyboard up while "next" hops fields.
+        submitBehavior={returnKeyType === "next" ? "submit" : undefined}
         placeholderTextColor={colors.onSurfaceVariant}
         style={{
           backgroundColor: colors.surfaceContainer,
@@ -484,9 +516,70 @@ export default function EditMetadataScreen({ route, navigation }: any) {
     };
   }, [libraryItemId, retryTick]);
 
-  const patch = useMemo(() => buildDirtyPatch(form, seed), [form, seed]);
+  const originalSeries: any[] = item?.media?.metadata?.series || [];
+  const patch = useMemo(
+    () => buildDirtyPatch(form, seed, item?.media?.metadata?.series || []),
+    [form, seed, item]
+  );
   const dirty = Object.keys(patch).length > 0;
   const isPodcast = item?.mediaType === "podcast";
+
+  // Unsaved-changes guard (ChapterEditor pattern): intercept ANY navigation
+  // that would remove this screen while the form is dirty — hardware back
+  // included, which a header-back-only guard misses. Refs keep the listener
+  // stable.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty && !saving;
+  useEffect(() => {
+    if (!navigation?.addListener) return;
+    const unsub = navigation.addListener("beforeRemove", (e: any) => {
+      if (!dirtyRef.current) return;
+      e.preventDefault();
+      showAppDialog({
+        title: "Discard changes?",
+        message: "You have unsaved edits to this item's details.",
+        buttons: [
+          { text: "Keep editing", style: "cancel" },
+          {
+            text: "Discard",
+            style: "destructive",
+            onPress: () => navigation.dispatch(e.data.action),
+          },
+        ],
+      });
+    });
+    return unsub;
+  }, [navigation]);
+
+  // returnKeyType="next" focus chain through the Details form (Description is
+  // multiline — return inserts a newline there, so it's not in the chain).
+  const DETAILS_FOCUS_ORDER = [
+    "title",
+    "subtitle",
+    "authors",
+    "narrators",
+    "seriesName",
+    "seriesSequence",
+    "genres",
+    "tags",
+    "publisher",
+    "publishedYear",
+    "language",
+    "isbn",
+    "asin",
+  ] as const;
+  const detailInputsRef = useRef<Record<string, TextInput | null>>({});
+  const chainProps = (key: (typeof DETAILS_FOCUS_ORDER)[number]) => {
+    const idx = DETAILS_FOCUS_ORDER.indexOf(key);
+    const next = DETAILS_FOCUS_ORDER[idx + 1];
+    return {
+      inputRef: (r: TextInput | null) => {
+        detailInputsRef.current[key] = r;
+      },
+      returnKeyType: (next ? "next" : "done") as ReturnKeyTypeOptions,
+      onSubmitEditing: next ? () => detailInputsRef.current[next]?.focus() : undefined,
+    };
+  };
 
   const coverUri =
     libraryItemId && serverAddress && token
@@ -519,20 +612,9 @@ export default function EditMetadataScreen({ route, navigation }: any) {
     }
   };
 
-  const handleBack = () => {
-    if (dirty) {
-      showAppDialog({
-        title: "Discard changes?",
-        message: "You have unsaved edits to this item's details.",
-        buttons: [
-          { text: "Keep editing", style: "cancel" },
-          { text: "Discard", style: "destructive", onPress: () => navigation.goBack() },
-        ],
-      });
-      return;
-    }
-    navigation.goBack();
-  };
+  // Header back goes through goBack() — the beforeRemove listener above owns
+  // the dirty guard, so hardware back and header back share one code path.
+  const handleBack = () => navigation.goBack();
 
   // --- Cover actions ----------------------------------------------------------
 
@@ -564,6 +646,12 @@ export default function EditMetadataScreen({ route, navigation }: any) {
         podcast: isPodcast || undefined,
       });
       setCoverResults(results);
+      // Announce the outcome — the grid pops in silently for screen readers.
+      AccessibilityInfo.announceForAccessibility(
+        results.length === 0
+          ? "No covers found"
+          : `${results.length} cover option${results.length === 1 ? "" : "s"} found`
+      );
     } catch (e: any) {
       showAppDialog({
         title: "Cover search failed",
@@ -574,16 +662,9 @@ export default function EditMetadataScreen({ route, navigation }: any) {
     }
   };
 
-  const pickCoverResult = (url: string) => {
-    showAppDialog({
-      title: "Use this cover?",
-      message: "The server downloads the image and replaces the current cover.",
-      buttons: [
-        { text: "Cancel", style: "cancel" },
-        { text: "Use cover", onPress: () => applyCover(url, "Cover updated") },
-      ],
-    });
-  };
+  // Tier-1 like set-by-URL: picking a result applies instantly + snackbar —
+  // the two cover paths must not sit on different confirmation tiers.
+  const pickCoverResult = (url: string) => applyCover(url, "Cover updated");
 
   // --- Match flow ---------------------------------------------------------------
 
@@ -629,13 +710,18 @@ export default function EditMetadataScreen({ route, navigation }: any) {
       const cv = fieldDef.candidate(c);
       if (cv && cv !== fieldDef.current(form)) checks[fieldDef.key] = !fieldDef.current(form);
     });
-    if (c?.cover) checks.cover = !c.__hasCurrentCover && !item?.media?.coverPath;
+    // Applying a matched cover is a cover UPLOAD — same permission gate as the
+    // Cover tab. Default-checked only when the item has no cover yet.
+    if (c?.cover && caps.canUploadCover) checks.cover = !item?.media?.coverPath;
     setFieldChecks(checks);
     setMatchStage("fields");
   };
 
   const doApplyMatch = async () => {
     setApplying(true);
+    // Tracks the partial-failure case: the metadata PATCH landed but the
+    // cover POST failed — the error copy must say so, not imply nothing stuck.
+    let metadataApplied = false;
     try {
       const md: any = {};
       MATCH_FIELDS.forEach((fieldDef) => {
@@ -643,6 +729,7 @@ export default function EditMetadataScreen({ route, navigation }: any) {
       });
       if (Object.keys(md).length > 0) {
         await updateItemMedia(libraryItemId, { metadata: md });
+        metadataApplied = true;
       }
       if (fieldChecks.cover && candidateCover) {
         await setCoverFromUrl(libraryItemId, candidateCover);
@@ -662,8 +749,12 @@ export default function EditMetadataScreen({ route, navigation }: any) {
       setCandidate(null);
     } catch (e: any) {
       showAppDialog({
-        title: "Couldn't apply match",
-        message: e?.message || "Something went wrong. Please try again.",
+        title: metadataApplied ? "Cover not applied" : "Couldn't apply match",
+        message: metadataApplied
+          ? `The matched details were saved, but the cover couldn't be updated${
+              e?.message ? `: ${e.message}` : "."
+            }`
+          : e?.message || "Something went wrong. Please try again.",
       });
     } finally {
       setApplying(false);
@@ -675,22 +766,39 @@ export default function EditMetadataScreen({ route, navigation }: any) {
     const anythingChecked =
       diffRows.some((r) => fieldChecks[r.key]) || (fieldChecks.cover && !!candidateCover);
     if (!anythingChecked) return;
-    // Tier-2 confirm ONLY when overwriting non-empty fields (fill-missing is safe).
-    const overwriteCount = diffRows.filter((r) => fieldChecks[r.key] && r.currentValue).length;
-    if (overwriteCount > 0) {
+    const proceed = () => {
+      // Tier-2 confirm ONLY when overwriting non-empty fields (fill-missing is safe).
+      const overwriteCount = diffRows.filter((r) => fieldChecks[r.key] && r.currentValue).length;
+      if (overwriteCount > 0) {
+        showAppDialog({
+          title: "Overwrite existing fields?",
+          message: `This will overwrite ${overwriteCount} existing field${
+            overwriteCount === 1 ? "" : "s"
+          } with the matched values.`,
+          buttons: [
+            { text: "Cancel", style: "cancel" },
+            { text: "Apply", style: "destructive", onPress: doApplyMatch },
+          ],
+        });
+        return;
+      }
+      doApplyMatch();
+    };
+    // The post-apply reseed replaces the Details form — never silently clobber
+    // unsaved edits sitting on that tab.
+    if (dirty) {
       showAppDialog({
-        title: "Overwrite existing fields?",
-        message: `This will overwrite ${overwriteCount} existing field${
-          overwriteCount === 1 ? "" : "s"
-        } with the matched values.`,
+        title: "Unsaved edits on Details",
+        message:
+          "Applying this match reloads the Details form and discards your unsaved edits there.",
         buttons: [
-          { text: "Cancel", style: "cancel" },
-          { text: "Apply", style: "destructive", onPress: doApplyMatch },
+          { text: "Keep editing", style: "cancel" },
+          { text: "Apply match", style: "destructive", onPress: proceed },
         ],
       });
       return;
     }
-    doApplyMatch();
+    proceed();
   };
 
   // --- Render pieces -------------------------------------------------------------
@@ -731,28 +839,62 @@ export default function EditMetadataScreen({ route, navigation }: any) {
 
   const renderDetails = () => (
     <>
-      <Field label="Title" value={form.title} onChangeText={(t) => setField("title", t)} colors={colors} />
-      <Field label="Subtitle" value={form.subtitle} onChangeText={(t) => setField("subtitle", t)} colors={colors} />
+      <Field
+        label="Title"
+        value={form.title}
+        onChangeText={(t) => setField("title", t)}
+        autoCapitalize="words"
+        colors={colors}
+        {...chainProps("title")}
+      />
+      <Field
+        label="Subtitle"
+        value={form.subtitle}
+        onChangeText={(t) => setField("subtitle", t)}
+        autoCapitalize="words"
+        colors={colors}
+        {...chainProps("subtitle")}
+      />
       <Field
         label="Authors"
         helper="Separate with commas"
         value={form.authors}
         onChangeText={(t) => setField("authors", t)}
+        autoCapitalize="words"
         colors={colors}
+        {...chainProps("authors")}
       />
       <Field
         label="Narrators"
         helper="Separate with commas"
         value={form.narrators}
         onChangeText={(t) => setField("narrators", t)}
+        autoCapitalize="words"
         colors={colors}
+        {...chainProps("narrators")}
       />
-      <Field label="Series" value={form.seriesName} onChangeText={(t) => setField("seriesName", t)} colors={colors} />
+      <Field
+        label="Series"
+        // The form edits the FIRST series only; a multi-series book keeps its
+        // remaining entries untouched on save (buildDirtyPatch tail).
+        helper={
+          originalSeries.length > 1
+            ? `+${originalSeries.length - 1} more series — kept unchanged`
+            : undefined
+        }
+        value={form.seriesName}
+        onChangeText={(t) => setField("seriesName", t)}
+        autoCapitalize="words"
+        colors={colors}
+        {...chainProps("seriesName")}
+      />
       <Field
         label="Series sequence"
         value={form.seriesSequence}
         onChangeText={(t) => setField("seriesSequence", t)}
+        keyboardType="decimal-pad"
         colors={colors}
+        {...chainProps("seriesSequence")}
       />
       <Field
         label="Genres"
@@ -760,6 +902,7 @@ export default function EditMetadataScreen({ route, navigation }: any) {
         value={form.genres}
         onChangeText={(t) => setField("genres", t)}
         colors={colors}
+        {...chainProps("genres")}
       />
       <Field
         label="Tags"
@@ -767,6 +910,7 @@ export default function EditMetadataScreen({ route, navigation }: any) {
         value={form.tags}
         onChangeText={(t) => setField("tags", t)}
         colors={colors}
+        {...chainProps("tags")}
       />
       <Field
         label="Description"
@@ -775,16 +919,43 @@ export default function EditMetadataScreen({ route, navigation }: any) {
         onChangeText={(t) => setField("description", t)}
         colors={colors}
       />
-      <Field label="Publisher" value={form.publisher} onChangeText={(t) => setField("publisher", t)} colors={colors} />
+      <Field
+        label="Publisher"
+        value={form.publisher}
+        onChangeText={(t) => setField("publisher", t)}
+        autoCapitalize="words"
+        colors={colors}
+        {...chainProps("publisher")}
+      />
       <Field
         label="Publish year"
         value={form.publishedYear}
         onChangeText={(t) => setField("publishedYear", t)}
+        keyboardType="number-pad"
         colors={colors}
+        {...chainProps("publishedYear")}
       />
-      <Field label="Language" value={form.language} onChangeText={(t) => setField("language", t)} colors={colors} />
-      <Field label="ISBN" value={form.isbn} onChangeText={(t) => setField("isbn", t)} colors={colors} />
-      <Field label="ASIN" value={form.asin} onChangeText={(t) => setField("asin", t)} colors={colors} />
+      <Field
+        label="Language"
+        value={form.language}
+        onChangeText={(t) => setField("language", t)}
+        colors={colors}
+        {...chainProps("language")}
+      />
+      <Field
+        label="ISBN"
+        value={form.isbn}
+        onChangeText={(t) => setField("isbn", t)}
+        colors={colors}
+        {...chainProps("isbn")}
+      />
+      <Field
+        label="ASIN"
+        value={form.asin}
+        onChangeText={(t) => setField("asin", t)}
+        colors={colors}
+        {...chainProps("asin")}
+      />
       <ToggleField label="Explicit" value={form.explicit} onValueChange={(v) => setField("explicit", v)} colors={colors} />
       <ToggleField label="Abridged" value={form.abridged} onValueChange={(v) => setField("abridged", v)} colors={colors} />
     </>
@@ -827,6 +998,8 @@ export default function EditMetadataScreen({ route, navigation }: any) {
           helper="The server downloads the image from this address."
           value={coverUrlInput}
           onChangeText={setCoverUrlInput}
+          keyboardType="url"
+          autoCapitalize="none"
           colors={colors}
         />
         <Pill
@@ -863,7 +1036,7 @@ export default function EditMetadataScreen({ route, navigation }: any) {
                   key={`${url}-${i}`}
                   onPress={() => pickCoverResult(url)}
                   accessibilityRole="button"
-                  accessibilityLabel={`Cover option ${i + 1}`}
+                  accessibilityLabel={`Cover option ${i + 1} of ${coverResults.length}`}
                   style={{ width: "33.33%", padding: 4 }}
                 >
                   <Image
@@ -883,7 +1056,8 @@ export default function EditMetadataScreen({ route, navigation }: any) {
   const renderMatch = () => {
     if (matchStage === "fields" && candidate) {
       const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label || provider;
-      const coverRowVisible = !!candidateCover;
+      // Cover apply = cover upload permission (same gate as the Cover tab).
+      const coverRowVisible = !!candidateCover && caps.canUploadCover;
       return (
         <>
           <Text

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import Icon from "../components/Icon";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import { getMyItemListeningSessions } from "../utils/abs/me";
+import { api } from "../utils/api";
 
 /**
  * ItemHistoryScreen — MY listening sessions for one library item (optionally
@@ -22,7 +23,12 @@ import { getMyItemListeningSessions } from "../utils/abs/me";
  * Route: "ItemHistory"  Params: { libraryItemId: string; episodeId?: string }
  *
  * Data: utils/abs/me.getMyItemListeningSessions — throws AbsError, so the
- * error state can distinguish offline from a server rejection.
+ * error state can distinguish offline from a server rejection. The endpoint
+ * is PAGED (~10 sessions/response with a `total`): after the first page lands
+ * the screen silently pages through the remainder, appending as batches
+ * arrive, so the list AND the "N sessions · X total" summary reflect the real
+ * history rather than one page of it. The summary's session count prefers the
+ * endpoint's `total` so it's honest even before the last page arrives.
  */
 
 /** "Xh Ym" / "Xm" / "Xs" — a 40-second session must not read "0m". */
@@ -65,16 +71,60 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
   const { libraryItemId, episodeId } = route?.params || {};
 
   const [sessions, setSessions] = useState<any[]>([]);
+  // The endpoint's `total` (all pages) — null when the server didn't send one.
+  const [serverTotal, setServerTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
+  // In-flight guard for the background page-through: every fresh load (mount,
+  // retry, refresh, param change) bumps the sequence, so a stale loop can
+  // never append into — or race — a newer load's list.
+  const loadSeqRef = useRef(0);
+
+  const sessionsPath = episodeId
+    ? `/api/me/item/listening-sessions/${libraryItemId}/${episodeId}`
+    : `/api/me/item/listening-sessions/${libraryItemId}`;
+
+  const sortNewestFirst = (list: any[]) =>
+    [...list].sort((a, b) => (sessionTimeMs(b) || 0) - (sessionTimeMs(a) || 0));
+
+  /**
+   * Fetch page 0 (throws AbsError — the caller owns the error state), publish
+   * it, then page through the remainder in the background, appending batches.
+   * A failed later page keeps whatever already loaded (the list stays usable).
+   */
   const fetchSessions = async () => {
-    const res = await getMyItemListeningSessions(libraryItemId, episodeId);
-    const list = Array.isArray(res?.sessions) ? res.sessions : [];
-    // Most recent first — the API returns them in server order.
-    return [...list].sort((a, b) => (sessionTimeMs(b) || 0) - (sessionTimeMs(a) || 0));
+    const seq = ++loadSeqRef.current;
+    const first = await getMyItemListeningSessions(libraryItemId, episodeId);
+    if (seq !== loadSeqRef.current) return;
+    let list: any[] = Array.isArray(first?.sessions) ? [...first.sessions] : [];
+    const total = Number(first?.total);
+    const hasTotal = Number.isFinite(total) && total >= 0;
+    setSessions(sortNewestFirst(list));
+    setServerTotal(hasTotal ? total : null);
+    if (!hasTotal || total <= list.length || list.length === 0) return;
+
+    // Background page-through (not awaited by callers' loading/refreshing
+    // spinners — batches render as they land).
+    const perPage = Number(first?.itemsPerPage) || list.length;
+    const numPages = Number(first?.numPages) || Math.ceil(total / perPage);
+    void (async () => {
+      for (let page = 1; page < numPages; page++) {
+        let data: any;
+        try {
+          data = (await api.get(`${sessionsPath}?page=${page}`)).data;
+        } catch {
+          return; // keep the pages we have
+        }
+        if (seq !== loadSeqRef.current) return; // superseded by a newer load
+        const batch = Array.isArray(data?.sessions) ? data.sessions : [];
+        if (batch.length === 0) return;
+        list = list.concat(batch);
+        setSessions(sortNewestFirst(list));
+      }
+    })();
   };
 
   useEffect(() => {
@@ -88,8 +138,7 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
       setLoading(true);
       setError(null);
       try {
-        const list = await fetchSessions();
-        if (!cancelled) setSessions(list);
+        await fetchSessions();
       } catch (e: any) {
         if (!cancelled) setError(e?.message || "Failed to load listening history.");
       } finally {
@@ -98,13 +147,16 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
     })();
     return () => {
       cancelled = true;
+      // Invalidate any in-flight page-through so it can't setState after
+      // unmount or bleed into the next load.
+      loadSeqRef.current++;
     };
   }, [libraryItemId, episodeId, retryTick]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      setSessions(await fetchSessions());
+      await fetchSessions();
       setError(null);
     } catch {
       // Keep the current list on a failed refresh.
@@ -114,6 +166,8 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
   };
 
   const totalSeconds = sessions.reduce((sum, s) => sum + (Number(s?.timeListening) || 0), 0);
+  // Session count prefers the endpoint's total — honest even mid-page-through.
+  const sessionCount = serverTotal ?? sessions.length;
   const itemTitle = sessions[0]?.displayTitle || "";
 
   return (
@@ -188,7 +242,7 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
                   marginBottom: 12,
                 }}
               >
-                {sessions.length} {sessions.length === 1 ? "session" : "sessions"} ·{" "}
+                {sessionCount} {sessionCount === 1 ? "session" : "sessions"} ·{" "}
                 {formatListened(totalSeconds)} total
               </Text>
             ) : null

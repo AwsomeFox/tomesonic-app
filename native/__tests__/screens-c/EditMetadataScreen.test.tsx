@@ -27,6 +27,7 @@ jest.mock("../../utils/abs/items", () => ({
 }));
 
 import React from "react";
+import { AccessibilityInfo } from "react-native";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import EditMetadataScreen, { buildDirtyPatch } from "../../screens/EditMetadataScreen";
 import { api } from "../../utils/api";
@@ -78,7 +79,19 @@ const CANDIDATE = {
 };
 
 function makeNavigation() {
-  return { navigate: jest.fn(), goBack: jest.fn(), addListener: jest.fn(() => jest.fn()) } as any;
+  // Captures navigation listeners so tests can drive `beforeRemove` (the
+  // dirty guard covers hardware back through it — not just the header button).
+  const listeners: Record<string, (e: any) => void> = {};
+  const navigation = {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    dispatch: jest.fn(),
+    addListener: jest.fn((name: string, cb: (e: any) => void) => {
+      listeners[name] = cb;
+      return jest.fn();
+    }),
+  } as any;
+  return { navigation, listeners };
 }
 
 function setAdmin() {
@@ -89,9 +102,9 @@ function setAdmin() {
 }
 
 async function renderScreen(params: any = { libraryItemId: "item1" }) {
-  const navigation = makeNavigation();
+  const { navigation, listeners } = makeNavigation();
   await render(<EditMetadataScreen navigation={navigation} route={{ params }} />);
-  return navigation;
+  return { navigation, listeners };
 }
 
 beforeEach(() => {
@@ -178,6 +191,55 @@ describe("EditMetadataScreen — details form", () => {
     );
   });
 
+  it("multi-series book: editing the sequence PRESERVES the other series in the PATCH", async () => {
+    // Data-loss class bug: the form edits series[0] only — the PATCH replaces
+    // metadata.series wholesale, so the untouched tail MUST ride along.
+    const twoSeriesItem = JSON.parse(JSON.stringify(ITEM));
+    twoSeriesItem.media.metadata.series = [
+      { id: "s1", name: "Middle Earth", sequence: "1" },
+      { id: "s2", name: "Tolkien Legendarium", sequence: "3" },
+    ];
+    (api.get as jest.Mock).mockResolvedValue({ data: twoSeriesItem });
+
+    await renderScreen();
+    const seq = await screen.findByLabelText("Series sequence");
+    // The form surfaces that only the first series is being edited.
+    expect(screen.getByText("+1 more series — kept unchanged")).toBeTruthy();
+
+    await fireEvent.changeText(seq, "2");
+    await fireEvent.press(screen.getByLabelText("Save details"));
+
+    await waitFor(() => expect(updateItemMedia).toHaveBeenCalled());
+    expect((updateItemMedia as jest.Mock).mock.calls[0][1]).toEqual({
+      metadata: {
+        series: [
+          { name: "Middle Earth", sequence: "2" },
+          // Tail entry passes through verbatim (id intact).
+          { id: "s2", name: "Tolkien Legendarium", sequence: "3" },
+        ],
+      },
+    });
+  });
+
+  it("configures per-field keyboards and a returnKey 'next' chain", async () => {
+    await renderScreen();
+    const title = await screen.findByLabelText("Title");
+    // Name/title fields capitalize words.
+    expect(title.props.autoCapitalize).toBe("words");
+    expect(screen.getByLabelText("Authors").props.autoCapitalize).toBe("words");
+    expect(screen.getByLabelText("Series").props.autoCapitalize).toBe("words");
+    expect(screen.getByLabelText("Publisher").props.autoCapitalize).toBe("words");
+    // Numeric fields get numeric pads (sequence may hold decimals like 1.5).
+    expect(screen.getByLabelText("Publish year").props.keyboardType).toBe("number-pad");
+    expect(screen.getByLabelText("Series sequence").props.keyboardType).toBe("decimal-pad");
+    // The chain: every single-line field advances with "next"; the last is done.
+    expect(title.props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("ISBN").props.returnKeyType).toBe("next");
+    expect(screen.getByLabelText("ASIN").props.returnKeyType).toBe("done");
+    // Description is multiline — return inserts a newline, not a focus hop.
+    expect(screen.getByLabelText("Description").props.returnKeyType).toBeUndefined();
+  });
+
   it("save failure surfaces a dialog and PRESERVES the edited form", async () => {
     (updateItemMedia as jest.Mock).mockRejectedValue(
       Object.assign(new Error("You don't have permission to do that."), { kind: "forbidden" })
@@ -199,18 +261,41 @@ describe("EditMetadataScreen — details form", () => {
     expect(screen.getByLabelText("Title").props.value).toBe("Nope");
   });
 
-  it("dirty back press asks to discard instead of silently dropping edits", async () => {
-    const navigation = await renderScreen();
+  it("beforeRemove with a DIRTY form blocks navigation (hardware back included) until Discard", async () => {
+    const { navigation, listeners } = await renderScreen();
     await fireEvent.changeText(await screen.findByLabelText("Title"), "Edited");
-    await fireEvent.press(screen.getByLabelText("Go back"));
 
-    expect(navigation.goBack).not.toHaveBeenCalled();
+    const event = { preventDefault: jest.fn(), data: { action: { type: "GO_BACK" } } };
+    await act(async () => listeners["beforeRemove"](event));
+
+    expect(event.preventDefault).toHaveBeenCalled();
     const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
     expect(dialog.title).toBe("Discard changes?");
+    expect(navigation.dispatch).not.toHaveBeenCalled();
+
     await act(async () => {
       dialog.buttons.find((b: any) => b.text === "Discard").onPress();
     });
+    expect(navigation.dispatch).toHaveBeenCalledWith({ type: "GO_BACK" });
+  });
+
+  it("beforeRemove with a CLEAN form lets navigation proceed silently", async () => {
+    const { listeners } = await renderScreen();
+    await screen.findByLabelText("Title");
+
+    const event = { preventDefault: jest.fn(), data: { action: { type: "GO_BACK" } } };
+    await act(async () => listeners["beforeRemove"](event));
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(showAppDialog).not.toHaveBeenCalled();
+  });
+
+  it("header back routes through goBack() so the beforeRemove guard owns the dirty check", async () => {
+    const { navigation } = await renderScreen();
+    await screen.findByLabelText("Title");
+    await fireEvent.press(screen.getByLabelText("Go back"));
     expect(navigation.goBack).toHaveBeenCalled();
+    expect(showAppDialog).not.toHaveBeenCalled();
   });
 
   it("non-privileged user gets the read-only lock state — no form, no Save", async () => {
@@ -250,6 +335,21 @@ describe("EditMetadataScreen — details form", () => {
     expect(buildDirtyPatch({ ...seed, seriesName: "S", seriesSequence: "2" }, seed)).toEqual({
       metadata: { series: [{ name: "S", sequence: "2" }] },
     });
+    // Multi-series original: the edited head replaces series[0]; the tail
+    // rides along verbatim so the PATCH never drops the other series.
+    expect(
+      buildDirtyPatch({ ...seed, seriesName: "S", seriesSequence: "2" }, seed, [
+        { id: "a", name: "Old First", sequence: "1" },
+        { id: "b", name: "Second", sequence: "4" },
+      ])
+    ).toEqual({
+      metadata: {
+        series: [
+          { name: "S", sequence: "2" },
+          { id: "b", name: "Second", sequence: "4" },
+        ],
+      },
+    });
   });
 });
 
@@ -271,7 +371,8 @@ describe("EditMetadataScreen — cover tab", () => {
     expect(showSnackbar).toHaveBeenCalledWith({ message: "Cover updated" });
   });
 
-  it("cover search renders a grid; picking one confirms then POSTs that URL", async () => {
+  it("cover search renders a grid; picking one applies INSTANTLY (Tier-1, same as set-by-URL)", async () => {
+    const announceSpy = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
     (searchCovers as jest.Mock).mockResolvedValue([
       "https://covers.example/1.jpg",
       "https://covers.example/2.jpg",
@@ -286,16 +387,57 @@ describe("EditMetadataScreen — cover tab", () => {
         expect.objectContaining({ title: "The Hobbit", author: "J.R.R. Tolkien" })
       )
     );
+    // Result count announced for screen readers; grid labels carry i of N.
+    expect(announceSpy).toHaveBeenCalledWith("2 cover options found");
 
-    await fireEvent.press(await screen.findByLabelText("Cover option 2"));
-    // Confirm gate before the server call.
-    expect(setCoverFromUrl).not.toHaveBeenCalled();
-    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
-    expect(dialog.title).toBe("Use this cover?");
-    await act(async () => {
-      await dialog.buttons.find((b: any) => b.text === "Use cover").onPress();
-    });
-    expect(setCoverFromUrl).toHaveBeenCalledWith("item1", "https://covers.example/2.jpg");
+    await fireEvent.press(await screen.findByLabelText("Cover option 2 of 2"));
+    // No confirm dialog — instant apply + snackbar, matching set-by-URL's tier.
+    await waitFor(() =>
+      expect(setCoverFromUrl).toHaveBeenCalledWith("item1", "https://covers.example/2.jpg")
+    );
+    expect(showAppDialog).not.toHaveBeenCalled();
+    expect(showSnackbar).toHaveBeenCalledWith({ message: "Cover updated" });
+  });
+
+  it("set-cover-from-URL rejection surfaces a dialog and keeps the tab usable", async () => {
+    (setCoverFromUrl as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("Server couldn't download that image."), { kind: "server" })
+    );
+    await renderScreen();
+    await screen.findByLabelText("Title");
+    await fireEvent.press(screen.getByLabelText("Cover tab"));
+    await fireEvent.changeText(screen.getByLabelText("Cover image URL"), "https://x/y.jpg");
+    await fireEvent.press(screen.getByLabelText("Set cover from URL"));
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't update cover",
+          message: "Server couldn't download that image.",
+        })
+      )
+    );
+    expect(showSnackbar).not.toHaveBeenCalled();
+    // URL preserved for a retry (only cleared on success).
+    expect(screen.getByLabelText("Cover image URL").props.value).toBe("https://x/y.jpg");
+  });
+
+  it("cover search rejection surfaces a dialog instead of an empty grid", async () => {
+    (searchCovers as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("Provider timed out."), { kind: "server" })
+    );
+    await renderScreen();
+    await screen.findByLabelText("Title");
+    await fireEvent.press(screen.getByLabelText("Cover tab"));
+    await fireEvent.press(screen.getByLabelText("Run cover search"));
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Cover search failed", message: "Provider timed out." })
+      )
+    );
+    // No stale "No covers found" empty state from a failed search.
+    expect(screen.queryByText("No covers found")).toBeNull();
   });
 
   it("hides cover controls without the upload permission (update alone isn't enough)", async () => {
@@ -406,5 +548,74 @@ describe("EditMetadataScreen — match flow", () => {
       metadata: { title: "The Hobbit: There and Back Again", asin: "B0HOBBIT" },
     });
     expect(setCoverFromUrl).toHaveBeenCalledWith("item1", "https://covers.example/hobbit.jpg");
+  });
+
+  it("hides the matched-cover row without the upload permission (cover apply = cover upload)", async () => {
+    useUserStore.setState({
+      user: {
+        id: "u3",
+        username: "editor",
+        type: "user",
+        permissions: { update: true, upload: false },
+      },
+    } as any);
+    await openMatchAndSearch();
+    await fireEvent.press(
+      await screen.findByLabelText(/^Match result: The Hobbit: There and Back Again/)
+    );
+
+    // Field rows still offered; the cover pseudo-row is gone.
+    expect(screen.getByLabelText(/^ASIN: current empty/)).toBeTruthy();
+    expect(screen.queryByLabelText("Cover: use the matched cover image")).toBeNull();
+  });
+
+  it("partial failure (metadata PATCH landed, cover POST failed) says the details WERE saved", async () => {
+    (setCoverFromUrl as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("image fetch failed"), { kind: "server" })
+    );
+    await openMatchAndSearch();
+    await fireEvent.press(
+      await screen.findByLabelText(/^Match result: The Hobbit: There and Back Again/)
+    );
+    // Opt in to the matched cover (ASIN fill-missing is checked by default).
+    await fireEvent.press(screen.getByLabelText("Cover: use the matched cover image"));
+    await fireEvent.press(screen.getByText("Apply match"));
+
+    await waitFor(() =>
+      expect(updateItemMedia).toHaveBeenCalledWith("item1", { metadata: { asin: "B0HOBBIT" } })
+    );
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Cover not applied",
+          message: expect.stringContaining("matched details were saved"),
+        })
+      )
+    );
+    // The generic all-failed copy must NOT show — the PATCH landed.
+    expect(showAppDialog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Couldn't apply match" })
+    );
+  });
+
+  it("applying a match with UNSAVED Details edits prompts before the reseed clobbers them", async () => {
+    await openMatchAndSearch();
+    // Dirty the Details form first.
+    await fireEvent.press(screen.getByLabelText("Details tab"));
+    await fireEvent.changeText(screen.getByLabelText("Title"), "My unsaved edit");
+    await fireEvent.press(screen.getByLabelText("Match tab"));
+    await fireEvent.press(
+      await screen.findByLabelText(/^Match result: The Hobbit: There and Back Again/)
+    );
+    await fireEvent.press(screen.getByText("Apply match"));
+
+    // Nothing applied yet — the unsaved-edits prompt gates the flow.
+    expect(updateItemMedia).not.toHaveBeenCalled();
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Unsaved edits on Details");
+    await act(async () => {
+      await dialog.buttons.find((b: any) => b.text === "Apply match").onPress();
+    });
+    await waitFor(() => expect(updateItemMedia).toHaveBeenCalled());
   });
 });
