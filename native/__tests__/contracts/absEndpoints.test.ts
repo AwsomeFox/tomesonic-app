@@ -140,6 +140,8 @@ const CONTRACT: Array<{
   // --- feeds ---------------------------------------------------------------
   { name: "getOpenFeeds", invoke: () => feeds.getOpenFeeds(), method: "get", path: "/api/feeds" },
   { name: "openItemFeed (requires serverAddress+slug)", invoke: () => feeds.openItemFeed("ITEM", { serverAddress: "https://a", slug: "s" }), method: "post", path: "/api/feeds/item/ITEM/open", body: { serverAddress: "https://a", slug: "s" } },
+  { name: "openCollectionFeed (requires serverAddress+slug)", invoke: () => feeds.openCollectionFeed("COL", { serverAddress: "https://a", slug: "s" }), method: "post", path: "/api/feeds/collection/COL/open", body: { serverAddress: "https://a", slug: "s" } },
+  { name: "openSeriesFeed (requires serverAddress+slug)", invoke: () => feeds.openSeriesFeed("SER", { serverAddress: "https://a", slug: "s" }), method: "post", path: "/api/feeds/series/SER/open", body: { serverAddress: "https://a", slug: "s" } },
   { name: "closeFeed", invoke: () => feeds.closeFeed("FEED"), method: "post", path: "/api/feeds/FEED/close" },
   // --- me ------------------------------------------------------------------
   { name: "hideFromContinueListening (GET by PROGRESS id)", invoke: () => me.hideFromContinueListening("PROG"), method: "get", path: "/api/me/progress/PROG/remove-from-continue-listening" },
