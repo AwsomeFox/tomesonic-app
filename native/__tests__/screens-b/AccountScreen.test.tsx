@@ -69,6 +69,7 @@ import { api } from "../../utils/api";
 import { useUserStore } from "../../store/useUserStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { showAppDialog } from "../../store/useDialogStore";
+import { useSnackbarStore } from "../../store/useSnackbarStore";
 import { storage, storageHelper } from "../../utils/storage";
 
 const initialUser = useUserStore.getState();
@@ -111,6 +112,7 @@ beforeEach(() => {
   alertSpy.mockImplementation(() => {});
   (api.post as jest.Mock).mockResolvedValue({ data: {} });
   (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+  useSnackbarStore.setState({ current: null } as any);
 });
 
 afterEach(() => {
@@ -344,5 +346,211 @@ describe("AccountScreen", () => {
     await fireEvent.press(screen.getByText("Change Password"));
     expect(screen.getAllByDisplayValue("")).toHaveLength(3);
     expect(screen.queryByDisplayValue("secret")).toBeNull();
+  });
+
+  /**
+   * Per-user e-reader device management (POST /api/me/ereader-devices via
+   * utils/abs/me.updateMyEreaderDevices). The real me.ts + useUserStore run —
+   * only the axios layer is mocked — so these pin the exact payload the server
+   * receives AND that the store refreshes from /api/authorize afterwards.
+   */
+  describe("e-reader devices (per-user)", () => {
+    const MY_DEVICE = {
+      name: "Kindle",
+      email: "k@kindle.com",
+      availabilityOption: "specificUsers",
+      users: ["u1"],
+    };
+    const SHARED_DEVICE = {
+      name: "Family Kobo",
+      email: "kobo@example.com",
+      availabilityOption: "adminAndUp",
+    };
+
+    const snackbarMessage = () => useSnackbarStore.getState().current?.message;
+
+    // Route api.post by URL: the device update itself + the /api/authorize
+    // refresh that updateMyEreaderDevices triggers on success.
+    function mockDevicePosts(authorizeDevices: any[]) {
+      (api.post as jest.Mock).mockImplementation((url: string) => {
+        if (url === "/api/me/ereader-devices") return Promise.resolve({ data: {} });
+        if (url === "/api/authorize") {
+          return Promise.resolve({ data: { ereaderDevices: authorizeDevices } });
+        }
+        return Promise.resolve({ data: {} });
+      });
+    }
+
+    it("adding a device POSTs the specificUsers-normalized list and refreshes the store", async () => {
+      mockDevicePosts([MY_DEVICE]);
+      await renderAccount();
+
+      await fireEvent.press(screen.getByLabelText("Add e-reader device"));
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Kindle");
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "k@kindle.com");
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      // Each device is scoped to exactly this user — the shape the server
+      // requires for the self-managed route.
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/me/ereader-devices", {
+          ereaderDevices: [
+            {
+              name: "Kindle",
+              email: "k@kindle.com",
+              availabilityOption: "specificUsers",
+              users: ["u1"],
+            },
+          ],
+        })
+      );
+      // Store refreshed from /api/authorize → the new device is live app-wide.
+      expect(api.post).toHaveBeenCalledWith("/api/authorize");
+      await waitFor(() =>
+        expect(useUserStore.getState().ereaderDevices).toEqual([MY_DEVICE])
+      );
+      // Modal closed, row rendered, success snackbar (Tier-1 feedback).
+      await waitFor(() => expect(screen.getByLabelText("Edit device Kindle")).toBeTruthy());
+      expect(screen.queryByLabelText("Device name")).toBeNull();
+      expect(snackbarMessage()).toBe("Device added");
+    });
+
+    it("renders admin-managed devices read-only and my devices editable", async () => {
+      useUserStore.setState({ ereaderDevices: [MY_DEVICE, SHARED_DEVICE] } as any);
+      await renderAccount();
+
+      // Mine: an editable row.
+      expect(screen.getByLabelText("Edit device Kindle")).toBeTruthy();
+      // Admin-managed: labeled read-only, no edit affordance.
+      expect(
+        screen.getByLabelText("Family Kobo, kobo@example.com, managed by server admin")
+      ).toBeTruthy();
+      expect(screen.queryByLabelText("Edit device Family Kobo")).toBeNull();
+    });
+
+    it("editing my device sends ONLY my devices (admin-managed ones excluded)", async () => {
+      useUserStore.setState({ ereaderDevices: [MY_DEVICE, SHARED_DEVICE] } as any);
+      const updated = { ...MY_DEVICE, email: "new@kindle.com" };
+      mockDevicePosts([updated, SHARED_DEVICE]);
+      await renderAccount();
+
+      await fireEvent.press(screen.getByLabelText("Edit device Kindle"));
+      // Form seeds from the existing device.
+      expect(screen.getByDisplayValue("Kindle")).toBeTruthy();
+      expect(screen.getByDisplayValue("k@kindle.com")).toBeTruthy();
+
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "new@kindle.com");
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/api/me/ereader-devices", {
+          ereaderDevices: [
+            {
+              name: "Kindle",
+              email: "new@kindle.com",
+              availabilityOption: "specificUsers",
+              users: ["u1"],
+            },
+          ],
+        })
+      );
+      expect(snackbarMessage()).toBe("Device saved");
+    });
+
+    it("removing a device confirms first, then POSTs the list without it", async () => {
+      useUserStore.setState({ ereaderDevices: [MY_DEVICE] } as any);
+      mockDevicePosts([]);
+      await renderAccount();
+
+      await fireEvent.press(screen.getByLabelText("Edit device Kindle"));
+      await fireEvent.press(screen.getByLabelText("Remove device"));
+
+      // Nothing sent until the destructive action is confirmed.
+      expect(api.post).not.toHaveBeenCalled();
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Remove "Kindle"?', buttons: expect.any(Array) })
+      );
+      const buttons = alertSpy.mock.calls[0][0].buttons;
+      expect(buttons.find((b: any) => b.text === "Cancel")).toBeTruthy();
+      const removeBtn = buttons.find((b: any) => b.text === "Remove");
+      expect(removeBtn.style).toBe("destructive");
+
+      await act(async () => {
+        await removeBtn.onPress();
+      });
+      expect(api.post).toHaveBeenCalledWith("/api/me/ereader-devices", { ereaderDevices: [] });
+      await waitFor(() =>
+        expect(useUserStore.getState().ereaderDevices).toEqual([])
+      );
+      expect(snackbarMessage()).toBe("Device removed");
+    });
+
+    it("validates the device form before posting", async () => {
+      await renderAccount();
+
+      await fireEvent.press(screen.getByLabelText("Add e-reader device"));
+      await fireEvent.press(screen.getByLabelText("Save device"));
+      expect(alertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Error", message: expect.stringMatching(/valid email/i) })
+      );
+
+      // Email without an @ is rejected too.
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Kindle");
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "not-an-email");
+      await fireEvent.press(screen.getByLabelText("Save device"));
+      expect(alertSpy).toHaveBeenCalledTimes(2);
+      expect(api.post).not.toHaveBeenCalled();
+    });
+
+    it("surfaces an offline failure without touching the store", async () => {
+      (api.post as jest.Mock).mockRejectedValue(new Error("Network Error")); // no .response
+      await renderAccount();
+
+      await fireEvent.press(screen.getByLabelText("Add e-reader device"));
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Kindle");
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "k@kindle.com");
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      await waitFor(() =>
+        expect(alertSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Couldn't save device",
+            message: "Can't reach the server. Check your connection.",
+          })
+        )
+      );
+      expect(useUserStore.getState().ereaderDevices).toEqual([]);
+      // Modal stays open for another attempt.
+      expect(screen.getByDisplayValue("Kindle")).toBeTruthy();
+    });
+
+    it("surfaces a 403 (no createEreader permission) as a permission error", async () => {
+      (api.post as jest.Mock).mockRejectedValue({ response: { status: 403, data: "" } });
+      await renderAccount();
+
+      await fireEvent.press(screen.getByLabelText("Add e-reader device"));
+      await fireEvent.changeText(screen.getByLabelText("Device name"), "Kindle");
+      await fireEvent.changeText(screen.getByLabelText("Device email"), "k@kindle.com");
+      await fireEvent.press(screen.getByLabelText("Save device"));
+
+      await waitFor(() =>
+        expect(alertSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Couldn't save device",
+            message: "You don't have permission to do that.",
+          })
+        )
+      );
+    });
+
+    it("hides the section when the user explicitly lacks the createEreader permission", async () => {
+      useUserStore.setState({
+        user: { id: "u1", username: "tony", permissions: { createEreader: false } },
+      } as any);
+      await renderAccount();
+
+      expect(screen.queryByText("E-reader devices")).toBeNull();
+      expect(screen.queryByLabelText("Add e-reader device")).toBeNull();
+    });
   });
 });

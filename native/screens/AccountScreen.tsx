@@ -14,7 +14,10 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { useUserStore } from "../store/useUserStore";
 import { usePlaybackStore } from "../store/usePlaybackStore";
 import { showAppDialog } from "../store/useDialogStore";
+import { showSnackbar } from "../store/useSnackbarStore";
 import { api } from "../utils/api";
+import { updateMyEreaderDevices } from "../utils/abs/me";
+import type { AbsEreaderDevice } from "../utils/abs/types";
 import Icon from "../components/Icon";
 
 const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
@@ -26,7 +29,8 @@ const GITHUB_URL = "https://github.com/AwsomeFox/tomesonic-app";
  */
 export default function AccountScreen({ navigation }: any) {
   const colors = useThemeColors();
-  const { user, serverConnectionConfig, logout, updateServerAddress } = useUserStore();
+  const { user, serverConnectionConfig, logout, updateServerAddress, ereaderDevices } =
+    useUserStore();
   const hasSession = usePlaybackStore((s) => s.currentSession !== null);
 
   const serverAddress = serverConnectionConfig?.address || "";
@@ -125,6 +129,133 @@ export default function AccountScreen({ navigation }: any) {
     } finally {
       setChangingPassword(false);
     }
+  };
+
+  // ---------------------------------------------------------------------
+  // Per-user e-reader devices (Send-to-Kindle etc.), managed via
+  // POST /api/me/ereader-devices. The store's ereaderDevices (from
+  // /api/authorize) mixes MY self-managed devices with server-wide ones an
+  // admin configured; only the former are editable here. A "mine" device is
+  // exactly what the server will accept back: availabilityOption
+  // "specificUsers" with only my user id.
+  // ---------------------------------------------------------------------
+  const myUserId = user?.id || serverConnectionConfig?.userId || "";
+  const isMyDevice = React.useCallback(
+    (d: any) =>
+      d?.availabilityOption === "specificUsers" &&
+      Array.isArray(d?.users) &&
+      d.users.length === 1 &&
+      d.users[0] === myUserId,
+    [myUserId]
+  );
+  const allDevices: any[] = Array.isArray(ereaderDevices) ? ereaderDevices : [];
+  const myDevices = allDevices.filter(isMyDevice);
+  const sharedDevices = allDevices.filter((d) => !isMyDevice(d));
+  // permissions.createEreader gates self-managed devices server-side; the
+  // cold-restore thin user carries no permissions, so only an EXPLICIT false
+  // hides the section (a wrong guess just surfaces as a 403 dialog on save).
+  const canManageDevices = !!myUserId && user?.permissions?.createEreader !== false;
+
+  const [showDeviceModal, setShowDeviceModal] = React.useState(false);
+  // null = adding a new device; a number = index into myDevices being edited.
+  const [editingDeviceIndex, setEditingDeviceIndex] = React.useState<number | null>(null);
+  const [deviceName, setDeviceName] = React.useState("");
+  const [deviceEmail, setDeviceEmail] = React.useState("");
+  const [savingDevice, setSavingDevice] = React.useState(false);
+
+  const openAddDevice = () => {
+    setEditingDeviceIndex(null);
+    setDeviceName("");
+    setDeviceEmail("");
+    setShowDeviceModal(true);
+  };
+
+  const openEditDevice = (index: number) => {
+    const d = myDevices[index];
+    if (!d) return;
+    setEditingDeviceIndex(index);
+    setDeviceName(d.name || "");
+    setDeviceEmail(d.email || "");
+    setShowDeviceModal(true);
+  };
+
+  const closeDeviceModal = () => {
+    setShowDeviceModal(false);
+    setEditingDeviceIndex(null);
+    setDeviceName("");
+    setDeviceEmail("");
+  };
+
+  // The server requires every self-managed device to be scoped to exactly me;
+  // normalize on the way out so an edit of a partially-shaped row can't 400.
+  const normalizeMine = (list: any[]): AbsEreaderDevice[] =>
+    list.map((d) => ({ ...d, availabilityOption: "specificUsers", users: [myUserId] }));
+
+  const handleSaveDevice = async () => {
+    if (savingDevice) return;
+    const name = deviceName.trim();
+    const email = deviceEmail.trim();
+    if (!name || !email || !email.includes("@")) {
+      showAppDialog({ title: "Error", message: "Enter a device name and a valid email address." });
+      return;
+    }
+    // Device names are unique server-wide (including admin-managed ones).
+    const clash = allDevices.some(
+      (d) =>
+        (d.name || "").toLowerCase() === name.toLowerCase() &&
+        !(editingDeviceIndex != null && d === myDevices[editingDeviceIndex])
+    );
+    if (clash) {
+      showAppDialog({ title: "Error", message: "A device with that name already exists." });
+      return;
+    }
+    const next =
+      editingDeviceIndex == null
+        ? [...myDevices, { name, email }]
+        : myDevices.map((d, i) => (i === editingDeviceIndex ? { ...d, name, email } : d));
+    setSavingDevice(true);
+    try {
+      // updateMyEreaderDevices re-fetches the store's ereaderDevices on
+      // success, so the list below (and "Send to device" pickers) refresh.
+      await updateMyEreaderDevices(normalizeMine(next));
+      const added = editingDeviceIndex == null;
+      closeDeviceModal();
+      showSnackbar({ message: added ? "Device added" : "Device saved" });
+    } catch (err: any) {
+      showAppDialog({ title: "Couldn't save device", message: err?.message || "Please try again." });
+    } finally {
+      setSavingDevice(false);
+    }
+  };
+
+  const handleRemoveDevice = () => {
+    if (editingDeviceIndex == null) return;
+    const d = myDevices[editingDeviceIndex];
+    if (!d) return;
+    const remaining = myDevices.filter((_, i) => i !== editingDeviceIndex);
+    showAppDialog({
+      title: `Remove "${d.name}"?`,
+      message: "You'll no longer be able to send ebooks to this device.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await updateMyEreaderDevices(normalizeMine(remaining));
+              closeDeviceModal();
+              showSnackbar({ message: "Device removed" });
+            } catch (err: any) {
+              showAppDialog({
+                title: "Couldn't remove device",
+                message: err?.message || "Please try again.",
+              });
+            }
+          },
+        },
+      ],
+    });
   };
 
   // Read-only field with a label above (matches ui-text-input-with-label)
@@ -256,6 +387,110 @@ export default function AccountScreen({ navigation }: any) {
           </Text>
           <Icon name="chevron-right" size={20} color={colors.onSurfaceVariant} />
         </Pressable>
+
+        {/* Per-user e-reader devices (Send-to-Kindle etc.). Server-managed
+            devices are listed read-only; devices scoped to just this user are
+            editable via POST /api/me/ereader-devices. */}
+        {canManageDevices ? (
+          <View style={{ marginTop: 28 }}>
+            <Text
+              style={{
+                color: colors.onSurface,
+                fontSize: 16,
+                fontWeight: "700",
+                marginBottom: 4,
+              }}
+            >
+              E-reader devices
+            </Text>
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginBottom: 12 }}>
+              Send ebooks to a Kindle or other e-reader by email.
+            </Text>
+
+            {sharedDevices.map((d, i) => (
+              <View
+                key={`shared-${d.name}-${i}`}
+                accessible
+                accessibilityLabel={`${d.name}, ${d.email}, managed by server admin`}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 8,
+                  paddingVertical: 14,
+                  paddingHorizontal: 16,
+                  borderRadius: 16,
+                  backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
+                  borderWidth: 1,
+                  borderColor: colors.outlineVariant || colors.outline,
+                  opacity: 0.85,
+                }}
+              >
+                <Icon name="send" size={22} color={colors.onSurfaceVariant} style={{ marginRight: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>
+                    {d.name}
+                  </Text>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+                    {d.email} · Managed by server admin
+                  </Text>
+                </View>
+                <Icon name="lock" size={18} color={colors.onSurfaceVariant} />
+              </View>
+            ))}
+
+            {myDevices.map((d, i) => (
+              <Pressable
+                key={`mine-${d.name}-${i}`}
+                onPress={() => openEditDevice(i)}
+                accessibilityRole="button"
+                accessibilityLabel={`Edit device ${d.name}`}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 8,
+                  paddingVertical: 14,
+                  paddingHorizontal: 16,
+                  borderRadius: 16,
+                  backgroundColor: colors.surfaceContainer || colors.surfaceVariant,
+                  borderWidth: 1,
+                  borderColor: colors.outlineVariant || colors.outline,
+                }}
+              >
+                <Icon name="send" size={22} color={colors.primary} style={{ marginRight: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.onSurface, fontSize: 16, fontWeight: "600" }}>
+                    {d.name}
+                  </Text>
+                  <Text style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}>
+                    {d.email}
+                  </Text>
+                </View>
+                <Icon name="chevron-right" size={20} color={colors.onSurfaceVariant} />
+              </Pressable>
+            ))}
+
+            <Pressable
+              onPress={openAddDevice}
+              accessibilityRole="button"
+              accessibilityLabel="Add e-reader device"
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                paddingVertical: 14,
+                paddingHorizontal: 16,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderStyle: "dashed",
+                borderColor: colors.outline,
+              }}
+            >
+              <Icon name="add" size={22} color={colors.primary} style={{ marginRight: 12 }} />
+              <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "600" }}>
+                Add e-reader device
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         <View
           style={{
@@ -503,6 +738,115 @@ export default function AccountScreen({ navigation }: any) {
                 }}
               >
                 {changingPassword ? (
+                  <ActivityIndicator size="small" color={colors.onPrimary} style={{ marginRight: 8 }} />
+                ) : null}
+                <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600" }}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Add / edit e-reader device modal (per-user devices only) */}
+      <Modal
+        visible={showDeviceModal}
+        animationType="fade"
+        transparent
+        onRequestClose={closeDeviceModal}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 }}>
+          <View style={{ backgroundColor: colors.surfaceContainer || colors.surfaceVariant, borderRadius: 28, padding: 24, elevation: 5 }}>
+            <Text style={{ color: colors.onSurface, fontSize: 24, fontWeight: "600", marginBottom: 8 }}>
+              {editingDeviceIndex == null ? "Add e-reader device" : "Edit e-reader device"}
+            </Text>
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, marginBottom: 20 }}>
+              For Kindle, use the device's @kindle.com address and make sure the server's
+              sending address is approved in your Amazon settings.
+            </Text>
+
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontWeight: "500", marginBottom: 6 }}>
+              Device name
+            </Text>
+            <TextInput
+              value={deviceName}
+              onChangeText={setDeviceName}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="My Kindle"
+              placeholderTextColor={colors.onSurfaceVariant}
+              accessibilityLabel="Device name"
+              style={{
+                backgroundColor: colors.surface,
+                color: colors.onSurface,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 16,
+                borderWidth: 1,
+                borderColor: colors.outline,
+                marginBottom: 16,
+              }}
+            />
+
+            <Text style={{ color: colors.onSurfaceVariant, fontSize: 14, fontWeight: "500", marginBottom: 6 }}>
+              Device email
+            </Text>
+            <TextInput
+              value={deviceEmail}
+              onChangeText={setDeviceEmail}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              placeholder="name@kindle.com"
+              placeholderTextColor={colors.onSurfaceVariant}
+              accessibilityLabel="Device email"
+              style={{
+                backgroundColor: colors.surface,
+                color: colors.onSurface,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 16,
+                borderWidth: 1,
+                borderColor: colors.outline,
+                marginBottom: 24,
+              }}
+            />
+
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              {editingDeviceIndex != null ? (
+                <Pressable
+                  onPress={handleRemoveDevice}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove device"
+                  style={{ paddingVertical: 12, paddingRight: 12 }}
+                >
+                  <Text style={{ color: colors.error, fontSize: 16, fontWeight: "600" }}>Remove</Text>
+                </Pressable>
+              ) : null}
+              <View style={{ flex: 1 }} />
+              <Pressable
+                onPress={closeDeviceModal}
+                accessibilityRole="button"
+                style={{ paddingHorizontal: 20, paddingVertical: 12, marginRight: 8 }}
+              >
+                <Text style={{ color: colors.primary, fontSize: 16, fontWeight: "600" }}>Cancel</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={handleSaveDevice}
+                disabled={savingDevice}
+                accessibilityRole="button"
+                accessibilityLabel="Save device"
+                accessibilityState={{ disabled: savingDevice, busy: savingDevice }}
+                style={{
+                  backgroundColor: colors.primary,
+                  paddingHorizontal: 20,
+                  paddingVertical: 12,
+                  borderRadius: 24,
+                  flexDirection: "row",
+                  alignItems: "center",
+                }}
+              >
+                {savingDevice ? (
                   <ActivityIndicator size="small" color={colors.onPrimary} style={{ marginRight: 8 }} />
                 ) : null}
                 <Text style={{ color: colors.onPrimary, fontSize: 16, fontWeight: "600" }}>Save</Text>
