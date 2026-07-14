@@ -33,6 +33,7 @@ export type IconName =
   | "pause"
   | "download"
   | "cloud"
+  | "cloud-sync"
   | "cloud-off"
   | "book"
   | "clock"
@@ -134,6 +135,7 @@ const MAP: Record<IconName, [Family, string]> = {
   pause: ["mi", "pause"],
   download: ["mi", "file-download"],
   cloud: ["mi", "cloud-done"],
+  "cloud-sync": ["mi", "cloud-sync"],
   "cloud-off": ["mi", "cloud-off"],
   book: ["mi", "menu-book"],
   clock: ["mi", "schedule"],

@@ -43,6 +43,7 @@ import { useDownloadStore } from "../store/useDownloadStore";
 import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
 import { showAppDialog } from "../store/useDialogStore";
+import { showSnackbar } from "../store/useSnackbarStore";
 import { resolveEbookTarget, readingFractionForAudioPosition, canJumpToFraction } from "../utils/formatSwitch";
 import { haptic } from "../utils/haptics";
 import { computePlayerLayout } from "../utils/playerLayout";
@@ -1909,6 +1910,22 @@ export default function PlayerBottomSheet() {
           }
         }}
         onReadFromHere={readFromHere}
+        onSyncFromServer={() => {
+          usePlaybackStore
+            .getState()
+            .syncPositionFromServer()
+            .then((r) =>
+              showSnackbar({
+                message:
+                  r.status === "adopted"
+                    ? "Jumped to your latest position"
+                    : r.status === "up-to-date"
+                    ? "Already at the latest position"
+                    : "Couldn't reach the server",
+              })
+            )
+            .catch(() => showSnackbar({ message: "Couldn't reach the server" }));
+        }}
         onStopClose={() => {
           setPlayerExpanded(false);
           closePlayback().catch(() => {});

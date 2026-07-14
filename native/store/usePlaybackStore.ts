@@ -681,6 +681,97 @@ async function checkIsConnectedWithTimeout(): Promise<boolean> {
   return isConnected;
 }
 
+// Freshest-wins predicate shared by loadLastSession, the resume-time
+// cross-device catch-up in play(), and the manual "sync from server" action.
+// The server position wins ONLY when its progress timestamp is meaningfully
+// newer (10s margin absorbs clock skew and in-flight sync races) AND the two
+// positions actually differ (>2s) — so a server that is merely equal, or barely
+// newer, never triggers a pointless seek, and unsynced local progress (offline
+// listening whose syncs are still queued) is never clobbered.
+const SERVER_FRESHNESS_MARGIN_MS = 10000;
+const POSITION_EPSILON_S = 2;
+// A resume is only preceded by a live server-progress check when the session
+// sat paused at least this long — long enough that the user could have listened
+// on another device, but past any quick pause/resume (skip-back-a-sentence) tap
+// so those never pay a network round-trip.
+const AUTO_SERVER_SYNC_MIN_PAUSE_MS = 15000;
+function isServerProgressFresher(
+  serverTime: number,
+  serverUpdatedAt: number,
+  localTime: number,
+  localUpdatedAt: number
+): boolean {
+  return (
+    typeof serverTime === "number" &&
+    serverUpdatedAt > localUpdatedAt + SERVER_FRESHNESS_MARGIN_MS &&
+    Math.abs(serverTime - localTime) > POSITION_EPSILON_S
+  );
+}
+
+// Best-effort LIVE fetch of the server's current progress for an item (or
+// podcast episode). The connectivity pre-check and the GET share ONE time
+// budget so the whole call stays bounded at ~timeoutMs — a slow or unreachable
+// server never hangs a resume or the app. Returns null when offline, on
+// timeout, or when the server has no usable progress row, so every caller
+// simply keeps the local position on failure.
+async function fetchServerProgress(
+  itemId: string,
+  episodeId: string | null | undefined,
+  timeoutMs: number
+): Promise<{ currentTime: number; lastUpdate: number } | null> {
+  try {
+    const budgetStart = Date.now();
+    const isConnected = await checkIsConnectedWithTimeout();
+    if (!isConnected) return null;
+    const remainingBudget = Math.max(500, timeoutMs - (Date.now() - budgetStart));
+    // Podcast progress is keyed per EPISODE server-side — the item-level GET
+    // returns nothing useful for an episode session.
+    const progressPath = episodeId
+      ? `/api/me/progress/${encodeURIComponent(itemId)}/${encodeURIComponent(episodeId)}`
+      : `/api/me/progress/${encodeURIComponent(itemId)}`;
+    // The timeout arm rejects; it is cleared when the GET wins so an orphaned
+    // timer can't surface as an unhandled rejection after the race is decided.
+    let progressTimer: ReturnType<typeof setTimeout> | null = null;
+    let res: any;
+    try {
+      res = await Promise.race([
+        api.get(progressPath),
+        new Promise((_, rej) => {
+          progressTimer = setTimeout(() => rej(new Error("timeout")), remainingBudget);
+        }),
+      ]);
+    } finally {
+      if (progressTimer) clearTimeout(progressTimer);
+    }
+    const p = res?.data;
+    if (!p || typeof p.currentTime !== "number") return null;
+    return { currentTime: p.currentTime, lastUpdate: Number(p.lastUpdate) || 0 };
+  } catch {
+    return null;
+  }
+}
+
+// This device's freshness stamp for a live/loaded session: the on-disk save's
+// updatedAt for the SAME item/episode. The progress-sync loop rewrites that
+// save (with a fresh updatedAt) on every sync and on pause, so it tracks how
+// recently THIS device advanced the position — the value the freshest-wins
+// predicate compares the server's lastUpdate against. Using the disk stamp
+// (not the in-memory session's often-absent updatedAt) is what stops a
+// just-started local session from wrongly adopting an older server row.
+function localSaveUpdatedAt(itemId: string, episodeId?: string | null): number {
+  try {
+    const saved = storageHelper.getLastPlaybackSession();
+    if (
+      saved &&
+      (saved.libraryItemId || saved.libraryItem?.id) === itemId &&
+      (saved.episodeId || null) === (episodeId || null)
+    ) {
+      return Number(saved.updatedAt) || 0;
+    }
+  } catch {}
+  return 0;
+}
+
 // Called after a token refresh (see api.ts applyRefreshedConfig): the live
 // session's coverUrl — and the artwork Media3 is showing — may carry the
 // ROTATED-OUT token, so its next fetch 401s and the notification loses its
@@ -1408,6 +1499,16 @@ interface PlaybackState {
   play: () => Promise<void>;
   pause: () => Promise<void>;
   seek: (value: number) => Promise<void>;
+  // Pull the LATEST server progress for the currently-loaded item and, if it is
+  // meaningfully fresher than the live local position (another device listened
+  // on since), seek there. Best-effort and bounded; offline/unreachable is a
+  // no-op; never clobbers unsynced local progress. Backs both the automatic
+  // resume-time catch-up in play() and the manual "Sync position from server"
+  // buttons on the item-detail and player screens.
+  syncPositionFromServer: (opts?: { timeoutMs?: number }) => Promise<{
+    status: "adopted" | "up-to-date" | "unavailable" | "no-session";
+    position?: number;
+  }>;
   // Seek from a remote (notification / Android Auto) seekbar, whose position is
   // reported relative to the ACTIVE queue item. Maps that to an absolute book
   // position before seeking.
@@ -1663,50 +1764,25 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         const itemId = session.libraryItemId || session.libraryItem?.id;
         if (itemId) {
-          // Check connectivity before fetching progress. The pre-check's
-          // elapsed time (up to 1s) counts AGAINST the same 3s budget below,
-          // so the whole restore stays bounded at ~3s as documented — the
-          // pre-check must never stack on top of it.
-          const budgetStart = Date.now();
-          const isConnected = await checkIsConnectedWithTimeout();
-          if (!isConnected) {
-            throw new Error("Network unreachable");
-          }
-          const remainingBudget = Math.max(500, 3000 - (Date.now() - budgetStart));
-
-          // Podcast progress is keyed per EPISODE server-side — the item-level
-          // GET returns nothing useful for an episode session.
-          const progressPath = session.episodeId
-            ? `/api/me/progress/${encodeURIComponent(itemId)}/${encodeURIComponent(session.episodeId)}`
-            : `/api/me/progress/${encodeURIComponent(itemId)}`;
-          // Timer is cleared when the request wins — an orphaned rejecting
-          // timeout after a decided race is an unhandled promise rejection.
-          let progressTimer: ReturnType<typeof setTimeout> | null = null;
-          let res: any;
-          try {
-            res = await Promise.race([
-              api.get(progressPath),
-              new Promise((_, rej) => {
-                progressTimer = setTimeout(() => rej(new Error("timeout")), remainingBudget);
-              }),
-            ]);
-          } finally {
-            if (progressTimer) clearTimeout(progressTimer);
-          }
-          const p = res?.data;
-          const serverUpdatedAt = Number(p?.lastUpdate) || 0;
+          // Cross-device freshness, bounded at ~3s (connectivity pre-check +
+          // GET share the budget) so a slow/unreachable server never delays
+          // startup. null = offline/timeout/no row → the local save stands.
+          const server = await fetchServerProgress(itemId, session.episodeId, 3000);
           const localUpdatedAt = Number(session.updatedAt) || 0;
           if (
-            p &&
-            typeof p.currentTime === "number" &&
-            serverUpdatedAt > localUpdatedAt + 10000 &&
-            Math.abs(p.currentTime - (session.currentTime || 0)) > 2
+            server &&
+            isServerProgressFresher(
+              server.currentTime,
+              server.lastUpdate,
+              session.currentTime || 0,
+              localUpdatedAt
+            )
           ) {
             console.log(
-              `[PlaybackStore] Server progress is fresher (${p.currentTime}s vs ${session.currentTime}s) — resuming from server.`
+              `[PlaybackStore] Server progress is fresher (${server.currentTime}s vs ${session.currentTime}s) — resuming from server.`
             );
-            session.currentTime = p.currentTime;
-            session.updatedAt = serverUpdatedAt;
+            session.currentTime = server.currentTime;
+            session.updatedAt = server.lastUpdate;
             // Persist the adopted position — preparePlaybackSession re-reads
             // the MMKV save for its own freshest-wins pass, and without this
             // write it would see the STALE local save (mediaProgress may not
@@ -2720,6 +2796,28 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
       } catch {}
     }
+    // Cross-device catch-up (tablet ↔ phone): if this session sat paused long
+    // enough that another device could have moved the position on, check the
+    // LIVE server progress BEFORE resuming and jump to it when it is fresher.
+    // Gated on a real pause gap so a quick pause/resume tap never hits the
+    // network; bounded and offline-safe via syncPositionFromServer. An adopted
+    // server position is authoritative — it supersedes the sleep/auto rewind
+    // below (we want exactly the other device's spot, not a nudge back).
+    if (
+      !isCasting &&
+      _lastPausedAt != null &&
+      Date.now() - _lastPausedAt > AUTO_SERVER_SYNC_MIN_PAUSE_MS
+    ) {
+      try {
+        const r = await get().syncPositionFromServer();
+        if (r.status === "adopted") {
+          _lastPausedAt = null;
+          _sleepRewindPending = false;
+        }
+      } catch {}
+      // A closePlayback may have landed during the up-to-3s await above.
+      if (!get().currentSession) return;
+    }
     // Sleep-timer "rewind on wake": when the sleep timer paused playback, the
     // next resume rewinds a dedicated amount so you don't lose your place after
     // dozing off. When the toggle is OFF we fall through to today's generic
@@ -2909,6 +3007,46 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     await TrackPlayer.seekTo(value);
     set({ position: value });
     saveSessionPositionNow(value);
+  },
+
+  syncPositionFromServer: async (opts) => {
+    const session = get().currentSession;
+    if (!session) return { status: "no-session" };
+    const itemId = session.libraryItemId || session.libraryItem?.id;
+    if (!itemId) return { status: "no-session" };
+    // This device's freshness stamp for the item — the furthest of the on-disk
+    // save and the in-memory session's own updatedAt. WITHOUT a real stamp we
+    // cannot prove the server is genuinely fresher: any real server timestamp
+    // beats 0, so an ancient server row would "win" and jump the listener
+    // BACKWARD. Treat unknown-local as already in sync rather than risk that.
+    const localUpdatedAt = Math.max(
+      localSaveUpdatedAt(itemId, session.episodeId),
+      Number(session.updatedAt) || 0
+    );
+    if (localUpdatedAt <= 0) return { status: "up-to-date" };
+    const server = await fetchServerProgress(
+      itemId,
+      session.episodeId,
+      opts?.timeoutMs ?? 3000
+    );
+    // Offline, unreachable, timed out, or no server-side row — nothing to adopt.
+    if (!server) return { status: "unavailable" };
+    // A closePlayback / book switch may have landed during the fetch above.
+    const live = get().currentSession;
+    if (!live || (live.libraryItemId || live.libraryItem?.id) !== itemId) {
+      return { status: "no-session" };
+    }
+    const livePos = await getLiveAbsolutePosition(get);
+    if (
+      isServerProgressFresher(server.currentTime, server.lastUpdate, livePos, localUpdatedAt)
+    ) {
+      console.log(
+        `[PlaybackStore] Adopting fresher server position (${server.currentTime}s vs ${livePos}s).`
+      );
+      await get().seek(server.currentTime);
+      return { status: "adopted", position: server.currentTime };
+    }
+    return { status: "up-to-date" };
   },
 
   // The notification / Android Auto seekbar reports its position relative to the

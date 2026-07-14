@@ -16,6 +16,7 @@ interface Props {
   onShowChapters: () => void;
   onGoToDetails: () => void;
   onReadFromHere: () => void;
+  onSyncFromServer: () => void;
   onStopClose: () => void;
 }
 
@@ -30,6 +31,7 @@ export default function PlayerOverflowModal({
   onShowChapters,
   onGoToDetails,
   onReadFromHere,
+  onSyncFromServer,
   onStopClose,
 }: Props) {
   const colors = useThemeColors();
@@ -119,6 +121,25 @@ export default function PlayerOverflowModal({
         >
           <Icon name="book" size={24} color={colors.onSurface} style={{ marginRight: 16 }} />
           <Text style={{ fontSize: 16, fontWeight: "500", color: colors.onSurface }}>View book details</Text>
+        </Pressable>
+
+        {/* Sync position from server (issue #55 follow-up) — pull the latest
+            cross-device position on demand. Automatic on resume too, but the
+            explicit action is a "catch me up now". */}
+        <Pressable
+          onPress={() => handleItemPress(onSyncFromServer)}
+          accessibilityRole="button"
+          accessibilityLabel="Sync position from server"
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            paddingVertical: 16,
+            paddingHorizontal: 16,
+            borderRadius: 16,
+          }}
+        >
+          <Icon name="cloud-sync" size={24} color={colors.onSurface} style={{ marginRight: 16 }} />
+          <Text style={{ fontSize: 16, fontWeight: "500", color: colors.onSurface }}>Sync position from server</Text>
         </Pressable>
 
         {/* Want to Read (Favorite) */}
