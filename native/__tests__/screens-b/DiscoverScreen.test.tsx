@@ -487,6 +487,29 @@ describe("DiscoverScreen (not connected promo)", () => {
     expect(getBookdateRecommendations).not.toHaveBeenCalled();
   });
 
+  it("a server-address change while disconnected still never hits discovery", async () => {
+    // Regression: the server-address-change effect fired loadDeck()/loadShelves()
+    // unconditionally — so editing the server address (Account) while RMAB was
+    // disconnected hit the discovery endpoints (401/400), unlike the guarded
+    // mount effect. The address effect must respect rmabConnected too.
+    useRmabStore.setState({ ...rmabInitial, configured: false, authMode: null }, true);
+    useUserStore.setState({
+      serverConnectionConfig: { address: "https://a.example.com", token: "t" },
+    } as any);
+    (getBookdateRecommendations as jest.Mock).mockResolvedValue(RECS);
+    await render(<DiscoverScreen navigation={{ navigate: jest.fn() }} />);
+    await screen.findByText("Discover audiobooks with ReadMeABook");
+    expect(getBookdateRecommendations).not.toHaveBeenCalled();
+
+    // Change the active server address in place (no remount).
+    await act(async () => {
+      useUserStore.setState({
+        serverConnectionConfig: { address: "https://b.example.com", token: "t" },
+      } as any);
+    });
+    expect(getBookdateRecommendations).not.toHaveBeenCalled();
+  });
+
   it("the primary button opens Settings' RMAB connect flow", async () => {
     useRmabStore.setState({ ...rmabInitial, configured: false, authMode: null }, true);
     const navigate = jest.fn();

@@ -241,11 +241,16 @@ export default function DiscoverScreen({ navigation }: any) {
   useEffect(() => {
     if (prevServerAddressRef.current === serverAddress) return;
     prevServerAddressRef.current = serverAddress;
+    // Without a full (jwt) RMAB session the discovery endpoints just 401/400 —
+    // record the new address but don't fetch. The connect effect above loads
+    // once rmabConnected flips (and by then prevRef already matches, so this
+    // effect won't double-fire the loads).
+    if (!rmabConnected) return;
     clearRmabCaches();
     setDeck(null);
     loadDeck();
     loadShelves();
-  }, [serverAddress, loadDeck, loadShelves]);
+  }, [serverAddress, loadDeck, loadShelves, rmabConnected]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

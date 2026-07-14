@@ -271,6 +271,10 @@ function LibraryScreen(
   const isFetchingRef = useRef(false);
   const fetchIdRef = useRef(0);
   const listRef = useRef<FlatList>(null);
+  // Latest onScroll in a ref so the reset effect can report a zero offset to
+  // the hub without adding the (potentially unstable) prop to its deps.
+  const onScrollRef = useRef(onScroll);
+  onScrollRef.current = onScroll;
   // Set when the server returns an empty page: with the hide-non-audiobooks
   // client filter active, items.length can stay below `total` forever, which
   // would otherwise make onEndReached refetch empty pages on every scroll-end.
@@ -443,6 +447,10 @@ function LibraryScreen(
     setItems([]);
     setPage(0);
     setTotal(0);
+    // Emptying `data` snaps the FlatList back to the top, but that reset never
+    // fires an onScroll(0), so the hub keeps the previous facet offset and the
+    // scroll-to-top FAB lingers after a filter/sort change. Report the reset.
+    onScrollRef.current?.(0);
     fetchItems(0, true);
   }, [currentLibraryId, fetchItems]);
 

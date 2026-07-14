@@ -728,6 +728,7 @@ describe("useUserStore", () => {
       // and cross-book play queue.
       storage.set("reader_highlights_item1", JSON.stringify([{ cfi: "x", text: "hi" }]));
       storage.set("reader_speed_item1", "260");
+      storage.set("reader_rate_item1", "1.4");
       storage.set("perBookRate", JSON.stringify({ item1: 1.5 }));
       storage.set("favorites", JSON.stringify(["item1", "item2"]));
       storage.set("playbackQueue", JSON.stringify([{ libraryItemId: "item9" }]));
@@ -750,6 +751,9 @@ describe("useUserStore", () => {
       // New per-account state wiped so the next login can't inherit it.
       expect(storage.getString("reader_highlights_item1")).toBeUndefined();
       expect(storage.getString("reader_speed_item1")).toBeUndefined();
+      // Per-book reading-rate estimate (bare-id keyed) — same cross-account
+      // collision risk as reader_speed_ on a shared server.
+      expect(storage.getString("reader_rate_item1")).toBeUndefined();
       expect(storage.getString("perBookRate")).toBeUndefined();
       // Favorites + queue cleared via their stores (key gone or emptied).
       const favLeft = storage.getString("favorites");

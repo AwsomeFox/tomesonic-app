@@ -438,6 +438,9 @@ export const useUserStore = create<UserState>((set, get) => ({
               // BARE libraryItemId (collides across accounts on a shared server).
               k.startsWith("reader_highlights_") ||
               k.startsWith("reader_speed_") ||
+              // Per-book chapter reading-rate estimate (bare-id keyed) — same
+              // cross-account collision as reader_speed_ above.
+              k.startsWith("reader_rate_") ||
               // Per-book playback-rate overrides (bare-id keyed map).
               k === "perBookRate"
           )
@@ -620,6 +623,7 @@ export const useUserStore = create<UserState>((set, get) => ({
             // collides across accounts on a shared server.
             k.startsWith("reader_highlights_") ||
             k.startsWith("reader_speed_") ||
+            k.startsWith("reader_rate_") ||
             k === "perBookRate"
         )
         .forEach((k: string) => storage.remove(k));
