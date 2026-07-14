@@ -65,6 +65,7 @@ export function uploadMediaFiles(
   const { onProgress, notifyId, notifyTitle } = opts;
 
   let cancelled = false;
+  let settled = false; // guards every terminal path to a single settle + clear
   let retried = false;
   let xhr: XMLHttpRequest | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -109,11 +110,15 @@ export function uploadMediaFiles(
   };
 
   const finishOk = (data: any) => {
+    if (settled) return;
+    settled = true;
     if (notifyId) downloadNotifications.complete(notifyId, notifyTitle || "");
     resolvePromise(data);
   };
 
   const finishErr = (err: Error) => {
+    if (settled) return;
+    settled = true;
     clearNotif();
     rejectPromise(err);
   };
@@ -179,16 +184,32 @@ export function uploadMediaFiles(
     req.send(buildForm());
   };
 
-  if (notifyId) downloadNotifications.start(notifyId, notifyTitle || "");
-  send();
+  // A synchronous failure in start()/open()/send() (e.g. a malformed target
+  // URL or a token with illegal header chars) must route through finishErr —
+  // clearing the just-started notification and rejecting the promise — never
+  // throw out of the constructor (the handle/promise contract).
+  try {
+    if (notifyId) {
+      downloadNotifications.start(notifyId, notifyTitle || "", {
+        verb: "Uploading",
+        doneTitle: "Upload complete",
+      });
+    }
+    send();
+  } catch (e: any) {
+    finishErr(e instanceof Error ? e : new Error("Upload failed to start."));
+  }
 
   return {
     promise,
     cancel: () => {
-      if (cancelled) return;
-      // Mark cancelled FIRST so a resulting onerror/onabort doesn't fire the
-      // retry, then abort the in-flight request and drop any pending retry.
+      // Already cancelled, or already resolved/rejected — a cancel after
+      // completion must not clear the just-posted "complete" notification.
+      if (cancelled || settled) return;
+      // Mark cancelled+settled FIRST so a resulting onerror/onabort doesn't
+      // fire the retry or re-settle, then abort and drop any pending retry.
       cancelled = true;
+      settled = true;
       if (retryTimer) {
         clearTimeout(retryTimer);
         retryTimer = null;

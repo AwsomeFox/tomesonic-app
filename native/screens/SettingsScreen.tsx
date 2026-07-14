@@ -279,6 +279,19 @@ export default function SettingsScreen({ navigation, route }: any) {
               colors={colors}
             />
           </>
+        ) : capabilities.canUpload ? (
+          // A non-admin with the upload permission can't reach the admin hub,
+          // so give them a direct entry to the upload screen (issue #57).
+          <>
+            <SectionHeader label="Server" colors={colors} />
+            <NavRow
+              icon="cloud"
+              title="Upload media"
+              subtitle="Add audiobooks or ebooks from this device"
+              onPress={() => navigation.navigate('UploadMedia')}
+              colors={colors}
+            />
+          </>
         ) : null}
 
         {/* ── USER INTERFACE SETTINGS ── */}

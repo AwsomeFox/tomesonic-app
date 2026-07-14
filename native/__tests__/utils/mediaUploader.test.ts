@@ -128,7 +128,12 @@ describe("uploadMediaFiles — progress + success", () => {
       notifyId: "up1",
       notifyTitle: "My Upload",
     });
-    expect(notifications.start).toHaveBeenCalledWith("up1", "My Upload");
+    // Upload copy is threaded through so the notification reads "Uploading",
+    // not "Downloading".
+    expect(notifications.start).toHaveBeenCalledWith("up1", "My Upload", {
+      verb: "Uploading",
+      doneTitle: "Upload complete",
+    });
 
     FakeXHR.latest().emitProgress(50, 100);
     expect(onProgress).toHaveBeenCalledWith(50, 100);
@@ -226,6 +231,30 @@ describe("uploadMediaFiles — cancel", () => {
     await expect(handle.promise).rejects.toThrow("Upload cancelled");
     expect(notifications.clear).toHaveBeenCalledWith("up1");
     expect(notifications.complete).not.toHaveBeenCalled();
+  });
+
+  it("a late 200 arriving after cancel never completes the notification or re-settles", async () => {
+    const handle = uploadMediaFiles(params(), { notifyId: "up1", notifyTitle: "T" });
+    const xhr = FakeXHR.latest();
+
+    handle.cancel();
+    await expect(handle.promise).rejects.toThrow("Upload cancelled");
+
+    // A racing success firing after cancel must be ignored.
+    xhr.succeed(200, JSON.stringify({ ok: true }));
+    expect(notifications.complete).not.toHaveBeenCalled();
+    await expect(handle.promise).rejects.toThrow("Upload cancelled");
+  });
+
+  it("cancel() after a successful completion is a no-op (keeps the complete notification)", async () => {
+    const handle = uploadMediaFiles(params(), { notifyId: "up1", notifyTitle: "T" });
+    FakeXHR.latest().succeed(200, "{}");
+    await handle.promise;
+    expect(notifications.complete).toHaveBeenCalledWith("up1", "T");
+
+    // A stray cancel after completion must not clear the completion notification.
+    handle.cancel();
+    expect(notifications.clear).not.toHaveBeenCalled();
   });
 
   it("cancelling during the retry backoff drops the pending retry (no new request)", async () => {

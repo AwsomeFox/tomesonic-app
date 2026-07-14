@@ -11,9 +11,7 @@
  *    auto-selects);
  *  - the Upload gate (disabled until files + library + folder), the confirm →
  *    uploadMediaFiles(EXACT params) hand-off, the progress bar driven by
- *    onProgress, Cancel → handle.cancel(), the success + failure dialogs, and the
- *    optional auto-match that fires quickMatchItem only when the response yields
- *    an id.
+ *    onProgress, Cancel → handle.cancel(), and the success + failure dialogs.
  */
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -21,7 +19,6 @@ jest.mock("../../utils/api", () => ({
 jest.mock("../../store/useDialogStore", () => ({ showAppDialog: jest.fn() }));
 jest.mock("../../store/useSnackbarStore", () => ({ showSnackbar: jest.fn() }));
 jest.mock("../../utils/mediaUploader", () => ({ uploadMediaFiles: jest.fn() }));
-jest.mock("../../utils/abs/items", () => ({ quickMatchItem: jest.fn() }));
 jest.mock("expo-document-picker", () => ({ getDocumentAsync: jest.fn() }));
 
 import React from "react";
@@ -30,7 +27,6 @@ import UploadMediaScreen from "../../screens/UploadMediaScreen";
 import { api } from "../../utils/api";
 import { showAppDialog } from "../../store/useDialogStore";
 import { uploadMediaFiles } from "../../utils/mediaUploader";
-import { quickMatchItem } from "../../utils/abs/items";
 import * as DocumentPicker from "expo-document-picker";
 import { useUserStore } from "../../store/useUserStore";
 
@@ -144,8 +140,6 @@ beforeEach(() => {
   (api.post as jest.Mock).mockResolvedValue({ data: {} });
   (DocumentPicker.getDocumentAsync as jest.Mock).mockReset();
   (DocumentPicker.getDocumentAsync as jest.Mock).mockResolvedValue({ canceled: true, assets: null });
-  (quickMatchItem as jest.Mock).mockReset();
-  (quickMatchItem as jest.Mock).mockResolvedValue({});
   capturedOnProgress = undefined;
   primeUploader();
 });
@@ -386,24 +380,7 @@ describe("UploadMediaScreen — upload", () => {
     expect(screen.getByTestId("upload-submit").props.accessibilityState?.disabled).toBe(false);
   });
 
-  it("auto-match fires quickMatchItem when the response yields a library item id", async () => {
-    await renderScreen();
-    await chooseFiles([ASSET]);
-
-    // Turn on the auto-match toggle.
-    await act(async () => {
-      fireEvent.press(screen.getByLabelText(/Auto-match metadata after upload/));
-    });
-    await confirmUpload();
-
-    await act(async () => {
-      resolveUpload({ libraryItemId: "li-99" });
-    });
-
-    await waitFor(() => expect(quickMatchItem).toHaveBeenCalledWith("li-99"));
-  });
-
-  it("auto-match off never calls quickMatchItem", async () => {
+  it("a successful upload shows the Upload complete dialog", async () => {
     await renderScreen();
     await chooseFiles([ASSET]);
     await confirmUpload();
@@ -412,6 +389,27 @@ describe("UploadMediaScreen — upload", () => {
       resolveUpload({ libraryItemId: "li-99" });
     });
     await waitFor(() => expect(dialogByTitle("Upload complete")).toBeTruthy());
-    expect(quickMatchItem).not.toHaveBeenCalled();
+  });
+
+  it("an upload that finishes AFTER the screen unmounts fires no dialog and no goBack", async () => {
+    const navigation = makeNavigation();
+    const { unmount } = await render(
+      <UploadMediaScreen navigation={navigation} route={{ params: { libraryId: "lib-books" } }} />
+    );
+    await act(async () => {});
+    await chooseFiles([ASSET]);
+    await confirmUpload();
+
+    // User leaves the screen mid-upload, THEN the upload resolves.
+    await act(async () => {
+      unmount();
+    });
+    await act(async () => {
+      resolveUpload({ libraryItemId: "li-1" });
+    });
+
+    // No completion dialog popped over the next screen, and no stray goBack.
+    expect(dialogByTitle("Upload complete")).toBeUndefined();
+    expect(navigation.goBack).not.toHaveBeenCalled();
   });
 });

@@ -14,13 +14,12 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
-import { SectionHeader, SelectRow, ToggleRow } from "../components/SettingsRows";
+import { SectionHeader, SelectRow } from "../components/SettingsRows";
 import SettingSelectModal from "../components/SettingSelectModal";
 import { api } from "../utils/api";
 import { AbsError, normalizeAbsError } from "../utils/abs/errors";
 import { refreshCapabilities, useServerCapabilities } from "../utils/abs/capabilities";
 import { uploadMediaFiles, type MediaUploadHandle } from "../utils/mediaUploader";
-import { quickMatchItem } from "../utils/abs/items";
 import { formatSize } from "../utils/format";
 import { showAppDialog } from "../store/useDialogStore";
 
@@ -40,9 +39,10 @@ import { showAppDialog } from "../store/useDialogStore";
  *
  * The heavy multipart streaming (progress/cancel) lives in
  * utils/mediaUploader.uploadMediaFiles — this screen only assembles its params,
- * tracks the returned handle for Cancel, drives a progress bar off onProgress,
- * and (optionally) fires a best-effort quickMatchItem when the upload response
- * yields a library item id. Navigator registration is owned by the parent.
+ * tracks the returned handle for Cancel, and drives a progress bar off
+ * onProgress. Navigator registration is owned by the parent. (No auto-match:
+ * POST /api/upload doesn't return a created-item id — the scan produces it
+ * asynchronously — so there's nothing to match against at upload time.)
  */
 
 interface PickedFile {
@@ -113,7 +113,6 @@ export default function UploadMediaScreen({ navigation, route }: any) {
   );
   const [author, setAuthor] = useState("");
   const [series, setSeries] = useState("");
-  const [autoMatch, setAutoMatch] = useState(false);
 
   // Upload lifecycle.
   const [busy, setBusy] = useState(false);
@@ -125,6 +124,17 @@ export default function UploadMediaScreen({ navigation, route }: any) {
   const handleRef = useRef<MediaUploadHandle | null>(null);
   // Stable per-mount id for the upload notification.
   const notifyIdRef = useRef(`upload-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+  // Post-await UI (the completion/failure dialog + goBack) only fires while
+  // mounted — an upload that outlives the screen keeps going in the background
+  // and reports via its notification, but must not pop a dialog over whatever
+  // screen replaced this one.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!caps.canUpload) return;
@@ -239,17 +249,12 @@ export default function UploadMediaScreen({ navigation, route }: any) {
         }
       );
       handleRef.current = handle;
-      const response = await handle.promise;
+      await handle.promise;
 
-      // Optional best-effort auto-match: only when the response defensively
-      // yields a library item id; a match failure must never fail the upload.
-      if (autoMatch) {
-        const itemId = response?.libraryItemId || response?.results?.[0]?.id;
-        if (itemId) {
-          quickMatchItem(itemId).catch(() => {});
-        }
-      }
-
+      // The upload continues in the background if the user navigated away (the
+      // notification reports completion); only touch in-app UI while mounted, so
+      // no stray dialog/goBack fires over another screen.
+      if (!mountedRef.current) return;
       showAppDialog({
         title: "Upload complete",
         message: `${files.length} file${files.length === 1 ? "" : "s"} uploaded to ${
@@ -258,6 +263,7 @@ export default function UploadMediaScreen({ navigation, route }: any) {
         buttons: [{ text: "Done", onPress: () => navigation.goBack() }],
       });
     } catch (e) {
+      if (!mountedRef.current) return;
       const message =
         e instanceof AbsError
           ? normalizeAbsError(e).message
@@ -345,6 +351,7 @@ export default function UploadMediaScreen({ navigation, route }: any) {
             <View
               key={f.uri}
               testID={`file-row-${i}`}
+              accessible
               accessibilityLabel={`File: ${f.name}${
                 f.size ? `, ${formatSize(f.size)}` : ""
               }`}
@@ -446,19 +453,18 @@ export default function UploadMediaScreen({ navigation, route }: any) {
           />
         </View>
 
-        <SectionHeader label="Options" colors={colors} />
-        <ToggleRow
-          icon="search"
-          title="Auto-match metadata after upload"
-          subtitle="Look up cover and details once the upload finishes"
-          value={autoMatch}
-          onValueChange={setAutoMatch}
-          colors={colors}
-        />
-
         {/* Upload action / progress */}
         {uploading ? (
-          <View testID="upload-progress" style={{ paddingHorizontal: 16, marginTop: 20 }}>
+          <View
+            testID="upload-progress"
+            style={{ paddingHorizontal: 16, marginTop: 20 }}
+            // progressbar role + value announce advancement on iOS VoiceOver
+            // (accessibilityLiveRegion below is Android-only).
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityValue={{ min: 0, max: 100, now: pct }}
+            accessibilityLabel="Upload progress"
+          >
             <Text
               accessibilityLiveRegion="polite"
               accessibilityLabel={`Uploading, ${pct} percent complete`}

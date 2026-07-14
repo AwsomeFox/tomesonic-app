@@ -10,9 +10,11 @@
  *     files:       appended under numeric string keys "0","1",... (the server
  *                  reads Object.values(req.files); the web client keys them by
  *                  index). This file-key strategy is the single riskiest guess.
- * A wrong field name simply makes the server reject the request; absRequest maps
- * that to an AbsError (server/unknown kind) which callers surface as a failure
- * dialog — never a crash. Callers MUST handle AbsError.
+ * A wrong field name simply makes the server reject the request rather than
+ * crashing: the axios uploadMedia() below maps it to an AbsError; the streaming
+ * utils/mediaUploader path (the one the screen actually uses) rejects a plain
+ * Error from its own describeUploadFailure(). Either way callers surface a
+ * failure dialog — never a crash — so a caller must handle BOTH shapes.
  *
  * The heavy lifting (streaming a large file with progress/cancel/retry) lives in
  * utils/mediaUploader.ts, which drives a bare XMLHttpRequest against the URL from
