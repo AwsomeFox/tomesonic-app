@@ -245,6 +245,28 @@ describe("PodcastFeedPreviewScreen — add podcast", () => {
     expect(success.title).toBe("Podcast added");
   });
 
+  it("falls back to the provider artworkUrl for the created cover when the feed has none", async () => {
+    // Feed metadata carries no imageUrl; the provider seed exposes the art as
+    // `artworkUrl` (not `cover`) — it must still reach the created podcast.
+    (api.post as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/podcasts/feed")
+        return Promise.resolve({ data: { podcast: { metadata: { title: "Arty Show" }, episodes: [] } } });
+      if (url === "/api/podcasts") return Promise.resolve({ data: {} });
+      return Promise.reject(new Error(`unmocked POST ${url}`));
+    });
+    await renderScreen({
+      feedUrl: FEED_URL,
+      libraryId: "lib-pods",
+      seed: { artworkUrl: "https://provider/art.jpg" },
+    });
+
+    await fireEvent.press(screen.getByLabelText("Add podcast"));
+    await confirmAdd();
+
+    expect(createCalls()).toHaveLength(1);
+    expect(createCalls()[0][1].media.metadata.imageUrl).toBe("https://provider/art.jpg");
+  });
+
   it("success dialog's Done pops back with goBack()", async () => {
     const navigation = await renderScreen();
     await fireEvent.press(screen.getByLabelText("Add podcast"));

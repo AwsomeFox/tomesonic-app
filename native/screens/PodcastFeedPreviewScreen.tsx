@@ -160,7 +160,10 @@ export default function PodcastFeedPreviewScreen({ navigation, route }: any) {
   const title: string = metadata.title || seed?.title || "Podcast";
   const author: string = metadata.author || seed?.artistName || "";
   const description: string = metadata.description || "";
-  const cover: string | undefined = seed?.cover || metadata.imageUrl || undefined;
+  // Provider hits carry the cover as `cover` OR `artworkUrl` (PodcastAddSearch
+  // renders `cover || artworkUrl`); honor both so the art isn't dropped.
+  const seedCover: string | undefined = seed?.cover || seed?.artworkUrl || undefined;
+  const cover: string | undefined = seedCover || metadata.imageUrl || undefined;
   const episodes: any[] = Array.isArray(feed?.episodes) ? feed!.episodes! : [];
 
   const sanitizedTitle = sanitizePodcastDirName(title);
@@ -181,7 +184,7 @@ export default function PodcastFeedPreviewScreen({ navigation, route }: any) {
         author: author || null,
         description: description || null,
         feedUrl: metadata.feedUrl || feedUrl,
-        imageUrl: metadata.imageUrl || seed?.cover || null,
+        imageUrl: metadata.imageUrl || seedCover || null,
         // Send itunesId as a string to match the metadata editor's write path
         // (EditMetadataScreen coerces with String()), so the two paths agree.
         ...(metadata.itunesId != null ? { itunesId: String(metadata.itunesId) } : {}),

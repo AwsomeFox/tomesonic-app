@@ -58,16 +58,35 @@ const SEGMENTS: { key: Segment; label: string }[] = [
 ];
 
 /**
- * On-server diff for one feed episode against the item's media.episodes:
+ * A once-per-render index of the server episodes' identities, so the on-server
+ * diff is O(1) per feed episode instead of scanning serverEpisodes three times
+ * each (O(n*m) across a large feed).
+ */
+type ServerEpisodeIndex = { urls: Set<string>; guids: Set<string>; titles: Set<string> };
+
+function buildServerEpisodeIndex(serverEpisodes: any[]): ServerEpisodeIndex {
+  const urls = new Set<string>();
+  const guids = new Set<string>();
+  const titles = new Set<string>();
+  for (const se of serverEpisodes) {
+    if (se?.enclosure?.url) urls.add(se.enclosure.url);
+    if (se?.guid) guids.add(se.guid);
+    if (se?.title) titles.add(se.title);
+  }
+  return { urls, guids, titles };
+}
+
+/**
+ * On-server diff for one feed episode against the precomputed server index:
  * enclosure.url is the strongest identity (it's what the server stores from
  * the download), then guid, then an exact-title fallback for feeds that
  * regenerate enclosure URLs.
  */
-function isEpisodeOnServer(feedEp: AbsPodcastFeedEpisode, serverEpisodes: any[]): boolean {
+function isEpisodeOnServer(feedEp: AbsPodcastFeedEpisode, index: ServerEpisodeIndex): boolean {
   const encUrl = feedEp?.enclosure?.url;
-  if (encUrl && serverEpisodes.some((se) => se?.enclosure?.url === encUrl)) return true;
-  if (feedEp?.guid && serverEpisodes.some((se) => se?.guid === feedEp.guid)) return true;
-  if (feedEp?.title && serverEpisodes.some((se) => se?.title === feedEp.title)) return true;
+  if (encUrl && index.urls.has(encUrl)) return true;
+  if (feedEp?.guid && index.guids.has(feedEp.guid)) return true;
+  if (feedEp?.title && index.titles.has(feedEp.title)) return true;
   return false;
 }
 
@@ -256,6 +275,13 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
 
   const podcastTitle = item?.media?.metadata?.title || "Episodes";
 
+  // Precompute the server episodes' identity sets once per item change so the
+  // on-server diff below is O(1) per feed episode, not a triple linear scan.
+  const serverEpisodeIndex = useMemo(
+    () => buildServerEpisodeIndex(serverEpisodes),
+    [serverEpisodes]
+  );
+
   // ---- feed rows (decorated with the on-server diff + title filter) --------
   type FeedRow = { key: string; ep: AbsPodcastFeedEpisode; onServer: boolean };
   const feedRows: FeedRow[] = useMemo(() => {
@@ -265,10 +291,10 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
       .map((ep, i) => ({
         key: feedEpisodeKey(ep, i),
         ep,
-        onServer: isEpisodeOnServer(ep, serverEpisodes),
+        onServer: isEpisodeOnServer(ep, serverEpisodeIndex),
       }))
       .filter((r) => !needle || String(r.ep?.title || "").toLowerCase().includes(needle));
-  }, [feedEpisodes, serverEpisodes, filter]);
+  }, [feedEpisodes, serverEpisodeIndex, filter]);
 
   type ServerRow = { key: string; ep: any };
   const serverRows: ServerRow[] = useMemo(() => {
@@ -323,9 +349,9 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
     if (!Array.isArray(feedEpisodes) || !selected) return [];
     return feedEpisodes
       .map((ep, i) => ({ key: feedEpisodeKey(ep, i), ep }))
-      .filter((r) => selected.has(r.key) && !isEpisodeOnServer(r.ep, serverEpisodes))
+      .filter((r) => selected.has(r.key) && !isEpisodeOnServer(r.ep, serverEpisodeIndex))
       .map((r) => r.ep);
-  }, [feedEpisodes, serverEpisodes, selected]);
+  }, [feedEpisodes, serverEpisodeIndex, selected]);
 
   const doDownload = async (eps: AbsPodcastFeedEpisode[]) => {
     if (!libraryItemId || eps.length === 0) return;
