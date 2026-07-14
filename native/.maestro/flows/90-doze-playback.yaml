@@ -1,0 +1,92 @@
+# Playback survives Android Doze. A SUPERSET of 20-playback: the PHASE=start
+# block is 20-playback verbatim (open the seeded BOOK, start real playback,
+# drive transport, collapse to a still-PLAYING miniplayer); the PHASE=assert
+# block runs AFTER the shell's doze sandwich (force-idle -> sleep -> unforce ->
+# wake) and verifies the session and position survived deep idle.
+#
+# Two phases in one file because Maestro can't run adb — ci-doze.sh invokes
+# this file twice (-e PHASE=start, then the adb doze sandwich, then
+# -e PHASE=assert). Every selector is borrowed from 20-playback / 60-resume;
+# the only genuinely new thing in the whole doze suite is the adb sandwich the
+# shell wraps between these two invocations.
+appId: com.tomesonic.app
+env:
+  # Which shelf card to open — CI pins the seeded audiobook so the seeded
+  # EBOOK (also "<title> by <author>") can't be picked up instead.
+  BOOK: ".* by .*"
+  # start | assert — set by ci-doze.sh; defaults to the start phase so a bare
+  # `maestro test 90-doze-playback.yaml` still does something sensible.
+  PHASE: start
+---
+# ---- PHASE=start : begin a real playback session (identical to 20-playback) ----
+- runFlow:
+    when:
+      true: ${PHASE == "start"}
+    commands:
+      - launchApp
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 20000
+      # Open the first book card on the shelves (BookCard a11y label is "<title> by <author>").
+      - tapOn:
+          text: ${BOOK}
+          index: 0
+      # Item detail: start (or continue) playback.
+      - extendedWaitUntil:
+          visible: ".*(Play|Continue).*"
+          timeout: 15000
+      - tapOn:
+          text: "^(Play|Continue)$"
+      # The app auto-expands the FULL player when playback starts — wait for it
+      # (a real session means audio is actually loaded and playing).
+      - extendedWaitUntil:
+          visible: "Collapse player"
+          timeout: 30000
+      # Transport: pause, resume, jump both ways.
+      - tapOn: "Pause"
+      - assertVisible: "Play"
+      - tapOn: "Play"
+      - assertVisible: "Pause"
+      - tapOn: "Forward .* seconds"
+      - tapOn: "Back .* seconds"
+      # Speed modal opens and closes.
+      - tapOn: "Playback speed.*"
+      - assertVisible: ".*×.*"
+      - back
+      # Collapse and confirm the miniplayer takes over — playback keeps running
+      # in the foreground service, which is exactly what must survive Doze.
+      - tapOn: "Collapse player"
+      - extendedWaitUntil:
+          visible: "Expand player.*"
+          timeout: 10000
+# ---- PHASE=assert : after force-idle -> sleep -> unforce -> KEYCODE_WAKEUP ----
+- runFlow:
+    when:
+      true: ${PHASE == "assert"}
+    commands:
+      - launchApp
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 20000
+      # Session survived Doze: the miniplayer is still present on the shelf.
+      - extendedWaitUntil:
+          visible: "Expand player.*"
+          timeout: 20000
+      # Player state sane: it re-expands into a working full player.
+      - tapOn: "Expand player.*"
+      - extendedWaitUntil:
+          visible: "Collapse player"
+          timeout: 30000
+      - tapOn: "Collapse player"
+      - extendedWaitUntil:
+          visible: "Expand player.*"
+          timeout: 10000
+      # Position persisted across Doze: the item detail now offers Continue,
+      # not Play (same assertion 60-resume makes after a kill/restore).
+      - tapOn:
+          text: ${BOOK}
+          index: 0
+      - extendedWaitUntil:
+          visible: "Continue"
+          timeout: 15000
+      - back

@@ -1,0 +1,86 @@
+# The native sleep-timer enforcer fires even under Android Doze. A SUPERSET of
+# 22-chapters-sleep: the PHASE=arm block starts real playback and arms the
+# SHORTEST preset ("5 min") — the fade-out + pause is driven natively, so it
+# must still fire while the device is force-idled. The PHASE=assert block runs
+# AFTER the shell's doze sandwich (force-idle -> sleep PAST the timer's expiry
+# -> unforce -> wake) and verifies playback was paused (paused-at-zero) and the
+# countdown chip is gone (plain "Sleep timer" control restored).
+#
+# Two phases in one file because Maestro can't run adb — ci-doze.sh invokes
+# this file twice (-e PHASE=arm, then the adb doze sandwich, then
+# -e PHASE=assert). Every selector is borrowed from 22-chapters-sleep; only the
+# adb sandwich the shell wraps between the two invocations is new. Playback is
+# left RUNNING (not paused) after arming so the timer actually counts down.
+appId: com.tomesonic.app
+env:
+  # Which shelf card to open — CI pins the seeded audiobook so the seeded
+  # EBOOK (also "<title> by <author>") can't be picked up instead.
+  BOOK: ".* by .*"
+  # arm | assert — set by ci-doze.sh; defaults to arm so a bare run is sensible.
+  PHASE: arm
+---
+# ---- PHASE=arm : start playback and arm the shortest sleep timer ----
+- runFlow:
+    when:
+      true: ${PHASE == "arm"}
+    commands:
+      - launchApp
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 20000
+      - tapOn:
+          text: ${BOOK}
+          index: 0
+      - extendedWaitUntil:
+          visible: ".*(Play|Continue).*"
+          timeout: 15000
+      - tapOn: "^(Play|Continue)$"
+      # A fresh play auto-expands; a resumed prior session stays collapsed —
+      # open it explicitly in that case (optional:true keeps the auto-expanded
+      # path from failing on a missing miniplayer handle).
+      - tapOn:
+          text: "Expand player.*"
+          optional: true
+      - extendedWaitUntil:
+          visible: "Collapse player"
+          timeout: 30000
+      # Arm the smallest preset and confirm the countdown chip appears. Leave it
+      # PLAYING and armed — the native enforcer must fade out + pause at expiry
+      # while the device is in deep Doze.
+      - tapOn: "Sleep timer"
+      - extendedWaitUntil:
+          visible: "5 min"
+          timeout: 5000
+      - tapOn: "5 min"
+      - extendedWaitUntil:
+          visible: "Sleep timer, .* remaining"
+          timeout: 5000
+      # Collapse to the miniplayer so playback continues in the foreground
+      # service through the doze sandwich.
+      - tapOn: "Collapse player"
+      - extendedWaitUntil:
+          visible: "Expand player.*"
+          timeout: 10000
+# ---- PHASE=assert : after force-idle -> sleep PAST expiry -> unforce -> wake ----
+- runFlow:
+    when:
+      true: ${PHASE == "assert"}
+    commands:
+      - launchApp
+      - extendedWaitUntil:
+          visible: "Home"
+          timeout: 20000
+      # The paused session persists — miniplayer still present on the shelf.
+      - extendedWaitUntil:
+          visible: "Expand player.*"
+          timeout: 20000
+      - tapOn: "Expand player.*"
+      - extendedWaitUntil:
+          visible: "Collapse player"
+          timeout: 30000
+      # The native enforcer fired under Doze: playback is PAUSED (paused-at-zero).
+      - assertVisible: "Play"
+      # The countdown chip is gone — the sleep-timer control is back to plain.
+      - assertNotVisible: "Sleep timer, .* remaining"
+      - assertVisible: "Sleep timer"
+      - tapOn: "Collapse player"

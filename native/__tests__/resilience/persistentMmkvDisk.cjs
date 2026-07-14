@@ -22,9 +22,11 @@
  * "tomesonic-settings" MMKV instances on the globalThis disk map, and the
  * MMKV mock ignores the encryption key that a Keystore wipe would rotate.
  *
- * TODO (out of this harness's disk model): download-store rehydration goes
- * through the SQLite-backed db layer, not MMKV — kill/rehydrate coverage for
- * completedDownloads needs a persistent db fake.
+ * NOTE: the download-store db layer (utils/db) is MMKV-backed
+ * (`createMMKV({ id: "tomesonic-db" })`), NOT SQLite — so mmkvDiskModule()
+ * already persists it across boot() with no extra fake. completedDownloads
+ * kill/rehydrate (plus namespace isolation and corrupt-record drop) is covered
+ * by downloadStoreRehydrate.test.ts.
  */
 
 /* eslint-disable */

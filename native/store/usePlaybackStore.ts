@@ -7,6 +7,7 @@ import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress
 import { writeWidgetState } from "../utils/autoCreds";
 import { upNextAddItem, upNextRemoveItem, upNextListItems } from "../utils/upNext";
 import { chapterIndexAt, absolutePositionFor } from "../utils/chapterMath";
+import { parsePlayMediaId } from "../utils/playMediaId";
 import { useLibraryStore } from "./useLibraryStore";
 import * as FileSystem from "expo-file-system/legacy";
 
@@ -1313,9 +1314,9 @@ export async function reconcileWithNativePlayer(): Promise<boolean> {
     const active: any = await TrackPlayer.getActiveTrack().catch(() => null);
     const mediaId = String(active?.mediaId ?? active?.id ?? "");
     if (!mediaId.startsWith("play:")) return false;
-    const raw = mediaId.slice("play:".length).split("@@")[0];
-    const itemId = raw.split("::")[0];
-    const episodeId = raw.includes("::") ? raw.split("::")[1] || undefined : undefined;
+    // Parse itemId/episodeId only — native already owns the live position, so
+    // the "@@<seconds>" suffix (if any) is discarded here; adoption never seeks.
+    const { itemId, episodeId } = parsePlayMediaId(mediaId, { hasPrefix: true });
     if (!itemId) return false;
     console.log(`[PlaybackStore] Adopting Android Auto native session for ${itemId}.`);
     return await usePlaybackStore.getState().startPlayback(itemId, episodeId);
