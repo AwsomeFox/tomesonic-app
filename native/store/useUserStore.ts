@@ -242,10 +242,15 @@ export const useUserStore = create<UserState>((set, get) => ({
       if (!Array.isArray(list)) return;
       const now = get().serverConnectionConfig;
       // Bail only on a LOGOUT (a token we HAD is now gone) or an ACCOUNT switch
-      // (userId changed) — NOT on a plain token change. A token rotation via
-      // /auth/refresh (which /api/me itself can trigger and replay) is the same
-      // account, and comparing tokens strictly would drop that valid refresh.
-      if ((sessionToken && !now?.token) || now?.userId !== sessionUserId) return;
+      // — NOT on a plain token change. A token rotation via /auth/refresh (which
+      // /api/me itself can trigger and replay) is the same account, and a strict
+      // token compare would drop that valid refresh. Prefer userId; fall back to
+      // token equality when the config predates userId so a token-only
+      // cross-account switch still blocks the late response.
+      const switched = sessionUserId
+        ? now?.userId !== sessionUserId
+        : now?.token !== sessionToken;
+      if ((sessionToken && !now?.token) || switched) return;
       const next = indexMediaProgress(list);
       const prev = get().mediaProgress;
       // FRESHEST-WINS per entry: local writers (player tick, reader, finish
@@ -340,11 +345,16 @@ export const useUserStore = create<UserState>((set, get) => ({
       const devices = res.data?.ereaderDevices;
       if (!Array.isArray(devices)) return;
       const now = get().serverConnectionConfig;
-      // Bail only on a LOGOUT (had a token, now none) or an ACCOUNT switch
-      // (userId changed) — NOT on a bare token change. /api/authorize can
-      // trigger a token rotation for the SAME account, and comparing tokens
-      // strictly would drop that valid, freshly-fetched device list.
-      if ((sessionToken && !now?.token) || now?.userId !== sessionUserId) return;
+      // Bail only on a LOGOUT (had a token, now none) or an ACCOUNT switch —
+      // NOT on a bare token change (/api/authorize can rotate the token for the
+      // SAME account, and a strict token compare would drop that valid list).
+      // Prefer userId to detect a switch (survives token rotation); when the
+      // config predates userId, fall back to token equality so a token-only
+      // cross-account switch still blocks the late response (device-email leak).
+      const switched = sessionUserId
+        ? now?.userId !== sessionUserId
+        : now?.token !== sessionToken;
+      if ((sessionToken && !now?.token) || switched) return;
       set({ ereaderDevices: devices });
     } catch {
       // No devices is the common case; failures just leave the action hidden.
@@ -474,11 +484,18 @@ export const useUserStore = create<UserState>((set, get) => ({
     }
     storageHelper.setLastSessionKey(newKey);
 
-    storageHelper.setServerConfig(config);
+    // Normalize the persisted config to ALWAYS carry a userId (fall back to the
+    // login user's id). The stale-session guards in refreshCapabilities /
+    // loadEReaderDevices / loadMediaProgress key off userId to tell a
+    // same-account token rotation (keep the response) from an account switch
+    // (drop it); without a userId those guards can't detect a token-only switch
+    // and could leak the previous account's data (e-reader device emails).
+    const normalizedConfig: any = { ...config, userId: config?.userId ?? user?.id };
+    storageHelper.setServerConfig(normalizedConfig);
     // trustTokens: a fresh login — this pair came straight from the server.
-    writeAutoCreds(config?.address, config?.token, useLibraryStore.getState().currentLibraryId, config?.refreshToken, true);
+    writeAutoCreds(normalizedConfig.address, normalizedConfig.token, useLibraryStore.getState().currentLibraryId, normalizedConfig.refreshToken, true);
     set({
-      serverConnectionConfig: config,
+      serverConnectionConfig: normalizedConfig,
       user: user,
       // A fresh login may target a DIFFERENT server — its settings blob (and
       // the capability gates derived from it) must not carry over. Admin

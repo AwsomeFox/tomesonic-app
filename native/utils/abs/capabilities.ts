@@ -179,7 +179,13 @@ export async function refreshCapabilities(): Promise<void> {
     const user = res.data?.user;
     if (!user || typeof user !== "object" || !user.id) return;
     const now = useUserStore.getState().serverConnectionConfig;
-    if ((sessionToken && !now?.token) || now?.userId !== sessionUserId) return;
+    // Prefer userId to detect an account switch (it survives a same-account
+    // token rotation); when the config predates userId, fall back to token
+    // equality so a token-only cross-account switch still blocks this response.
+    const switched = sessionUserId
+      ? now?.userId !== sessionUserId
+      : now?.token !== sessionToken;
+    if ((sessionToken && !now?.token) || switched) return;
     const patch: any = { user };
     // Skip the serverSettings write when a PATCH /api/settings echo landed
     // while this authorize was in flight — ours is the stale pre-PATCH blob.

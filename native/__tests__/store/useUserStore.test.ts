@@ -452,6 +452,14 @@ describe("useUserStore", () => {
       expect(api.delete).not.toHaveBeenCalled();
     });
 
+    it("normalizes the persisted config to carry userId (falls back to user.id) so the stale-session guards work", async () => {
+      await useUserStore
+        .getState()
+        .login({ address: "https://abs.test", token: "tok" } as any, { id: "userX", mediaProgress: [] });
+      expect(useUserStore.getState().serverConnectionConfig.userId).toBe("userX");
+      expect(storageHelper.getServerConfig()?.userId).toBe("userX");
+    });
+
     it("clears the previous account's e-reader devices on account switch (no cross-account email leak)", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       // Account A's devices are in memory (a forced 401 logout doesn't clear
@@ -952,6 +960,24 @@ describe("useUserStore", () => {
           serverConnectionConfig: { address: "https://b.test", token: "tokB", userId: "userB" },
         } as any);
         return { data: { ereaderDevices: [{ name: "A's Kindle" }] } } as any;
+      });
+      await useUserStore.getState().loadEReaderDevices();
+      expect(useUserStore.getState().ereaderDevices).toEqual([]);
+    });
+
+    it("drops the devices on a token-only switch when the config has NO userId (legacy fallback)", async () => {
+      // Legacy config without userId: the guard can't compare userId, so it must
+      // fall back to token equality — a token-only cross-account switch still
+      // blocks the late response (no device-email leak).
+      useUserStore.setState({
+        serverConnectionConfig: { address: "https://abs.test", token: "tokA" },
+        ereaderDevices: [],
+      } as any);
+      jest.mocked(api.post).mockImplementation(async () => {
+        useUserStore.setState({
+          serverConnectionConfig: { address: "https://abs.test", token: "tokB" },
+        } as any);
+        return { data: { ereaderDevices: [{ name: "A's Kindle", email: "a@x.com" }] } } as any;
       });
       await useUserStore.getState().loadEReaderDevices();
       expect(useUserStore.getState().ereaderDevices).toEqual([]);
