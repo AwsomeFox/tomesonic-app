@@ -341,6 +341,13 @@ describe("UploadMediaScreen — upload", () => {
     });
     expect(screen.getByText(/Uploading.*50%/)).toBeTruthy();
 
+    // An over-total event (loaded > total) clamps to 100%, never 120%.
+    await act(async () => {
+      capturedOnProgress!(120, 100);
+    });
+    expect(screen.getByText(/Uploading.*100%/)).toBeTruthy();
+    expect(screen.getByTestId("upload-progress").props.accessibilityValue?.now).toBe(100);
+
     await act(async () => {
       fireEvent.press(screen.getByTestId("upload-cancel"));
     });

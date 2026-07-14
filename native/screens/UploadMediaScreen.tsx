@@ -311,7 +311,9 @@ export default function UploadMediaScreen({ navigation, route }: any) {
   };
 
   const uploadLabel = `Upload ${files.length} file${files.length === 1 ? "" : "s"}`;
-  const pct = Math.round(progress * 100);
+  // Clamp: a progress event can report loaded > total (rounding) — an
+  // unclamped 101% would give a bad progressbar value and an over-full bar.
+  const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
 
   let body: React.ReactNode;
   if (caps.canUpload) {
