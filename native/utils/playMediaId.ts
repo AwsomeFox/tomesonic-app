@@ -30,15 +30,27 @@ export interface ParsedPlayMediaId {
   /** undefined when there is no "::episodeId" segment (or it is empty). */
   episodeId?: string;
   /**
-   * Raw Number() parse of the "@@<seconds>" suffix:
-   *   - undefined when the "@@" suffix is absent,
-   *   - NaN when the suffix is non-numeric (e.g. "@@later"),
-   *   - 0 for an empty suffix ("@@").
-   * It is deliberately NOT normalised here — every seek caller already guards
-   * with `!isNaN(bookmarkSeconds) && bookmarkSeconds > 0`, so a malformed suffix
-   * simply skips the seek rather than being silently coerced to a valid number.
+   * Seconds from the "@@<seconds>" suffix, mirroring the Kotlin parser's
+   * `substringAfter("@@", "").toDoubleOrNull()`: a finite number when the suffix
+   * is numeric (0 included, for a literal "@@0"), otherwise undefined — an
+   * absent, empty, or non-numeric suffix ("@@", "@@later", "@@1@@2") all collapse
+   * to undefined, matching Kotlin's null. Seek callers still guard with
+   * `bookmarkSeconds !== undefined && bookmarkSeconds > 0`.
    */
   bookmarkSeconds?: number;
+}
+
+/**
+ * JS equivalent of Kotlin's `String.toDoubleOrNull()` for the "@@<seconds>"
+ * suffix: a finite number, else undefined. It explicitly guards the JS footgun
+ * where `Number("")` and `Number(" ")` are 0 — an empty or whitespace-only
+ * suffix must read as absent (Kotlin's `substringAfter("@@", "")` yields "",
+ * and `"".toDoubleOrNull()` is null), not as a bookmark of 0.
+ */
+function toFiniteSecondsOrUndefined(suffix: string | undefined): number | undefined {
+  if (suffix === undefined || suffix.trim() === "") return undefined;
+  const n = Number(suffix);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 export function parsePlayMediaId(
@@ -66,6 +78,6 @@ export function parsePlayMediaId(
   // Empty ("a::") or missing episode segment both collapse to undefined, which
   // is the shape startPlayback expects (no episode).
   const episodeId = colonIdx === -1 ? undefined : main.slice(colonIdx + 2) || undefined;
-  const bookmarkSeconds = bookmarkStr !== undefined ? Number(bookmarkStr) : undefined;
+  const bookmarkSeconds = toFiniteSecondsOrUndefined(bookmarkStr);
   return { itemId, episodeId, bookmarkSeconds };
 }

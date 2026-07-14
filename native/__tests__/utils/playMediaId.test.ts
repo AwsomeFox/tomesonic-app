@@ -58,7 +58,7 @@ describe("parsePlayMediaId — stripped form (hasPrefix: false, from RemotePlayI
     expect(parsePlayMediaId("a@@123.5")).toEqual({ itemId: "a", bookmarkSeconds: 123.5 });
   });
 
-  it('"a::e@@0" → item + episode, bookmark 0 (caller\'s t > 0 guard skips the seek)', () => {
+  it('"a::e@@0" → item + episode, bookmark 0 (a literal "0" is a valid finite parse)', () => {
     expect(parsePlayMediaId("a::e@@0")).toEqual({
       itemId: "a",
       episodeId: "e",
@@ -70,24 +70,20 @@ describe("parsePlayMediaId — stripped form (hasPrefix: false, from RemotePlayI
     expect(parsePlayMediaId("a")).toEqual({ itemId: "a" });
   });
 
-  it('a non-numeric "@@" suffix yields NaN (caller\'s !isNaN guard skips the seek)', () => {
-    const parsed = parsePlayMediaId("a@@later");
-    expect(parsed.itemId).toBe("a");
-    expect(Number.isNaN(parsed.bookmarkSeconds)).toBe(true);
+  it('a non-numeric "@@" suffix collapses to undefined (matches Kotlin toDoubleOrNull → null)', () => {
+    expect(parsePlayMediaId("a@@later")).toEqual({ itemId: "a" });
   });
 
-  it('an empty "@@" suffix parses to 0 ("a@@")', () => {
-    expect(parsePlayMediaId("a@@")).toEqual({ itemId: "a", bookmarkSeconds: 0 });
+  it('an empty "@@" suffix collapses to undefined ("a@@" → Kotlin "".toDoubleOrNull() is null)', () => {
+    expect(parsePlayMediaId("a@@")).toEqual({ itemId: "a" });
   });
 });
 
 describe("parsePlayMediaId — first-occurrence splits (aligned with the Kotlin parser)", () => {
-  it('"a@@1@@2" → suffix is everything after the FIRST "@@" ("1@@2" → NaN), not "1"', () => {
+  it('"a@@1@@2" → suffix is everything after the FIRST "@@" ("1@@2" → undefined), not "1"', () => {
     // Kotlin: body.substringAfter("@@") = "1@@2" → toDoubleOrNull() = null.
     // A naive split("@@") would wrongly yield bookmarkSeconds 1.
-    const parsed = parsePlayMediaId("a@@1@@2");
-    expect(parsed.itemId).toBe("a");
-    expect(Number.isNaN(parsed.bookmarkSeconds)).toBe(true);
+    expect(parsePlayMediaId("a@@1@@2")).toEqual({ itemId: "a" });
   });
 
   it('"a::e::x" → episode is everything after the FIRST "::" ("e::x"), not "e"', () => {
