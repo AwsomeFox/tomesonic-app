@@ -159,20 +159,27 @@ export function bumpSettingsWriteSeq(): void {
 /**
  * (Re)hydrate the full user + serverSettings from POST /api/authorize.
  * NEVER throws — capabilities simply stay stale/degraded on failure. Uses the
- * same stale-session guard as useUserStore.loadEReaderDevices: snapshot the
- * session token first so a slow response can't write account A's role into
- * account B's (or a logged-out) store. Additionally guarded against the
- * settings write race (see settingsWriteSeq above).
+ * same stale-session guard as useUserStore.loadMediaProgress: snapshot the
+ * session userId first so a slow response can't write account A's role into
+ * account B's (or a logged-out) store — but bail only on a LOGOUT or an ACCOUNT
+ * switch, NOT on a bare token rotation. /api/authorize is exactly the request
+ * whose 401 the interceptor refreshes+replays, rotating the token mid-flight
+ * for the SAME account; a strict-token guard would then discard the valid admin
+ * response and strand real admins in the degraded non-admin state. Additionally
+ * guarded against the settings write race (see settingsWriteSeq above).
  */
 export async function refreshCapabilities(): Promise<void> {
-  const sessionToken = useUserStore.getState().serverConnectionConfig?.token;
+  const cfg = useUserStore.getState().serverConnectionConfig;
+  const sessionToken = cfg?.token;
+  const sessionUserId = cfg?.userId;
   if (!sessionToken) return;
   const seqAtRequest = settingsWriteSeq;
   try {
     const res = await api.post("/api/authorize");
     const user = res.data?.user;
     if (!user || typeof user !== "object" || !user.id) return;
-    if (useUserStore.getState().serverConnectionConfig?.token !== sessionToken) return;
+    const now = useUserStore.getState().serverConnectionConfig;
+    if ((sessionToken && !now?.token) || now?.userId !== sessionUserId) return;
     const patch: any = { user };
     // Skip the serverSettings write when a PATCH /api/settings echo landed
     // while this authorize was in flight — ours is the stale pre-PATCH blob.

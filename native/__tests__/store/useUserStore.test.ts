@@ -452,6 +452,21 @@ describe("useUserStore", () => {
       expect(api.delete).not.toHaveBeenCalled();
     });
 
+    it("clears the previous account's e-reader devices on account switch (no cross-account email leak)", async () => {
+      storageHelper.setLastSessionKey("https://a.example.com::userA");
+      // Account A's devices are in memory (a forced 401 logout doesn't clear
+      // them); each carries an email that must not render under account B.
+      useUserStore.setState({
+        ereaderDevices: [{ name: "Kindle A", email: "a@example.com", users: ["userA"] }],
+      } as any);
+      // The async loadEReaderDevices() login fires returns nothing here.
+      jest.mocked(api.post).mockResolvedValue({ data: {} } as any);
+
+      await useUserStore.getState().login(CONFIG_B, { id: "userB", mediaProgress: [] });
+
+      expect(useUserStore.getState().ereaderDevices).toEqual([]);
+    });
+
     it("keeps caches and pending syncs when the same account re-logs in", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       seedPreviousSessionLeftovers();
@@ -908,6 +923,38 @@ describe("useUserStore", () => {
     it("swallows request failures (devices only gate a secondary action)", async () => {
       jest.mocked(api.post).mockRejectedValue(new Error("500"));
       await expect(useUserStore.getState().loadEReaderDevices()).resolves.toBeUndefined();
+    });
+
+    it("keeps the freshly-fetched devices when the token ROTATES mid-request (same account)", async () => {
+      useUserStore.setState({
+        serverConnectionConfig: { address: "https://abs.test", token: "old", userId: "userA" },
+        ereaderDevices: [],
+      } as any);
+      jest.mocked(api.post).mockImplementation(async () => {
+        // The 401 interceptor rotated the access token for the SAME account
+        // mid-flight — a strict-token guard would wrongly drop this valid list.
+        useUserStore.setState({
+          serverConnectionConfig: { address: "https://abs.test", token: "rotated", userId: "userA" },
+        } as any);
+        return { data: { ereaderDevices: [{ name: "Kindle" }] } } as any;
+      });
+      await useUserStore.getState().loadEReaderDevices();
+      expect(useUserStore.getState().ereaderDevices.map((d: any) => d.name)).toEqual(["Kindle"]);
+    });
+
+    it("drops the devices when the ACCOUNT switches mid-request", async () => {
+      useUserStore.setState({
+        serverConnectionConfig: { address: "https://abs.test", token: "old", userId: "userA" },
+        ereaderDevices: [],
+      } as any);
+      jest.mocked(api.post).mockImplementation(async () => {
+        useUserStore.setState({
+          serverConnectionConfig: { address: "https://b.test", token: "tokB", userId: "userB" },
+        } as any);
+        return { data: { ereaderDevices: [{ name: "A's Kindle" }] } } as any;
+      });
+      await useUserStore.getState().loadEReaderDevices();
+      expect(useUserStore.getState().ereaderDevices).toEqual([]);
     });
   });
 

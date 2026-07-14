@@ -330,14 +330,21 @@ export const useUserStore = create<UserState>((set, get) => ({
     // Fired-and-forgotten from initialize()/login() — snapshot the session so
     // a slow response can't repopulate devices into a logged-out (or
     // switched-account) store.
-    const sessionToken = get().serverConnectionConfig?.token;
+    const cfg = get().serverConnectionConfig;
+    const sessionToken = cfg?.token;
+    const sessionUserId = cfg?.userId;
     try {
       // Same source as the original app: /api/authorize returns the server's
       // configured e-reader devices for this user.
       const res = await api.post("/api/authorize");
       const devices = res.data?.ereaderDevices;
       if (!Array.isArray(devices)) return;
-      if (get().serverConnectionConfig?.token !== sessionToken) return;
+      const now = get().serverConnectionConfig;
+      // Bail only on a LOGOUT (had a token, now none) or an ACCOUNT switch
+      // (userId changed) — NOT on a bare token change. /api/authorize can
+      // trigger a token rotation for the SAME account, and comparing tokens
+      // strictly would drop that valid, freshly-fetched device list.
+      if ((sessionToken && !now?.token) || now?.userId !== sessionUserId) return;
       set({ ereaderDevices: devices });
     } catch {
       // No devices is the common case; failures just leave the action hidden.
@@ -477,6 +484,12 @@ export const useUserStore = create<UserState>((set, get) => ({
       // the capability gates derived from it) must not carry over. Admin
       // flows re-hydrate via refreshCapabilities().
       serverSettings: null,
+      // Clear the PREVIOUS account's e-reader devices (each carries a device
+      // email) so a forced-logout → different-account login on a shared server
+      // can't render account A's devices as B's "shared" devices until the
+      // async loadEReaderDevices() below resolves — and permanently if it
+      // throws (offline) or the response omits the field. Matches logout().
+      ereaderDevices: [],
       // Seed progress from the login payload; refreshed later via loadMediaProgress.
       mediaProgress: indexMediaProgress(user?.mediaProgress || []),
     });

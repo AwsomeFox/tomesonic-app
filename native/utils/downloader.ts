@@ -23,6 +23,18 @@ const bookRunSeq: Record<string, number> = {};
 // concurrent starts (double-tap, retry-while-running, auto-next races).
 const runningBooks = new Set<string>();
 
+// A duplicate start is only rejected when a loop is BOTH flagged running AND
+// still has a live store entry. cancelDownload / abortBookParts /
+// deactivateDownloadsForSwitch remove the store entry SYNCHRONOUSLY, but the
+// native download keeps aborting for a beat afterward — so the id lingers in
+// runningBooks (its finally is gated on isCurrent() and won't fire for a
+// superseded run). Gating on the store entry lets the user's immediate
+// re-download start right away — the exact "cancel → immediate re-download
+// while a part is still aborting" case the bookRunSeq generation guard exists
+// to make safe — instead of being silently swallowed until the abort settles.
+const isDownloadLive = (id: string): boolean =>
+  runningBooks.has(id) && !!useDownloadStore.getState().activeDownloads[id];
+
 // Guards auto-download-next-in-series against triggering more than once per
 // completion chain (e.g. if a user has several books mid-series queued up).
 const autoNextInFlight = new Set<string>();
@@ -296,6 +308,12 @@ async function downloadPartWithAuthRetry(
     const freshToken = config?.token;
     // No refresh happened (same/absent token) — surface the original error.
     if (!freshToken || freshToken === token) throw err;
+    // The refresh above awaited the network; a cancel/abort during that window
+    // removed the store entry (and may have deleted the folder). Re-downloading
+    // the part now would waste bandwidth and rewrite into a just-removed folder,
+    // so bail if the download is no longer live (the main loop guards each part
+    // the same way; the retry path was missing it).
+    if (!useDownloadStore.getState().activeDownloads[id]) return;
     const freshUrl = absoluteUrl(part.url.split("?")[0], config.address || "", freshToken);
     await downloadPart(id, title, { ...part, url: freshUrl }, destPath, freshToken);
   }
@@ -384,7 +402,8 @@ export const downloader = {
 
     // Duplicate-start guard: if a loop is already driving this book (double
     // tap, auto-next racing a manual download, retry-while-running), ignore.
-    if (runningBooks.has(id)) {
+    // A stale flag left by a still-aborting cancel is NOT a live loop.
+    if (isDownloadLive(id)) {
       console.log("[Downloader] Download already running for", id, "— ignoring duplicate start");
       return;
     }
@@ -653,7 +672,7 @@ export const downloader = {
     const id = episodeDownloadKey(libraryItemId, episodeId);
 
     // Duplicate-start guard (double tap / retry-while-running), same as downloadBook.
-    if (runningBooks.has(id)) {
+    if (isDownloadLive(id)) {
       console.log("[Downloader] Download already running for", id, "— ignoring duplicate start");
       return;
     }
@@ -792,7 +811,7 @@ export const downloader = {
     const { id, title } = downloadItem;
 
     // Duplicate-start guard, same as downloadBook (double-tapped retry etc.).
-    if (runningBooks.has(id)) {
+    if (isDownloadLive(id)) {
       console.log("[Downloader] Download already running for", id, "— ignoring duplicate resume");
       return;
     }

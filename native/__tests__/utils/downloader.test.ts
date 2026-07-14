@@ -363,6 +363,33 @@ describe("downloadBook — duplicate-start guard", () => {
     await downloader.downloadBook(fullItem(), SERVER, TOKEN);
     expect(notifications.start).toHaveBeenCalledTimes(2);
   });
+
+  it("allows an immediate re-download after cancel while the old part is still aborting", async () => {
+    const gate = deferred<any>();
+    downloadImpl = () => gate.promise;
+
+    const first = downloader.downloadBook(fullItem(), SERVER, TOKEN);
+    await until(() => resumables.length === 1);
+
+    // Cancel removes the store entry + aborts, but the OLD loop is still awaiting
+    // its (aborting) native downloadAsync — so it lingers in runningBooks.
+    useDownloadStore.getState().cancelDownload("book1");
+    await until(() => resumables[0].cancelAsync.mock.calls.length === 1);
+    expect(useDownloadStore.getState().activeDownloads["book1"]).toBeUndefined();
+
+    // Immediate re-download BEFORE the old native task settles. Previously the
+    // stale runningBooks flag silently swallowed this ("ignoring duplicate
+    // start"); gating on the live store entry lets a fresh loop start.
+    downloadImpl = async () => ({ uri: "x", status: 200 });
+    await downloader.downloadBook(fullItem(), SERVER, TOKEN);
+    expect(notifications.start).toHaveBeenCalledTimes(2); // the second start actually ran
+    expect(useDownloadStore.getState().completedDownloads["book1"]).toBeTruthy();
+
+    // The ORIGINAL aborted loop settling must not clobber the new run's result.
+    gate.resolve(undefined);
+    await first;
+    expect(useDownloadStore.getState().completedDownloads["book1"]).toBeTruthy();
+  });
 });
 
 describe("downloadBook — cancel mid-flight", () => {
