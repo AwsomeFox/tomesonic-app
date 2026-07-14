@@ -278,6 +278,79 @@ export interface AbsNotificationSettings {
   [key: string]: any;
 }
 
+/**
+ * A provider podcast-search hit (GET /api/search/podcast). NOTE: like the
+ * notification shapes, the podcast surface is verified at ISSUE-TEXT +
+ * web-client-behavior level, not against the server source — see
+ * utils/abs/podcasts.ts. Everything is optional/loose on purpose.
+ */
+export interface AbsPodcastSearchResult {
+  id?: string | number;
+  title?: string;
+  artistName?: string;
+  cover?: string;
+  artworkUrl?: string;
+  feedUrl?: string;
+  trackCount?: number;
+  genres?: string[];
+  [key: string]: any;
+}
+
+/** One episode inside a parsed podcast feed (POST /api/podcasts/feed). */
+export interface AbsPodcastFeedEpisode {
+  title?: string;
+  subtitle?: string;
+  description?: string;
+  pubDate?: string;
+  publishedAt?: number;
+  enclosure?: { url?: string; type?: string; length?: string | number; [key: string]: any };
+  guid?: string;
+  episode?: string | number;
+  season?: string | number;
+  [key: string]: any;
+}
+
+/** A parsed podcast feed (POST /api/podcasts/feed → { podcast }). */
+export interface AbsPodcastFeed {
+  metadata?: any;
+  episodes?: AbsPodcastFeedEpisode[];
+  [key: string]: any;
+}
+
+/** An episode-download-queue row (GET /api/podcasts/:id/downloads). */
+export interface AbsEpisodeDownload {
+  id?: string;
+  episodeDisplayTitle?: string;
+  podcastId?: string;
+  libraryItemId?: string;
+  [key: string]: any;
+}
+
+/** A feed entry parsed out of an OPML file (POST /api/podcasts/opml/parse → { feeds }). */
+export interface AbsOpmlFeed {
+  title?: string;
+  feedUrl?: string;
+  [key: string]: any;
+}
+
+/**
+ * POST /api/podcasts create payload. The media.metadata NESTING is one of the
+ * podcast module's weakest pins (web-client-mirrored, not server-verified) —
+ * see utils/abs/podcasts.ts.
+ */
+export interface AbsCreatePodcastPayload {
+  path: string;
+  folderId: string;
+  libraryId: string;
+  media: {
+    metadata: any;
+    autoDownloadEpisodes?: boolean;
+    autoDownloadSchedule?: string;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
 /** A narrator row from GET /api/libraries/:id/narrators → { narrators }. */
 export interface AbsNarrator {
   /** encodeURIComponent(base64(name)) — the :narratorId path param scheme. */
