@@ -154,6 +154,41 @@ describe("ItemHistoryScreen", () => {
     expect(labels[2]).toContain("Old Phone");
   });
 
+  it("de-dupes a session re-served across page boundaries (no double count/sum)", async () => {
+    // A session added server-side mid-paging shifts boundaries and re-serves a
+    // row. Page 1 here re-serves s2 (already on page 0) plus a genuinely new s3.
+    const page2New = {
+      id: "s3",
+      libraryItemId: "item1",
+      displayTitle: "The Hobbit",
+      timeListening: 300, // 5m
+      updatedAt: new Date("2026-06-20T10:00:00Z").getTime(),
+      deviceInfo: { deviceName: "Old Phone" },
+    };
+    mockedSessions.mockResolvedValue({
+      sessions: SESSIONS,
+      total: 3,
+      numPages: 2,
+      page: 0,
+      itemsPerPage: 2,
+    });
+    mockedGet.mockResolvedValue({
+      data: { sessions: [SESSIONS[1], page2New], total: 3, numPages: 2, page: 1, itemsPerPage: 2 },
+    });
+    await renderScreen();
+
+    await waitFor(() =>
+      expect(mockedGet).toHaveBeenCalledWith("/api/me/item/listening-sessions/item1?page=1")
+    );
+    // s2 counted ONCE: 3 unique sessions, time = 3660 + 40 + 300 = 4000s (1h 6m),
+    // not 4040s (would be 1h 7m if s2 double-summed).
+    await screen.findByText("3 sessions · 1h 6m total");
+    const labels = screen
+      .getAllByLabelText(/listened/)
+      .map((n) => n.props.accessibilityLabel as string);
+    expect(labels).toHaveLength(3);
+  });
+
   it("a failed later page keeps page 0 usable and never pairs the full count with a partial time", async () => {
     mockedSessions.mockResolvedValue({
       sessions: SESSIONS,

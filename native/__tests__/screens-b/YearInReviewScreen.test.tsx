@@ -185,6 +185,29 @@ describe("YearInReviewScreen", () => {
     }
   });
 
+  it("shows seconds (not '0 minutes') when a non-empty year totals under a minute", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        numBooksFinished: 0,
+        totalListeningTime: 45, // 45 seconds -> would floor to 0 minutes
+        totalListeningSessions: 1,
+        numBooksListened: 1,
+        topAuthors: [],
+        topGenres: [],
+        finishedBooksWithCovers: [],
+      },
+    });
+    await renderYear({ year: 2025 });
+    await screen.findByText("Books Finished");
+
+    // A real (tiny) year must not headline as "0 minutes"/empty.
+    expect(screen.getByText("seconds listened")).toBeTruthy();
+    expect(screen.getByText("45")).toBeTruthy();
+    expect(screen.queryByText("minutes listened")).toBeNull();
+    // NOT the empty state.
+    expect(screen.queryByText(/no listening/i)).toBeNull();
+  });
+
   it("uses the singular 'hour' when the total is exactly one hour", async () => {
     (api.get as jest.Mock).mockResolvedValue({
       data: {

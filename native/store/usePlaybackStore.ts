@@ -1734,7 +1734,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({
       castClient: client || null,
       isCasting: !!client,
-      ...(client ? {} : { castSeekAbs: null }),
+      // Attaching a Cast client makes the PlaybackState listener early-return,
+      // so it can no longer clear a local isBuffering that was true when the
+      // cast started — the spinner would stay pinned over the transport for the
+      // whole session. Clear it here; the receiver reports its own state.
+      ...(client ? { isBuffering: false } : { castSeekAbs: null }),
     });
   },
 
@@ -3276,7 +3280,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 
     // Native enforcement (doze-proof pause/fade/shake) — local playback only;
     // while casting the receiver plays and JS stays authoritative.
-    const nativeArmed = !get().isCasting && armNativeSleepTimer(initialRemaining);
+    // The native enforcer counts WALL-clock time, but an End-of-chapter timer's
+    // `remaining` is BOOK-seconds (chapter end − position). At any rate ≠ 1x the
+    // two diverge, so under doze (JS frozen — the exact case the native path
+    // exists for) native would fire at the wrong point (late at >1x, early at
+    // <1x). Convert to wall-clock for the native arm. Fixed-duration timers are
+    // already wall-clock (real listening time) and pass through unchanged.
+    const speedNow = get().playbackSpeed || 1;
+    const nativeRemaining = endOfChapter ? initialRemaining / speedNow : initialRemaining;
+    const nativeArmed = !get().isCasting && armNativeSleepTimer(nativeRemaining);
     if (get().isCasting) cancelNativeSleepTimer();
 
     // Shake-to-extend: when the native timer is armed it owns the shake sensor
@@ -3368,8 +3380,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       if (timer.endOfChapter && _nativeSleepArmed && !get().isCasting && get().isPlaying) {
         const nativeExpected =
           _nativeSleepArmedRemaining - (Date.now() - _nativeSleepArmedAt) / 1000;
-        if (Math.abs(remaining - nativeExpected) > 3) {
-          armNativeSleepTimer(remaining);
+        // Compare in WALL-clock units (native's units): `remaining` is
+        // BOOK-seconds, so scale by the current rate before diffing/re-arming.
+        // This also self-corrects a mid-timer speed change (which shifts the
+        // wall-clock deadline) instead of spamming re-arms every tick.
+        const remainingWall = remaining / (get().playbackSpeed || 1);
+        if (Math.abs(remainingWall - nativeExpected) > 3) {
+          armNativeSleepTimer(remainingWall);
         }
       }
 

@@ -843,6 +843,17 @@ export const downloader = {
 
       const remainingParts = (downloadItem.parts || []).filter((p: DownloadPart) => !p.completed);
 
+      // A re-fetched part restarts from byte 0 (no HTTP range resume here), but
+      // the store still carries the stale high bytesDownloaded from the failed
+      // attempt. The first fresh progress callback would REPLACE that high value
+      // with a low one, snapping the progress bar backwards — most visibly on
+      // single-part items (podcast episodes, single-m4b books) where that part
+      // IS the whole bar. Reset each incomplete part to the honest baseline (0)
+      // up front so progress only ever climbs from the completed-parts total.
+      for (const part of remainingParts) {
+        useDownloadStore.getState().updateDownloadProgress(id, part.id, 0, part.fileSize);
+      }
+
       // Only the not-yet-downloaded remainder needs to fit on disk.
       await assertEnoughFreeSpace(remainingParts);
 

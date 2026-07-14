@@ -674,6 +674,29 @@ describe("resumeDownload", () => {
     expect(useDownloadStore.getState().completedDownloads["r1"]).toBeTruthy();
   });
 
+  it("resets an incomplete part's stale progress to the baseline at retry (no backwards bar)", async () => {
+    const item = seedResumable();
+    // The failed attempt left a HIGH bytesDownloaded on the incomplete part. A
+    // re-fetch restarts from byte 0; without a reset the first fresh progress
+    // callback would REPLACE 8 with a low value, snapping the bar backwards.
+    item.parts[1].bytesDownloaded = 8; // fileSize 10, completed:false
+    useDownloadStore.setState({ activeDownloads: { r1: item } } as any);
+
+    const gate = deferred<any>();
+    downloadImpl = () => gate.promise;
+    const p = downloader.resumeDownload(item, SERVER, "new-tok");
+    await until(() => resumables.length === 1);
+
+    // At retry time (before the re-fetch reports any bytes) the incomplete part
+    // is reset to 0 — the honest completed-parts baseline it climbs from.
+    const mid = useDownloadStore.getState().activeDownloads["r1"];
+    const track2 = mid.parts.find((pt: any) => pt.id === "track_2");
+    expect(track2?.bytesDownloaded).toBe(0);
+
+    gate.resolve({ uri: "x", status: 200 });
+    await p;
+  });
+
   it("bails out silently when the item was cancelled before resuming", async () => {
     const item = seedResumable();
     useDownloadStore.setState({ activeDownloads: {} } as any); // cancelled elsewhere

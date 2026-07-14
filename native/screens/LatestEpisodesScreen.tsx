@@ -346,7 +346,14 @@ export default function LatestEpisodesScreen({ navigation }: any) {
     // is the reference for this pattern).
     return (
       <View
-        key={episode.id || index}
+        // Episode ids are NOT unique across podcasts (see the composite keys
+        // used for progress/download above) — a bare episode.id can collide
+        // between two podcasts' rows. Key by the same item+episode composite.
+        key={
+          episode.libraryItemId && episode.id
+            ? `${episode.libraryItemId}-${episode.id}`
+            : episode.id || index
+        }
         style={{
           flexDirection: "row",
           alignItems: "center",

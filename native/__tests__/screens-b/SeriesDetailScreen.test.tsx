@@ -261,6 +261,75 @@ describe("SeriesDetailScreen", () => {
     expect(screen.queryByText("Continue")).toBeNull();
   });
 
+  it("keeps the PLAYABLE edition when collapsing a re-released sequence (audio over ebook)", async () => {
+    // Two editions share sequence "1": an audiobook and a NEWER ebook-only
+    // re-release. The collapse must keep the audiobook — otherwise the row
+    // routes to the Reader and vanishes under "Hide non-audiobooks".
+    mockSeriesApi({
+      items: [
+        {
+          id: "audioEd",
+          mediaType: "book",
+          addedAt: 1000, // older
+          media: {
+            metadata: { title: "AudioEd", authorName: "Author X", series: [{ id: "ser1", sequence: "1" }] },
+            duration: 3600,
+            numTracks: 6,
+          },
+          userMediaProgress: null,
+        },
+        {
+          id: "ebookEd",
+          mediaType: "book",
+          addedAt: 5000, // newer — would win a recency-only tiebreak
+          media: {
+            metadata: { title: "EbookEd", authorName: "Author X", series: [{ id: "ser1", sequence: "1" }] },
+            ebookFile: { ebookFormat: "epub" },
+          },
+          userMediaProgress: null,
+        },
+      ],
+    });
+    await renderSeries();
+    await screen.findByText("#1 AudioEd");
+
+    // The audiobook edition is the sole representative; the ebook re-release is
+    // collapsed away, and the surviving row plays (does not open the Reader).
+    expect(screen.queryByText("#1 EbookEd")).toBeNull();
+    expect(screen.getByLabelText("Play AudioEd")).toBeTruthy();
+  });
+
+  it("hero button reads Read (book) when the next unfinished book is ebook-only", async () => {
+    // handlePlay routes an ebook-only next book to the Reader, so the hero must
+    // present as Read — not a play icon + Play all that silently opens the Reader.
+    mockSeriesApi({
+      items: [
+        {
+          id: "onlyEbook",
+          mediaType: "book",
+          media: {
+            metadata: { title: "SoloEbook", authorName: "Author X", series: [{ id: "ser1", sequence: "1" }] },
+            ebookFile: { ebookFormat: "epub" },
+          },
+          userMediaProgress: null,
+        },
+      ],
+    });
+    const navigation = await renderSeries();
+    await screen.findByText("#1 SoloEbook");
+
+    // Hero affordance matches the routing: "Read", not "Play all".
+    const hero = screen.getByLabelText("Read");
+    expect(hero.props.accessibilityRole).toBe("button");
+    expect(screen.queryByText("Play all")).toBeNull();
+    await fireEvent.press(hero);
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      "Reader",
+      expect.objectContaining({ itemId: "onlyEbook", ebookFormat: "epub" })
+    );
+    expect(startPlayback).not.toHaveBeenCalled();
+  });
+
   it("routes ebook-only rows to the Reader (with format) and audiobook rows to playback", async () => {
     const navigation = await renderSeries();
     await screen.findByText("#3 Gamma");

@@ -128,7 +128,11 @@ export default function ItemHistoryScreen({ route, navigation }: any) {
         if (seq !== loadSeqRef.current) return; // superseded by a newer load
         const batch = Array.isArray(data?.sessions) ? data.sessions : [];
         if (batch.length === 0) return;
-        list = list.concat(batch);
+        // A session added server-side mid-paging shifts page boundaries and
+        // re-serves rows — dedupe by id so a straddling session isn't counted
+        // (and summed) twice (mirrors ListeningHistoryScreen.loadMore).
+        const seen = new Set(list.map((s: any) => s?.id).filter(Boolean));
+        list = list.concat(batch.filter((s: any) => !s?.id || !seen.has(s.id)));
         setSessions(sortNewestFirst(list));
       }
       // Only reached when every page was fetched without a gap — the summed
