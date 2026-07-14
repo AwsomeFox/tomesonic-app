@@ -128,4 +128,36 @@ describe("TaskProgressRow", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByLabelText("Library scan, Running for 5s")).toBeTruthy();
   });
+
+  it("appends the rendered description to the a11y label when showDescription is on", async () => {
+    await render(
+      <TaskProgressRow task={makeTask({ description: "Merging 12 audio files" }) as any} showDescription />
+    );
+    // The description renders as its own line…
+    expect(screen.getByText("Merging 12 audio files")).toBeTruthy();
+    // …and the single accessible row speaks it too (text outside the label is
+    // silent on an accessible container).
+    expect(
+      screen.getByLabelText("Library scan, Running for 5s, Merging 12 audio files")
+    ).toBeTruthy();
+  });
+
+  it("pressable variant carries the description in its a11y label as well", async () => {
+    const onPress = jest.fn();
+    await render(
+      <TaskProgressRow
+        task={makeTask({ description: "Merging 12 audio files" }) as any}
+        showDescription
+        onPress={onPress}
+      />
+    );
+    expect(
+      screen.getByLabelText("Library scan, Running for 5s, Merging 12 audio files")
+    ).toBeTruthy();
+  });
+
+  it("label stays unchanged when showDescription is on but the task has no description", async () => {
+    await render(<TaskProgressRow task={makeTask() as any} showDescription />);
+    expect(screen.getByLabelText("Library scan, Running for 5s")).toBeTruthy();
+  });
 });

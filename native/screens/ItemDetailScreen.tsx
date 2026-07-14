@@ -18,6 +18,7 @@ import {
   queueProgressPatch,
   syncBothProgressFraction,
   reconcileLinkedProgress,
+  clearPendingWritesFor,
 } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { useFavoritesStore } from "../store/useFavoritesStore";
@@ -29,7 +30,8 @@ import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import { useDownloadStore, episodeDownloadKey } from "../store/useDownloadStore";
-import { downloader } from "../utils/downloader";
+import { downloader, downloadFileByUrl, type FileDownloadHandle } from "../utils/downloader";
+import { downloadNotifications } from "../utils/downloadNotifications";
 import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
@@ -50,10 +52,23 @@ import {
   embedMetadata,
   createShareLink,
   deleteShareLink,
-  buildItemZipDownloadUrl,
+  getItemZipDownloadTarget,
 } from "../utils/abs/items";
 import { startTaskWatch, subscribeTasks, getTasksSnapshot } from "../utils/abs/tasks";
+import { batchUpdateProgress } from "../utils/abs/me";
 import type { AbsTask } from "../utils/abs/types";
+// The classic filesystem API lives on the /legacy entry point (SDK 54+) —
+// used here only to dispose of the shared zip staging file from the cache.
+import * as FileSystem from "expo-file-system/legacy";
+
+// expo-sharing is optional at runtime (same lazy require as ReaderScreen's
+// openExternally) — a build without it falls back to the browser dialog.
+let Sharing: any = null;
+try {
+  Sharing = require("expo-sharing");
+} catch {
+  Sharing = null;
+}
 
 // Share-link expiry presets (ms). 0 = never (the server expects numeric
 // expiresAt with 0 for "no expiry" — never null).
@@ -127,6 +142,26 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [shareLink, setShareLink] = useState<any>(null);
   // Open-RSS-feed flow (admin-only) — null when the sheet is closed.
   const [feedEntity, setFeedEntity] = useState<OpenFeedEntity | null>(null);
+  // In-app zip download (issue #68): whole-percent progress + a cancel hook
+  // for the banner. Null when idle. `totalBytes` is the ONE total both the
+  // percent and the byte label derive from — preferring the response's
+  // Content-Length (captured in onProgress) over the item's metadata size;
+  // 0 means no total is known and the banner renders indeterminate. The live
+  // handle rides a ref so the unmount cleanup can cancel without re-running
+  // the effect per percent.
+  const [zipDownload, setZipDownload] = useState<null | {
+    pct: number;
+    totalBytes: number;
+    cancel: () => Promise<void>;
+  }>(null);
+  const zipHandleRef = React.useRef<FileDownloadHandle | null>(null);
+  React.useEffect(() => {
+    return () => {
+      // Cancel an in-flight zip on unmount — the handle's own cancel path
+      // clears the notification and deletes the partial file from cache.
+      zipHandleRef.current?.cancel();
+    };
+  }, []);
   const capabilities = useServerCapabilities();
   const [sendToVisible, setSendToVisible] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
@@ -277,6 +312,101 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     } finally {
       finishBusyRef.current = false;
     }
+  };
+
+  // Per-item "Reset progress" (issue #71): un-finish AND zero both mediums via
+  // the batch progress endpoint (the plain finished-toggle above only flips the
+  // flag, leaving currentTime/progress behind). DELIBERATE DIVERGENCE from the
+  // finished-toggle's offline queue: a failed reset just reports (mirroring the
+  // series-level reset in SeriesDetailScreen) — a destructive batch write
+  // either lands or is surfaced, never silently deferred.
+  //
+  // KNOWN LIMITATION: the batch endpoint has never carried ebookLocation, so an
+  // old CFI can survive the reset — the reader may resume its saved position
+  // even though progress reads 0%. Fully clearing it would need
+  // DELETE /api/me/progress/:id, which is unverified against the server
+  // source; tracked as a follow-up.
+  const resetBusyRef = React.useRef(false);
+  const handleResetProgress = () => {
+    if (!item?.id) return;
+    // Never reset the item (or its counterpart) while it is the CURRENT
+    // playback session: the player's per-tick sync writes progress
+    // continuously, so the zeroing PATCH would be overwritten within seconds.
+    const liveItemId = usePlaybackStore.getState().currentSession?.libraryItemId;
+    if (liveItemId && (liveItemId === item.id || liveItemId === counterpart?.id)) {
+      showAppDialog({
+        title: "Can't reset while playing",
+        message:
+          "Stop playback first — resetting while playing would be immediately overwritten.",
+      });
+      return;
+    }
+    showAppDialog({
+      title: "Reset progress?",
+      message: `Progress on "${
+        item?.media?.metadata?.title || "this book"
+      }" will be returned to not started. This can't be undone.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: async () => {
+            if (resetBusyRef.current) return;
+            resetBusyRef.current = true;
+            try {
+              const zeroed = (libraryItemId: string) => ({
+                libraryItemId,
+                isFinished: false,
+                currentTime: 0,
+                progress: 0,
+                ebookProgress: 0,
+              });
+              const payloads = [zeroed(item.id)];
+              // The fuzzy-matched sibling (see the counterpart mirroring in
+              // handleToggleFinished) is the same book in the other format —
+              // reset both together so they keep agreeing.
+              if (counterpart?.id) payloads.push(zeroed(counterpart.id));
+              // Drop queued offline writes for both ids FIRST: a stale queued
+              // position/finished flag would flush AFTER the zeroing PATCH and
+              // silently undo the reset.
+              clearPendingWritesFor(item.id);
+              if (counterpart?.id) clearPendingWritesFor(counterpart.id);
+              await batchUpdateProgress(payloads);
+              // Merge the zeroed entries into the global progress map so
+              // badges/cards on already-rendered screens update without
+              // waiting for the next /api/me (same shape as the
+              // finished-toggle's applyLocally above).
+              useUserStore.setState((s) => {
+                const now = Date.now();
+                const nextMap: Record<string, any> = { ...s.mediaProgress };
+                for (const p of payloads) {
+                  nextMap[p.libraryItemId] = {
+                    ...s.mediaProgress[p.libraryItemId],
+                    ...p,
+                    updatedAt: now,
+                  };
+                }
+                return { mediaProgress: nextMap };
+              });
+              useUserStore
+                .getState()
+                .loadMediaProgress()
+                .catch(() => {});
+              refetchItem();
+              showSnackbar({ message: "Progress reset" });
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't reset progress",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            } finally {
+              resetBusyRef.current = false;
+            }
+          },
+        },
+      ],
+    });
   };
 
   // Per-episode finished toggle. Episode progress is ITS OWN entry, keyed
@@ -632,10 +762,125 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // history. Entries are capability-gated (utils/abs/capabilities) — the
   // server would 403 anyway, but a dead row is worse than a hidden one.
 
+  // Kicks off the in-app streaming zip download (issue #68): the token rides
+  // the Authorization header (never the url), progress paints the banner in
+  // whole percents, and the finished file is offered via the share sheet.
+  const startZipDownload = (target: { url: string; token: string }) => {
+    const title = metadata.title || "Download";
+    // Always unique per item: two items with the same (or empty) title must
+    // never collide on one cache staging path mid-download.
+    const filename = `${slugifyTitle(metadata.title || "") || "item"}_${itemId}.zip`;
+    // Whole-percent throttle: a multi-GB zip fires the native progress
+    // callback constantly — re-rendering the screen per callback would jank.
+    let lastPct = -1;
+    const handle = downloadFileByUrl({
+      url: target.url,
+      token: target.token,
+      filename,
+      expectedBytes: sizeBytes > 0 ? sizeBytes : undefined,
+      notification: { id: `zip_${itemId}`, title },
+      // The zip is transient share-sheet staging, deleted right after use —
+      // a tappable "complete" notification would point at a gone file.
+      clearNotificationOnComplete: true,
+      onProgress: (bytesWritten, bytesExpected) => {
+        // Servers may stream the zip without Content-Length — fall back to
+        // the item's metadata size for the fraction. No total at all keeps
+        // the banner indeterminate (never a stuck 0%).
+        const total = bytesExpected > 0 ? bytesExpected : sizeBytes;
+        if (!(total > 0)) return;
+        const pct = Math.max(0, Math.min(100, Math.round((bytesWritten / total) * 100)));
+        if (pct === lastPct) return;
+        lastPct = pct;
+        setZipDownload((cur) => (cur ? { ...cur, pct, totalBytes: total } : cur));
+      },
+    });
+    zipHandleRef.current = handle;
+    setZipDownload({ pct: 0, totalBytes: sizeBytes > 0 ? sizeBytes : 0, cancel: handle.cancel });
+
+    handle.promise
+      .then(async (res) => {
+        zipHandleRef.current = null;
+        if (!aliveRef.current) {
+          // Screen unmounted while the download was settling — nobody is left
+          // to share the staged file. Dispose of it (and any notification)
+          // best-effort so multi-GB temp files don't linger in cache.
+          if (res) {
+            try {
+              await FileSystem.deleteAsync(res.uri, { idempotent: true });
+            } catch {}
+            try {
+              await downloadNotifications.clear(`zip_${itemId}`);
+            } catch {}
+          }
+          return;
+        }
+        setZipDownload(null);
+        if (!res) {
+          // Cancelled (banner X / unmount race) — the handle already cleaned
+          // up the partial file and notification.
+          showSnackbar({ message: "Download cancelled" });
+          return;
+        }
+        let shared = false;
+        try {
+          if (Sharing && (await Sharing.isAvailableAsync())) {
+            await Sharing.shareAsync(res.uri, {
+              dialogTitle: title,
+              mimeType: "application/zip",
+              UTI: "public.zip-archive",
+            });
+            shared = true;
+          }
+        } catch (e) {
+          console.warn("[ItemDetail] Zip share failed:", e);
+          shared = true; // downloaded + share attempted — don't fall through to the browser dialog
+        } finally {
+          // The zip lives in cache purely as share-sheet staging — dispose of
+          // it in EVERY outcome, before any fallback dialog (the browser
+          // handoff re-downloads; the local file is unused there). Best-effort.
+          try {
+            await FileSystem.deleteAsync(res.uri, { idempotent: true });
+          } catch {}
+        }
+        if (shared) return;
+        // No share sheet on this device: offer the legacy browser handoff.
+        showAppDialog({
+          title: "Downloaded",
+          message:
+            "The zip finished downloading, but this device can't open a save/share dialog for it. " +
+            "You can hand the download to your browser instead. " +
+            "The browser link includes your session token and downloads the file again.",
+          buttons: [
+            { text: "Close", style: "cancel" },
+            {
+              text: "Open in browser",
+              onPress: () => {
+                // FALLBACK ONLY: a browser can't send our Authorization
+                // header, so this reconstructs the legacy tokened-URL form —
+                // the one deliberate, user-chosen exception to the
+                // header-only token rule (#68).
+                Linking.openURL(`${target.url}?token=${target.token}`).catch(() => {});
+              },
+            },
+          ],
+        });
+      })
+      .catch((err: any) => {
+        zipHandleRef.current = null;
+        if (!aliveRef.current) return;
+        setZipDownload(null);
+        showAppDialog({
+          title: "Couldn't download",
+          message: err?.message || "Something went wrong. Please try again.",
+        });
+      });
+  };
+
   const handleZipDownload = () => {
-    const url = buildItemZipDownloadUrl(itemId);
+    if (zipDownload) return; // one zip at a time (the row is disabled too)
+    const target = getItemZipDownloadTarget(itemId);
     setOverflowVisible(false);
-    if (!url) {
+    if (!target) {
       showAppDialog({
         title: "Can't download",
         message: "No server session available. Reconnect and try again.",
@@ -648,28 +893,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         `Download this item's folder as a single zip${
           sizeBytes > 0 ? ` (~${formatBytes(sizeBytes)})` : ""
         }? ` +
-        "It's handed to your browser's download manager, so large files stream straight to storage.",
+        "It downloads right here in the app with progress, and you can save or share the file when it's done.",
       buttons: [
         { text: "Cancel", style: "cancel" },
         {
           text: "Download",
-          onPress: () => {
-            // Deliberately NOT axios and NOT the in-app downloads store: a
-            // multi-GB zip must stream via the OS download manager, and it
-            // isn't a playable in-app download. Success feedback only once
-            // the OS actually took the URL — a device with no browser lands
-            // in the catch, which must not claim the handoff happened.
-            Linking.openURL(url)
-              .then(() => {
-                showSnackbar({ message: "Zip download handed to your browser" });
-              })
-              .catch(() => {
-                showAppDialog({
-                  title: "Couldn't download",
-                  message: "Couldn't open a browser for the download.",
-                });
-              });
-          },
+          onPress: () => startZipDownload(target),
         },
       ],
     });
@@ -1474,6 +1703,92 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 >
                   {encodeTaskRunning ? "Encoding in progress…" : "Embedding metadata…"}
                 </Text>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Persistent in-app zip download banner (issue #68) — mirrors the
+              encode/embed banner above, plus a thin determinate bar and a
+              cancel affordance (the download survives leaving this scroll
+              position, so a transient snackbar wouldn't do). */}
+          {zipDownload ? (
+            <View style={{ paddingHorizontal: 20, marginTop: 16 }}>
+              <View
+                style={{
+                  backgroundColor: colors.tertiaryContainer,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                }}
+              >
+                {/* STATIC live-region status, announced once when the banner
+                    appears. The live region must never sit on the per-percent
+                    text — screen readers would announce every whole percent.
+                    The moving value is exposed via the progressbar's
+                    accessibilityValue instead. */}
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
+                >
+                  Downloading zip
+                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Text
+                    style={{
+                      flex: 1,
+                      color: colors.onTertiaryContainer,
+                      fontSize: 14,
+                      fontWeight: "600",
+                    }}
+                  >
+                    {/* ONE total drives both the percent and the byte label
+                        (zipDownload.totalBytes — Content-Length when known).
+                        No total at all → indeterminate copy, never a stuck 0%. */}
+                    {zipDownload.totalBytes > 0
+                      ? `Downloading zip… ${zipDownload.pct}% of ${formatBytes(
+                          zipDownload.totalBytes
+                        )}`
+                      : "Downloading zip…"}
+                  </Text>
+                  <Pressable
+                    onPress={() => {
+                      zipDownload.cancel();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel zip download"
+                    // 18dp glyph + 14dp slop per side = 46dp target (≥44dp).
+                    hitSlop={14}
+                    style={{ marginLeft: 10 }}
+                  >
+                    <Icon name="close" size={18} color={colors.onTertiaryContainer} />
+                  </Pressable>
+                </View>
+                {/* Determinate bar only when a total is known — an indeterminate
+                    download hides the bar rather than pinning it at 0%. */}
+                {zipDownload.totalBytes > 0 ? (
+                  <View
+                    accessible
+                    accessibilityRole="progressbar"
+                    accessibilityValue={{ min: 0, max: 100, now: zipDownload.pct }}
+                    style={{
+                      height: 4,
+                      borderRadius: 2,
+                      marginTop: 8,
+                      overflow: "hidden",
+                      backgroundColor: withAlpha(colors.onTertiaryContainer, 0.2),
+                    }}
+                  >
+                    <View
+                      testID="zip-progress-fill"
+                      style={{
+                        width: `${zipDownload.pct}%`,
+                        height: 4,
+                        borderRadius: 2,
+                        backgroundColor: colors.onTertiaryContainer,
+                      }}
+                    />
+                  </View>
+                ) : null}
               </View>
             </View>
           ) : null}
@@ -2670,13 +2985,26 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           />
         ) : null}
         {capabilities.canDownload ? (
-          <RowBase
-            icon="download"
-            title="Download all (zip)"
-            subtitle={sizeBytes > 0 ? `~${formatBytes(sizeBytes)}` : undefined}
-            colors={colors}
-            onPress={handleZipDownload}
-          />
+          // Disabled (dimmed + guarded in handleZipDownload) while a zip is
+          // already streaming — one zip download per item at a time.
+          <View style={{ opacity: zipDownload ? 0.5 : 1 }}>
+            <RowBase
+              icon="download"
+              title="Download all (zip)"
+              subtitle={
+                zipDownload
+                  ? zipDownload.totalBytes > 0
+                    ? `Downloading… ${zipDownload.pct}%`
+                    : "Downloading…"
+                  : sizeBytes > 0
+                  ? `~${formatBytes(sizeBytes)}`
+                  : undefined
+              }
+              colors={colors}
+              accessibilityState={{ disabled: !!zipDownload }}
+              onPress={handleZipDownload}
+            />
+          </View>
         ) : null}
         {capabilities.isAdmin && capabilities.supportsShareLinks && !isPodcastItem ? (
           <RowBase
@@ -2698,6 +3026,22 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             onPress={() => {
               setOverflowVisible(false);
               setFeedEntity({ kind: "item", id: itemId, title: metadata.title || "this item" });
+            }}
+          />
+        ) : null}
+        {/* Per-item progress reset (issue #71) — books only, and only when
+            there is something to reset. Podcasts track per-EPISODE progress;
+            a bulk episode reset is out of scope here. */}
+        {!isPodcastItem &&
+        (isFinished || audioProgressFraction > 0 || ebookProgressFraction > 0) ? (
+          <RowBase
+            icon="undo"
+            title="Reset progress"
+            subtitle="Back to not started"
+            colors={colors}
+            onPress={() => {
+              setOverflowVisible(false);
+              handleResetProgress();
             }}
           />
         ) : null}
@@ -2733,7 +3077,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             title="Encode as M4B"
             subtitle={encodeTaskRunning ? "Encoding in progress…" : "Merge audio files into one M4B"}
             colors={colors}
-            accessibilityState={{ disabled: itemTaskRunning } as any}
+            accessibilityState={{ disabled: itemTaskRunning }}
             onPress={() => {
               if (itemTaskRunning) return;
               startEncodeM4b();
@@ -2748,7 +3092,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 : "Write metadata and cover into the audio files"
             }
             colors={colors}
-            accessibilityState={{ disabled: itemTaskRunning } as any}
+            accessibilityState={{ disabled: itemTaskRunning }}
             onPress={() => {
               if (itemTaskRunning) return;
               startEmbedMetadata();

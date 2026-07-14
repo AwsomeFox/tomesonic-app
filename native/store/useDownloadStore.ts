@@ -226,10 +226,13 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
     set({ activeDownloads: active, completedDownloads: completed, downloadsLoaded: true });
 
     // Best-effort, after hydration: reclaim download folders on disk that no
-    // record owns (partial files orphaned by old cancel/fail paths).
+    // record owns (partial files orphaned by old cancel/fail paths), plus
+    // transient zip-export leftovers (stale dl_zip_* notifications and stray
+    // cache *.zip staging files from a killed app).
     try {
       const { downloader } = require("../utils/downloader");
       downloader.sweepOrphanFolders();
+      downloader.sweepStaleZipArtifacts?.();
     } catch {}
   },
 

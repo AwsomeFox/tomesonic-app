@@ -137,6 +137,7 @@ describe("ServerAdminHubScreen", () => {
         "Server settings",
         "Backups",
         "Email",
+        "Notifications",
         "Server logs",
       ]) {
         expect(screen.getByText(title)).toBeTruthy();
@@ -232,6 +233,7 @@ describe("ServerAdminHubScreen", () => {
         [/^Server settings,/, "AdminServerSettings"],
         [/^Backups,/, "AdminBackups"],
         [/^Email,/, "AdminEmail"],
+        [/^Notifications,/, "AdminNotifications"],
         [/^Server logs,/, "AdminServerLogs"],
       ];
       for (const [label, route] of expected) {
@@ -306,7 +308,7 @@ describe("ServerAdminHubScreen", () => {
       expect(screen.queryByTestId("task-activity-card")).toBeNull();
     });
 
-    it("collapses to two rows behind a 'View all' toggle when more tasks run", async () => {
+    it("collapses to two rows; 'View all' opens the TasksSheet (NOT in-place expansion)", async () => {
       useUserStore.setState({ user: ADMIN_USER } as any);
       await renderHub();
 
@@ -321,12 +323,52 @@ describe("ServerAdminHubScreen", () => {
       expect(screen.getByText("Task A")).toBeTruthy();
       expect(screen.getByText("Task B")).toBeTruthy();
       expect(screen.queryByText("Task C")).toBeNull();
+      // Sheet closed: only the card's own "Server activity" header exists.
+      expect(screen.getAllByText("Server activity")).toHaveLength(1);
 
+      await fireEvent.press(screen.getByLabelText("View all 3 tasks"));
+
+      // The TasksSheet opened (its own header joins the card's) and lists the
+      // full snapshot — the card itself did NOT expand in place.
+      expect(screen.getAllByText("Server activity")).toHaveLength(2);
+      expect(screen.getByText("Task C")).toBeTruthy();
+      expect(screen.queryByText("Show fewer")).toBeNull();
+      expect(screen.getByText("View all (3)")).toBeTruthy();
+      // Read-only rows: no cancel affordance exists anywhere in the sheet.
+      expect(screen.queryByText(/cancel/i)).toBeNull();
+    });
+
+    it("the open TasksSheet tracks live snapshot updates from the captured listener", async () => {
+      useUserStore.setState({ user: ADMIN_USER } as any);
+      await renderHub();
+
+      await act(async () => {
+        taskListener!([
+          makeTask({ id: "a", title: "Task A" }),
+          makeTask({ id: "b", title: "Task B" }),
+          makeTask({ id: "c", title: "Task C" }),
+        ]);
+      });
       await fireEvent.press(screen.getByLabelText("View all 3 tasks"));
       expect(screen.getByText("Task C")).toBeTruthy();
 
-      await fireEvent.press(screen.getByLabelText("Show fewer tasks"));
+      // A new poll tick lands while the sheet is open — the sheet re-renders
+      // with the fresh snapshot (new task appears, dropped task vanishes).
+      // getAllByText: the two-task snapshot renders in the card AND the sheet.
+      await act(async () => {
+        taskListener!([
+          makeTask({ id: "a", title: "Task A" }),
+          makeTask({ id: "d", title: "Task D" }),
+        ]);
+      });
+      expect(screen.getAllByText("Task D").length).toBeGreaterThanOrEqual(1);
       expect(screen.queryByText("Task C")).toBeNull();
+
+      // Backdrop tap closes the sheet again (card header remains).
+      await fireEvent.press(
+        screen.getByTestId("sheet-backdrop", { includeHiddenElements: true })
+      );
+      await waitFor(() => expect(screen.getAllByText("Server activity")).toHaveLength(1));
     });
 
     it("seeds the strip from getTasksSnapshot and unsubscribes on unmount", async () => {

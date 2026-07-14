@@ -22,7 +22,7 @@ import {
   encodeM4b,
   cancelEncodeM4b,
   embedMetadata,
-  buildItemZipDownloadUrl,
+  getItemZipDownloadTarget,
   createShareLink,
   deleteShareLink,
 } from "../../../utils/abs/items";
@@ -150,18 +150,22 @@ describe("tools", () => {
   });
 });
 
-describe("buildItemZipDownloadUrl", () => {
-  it("builds the tokened zip URL from the stored config", () => {
+describe("getItemZipDownloadTarget", () => {
+  it("returns the plain zip URL + token for the Authorization header (never in the query string)", () => {
     storageHelper.setServerConfig({ address: "https://abs.example.com/", token: "tok1" });
-    expect(buildItemZipDownloadUrl("i1")).toBe(
-      "https://abs.example.com/api/items/i1/download?token=tok1"
-    );
+    const target = getItemZipDownloadTarget("i1");
+    expect(target).toEqual({
+      url: "https://abs.example.com/api/items/i1/download",
+      token: "tok1",
+    });
+    // #68: the token must NOT ride the url — it goes in the Bearer header.
+    expect(target!.url).not.toContain("token=");
   });
 
-  it("returns null without a full session (never a token=undefined URL)", () => {
-    expect(buildItemZipDownloadUrl("i1")).toBeNull();
+  it("returns null without a full session (never a token-less/undefined target)", () => {
+    expect(getItemZipDownloadTarget("i1")).toBeNull();
     storageHelper.setServerConfig({ address: "https://abs.example.com" });
-    expect(buildItemZipDownloadUrl("i1")).toBeNull();
+    expect(getItemZipDownloadTarget("i1")).toBeNull();
   });
 });
 

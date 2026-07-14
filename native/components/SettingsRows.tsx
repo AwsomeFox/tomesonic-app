@@ -58,7 +58,7 @@ export function RowBase({
   onPress?: () => void;
   colors: any;
   accessibilityRole?: 'button' | 'switch';
-  accessibilityState?: { checked?: boolean };
+  accessibilityState?: { checked?: boolean; disabled?: boolean };
 }) {
   const inner = (
     <View

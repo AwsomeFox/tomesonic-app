@@ -549,10 +549,11 @@ describe("SeriesDetailScreen — batch progress (mark finished / reset)", () => 
         await confirm.onPress!();
       });
 
-      // Reset payloads zero out currentTime + progress and clear isFinished.
+      // Reset payloads zero out currentTime + progress + ebookProgress and
+      // clear isFinished — aligned with the per-item reset in ItemDetailScreen.
       expect(api.patch).toHaveBeenCalledWith("/api/me/progress/batch/update", [
-        { libraryItemId: "b1", isFinished: false, currentTime: 0, progress: 0 },
-        { libraryItemId: "b3", isFinished: false, currentTime: 0, progress: 0 },
+        { libraryItemId: "b1", isFinished: false, currentTime: 0, progress: 0, ebookProgress: 0 },
+        { libraryItemId: "b3", isFinished: false, currentTime: 0, progress: 0, ebookProgress: 0 },
       ]);
       const [, body] = (api.patch as jest.Mock).mock.calls[0];
       expect(Array.isArray(body)).toBe(true);

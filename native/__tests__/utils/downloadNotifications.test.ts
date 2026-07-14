@@ -1,5 +1,8 @@
 import notifee from "@notifee/react-native";
-import { downloadNotifications } from "../../utils/downloadNotifications";
+import {
+  downloadNotifications,
+  sweepStaleZipNotifications,
+} from "../../utils/downloadNotifications";
 
 const display = notifee.displayNotification as jest.Mock;
 const cancel = notifee.cancelNotification as jest.Mock;
@@ -165,6 +168,50 @@ describe("clear", () => {
   it("swallows cancel errors", async () => {
     cancel.mockRejectedValueOnce(new Error("gone"));
     await expect(downloadNotifications.clear("item1")).resolves.toBeUndefined();
+  });
+});
+
+describe("sweepStaleZipNotifications", () => {
+  const getDisplayed = notifee.getDisplayedNotifications as jest.Mock;
+
+  it("cancels only zip-prefixed notifications (dl_zip_* / legacy dl_done_zip_*)", async () => {
+    getDisplayed.mockResolvedValue([
+      { id: "dl_zip_item1", notification: { id: "dl_zip_item1" } },
+      { id: "dl_done_zip_item2", notification: { id: "dl_done_zip_item2" } },
+      // A live BOOK download's notification must survive the sweep.
+      { id: "dl_book9", notification: { id: "dl_book9" } },
+      { id: "dl_done_book9", notification: { id: "dl_done_book9" } },
+      // Malformed entries (no id anywhere) are skipped, not thrown on.
+      { notification: {} },
+    ]);
+
+    await sweepStaleZipNotifications();
+
+    expect(cancel).toHaveBeenCalledWith("dl_zip_item1");
+    expect(cancel).toHaveBeenCalledWith("dl_done_zip_item2");
+    expect(cancel).not.toHaveBeenCalledWith("dl_book9");
+    expect(cancel).not.toHaveBeenCalledWith("dl_done_book9");
+    expect(cancel).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to the entry-level id when notification.id is absent", async () => {
+    getDisplayed.mockResolvedValue([{ id: "dl_zip_item3", notification: {} }]);
+    await sweepStaleZipNotifications();
+    expect(cancel).toHaveBeenCalledWith("dl_zip_item3");
+  });
+
+  it("never throws when notifee fails", async () => {
+    getDisplayed.mockRejectedValueOnce(new Error("no notifee"));
+    await expect(sweepStaleZipNotifications()).resolves.toBeUndefined();
+
+    // A single failing cancel doesn't stop the rest of the sweep either.
+    getDisplayed.mockResolvedValue([
+      { id: "dl_zip_a", notification: { id: "dl_zip_a" } },
+      { id: "dl_zip_b", notification: { id: "dl_zip_b" } },
+    ]);
+    cancel.mockRejectedValueOnce(new Error("gone"));
+    await expect(sweepStaleZipNotifications()).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledWith("dl_zip_b");
   });
 });
 

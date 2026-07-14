@@ -474,6 +474,10 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
                   isFinished: false,
                   currentTime: 0,
                   progress: 0,
+                  // Zero the reading side too — aligned with the per-item
+                  // reset in ItemDetailScreen (a both-format book must not
+                  // keep its reading % after a "reset").
+                  ebookProgress: 0,
                 }))
               );
               const n = targets.length;

@@ -79,6 +79,134 @@ async function assertEnoughFreeSpace(parts: { fileSize: number }[]) {
   }
 }
 
+/** Handle for a one-off in-app file download (see downloadFileByUrl). */
+export interface FileDownloadHandle {
+  /** Resolves { uri } on success, null when cancelled; rejects on failure. */
+  promise: Promise<{ uri: string } | null>;
+  cancel: () => Promise<void>;
+}
+
+/**
+ * One-off streaming download of a single file (e.g. the item zip from
+ * GET /api/items/:id/download — issue #68) into the app's cache directory.
+ *
+ * Mirrors the book-part download above: FileSystem.createDownloadResumable
+ * streams to disk with the token in the Authorization header — the token is
+ * NEVER appended to the url, so it can't land in browser/download-manager
+ * history or server access logs (the whole point of #68).
+ *
+ * Deliberately independent of useDownloadStore/activeDownloadsMap: this is a
+ * transient export, not a playable in-app download — the caller owns the
+ * handle (progress UI, cancel, and disposing of the file after sharing it).
+ *
+ * No 401 retry here (unlike downloadPartWithAuthRetry): a session-expired
+ * failure surfaces to the caller via describeHttpFailure's message instead.
+ */
+export function downloadFileByUrl(opts: {
+  url: string;
+  token: string;
+  filename: string;
+  expectedBytes?: number;
+  onProgress?: (bytesWritten: number, bytesExpected: number) => void;
+  notification?: { id: string; title: string };
+  /** On success, CLEAR the progress notification instead of posting a
+   *  "Download complete" one — for transient files the caller deletes right
+   *  after use (a tappable complete notification would point at nothing). */
+  clearNotificationOnComplete?: boolean;
+}): FileDownloadHandle {
+  const {
+    url,
+    token,
+    filename,
+    expectedBytes,
+    onProgress,
+    notification,
+    clearNotificationOnComplete,
+  } = opts;
+  const dest = `${FileSystem.cacheDirectory}${filename}`;
+  let cancelled = false;
+  let resumable: FileSystem.DownloadResumable | null = null;
+
+  const cleanupPartial = async () => {
+    if (notification) downloadNotifications.clear(notification.id);
+    // Best-effort: never let a failed delete mask the real outcome.
+    try {
+      await FileSystem.deleteAsync(dest, { idempotent: true });
+    } catch {}
+  };
+
+  const promise = (async (): Promise<{ uri: string } | null> => {
+    // Fail fast when the device clearly lacks room (same preflight the book
+    // path runs) — before any native task is created or byte written.
+    if (expectedBytes && expectedBytes > 0) {
+      await assertEnoughFreeSpace([{ fileSize: expectedBytes }]);
+    }
+    if (cancelled) return null; // cancelled during the preflight
+
+    const callback = (p: FileSystem.DownloadProgressData) => {
+      // A late native callback after cancel must not touch UI/notifications.
+      if (cancelled) return;
+      onProgress?.(p.totalBytesWritten, p.totalBytesExpectedToWrite);
+      if (notification) {
+        // Servers streaming the zip may not send Content-Length — fall back
+        // to the caller's expected size for the notification fraction.
+        const total = p.totalBytesExpectedToWrite > 0 ? p.totalBytesExpectedToWrite : expectedBytes || 0;
+        if (total > 0) {
+          downloadNotifications.progress(notification.id, notification.title, p.totalBytesWritten / total);
+        }
+      }
+    };
+
+    resumable = FileSystem.createDownloadResumable(
+      url,
+      dest,
+      { headers: { Authorization: `Bearer ${token}` } },
+      callback
+    );
+    if (notification) downloadNotifications.start(notification.id, notification.title);
+
+    let result: FileSystem.FileSystemDownloadResult | undefined;
+    try {
+      result = await resumable.downloadAsync();
+    } catch (err) {
+      await cleanupPartial();
+      throw err;
+    }
+
+    // downloadAsync resolves undefined when cancelAsync was called on it.
+    if (!result || cancelled) {
+      await cleanupPartial();
+      return null;
+    }
+
+    if (result.status === 200 || result.status === 206) {
+      if (notification) {
+        if (clearNotificationOnComplete) {
+          downloadNotifications.clear(notification.id);
+        } else {
+          downloadNotifications.complete(notification.id, notification.title);
+        }
+      }
+      return { uri: dest };
+    }
+
+    // Non-2xx: the server's error body (HTML/JSON) was written to dest —
+    // delete it so a garbage file can't be shared as a real zip.
+    await cleanupPartial();
+    throw new Error(describeHttpFailure(result.status, filename));
+  })();
+
+  return {
+    promise,
+    cancel: async () => {
+      cancelled = true;
+      try {
+        await resumable?.cancelAsync();
+      } catch {}
+    },
+  };
+}
+
 /** Downloads a single part to destPath, wiring progress/completion into the store + notifications. */
 async function downloadPart(
   id: string,
@@ -774,6 +902,37 @@ export const downloader = {
       }
     } catch (e) {
       console.warn("[Downloader] Orphan sweep failed:", e);
+    }
+  },
+
+  /**
+   * Startup sweep of transient zip-export leftovers: stale dl_zip_*
+   * notifications (app killed mid-download) and stray *.zip staging files in
+   * the cache directory (killed/crashed before the post-share delete ran).
+   * The zip export is fully transient — nothing owns these across a restart,
+   * so anything found is garbage. Best-effort; never throws. Invoked from the
+   * same boot point as sweepOrphanFolders (download-store hydration).
+   */
+  sweepStaleZipArtifacts: async () => {
+    try {
+      const { sweepStaleZipNotifications } = require("./downloadNotifications");
+      await sweepStaleZipNotifications?.();
+    } catch {}
+    try {
+      const root = FileSystem.cacheDirectory;
+      if (!root) return;
+      const entries = await FileSystem.readDirectoryAsync(root);
+      for (const name of entries) {
+        if (!name.toLowerCase().endsWith(".zip")) continue;
+        console.log("[Downloader] Removing stray zip staging file:", name);
+        try {
+          await FileSystem.deleteAsync(`${root}${name}`, { idempotent: true });
+        } catch (e) {
+          console.warn("[Downloader] Failed to remove stray zip:", name, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[Downloader] Stray-zip sweep failed:", e);
     }
   },
 

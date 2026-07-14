@@ -44,6 +44,7 @@ import AdminBackupsScreen from "../screens/AdminBackupsScreen";
 import AdminEmailScreen from "../screens/AdminEmailScreen";
 import AdminServerLogsScreen from "../screens/AdminServerLogsScreen";
 import AdminFeedsScreen from "../screens/AdminFeedsScreen";
+import AdminNotificationsScreen from "../screens/AdminNotificationsScreen";
 import AdminMaintenanceScreen from "../screens/AdminMaintenanceScreen";
 import AdminServerSettingsScreen from "../screens/AdminServerSettingsScreen";
 import AdminApiKeysScreen from "../screens/AdminApiKeysScreen";
@@ -262,6 +263,7 @@ export default function AppNavigator() {
                 "Logs" route above. */}
             <Stack.Screen name="AdminServerLogs" component={AdminServerLogsScreen} />
             <Stack.Screen name="AdminFeeds" component={AdminFeedsScreen} />
+            <Stack.Screen name="AdminNotifications" component={AdminNotificationsScreen} />
             <Stack.Screen name="AdminMaintenance" component={AdminMaintenanceScreen} />
             <Stack.Screen name="AdminServerSettings" component={AdminServerSettingsScreen} />
             <Stack.Screen name="AdminApiKeys" component={AdminApiKeysScreen} />

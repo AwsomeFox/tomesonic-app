@@ -262,6 +262,36 @@ export function hasPendingWritesFor(
   return false;
 }
 
+/** Drop every queued offline progress write for an item — used by the
+ *  destructive per-item reset: a stale queued position (or finished flag) for
+ *  this item would flush AFTER the batch-zeroing PATCH and silently undo it.
+ *  Removes the item's queued progress PATCHes (episode-scoped entries
+ *  included) and any pending session syncs targeting the item. */
+export function clearPendingWritesFor(libraryItemId: string) {
+  if (!libraryItemId) return;
+  try {
+    for (const k of storage.getAllKeys()) {
+      // Queued direct PATCHes: `pendingPatch_<id>` (item) and
+      // `pendingPatch_<id>-<episodeId>` (episode-scoped).
+      if (
+        k === `${PATCH_PREFIX}${libraryItemId}` ||
+        k.startsWith(`${PATCH_PREFIX}${libraryItemId}-`)
+      ) {
+        storage.remove(k);
+        continue;
+      }
+      // Queued session syncs are keyed by session id — match on the payload's
+      // libraryItemId instead.
+      if (k.startsWith(PENDING_PREFIX)) {
+        try {
+          const p = JSON.parse(storage.getString(k) || "null");
+          if (p?.libraryItemId === libraryItemId) storage.remove(k);
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
 // --- Offline bookmarks ------------------------------------------------------
 // Bookmarks added while offline used to live only in the modal's component
 // state — gone on unmount. Queue them here and flush with everything else.

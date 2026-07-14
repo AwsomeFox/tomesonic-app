@@ -26,10 +26,17 @@ const COLLAPSED_ROWS = 2;
  *    nothing when the queue drains — no empty card, per the UX plan).
  *
  * More than COLLAPSED_ROWS visible tasks collapse behind a "View all (n)"
- * toggle expanded in place (a dedicated TasksSheet is deliberately out of
- * scope for the hub package).
+ * footer. When the caller passes `onViewAll` (the hub opening its TasksSheet
+ * — issue #64), the footer delegates there; without it, the footer falls back
+ * to expanding the list in place.
  */
-export default function TaskActivityCard({ tasks }: { tasks: AbsTask[] }) {
+export default function TaskActivityCard({
+  tasks,
+  onViewAll,
+}: {
+  tasks: AbsTask[];
+  onViewAll?: () => void;
+}) {
   const colors = useThemeColors();
   const [expanded, setExpanded] = useState(false);
 
@@ -92,7 +99,7 @@ export default function TaskActivityCard({ tasks }: { tasks: AbsTask[] }) {
       ))}
       {visible.length > COLLAPSED_ROWS ? (
         <TouchableOpacity
-          onPress={() => setExpanded((e) => !e)}
+          onPress={() => (onViewAll ? onViewAll() : setExpanded((e) => !e))}
           accessibilityRole="button"
           accessibilityLabel={expanded ? "Show fewer tasks" : `View all ${visible.length} tasks`}
           style={{

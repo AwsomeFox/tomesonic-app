@@ -52,9 +52,12 @@ function formatElapsed(ms: number): string {
 export default function TaskProgressRow({
   task,
   onPress,
+  showDescription,
 }: {
   task: AbsTask;
   onPress?: () => void;
+  /** Append task.description as a secondary line (TasksSheet's roomier rows). */
+  showDescription?: boolean;
 }) {
   const colors = useThemeColors();
   const reduceMotion = useReducedMotion();
@@ -96,6 +99,14 @@ export default function TaskProgressRow({
     ? `Finished in ${formatElapsed(task.finishedAt - task.startedAt)}`
     : `Running for ${formatElapsed(Date.now() - task.startedAt)}`;
 
+  // The rendered description (TasksSheet's roomier rows) must reach screen
+  // readers too — the row is a single accessible element, so text outside the
+  // label is silent.
+  const a11yLabel =
+    showDescription && task.description
+      ? `${task.title}, ${sublabel}, ${task.description}`
+      : `${task.title}, ${sublabel}`;
+
   const inner = (
     <View
       style={{
@@ -125,6 +136,14 @@ export default function TaskProgressRow({
         >
           {sublabel}
         </Text>
+        {showDescription && task.description ? (
+          <Text
+            style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}
+            numberOfLines={2}
+          >
+            {task.description}
+          </Text>
+        ) : null}
       </View>
       {task.isFailed ? (
         <Icon name="warning" size={22} color={colors.error} />
@@ -143,7 +162,7 @@ export default function TaskProgressRow({
       <TouchableOpacity
         onPress={onPress}
         accessibilityRole="button"
-        accessibilityLabel={`${task.title}, ${sublabel}`}
+        accessibilityLabel={a11yLabel}
         testID="task-progress-row"
       >
         {inner}
@@ -151,7 +170,7 @@ export default function TaskProgressRow({
     );
   }
   return (
-    <View accessible accessibilityLabel={`${task.title}, ${sublabel}`} testID="task-progress-row">
+    <View accessible accessibilityLabel={a11yLabel} testID="task-progress-row">
       {inner}
     </View>
   );

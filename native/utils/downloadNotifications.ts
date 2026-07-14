@@ -126,6 +126,32 @@ async function showProgress(itemId: string, title: string, pct: number) {
   } catch {}
 }
 
+// notifee ids the transient zip export produces: downloadFileByUrl is handed
+// notification id `zip_<itemId>`, which the helpers below prefix as
+// `dl_zip_<itemId>` (progress) / `dl_done_zip_<itemId>` (legacy complete).
+const STALE_ZIP_NOTIFICATION_PREFIXES = ["dl_zip_", "dl_done_zip_"];
+
+/**
+ * Cancel zip-download notifications orphaned by a killed/crashed app. The zip
+ * export is fully transient (in-memory handle, staging file deleted right
+ * after the share sheet), so any dl_zip_* notification still displayed at
+ * startup is stale by definition — tapping it does nothing. Best-effort:
+ * never throws.
+ */
+export async function sweepStaleZipNotifications(): Promise<void> {
+  try {
+    const displayed = await notifee.getDisplayedNotifications();
+    for (const entry of displayed || []) {
+      const id = entry?.notification?.id ?? entry?.id;
+      if (typeof id !== "string") continue;
+      if (!STALE_ZIP_NOTIFICATION_PREFIXES.some((p) => id.startsWith(p))) continue;
+      try {
+        await notifee.cancelNotification(id);
+      } catch {}
+    }
+  } catch {}
+}
+
 export const downloadNotifications = {
   // Called on download start.
   start(itemId: string, title: string) {

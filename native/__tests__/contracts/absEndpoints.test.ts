@@ -43,6 +43,7 @@ import * as sessions from "../../utils/abs/sessions";
 import * as server from "../../utils/abs/server";
 import * as email from "../../utils/abs/email";
 import * as feeds from "../../utils/abs/feeds";
+import * as notifications from "../../utils/abs/notifications";
 import * as me from "../../utils/abs/me";
 import * as tasks from "../../utils/abs/tasks";
 import * as capabilities from "../../utils/abs/capabilities";
@@ -144,6 +145,23 @@ const CONTRACT: Array<{
   { name: "openCollectionFeed (requires serverAddress+slug)", invoke: () => feeds.openCollectionFeed("COL", { serverAddress: "https://a", slug: "s" }), method: "post", path: "/api/feeds/collection/COL/open", body: { serverAddress: "https://a", slug: "s" } },
   { name: "openSeriesFeed (requires serverAddress+slug)", invoke: () => feeds.openSeriesFeed("SER", { serverAddress: "https://a", slug: "s" }), method: "post", path: "/api/feeds/series/SER/open", body: { serverAddress: "https://a", slug: "s" } },
   { name: "closeFeed", invoke: () => feeds.closeFeed("FEED"), method: "post", path: "/api/feeds/FEED/close" },
+  // --- notifications (docs-level verification — see utils/abs/notifications) --
+  { name: "getNotificationSettings", invoke: () => notifications.getNotificationSettings(), method: "get", path: "/api/notifications" },
+  {
+    name: "updateNotification (full object body)",
+    invoke: () =>
+      notifications.updateNotification({
+        id: "NOTIF",
+        eventName: "onTest",
+        urls: ["apprises://host/key"],
+        enabled: false,
+      }),
+    method: "patch",
+    path: "/api/notifications/NOTIF",
+    // Partial-vs-full PATCH semantics are unverified — the module pins the
+    // superset-safe FULL object (id included) as its contract.
+    body: { id: "NOTIF", eventName: "onTest", urls: ["apprises://host/key"], enabled: false },
+  },
   // --- me ------------------------------------------------------------------
   { name: "hideFromContinueListening (GET by PROGRESS id)", invoke: () => me.hideFromContinueListening("PROG"), method: "get", path: "/api/me/progress/PROG/remove-from-continue-listening" },
   { name: "batchUpdateProgress (bare array body)", invoke: () => me.batchUpdateProgress([{ libraryItemId: "LI" }]), method: "patch", path: "/api/me/progress/batch/update", body: [{ libraryItemId: "LI" }] },
@@ -185,7 +203,7 @@ describe("utils/abs endpoint table (fn → method + literal path)", () => {
     // module must be added to the table above (URL builders + pure helpers
     // are exempt — they never hit the network).
     const exempt = new Set([
-      "buildItemZipDownloadUrl",
+      "getItemZipDownloadTarget",
       "buildBackupDownloadUrl",
       "narratorNameToId",
       // utils/abs/tasks — poller/watch machinery around the one pinned
@@ -211,6 +229,7 @@ describe("utils/abs endpoint table (fn → method + literal path)", () => {
       server,
       email,
       feeds,
+      notifications,
       me,
       tasks,
       capabilities,
