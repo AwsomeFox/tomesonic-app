@@ -294,7 +294,10 @@ async function downloadPartWithAuthRetry(
   title: string,
   part: { id: string; filename: string; url: string; fileSize: number },
   destPath: string,
-  token: string
+  token: string,
+  // The caller's run-generation guard — false once a NEWER run (e.g. a
+  // cancel → immediate re-download) has taken over this book.
+  isCurrent: () => boolean = () => true
 ) {
   try {
     await downloadPart(id, title, part, destPath, token);
@@ -308,12 +311,14 @@ async function downloadPartWithAuthRetry(
     const freshToken = config?.token;
     // No refresh happened (same/absent token) — surface the original error.
     if (!freshToken || freshToken === token) throw err;
-    // The refresh above awaited the network; a cancel/abort during that window
-    // removed the store entry (and may have deleted the folder). Re-downloading
-    // the part now would waste bandwidth and rewrite into a just-removed folder,
-    // so bail if the download is no longer live (the main loop guards each part
-    // the same way; the retry path was missing it).
-    if (!useDownloadStore.getState().activeDownloads[id]) return;
+    // The refresh above awaited the network. Bail if THIS run is no longer the
+    // live one: a cancel during the window removes the store entry, and — the
+    // case activeDownloads[id] alone misses — a cancel followed by an immediate
+    // re-download for the same id RE-CREATES the entry under a NEWER run, so the
+    // superseded old loop must check its generation (isCurrent) too or it would
+    // re-download concurrently with the new run and corrupt its state/files
+    // (activeDownloadsMap is keyed by `${id}_${part.id}`).
+    if (!isCurrent() || !useDownloadStore.getState().activeDownloads[id]) return;
     const freshUrl = absoluteUrl(part.url.split("?")[0], config.address || "", freshToken);
     await downloadPart(id, title, { ...part, url: freshUrl }, destPath, freshToken);
   }
@@ -534,7 +539,7 @@ export const downloader = {
           return;
         }
         const destPath = `${localFolderPath}${part.filename}`;
-        await downloadPartWithAuthRetry(id, title, part, destPath, token);
+        await downloadPartWithAuthRetry(id, title, part, destPath, token, isCurrent);
       }
       if (!isCurrent()) return;
       if (!useDownloadStore.getState().activeDownloads[id]) {
@@ -779,7 +784,7 @@ export const downloader = {
           return;
         }
         const destPath = `${localFolderPath}${part.filename}`;
-        await downloadPartWithAuthRetry(id, title, part, destPath, token);
+        await downloadPartWithAuthRetry(id, title, part, destPath, token, isCurrent);
       }
       if (!isCurrent()) return;
       if (!useDownloadStore.getState().activeDownloads[id]) {
@@ -851,7 +856,7 @@ export const downloader = {
         // Token may have rotated since the original attempt; rebuild the url with the current one.
         const refreshedUrl = part.url.split("?")[0];
         const url = absoluteUrl(refreshedUrl, serverAddress, token);
-        await downloadPartWithAuthRetry(id, title, { ...part, url }, destPath, token);
+        await downloadPartWithAuthRetry(id, title, { ...part, url }, destPath, token, isCurrent);
       }
       if (!isCurrent()) return;
       if (!useDownloadStore.getState().activeDownloads[id]) {

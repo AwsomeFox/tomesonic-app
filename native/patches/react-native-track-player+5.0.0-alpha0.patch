@@ -307,7 +307,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..31aedd7 100644
+index b495b5a..1069c94 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -477,15 +477,7 @@ index b495b5a..31aedd7 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -943,7 +935,7 @@ index b495b5a..31aedd7 100644
 +                    v.optDouble("currentTime", 0.0),
 +                    v.optDouble("duration", 0.0),
 +                    tracks
-                 )
++                )
 +            }
 +        }
 +        return out
@@ -1476,7 +1468,15 @@ index b495b5a..31aedd7 100644
 +                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MediaItem>>): Boolean =
 +                    size > 30
 +            }
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +
 +    private fun absSearch(query: String): List<MediaItem> {
 +        val libsBody = absGet("/api/libraries") ?: return emptyList()
@@ -1581,7 +1581,7 @@ index b495b5a..31aedd7 100644
 +            return when (parentId) {
 +                "__ROOT__" -> listOf(
 +                    absBrowsableItem("__DOWNLOADS__", "Downloads", "Available offline", iconRes = "aa_downloads")
-+                )
+                 )
 +                "__DOWNLOADS__" -> absDownloadsCategory()
 +                else -> absDownloadsCategory()
 +            }
@@ -2554,7 +2554,28 @@ index b495b5a..31aedd7 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2961,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,13 +2887,18 @@ class MusicService : HeadlessJsMediaService() {
+                     true
+                 }
+ 
++                // The car steering-wheel / console next+previous transport keys
++                // seek by the user's configured jump increment, NOT to the
++                // next/previous CHAPTER. Chapter navigation stays available via
++                // the dedicated on-screen NEXT/PREVIOUS buttons in the Android
++                // Auto now-playing layout (the JUMP buttons already seek there).
+                 KeyEvent.KEYCODE_MEDIA_NEXT -> {
+-                    emit(MusicEvents.BUTTON_SKIP_NEXT)
++                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
+                     true
+                 }
+ 
+                 KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+-                    emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
++                    emit(MusicEvents.BUTTON_JUMP_BACKWARD)
+                     true
+                 }
+ 
+@@ -905,24 +2966,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2815,7 +2836,7 @@ index b495b5a..31aedd7 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3206,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3211,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2845,7 +2866,7 @@ index b495b5a..31aedd7 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3238,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3243,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2861,7 +2882,7 @@ index b495b5a..31aedd7 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3254,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3259,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
