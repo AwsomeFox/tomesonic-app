@@ -60,11 +60,19 @@ function eventLabel(eventName?: string): string {
   return (eventName && EVENT_LABELS[eventName]) || eventName || "Notification";
 }
 
+// Apprise URLs routinely embed webhook tokens/keys — truncate the STRING (not
+// just the rendered lines via numberOfLines) so the a11y label reads the short
+// form too instead of speaking the full token aloud.
+const SUBTITLE_URL_MAX = 48;
+function truncateUrl(url: string): string {
+  return url.length > SUBTITLE_URL_MAX ? `${url.slice(0, SUBTITLE_URL_MAX)}…` : url;
+}
+
 function notificationSubtitle(n: AbsNotification): string | undefined {
   const url = Array.isArray(n.urls) ? n.urls[0] : undefined;
   const failed = n.lastAttemptFailed ? " · last attempt failed" : "";
   if (!url) return failed ? failed.replace(" · ", "") : undefined;
-  return `${url}${failed}`;
+  return `${truncateUrl(url)}${failed}`;
 }
 
 export default function AdminNotificationsScreen({ navigation }: any) {
@@ -75,8 +83,14 @@ export default function AdminNotificationsScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<any>(null);
   const [retryTick, setRetryTick] = useState(0);
-  // Notification id with an in-flight enabled write (guards double-toggles).
-  const [savingId, setSavingId] = useState<string | null>(null);
+  // Notification ids with an in-flight enabled write. The ref-Set is the
+  // guard (synchronous, so a re-tap can't slip through between renders); the
+  // mirrored state array drives the dimmed row. A single shared savingId let
+  // whichever of two concurrent patches settled FIRST unguard the OTHER row
+  // while its write was still in flight.
+  const savingRef = React.useRef<Set<string>>(new Set());
+  const [savingIds, setSavingIds] = useState<string[]>([]);
+  const syncSavingIds = () => setSavingIds(Array.from(savingRef.current));
 
   useEffect(() => {
     let cancelled = false;
@@ -124,8 +138,9 @@ export default function AdminNotificationsScreen({ navigation }: any) {
     );
 
   const handleToggle = async (n: AbsNotification, next: boolean) => {
-    if (savingId === n.id) return;
-    setSavingId(n.id);
+    if (savingRef.current.has(n.id)) return;
+    savingRef.current.add(n.id);
+    syncSavingIds();
     // Optimistic: flip at once, revert with a snackbar if the server rejects.
     applyEnabled(n.id, next);
     try {
@@ -136,7 +151,10 @@ export default function AdminNotificationsScreen({ navigation }: any) {
       applyEnabled(n.id, !next);
       showSnackbar({ message: actionErrorMessage(e) });
     } finally {
-      setSavingId(null);
+      // Release ONLY this notification's guard — another row's in-flight
+      // write stays guarded until its own patch settles.
+      savingRef.current.delete(n.id);
+      syncSavingIds();
     }
   };
 
@@ -223,7 +241,7 @@ export default function AdminNotificationsScreen({ navigation }: any) {
             <>
               <SectionHeader label={`Notifications (${notifications.length})`} colors={colors} />
               {notifications.map((n, index) => (
-                <View key={n.id} style={{ opacity: savingId === n.id ? 0.5 : 1 }}>
+                <View key={n.id} style={{ opacity: savingIds.includes(n.id) ? 0.5 : 1 }}>
                   {index > 0 ? <Divider colors={colors} /> : null}
                   <ToggleRow
                     icon="bell"

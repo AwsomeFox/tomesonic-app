@@ -23,7 +23,11 @@ export async function getNotificationSettings(): Promise<AbsNotificationSettings
   const settings = data?.settings ?? data;
   return {
     ...settings,
-    notifications: Array.isArray(settings?.notifications) ? settings.notifications : [],
+    // Keep only entries with a real id — the toggle PATCHes /:id, so an
+    // id-less entry would render a row whose write can never land.
+    notifications: Array.isArray(settings?.notifications)
+      ? settings.notifications.filter((n: any) => n?.id)
+      : [],
   };
 }
 

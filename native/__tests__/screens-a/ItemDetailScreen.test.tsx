@@ -31,6 +31,7 @@ jest.mock("../../utils/progressSync", () => ({
   queueEbookProgressPatch: jest.fn(),
   flushPendingSyncs: jest.fn().mockResolvedValue(undefined),
   clearAllPending: jest.fn(),
+  clearPendingWritesFor: jest.fn(),
   syncProgress: jest.fn().mockResolvedValue(undefined),
   closeSession: jest.fn().mockResolvedValue(undefined),
   syncBothProgressFraction: jest.fn(),
@@ -94,6 +95,7 @@ import {
   queueProgressPatch,
   syncBothProgressFraction,
   reconcileLinkedProgress,
+  clearPendingWritesFor,
 } from "../../utils/progressSync";
 import { downloader, downloadFileByUrl } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
@@ -1537,9 +1539,14 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
       expect.objectContaining({
         url: "https://abs.test/api/items/item1/download",
         token: "tok",
-        filename: "the-hobbit.zip",
+        // Unique staging filename: slug + item id (same-titled items must not
+        // collide on one cache path).
+        filename: "the-hobbit_item1.zip",
         expectedBytes: 123456789,
         notification: { id: "zip_item1", title: "The Hobbit" },
+        // Transient staging file: on success the notification is CLEARED, not
+        // replaced with a tappable "complete" for an already-deleted file.
+        clearNotificationOnComplete: true,
       })
     );
     expect(openSpy).not.toHaveBeenCalled();
@@ -1620,7 +1627,7 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
 
     await startZip();
     await act(async () => {
-      resolve({ uri: "file:///test-cache/the-hobbit.zip" });
+      resolve({ uri: "file:///test-cache/the-hobbit_item1.zip" });
     });
 
     await waitFor(() =>
@@ -1628,7 +1635,24 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     );
     expect(Sharing.shareAsync).not.toHaveBeenCalled();
 
+    // The staged file is unused on this path (the browser handoff re-downloads)
+    // — it must be deleted, and BEFORE the fallback dialog was shown.
+    const FileSystem = require("expo-file-system/legacy");
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///test-cache/the-hobbit_item1.zip", {
+      idempotent: true,
+    });
+    const deleteOrder = (FileSystem.deleteAsync as jest.Mock).mock.invocationCallOrder[0];
+    const dialogIdx = (showAppDialog as jest.Mock).mock.calls.findIndex(
+      (c: any[]) => c[0]?.title === "Downloaded"
+    );
+    const dialogOrder = (showAppDialog as jest.Mock).mock.invocationCallOrder[dialogIdx];
+    expect(deleteOrder).toBeLessThan(dialogOrder);
+
     const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    // The fallback copy must disclose what the handoff actually does.
+    expect(dialog.message).toContain(
+      "The browser link includes your session token and downloads the file again."
+    );
     await act(async () => {
       dialog.buttons.find((b: any) => b.text === "Open in browser").onPress();
     });
@@ -1636,6 +1660,113 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     // browser handoff (the browser can't send our Authorization header).
     expect(openSpy).toHaveBeenCalledWith("https://abs.test/api/items/item1/download?token=tok");
     openSpy.mockRestore();
+  });
+
+  it("zip banner a11y: progressbar role + value track the percent; live region is a static status", async () => {
+    setAdmin();
+    (getItemZipDownloadTarget as jest.Mock).mockReturnValue(ZIP_TARGET);
+    const { handle } = makeZipHandle();
+    (downloadFileByUrl as jest.Mock).mockReturnValue(handle);
+
+    await startZip();
+
+    // Determinate bar exposes its value via the progressbar role.
+    let bar = screen.getByRole("progressbar");
+    expect(bar.props.accessibilityValue).toEqual({ min: 0, max: 100, now: 0 });
+
+    const opts = (downloadFileByUrl as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      opts.onProgress(Math.round(0.42 * 123456789), 123456789);
+    });
+    bar = screen.getByRole("progressbar");
+    expect(bar.props.accessibilityValue).toEqual({ min: 0, max: 100, now: 42 });
+
+    // The live region sits on a STATIC status text (announced once), never on
+    // the per-percent label — the moving text itself carries no live region.
+    const status = screen.getByText("Downloading zip");
+    expect(status.props.accessibilityLiveRegion).toBe("polite");
+    const pctText = screen.getByText("Downloading zip… 42% of 118 MB");
+    expect(pctText.props.accessibilityLiveRegion).toBeUndefined();
+  });
+
+  it("zip banner: NO known total → indeterminate copy without a stuck 0% or bar", async () => {
+    setAdmin();
+    (getItemZipDownloadTarget as jest.Mock).mockReturnValue(ZIP_TARGET);
+    const { handle } = makeZipHandle();
+    (downloadFileByUrl as jest.Mock).mockReturnValue(handle);
+
+    // No item size AND (below) no Content-Length from the server.
+    routeApi({ ...bothFormatItem, size: 0 });
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Download all (zip)"));
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      dialog.buttons.find((b: any) => b.text === "Download").onPress();
+    });
+
+    expect(screen.getByText("Downloading zip…")).toBeTruthy();
+    expect(screen.queryByText(/Downloading zip… \d+%/)).toBeNull();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByTestId("zip-progress-fill")).toBeNull();
+    // Cancel stays available while indeterminate.
+    expect(screen.getByLabelText("Cancel zip download")).toBeTruthy();
+
+    // A progress callback WITHOUT a Content-Length keeps it indeterminate.
+    const opts = (downloadFileByUrl as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      opts.onProgress(1024, 0);
+    });
+    expect(screen.queryByRole("progressbar")).toBeNull();
+
+    // Once the server DOES report a total, the banner turns determinate off
+    // that single Content-Length total.
+    await act(async () => {
+      opts.onProgress(1024 * 1024, 2 * 1024 * 1024);
+    });
+    expect(screen.getByText("Downloading zip… 50% of 2.0 MB")).toBeTruthy();
+    expect(screen.getByRole("progressbar").props.accessibilityValue).toEqual({
+      min: 0,
+      max: 100,
+      now: 50,
+    });
+  });
+
+  it("zip download resolving AFTER unmount still disposes the staged file and notification", async () => {
+    setAdmin();
+    (getItemZipDownloadTarget as jest.Mock).mockReturnValue(ZIP_TARGET);
+    const { handle, resolve } = makeZipHandle();
+    (downloadFileByUrl as jest.Mock).mockReturnValue(handle);
+    const Sharing = require("expo-sharing");
+    (Sharing.isAvailableAsync as jest.Mock).mockResolvedValue(true);
+
+    await startZip();
+    // React 19 defers unmount effect-cleanup to the act flush — wrap it so
+    // aliveRef actually reads false before the promise settles.
+    await act(async () => {
+      screen.unmount();
+    });
+
+    await act(async () => {
+      resolve({ uri: "file:///test-cache/the-hobbit_item1.zip" });
+    });
+
+    const FileSystem = require("expo-file-system/legacy");
+    await waitFor(() =>
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith(
+        "file:///test-cache/the-hobbit_item1.zip",
+        { idempotent: true }
+      )
+    );
+    // Nobody is left to share with — no share sheet, and the zip progress
+    // notification is taken down (downloadNotifications prefixes dl_).
+    expect(Sharing.shareAsync).not.toHaveBeenCalled();
+    const notifee = require("@notifee/react-native").default;
+    await waitFor(() => expect(notifee.cancelNotification).toHaveBeenCalledWith("dl_zip_item1"));
+
+    (Sharing.isAvailableAsync as jest.Mock).mockResolvedValue(false); // restore the setup default
   });
 
   it("tools: M4B encode = confirm → POST → task watch → completion snackbar", async () => {
@@ -2228,6 +2359,77 @@ describe("ItemDetailScreen — reset progress", () => {
     const map = useUserStore.getState().mediaProgress;
     expect(map["item1"]).toMatchObject(zeroed("item1"));
     expect(map["ebook1"]).toMatchObject(zeroed("ebook1"));
+  });
+
+  it("BLOCKS the reset with a stop-playback dialog while the item is the current session (no PATCH)", async () => {
+    routeApi(bothFormatItem);
+    usePlaybackStore.setState({
+      currentSession: { id: "sess1", libraryItemId: "item1" },
+    } as any);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Reset progress"));
+
+    // The live session's per-tick sync would immediately overwrite the reset —
+    // a blocking dialog replaces the destructive confirm entirely.
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Can't reset while playing");
+    expect(dialog.message).toBe(
+      "Stop playback first — resetting while playing would be immediately overwritten."
+    );
+    expect(dialog.buttons).toBeUndefined();
+    expect(batchCalls()).toEqual([]);
+    expect(clearPendingWritesFor).not.toHaveBeenCalled();
+  });
+
+  it("BLOCKS the reset when the COUNTERPART is the current playback session", async () => {
+    routeApi(audioOnlyItem, [ebookSibling]);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    // Wait for the fuzzy match so the counterpart id is known.
+    await screen.findByLabelText("Read ebook");
+    await act(async () => {
+      usePlaybackStore.setState({
+        currentSession: { id: "sess1", libraryItemId: "ebook1" },
+      } as any);
+    });
+
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Reset progress"));
+
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Can't reset while playing");
+    expect(batchCalls()).toEqual([]);
+  });
+
+  it("clears queued offline writes for the item AND counterpart BEFORE the batch PATCH", async () => {
+    routeApi(audioOnlyItem, [ebookSibling]);
+    stubLoadMediaProgress();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByLabelText("Read ebook");
+
+    const dialog = await openResetConfirm();
+    await act(async () => {
+      await dialog.buttons.find((b: any) => b.text === "Reset").onPress();
+    });
+
+    // Both ids' queued offline progress writes are dropped (a stale queued
+    // position flushing after the PATCH would silently undo the reset)…
+    expect(clearPendingWritesFor).toHaveBeenCalledWith("item1");
+    expect(clearPendingWritesFor).toHaveBeenCalledWith("ebook1");
+    // …and the clears land BEFORE the batch-zeroing PATCH.
+    const firstClearOrder = (clearPendingWritesFor as jest.Mock).mock.invocationCallOrder[0];
+    const batchIdx = mockedPatch.mock.calls.findIndex(([url]) => url === BATCH_PATH);
+    const batchOrder = mockedPatch.mock.invocationCallOrder[batchIdx];
+    expect(firstClearOrder).toBeLessThan(batchOrder);
+    expect(batchCalls()).toEqual([[BATCH_PATH, [zeroed("item1"), zeroed("ebook1")]]]);
   });
 
   it("failure surfaces an error dialog and — unlike the finished toggle — never queues offline", async () => {

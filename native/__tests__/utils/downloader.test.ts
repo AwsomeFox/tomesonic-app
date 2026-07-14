@@ -1,6 +1,6 @@
 import * as FileSystem from "expo-file-system/legacy";
 import { downloader, autoDownloadNextAfterFinish, downloadFileByUrl } from "../../utils/downloader";
-import { downloadNotifications } from "../../utils/downloadNotifications";
+import { downloadNotifications, sweepStaleZipNotifications } from "../../utils/downloadNotifications";
 import { api } from "../../utils/api";
 import { useDownloadStore } from "../../store/useDownloadStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -18,6 +18,7 @@ jest.mock("../../utils/downloadNotifications", () => ({
     complete: jest.fn(),
     clear: jest.fn(),
   },
+  sweepStaleZipNotifications: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockedApiGet = jest.mocked(api.get);
@@ -702,6 +703,47 @@ describe("sweepOrphanFolders", () => {
   });
 });
 
+describe("sweepStaleZipArtifacts", () => {
+  it("sweeps stale zip notifications and deletes stray *.zip files from the cache dir", async () => {
+    (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValue([
+      "the-hobbit_item1.zip",
+      "UPPER.ZIP",
+      "track_1.mp3", // non-zip cache entries survive
+    ]);
+
+    await downloader.sweepStaleZipArtifacts();
+
+    expect(sweepStaleZipNotifications).toHaveBeenCalled();
+    expect(FileSystem.readDirectoryAsync).toHaveBeenCalledWith("file:///test-cache/");
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith(
+      "file:///test-cache/the-hobbit_item1.zip",
+      { idempotent: true }
+    );
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///test-cache/UPPER.ZIP", {
+      idempotent: true,
+    });
+    expect(FileSystem.deleteAsync).not.toHaveBeenCalledWith(
+      "file:///test-cache/track_1.mp3",
+      expect.anything()
+    );
+  });
+
+  it("never throws — a failing cache listing or notification sweep is swallowed", async () => {
+    (sweepStaleZipNotifications as jest.Mock).mockRejectedValueOnce(new Error("notifee down"));
+    (FileSystem.readDirectoryAsync as jest.Mock).mockRejectedValue(new Error("cache gone"));
+    await expect(downloader.sweepStaleZipArtifacts()).resolves.toBeUndefined();
+  });
+
+  it("keeps deleting other strays when one delete fails", async () => {
+    (FileSystem.readDirectoryAsync as jest.Mock).mockResolvedValue(["a.zip", "b.zip"]);
+    (FileSystem.deleteAsync as jest.Mock)
+      .mockRejectedValueOnce(new Error("busy"))
+      .mockResolvedValueOnce(undefined);
+    await expect(downloader.sweepStaleZipArtifacts()).resolves.toBeUndefined();
+    expect(FileSystem.deleteAsync).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("abortBookParts / cancelBookDownload", () => {
   it("clears the notification even with no in-flight parts", async () => {
     await downloader.abortBookParts("ghost");
@@ -1062,6 +1104,23 @@ describe("downloadFileByUrl — one-off in-app file download (issue #68)", () =>
     expect(notifications.complete).toHaveBeenCalledWith("zip_i1", "My Book");
     expect(notifications.clear).not.toHaveBeenCalled();
     // Success never deletes the downloaded file.
+    expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+  });
+
+  it("clearNotificationOnComplete: success CLEARS the notification instead of completing (transient zip)", async () => {
+    const handle = downloadFileByUrl({
+      url: ZIP_URL,
+      token: TOKEN,
+      filename: "tmp.zip",
+      notification: { id: "zip_i1", title: "My Book" },
+      clearNotificationOnComplete: true,
+    });
+    await expect(handle.promise).resolves.toEqual({ uri: "file:///test-cache/tmp.zip" });
+    // The caller deletes the file right after use — a tappable "complete"
+    // notification would point at nothing, so the progress one just clears.
+    expect(notifications.clear).toHaveBeenCalledWith("zip_i1");
+    expect(notifications.complete).not.toHaveBeenCalled();
+    // The downloaded file itself is untouched (the caller owns disposal).
     expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
   });
 

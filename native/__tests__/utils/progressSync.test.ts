@@ -20,6 +20,7 @@ import {
   reconcileLinkedProgress,
   isProgressLinked,
   remapPendingSids,
+  clearPendingWritesFor,
 } from "../../utils/progressSync";
 import { useUserStore } from "../../store/useUserStore";
 
@@ -686,6 +687,51 @@ describe("clearAllPending", () => {
 
     expect(bookmarkDeleteKeys()).toHaveLength(0);
     expect(pendingBookmarkDeletionsFor("li1")).toEqual([]);
+  });
+});
+
+describe("clearPendingWritesFor (per-item reset)", () => {
+  it("drops the item's queued patches (episode-scoped included) and its pending session syncs, nothing else", () => {
+    // Item-level + episode-scoped patches for the target item.
+    queueProgressPatch("li1", 100, 1000);
+    queueProgressPatch("li1", 50, 500, "ep1", { isFinished: true });
+    // A DIFFERENT item's patch must survive.
+    queueProgressPatch("li2", 7, 70);
+    // Pending session syncs: one targeting li1, one targeting li2.
+    storage.set(
+      "pendingSync_s1",
+      JSON.stringify({ sessionId: "s1", libraryItemId: "li1", currentTime: 5, timeListened: 5 })
+    );
+    storage.set(
+      "pendingSync_s2",
+      JSON.stringify({ sessionId: "s2", libraryItemId: "li2", currentTime: 9, timeListened: 9 })
+    );
+
+    clearPendingWritesFor("li1");
+
+    expect(storage.getString("pendingPatch_li1")).toBeUndefined();
+    expect(storage.getString("pendingPatch_li1-ep1")).toBeUndefined();
+    expect(storage.getString("pendingPatch_li2")).toBeTruthy();
+    expect(storage.getString("pendingSync_s1")).toBeUndefined();
+    expect(storage.getString("pendingSync_s2")).toBeTruthy();
+  });
+
+  it("does NOT clear a different item whose id merely shares a prefix", () => {
+    queueProgressPatch("li1", 1, 10);
+    queueProgressPatch("li10", 2, 20);
+
+    clearPendingWritesFor("li1");
+
+    expect(storage.getString("pendingPatch_li1")).toBeUndefined();
+    expect(storage.getString("pendingPatch_li10")).toBeTruthy();
+  });
+
+  it("is a safe no-op for a missing id or corrupt queue entries", () => {
+    storage.set("pendingSync_bad", "{not json");
+    expect(() => clearPendingWritesFor("")).not.toThrow();
+    expect(() => clearPendingWritesFor("li1")).not.toThrow();
+    // The corrupt entry is left for the flush loop's own corrupt-entry drop.
+    expect(storage.getString("pendingSync_bad")).toBe("{not json");
   });
 });
 

@@ -109,8 +109,20 @@ export function downloadFileByUrl(opts: {
   expectedBytes?: number;
   onProgress?: (bytesWritten: number, bytesExpected: number) => void;
   notification?: { id: string; title: string };
+  /** On success, CLEAR the progress notification instead of posting a
+   *  "Download complete" one — for transient files the caller deletes right
+   *  after use (a tappable complete notification would point at nothing). */
+  clearNotificationOnComplete?: boolean;
 }): FileDownloadHandle {
-  const { url, token, filename, expectedBytes, onProgress, notification } = opts;
+  const {
+    url,
+    token,
+    filename,
+    expectedBytes,
+    onProgress,
+    notification,
+    clearNotificationOnComplete,
+  } = opts;
   const dest = `${FileSystem.cacheDirectory}${filename}`;
   let cancelled = false;
   let resumable: FileSystem.DownloadResumable | null = null;
@@ -168,7 +180,13 @@ export function downloadFileByUrl(opts: {
     }
 
     if (result.status === 200 || result.status === 206) {
-      if (notification) downloadNotifications.complete(notification.id, notification.title);
+      if (notification) {
+        if (clearNotificationOnComplete) {
+          downloadNotifications.clear(notification.id);
+        } else {
+          downloadNotifications.complete(notification.id, notification.title);
+        }
+      }
       return { uri: dest };
     }
 
@@ -884,6 +902,37 @@ export const downloader = {
       }
     } catch (e) {
       console.warn("[Downloader] Orphan sweep failed:", e);
+    }
+  },
+
+  /**
+   * Startup sweep of transient zip-export leftovers: stale dl_zip_*
+   * notifications (app killed mid-download) and stray *.zip staging files in
+   * the cache directory (killed/crashed before the post-share delete ran).
+   * The zip export is fully transient — nothing owns these across a restart,
+   * so anything found is garbage. Best-effort; never throws. Invoked from the
+   * same boot point as sweepOrphanFolders (download-store hydration).
+   */
+  sweepStaleZipArtifacts: async () => {
+    try {
+      const { sweepStaleZipNotifications } = require("./downloadNotifications");
+      await sweepStaleZipNotifications?.();
+    } catch {}
+    try {
+      const root = FileSystem.cacheDirectory;
+      if (!root) return;
+      const entries = await FileSystem.readDirectoryAsync(root);
+      for (const name of entries) {
+        if (!name.toLowerCase().endsWith(".zip")) continue;
+        console.log("[Downloader] Removing stray zip staging file:", name);
+        try {
+          await FileSystem.deleteAsync(`${root}${name}`, { idempotent: true });
+        } catch (e) {
+          console.warn("[Downloader] Failed to remove stray zip:", name, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[Downloader] Stray-zip sweep failed:", e);
     }
   },
 

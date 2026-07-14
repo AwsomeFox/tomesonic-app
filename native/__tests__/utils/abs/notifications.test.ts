@@ -71,6 +71,21 @@ describe("getNotificationSettings", () => {
       notifications: [],
     });
   });
+
+  it("drops id-less entries from the notifications list (the toggle PATCHes /:id)", async () => {
+    jest.mocked(api.get).mockResolvedValue(
+      ok({
+        settings: {
+          appriseApiUrl: null,
+          notifications: [NOTIFICATION, { eventName: "onTest" }, null, { id: "" }],
+        },
+      })
+    );
+    await expect(getNotificationSettings()).resolves.toEqual({
+      appriseApiUrl: null,
+      notifications: [NOTIFICATION],
+    });
+  });
 });
 
 describe("updateNotification", () => {

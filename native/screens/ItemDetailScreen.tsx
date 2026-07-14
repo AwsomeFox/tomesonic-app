@@ -18,6 +18,7 @@ import {
   queueProgressPatch,
   syncBothProgressFraction,
   reconcileLinkedProgress,
+  clearPendingWritesFor,
 } from "../utils/progressSync";
 import { useUserStore } from "../store/useUserStore";
 import { useFavoritesStore } from "../store/useFavoritesStore";
@@ -30,6 +31,7 @@ import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import { useDownloadStore, episodeDownloadKey } from "../store/useDownloadStore";
 import { downloader, downloadFileByUrl, type FileDownloadHandle } from "../utils/downloader";
+import { downloadNotifications } from "../utils/downloadNotifications";
 import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
@@ -141,10 +143,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // Open-RSS-feed flow (admin-only) — null when the sheet is closed.
   const [feedEntity, setFeedEntity] = useState<OpenFeedEntity | null>(null);
   // In-app zip download (issue #68): whole-percent progress + a cancel hook
-  // for the banner. Null when idle. The live handle rides a ref so the
-  // unmount cleanup can cancel without re-running the effect per percent.
+  // for the banner. Null when idle. `totalBytes` is the ONE total both the
+  // percent and the byte label derive from — preferring the response's
+  // Content-Length (captured in onProgress) over the item's metadata size;
+  // 0 means no total is known and the banner renders indeterminate. The live
+  // handle rides a ref so the unmount cleanup can cancel without re-running
+  // the effect per percent.
   const [zipDownload, setZipDownload] = useState<null | {
     pct: number;
+    totalBytes: number;
     cancel: () => Promise<void>;
   }>(null);
   const zipHandleRef = React.useRef<FileDownloadHandle | null>(null);
@@ -322,6 +329,18 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const resetBusyRef = React.useRef(false);
   const handleResetProgress = () => {
     if (!item?.id) return;
+    // Never reset the item (or its counterpart) while it is the CURRENT
+    // playback session: the player's per-tick sync writes progress
+    // continuously, so the zeroing PATCH would be overwritten within seconds.
+    const liveItemId = usePlaybackStore.getState().currentSession?.libraryItemId;
+    if (liveItemId && (liveItemId === item.id || liveItemId === counterpart?.id)) {
+      showAppDialog({
+        title: "Can't reset while playing",
+        message:
+          "Stop playback first — resetting while playing would be immediately overwritten.",
+      });
+      return;
+    }
     showAppDialog({
       title: "Reset progress?",
       message: `Progress on "${
@@ -348,6 +367,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               // handleToggleFinished) is the same book in the other format —
               // reset both together so they keep agreeing.
               if (counterpart?.id) payloads.push(zeroed(counterpart.id));
+              // Drop queued offline writes for both ids FIRST: a stale queued
+              // position/finished flag would flush AFTER the zeroing PATCH and
+              // silently undo the reset.
+              clearPendingWritesFor(item.id);
+              if (counterpart?.id) clearPendingWritesFor(counterpart.id);
               await batchUpdateProgress(payloads);
               // Merge the zeroed entries into the global progress map so
               // badges/cards on already-rendered screens update without
@@ -743,7 +767,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // whole percents, and the finished file is offered via the share sheet.
   const startZipDownload = (target: { url: string; token: string }) => {
     const title = metadata.title || "Download";
-    const filename = `${slugifyTitle(metadata.title || "") || itemId}.zip`;
+    // Always unique per item: two items with the same (or empty) title must
+    // never collide on one cache staging path mid-download.
+    const filename = `${slugifyTitle(metadata.title || "") || "item"}_${itemId}.zip`;
     // Whole-percent throttle: a multi-GB zip fires the native progress
     // callback constantly — re-rendering the screen per callback would jank.
     let lastPct = -1;
@@ -753,24 +779,41 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       filename,
       expectedBytes: sizeBytes > 0 ? sizeBytes : undefined,
       notification: { id: `zip_${itemId}`, title },
+      // The zip is transient share-sheet staging, deleted right after use —
+      // a tappable "complete" notification would point at a gone file.
+      clearNotificationOnComplete: true,
       onProgress: (bytesWritten, bytesExpected) => {
         // Servers may stream the zip without Content-Length — fall back to
-        // the item's metadata size for the fraction.
+        // the item's metadata size for the fraction. No total at all keeps
+        // the banner indeterminate (never a stuck 0%).
         const total = bytesExpected > 0 ? bytesExpected : sizeBytes;
         if (!(total > 0)) return;
         const pct = Math.max(0, Math.min(100, Math.round((bytesWritten / total) * 100)));
         if (pct === lastPct) return;
         lastPct = pct;
-        setZipDownload((cur) => (cur ? { ...cur, pct } : cur));
+        setZipDownload((cur) => (cur ? { ...cur, pct, totalBytes: total } : cur));
       },
     });
     zipHandleRef.current = handle;
-    setZipDownload({ pct: 0, cancel: handle.cancel });
+    setZipDownload({ pct: 0, totalBytes: sizeBytes > 0 ? sizeBytes : 0, cancel: handle.cancel });
 
     handle.promise
       .then(async (res) => {
         zipHandleRef.current = null;
-        if (!aliveRef.current) return;
+        if (!aliveRef.current) {
+          // Screen unmounted while the download was settling — nobody is left
+          // to share the staged file. Dispose of it (and any notification)
+          // best-effort so multi-GB temp files don't linger in cache.
+          if (res) {
+            try {
+              await FileSystem.deleteAsync(res.uri, { idempotent: true });
+            } catch {}
+            try {
+              await downloadNotifications.clear(`zip_${itemId}`);
+            } catch {}
+          }
+          return;
+        }
         setZipDownload(null);
         if (!res) {
           // Cancelled (banner X / unmount race) — the handle already cleaned
@@ -792,13 +835,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           console.warn("[ItemDetail] Zip share failed:", e);
           shared = true; // downloaded + share attempted — don't fall through to the browser dialog
         } finally {
-          if (shared) {
-            // The zip lives in cache purely as share-sheet staging — dispose
-            // of it so multi-GB temp files don't pile up. Best-effort.
-            try {
-              await FileSystem.deleteAsync(res.uri, { idempotent: true });
-            } catch {}
-          }
+          // The zip lives in cache purely as share-sheet staging — dispose of
+          // it in EVERY outcome, before any fallback dialog (the browser
+          // handoff re-downloads; the local file is unused there). Best-effort.
+          try {
+            await FileSystem.deleteAsync(res.uri, { idempotent: true });
+          } catch {}
         }
         if (shared) return;
         // No share sheet on this device: offer the legacy browser handoff.
@@ -806,7 +848,8 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           title: "Downloaded",
           message:
             "The zip finished downloading, but this device can't open a save/share dialog for it. " +
-            "You can hand the download to your browser instead.",
+            "You can hand the download to your browser instead. " +
+            "The browser link includes your session token and downloads the file again.",
           buttons: [
             { text: "Close", style: "cancel" },
             {
@@ -1669,7 +1712,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               cancel affordance (the download survives leaving this scroll
               position, so a transient snackbar wouldn't do). */}
           {zipDownload ? (
-            <View style={{ paddingHorizontal: 20, marginTop: 16 }} accessibilityLiveRegion="polite">
+            <View style={{ paddingHorizontal: 20, marginTop: 16 }}>
               <View
                 style={{
                   backgroundColor: colors.tertiaryContainer,
@@ -1678,6 +1721,17 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                   paddingVertical: 10,
                 }}
               >
+                {/* STATIC live-region status, announced once when the banner
+                    appears. The live region must never sit on the per-percent
+                    text — screen readers would announce every whole percent.
+                    The moving value is exposed via the progressbar's
+                    accessibilityValue instead. */}
+                <Text
+                  accessibilityLiveRegion="polite"
+                  style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
+                >
+                  Downloading zip
+                </Text>
                 <View style={{ flexDirection: "row", alignItems: "center" }}>
                   <Text
                     style={{
@@ -1687,9 +1741,14 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                       fontWeight: "600",
                     }}
                   >
-                    {`Downloading zip… ${zipDownload.pct}%${
-                      sizeBytes > 0 ? ` of ${formatBytes(sizeBytes)}` : ""
-                    }`}
+                    {/* ONE total drives both the percent and the byte label
+                        (zipDownload.totalBytes — Content-Length when known).
+                        No total at all → indeterminate copy, never a stuck 0%. */}
+                    {zipDownload.totalBytes > 0
+                      ? `Downloading zip… ${zipDownload.pct}% of ${formatBytes(
+                          zipDownload.totalBytes
+                        )}`
+                      : "Downloading zip…"}
                   </Text>
                   <Pressable
                     onPress={() => {
@@ -1697,31 +1756,39 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                     }}
                     accessibilityRole="button"
                     accessibilityLabel="Cancel zip download"
-                    hitSlop={8}
+                    // 18dp glyph + 14dp slop per side = 46dp target (≥44dp).
+                    hitSlop={14}
                     style={{ marginLeft: 10 }}
                   >
                     <Icon name="close" size={18} color={colors.onTertiaryContainer} />
                   </Pressable>
                 </View>
-                <View
-                  style={{
-                    height: 4,
-                    borderRadius: 2,
-                    marginTop: 8,
-                    overflow: "hidden",
-                    backgroundColor: withAlpha(colors.onTertiaryContainer, 0.2),
-                  }}
-                >
+                {/* Determinate bar only when a total is known — an indeterminate
+                    download hides the bar rather than pinning it at 0%. */}
+                {zipDownload.totalBytes > 0 ? (
                   <View
-                    testID="zip-progress-fill"
+                    accessible
+                    accessibilityRole="progressbar"
+                    accessibilityValue={{ min: 0, max: 100, now: zipDownload.pct }}
                     style={{
-                      width: `${zipDownload.pct}%`,
                       height: 4,
                       borderRadius: 2,
-                      backgroundColor: colors.onTertiaryContainer,
+                      marginTop: 8,
+                      overflow: "hidden",
+                      backgroundColor: withAlpha(colors.onTertiaryContainer, 0.2),
                     }}
-                  />
-                </View>
+                  >
+                    <View
+                      testID="zip-progress-fill"
+                      style={{
+                        width: `${zipDownload.pct}%`,
+                        height: 4,
+                        borderRadius: 2,
+                        backgroundColor: colors.onTertiaryContainer,
+                      }}
+                    />
+                  </View>
+                ) : null}
               </View>
             </View>
           ) : null}
@@ -2926,13 +2993,15 @@ export default function ItemDetailScreen({ route, navigation }: any) {
               title="Download all (zip)"
               subtitle={
                 zipDownload
-                  ? `Downloading… ${zipDownload.pct}%`
+                  ? zipDownload.totalBytes > 0
+                    ? `Downloading… ${zipDownload.pct}%`
+                    : "Downloading…"
                   : sizeBytes > 0
                   ? `~${formatBytes(sizeBytes)}`
                   : undefined
               }
               colors={colors}
-              accessibilityState={{ disabled: !!zipDownload } as any}
+              accessibilityState={{ disabled: !!zipDownload }}
               onPress={handleZipDownload}
             />
           </View>
@@ -3008,7 +3077,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             title="Encode as M4B"
             subtitle={encodeTaskRunning ? "Encoding in progress…" : "Merge audio files into one M4B"}
             colors={colors}
-            accessibilityState={{ disabled: itemTaskRunning } as any}
+            accessibilityState={{ disabled: itemTaskRunning }}
             onPress={() => {
               if (itemTaskRunning) return;
               startEncodeM4b();
@@ -3023,7 +3092,7 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 : "Write metadata and cover into the audio files"
             }
             colors={colors}
-            accessibilityState={{ disabled: itemTaskRunning } as any}
+            accessibilityState={{ disabled: itemTaskRunning }}
             onPress={() => {
               if (itemTaskRunning) return;
               startEmbedMetadata();

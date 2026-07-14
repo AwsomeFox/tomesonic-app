@@ -16,7 +16,7 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import AdminNotificationsScreen from "../../screens/AdminNotificationsScreen";
 import { api } from "../../utils/api";
 import { showSnackbar } from "../../store/useSnackbarStore";
@@ -161,6 +161,64 @@ describe("AdminNotificationsScreen", () => {
         enabled: true,
       })
     );
+  });
+
+  it("two concurrent toggles: each row stays guarded until ITS OWN patch settles", async () => {
+    // One pending promise per PATCH url so each write settles independently.
+    const pending: Record<string, (v: any) => void> = {};
+    (api.patch as jest.Mock).mockImplementation(
+      (url: string) => new Promise((res) => (pending[url] = res))
+    );
+    await renderScreen();
+    await screen.findByText("Podcast episode downloaded");
+
+    // Start both toggles WITHOUT awaiting their fireEvent promises — the
+    // async fireEvent resolves only when the handler chain (the held-open
+    // PATCH) settles; each is awaited below after ITS patch is released. The
+    // setTimeout yields let each press's internal act() scope close before
+    // the next opens — interleaved act scopes scramble the global act-env
+    // restore and poison every later test in the file.
+    const flushLoop = () => new Promise((r) => setTimeout(r, 0));
+    const press1 = fireEvent.press(screen.getByLabelText(/^Podcast episode downloaded,/)); // n1
+    await flushLoop();
+    const press2 = fireEvent.press(screen.getByLabelText(/^Backup failed,/)); // n2
+    await flushLoop();
+    expect(api.patch).toHaveBeenCalledTimes(2);
+
+    // n1's patch settles FIRST. n2's write is still in flight — its row must
+    // STAY guarded (the old shared savingId was nulled by whichever patch
+    // finished first, unguarding the other row mid-flight).
+    await act(async () => {
+      pending["/api/notifications/n1"]({ data: {} });
+      await press1;
+    });
+    // Guarded re-press: handleToggle bails synchronously, no third PATCH.
+    await fireEvent.press(screen.getByLabelText(/^Backup failed,/));
+    expect(api.patch).toHaveBeenCalledTimes(2); // re-press swallowed
+
+    // Once n2's OWN patch settles, its guard releases and a new toggle sends.
+    await act(async () => {
+      pending["/api/notifications/n2"]({ data: {} });
+      await press2;
+    });
+    (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+    await fireEvent.press(screen.getByLabelText(/^Backup failed,/));
+    expect(api.patch).toHaveBeenCalledTimes(3);
+  });
+
+  it("truncates long subtitle URLs (they can embed webhook tokens) for display AND the a11y label", async () => {
+    const longUrl = "apprises://hooks.example.com/" + "s".repeat(60);
+    mockSettings({ notifications: [{ ...EPISODE_NOTIF, urls: [longUrl] }] });
+    await renderScreen();
+    await screen.findByText("Podcast episode downloaded");
+
+    const truncated = `${longUrl.slice(0, 48)}…`;
+    expect(screen.getByText(truncated)).toBeTruthy();
+    expect(screen.queryByText(longUrl)).toBeNull();
+    // The STRING is truncated before rendering, so the row's accessibility
+    // label (title, subtitle) reads the short form too — numberOfLines alone
+    // would still speak the full token aloud.
+    expect(screen.getByLabelText(`Podcast episode downloaded, ${truncated}`)).toBeTruthy();
   });
 
   it("a failed toggle reverts the optimistic flip and explains via snackbar", async () => {
