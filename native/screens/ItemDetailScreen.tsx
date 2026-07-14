@@ -53,6 +53,7 @@ import {
   buildItemZipDownloadUrl,
 } from "../utils/abs/items";
 import { startTaskWatch, subscribeTasks, getTasksSnapshot } from "../utils/abs/tasks";
+import { batchUpdateProgress } from "../utils/abs/me";
 import type { AbsTask } from "../utils/abs/types";
 
 // Share-link expiry presets (ms). 0 = never (the server expects numeric
@@ -277,6 +278,84 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     } finally {
       finishBusyRef.current = false;
     }
+  };
+
+  // Per-item "Reset progress" (issue #71): un-finish AND zero both mediums via
+  // the batch progress endpoint (the plain finished-toggle above only flips the
+  // flag, leaving currentTime/progress behind). DELIBERATE DIVERGENCE from the
+  // finished-toggle's offline queue: a failed reset just reports (mirroring the
+  // series-level reset in SeriesDetailScreen) — a destructive batch write
+  // either lands or is surfaced, never silently deferred.
+  //
+  // KNOWN LIMITATION: the batch endpoint has never carried ebookLocation, so an
+  // old CFI can survive the reset — the reader may resume its saved position
+  // even though progress reads 0%. Fully clearing it would need
+  // DELETE /api/me/progress/:id, which is unverified against the server
+  // source; tracked as a follow-up.
+  const resetBusyRef = React.useRef(false);
+  const handleResetProgress = () => {
+    if (!item?.id) return;
+    showAppDialog({
+      title: "Reset progress?",
+      message: `Progress on "${
+        item?.media?.metadata?.title || "this book"
+      }" will be returned to not started. This can't be undone.`,
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: async () => {
+            if (resetBusyRef.current) return;
+            resetBusyRef.current = true;
+            try {
+              const zeroed = (libraryItemId: string) => ({
+                libraryItemId,
+                isFinished: false,
+                currentTime: 0,
+                progress: 0,
+                ebookProgress: 0,
+              });
+              const payloads = [zeroed(item.id)];
+              // The fuzzy-matched sibling (see the counterpart mirroring in
+              // handleToggleFinished) is the same book in the other format —
+              // reset both together so they keep agreeing.
+              if (counterpart?.id) payloads.push(zeroed(counterpart.id));
+              await batchUpdateProgress(payloads);
+              // Merge the zeroed entries into the global progress map so
+              // badges/cards on already-rendered screens update without
+              // waiting for the next /api/me (same shape as the
+              // finished-toggle's applyLocally above).
+              useUserStore.setState((s) => {
+                const now = Date.now();
+                const nextMap: Record<string, any> = { ...s.mediaProgress };
+                for (const p of payloads) {
+                  nextMap[p.libraryItemId] = {
+                    ...s.mediaProgress[p.libraryItemId],
+                    ...p,
+                    updatedAt: now,
+                  };
+                }
+                return { mediaProgress: nextMap };
+              });
+              useUserStore
+                .getState()
+                .loadMediaProgress()
+                .catch(() => {});
+              refetchItem();
+              showSnackbar({ message: "Progress reset" });
+            } catch (e: any) {
+              showAppDialog({
+                title: "Couldn't reset progress",
+                message: e?.message || "Something went wrong. Please try again.",
+              });
+            } finally {
+              resetBusyRef.current = false;
+            }
+          },
+        },
+      ],
+    });
   };
 
   // Per-episode finished toggle. Episode progress is ITS OWN entry, keyed
@@ -2698,6 +2777,22 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             onPress={() => {
               setOverflowVisible(false);
               setFeedEntity({ kind: "item", id: itemId, title: metadata.title || "this item" });
+            }}
+          />
+        ) : null}
+        {/* Per-item progress reset (issue #71) — books only, and only when
+            there is something to reset. Podcasts track per-EPISODE progress;
+            a bulk episode reset is out of scope here. */}
+        {!isPodcastItem &&
+        (isFinished || audioProgressFraction > 0 || ebookProgressFraction > 0) ? (
+          <RowBase
+            icon="undo"
+            title="Reset progress"
+            subtitle="Back to not started"
+            colors={colors}
+            onPress={() => {
+              setOverflowVisible(false);
+              handleResetProgress();
             }}
           />
         ) : null}

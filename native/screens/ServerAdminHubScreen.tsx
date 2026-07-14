@@ -274,6 +274,12 @@ export default function ServerAdminHubScreen({ navigation }: any) {
           route: "AdminEmail",
         },
         {
+          icon: "bell",
+          title: "Notifications",
+          subtitle: "Apprise event notifications",
+          route: "AdminNotifications",
+        },
+        {
           icon: "logs",
           title: "Server logs",
           subtitle: "Read server log output",

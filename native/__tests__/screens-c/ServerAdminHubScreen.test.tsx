@@ -137,6 +137,7 @@ describe("ServerAdminHubScreen", () => {
         "Server settings",
         "Backups",
         "Email",
+        "Notifications",
         "Server logs",
       ]) {
         expect(screen.getByText(title)).toBeTruthy();
@@ -232,6 +233,7 @@ describe("ServerAdminHubScreen", () => {
         [/^Server settings,/, "AdminServerSettings"],
         [/^Backups,/, "AdminBackups"],
         [/^Email,/, "AdminEmail"],
+        [/^Notifications,/, "AdminNotifications"],
         [/^Server logs,/, "AdminServerLogs"],
       ];
       for (const [label, route] of expected) {

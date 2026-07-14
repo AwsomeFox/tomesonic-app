@@ -242,6 +242,42 @@ export interface AbsShareLink {
   [key: string]: any;
 }
 
+/**
+ * One Apprise event notification (GET /api/notifications → settings.notifications[]).
+ * NOTE: unlike most shapes in this file, the notification surface is verified
+ * at DOCS level (openapi spec + web client behavior), not against the server
+ * source — see utils/abs/notifications.ts.
+ */
+export interface AbsNotification {
+  id: string;
+  libraryId?: string | null;
+  /** e.g. "onPodcastEpisodeDownloaded", "onBackupCompleted", "onTest". */
+  eventName: string;
+  /** Apprise destination URLs. */
+  urls: string[];
+  titleTemplate?: string;
+  bodyTemplate?: string;
+  enabled: boolean;
+  type?: string;
+  lastFiredAt?: number | null;
+  lastAttemptFailed?: boolean;
+  numConsecutiveFailedAttempts?: number;
+  createdAt?: number;
+  [key: string]: any;
+}
+
+/** GET /api/notifications → { settings } (the server's notification settings). */
+export interface AbsNotificationSettings {
+  id?: string;
+  appriseType?: string;
+  appriseApiUrl: string | null;
+  notifications: AbsNotification[];
+  maxFailedAttempts?: number;
+  maxNotificationQueue?: number;
+  notificationDelay?: number;
+  [key: string]: any;
+}
+
 /** A narrator row from GET /api/libraries/:id/narrators → { narrators }. */
 export interface AbsNarrator {
   /** encodeURIComponent(base64(name)) — the :narratorId path param scheme. */

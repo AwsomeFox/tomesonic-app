@@ -1939,3 +1939,210 @@ describe("ItemDetailScreen — freshness after edits", () => {
     expect(coverUris.some((u: string) => u.includes("ts=1720000000000"))).toBe(true);
   });
 });
+
+// --- Per-item "Reset progress" (issue #71) -----------------------------------
+describe("ItemDetailScreen — reset progress", () => {
+  const BATCH_PATH = "/api/me/progress/batch/update";
+  const batchCalls = () => mockedPatch.mock.calls.filter(([url]) => url === BATCH_PATH);
+
+  /** Zeroing payload element the endpoint must receive (bare-array body). */
+  const zeroed = (libraryItemId: string) => ({
+    libraryItemId,
+    isFinished: false,
+    currentTime: 0,
+    progress: 0,
+    ebookProgress: 0,
+  });
+
+  // The reset refreshes the authoritative map afterwards — inject a resolved
+  // stub so the real /api/me fetch never runs against the routed mock.
+  const stubLoadMediaProgress = () => {
+    const fn = jest.fn().mockResolvedValue(undefined);
+    useUserStore.setState({ loadMediaProgress: fn } as any);
+    return fn;
+  };
+
+  const openOverflow = async () => {
+    await fireEvent.press(screen.getByLabelText("More actions"));
+  };
+
+  /** Press the row, return the captured confirm dialog. */
+  const openResetConfirm = async () => {
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Reset progress"));
+    return (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+  };
+
+  it("offers the row only with something to reset, behind a destructive confirm with the exact copy", async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    await openOverflow();
+    expect(screen.getByText("Reset progress")).toBeTruthy();
+    expect(screen.getByText("Back to not started")).toBeTruthy();
+
+    await fireEvent.press(screen.getByText("Reset progress"));
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.title).toBe("Reset progress?");
+    expect(dialog.message).toContain('"The Hobbit"');
+    expect(dialog.message).toContain("returned to not started");
+    expect(dialog.message).toContain("This can't be undone.");
+    const resetBtn = dialog.buttons.find((b: any) => b.text === "Reset");
+    expect(resetBtn.style).toBe("destructive");
+    expect(dialog.buttons.find((b: any) => b.style === "cancel")).toBeTruthy();
+    // Not confirmed yet — nothing sent.
+    expect(batchCalls()).toEqual([]);
+  });
+
+  it("hides the row when the book has no progress and isn't finished", async () => {
+    routeApi({
+      ...bothFormatItem,
+      userMediaProgress: {
+        libraryItemId: "item1",
+        progress: 0,
+        ebookProgress: 0,
+        currentTime: 0,
+        isFinished: false,
+        lastUpdate: 1000,
+      },
+    });
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("The Hobbit");
+
+    await openOverflow();
+    // The sheet is open (history row present) but reset isn't offered.
+    expect(screen.getByText("Listening history")).toBeTruthy();
+    expect(screen.queryByText("Reset progress")).toBeNull();
+  });
+
+  it("offers the row for a finished book even when the fractions read 0", async () => {
+    routeApi({
+      ...bothFormatItem,
+      userMediaProgress: {
+        libraryItemId: "item1",
+        progress: 0,
+        ebookProgress: 0,
+        currentTime: 0,
+        isFinished: true,
+        lastUpdate: 1000,
+      },
+    });
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findAllByText("The Hobbit");
+
+    await openOverflow();
+    expect(screen.getByText("Reset progress")).toBeTruthy();
+  });
+
+  it("hides the row for podcasts (per-episode progress; bulk reset out of scope)", async () => {
+    routeApi(podcastItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("2 Episodes");
+
+    await openOverflow();
+    expect(screen.getByText("Listening history")).toBeTruthy();
+    expect(screen.queryByText("Reset progress")).toBeNull();
+  });
+
+  it("confirm PATCHes the batch endpoint with the exact zeroing payload, zeroes the local map, and confirms", async () => {
+    routeApi(bothFormatItem);
+    const loadMediaProgress = stubLoadMediaProgress();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    const dialog = await openResetConfirm();
+    await act(async () => {
+      await dialog.buttons.find((b: any) => b.text === "Reset").onPress();
+    });
+
+    // Bare-array body, all progress fields zeroed, no counterpart element.
+    expect(batchCalls()).toEqual([[BATCH_PATH, [zeroed("item1")]]]);
+    // Local map merged at once so badges elsewhere update pre-refresh…
+    const entry = useUserStore.getState().mediaProgress["item1"];
+    expect(entry).toMatchObject(zeroed("item1"));
+    // …and the authoritative refresh + confirmation fired.
+    expect(loadMediaProgress).toHaveBeenCalled();
+    expect(showSnackbar).toHaveBeenCalledWith({ message: "Progress reset" });
+  });
+
+  it("includes the fuzzy-matched counterpart in the batch and zeroes its map entry too", async () => {
+    routeApi(audioOnlyItem, [ebookSibling]);
+    stubLoadMediaProgress();
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    // The counterpart supplies the Read button — wait for the fuzzy match.
+    await screen.findByLabelText("Read ebook");
+
+    const dialog = await openResetConfirm();
+    await act(async () => {
+      await dialog.buttons.find((b: any) => b.text === "Reset").onPress();
+    });
+
+    expect(batchCalls()).toEqual([[BATCH_PATH, [zeroed("item1"), zeroed("ebook1")]]]);
+    const map = useUserStore.getState().mediaProgress;
+    expect(map["item1"]).toMatchObject(zeroed("item1"));
+    expect(map["ebook1"]).toMatchObject(zeroed("ebook1"));
+  });
+
+  it("failure surfaces an error dialog and — unlike the finished toggle — never queues offline", async () => {
+    routeApi(bothFormatItem);
+    stubLoadMediaProgress();
+    mockedPatch.mockRejectedValue(new Error("Network Error")); // offline-shaped
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    const dialog = await openResetConfirm();
+    await act(async () => {
+      await dialog.buttons.find((b: any) => b.text === "Reset").onPress();
+    });
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't reset progress" })
+      )
+    );
+    // No offline queueing (destructive reset either lands or reports) and no
+    // optimistic zeroing of the local map on failure.
+    expect(queueFinishedPatch).not.toHaveBeenCalled();
+    expect(queueProgressPatch).not.toHaveBeenCalled();
+    expect(useUserStore.getState().mediaProgress["item1"]?.isFinished).not.toBe(false);
+    expect(showSnackbar).not.toHaveBeenCalledWith({ message: "Progress reset" });
+  });
+
+  it("double-tapping the confirm sends exactly one batch request (busy-ref guard)", async () => {
+    routeApi(bothFormatItem);
+    stubLoadMediaProgress();
+    let resolvePatch!: (v: any) => void;
+    mockedPatch.mockImplementation(() => new Promise((res) => (resolvePatch = res)));
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
+    );
+    await screen.findByText("Listening");
+
+    const dialog = await openResetConfirm();
+    const onPress = dialog.buttons.find((b: any) => b.text === "Reset").onPress;
+    await act(async () => {
+      onPress();
+      onPress(); // second tap while the first is in flight
+    });
+    await act(async () => {
+      resolvePatch({ data: {} });
+    });
+
+    expect(batchCalls()).toHaveLength(1);
+  });
+});
