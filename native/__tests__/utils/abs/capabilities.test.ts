@@ -252,6 +252,28 @@ describe("refreshCapabilities", () => {
     expect(useUserStore.getState().serverSettings).toBeNull();
   });
 
+  it("keeps the admin response when the token ROTATES mid-request (same account, not a switch)", async () => {
+    seed({ id: "u1", username: "amy" }, null, { token: "tok-old", userId: "u1" });
+    jest.mocked(api.post).mockImplementation(async () => {
+      // The 401 interceptor refreshed + rotated the token for the SAME account
+      // while /api/authorize was in flight, then replayed it successfully.
+      useUserStore.setState({ serverConnectionConfig: { token: "tok-rotated", userId: "u1" } });
+      return {
+        data: {
+          user: { id: "u1", username: "amy", type: "admin", permissions: NO_PERMS },
+          serverSettings: { version: "2.28.0" },
+        },
+      } as any;
+    });
+
+    await refreshCapabilities();
+
+    // A bare token change is the SAME session — the admin role must be adopted,
+    // not discarded (a strict-token guard stranded real admins in degraded mode).
+    expect(getCapabilities().isAdmin).toBe(true);
+    expect(useUserStore.getState().serverSettings).toEqual({ version: "2.28.0" });
+  });
+
   it("does nothing when there is no session token", async () => {
     seed(null, null, null);
     await refreshCapabilities();

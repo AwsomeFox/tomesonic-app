@@ -363,6 +363,33 @@ describe("downloadBook — duplicate-start guard", () => {
     await downloader.downloadBook(fullItem(), SERVER, TOKEN);
     expect(notifications.start).toHaveBeenCalledTimes(2);
   });
+
+  it("allows an immediate re-download after cancel while the old part is still aborting", async () => {
+    const gate = deferred<any>();
+    downloadImpl = () => gate.promise;
+
+    const first = downloader.downloadBook(fullItem(), SERVER, TOKEN);
+    await until(() => resumables.length === 1);
+
+    // Cancel removes the store entry + aborts, but the OLD loop is still awaiting
+    // its (aborting) native downloadAsync — so it lingers in runningBooks.
+    useDownloadStore.getState().cancelDownload("book1");
+    await until(() => resumables[0].cancelAsync.mock.calls.length === 1);
+    expect(useDownloadStore.getState().activeDownloads["book1"]).toBeUndefined();
+
+    // Immediate re-download BEFORE the old native task settles. Previously the
+    // stale runningBooks flag silently swallowed this ("ignoring duplicate
+    // start"); gating on the live store entry lets a fresh loop start.
+    downloadImpl = async () => ({ uri: "x", status: 200 });
+    await downloader.downloadBook(fullItem(), SERVER, TOKEN);
+    expect(notifications.start).toHaveBeenCalledTimes(2); // the second start actually ran
+    expect(useDownloadStore.getState().completedDownloads["book1"]).toBeTruthy();
+
+    // The ORIGINAL aborted loop settling must not clobber the new run's result.
+    gate.resolve(undefined);
+    await first;
+    expect(useDownloadStore.getState().completedDownloads["book1"]).toBeTruthy();
+  });
 });
 
 describe("downloadBook — cancel mid-flight", () => {
@@ -528,6 +555,34 @@ describe("downloadBook — 401 auth retry", () => {
     const failed = useDownloadStore.getState().activeDownloads["book5"];
     expect(failed.status).toBe("failed");
     expect(failed.error).toContain("Not authorized to download");
+  });
+
+  it("does NOT re-download in the retry once a NEWER run took over the same book (superseded)", async () => {
+    storageHelper.setServerConfig({ address: SERVER, token: "fresh-tok" });
+    // The first part 401s; gate the /api/me refresh so a newer run can take over
+    // while the OLD loop is parked in the retry's token-refresh await.
+    const refreshGate = deferred<any>();
+    mockedApiGet.mockReturnValueOnce(refreshGate.promise as any);
+    downloadImpl = async () => ({ uri: "x", status: 401 });
+
+    const first = downloader.downloadBook(trackOnlyItem(), SERVER, TOKEN);
+    await until(() => resumables.length === 1); // first part attempted → 401 → awaiting /api/me
+
+    // Cancel + immediate re-download of the SAME id starts a newer run (bumps
+    // the run generation → the old loop's isCurrent() is now false). The new run
+    // downloads cleanly.
+    useDownloadStore.getState().cancelDownload("book5");
+    downloadImpl = async () => ({ uri: "x", status: 200 });
+    await downloader.downloadBook(trackOnlyItem(), SERVER, TOKEN);
+    const resumablesAfterNewRun = resumables.length;
+    expect(useDownloadStore.getState().completedDownloads["book5"]).toBeTruthy();
+
+    // Release the OLD loop's refresh: its retry must BAIL (isCurrent()===false),
+    // not re-issue a part that races the new run's files/state.
+    refreshGate.resolve({ data: {} });
+    await first;
+    expect(resumables.length).toBe(resumablesAfterNewRun); // no superseded re-download
+    expect(useDownloadStore.getState().completedDownloads["book5"]).toBeTruthy();
   });
 });
 

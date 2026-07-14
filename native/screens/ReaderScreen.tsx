@@ -1131,6 +1131,17 @@ function getExtForFormat(format: string): string {
   }
 }
 
+// A downloaded part's localFilePath may be a BARE absolute path ("/data/.../x")
+// on older/cached download rows. expo's FileSystem read and react-native-pdf's
+// source both need a proper file:// URI, so normalize the same way the
+// "Open externally" share path does — otherwise offline open fails for exactly
+// the legacy rows the offline fallback exists to serve.
+function toLocalFileUri(path: string): string {
+  return path.startsWith("file://") || path.startsWith("content://")
+    ? path
+    : `file://${path}`;
+}
+
 export default function ReaderScreen({ route, navigation }: any) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
@@ -1602,7 +1613,9 @@ export default function ReaderScreen({ route, navigation }: any) {
         
         let fileUri = "";
         if (ebookPart?.localFilePath) {
-          fileUri = ebookPart.localFilePath;
+          // Normalize a bare absolute path (legacy download rows) to file://,
+          // else FileSystem.getInfoAsync/readAsStringAsync fail offline.
+          fileUri = toLocalFileUri(ebookPart.localFilePath);
           console.log("[Reader] Loading ebook from offline download:", fileUri);
         } else {
           const ext = getExtForFormat(format);
@@ -1735,12 +1748,21 @@ export default function ReaderScreen({ route, navigation }: any) {
           readingSampleRef.current = { page, pages, section, fraction: frac, t: now };
         }
 
+        // A blank-cfi relocate (continuous/scrolled flow, or a transitional
+        // relocate) carries a real fraction but cfi:"" — the MMKV write above is
+        // already guarded against it. The store write and the server PATCH below
+        // must be guarded the SAME way: writing ebookLocation:"" would wipe the
+        // server's stored CFI, so another device restoring from the server would
+        // open the book at the start. Fall back to the last known good CFI so a
+        // blank relocate updates ONLY ebookProgress.
+        const resolvedCfi = data.cfi || latestProgressRef.current?.cfi || "";
+
         // Update local store progress state instantly — EBOOK fields only.
         // Touching `progress`/`isFinished` here would clobber the audio
         // progress on both-format items (and un-finish finished audiobooks).
         const updatedProgress = {
           libraryItemId: itemId,
-          ebookLocation: data.cfi || "",
+          ebookLocation: resolvedCfi,
           ebookProgress: data.fraction || 0,
           updatedAt: Date.now(),
         };
@@ -1762,7 +1784,7 @@ export default function ReaderScreen({ route, navigation }: any) {
         syncTimeoutRef.current = setTimeout(async () => {
           try {
             await api.patch(`/api/me/progress/${itemId}`, {
-              ebookLocation: data.cfi || "",
+              ebookLocation: resolvedCfi,
               ebookProgress: data.fraction || 0,
               ...((data.fraction || 0) >= 0.99 ? { isFinished: true } : {}),
             });
@@ -1771,7 +1793,7 @@ export default function ReaderScreen({ route, navigation }: any) {
             // Offline — queue (ebook fields only) instead of dropping it.
             queueEbookProgressPatch(
               itemId,
-              data.cfi || "",
+              resolvedCfi,
               data.fraction || 0,
               (data.fraction || 0) >= 0.99
             );
@@ -1988,13 +2010,10 @@ export default function ReaderScreen({ route, navigation }: any) {
           .completedDownloads[itemId]?.parts?.find((p: any) => p.id === "ebook")?.localFilePath;
         if (localEbook) {
           // localFilePath may be a bare absolute path (older/cached download
-          // rows) — expo-sharing wants a URI (same normalization as the
-          // playback store's local track resolution).
-          const uri =
-            localEbook.startsWith("file://") || localEbook.startsWith("content://")
-              ? localEbook
-              : `file://${localEbook}`;
-          await Sharing.shareAsync(uri, { dialogTitle: title || "Open ebook" });
+          // rows) — expo-sharing wants a proper file:// URI.
+          await Sharing.shareAsync(toLocalFileUri(localEbook), {
+            dialogTitle: title || "Open ebook",
+          });
           return;
         }
         const localPath = `${FileSystem.cacheDirectory}book_${itemId}.${format || "bin"}`;
@@ -2395,7 +2414,7 @@ export default function ReaderScreen({ route, navigation }: any) {
         key={itemId}
         source={
           localPdf
-            ? { uri: localPdf }
+            ? { uri: toLocalFileUri(localPdf) }
             : { uri: ebookUri, headers: { Authorization: `Bearer ${token}` } }
         }
         style={{ flex: 1, backgroundColor: colors.surface }}

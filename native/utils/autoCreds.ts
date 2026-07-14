@@ -138,7 +138,33 @@ export async function readAutoCreds(): Promise<AutoCreds | null> {
   }
 }
 
-export async function writeAutoCreds(
+// Serializes all writeAutoCreds callers. The write is a READ-MODIFY-WRITE
+// (readAutoCreds → decide → atomic file write), and while each file write is
+// atomic on its own, two overlapping writers are NOT: a library-switch mirror
+// that reads the pre-refresh pair can resume AFTER a token-refresh write landed
+// and overwrite the freshly-rotated pair with its stale copy — leaving the
+// native Android Auto file with a refresh token ABS kills ~60s later, so the
+// car can no longer self-refresh. Chaining every call makes each
+// read-modify-write atomic with respect to the others.
+let autoCredsWriteChain: Promise<void> = Promise.resolve();
+
+export function writeAutoCreds(
+  address?: string | null,
+  token?: string | null,
+  libraryId?: string | null,
+  refreshToken?: string | null,
+  trustTokens = false,
+): Promise<void> {
+  const run = autoCredsWriteChain.then(() =>
+    writeAutoCredsImpl(address, token, libraryId, refreshToken, trustTokens)
+  );
+  // Keep the chain alive even if a write rejects, so one failure can't wedge
+  // every subsequent write. (writeAutoCredsImpl already swallows internally.)
+  autoCredsWriteChain = run.catch(() => {});
+  return run;
+}
+
+async function writeAutoCredsImpl(
   address?: string | null,
   token?: string | null,
   libraryId?: string | null,

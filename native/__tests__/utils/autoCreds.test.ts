@@ -158,6 +158,43 @@ describe("writeAutoCreds", () => {
     await expect(writeAutoCreds("http://abs.local", "tok")).resolves.toBeUndefined();
     expect(console.warn).toHaveBeenCalledWith("[AutoCreds] write failed", expect.any(Error));
   });
+
+  it("serializes concurrent writers so a mirror write preserves a concurrently-rotated pair", async () => {
+    // Stateful in-memory file so the read-modify-write is observable.
+    const move = FileSystem.moveAsync as jest.Mock;
+    let creds: string | null = null;
+    let tmp: string | null = null;
+    getInfo.mockImplementation(async (p: string) => ({
+      exists: p.endsWith(".tmp") ? tmp !== null : creds !== null,
+    }));
+    readStr.mockImplementation(async (p: string) => (p.endsWith(".tmp") ? tmp : creds) ?? "");
+    writeStr.mockImplementation(async (p: string, c: string) => {
+      if (p.endsWith(".tmp")) tmp = c;
+      else creds = c;
+    });
+    del.mockImplementation(async (p: string) => {
+      if (p.endsWith(".tmp")) tmp = null;
+      else creds = null;
+    });
+    move.mockImplementation(async () => {
+      creds = tmp;
+      tmp = null;
+    });
+
+    // Writer 1: a TRUSTED token-refresh persists a freshly-rotated pair.
+    const p1 = writeAutoCreds("http://abs.local", "t_new", "L", "r_new", true);
+    // Writer 2: an UNTRUSTED library-switch mirror carrying the STALE pair.
+    const p2 = writeAutoCreds("http://abs.local", "t_stale", "L", "r_stale", false);
+    await Promise.all([p1, p2]);
+
+    // Serialized: writer 2 ran AFTER writer 1, read the rotated pair, and — being
+    // untrusted with an existing refreshToken it doesn't recognize — KEPT it
+    // rather than clobbering it back to the dead {t_stale, r_stale}.
+    expect(creds).not.toBeNull();
+    const final = JSON.parse(creds!);
+    expect(final.token).toBe("t_new");
+    expect(final.refreshToken).toBe("r_new");
+  });
 });
 
 describe("writeAutoDownloads", () => {
