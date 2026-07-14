@@ -1433,19 +1433,25 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     expect(screen.getByText("Tools")).toBeTruthy();
   });
 
-  it("podcast: book-shaped entries (metadata/chapters/tools/share) hidden; history offered", async () => {
+  it("podcast: book-only entries (chapters/tools/share) hidden; metadata + history offered", async () => {
     setAdmin();
     routeApi(podcastItem);
+    const navigation = makeNavigation();
     await render(
-      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={makeNavigation()} />
+      <ItemDetailScreen route={{ params: { itemId: "pod1" } }} navigation={navigation} />
     );
     await screen.findByText("2 Episodes");
     await fireEvent.press(screen.getByLabelText("More actions"));
 
-    // Edit metadata is book-shaped (authors/series/ISBN) — podcasts ride with
-    // issue #56, so the row must not be offered on a podcast item.
-    expect(screen.queryByText("Edit metadata")).toBeNull();
+    // Edit metadata now covers podcasts too (issue #56's podcast admin work
+    // made the editor handle both shapes), so the row IS offered here.
+    expect(screen.getByText("Edit metadata")).toBeTruthy();
+    await fireEvent.press(screen.getByText("Edit metadata"));
+    expect(navigation.navigate).toHaveBeenCalledWith("EditMetadata", { libraryItemId: "pod1" });
+
+    await fireEvent.press(screen.getByLabelText("More actions"));
     expect(screen.getByText("Listening history")).toBeTruthy();
+    // Chapters/tools/share stay book-only.
     expect(screen.queryByText("Edit chapters")).toBeNull();
     expect(screen.queryByText("Tools")).toBeNull();
     expect(screen.queryByText("Share link")).toBeNull();

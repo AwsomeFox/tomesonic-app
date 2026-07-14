@@ -12,9 +12,14 @@ import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
+import { SectionHeader, NavRow, RowBase, Divider } from "../components/SettingsRows";
 import { api } from "../utils/api";
-import { useUserStore } from "../store/useUserStore";
+import { checkNewEpisodes } from "../utils/abs/podcasts";
+import { deleteLibraryItem } from "../utils/abs/items";
+import { useServerCapabilities } from "../utils/abs/capabilities";
+import { normalizeAbsError } from "../utils/abs/errors";
 import { showAppDialog } from "../store/useDialogStore";
+import { showSnackbar } from "../store/useSnackbarStore";
 
 /**
  * PodcastSettingsScreen — surfaces a single podcast's SERVER-managed
@@ -28,6 +33,11 @@ import { showAppDialog } from "../store/useDialogStore";
  * maxNewEpisodesToDownload,lastEpisodeCheck}` and writes them back via
  * `PATCH /api/items/{id}/media`. All write endpoints are admin-gated on the
  * server, so a non-admin sees the settings read-only with a note.
+ *
+ * Also the per-show admin remote (issue #56 P3): a strictly-admin "Manage"
+ * section links to PodcastEpisodes (browse/download the feed to the server),
+ * PodcastDownloadQueue, EditMetadata, and a typed-confirm "Remove podcast
+ * from server" (record-only vs also-delete-files → items.deleteLibraryItem).
  */
 
 // Friendly cron presets (label → 5-field cron). The raw value stays visible and
@@ -41,8 +51,12 @@ const CRON_PRESETS: { label: string; cron: string }[] = [
 
 // Admin-or-up decides whether the write controls are enabled. ABS marks these
 // endpoints admin-only; a full user object carries `type` ("root"/"admin") and a
-// `permissions.update` flag. On a restored (cold-start) session the store user
-// may only hold {id, username}, so we also read the authoritative /api/me below.
+// `permissions.update` flag. The STORE side of this gating now flows through
+// useServerCapabilities (isAdmin covers the role, canEditMetadata covers the
+// permissions.update fallback the old store check treated as admin-ish); this
+// helper remains for the authoritative /api/me response fetched below, which
+// hydrates gating on a restored (cold-start) session whose store user may only
+// hold {id, username}.
 function isAdminUser(u: any): boolean {
   return (
     !!u &&
@@ -173,10 +187,9 @@ function NumberField({
 
 export default function PodcastSettingsScreen({ navigation, route }: any) {
   const colors = useThemeColors();
+  const caps = useServerCapabilities();
   const params = route?.params || {};
   const libraryItemId: string | undefined = params.libraryItemId || params.item?.id;
-
-  const storeUser = useUserStore((s) => s.user);
 
   const [item, setItem] = useState<any>(params.item || null);
   const [serverUser, setServerUser] = useState<any>(null);
@@ -193,8 +206,16 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
   const [maxNew, setMaxNew] = useState("3");
   const [maxKeep, setMaxKeep] = useState("0");
 
-  // The authoritative user (server first, store fallback) drives admin gating.
-  const isAdmin = isAdminUser(serverUser) || isAdminUser(storeUser);
+  // The authoritative user (server /api/me first, capabilities-from-store
+  // fallback) drives admin gating. caps.isAdmin + caps.canEditMetadata
+  // reproduce the former isAdminUser(storeUser) semantics (role OR
+  // permissions.update).
+  const isAdmin = isAdminUser(serverUser) || caps.isAdmin || caps.canEditMetadata;
+  // The Manage section below is STRICTLY admin: episode downloads, the queue,
+  // and item deletion are role-gated on the server (permissions.update alone
+  // isn't enough), unlike the settings form's looser gate above.
+  const isStrictAdmin =
+    caps.isAdmin || serverUser?.type === "admin" || serverUser?.type === "root";
 
   const seedFromItem = (it: any) => {
     const media = it?.media || {};
@@ -380,9 +401,11 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
     try {
       // Fetch as many new episodes as the podcast is configured to pull each
       // check (maxNewEpisodesToDownload), not a hardcoded 3. Fall back to 3 (the
-      // server default) when the field isn't a valid count.
+      // server default) when the field isn't a valid count. Goes through the
+      // shared podcasts.checkNewEpisodes wrapper (same GET /api/podcasts/:id/
+      // checknew endpoint; failures arrive normalized as AbsError).
       const limit = parseCount(maxNew) ?? 3;
-      const res = await api.get(`/api/podcasts/${libraryItemId}/checknew?limit=${limit}`);
+      const data = await checkNewEpisodes(libraryItemId, limit);
       // Refresh the item so "Last checked" (and any media fields the server
       // touched during the check) reflect the just-completed run. Best-effort —
       // a refetch failure doesn't invalidate the check result we already have.
@@ -393,7 +416,6 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
       } catch (refetchErr) {
         console.warn("[PodcastSettings] post-check refetch failed", refetchErr);
       }
-      const data = res?.data;
       const eps: any[] = Array.isArray(data?.episodes)
         ? data.episodes
         : Array.isArray(data?.results)
@@ -419,18 +441,68 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
       });
     } catch (err: any) {
       console.warn("[PodcastSettings] checknew failed", err);
+      // checkNewEpisodes throws a normalized AbsError — same three-way copy as
+      // the old raw-axios branch (403 / reached-the-server / offline).
+      const kind = normalizeAbsError(err).kind;
       showAppDialog({
         title: "Couldn't check the feed",
         message:
-          err?.response?.status === 403
+          kind === "forbidden"
             ? "Only server admins can check this podcast's feed."
-            : err?.response
-            ? "The server couldn't check this podcast's feed right now."
-            : "You're offline. Reconnect and try again.",
+            : kind === "offline"
+            ? "You're offline. Reconnect and try again."
+            : "The server couldn't check this podcast's feed right now.",
       });
     } finally {
       setChecking(false);
     }
+  };
+
+  // ---- remove podcast from server (admin, destructive) ----------------------
+  const doRemovePodcast = async (hard: boolean) => {
+    if (!libraryItemId) return;
+    try {
+      await deleteLibraryItem(libraryItemId, hard ? { hard: true } : undefined);
+      showSnackbar({ message: "Podcast removed from server" });
+      // Both this screen and the podcast's ItemDetail underneath are about an
+      // item that no longer exists — pop past them both when we can.
+      if (typeof navigation.pop === "function") navigation.pop(2);
+      else navigation.goBack();
+    } catch (err) {
+      showAppDialog({
+        title: "Couldn't remove the podcast",
+        message: normalizeAbsError(err).message,
+      });
+    }
+  };
+
+  // Second step: record-only vs also-delete-files (hard=1) — asked explicitly
+  // AFTER the typed confirm so the file-deletion choice is never buried.
+  const askRemoveMode = () => {
+    showAppDialog({
+      title: "Also delete files?",
+      message:
+        "“Remove record only” keeps the audio files on disk (a re-scan can restore the podcast). “Also delete files” permanently deletes them. There is no undo.",
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove record only", onPress: () => void doRemovePodcast(false) },
+        { text: "Also delete files", style: "destructive", onPress: () => void doRemovePodcast(true) },
+      ],
+    });
+  };
+
+  // Typed confirm (AdminLibraryEdit's delete idiom): the destructive button
+  // stays disabled until the podcast title is typed back.
+  const confirmRemovePodcast = () => {
+    showAppDialog({
+      title: "Remove podcast from server",
+      message: `This removes "${podcastTitle}" and all of its episodes from the server for every user. Type the podcast title to confirm.`,
+      confirmInput: { placeholder: podcastTitle, requiredText: podcastTitle },
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        { text: "Remove", style: "destructive", onPress: askRemoveMode },
+      ],
+    });
   };
 
   const sectionLabel = (text: string) => (
@@ -729,6 +801,45 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
                 </Text>
               )}
             </Pressable>
+          ) : null}
+
+          {/* Manage — the per-show server-admin remote (issue #56 P3). Strictly
+              admin: every destination/action is role-gated on the server. */}
+          {isStrictAdmin && libraryItemId ? (
+            <>
+              <SectionHeader label="Manage" colors={colors} />
+              <NavRow
+                icon="podcast"
+                title="Browse & download episodes"
+                subtitle="Fetch the feed and download episodes to the server"
+                onPress={() => navigation.navigate("PodcastEpisodes", { libraryItemId })}
+                colors={colors}
+              />
+              <Divider colors={colors} />
+              <NavRow
+                icon="download"
+                title="Download queue"
+                subtitle="Server episode downloads for this podcast"
+                onPress={() => navigation.navigate("PodcastDownloadQueue", { libraryItemId })}
+                colors={colors}
+              />
+              <Divider colors={colors} />
+              <NavRow
+                icon="edit"
+                title="Edit details"
+                subtitle="Metadata, cover, and provider match"
+                onPress={() => navigation.navigate("EditMetadata", { libraryItemId })}
+                colors={colors}
+              />
+              <Divider colors={colors} />
+              <RowBase
+                icon="trash"
+                title="Remove podcast from server"
+                subtitle="Deletes the show for every user"
+                onPress={confirmRemovePodcast}
+                colors={colors}
+              />
+            </>
           ) : null}
         </ScrollView>
       )}

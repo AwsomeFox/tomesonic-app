@@ -10,12 +10,16 @@ jest.mock("../../utils/api", () => ({
 jest.mock("../../store/useDialogStore", () => ({
   showAppDialog: jest.fn(),
 }));
+jest.mock("../../store/useSnackbarStore", () => ({
+  showSnackbar: jest.fn(),
+}));
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react-native";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import PodcastSettingsScreen from "../../screens/PodcastSettingsScreen";
 import { api } from "../../utils/api";
 import { showAppDialog } from "../../store/useDialogStore";
+import { showSnackbar } from "../../store/useSnackbarStore";
 import { useUserStore } from "../../store/useUserStore";
 
 const initialUser = useUserStore.getState();
@@ -46,7 +50,12 @@ function mockGet({ me = ADMIN_ME, item = PODCAST_ITEM }: { me?: any; item?: any 
 }
 
 function makeNavigation() {
-  return { navigate: jest.fn(), goBack: jest.fn(), addListener: jest.fn(() => jest.fn()) } as any;
+  return {
+    navigate: jest.fn(),
+    goBack: jest.fn(),
+    pop: jest.fn(),
+    addListener: jest.fn(() => jest.fn()),
+  } as any;
 }
 
 async function renderScreen(params: any = { libraryItemId: "pod1" }) {
@@ -58,9 +67,12 @@ async function renderScreen(params: any = { libraryItemId: "pod1" }) {
 beforeEach(() => {
   useUserStore.setState(initialUser, true);
   (showAppDialog as jest.Mock).mockClear();
+  (showSnackbar as jest.Mock).mockClear();
   (api.get as jest.Mock).mockReset();
   (api.patch as jest.Mock).mockReset();
   (api.patch as jest.Mock).mockResolvedValue({ data: {} });
+  (api.delete as jest.Mock).mockReset();
+  (api.delete as jest.Mock).mockResolvedValue({ data: {} });
   mockGet();
 });
 
@@ -286,7 +298,13 @@ describe("PodcastSettingsScreen", () => {
 
     fireEvent.press(screen.getByLabelText("Check for new episodes now"));
 
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/api/podcasts/pod1/checknew?limit=3"));
+    // The checknew call now flows through podcasts.checkNewEpisodes, which
+    // hits the same GET /api/podcasts/:id/checknew path with limit as a param.
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith("/api/podcasts/pod1/checknew", {
+        params: { limit: 3 },
+      })
+    );
     await waitFor(() =>
       expect(showAppDialog).toHaveBeenCalledWith(
         expect.objectContaining({ title: "Found 2 new episodes" })
@@ -308,7 +326,9 @@ describe("PodcastSettingsScreen", () => {
     fireEvent.press(screen.getByLabelText("Check for new episodes now"));
 
     await waitFor(() =>
-      expect(api.get).toHaveBeenCalledWith("/api/podcasts/pod1/checknew?limit=5")
+      expect(api.get).toHaveBeenCalledWith("/api/podcasts/pod1/checknew", {
+        params: { limit: 5 },
+      })
     );
   });
 
@@ -396,5 +416,166 @@ describe("PodcastSettingsScreen", () => {
 
     // Store user is root → admin controls remain available.
     expect(screen.getByLabelText("Save podcast settings")).toBeTruthy();
+  });
+
+  // ---- Manage section (issue #56 P3): the per-show admin remote -------------
+
+  describe("Manage section", () => {
+    it("admin sees the Manage rows and each navigates with the libraryItemId", async () => {
+      const navigation = await renderScreen();
+      await screen.findByText("My Great Podcast");
+
+      expect(screen.getByText("Manage")).toBeTruthy();
+
+      // Each press is act-wrapped so TouchableOpacity's press animation timers
+      // settle in-scope — three bare presses would leak real timers into the
+      // next test and stall its initial render.
+      await act(async () => {
+        fireEvent.press(screen.getByText("Browse & download episodes"));
+      });
+      expect(navigation.navigate).toHaveBeenCalledWith("PodcastEpisodes", {
+        libraryItemId: "pod1",
+      });
+
+      await act(async () => {
+        fireEvent.press(screen.getByText("Download queue"));
+      });
+      expect(navigation.navigate).toHaveBeenCalledWith("PodcastDownloadQueue", {
+        libraryItemId: "pod1",
+      });
+
+      // "Edit details" reuses the existing EditMetadata route (frozen name).
+      await act(async () => {
+        fireEvent.press(screen.getByText("Edit details"));
+      });
+      expect(navigation.navigate).toHaveBeenCalledWith("EditMetadata", {
+        libraryItemId: "pod1",
+      });
+
+      expect(screen.getByText("Remove podcast from server")).toBeTruthy();
+    });
+
+    it("non-admin sees NO Manage section", async () => {
+      mockGet({ me: USER_ME });
+      await renderScreen();
+      await screen.findByText("My Great Podcast");
+
+      expect(screen.queryByText("Manage")).toBeNull();
+      expect(screen.queryByText("Browse & download episodes")).toBeNull();
+      expect(screen.queryByText("Download queue")).toBeNull();
+      expect(screen.queryByText("Edit details")).toBeNull();
+      expect(screen.queryByText("Remove podcast from server")).toBeNull();
+    });
+
+    it("remove flow: typed confirm pins the podcast title as requiredText (mismatch blocks in AppDialog)", async () => {
+      await renderScreen();
+      await screen.findByText("My Great Podcast");
+
+      fireEvent.press(screen.getByText("Remove podcast from server"));
+
+      await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+      const dialog = (showAppDialog as jest.Mock).mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Remove podcast from server");
+      // The typed-confirm gate: AppDialog keeps the destructive button disabled
+      // until the input matches requiredText — pin the exact contract here.
+      expect(dialog.confirmInput).toEqual({
+        placeholder: "My Great Podcast",
+        requiredText: "My Great Podcast",
+      });
+      const remove = dialog.buttons.find((b: any) => b.text === "Remove");
+      expect(remove.style).toBe("destructive");
+      // Nothing deleted before both dialogs run.
+      expect(api.delete).not.toHaveBeenCalled();
+    });
+
+    it("remove flow: 'Remove record only' → DELETE /api/items/pod1 with no hard param, snackbar, pop(2)", async () => {
+      const navigation = await renderScreen();
+      await screen.findByText("My Great Podcast");
+
+      fireEvent.press(screen.getByText("Remove podcast from server"));
+      await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+      const first = (showAppDialog as jest.Mock).mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Remove podcast from server");
+      first.buttons.find((b: any) => b.text === "Remove").onPress();
+
+      // Second dialog: record-only vs also-delete-files.
+      await waitFor(() =>
+        expect(
+          (showAppDialog as jest.Mock).mock.calls.some((c) => c[0]?.title === "Also delete files?")
+        ).toBe(true)
+      );
+      const second = (showAppDialog as jest.Mock).mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Also delete files?");
+      second.buttons.find((b: any) => b.text === "Remove record only").onPress();
+
+      // Soft delete: exactly one argument — no params, no hard flag.
+      await waitFor(() => expect(api.delete).toHaveBeenCalledWith("/api/items/pod1"));
+      expect(showSnackbar).toHaveBeenCalledWith({ message: "Podcast removed from server" });
+      // Pops past both this screen and the (now stale) ItemDetail beneath it.
+      await waitFor(() => expect(navigation.pop).toHaveBeenCalledWith(2));
+    });
+
+    it("remove flow: 'Also delete files' → DELETE /api/items/pod1 with hard=1", async () => {
+      await renderScreen();
+      await screen.findByText("My Great Podcast");
+
+      fireEvent.press(screen.getByText("Remove podcast from server"));
+      await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+      const first = (showAppDialog as jest.Mock).mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Remove podcast from server");
+      first.buttons.find((b: any) => b.text === "Remove").onPress();
+
+      await waitFor(() =>
+        expect(
+          (showAppDialog as jest.Mock).mock.calls.some((c) => c[0]?.title === "Also delete files?")
+        ).toBe(true)
+      );
+      const second = (showAppDialog as jest.Mock).mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Also delete files?");
+      const hardBtn = second.buttons.find((b: any) => b.text === "Also delete files");
+      expect(hardBtn.style).toBe("destructive");
+      hardBtn.onPress();
+
+      await waitFor(() =>
+        expect(api.delete).toHaveBeenCalledWith("/api/items/pod1", { params: { hard: 1 } })
+      );
+    });
+
+    it("remove failure surfaces a dialog and does NOT navigate away", async () => {
+      (api.delete as jest.Mock).mockRejectedValue(
+        Object.assign(new Error("nope"), { response: { status: 403 } })
+      );
+      const navigation = await renderScreen();
+      await screen.findByText("My Great Podcast");
+
+      fireEvent.press(screen.getByText("Remove podcast from server"));
+      await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+      const first = (showAppDialog as jest.Mock).mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Remove podcast from server");
+      first.buttons.find((b: any) => b.text === "Remove").onPress();
+      await waitFor(() =>
+        expect(
+          (showAppDialog as jest.Mock).mock.calls.some((c) => c[0]?.title === "Also delete files?")
+        ).toBe(true)
+      );
+      const second = (showAppDialog as jest.Mock).mock.calls
+        .map((c) => c[0])
+        .find((d) => d.title === "Also delete files?");
+      second.buttons.find((b: any) => b.text === "Remove record only").onPress();
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Couldn't remove the podcast" })
+        )
+      );
+      expect(navigation.pop).not.toHaveBeenCalled();
+      expect(showSnackbar).not.toHaveBeenCalled();
+    });
   });
 });

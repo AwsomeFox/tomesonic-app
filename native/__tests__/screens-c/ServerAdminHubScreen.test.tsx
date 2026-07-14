@@ -130,6 +130,7 @@ describe("ServerAdminHubScreen", () => {
       // Rows.
       for (const title of [
         "Libraries",
+        "Podcasts",
         "Maintenance",
         "Users",
         "Listening sessions",
@@ -226,6 +227,7 @@ describe("ServerAdminHubScreen", () => {
 
       const expected: Array<[RegExp, string]> = [
         [/^Libraries,/, "AdminLibraries"],
+        [/^Podcasts,/, "PodcastAddSearch"],
         [/^Maintenance,/, "AdminMaintenance"],
         [/^Users,/, "AdminUsers"],
         [/^Listening sessions,/, "AdminSessions"],
