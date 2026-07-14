@@ -26,6 +26,9 @@ const notifications = jest.mocked(downloadNotifications);
 // headers/body/abort) and lets the test fire success/network-error/progress.
 class FakeXHR {
   static instances: FakeXHR[] = [];
+  // When set, the NEXT send() throws synchronously (simulates a malformed
+  // header/body throwing on the retry attempt).
+  static failNextSend = false;
   static latest(): FakeXHR {
     return FakeXHR.instances[FakeXHR.instances.length - 1];
   }
@@ -56,6 +59,10 @@ class FakeXHR {
   }
   send(body: any) {
     this.body = body;
+    if (FakeXHR.failNextSend) {
+      FakeXHR.failNextSend = false;
+      throw new Error("send boom");
+    }
     this.sent = true;
   }
   abort() {
@@ -95,6 +102,7 @@ beforeEach(() => {
 
   originalXHR = (global as any).XMLHttpRequest;
   FakeXHR.instances = [];
+  FakeXHR.failNextSend = false;
   (global as any).XMLHttpRequest = FakeXHR as any;
 });
 
@@ -255,6 +263,19 @@ describe("uploadMediaFiles — cancel", () => {
     // A stray cancel after completion must not clear the completion notification.
     handle.cancel();
     expect(notifications.clear).not.toHaveBeenCalled();
+  });
+
+  it("a synchronous throw in the retry's send() settles the promise (no leak)", async () => {
+    jest.useFakeTimers();
+    const handle = uploadMediaFiles(params(), { notifyId: "up1", notifyTitle: "T" });
+    const rejection = expect(handle.promise).rejects.toThrow("send boom");
+
+    FakeXHR.latest().networkFail(); // first attempt drops → schedules retry
+    FakeXHR.failNextSend = true; // the retry's send() will throw synchronously
+    jest.advanceTimersByTime(2000);
+
+    await rejection; // routed through finishErr, not leaked
+    expect(notifications.clear).toHaveBeenCalledWith("up1");
   });
 
   it("cancelling during the retry backoff drops the pending retry (no new request)", async () => {

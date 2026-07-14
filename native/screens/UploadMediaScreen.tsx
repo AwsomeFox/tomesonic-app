@@ -370,7 +370,9 @@ export default function UploadMediaScreen({ navigation, route }: any) {
             <View
               key={f.uri}
               testID={`file-row-${i}`}
-              accessible
+              // NOT `accessible`: marking the row a single a11y element would
+              // swallow the nested Remove button. The name/size Texts read
+              // individually and Remove keeps its own label/role.
               accessibilityLabel={`File: ${f.name}${
                 f.size ? `, ${formatSize(f.size)}` : ""
               }`}

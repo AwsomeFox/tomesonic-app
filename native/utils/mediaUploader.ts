@@ -172,7 +172,14 @@ export function uploadMediaFiles(
         retried = true;
         retryTimer = setTimeout(() => {
           retryTimer = null;
-          if (!cancelled) send();
+          if (cancelled) return;
+          // A synchronous throw in the retry's send() would otherwise escape
+          // asynchronously (unhandled) and leave the promise unsettled.
+          try {
+            send();
+          } catch (e: any) {
+            finishErr(e instanceof Error ? e : new Error("Upload failed to start."));
+          }
         }, RETRY_DELAY_MS);
         return;
       }
