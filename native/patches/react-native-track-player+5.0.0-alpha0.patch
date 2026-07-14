@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-index 5a1b2bf..84f8b59 100644
+index 5a1b2bf..d9b4e7a 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 @@ -14,7 +14,18 @@ open class AudioItem(
@@ -22,7 +22,7 @@ index 5a1b2bf..84f8b59 100644
  ) {
      fun toMediaItem(): MediaItem {
          val extras = Bundle().apply {
-@@ -30,24 +41,72 @@ open class AudioItem(
+@@ -30,24 +41,138 @@ open class AudioItem(
              putString("type", type.toString())
              putString("uri", audioUrl)
          }
@@ -30,7 +30,16 @@ index 5a1b2bf..84f8b59 100644
 +        val mdBuilder = MediaMetadata.Builder()
              .setTitle(title)
              .setArtist(artist)
-             .setArtworkUri(Uri.parse(artwork))
+-            .setArtworkUri(Uri.parse(artwork))
++            // Media3 copies this artworkUri string VERBATIM into the legacy
++            // MediaMetadataCompat *_ART_URI keys, and the Android Auto launcher
++            // mini-player loads THAT uri in the car's own process. A downloaded
++            // book's cover is a private file:// path the car process cannot read
++            // (different UID) → blank mini-player tile, even though the in-process
++            // full player renders it fine from the same file. Re-expose a local
++            // cover through the app's FileProvider as a cross-process-readable
++            // content:// uri so the car can load it (http covers pass through).
++            .setArtworkUri(Uri.parse(carReadableArtworkUri(artwork) ?: artwork))
              .setExtras(extras)
 -            .build()
 -        return MediaItem.Builder()
@@ -64,6 +73,64 @@ index 5a1b2bf..84f8b59 100644
          fun fromMediaItem(item: MediaItem): AudioItem {
              return item.localConfiguration!!.tag as AudioItem
          }
++
++        // Application context, set once from MusicService.onCreate — needed to
++        // build FileProvider content:// uris and grant the Android Auto host
++        // read access. Null before the service starts (then artwork passes
++        // through unchanged, which is the previous behavior).
++        @Volatile
++        @JvmStatic
++        var appContext: android.content.Context? = null
++
++        // content:// uris resolved for a local path, cached so a chaptered book
++        // (one cover, many queue items) does a single FileProvider round-trip.
++        private val contentUriCache = java.util.concurrent.ConcurrentHashMap<String, String>()
++
++        /**
++         * Turn a LOCAL cover path (file:// or bare absolute) into a content://
++         * uri the Android Auto system process can read, and grant that process
++         * read permission. http(s)/content/android.resource uris (already
++         * cross-process readable) and unknown/missing files pass through
++         * unchanged. Never throws — any failure returns the original string so
++         * the in-process surfaces keep working exactly as before.
++         */
++        private fun carReadableArtworkUri(artwork: String?): String? {
++            if (artwork.isNullOrEmpty()) return artwork
++            val ctx = appContext ?: return artwork
++            val path = when {
++                artwork.startsWith("file://") -> Uri.parse(artwork).path ?: return artwork
++                artwork.startsWith("/") -> artwork
++                else -> return artwork // http(s)/content/android.resource: already readable
++            }
++            contentUriCache[path]?.let { return it }
++            return try {
++                val file = java.io.File(path)
++                if (!file.exists()) return artwork
++                // The Expo FileSystemFileProvider already exposes the whole
++                // files/ + cache/ dirs (where downloaded covers + the
++                // now-playing cover cache live), so no new provider is needed.
++                val authority = "${ctx.packageName}.FileSystemFileProvider"
++                val uri = androidx.core.content.FileProvider.getUriForFile(ctx, authority, file)
++                // The framework's per-controller grant isn't reliable for
++                // now-playing art across head units — grant the AA / Automotive
++                // hosts explicitly.
++                for (pkg in arrayOf(
++                    "com.google.android.projection.gearhead",
++                    "com.google.android.apps.automotive.templates.host",
++                    "com.google.android.gms"
++                )) {
++                    try {
++                        ctx.grantUriPermission(pkg, uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
++                    } catch (_: Exception) {}
++                }
++                val str = uri.toString()
++                if (contentUriCache.size >= 8) contentUriCache.clear()
++                contentUriCache[path] = str
++                str
++            } catch (e: Exception) {
++                artwork
++            }
++        }
 +
 +        // One book cover backs every chapter queue item, so cache the encoded
 +        // bytes by path — a whole queue costs a single decode.
@@ -240,7 +307,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..8fe0b47 100644
+index b495b5a..31aedd7 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -334,7 +401,16 @@ index b495b5a..8fe0b47 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +157,1383 @@ class MusicService : HeadlessJsMediaService() {
+@@ -92,33 +152,1392 @@ class MusicService : HeadlessJsMediaService() {
+ 
+     @ExperimentalCoroutinesApi
+     override fun onCreate() {
++        // Give AudioItem the context it needs to build FileProvider content://
++        // artwork uris (so Android Auto's out-of-process mini-player can read a
++        // downloaded book's local cover) — set before any track is built.
++        com.doublesymmetry.kotlinaudio.models.AudioItem.appContext = applicationContext
+         Timber.plant(object : Timber.DebugTree() {
+             override fun createStackElementTag(element: StackTraceElement): String? {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -1731,7 +1807,7 @@ index b495b5a..8fe0b47 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1621,77 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1625,77 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1811,7 +1887,7 @@ index b495b5a..8fe0b47 100644
          observeEvents()
      }
  
-@@ -293,9 +1774,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1778,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1823,7 +1899,7 @@ index b495b5a..8fe0b47 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1787,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1791,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1885,7 +1961,7 @@ index b495b5a..8fe0b47 100644
          }
      }
  
-@@ -395,6 +1910,266 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,6 +1914,266 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -2152,7 +2228,7 @@ index b495b5a..8fe0b47 100644
      @MainThread
      fun stop() {
          player.stop()
-@@ -449,6 +2224,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +2228,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -2163,7 +2239,7 @@ index b495b5a..8fe0b47 100644
      }
  
      @MainThread
-@@ -515,6 +2294,237 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2298,237 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2401,7 +2477,7 @@ index b495b5a..8fe0b47 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2727,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2731,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2410,7 +2486,7 @@ index b495b5a..8fe0b47 100644
              return
          }
  
-@@ -780,8 +2790,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2794,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2426,7 +2502,7 @@ index b495b5a..8fe0b47 100644
          return mediaSession
      }
  
-@@ -792,13 +2808,49 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2812,49 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2478,7 +2554,7 @@ index b495b5a..8fe0b47 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2957,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2961,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2739,7 +2815,7 @@ index b495b5a..8fe0b47 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3202,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3206,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2769,7 +2845,7 @@ index b495b5a..8fe0b47 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3234,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3238,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2785,7 +2861,7 @@ index b495b5a..8fe0b47 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3250,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3254,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
