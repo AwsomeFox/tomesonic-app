@@ -56,6 +56,7 @@ describe("usePlaybackStore server-position sync", () => {
     mockGet.mockReset();
     // The live player position the freshest-wins compares the server against.
     jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 100, duration: 3000, buffered: 0 } as any);
+    jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0 as any);
     jest.mocked(TrackPlayer.seekTo).mockClear();
     jest.mocked(TrackPlayer.play).mockClear();
   });
@@ -134,6 +135,105 @@ describe("usePlaybackStore server-position sync", () => {
       expect(mockGet).not.toHaveBeenCalled();
     });
 
+    it("does NOT adopt when the server is newer but within the freshness margin (unsynced-local safety)", async () => {
+      setupLocal();
+      storageHelper.setLastPlaybackSession({ libraryItemId: "item1", updatedAt: BASE });
+      // Newer than local by only 5s (< 10s margin) — could be an in-flight sync
+      // race; local unsynced progress must not be clobbered.
+      mockGet.mockResolvedValue({ data: { currentTime: 500, lastUpdate: BASE + 5_000 } } as any);
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(r.status).toBe("up-to-date");
+      expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
+    });
+
+    it("maps the live absolute position through the ACTIVE chapter for the freshest-wins epsilon", async () => {
+      setupLocal({
+        chapterQueue: true,
+        chapters: [
+          { start: 0, end: 300 },
+          { start: 300, end: 600 },
+        ],
+      });
+      storageHelper.setLastPlaybackSession({ libraryItemId: "item1", updatedAt: BASE - 60_000 });
+      jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1 as any);
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 50, duration: 300, buffered: 0 } as any);
+      // Mapped live position = chapters[1].start(300) + 50 = 350. Server is newer
+      // but only 1s ahead of the MAPPED position → within epsilon → no adopt.
+      // (A naive use of the raw store position 100 would wrongly adopt.)
+      mockGet.mockResolvedValue({ data: { currentTime: 351, lastUpdate: BASE } } as any);
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(r.status).toBe("up-to-date");
+      expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
+    });
+
+    it("adopts and seeks for a fresher podcast-episode server position", async () => {
+      setupLocal({ currentSession: { id: "s", libraryItemId: "item1", episodeId: "ep1" } });
+      storageHelper.setLastPlaybackSession({
+        libraryItemId: "item1",
+        episodeId: "ep1",
+        updatedAt: BASE - 60_000,
+      });
+      mockGet.mockResolvedValue({ data: { currentTime: 400, lastUpdate: BASE } } as any);
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(mockGet).toHaveBeenCalledWith("/api/me/progress/item1/ep1");
+      expect(r).toEqual({ status: "adopted", position: 400 });
+      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(400);
+    });
+
+    it("reports no-session when the session has no item id", async () => {
+      setupLocal({ currentSession: { id: "s" } });
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(r.status).toBe("no-session");
+      expect(mockGet).not.toHaveBeenCalled();
+    });
+
+    it("bails to no-session when the book switches during the fetch (liveness re-check)", async () => {
+      setupLocal();
+      storageHelper.setLastPlaybackSession({ libraryItemId: "item1", updatedAt: BASE - 60_000 });
+      mockGet.mockImplementation(async () => {
+        usePlaybackStore.setState({ currentSession: { id: "s2", libraryItemId: "item2" } } as any);
+        return { data: { currentTime: 500, lastUpdate: BASE } } as any;
+      });
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(r.status).toBe("no-session");
+      expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
+    });
+
+    it("does not issue the GET when the connectivity pre-check reports offline", async () => {
+      setupLocal();
+      storageHelper.setLastPlaybackSession({ libraryItemId: "item1", updatedAt: BASE - 60_000 });
+      const NetInfo = require("@react-native-community/netinfo").default;
+      jest
+        .mocked(NetInfo.fetch)
+        .mockResolvedValueOnce({ isConnected: false, isInternetReachable: false } as any);
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(r.status).toBe("unavailable");
+      expect(mockGet).not.toHaveBeenCalled();
+    });
+
+    it("reports unavailable when the server returns no usable progress row", async () => {
+      setupLocal();
+      storageHelper.setLastPlaybackSession({ libraryItemId: "item1", updatedAt: BASE - 60_000 });
+      mockGet.mockResolvedValue({ data: {} } as any); // no currentTime field
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(r.status).toBe("unavailable");
+      expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
+    });
+
     it("hits the composite episode endpoint for a podcast-episode session", async () => {
       setupLocal({ currentSession: { id: "s", libraryItemId: "item1", episodeId: "ep1" } });
       storageHelper.setLastPlaybackSession({
@@ -162,12 +262,49 @@ describe("usePlaybackStore server-position sync", () => {
       await usePlaybackStore.getState().play();
 
       expect(mockGet).toHaveBeenCalledWith("/api/me/progress/item1");
-      // Adopted the server position; the adopt supersedes the generic auto-rewind
-      // (a single seek to exactly the other device's spot, not a nudge back).
-      expect(TrackPlayer.seekTo).toHaveBeenCalledTimes(1);
-      expect(TrackPlayer.seekTo).toHaveBeenCalledWith(800);
+      // OPTIMISTIC: audio starts first (no latency), THEN the catch-up seeks —
+      // so the last seek lands on the fresher server position.
       expect(TrackPlayer.play).toHaveBeenCalled();
+      expect(TrackPlayer.seekTo).toHaveBeenLastCalledWith(800);
+      expect(usePlaybackStore.getState().position).toBe(800);
       expect(usePlaybackStore.getState().isPlaying).toBe(true);
+    });
+
+    it("starts audio BEFORE the server catch-up resolves (no resume latency)", async () => {
+      setupLocal({ isPlaying: true });
+      await usePlaybackStore.getState().pause();
+      // Record call order: TrackPlayer.play must fire before the progress GET.
+      const order: string[] = [];
+      jest.mocked(TrackPlayer.play).mockImplementationOnce(async () => {
+        order.push("play");
+      });
+      mockGet.mockImplementation(async () => {
+        order.push("get");
+        return { data: { currentTime: 800, lastUpdate: BASE + 300_000 } } as any;
+      });
+      jest.setSystemTime(BASE + 60_000);
+
+      await usePlaybackStore.getState().play();
+
+      expect(order).toEqual(["play", "get"]);
+    });
+
+    it("uses a strict pause-gap threshold — exactly 15s does not trigger, just over does", async () => {
+      setupLocal({ isPlaying: true });
+      await usePlaybackStore.getState().pause(); // _lastPausedAt = BASE
+      mockGet.mockClear();
+      jest.setSystemTime(BASE + 15_000); // exactly the threshold → NOT > threshold
+      await usePlaybackStore.getState().play();
+      expect(mockGet).not.toHaveBeenCalled();
+
+      // Re-pause and cross just past the threshold.
+      jest.mocked(TrackPlayer.getProgress).mockResolvedValue({ position: 100, duration: 3000, buffered: 0 } as any);
+      await usePlaybackStore.getState().pause(); // _lastPausedAt = BASE + 15000
+      storageHelper.setLastPlaybackSession({ libraryItemId: "item1", updatedAt: BASE - 60_000 });
+      mockGet.mockResolvedValue({ data: { currentTime: 500, lastUpdate: BASE + 300_000 } } as any);
+      jest.setSystemTime(BASE + 15_000 + 15_001); // gap = 15001 > threshold
+      await usePlaybackStore.getState().play();
+      expect(mockGet).toHaveBeenCalledWith("/api/me/progress/item1");
     });
 
     it("does NOT hit the server on a quick pause/resume (below the gap threshold)", async () => {

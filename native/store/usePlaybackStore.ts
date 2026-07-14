@@ -2584,8 +2584,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           );
           if (
             typeof serverProg2?.currentTime === "number" &&
-            serverAt2 > localAt2 + 10000 &&
-            Math.abs(serverProg2.currentTime - startAbs) > 2
+            isServerProgressFresher(serverProg2.currentTime, serverAt2, startAbs, localAt2)
           ) {
             console.log(
               `[PlaybackStore] Server position is fresher (${serverProg2.currentTime}s vs ${startAbs}s) — resuming from server.`
@@ -2796,28 +2795,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         }
       } catch {}
     }
-    // Cross-device catch-up (tablet ↔ phone): if this session sat paused long
-    // enough that another device could have moved the position on, check the
-    // LIVE server progress BEFORE resuming and jump to it when it is fresher.
-    // Gated on a real pause gap so a quick pause/resume tap never hits the
-    // network; bounded and offline-safe via syncPositionFromServer. An adopted
-    // server position is authoritative — it supersedes the sleep/auto rewind
-    // below (we want exactly the other device's spot, not a nudge back).
-    if (
-      !isCasting &&
-      _lastPausedAt != null &&
-      Date.now() - _lastPausedAt > AUTO_SERVER_SYNC_MIN_PAUSE_MS
-    ) {
-      try {
-        const r = await get().syncPositionFromServer();
-        if (r.status === "adopted") {
-          _lastPausedAt = null;
-          _sleepRewindPending = false;
-        }
-      } catch {}
-      // A closePlayback may have landed during the up-to-3s await above.
-      if (!get().currentSession) return;
-    }
+    // Snapshot the pause gap BEFORE the auto-rewind block clears _lastPausedAt —
+    // it decides (below, AFTER playback has started) whether to run the
+    // cross-device server-position catch-up.
+    const pausedGapMs = _lastPausedAt != null ? Date.now() - _lastPausedAt : null;
     // Sleep-timer "rewind on wake": when the sleep timer paused playback, the
     // next resume rewinds a dedicated amount so you don't lose your place after
     // dozing off. When the toggle is OFF we fall through to today's generic
@@ -2875,6 +2856,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     await TrackPlayer.play();
     if (!get().currentSession) return;
     set({ isPlaying: true });
+    // Cross-device catch-up (tablet ↔ phone), OPTIMISTIC: audio has already
+    // started, so a slow-but-online server never delays the resume. If this
+    // session sat paused long enough that another device could have moved the
+    // position on, check the LIVE server progress and jump to it when fresher —
+    // a brief seek-in-flight rather than silence. Gated on a real pause gap so
+    // quick pause/resume taps never hit the network; bounded + offline-safe.
+    if (pausedGapMs != null && pausedGapMs > AUTO_SERVER_SYNC_MIN_PAUSE_MS) {
+      try {
+        await get().syncPositionFromServer();
+      } catch {}
+    }
   },
 
   pause: async () => {

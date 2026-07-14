@@ -424,6 +424,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
       const liveItemId = live?.libraryItemId || live?.libraryItem?.id;
       if (liveItemId && liveItemId === item.id) {
         const r = await usePlaybackStore.getState().syncPositionFromServer();
+        // "no-session" means the live session ended between the tap and here —
+        // the network was fine, so stay silent rather than cry a network error.
+        if (r.status === "no-session") return;
         showSnackbar({
           message:
             r.status === "adopted"
@@ -434,9 +437,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         });
         return;
       }
-      // Not the live session — refresh the displayed progress from the server.
+      // Not the live session — refresh the displayed progress from the server so
+      // the Continue button / badge reflect where another device left off. Await
+      // BOTH the progress load and the item refetch before confirming, so the
+      // snackbar can't claim success ahead of the data it depends on.
       await useUserStore.getState().loadMediaProgress();
-      refetchItem();
+      await refetchItem();
       showSnackbar({ message: "Progress refreshed from server" });
     } catch {
       showSnackbar({ message: "Couldn't reach the server" });
