@@ -6,6 +6,7 @@ import {
   onPlaybackError,
   recoverPlaybackIfNeeded,
 } from "./usePlaybackStore";
+import { parsePlayMediaId } from "../utils/playMediaId";
 
 // Cycles through the same set the in-app speed control offers.
 const SPEEDS = [0.8, 1.0, 1.2, 1.5, 1.75, 2.0, 3.0];
@@ -232,13 +233,11 @@ export async function playbackService() {
     const paused = event?.paused === true;
     // A "@@<seconds>" suffix (from the Android Auto Bookmarks row, or the
     // native handoff's live position) means: start this book, then seek to it.
-    const [main, bookmarkTime] = raw.split("@@");
-    const [itemId, episodeId] = main.split("::");
+    const { itemId, episodeId, bookmarkSeconds } = parsePlayMediaId(raw, { hasPrefix: false });
     try {
-      const ok = await usePlaybackStore.getState().startPlayback(itemId, episodeId || undefined);
-      if (ok && bookmarkTime) {
-        const t = Number(bookmarkTime);
-        if (!isNaN(t) && t > 0) await usePlaybackStore.getState().seek(t);
+      const ok = await usePlaybackStore.getState().startPlayback(itemId, episodeId);
+      if (ok && bookmarkSeconds !== undefined && !isNaN(bookmarkSeconds) && bookmarkSeconds > 0) {
+        await usePlaybackStore.getState().seek(bookmarkSeconds);
       }
       // startPlayback always begins playing; a paused handoff must land paused.
       if (ok && paused) await usePlaybackStore.getState().pause();
