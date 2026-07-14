@@ -122,6 +122,9 @@ export default function UploadMediaScreen({ navigation, route }: any) {
   // before setBusy(true) has flushed).
   const busyRef = useRef(false);
   const handleRef = useRef<MediaUploadHandle | null>(null);
+  // Set when the user taps Cancel so the promise rejection isn't surfaced as a
+  // failure dialog (cancel already tore everything down).
+  const cancelledRef = useRef(false);
   // Stable per-mount id for the upload notification.
   const notifyIdRef = useRef(`upload-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
   // Post-await UI (the completion/failure dialog + goBack) only fires while
@@ -211,7 +214,10 @@ export default function UploadMediaScreen({ navigation, route }: any) {
   const pickFiles = async () => {
     const res = await DocumentPicker.getDocumentAsync({
       multiple: true,
-      copyToCacheDirectory: true,
+      // Stream from the original content:// URI — copying a multi-hundred-MB
+      // audiobook into the app cache would double disk use and defeat the whole
+      // streaming design.
+      copyToCacheDirectory: false,
       type: ["audio/*", "application/epub+zip", "application/octet-stream"],
     });
     // SDK-57 result shape: { canceled, assets: [...] | null }.
@@ -228,6 +234,7 @@ export default function UploadMediaScreen({ navigation, route }: any) {
   const doUpload = async () => {
     if (busyRef.current || !selectedLibrary || !selectedFolder || !files.length) return;
     busyRef.current = true;
+    cancelledRef.current = false;
     setBusy(true);
     setUploading(true);
     setProgress(0);
@@ -263,7 +270,9 @@ export default function UploadMediaScreen({ navigation, route }: any) {
         buttons: [{ text: "Done", onPress: () => navigation.goBack() }],
       });
     } catch (e) {
-      if (!mountedRef.current) return;
+      // A user-initiated cancel rejects the promise too, but that's not a
+      // failure — the Cancel button already tore everything down silently.
+      if (!mountedRef.current || cancelledRef.current) return;
       const message =
         e instanceof AbsError
           ? normalizeAbsError(e).message
@@ -293,6 +302,7 @@ export default function UploadMediaScreen({ navigation, route }: any) {
   };
 
   const cancelUpload = () => {
+    cancelledRef.current = true;
     handleRef.current?.cancel();
   };
 

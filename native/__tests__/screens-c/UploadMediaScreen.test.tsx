@@ -343,6 +343,13 @@ describe("UploadMediaScreen — upload", () => {
       fireEvent.press(screen.getByTestId("upload-cancel"));
     });
     expect(cancelFn).toHaveBeenCalledTimes(1);
+
+    // The cancel rejects the upload promise, but cancellation is user-initiated
+    // — it must NOT surface an "Upload failed" dialog.
+    await act(async () => {
+      rejectUpload(new Error("Upload cancelled"));
+    });
+    expect(dialogByTitle("Upload failed")).toBeUndefined();
   });
 
   it("success shows the 'Upload complete' dialog whose Done pops back", async () => {
