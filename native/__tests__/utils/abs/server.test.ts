@@ -21,6 +21,7 @@ import {
   getBackups,
   createBackup,
   deleteBackup,
+  applyBackup,
   buildBackupDownloadUrl,
   getServerLogs,
   purgeCache,
@@ -68,6 +69,22 @@ describe("backups", () => {
     jest.mocked(api.delete).mockResolvedValue(ok({ backups: [] }));
     await expect(deleteBackup("b1")).resolves.toEqual({ backups: [] });
     expect(api.delete).toHaveBeenCalledWith("/api/backups/b1");
+  });
+
+  it("applyBackup → GET /api/backups/:id/apply (the side-effecting restore GET)", async () => {
+    jest.mocked(api.get).mockResolvedValue(ok());
+    await expect(applyBackup("b1")).resolves.toBeUndefined();
+    expect(api.get).toHaveBeenCalledWith("/api/backups/b1/apply");
+  });
+
+  it("applyBackup with no response rejects as AbsError kind 'offline' (expected mid-restore drop)", async () => {
+    // The restore drops every connection, so the common outcome is an axios
+    // error WITHOUT a response — the screen relies on the "offline" kind to
+    // tell the expected drop apart from a real server refusal.
+    jest.mocked(api.get).mockRejectedValue(new Error("Network Error"));
+    const err = await applyBackup("b1").catch((e) => e);
+    expect(err).toBeInstanceOf(AbsError);
+    expect(err.kind).toBe("offline");
   });
 
   it("buildBackupDownloadUrl builds the tokened URL / null without a session", () => {
