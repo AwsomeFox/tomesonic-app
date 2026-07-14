@@ -34,6 +34,10 @@ import DiscoverScreen from "../screens/DiscoverScreen";
 import GenreBrowseScreen from "../screens/GenreBrowseScreen";
 import YearInReviewScreen from "../screens/YearInReviewScreen";
 import PodcastSettingsScreen from "../screens/PodcastSettingsScreen";
+import PodcastEpisodesScreen from "../screens/PodcastEpisodesScreen";
+import PodcastDownloadQueueScreen from "../screens/PodcastDownloadQueueScreen";
+import PodcastAddSearchScreen from "../screens/PodcastAddSearchScreen";
+import PodcastFeedPreviewScreen from "../screens/PodcastFeedPreviewScreen";
 import ServerAdminHubScreen from "../screens/ServerAdminHubScreen";
 import AdminLibrariesScreen from "../screens/AdminLibrariesScreen";
 import AdminLibraryEditScreen from "../screens/AdminLibraryEditScreen";
@@ -267,6 +271,14 @@ export default function AppNavigator() {
             <Stack.Screen name="AdminMaintenance" component={AdminMaintenanceScreen} />
             <Stack.Screen name="AdminServerSettings" component={AdminServerSettingsScreen} />
             <Stack.Screen name="AdminApiKeys" component={AdminApiKeysScreen} />
+            {/* Podcast administration (issue #56): per-show feed browsing /
+                server-side episode downloads + the download queue. */}
+            <Stack.Screen name="PodcastEpisodes" component={PodcastEpisodesScreen} />
+            <Stack.Screen name="PodcastDownloadQueue" component={PodcastDownloadQueueScreen} />
+            {/* Find & add shows (iTunes search / RSS URL / OPML) and the RSS
+                feed preview — the entry point is the ServerAdminHub Podcasts row. */}
+            <Stack.Screen name="PodcastAddSearch" component={PodcastAddSearchScreen} />
+            <Stack.Screen name="PodcastFeedPreview" component={PodcastFeedPreviewScreen} />
             {/* Item-scoped editors + non-admin extras from the same plan. */}
             <Stack.Screen name="EditMetadata" component={EditMetadataScreen} />
             <Stack.Screen name="ChapterEditor" component={ChapterEditorScreen} />

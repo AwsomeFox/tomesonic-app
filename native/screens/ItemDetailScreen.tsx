@@ -2947,9 +2947,9 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             More actions
           </Text>
         </View>
-        {/* Books only: the editor is book-shaped (authors/series/ISBN) —
-            podcast metadata editing rides with issue #56. */}
-        {capabilities.canEditMetadata && !isPodcastItem ? (
+        {/* Books AND podcasts: the editor handles both shapes since issue #56
+            (podcast metadata/cover editing landed with the podcast admin work). */}
+        {capabilities.canEditMetadata ? (
           <RowBase
             icon="edit"
             title="Edit metadata"

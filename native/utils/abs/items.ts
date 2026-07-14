@@ -14,6 +14,7 @@
  *   DELETE /api/tools/item/:id/encode-m4b        (admin)
  *   POST   /api/tools/item/:id/embed-metadata?forceEmbedChapters=1&backup=1 (admin)
  *   GET    /api/items/:id/download               (zip; `download` perm — auth-target builder below)
+ *   DELETE /api/items/:id?hard=1                 (`delete` perm; hard=1 also deletes files)
  *   POST   /api/share/mediaitem                  (admin; mediaItemId is the MEDIA id, not libraryItemId)
  *   DELETE /api/share/mediaitem/:id
  *
@@ -151,6 +152,20 @@ export async function embedMetadata(
       },
     })
   );
+}
+
+/**
+ * DESTRUCTIVE: delete a library item. A soft delete (no opts) removes the
+ * library record only; `hard: true` adds ?hard=1, which ALSO deletes the
+ * item's files from disk. There is no undo for either — callers must confirm
+ * with the user before invoking.
+ */
+export async function deleteLibraryItem(
+  itemId: string,
+  opts?: { hard?: boolean }
+): Promise<void> {
+  const url = `/api/items/${encodeURIComponent(itemId)}`;
+  await absRequest(() => (opts?.hard ? api.delete(url, { params: { hard: 1 } }) : api.delete(url)));
 }
 
 /**

@@ -216,6 +216,12 @@ export default function ServerAdminHubScreen({ navigation }: any) {
           route: "AdminLibraries",
         },
         {
+          icon: "podcast",
+          title: "Podcasts",
+          subtitle: "Search, add shows, and import OPML",
+          route: "PodcastAddSearch",
+        },
+        {
           icon: "refresh",
           title: "Maintenance",
           subtitle: "Tags, genres, narrators, and cache",

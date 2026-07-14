@@ -44,6 +44,7 @@ import * as server from "../../utils/abs/server";
 import * as email from "../../utils/abs/email";
 import * as feeds from "../../utils/abs/feeds";
 import * as notifications from "../../utils/abs/notifications";
+import * as podcasts from "../../utils/abs/podcasts";
 import * as me from "../../utils/abs/me";
 import * as tasks from "../../utils/abs/tasks";
 import * as capabilities from "../../utils/abs/capabilities";
@@ -103,6 +104,22 @@ const CONTRACT: Array<{
   { name: "embedMetadata", invoke: () => items.embedMetadata("ITEM"), method: "post", path: "/api/tools/item/ITEM/embed-metadata" },
   { name: "createShareLink", invoke: () => items.createShareLink({ slug: "s", mediaItemId: "M", mediaItemType: "book", expiresAt: 0 }), method: "post", path: "/api/share/mediaitem" },
   { name: "deleteShareLink", invoke: () => items.deleteShareLink("SHARE"), method: "delete", path: "/api/share/mediaitem/SHARE" },
+  // hard=1 is a query param, NOT part of the pinned body — invoked without opts.
+  { name: "deleteLibraryItem", invoke: () => items.deleteLibraryItem("ITEM"), method: "delete", path: "/api/items/ITEM" },
+  // --- podcasts (issue-text + web-client-behavior verification — see utils/abs/podcasts) --
+  { name: "searchPodcasts", invoke: () => podcasts.searchPodcasts("serial"), method: "get", path: "/api/search/podcast" },
+  { name: "getPodcastFeed", invoke: () => podcasts.getPodcastFeed("https://feed.example/rss"), method: "post", path: "/api/podcasts/feed", body: { rssFeed: "https://feed.example/rss" } },
+  { name: "createPodcast", invoke: () => podcasts.createPodcast({ path: "/pods/x", folderId: "FOL", libraryId: "LIB", media: { metadata: { title: "x" } } }), method: "post", path: "/api/podcasts", body: { path: "/pods/x", folderId: "FOL", libraryId: "LIB", media: { metadata: { title: "x" } } } },
+  { name: "parseOpml", invoke: () => podcasts.parseOpml("<opml/>"), method: "post", path: "/api/podcasts/opml/parse", body: { opmlText: "<opml/>" } },
+  { name: "createPodcastsFromOpml", invoke: () => podcasts.createPodcastsFromOpml({ feeds: [{ feedUrl: "https://f" }], libraryId: "LIB", folderId: "FOL" }), method: "post", path: "/api/podcasts/opml/create", body: { feeds: [{ feedUrl: "https://f" }], libraryId: "LIB", folderId: "FOL" } },
+  { name: "checkNewEpisodes", invoke: () => podcasts.checkNewEpisodes("POD"), method: "get", path: "/api/podcasts/POD/checknew" },
+  // Bare-array body, same precedent as batchUpdateProgress above.
+  { name: "downloadPodcastEpisodes (bare array body)", invoke: () => podcasts.downloadPodcastEpisodes("POD", [{ title: "Ep" }]), method: "post", path: "/api/podcasts/POD/download-episodes", body: [{ title: "Ep" }] },
+  { name: "getPodcastEpisodeDownloads", invoke: () => podcasts.getPodcastEpisodeDownloads("POD"), method: "get", path: "/api/podcasts/POD/downloads" },
+  { name: "clearPodcastDownloadQueue (side-effecting GET!)", invoke: () => podcasts.clearPodcastDownloadQueue("POD"), method: "get", path: "/api/podcasts/POD/clear-queue" },
+  { name: "getLibraryEpisodeDownloads", invoke: () => podcasts.getLibraryEpisodeDownloads("LIB"), method: "get", path: "/api/libraries/LIB/episode-downloads" },
+  // hard=1 is a query param, NOT part of the pinned body — invoked without opts.
+  { name: "deletePodcastEpisode", invoke: () => podcasts.deletePodcastEpisode("POD", "EP"), method: "delete", path: "/api/podcasts/POD/episode/EP" },
   // --- users ---------------------------------------------------------------
   { name: "getUsers", invoke: () => users.getUsers(), method: "get", path: "/api/users" },
   { name: "getUser", invoke: () => users.getUser("USER"), method: "get", path: "/api/users/USER" },
@@ -231,6 +248,7 @@ describe("utils/abs endpoint table (fn → method + literal path)", () => {
       email,
       feeds,
       notifications,
+      podcasts,
       me,
       tasks,
       capabilities,

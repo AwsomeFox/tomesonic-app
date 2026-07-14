@@ -25,6 +25,7 @@ import {
   getItemZipDownloadTarget,
   createShareLink,
   deleteShareLink,
+  deleteLibraryItem,
 } from "../../../utils/abs/items";
 import { AbsError } from "../../../utils/abs/errors";
 
@@ -192,6 +193,25 @@ describe("share links", () => {
   it("deleteShareLink → DELETE /api/share/mediaitem/:id", async () => {
     await deleteShareLink("s1");
     expect(api.delete).toHaveBeenCalledWith("/api/share/mediaitem/s1");
+  });
+});
+
+describe("deleteLibraryItem", () => {
+  it("soft delete → DELETE /api/items/:id with NO hard param", async () => {
+    await deleteLibraryItem("i1");
+    expect(api.delete).toHaveBeenCalledWith("/api/items/i1");
+  });
+
+  it("hard delete → adds params { hard: 1 } only when asked", async () => {
+    await deleteLibraryItem("i1", { hard: true });
+    expect(api.delete).toHaveBeenCalledWith("/api/items/i1", { params: { hard: 1 } });
+    await deleteLibraryItem("i1", { hard: false });
+    expect(api.delete).toHaveBeenLastCalledWith("/api/items/i1");
+  });
+
+  it("encodes the item id in the path", async () => {
+    await deleteLibraryItem("i 1");
+    expect(api.delete).toHaveBeenCalledWith("/api/items/i%201");
   });
 });
 
