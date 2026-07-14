@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, RefreshControl, Linking } from "react-native";
+import {
+  View,
+  Text,
+  ScrollView,
+  ActivityIndicator,
+  RefreshControl,
+  Linking,
+  AccessibilityInfo,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -51,6 +59,21 @@ import type { AbsBackup } from "../utils/abs/types";
 
 /** How long each reconnect episode watches for the server (5 minutes). */
 const RESTORE_WAIT_MS = 5 * 60_000;
+
+/**
+ * Leading delay before the first /ping when a VERIFY attempt bounces back to
+ * reconnecting: the API just answered (so the HTTP layer is demonstrably up)
+ * — without this the ping-up → verify-fail → ping-up cycle would spin hot.
+ */
+const REBOUNCE_DELAY_MS = 3000;
+
+/**
+ * How long the verifying spinner may sit on an auth failure before falling to
+ * the timeout view: the api interceptor's forceLogout normally swaps the
+ * navigator away, but if it doesn't (refresh path recovered, logout stalled)
+ * the admin must not hang on a spinner forever.
+ */
+const VERIFY_AUTH_FALLBACK_MS = 10_000;
 
 type RestorePhase = "idle" | "applying" | "reconnecting" | "verifying" | "timeout";
 interface RestoreState {
@@ -104,6 +127,16 @@ function describeCron(cron: string): string {
 const actionErrorMessage = (e: any) =>
   absErrorToActionMessage(e, { forbidden: "Only server admins can manage backups." });
 
+// Screen-reader announcement on entry to each restore phase — the full-screen
+// phase views swap silently otherwise (same pattern as EditMetadataScreen's
+// cover-search result announcement).
+const PHASE_ANNOUNCEMENTS: Partial<Record<RestorePhase, string>> = {
+  applying: "Restoring backup",
+  reconnecting: "Waiting for the server",
+  verifying: "Checking the server",
+  timeout: "Still waiting — the restore may still be running",
+};
+
 export default function AdminBackupsScreen({ navigation }: any) {
   const colors = useThemeColors();
   const caps = useServerCapabilities();
@@ -132,13 +165,31 @@ export default function AdminBackupsScreen({ navigation }: any) {
   // them, so the re-entrancy checks can't trust the render-time state.
   const restoreCancelledRef = useRef(false);
   const restorePhaseRef = useRef<RestorePhase>("idle");
+  // Armed by runVerify's auth branch (see there); ANY phase transition or the
+  // unmount cleanup disarms it.
+  const verifyFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearVerifyFallback = () => {
+    if (verifyFallbackTimerRef.current != null) {
+      clearTimeout(verifyFallbackTimerRef.current);
+      verifyFallbackTimerRef.current = null;
+    }
+  };
   const setRestoreSafe = (next: RestoreState) => {
+    clearVerifyFallback();
+    const prevPhase = restorePhaseRef.current;
     restorePhaseRef.current = next.phase;
-    if (!restoreCancelledRef.current) setRestore(next);
+    if (!restoreCancelledRef.current) {
+      setRestore(next);
+      if (next.phase !== prevPhase) {
+        const announcement = PHASE_ANNOUNCEMENTS[next.phase];
+        if (announcement) AccessibilityInfo.announceForAccessibility(announcement);
+      }
+    }
   };
   useEffect(() => {
     return () => {
       restoreCancelledRef.current = true;
+      clearVerifyFallback();
     };
   }, []);
 
@@ -323,7 +374,7 @@ export default function AdminBackupsScreen({ navigation }: any) {
         // apply — a real failure. NEVER auto-retry: /apply is a side-effecting
         // GET, and a blind retry could kick off a second restore on top of a
         // half-finished one.
-        showAppDialog({ title: "Couldn't restore backup", message: absErrorToActionMessage(e) });
+        showAppDialog({ title: "Couldn't restore backup", message: actionErrorMessage(e) });
         setRestoreSafe({ phase: "idle" });
       }
     }
@@ -332,7 +383,11 @@ export default function AdminBackupsScreen({ navigation }: any) {
   // RECONNECTING: raw unauthenticated /ping polling (see utils/serverLiveness
   // for why NOT the api singleton) until the server answers or the deadline
   // passes.
-  const runReconnect = async (backup: AbsBackup, deadlineAt: number) => {
+  const runReconnect = async (
+    backup: AbsBackup,
+    deadlineAt: number,
+    opts?: { initialDelayMs?: number }
+  ) => {
     setRestoreSafe({ phase: "reconnecting", backup, deadlineAt });
     // Same server-config source the download-URL builder reads.
     const address = storageHelper.getServerConfig()?.address;
@@ -344,6 +399,7 @@ export default function AdminBackupsScreen({ navigation }: any) {
     }
     const result = await waitForServerUp(address, {
       deadlineAt,
+      initialDelayMs: opts?.initialDelayMs,
       isCancelled: () => restoreCancelledRef.current,
     });
     if (result === "cancelled") return; // unmounted — stop watching silently
@@ -368,22 +424,49 @@ export default function AdminBackupsScreen({ navigation }: any) {
       setRestoreSafe({ phase: "idle" });
     } catch (e: any) {
       if (restoreCancelledRef.current) return;
-      if (e?.kind === "auth") {
+      const kind = e?.kind;
+      if (kind === "auth") {
         // The restored database rejected our token — the api interceptor's
-        // forceLogout path is already swapping the navigator to the connect
-        // screen. Do nothing here beyond not touching state.
+        // forceLogout path is normally already swapping the navigator to the
+        // connect screen, so don't touch state here. But if that swap never
+        // happens (token refresh recovered, logout stalled), the admin would
+        // hang on the verifying spinner forever — arm a fallback that drops
+        // to the timeout view (its copy already guides re-login vs waiting).
+        // Disarmed by any phase transition and by unmount.
+        clearVerifyFallback();
+        verifyFallbackTimerRef.current = setTimeout(() => {
+          verifyFallbackTimerRef.current = null;
+          if (!restoreCancelledRef.current && restorePhaseRef.current === "verifying") {
+            setRestoreSafe({ phase: "timeout", backup, deadlineAt });
+          }
+        }, VERIFY_AUTH_FALLBACK_MS);
+        return;
+      }
+      if (kind === "forbidden" || kind === "unsupported") {
+        // TERMINAL: the server answered and REFUSED us — more waiting can't
+        // fix a permission problem, and re-bouncing would ping+verify forever.
+        showAppDialog({
+          title: "Couldn't verify the restore",
+          message:
+            "Server is back, but this account couldn't verify the restore — you may need to " +
+            "sign in again or check permissions on the web dashboard.",
+        });
+        setRestoreSafe({ phase: "idle" });
         return;
       }
       // offline / server / unknown: the HTTP layer is up but the database may
-      // still be swapping — keep waiting on the SAME episode deadline.
-      runReconnect(backup, deadlineAt);
+      // still be swapping — keep waiting on the SAME episode deadline, with a
+      // leading delay so the ping-up → verify-fail cycle can never run hot.
+      runReconnect(backup, deadlineAt, { initialDelayMs: REBOUNCE_DELAY_MS });
     }
   };
 
   // Dialog 1 (typed confirm) → dialog 2 (last chance) → startApply.
   const confirmRestore = (backup: AbsBackup) => {
-    // Ignore taps while a restore episode is running or this row is deleting.
-    if (restorePhaseRef.current !== "idle" || deletingId === backup.id) return;
+    // Ignore taps while a restore episode is running, a backup is being
+    // created, or ANY row is deleting — a restore mid-create/mid-delete would
+    // race the very list it's about to replace.
+    if (restorePhaseRef.current !== "idle" || creating || deletingId != null) return;
     const label = backup.datePretty || backup.filename || backup.id;
     showAppDialog({
       title: "Restore this backup?",
@@ -476,7 +559,8 @@ export default function AdminBackupsScreen({ navigation }: any) {
             }}
           >
             {restore.phase === "applying"
-              ? "Sending the restore request to the server."
+              ? "Sending the restore request to the server. Leaving this screen only stops " +
+                "watching — the restore continues on the server."
               : "The restore is running; this can take a few minutes. Leaving this screen only " +
                 "stops watching — the restore continues on the server."}
           </Text>
@@ -510,6 +594,9 @@ export default function AdminBackupsScreen({ navigation }: any) {
           </Text>
           <HintPressable
             onPress={() => {
+              // Re-entrancy: a double-tap races the phase transition — the
+              // second press must not start a SECOND polling loop.
+              if (restorePhaseRef.current !== "timeout") return;
               // Re-arm a FRESH 5-minute watch window for the same episode.
               const backup = restore.backup;
               if (backup) runReconnect(backup, Date.now() + RESTORE_WAIT_MS);
@@ -534,6 +621,9 @@ export default function AdminBackupsScreen({ navigation }: any) {
           </HintPressable>
           <HintPressable
             onPress={() => {
+              // Same double-tap guard as Keep waiting: a second press after
+              // the phase moved on must not reload or clobber state again.
+              if (restorePhaseRef.current !== "timeout") return;
               // Back to the list with one fresh load — the admin decides what
               // to do from there.
               setRestoreSafe({ phase: "idle" });

@@ -19,6 +19,12 @@
 import axios from "axios";
 
 export interface WaitForServerUpOptions {
+  /**
+   * Sleep this long BEFORE the first probe (cancellation-checked). Callers
+   * that re-enter polling from a failure path (verify → reconnect bounces)
+   * set this so the ping+verify cycle can never run hot.
+   */
+  initialDelayMs?: number;
   /** First retry delay in ms; grows 1.5x per failed probe. Default 3000. */
   baseIntervalMs?: number;
   /** Ceiling for the growing delay (before jitter). Default 10000. */
@@ -51,7 +57,20 @@ export async function waitForServerUp(
   const max = opts.maxIntervalMs ?? 10000;
   const jitter = opts.jitterMs ?? 1000;
   const probeTimeout = opts.probeTimeoutMs ?? 5000;
-  const url = `${address.replace(/\/$/, "")}/ping`;
+  const url = `${address.replace(/\/+$/, "")}/ping`;
+
+  // Every sleep is clamped to the remaining deadline so the last wake-up
+  // lands AT the deadline instead of overshooting it by a whole interval.
+  const clampedSleep = (ms: number) =>
+    sleep(Math.max(0, Math.min(ms, opts.deadlineAt - Date.now())));
+
+  // Optional leading delay (throttles re-entry loops) — cancellation and
+  // deadline are checked before sleeping, and again at the loop top after.
+  if (opts.initialDelayMs && opts.initialDelayMs > 0) {
+    if (opts.isCancelled()) return "cancelled";
+    if (Date.now() >= opts.deadlineAt) return "timeout";
+    await clampedSleep(opts.initialDelayMs);
+  }
 
   for (let attempt = 0; ; attempt++) {
     if (opts.isCancelled()) return "cancelled";
@@ -66,6 +85,6 @@ export async function waitForServerUp(
     }
     if (opts.isCancelled()) return "cancelled";
     const delay = Math.min(base * Math.pow(1.5, attempt), max) + Math.random() * jitter;
-    await sleep(delay);
+    await clampedSleep(delay);
   }
 }

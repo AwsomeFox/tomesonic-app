@@ -87,6 +87,19 @@ describe("backups", () => {
     expect(err.kind).toBe("offline");
   });
 
+  it("applyBackup 404 is a REAL miss (backup deleted under us) — kind 'unknown' with the gone copy, NOT 'unsupported'", async () => {
+    // The default admin-route 404 mapping ("server needs an update") would be
+    // wrong here: we just listed this backup, so a 404 means it was rotated
+    // away or deleted by another admin.
+    jest
+      .mocked(api.get)
+      .mockRejectedValue(Object.assign(new Error("HTTP 404"), { response: { status: 404 } }));
+    const err = await applyBackup("b1").catch((e) => e);
+    expect(err).toBeInstanceOf(AbsError);
+    expect(err.kind).toBe("unknown");
+    expect(err.message).toBe("That backup no longer exists on the server.");
+  });
+
   it("buildBackupDownloadUrl builds the tokened URL / null without a session", () => {
     expect(buildBackupDownloadUrl("b1")).toBeNull();
     storageHelper.setServerConfig({ address: "https://abs.example.com/", token: "tok" });

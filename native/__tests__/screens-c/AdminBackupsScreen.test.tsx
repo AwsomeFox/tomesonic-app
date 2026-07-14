@@ -23,7 +23,7 @@ jest.mock("../../store/useSnackbarStore", () => ({
 }));
 
 import React from "react";
-import { Linking } from "react-native";
+import { AccessibilityInfo, Linking } from "react-native";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
 import axios from "axios";
 import AdminBackupsScreen from "../../screens/AdminBackupsScreen";
@@ -646,6 +646,277 @@ describe("AdminBackupsScreen", () => {
       expect(screen.queryByText(/may still be running/)).toBeNull();
       // The whole episode never fired the apply GET a second time.
       expect(applyCalls()).toBe(1);
+    });
+
+    // api.get mock where the list loads normally until the apply fires, after
+    // which every /api/backups (the VERIFY round-trip) fails as `verifyError`.
+    // Models "the HTTP layer answered but the restored database hates us".
+    function mockVerifyFailingWith(verifyError: () => any) {
+      let applied = false;
+      (api.get as jest.Mock).mockImplementation((url: string) => {
+        if (url === "/api/backups") {
+          return applied
+            ? Promise.reject(verifyError())
+            : Promise.resolve({
+                data: { backups: [BACKUP_1, BACKUP_2], backupLocation: "/backups" },
+              });
+        }
+        if (url === "/api/backups/b1/apply") {
+          applied = true;
+          return Promise.reject(networkError());
+        }
+        return Promise.resolve({ data: {} });
+      });
+    }
+
+    it("the applying view also says leaving only stops watching (the restore continues server-side)", async () => {
+      // An apply that never settles pins the machine in "applying".
+      mockGetWithApply(() => new Promise(() => {}));
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+      await confirmBothDialogs();
+
+      expect(screen.getByText("Restoring backup…")).toBeTruthy();
+      expect(
+        screen.getByText(/Leaving this screen only stops watching — the restore continues on the server/)
+      ).toBeTruthy();
+    });
+
+    it("verify 403 after the ping is up is TERMINAL: dedicated dialog, idle, and NO further pings", async () => {
+      jest.useFakeTimers();
+      mockVerifyFailingWith(() => httpError(403));
+      // The server's HTTP layer answers the very first probe.
+      axiosGet.mockResolvedValue({ data: { success: true } });
+
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+      await confirmBothDialogs();
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Couldn't verify the restore",
+            message: expect.stringMatching(/sign in again/),
+          })
+        )
+      );
+      // Idle — the list view, NOT the timeout guidance and NOT the spinner
+      // (a re-bounce here would ping+verify in a hot loop forever).
+      expect(screen.getByText("Jun 1, 2026, 3:00 AM")).toBeTruthy();
+      expect(screen.queryByText(/Waiting for the server/)).toBeNull();
+      expect(screen.queryByText(/may still be running/)).toBeNull();
+
+      // Terminal means terminal: the ping count freezes.
+      const pings = axiosGet.mock.calls.length;
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(60_000);
+      });
+      expect(axiosGet.mock.calls.length).toBe(pings);
+      expect(applyCalls()).toBe(1);
+    });
+
+    it("verify 500 re-bounces with a leading ~3s delay — the ping+verify cycle never runs hot", async () => {
+      jest.useFakeTimers();
+      // HTTP layer back, database still swapping: every verify 500s.
+      mockVerifyFailingWith(() => httpError(500));
+      axiosGet.mockResolvedValue({ data: { success: true } });
+
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+      await confirmBothDialogs();
+
+      // Cycle 1 (ping up + verify 500) settles on microtasks — without the
+      // leading re-entry delay this would already be spinning.
+      expect(axiosGet).toHaveBeenCalledTimes(1);
+
+      // The next probe waits out the throttle delay, not a tick sooner.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(2999);
+      });
+      expect(axiosGet).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      expect(axiosGet).toHaveBeenCalledTimes(2);
+
+      // Never a failure dialog — this is the legitimate keep-waiting path.
+      expect(showAppDialog).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't restore backup" })
+      );
+      expect(screen.getByText(/Waiting for the server/)).toBeTruthy();
+    });
+
+    it("verify auth pass-through can't hang: a ~10s fallback drops the spinner to the timeout view", async () => {
+      jest.useFakeTimers();
+      // The restored database rejects our token — normally the api
+      // interceptor's forceLogout swaps the navigator, but this screen must
+      // not sit on the spinner forever if that never happens.
+      mockVerifyFailingWith(() => httpError(401));
+      axiosGet.mockResolvedValue({ data: { success: true } });
+
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+      await confirmBothDialogs();
+
+      // Stuck in verifying (the auth branch defers to forceLogout).
+      expect(screen.getByText(/Waiting for the server/)).toBeTruthy();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(9_999);
+      });
+      expect(screen.queryByText(/may still be running/)).toBeNull();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      // The timeout view's copy guides what to do next.
+      expect(screen.getByText(/may still be running/)).toBeTruthy();
+      expect(screen.queryByText(/Waiting for the server/)).toBeNull();
+    });
+
+    it("apply 404 (backup vanished) shows the backup-gone copy, NOT the needs-an-update copy", async () => {
+      mockGetWithApply(() => Promise.reject(httpError(404)));
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+      await confirmBothDialogs();
+
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Couldn't restore backup",
+            message: "That backup no longer exists on the server.",
+          })
+        )
+      );
+      expect(showAppDialog).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringMatching(/needs an update/i) })
+      );
+      // Terminal refusal: back to the idle list, no reconnect machinery.
+      expect(screen.getByText("Jun 1, 2026, 3:00 AM")).toBeTruthy();
+      expect(axiosGet).not.toHaveBeenCalled();
+    });
+
+    it("double-tapping Keep waiting starts only ONE polling loop", async () => {
+      jest.useFakeTimers();
+      mockGetWithApply(() => Promise.reject(networkError()));
+      axiosGet.mockRejectedValue(networkError());
+
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+      await confirmBothDialogs();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5 * 60_000 + 15_000);
+      });
+      expect(screen.getByText(/may still be running/)).toBeTruthy();
+      const pingsAtTimeout = axiosGet.mock.calls.length;
+
+      // The second press races the synchronous phase flip out of "timeout" —
+      // it must NOT arm a second waitForServerUp loop.
+      const keepWaiting = screen.getByLabelText("Keep waiting");
+      await act(async () => {
+        fireEvent.press(keepWaiting);
+        fireEvent.press(keepWaiting);
+      });
+
+      // One loop probes at t≈0 and t≈3000-4000 inside this window; a doubled
+      // loop would have fired four probes by now.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(7_000);
+      });
+      expect(axiosGet.mock.calls.length - pingsAtTimeout).toBe(2);
+    });
+
+    it("announces each restore phase for screen readers (applying/reconnecting/verifying)", async () => {
+      jest.useFakeTimers();
+      const announceSpy = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
+      mockGetWithApply(() => Promise.reject(networkError()));
+      // First ping fails; the retry finds the server back → verify succeeds.
+      axiosGet
+        .mockRejectedValueOnce(networkError())
+        .mockResolvedValue({ data: { success: true } });
+
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+      await confirmBothDialogs();
+
+      expect(announceSpy).toHaveBeenCalledWith("Restoring backup");
+      expect(announceSpy).toHaveBeenCalledWith("Waiting for the server");
+      expect(announceSpy).not.toHaveBeenCalledWith("Checking the server");
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(6_000);
+      });
+      expect(announceSpy).toHaveBeenCalledWith("Checking the server");
+      await waitFor(() =>
+        expect(showSnackbar).toHaveBeenCalledWith({ message: "Server is back — backup restored" })
+      );
+    });
+
+    it("announces the timeout phase for screen readers", async () => {
+      jest.useFakeTimers();
+      const announceSpy = jest.spyOn(AccessibilityInfo, "announceForAccessibility");
+      mockGetWithApply(() => Promise.reject(networkError()));
+      axiosGet.mockRejectedValue(networkError());
+
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+      await confirmBothDialogs();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5 * 60_000 + 15_000);
+      });
+      expect(announceSpy).toHaveBeenCalledWith(
+        "Still waiting — the restore may still be running"
+      );
+    });
+
+    it("cross-action interlock: restore taps are ignored while a backup is being created", async () => {
+      // A create that never settles keeps `creating` pinned.
+      (api.post as jest.Mock).mockImplementation((url: string) =>
+        url === "/api/backups" ? new Promise(() => {}) : Promise.resolve({ data: {} })
+      );
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+      await fireEvent.press(screen.getByLabelText("Back up now"));
+      await fireEvent.press(screen.getByLabelText("Restore backup Jun 1, 2026, 3:00 AM"));
+
+      expect(
+        (showAppDialog as jest.Mock).mock.calls.find(
+          (c) => c[0].title === "Restore this backup?"
+        )
+      ).toBeUndefined();
+      expect(applyCalls()).toBe(0);
+    });
+
+    it("cross-action interlock: restore taps on OTHER rows are ignored while any row deletes", async () => {
+      (api.delete as jest.Mock).mockReturnValue(new Promise(() => {}));
+      await renderScreen();
+      await screen.findByText("Jun 1, 2026, 3:00 AM");
+
+      await fireEvent.press(screen.getByLabelText("Delete backup Jun 1, 2026, 3:00 AM"));
+      await waitFor(() =>
+        expect(showAppDialog).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Delete backup?" })
+        )
+      );
+      await act(async () => {
+        lastDialog()
+          .buttons.find((b: any) => b.text === "Delete")
+          .onPress();
+      });
+
+      // b1 is mid-delete; restoring b2 (a DIFFERENT row) must also be blocked
+      // — a restore would race the in-flight delete on the same list.
+      await fireEvent.press(screen.getByLabelText("Restore backup Jun 8, 2026, 3:00 AM"));
+
+      expect(
+        (showAppDialog as jest.Mock).mock.calls.find(
+          (c) => c[0].title === "Restore this backup?"
+        )
+      ).toBeUndefined();
     });
 
     it("re-entrancy: a stale second confirm press never fires a second apply", async () => {

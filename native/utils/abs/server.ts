@@ -65,7 +65,12 @@ export async function deleteBackup(backupId: string): Promise<{ backups: AbsBack
  * NEVER auto-retry this request.
  */
 export async function applyBackup(backupId: string): Promise<void> {
-  await absRequest(() => api.get(`/api/backups/${backupId}/apply`));
+  // 404 here is a REAL miss (the backup row we just listed was deleted from
+  // under us — e.g. rotation or another admin), not a too-old server; the
+  // default "unsupported / needs an update" copy would mislead.
+  await absRequest(() => api.get(`/api/backups/${backupId}/apply`), {
+    404: { kind: "unknown", message: "That backup no longer exists on the server." },
+  });
 }
 
 /**

@@ -709,37 +709,48 @@ export default function EditMetadataScreen({ route, navigation }: any) {
 
   // Gallery upload (issue #61): pick a local image → multipart POST /cover.
   // Same Tier-1 apply + snackbar/dialog copy as the other cover paths.
+  //
+  // NO pre-flight media-library permission request: expo-image-picker (SDK 57)
+  // launches the system Photo Picker on Android (PickVisualMedia) and PHPicker
+  // on iOS — neither needs the media-library permission (verified in the
+  // installed package: launchImageLibraryAsync has no permission guard). If
+  // the picker itself rejects with a permission-shaped error (OEM oddities),
+  // the settings dialog below is the fallback.
   const handleUploadFromGallery = async () => {
     if (coverBusy) return;
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      showAppDialog({
-        title: "Photos permission needed",
-        message:
-          "TomeSonic needs access to your photo library to upload a cover. You can allow it in the system settings.",
-        buttons: [
-          { text: "Cancel", style: "cancel" },
-          { text: "Open settings", onPress: () => Linking.openSettings() },
-        ],
-      });
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      allowsEditing: false,
-      quality: 0.9,
-    });
-    if (result.canceled || !result.assets?.[0]) return; // user backed out — no noise
+    // Busy is held across the ENTIRE flow — picker window included — so a
+    // double-tap can't launch two pickers and set-from-URL can't interleave.
     setCoverBusy(true);
     try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.9,
+      });
+      if (result.canceled || !result.assets?.[0]) return; // user backed out — no noise
+      // FUTURE: the original is uploaded as-is — a very large camera photo
+      // can hit the api singleton's 20s timeout. Downscaling before upload
+      // (expo-image-manipulator) is deliberately deferred follow-up work.
       await uploadCoverFile(libraryItemId, assetToCoverFile(result.assets[0]));
       setCoverBust((n) => n + 1);
       showSnackbar({ message: "Cover updated" });
     } catch (e: any) {
-      showAppDialog({
-        title: "Couldn't update cover",
-        message: e?.message || "Something went wrong. Please try again.",
-      });
+      if (/permission|denied/i.test(String(e?.message || e?.code || ""))) {
+        showAppDialog({
+          title: "Photos permission needed",
+          message:
+            "TomeSonic needs access to your photo library to upload a cover. You can allow it in the system settings.",
+          buttons: [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open settings", onPress: () => Linking.openSettings() },
+          ],
+        });
+      } else {
+        showAppDialog({
+          title: "Couldn't update cover",
+          message: e?.message || "Something went wrong. Please try again.",
+        });
+      }
     } finally {
       setCoverBusy(false);
     }

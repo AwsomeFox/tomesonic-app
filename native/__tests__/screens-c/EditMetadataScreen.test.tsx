@@ -529,7 +529,9 @@ describe("EditMetadataScreen — cover upload from gallery (issue #61)", () => {
       fireEvent.press(screen.getByLabelText("Upload from gallery"));
     });
 
-    expect(ImagePicker.requestMediaLibraryPermissionsAsync).toHaveBeenCalled();
+    // NO pre-flight permission request: the system Photo Picker (Android) /
+    // PHPicker (iOS) needs no media-library permission on SDK 57.
+    expect(ImagePicker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
     // SDK 57 string-array mediaTypes (MediaTypeOptions is deprecated).
     expect(ImagePicker.launchImageLibraryAsync).toHaveBeenCalledWith({
       mediaTypes: ["images"],
@@ -586,27 +588,30 @@ describe("EditMetadataScreen — cover upload from gallery (issue #61)", () => {
     });
   });
 
-  it("permission denied → settings dialog, and the picker/upload never run", async () => {
+  it("launches the picker directly — no pre-flight permission request; a permission-ish picker rejection falls back to the settings dialog", async () => {
+    // SDK 57 uses the system Photo Picker (Android PickVisualMedia) / PHPicker
+    // (iOS) — neither needs the media-library permission, so the pre-flight
+    // gate is gone. If some OEM's picker still rejects with a permission
+    // error, THAT is what routes to the settings dialog.
     const openSettingsSpy = jest
       .spyOn(Linking, "openSettings")
       .mockResolvedValue(undefined as any);
-    (ImagePicker.requestMediaLibraryPermissionsAsync as jest.Mock).mockResolvedValueOnce({
-      status: "denied",
-      granted: false,
-      canAskAgain: false,
-    });
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockRejectedValueOnce(
+      new Error("User rejected permissions")
+    );
     await openCoverTab();
 
     await act(async () => {
       fireEvent.press(screen.getByLabelText("Upload from gallery"));
     });
 
+    expect(ImagePicker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+    expect(ImagePicker.launchImageLibraryAsync).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(showAppDialog).toHaveBeenCalledWith(
         expect.objectContaining({ title: "Photos permission needed" })
       )
     );
-    expect(ImagePicker.launchImageLibraryAsync).not.toHaveBeenCalled();
     expect(uploadCoverFile).not.toHaveBeenCalled();
 
     // The dialog's escape hatch routes to the system settings.
@@ -616,6 +621,73 @@ describe("EditMetadataScreen — cover upload from gallery (issue #61)", () => {
       dialog.buttons.find((b: any) => b.text === "Open settings").onPress();
     });
     expect(openSettingsSpy).toHaveBeenCalled();
+
+    // Busy released — the flow is retryable.
+    const btn = screen.getByLabelText("Upload from gallery");
+    expect(btn.props.accessibilityState?.busy).toBe(false);
+  });
+
+  it("a non-permission picker rejection surfaces the cover error dialog and releases busy", async () => {
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockRejectedValueOnce(
+      new Error("Failed to parse PhotoPicker result")
+    );
+    await openCoverTab();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't update cover",
+          message: expect.stringContaining("PhotoPicker"),
+        })
+      )
+    );
+    // NOT the settings dialog — this isn't a permission problem.
+    expect(showAppDialog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Photos permission needed" })
+    );
+    expect(uploadCoverFile).not.toHaveBeenCalled();
+    expect(showSnackbar).not.toHaveBeenCalled();
+    const btn = screen.getByLabelText("Upload from gallery");
+    expect(btn.props.accessibilityState?.busy).toBe(false);
+    expect(btn.props.accessibilityState?.disabled).toBe(false);
+  });
+
+  it("holds busy across the whole picker window — a double-tap launches only ONE picker", async () => {
+    let resolvePick!: (v: any) => void;
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePick = resolve;
+      })
+    );
+    await openCoverTab();
+
+    const btn = screen.getByLabelText("Upload from gallery");
+    await act(async () => {
+      fireEvent.press(btn);
+    });
+    // Busy is held while the system picker is open (this is also what keeps
+    // Set-cover-from-URL from interleaving mid-pick).
+    expect(
+      screen.getByLabelText("Upload from gallery").props.accessibilityState?.busy
+    ).toBe(true);
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+    expect(ImagePicker.launchImageLibraryAsync).toHaveBeenCalledTimes(1);
+
+    // The user backs out — busy releases and nothing uploads.
+    await act(async () => {
+      resolvePick({ canceled: true, assets: null });
+    });
+    expect(uploadCoverFile).not.toHaveBeenCalled();
+    expect(
+      screen.getByLabelText("Upload from gallery").props.accessibilityState?.busy
+    ).toBe(false);
   });
 
   it("cancelling the picker is silent — no upload, no snackbar, no dialog", async () => {

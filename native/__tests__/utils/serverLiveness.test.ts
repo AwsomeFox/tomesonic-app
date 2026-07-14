@@ -180,4 +180,99 @@ describe("waitForServerUp", () => {
     expect(result).toBe("cancelled");
     expect(axiosGet).not.toHaveBeenCalled();
   });
+
+  it("strips ALL trailing slashes from the address, not just one", async () => {
+    axiosGet.mockResolvedValue(UP);
+
+    const result = await waitForServerUp("https://abs.example.com///", {
+      deadlineAt: Date.now() + 60_000,
+      isCancelled: () => false,
+    });
+
+    expect(result).toBe("up");
+    expect(axiosGet).toHaveBeenCalledWith("https://abs.example.com/ping", { timeout: 5000 });
+  });
+
+  describe("initialDelayMs (re-entry throttle)", () => {
+    it("sleeps the full initial delay BEFORE the first probe", async () => {
+      axiosGet.mockResolvedValue(UP);
+
+      const promise = waitForServerUp("https://abs.example.com", {
+        initialDelayMs: 3000,
+        deadlineAt: Date.now() + 60_000,
+        isCancelled: () => false,
+      });
+
+      // No leading probe — the whole point is that a verify→reconnect
+      // re-entry can never ping immediately.
+      await jest.advanceTimersByTimeAsync(2999);
+      expect(axiosGet).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(axiosGet).toHaveBeenCalledTimes(1);
+      await expect(promise).resolves.toBe("up");
+    });
+
+    it("cancellation during the initial delay stops before ANY probe fires", async () => {
+      axiosGet.mockResolvedValue(UP);
+      let cancelled = false;
+
+      const promise = waitForServerUp("https://abs.example.com", {
+        initialDelayMs: 3000,
+        deadlineAt: Date.now() + 60_000,
+        isCancelled: () => cancelled,
+      });
+
+      await jest.advanceTimersByTimeAsync(1000);
+      cancelled = true;
+      await jest.advanceTimersByTimeAsync(60_000);
+
+      await expect(promise).resolves.toBe("cancelled");
+      expect(axiosGet).not.toHaveBeenCalled();
+    });
+
+    it("an initial delay longer than the deadline is clamped and resolves 'timeout' with no probe", async () => {
+      axiosGet.mockResolvedValue(UP);
+
+      const promise = waitForServerUp("https://abs.example.com", {
+        initialDelayMs: 10_000,
+        deadlineAt: Date.now() + 2000,
+        isCancelled: () => false,
+      });
+      let settled: string | null = null;
+      promise.then((r) => {
+        settled = r;
+      });
+
+      await jest.advanceTimersByTimeAsync(1999);
+      expect(settled).toBeNull();
+      // Clamped to the remaining 2000ms — NOT the full 10s delay.
+      await jest.advanceTimersByTimeAsync(1);
+      expect(settled).toBe("timeout");
+      expect(axiosGet).not.toHaveBeenCalled();
+    });
+  });
+
+  it("clamps each retry sleep to the remaining deadline (no overshoot past deadlineAt)", async () => {
+    axiosGet.mockRejectedValue(refused());
+
+    const promise = waitForServerUp("https://abs.example.com", {
+      baseIntervalMs: 10_000,
+      jitterMs: 0,
+      deadlineAt: Date.now() + 4000,
+      isCancelled: () => false,
+    });
+    let settled: string | null = null;
+    promise.then((r) => {
+      settled = r;
+    });
+
+    // Probe 1 at t=0 fails; the 10s retry sleep is clamped to the 4s left.
+    await jest.advanceTimersByTimeAsync(3999);
+    expect(settled).toBeNull();
+    await jest.advanceTimersByTimeAsync(1);
+    // Wakes AT the deadline and resolves — an unclamped sleep would still be
+    // pending for another 6 seconds here.
+    expect(settled).toBe("timeout");
+    expect(axiosGet).toHaveBeenCalledTimes(1);
+  });
 });
