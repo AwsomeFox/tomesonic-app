@@ -35,6 +35,14 @@ describe("podcast route registration", () => {
     expect(registered.has(route)).toBe(true);
   });
 
+  // Issue #57: the ServerAdminHub "Upload media" row links to UploadMedia — the
+  // route must be registered (same class of gap the podcast routes hit).
+  it("registers the UploadMedia route the admin hub links to", () => {
+    const hubSrc = read("screens/ServerAdminHubScreen.tsx");
+    expect(/route:\s*"UploadMedia"/.test(hubSrc)).toBe(true); // the hub links to it
+    expect(registered.has("UploadMedia")).toBe(true);
+  });
+
   // Every Podcast* route that any screen navigates to must be registered — this
   // catches a NEW podcast destination added without a Stack.Screen entry.
   it("every navigated Podcast* route is registered", () => {

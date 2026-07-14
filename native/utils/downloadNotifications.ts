@@ -20,6 +20,10 @@ const MIN_UPDATE_INTERVAL_MS = 500;
 // Items with a live progress notification: presents re-check this after every
 // await so a display racing clear()/complete() can't resurrect a dismissed one.
 const _active = new Set<string>();
+// Per-item notification copy so the same helper can label an UPLOAD ("Uploading"
+// / "Upload complete") as well as a download. Set at start(); read by the
+// progress/complete presenters; defaults preserve the download wording.
+const _labels: Record<string, { verb: string; doneTitle: string }> = {};
 
 // Proactively request POST_NOTIFICATIONS (Android 13+). Without this the media
 // notification and lock-screen transport controls silently never appear for a
@@ -107,7 +111,7 @@ async function showProgress(itemId: string, title: string, pct: number) {
   try {
     await notifee.displayNotification({
       id: `dl_${itemId}`, // same id = in-place update (no flicker, no re-alert)
-      title: "Downloading",
+      title: _labels[itemId]?.verb || "Downloading",
       subtitle: `${pct}%`,
       body: title,
       android: {
@@ -153,10 +157,14 @@ export async function sweepStaleZipNotifications(): Promise<void> {
 }
 
 export const downloadNotifications = {
-  // Called on download start.
-  start(itemId: string, title: string) {
+  // Called on download start. `labels` overrides the copy for uploads etc.
+  start(itemId: string, title: string, labels?: { verb?: string; doneTitle?: string }) {
     _lastPct[itemId] = -1;
     _lastShownAt[itemId] = 0;
+    _labels[itemId] = {
+      verb: labels?.verb || "Downloading",
+      doneTitle: labels?.doneTitle || "Download complete",
+    };
     _active.add(itemId);
     showProgress(itemId, title, 0);
   },
@@ -180,12 +188,14 @@ export const downloadNotifications = {
     _active.delete(itemId);
     delete _lastPct[itemId];
     delete _lastShownAt[itemId];
+    const doneTitle = _labels[itemId]?.doneTitle || "Download complete";
+    delete _labels[itemId];
     try { await notifee.cancelNotification(`dl_${itemId}`); } catch {}
     if (!(await ensureReady())) return;
     try {
       await notifee.displayNotification({
         id: `dl_done_${itemId}`,
-        title: "Download complete",
+        title: doneTitle,
         body: title,
         android: {
           channelId: CHANNEL_ID,
@@ -201,6 +211,7 @@ export const downloadNotifications = {
     _active.delete(itemId);
     delete _lastPct[itemId];
     delete _lastShownAt[itemId];
+    delete _labels[itemId];
     try { await notifee.cancelNotification(`dl_${itemId}`); } catch {}
   },
 };

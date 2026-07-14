@@ -38,6 +38,7 @@ import PodcastEpisodesScreen from "../screens/PodcastEpisodesScreen";
 import PodcastDownloadQueueScreen from "../screens/PodcastDownloadQueueScreen";
 import PodcastAddSearchScreen from "../screens/PodcastAddSearchScreen";
 import PodcastFeedPreviewScreen from "../screens/PodcastFeedPreviewScreen";
+import UploadMediaScreen from "../screens/UploadMediaScreen";
 import ServerAdminHubScreen from "../screens/ServerAdminHubScreen";
 import AdminLibrariesScreen from "../screens/AdminLibrariesScreen";
 import AdminLibraryEditScreen from "../screens/AdminLibraryEditScreen";
@@ -279,6 +280,9 @@ export default function AppNavigator() {
                 feed preview — the entry point is the ServerAdminHub Podcasts row. */}
             <Stack.Screen name="PodcastAddSearch" component={PodcastAddSearchScreen} />
             <Stack.Screen name="PodcastFeedPreview" component={PodcastFeedPreviewScreen} />
+            {/* Upload media from device (issue #57) — entry is the ServerAdminHub
+                "Upload media" row, gated on canUpload. */}
+            <Stack.Screen name="UploadMedia" component={UploadMediaScreen} />
             {/* Item-scoped editors + non-admin extras from the same plan. */}
             <Stack.Screen name="EditMetadata" component={EditMetadataScreen} />
             <Stack.Screen name="ChapterEditor" component={ChapterEditorScreen} />

@@ -222,6 +222,15 @@ export default function ServerAdminHubScreen({ navigation }: any) {
           route: "PodcastAddSearch",
         },
         {
+          // This hub is admin-gated and every admin has canUpload, so a plain
+          // row is correct here. Non-admins with only the upload permission
+          // reach the same screen via a dedicated Settings row (SettingsScreen).
+          icon: "cloud",
+          title: "Upload media",
+          subtitle: "Add audiobooks or ebooks from this device",
+          route: "UploadMedia",
+        },
+        {
           icon: "refresh",
           title: "Maintenance",
           subtitle: "Tags, genres, narrators, and cache",

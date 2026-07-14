@@ -48,6 +48,7 @@ import * as podcasts from "../../utils/abs/podcasts";
 import * as me from "../../utils/abs/me";
 import * as tasks from "../../utils/abs/tasks";
 import * as capabilities from "../../utils/abs/capabilities";
+import * as upload from "../../utils/abs/upload";
 
 const { fetchTasksOnce, _resetTasksForTest } = tasks;
 
@@ -187,6 +188,8 @@ const CONTRACT: Array<{
   { name: "getMyItemListeningSessions (episode)", invoke: () => me.getMyItemListeningSessions("LI", "EP"), method: "get", path: "/api/me/item/listening-sessions/LI/EP" },
   { name: "createPlaylistFromCollection", invoke: () => me.createPlaylistFromCollection("COL"), method: "post", path: "/api/playlists/collection/COL" },
   { name: "updateMyEreaderDevices", invoke: () => me.updateMyEreaderDevices([]), method: "post", path: "/api/me/ereader-devices", body: { ereaderDevices: [] } },
+  // --- upload (issue #57; multipart field shape is a web-client-behavior pin) --
+  { name: "uploadMedia", invoke: () => upload.uploadMedia({ libraryId: "LIB", folderId: "FOL", files: [{ uri: "file:///a.m4b", name: "a.m4b" }] }), method: "post", path: "/api/upload" },
 ];
 
 const METHODS: Method[] = ["get", "post", "patch", "delete"];
@@ -238,6 +241,8 @@ describe("utils/abs endpoint table (fn → method + literal path)", () => {
       "getServerSettings",
       "meetsVersion",
       "bumpSettingsWriteSeq",
+      // utils/abs/upload — pure host/token builder for the streaming uploader.
+      "getUploadTarget",
     ]);
     const exportedFns = [
       libraries,
@@ -252,6 +257,7 @@ describe("utils/abs endpoint table (fn → method + literal path)", () => {
       me,
       tasks,
       capabilities,
+      upload,
     ].flatMap((mod) =>
       Object.entries(mod)
         .filter(([name, v]) => typeof v === "function" && !exempt.has(name))
