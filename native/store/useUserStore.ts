@@ -378,7 +378,21 @@ export const useUserStore = create<UserState>((set, get) => ({
     // which flushes normally once the new token is in place.
     const newKey = `${(config?.address || "").replace(/\/$/, "")}::${config?.userId || user?.id || ""}`;
     const prevKey = storageHelper.getLastSessionKey();
-    if (prevKey && prevKey !== newKey) {
+    // A config saved by an app version PREDATING userId wrote its session key as
+    // `${address}::` (empty id). Re-logging into the SAME account then produces
+    // `${address}::${userId}` — a different string — which was misread as an
+    // ACCOUNT SWITCH and wiped that account's own local data. Treat a same-address
+    // prevKey whose id segment is EMPTY as the same account (just now
+    // identified): adopt the new key below without the switch-cleanup. A prevKey
+    // that already carries a (different) non-empty id still counts as a switch.
+    const splitKey = (k: string): [string, string] => {
+      const i = k.lastIndexOf("::");
+      return i < 0 ? [k, ""] : [k.slice(0, i), k.slice(i + 2)];
+    };
+    const [prevAddr, prevUid] = prevKey ? splitKey(prevKey) : ["", ""];
+    const [newAddr] = splitKey(newKey);
+    const isSameAccountReident = !!prevKey && prevUid === "" && prevAddr === newAddr;
+    if (prevKey && prevKey !== newKey && !isSameAccountReident) {
       // Stop the PREVIOUS account's live playback FIRST (mirrors logout's
       // ordering). A forced-401 logout leaves the session loaded and playing;
       // without this, its 1s tick / native samples write the old account's

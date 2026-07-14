@@ -398,7 +398,21 @@ async function flushPendingBookmarkDeletions(): Promise<void> {
       storage.remove(key);
     } catch (e: any) {
       // Already gone server-side (or item deleted) — done either way.
-      if (e?.response?.status === 404) storage.remove(key);
+      if (e?.response?.status === 404) {
+        storage.remove(key);
+      } else if (e?.response?.status) {
+        // A persistent non-404 (e.g. 5xx) never lands — age it out after a few
+        // attempts instead of retrying forever. Network errors (no `.response`)
+        // stay queued for a genuine offline retry. Mirrors the rename flusher.
+        const attempts = (Number(b.attempts) || 0) + 1;
+        if (attempts >= BOOKMARK_RENAME_MAX_ATTEMPTS) {
+          storage.remove(key);
+        } else {
+          try {
+            storage.set(key, JSON.stringify({ ...b, attempts }));
+          } catch {}
+        }
+      }
       // Otherwise still offline — keep it queued.
     }
   }
@@ -532,8 +546,25 @@ async function flushPendingBookmarks(): Promise<void> {
       storage.remove(key);
     } catch (e: any) {
       // Item deleted server-side — the bookmark can never land.
-      if (e?.response?.status === 404) storage.remove(key);
-      // Otherwise still offline — keep it queued.
+      if (e?.response?.status === 404) {
+        storage.remove(key);
+      } else if (e?.response?.status) {
+        // A persistent non-404 server response (e.g. 400 for a bad time/title,
+        // or a 5xx) will never succeed on retry — age it out after a few
+        // attempts so it can't re-POST forever AND show as a phantom "pending"
+        // bookmark in the UI. A network error (no `.response`) leaves `attempts`
+        // untouched so genuine offline retries aren't burned. Mirrors the rename
+        // flusher.
+        const attempts = (Number(b.attempts) || 0) + 1;
+        if (attempts >= BOOKMARK_RENAME_MAX_ATTEMPTS) {
+          storage.remove(key);
+        } else {
+          try {
+            storage.set(key, JSON.stringify({ ...b, attempts }));
+          } catch {}
+        }
+      }
+      // No `.response` at all → offline/transient — keep it queued unchanged.
     }
   }
 }

@@ -491,6 +491,22 @@ describe("useUserStore", () => {
       expect(storage.getString("upNextPlaylistId_lib1")).toBe("plAccountA");
     });
 
+    it("treats a legacy empty-userId session key as the SAME account on re-login (no wipe)", async () => {
+      // A config saved before userId existed wrote "address::" (empty id).
+      // Re-login now produces "address::userA"; the string differs but it is the
+      // SAME account and must NOT trigger the switch-cleanup that wipes its data.
+      storageHelper.setLastSessionKey("https://a.example.com::");
+      seedPreviousSessionLeftovers();
+
+      await useUserStore.getState().login(CONFIG_A, { id: "userA" });
+
+      expect(clearAllPending).not.toHaveBeenCalled();
+      expect(storage.getString("shelvesCache_lib1")).toBeDefined();
+      expect(storageHelper.getLastPlaybackSession()).toEqual({ id: "sess1", libraryItemId: "item1" });
+      // The key self-heals to carry the now-known userId.
+      expect(storageHelper.getLastSessionKey()).toBe("https://a.example.com::userA");
+    });
+
     it("clears per-item link locks (linkedProgress) when switching accounts, keeping device prefs", async () => {
       storageHelper.setLastSessionKey("https://a.example.com::userA");
       storageHelper.setUserSettings({ jumpForwardTime: 20, linkedProgress: { book1: true } });

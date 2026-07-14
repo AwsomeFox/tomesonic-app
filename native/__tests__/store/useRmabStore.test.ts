@@ -74,6 +74,17 @@ describe("initialize", () => {
   });
 });
 
+describe("clearConnectError", () => {
+  it("clears a stale connect error so a reopened connect sheet starts clean", () => {
+    useRmabStore.setState({ connectError: "Couldn't connect" } as any);
+    useRmabStore.getState().clearConnectError();
+    expect(useRmabStore.getState().connectError).toBeNull();
+    // Idempotent when already null.
+    useRmabStore.getState().clearConnectError();
+    expect(useRmabStore.getState().connectError).toBeNull();
+  });
+});
+
 describe("connect", () => {
   it("exchanges the token, verifies with an authed call, persists", async () => {
     mockedExchange.mockResolvedValue(CFG);

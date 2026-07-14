@@ -899,6 +899,22 @@ describe("bookmark deletion queue", () => {
     expect(bookmarkDeleteKeys()).toHaveLength(0);
   });
 
+  it("ages a deletion out after repeated non-404 server failures (permanent 5xx)", async () => {
+    queueBookmarkDeletion("li1", 42);
+    mockedDelete.mockRejectedValue({ response: { status: 500 } });
+    for (let i = 0; i < 7; i++) await flushPendingSyncs();
+    expect(bookmarkDeleteKeys()).toHaveLength(1); // survives the first few
+    await flushPendingSyncs(); // 8th → dropped, no infinite retry
+    expect(bookmarkDeleteKeys()).toHaveLength(0);
+  });
+
+  it("a network error does NOT count toward the deletion attempt cap", async () => {
+    queueBookmarkDeletion("li1", 42);
+    mockedDelete.mockRejectedValue(errNetwork());
+    for (let i = 0; i < 20; i++) await flushPendingSyncs();
+    expect(pendingBookmarkDeletionsFor("li1")).toEqual([42]); // waits for connectivity
+  });
+
   it("flushes deletions BEFORE creations so a re-added bookmark at the same time survives", async () => {
     // Offline: delete the synced bookmark at 42s, then bookmark the same spot
     // again. Creations-first would POST the new bookmark and immediately
@@ -920,6 +936,22 @@ describe("bookmark deletion queue", () => {
     // Both queues drained.
     expect(bookmarkDeleteKeys()).toHaveLength(0);
     expect(bookmarkKeys()).toHaveLength(0);
+  });
+
+  it("ages a CREATE out after repeated non-404 server failures (e.g. persistent 400)", async () => {
+    queueBookmark("li1", 42, "note");
+    mockedPost.mockRejectedValue({ response: { status: 400 } });
+    for (let i = 0; i < 7; i++) await flushPendingSyncs();
+    expect(bookmarkKeys()).toHaveLength(1); // survives the first few
+    await flushPendingSyncs(); // 8th → dropped, no phantom pending bookmark forever
+    expect(bookmarkKeys()).toHaveLength(0);
+  });
+
+  it("a network error does NOT count toward the CREATE attempt cap", async () => {
+    queueBookmark("li1", 42, "note");
+    mockedPost.mockRejectedValue(errNetwork());
+    for (let i = 0; i < 20; i++) await flushPendingSyncs();
+    expect(bookmarkKeys()).toHaveLength(1); // waits for connectivity
   });
 });
 
