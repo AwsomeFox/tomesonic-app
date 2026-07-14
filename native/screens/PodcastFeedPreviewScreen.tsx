@@ -11,6 +11,7 @@ import SettingSelectModal from "../components/SettingSelectModal";
 import { api } from "../utils/api";
 import { AbsError, normalizeAbsError, absErrorToErrorStateProps } from "../utils/abs/errors";
 import { getPodcastFeed, createPodcast } from "../utils/abs/podcasts";
+import { CRON_PRESETS } from "../utils/podcastCron";
 import type { AbsPodcastFeed, AbsPodcastSearchResult } from "../utils/abs/types";
 import { showAppDialog } from "../store/useDialogStore";
 
@@ -35,15 +36,6 @@ import { showAppDialog } from "../store/useDialogStore";
  * that pops back (deep-linking into the P3-owned podcast screens is
  * deliberately not done here). Navigator registration is owned by P3.
  */
-
-// Cron presets mirrored from PodcastSettingsScreen's CRON_PRESETS (values must
-// stay in sync — reused by value rather than importing that screen).
-const CRON_PRESETS: { label: string; cron: string }[] = [
-  { label: "Hourly", cron: "0 * * * *" },
-  { label: "Every 6 hours", cron: "0 */6 * * *" },
-  { label: "Daily", cron: "0 3 * * *" },
-  { label: "Weekly", cron: "0 3 * * 0" },
-];
 
 /**
  * Sanitize a show title into a directory name the server can create: keep
@@ -177,7 +169,9 @@ export default function PodcastFeedPreviewScreen({ navigation, route }: any) {
         description: description || null,
         feedUrl: metadata.feedUrl || feedUrl,
         imageUrl: metadata.imageUrl || seed?.cover || null,
-        ...(metadata.itunesId != null ? { itunesId: metadata.itunesId } : {}),
+        // Send itunesId as a string to match the metadata editor's write path
+        // (EditMetadataScreen coerces with String()), so the two paths agree.
+        ...(metadata.itunesId != null ? { itunesId: String(metadata.itunesId) } : {}),
         ...(metadata.language ? { language: metadata.language } : {}),
         ...(metadata.explicit != null ? { explicit: !!metadata.explicit } : {}),
         ...(Array.isArray(metadata.genres) && metadata.genres.length

@@ -213,7 +213,9 @@ describe("PodcastFeedPreviewScreen — add podcast", () => {
           description: "A show about things.",
           feedUrl: FEED_URL,
           imageUrl: "https://img.example/cover.jpg",
-          itunesId: 123,
+          // Stringified to match the metadata editor's write path (the feed
+          // seeds a numeric 123).
+          itunesId: "123",
           language: "en",
           explicit: false,
           genres: ["Technology"],

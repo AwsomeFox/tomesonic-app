@@ -20,7 +20,7 @@ import { api } from "../utils/api";
 import { AbsError, normalizeAbsError, absErrorToErrorStateProps, isUnsupportedError } from "../utils/abs/errors";
 import { getPodcastFeed, downloadPodcastEpisodes, deletePodcastEpisode } from "../utils/abs/podcasts";
 import { startTaskWatch } from "../utils/abs/tasks";
-import { useServerCapabilities } from "../utils/abs/capabilities";
+import { useServerCapabilities, refreshCapabilities } from "../utils/abs/capabilities";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import type { AbsPodcastFeedEpisode } from "../utils/abs/types";
@@ -134,6 +134,23 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
     };
   }, []);
 
+  // A cold-restored session seeds only a thin {id, username} store user (no
+  // type), so caps.isAdmin is false until a flow re-hydrates it. This screen is
+  // reachable from PodcastSettings (which authenticates via a LOCAL /api/me that
+  // never writes the store), so without our own refresh a real admin arriving
+  // here on a fresh launch would hit the lock. Mirror ServerAdminHubScreen: fire
+  // refreshCapabilities() on mount and hold a spinner until it settles.
+  const [refreshDone, setRefreshDone] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    refreshCapabilities().finally(() => {
+      if (mounted) setRefreshDone(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const fetchItem = useCallback(async () => {
     // ?expanded=1 matches every other item fetch in the app (ChapterEditor,
     // EditMetadata, playback) so media.episodes is fully populated.
@@ -166,6 +183,10 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
 
   // Initial load + retry: item first (authoritative episodes), then its feed.
   useEffect(() => {
+    // Don't decide admin status until the mount-time capability refresh settles
+    // — otherwise a cold-restore admin briefly (or permanently, if the refresh
+    // is slow/offline) sees the lock before caps hydrate.
+    if (!refreshDone) return;
     if (!caps.isAdmin) {
       setLoading(false);
       return;
@@ -195,7 +216,7 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
     return () => {
       cancelled = true;
     };
-  }, [libraryItemId, retryTick, caps.isAdmin, fetchItem, fetchFeedFor]);
+  }, [libraryItemId, retryTick, caps.isAdmin, refreshDone, fetchItem, fetchFeedFor]);
 
   // Refetch the item only (post-download / post-delete re-diff).
   const refetchItem = useCallback(async () => {
@@ -288,8 +309,17 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
   };
 
   // ---- download to server ---------------------------------------------------
-  const selectedFeedEpisodes = (): AbsPodcastFeedEpisode[] =>
-    feedRows.filter((r) => !r.onServer && selected?.has(r.key)).map((r) => r.ep);
+  // Derive the download set from the FULL feed, not the (title-filtered)
+  // feedRows: a user who selects 5 episodes then types a filter that hides 3 of
+  // them must still download all 5. Keying is stable (feedEpisodeKey uses the
+  // index into the unfiltered feedEpisodes), so a selection survives filtering.
+  const selectedFeedEpisodes = useMemo<AbsPodcastFeedEpisode[]>(() => {
+    if (!Array.isArray(feedEpisodes) || !selected) return [];
+    return feedEpisodes
+      .map((ep, i) => ({ key: feedEpisodeKey(ep, i), ep }))
+      .filter((r) => selected.has(r.key) && !isEpisodeOnServer(r.ep, serverEpisodes))
+      .map((r) => r.ep);
+  }, [feedEpisodes, serverEpisodes, selected]);
 
   const doDownload = async (eps: AbsPodcastFeedEpisode[]) => {
     if (!libraryItemId || eps.length === 0) return;
@@ -299,11 +329,29 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
       // enclosure/guid/pubDate from them verbatim (contract pinned in
       // utils/abs/podcasts).
       await downloadPodcastEpisodes(libraryItemId, eps);
-      setSelected(null);
-      showSnackbar({ message: `Queued ${eps.length} episode${eps.length === 1 ? "" : "s"}` });
-      // Completion is INFERRED: the ABS TaskManager removes finished tasks
-      // from GET /api/tasks, so the watch resolves when this item's
-      // download-podcast-episode task vanishes (or reports finished).
+    } catch (e) {
+      if (mountedRef.current) {
+        showAppDialog({ title: "Couldn't queue downloads", message: normalizeAbsError(e).message });
+        setBusy(false);
+      }
+      return;
+    }
+    if (!mountedRef.current) return;
+    // The POST succeeded — the episodes are QUEUED. Release the button now
+    // rather than blocking it on the completion watch: the watch's match key
+    // (data.libraryItemId) is a weak pin, so a miss would otherwise strand the
+    // spinner for the full ~5-minute watch timeout.
+    setSelected(null);
+    setBusy(false);
+    showSnackbar({
+      message: `Queued ${eps.length} episode${eps.length === 1 ? "" : "s"} — downloading on the server`,
+    });
+    // Best-effort completion notification + re-diff, in the background.
+    // Completion is INFERRED: the ABS TaskManager removes finished tasks from
+    // GET /api/tasks, so the watch resolves when this item's
+    // download-podcast-episode task vanishes (or reports finished). A never-
+    // matching task simply yields no toast; refetchItem still re-diffs.
+    void (async () => {
       const task = await startTaskWatch(
         (t) => t.action === "download-podcast-episode" && t.data?.libraryItemId === libraryItemId
       );
@@ -315,18 +363,12 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
             : "Episode downloads finished",
         });
       }
-      await refetchItem(); // re-diff the feed against the fresh episode list
-    } catch (e) {
-      if (mountedRef.current) {
-        showAppDialog({ title: "Couldn't queue downloads", message: normalizeAbsError(e).message });
-      }
-    } finally {
-      if (mountedRef.current) setBusy(false);
-    }
+      if (mountedRef.current) await refetchItem();
+    })();
   };
 
   const confirmDownload = () => {
-    const eps = selectedFeedEpisodes();
+    const eps = selectedFeedEpisodes;
     if (eps.length === 0 || busy) return;
     const n = eps.length;
     showAppDialog({
@@ -384,10 +426,13 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
       title: `Delete ${n} episode${n === 1 ? "" : "s"}?`,
       message:
         "Removes them from the server for every user. “Also delete files” permanently deletes the audio files from disk. There is no undo.",
+      // Recoverable option first, permanent (delete-files) last — buttons render
+      // left-to-right, so the nuclear action must not sit in the easier-to-tap
+      // slot. Matches PodcastSettings' askRemoveMode ordering.
       buttons: [
         { text: "Cancel", style: "cancel" },
-        { text: "Also delete files", style: "destructive", onPress: () => void doDelete(ids, true) },
         { text: "Delete records", style: "destructive", onPress: () => void doDelete(ids, false) },
+        { text: "Also delete files", style: "destructive", onPress: () => void doDelete(ids, true) },
       ],
     });
   };
@@ -638,10 +683,20 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
     );
   };
 
-  const selectedCount = selected?.size ?? 0;
+  // In the feed segment the actionable count is the download set derived above
+  // (filter-independent, on-server excluded) so the button label matches what
+  // actually downloads. The server segment acts on every selected row.
+  const selectedCount = segment === "feed" ? selectedFeedEpisodes.length : selected?.size ?? 0;
 
   let body: React.ReactNode;
-  if (!caps.isAdmin) {
+  if (!refreshDone) {
+    // Capabilities still hydrating — a spinner, never a premature lock.
+    body = (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  } else if (!caps.isAdmin) {
     body = (
       <ErrorState
         style={{ flex: 1 }}
@@ -709,7 +764,7 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
                   ? `Download ${selectedCount} to server`
                   : `Delete ${selectedCount}`
               }
-              accessibilityState={{ disabled: busy || selectedCount === 0 }}
+              accessibilityState={{ disabled: busy || selectedCount === 0, busy }}
               android_ripple={{
                 color: withAlpha(segment === "feed" ? colors.onPrimary : colors.onError, 0.16),
               }}

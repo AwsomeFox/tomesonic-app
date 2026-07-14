@@ -63,6 +63,19 @@ export default function OpmlImportSheet({
     if (visible && libraryId) setSelectedLibraryId(libraryId);
   }, [visible, libraryId]);
 
+  // Clear the transient parse state whenever the sheet closes. The host mounts
+  // this sheet ONCE and toggles `visible`, so without this a reopen after a
+  // successful import still shows the previous OPML with every feed checked — a
+  // second confirm would re-add the same shows. (Library/folder/auto-download
+  // selections intentionally persist across opens.)
+  useEffect(() => {
+    if (!visible) {
+      setText("");
+      setFeeds(null);
+      setSelected(new Set());
+    }
+  }, [visible]);
+
   // Fetch libraries lazily on first open (fresh GET — AdminLibraries idiom).
   const fetchedRef = useRef(false);
   useEffect(() => {
@@ -331,6 +344,9 @@ export default function OpmlImportSheet({
                   accessibilityRole="checkbox"
                   accessibilityState={{ checked }}
                   accessibilityLabel={`Feed: ${feedTitle}`}
+                  // A title-only row (no feedUrl line) is ~35dp tall; a vertical
+                  // hitSlop lifts the effective touch target toward ~44dp.
+                  hitSlop={{ top: 6, bottom: 6 }}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",

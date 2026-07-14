@@ -16,6 +16,7 @@ import { SectionHeader, NavRow, RowBase, Divider } from "../components/SettingsR
 import { api } from "../utils/api";
 import { checkNewEpisodes } from "../utils/abs/podcasts";
 import { deleteLibraryItem } from "../utils/abs/items";
+import { CRON_PRESETS } from "../utils/podcastCron";
 import { useServerCapabilities } from "../utils/abs/capabilities";
 import { normalizeAbsError } from "../utils/abs/errors";
 import { showAppDialog } from "../store/useDialogStore";
@@ -39,15 +40,6 @@ import { showSnackbar } from "../store/useSnackbarStore";
  * PodcastDownloadQueue, EditMetadata, and a typed-confirm "Remove podcast
  * from server" (record-only vs also-delete-files → items.deleteLibraryItem).
  */
-
-// Friendly cron presets (label → 5-field cron). The raw value stays visible and
-// editable so an admin can enter any custom schedule.
-const CRON_PRESETS: { label: string; cron: string }[] = [
-  { label: "Hourly", cron: "0 * * * *" },
-  { label: "Every 6 hours", cron: "0 */6 * * *" },
-  { label: "Daily", cron: "0 3 * * *" },
-  { label: "Weekly", cron: "0 3 * * 0" },
-];
 
 // Admin-or-up decides whether the write controls are enabled. ABS marks these
 // endpoints admin-only; a full user object carries `type` ("root"/"admin") and a
@@ -719,7 +711,7 @@ export default function PodcastSettingsScreen({ navigation, route }: any) {
           />
           <NumberField
             label="Max episodes to keep"
-            helper="Server-wide limit (applies to all podcasts, not just this one). Older downloads are removed beyond this count. 0 keeps them all."
+            helper="Older downloaded episodes of this podcast are removed once it exceeds this count. 0 keeps them all."
             value={maxKeep}
             onChangeText={setMaxKeep}
             accessibilityLabel="Max episodes to keep"

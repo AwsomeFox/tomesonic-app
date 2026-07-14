@@ -187,7 +187,9 @@ describe("PodcastEpisodesScreen", () => {
         FEED_EP_C,
       ])
     );
-    expect(showSnackbar).toHaveBeenCalledWith({ message: "Queued 2 episodes" });
+    expect(showSnackbar).toHaveBeenCalledWith({
+      message: "Queued 2 episodes — downloading on the server",
+    });
 
     // The watch matcher is pinned to this item's download-podcast-episode task.
     const matcher = (startTaskWatch as jest.Mock).mock.calls[0][0];
@@ -298,6 +300,63 @@ describe("PodcastEpisodesScreen", () => {
     expect(await screen.findByText("Admin access required")).toBeTruthy();
     expect(api.get).not.toHaveBeenCalled();
     expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("cold-restored admin (thin store user) is unlocked once refreshCapabilities hydrates", async () => {
+    // Cold restore: the store holds only a thin {id, username} user (no type)
+    // plus a valid session token. Without the mount-time capability refresh this
+    // real admin would hit the "Admin access required" lock; refreshCapabilities
+    // → POST /api/authorize hydrates the full admin user and the screen unlocks.
+    useUserStore.setState({
+      user: { id: "u1", username: "tony" },
+      serverConnectionConfig: { token: "sess" },
+    } as any);
+    (api.post as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/authorize") return Promise.resolve({ data: { user: ADMIN_USER } });
+      if (url === "/api/podcasts/feed")
+        return Promise.resolve({ data: { podcast: { episodes: FEED_EPISODES } } });
+      return Promise.resolve({ data: {} });
+    });
+
+    await renderScreen();
+
+    // The real content loads (not the lock) after capabilities hydrate.
+    expect(await screen.findByText("Episode A")).toBeTruthy();
+    expect(screen.queryByText("Admin access required")).toBeNull();
+    expect(api.post).toHaveBeenCalledWith("/api/authorize");
+  });
+
+  it("a title filter never drops a selected-but-hidden episode from the download", async () => {
+    await renderScreen();
+    await screen.findByText("Episode A");
+
+    // Select B and C (both not on server).
+    fireEvent(screen.getByLabelText("Episode: Episode B"), "longPress");
+    await screen.findByText("1 selected");
+    fireEvent.press(screen.getByLabelText("Episode: Chatter special"));
+    await screen.findByText("2 selected");
+
+    // Filter to "chatter" — hides the selected Episode B from the list…
+    fireEvent.changeText(screen.getByLabelText("Filter episodes by title"), "chatter");
+    await waitFor(() => expect(screen.queryByText("Episode B")).toBeNull());
+
+    // …but the action still targets BOTH selected episodes (count unchanged).
+    expect(screen.getByLabelText("Download 2 to server")).toBeTruthy();
+    fireEvent.press(screen.getByLabelText("Download 2 to server"));
+    await waitFor(() => expect(showAppDialog).toHaveBeenCalled());
+    const dialog = dialogByTitle("Download 2 episodes to server?");
+    expect(dialog).toBeTruthy();
+    await act(async () => {
+      dialog.buttons.find((b: any) => b.text === "Download").onPress();
+    });
+
+    // The hidden Episode B is NOT dropped — the POST carries both B and C.
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/podcasts/pod1/download-episodes", [
+        FEED_EP_B,
+        FEED_EP_C,
+      ])
+    );
   });
 
   it("a feed failure keeps the On-server segment working (segment-scoped error)", async () => {
