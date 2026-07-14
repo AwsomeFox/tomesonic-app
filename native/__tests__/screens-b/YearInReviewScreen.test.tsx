@@ -189,7 +189,7 @@ describe("YearInReviewScreen", () => {
     (api.get as jest.Mock).mockResolvedValue({
       data: {
         numBooksFinished: 0,
-        totalListeningTime: 45, // 45 seconds -> would floor to 0 minutes
+        totalListeningTime: 45.7, // fractional seconds must floor to "45", not "45.7"
         totalListeningSessions: 1,
         numBooksListened: 1,
         topAuthors: [],
@@ -200,9 +200,11 @@ describe("YearInReviewScreen", () => {
     await renderYear({ year: 2025 });
     await screen.findByText("Books Finished");
 
-    // A real (tiny) year must not headline as "0 minutes"/empty.
+    // A real (tiny) year must not headline as "0 minutes"/empty — and the
+    // fractional total is floored (no "45.7").
     expect(screen.getByText("seconds listened")).toBeTruthy();
     expect(screen.getByText("45")).toBeTruthy();
+    expect(screen.queryByText("45.7")).toBeNull();
     expect(screen.queryByText("minutes listened")).toBeNull();
     // NOT the empty state.
     expect(screen.queryByText(/no listening/i)).toBeNull();
