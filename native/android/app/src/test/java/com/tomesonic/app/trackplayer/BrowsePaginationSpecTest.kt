@@ -1,56 +1,67 @@
 package com.tomesonic.app.trackplayer
 
+import android.app.Application
+import com.doublesymmetry.trackplayer.service.MusicService
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
- * SPEC-MIRROR TEST — weaker than testing the production method, and labelled
- * as such on purpose.
+ * Pins absPageWindow — the browse page-windowing extracted from the patched
+ * MusicService (node_modules/react-native-track-player/android/src/main/java/
+ * com/doublesymmetry/trackplayer/service/MusicService.kt, applied by
+ * patches/react-native-track-player+5.0.0-alpha0.patch). It was previously
+ * inlined verbatim in the onGetChildren and onGetSearchResult callbacks; both
+ * now call absPageWindow(size, page, pageSize), which returns the [from, to)
+ * sub-list bounds.
  *
- * The page-windowing under test lives inline in two anonymous
- * MediaLibrarySession.Callback overrides of the patched MusicService
- * (node_modules/react-native-track-player/android/src/main/java/com/
- * doublesymmetry/trackplayer/service/MusicService.kt, applied by
- * patches/react-native-track-player+5.0.0-alpha0.patch). Search that file for
- * the `override fun onGetChildren(` and `override fun onGetSearchResult(`
- * declarations: the windowing is the `val from = ... val to = ... subList`
- * block below the "Honor the requested page window" comment in each.
+ * Those callbacks take non-null MediaLibrarySession/ControllerInfo parameters
+ * (Kotlin null-check intrinsics reject reflective null arguments), so they stay
+ * unreachable without a live media3 session — but the windowing itself is now a
+ * named private member, so this test drives it DIRECTLY by reflection on a bare
+ * service from Robolectric.buildService(...).get() (onCreate NEVER called),
+ * replacing the old verbatim spec-mirror copy.
  *
- * TODO(pagination-extraction): extract this windowing into a NAMED function
- * in the RNTP patch (e.g. a companion-object member or top-level
- * `internal fun` that both callbacks call), then rewrite this spec-mirror as
- * a direct test of the production function and delete the copy below.
- * Deliberately NOT done on this branch: the patch file is concurrently
- * modified on the PR #54 branch and editing it here would tangle that rebase.
- * Do the extraction once #54 lands.
- *
- * Those overrides take non-null MediaLibrarySession/ControllerInfo parameters
- * (Kotlin null-check intrinsics reject reflective null arguments), so they
- * are unreachable without standing up a live media3 session and player. The
- * expression below is therefore copied VERBATIM from the service:
- *
- *   val from = (page.toLong() * pageSize.toLong())
- *       .coerceIn(0L, children.size.toLong()).toInt()
- *   val to = (from.toLong() + pageSize.toLong())
- *       .coerceIn(from.toLong(), children.size.toLong()).toInt()
- *   val window = children.subList(from, to)
- *
- * IF THE EXPRESSION IN MusicService.kt CHANGES, UPDATE THIS COPY TO MATCH.
  * The tests pin the expression's contract — disjoint pages (the head-unit
  * duplicate-rows bug), an empty (not out-of-range) page past the end, and no
- * Int overflow for hostile page/pageSize values — not the service wiring
- * around it.
+ * Int overflow for hostile page/pageSize values.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], application = Application::class)
 class BrowsePaginationSpecTest {
 
-    /** Verbatim copy of the windowing expression — see class comment. */
+    private lateinit var service: MusicService
+
+    @Before
+    fun setUp() {
+        service = Robolectric.buildService(MusicService::class.java).get()
+    }
+
+    /** Drives the extracted absPageWindow and applies its bounds, like the callbacks. */
     private fun <T> pageWindow(children: List<T>, page: Int, pageSize: Int): List<T> {
-        val from = (page.toLong() * pageSize.toLong())
-            .coerceIn(0L, children.size.toLong()).toInt()
-        val to = (from.toLong() + pageSize.toLong())
-            .coerceIn(from.toLong(), children.size.toLong()).toInt()
-        val window = children.subList(from, to)
-        return window
+        val m = try {
+            MusicService::class.java.getDeclaredMethod(
+                "absPageWindow",
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!,
+                Int::class.javaPrimitiveType!!
+            )
+        } catch (e: NoSuchMethodException) {
+            throw AssertionError(
+                "absPageWindow missing — signature changed in the RNTP patch? See " +
+                    "native/patches/react-native-track-player+5.0.0-alpha0.patch",
+                e
+            )
+        }
+        m.isAccessible = true
+        val bounds = m.invoke(service, children.size, page, pageSize) as Pair<*, *>
+        val from = bounds.first as Int
+        val to = bounds.second as Int
+        return children.subList(from, to)
     }
 
     private val items = (0 until 25).map { "item$it" }

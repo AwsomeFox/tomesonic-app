@@ -240,7 +240,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..ae90618 100644
+index b495b5a..4d52489 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -334,7 +334,7 @@ index b495b5a..ae90618 100644
          return player.exoPlayer.currentMediaItem?.mediaMetadata?.let {
              mediaSession.bitmapLoader.loadBitmapFromMetadata(
                  it
-@@ -97,28 +157,1338 @@ class MusicService : HeadlessJsMediaService() {
+@@ -97,28 +157,1378 @@ class MusicService : HeadlessJsMediaService() {
                  return "RNTP-${element.className}:${element.methodName}"
              }
          })
@@ -401,7 +401,15 @@ index b495b5a..ae90618 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -513,6 +521,39 @@ index b495b5a..ae90618 100644
 +            Timber.w(e, "browse executor rejected task; completing future inline")
 +            onReject()
 +        }
++    }
++
++    // Compute the [from, to) sub-list bounds for a browse page. Returning the
++    // full list for every page made paginating head units append the same rows
++    // repeatedly (duplicate entries). The toLong() arithmetic clamps so a hostile
++    // page/pageSize can't overflow Int into a negative index; a page past the end
++    // yields an empty (from == to), NOT out-of-range, window.
++    private fun absPageWindow(size: Int, page: Int, pageSize: Int): Pair<Int, Int> {
++        val from = (page.toLong() * pageSize.toLong())
++            .coerceIn(0L, size.toLong()).toInt()
++        val to = (from.toLong() + pageSize.toLong())
++            .coerceIn(from.toLong(), size.toLong()).toInt()
++        return Pair(from, to)
++    }
++
++    // Parsed "play:<itemId>[::<episodeId>][@@<bookmarkSeconds>]" Android Auto
++    // media id. bookmarkSeconds is the absolute-seconds override some ids carry.
++    private data class PlayMediaId(
++        val itemId: String,
++        val episodeId: String?,
++        val bookmarkSeconds: Double?
++    )
++
++    // Parse the "play:" media-id grammar used across the Android Auto callbacks.
++    // removePrefix is a no-op when "play:" is absent, matching every call site
++    // (each guards with startsWith("play:") first, so the prefix is present).
++    private fun parsePlayMediaId(mediaId: String): PlayMediaId {
++        val body = mediaId.removePrefix("play:")
++        val raw = body.substringBefore("@@")
++        val bookmarkSeconds = body.substringAfter("@@", "").toDoubleOrNull()
++        val itemId = raw.substringBefore("::")
++        val episodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++        return PlayMediaId(itemId, episodeId, bookmarkSeconds)
 +    }
 +
 +    // Holds a freshly-refreshed access token in memory so we don't keep hitting
@@ -795,6 +836,43 @@ index b495b5a..ae90618 100644
 +        return null
 +    }
 +
++    // Parse the auto_downloads.json mirror into the offline catalog map. Two row
++    // shapes coexist: legacy bare-string ids (badge only, no offline play) and
++    // rich JSONObject rows carrying title/author/folder/cover + a tracks[] list.
++    // Extracted verbatim from absRefreshDownloaded so it is unit-testable; the
++    // "keep last good map on throw" recovery stays in the caller's wrapper.
++    private fun parseAutoDownloads(arr: org.json.JSONArray): Map<String, AbsDownload> {
++        val out = HashMap<String, AbsDownload>()
++        for (i in 0 until arr.length()) {
++            val v = arr.opt(i)
++            if (v is String) {
++                // Legacy format: bare item id (badge only, no offline play).
++                out[v] = AbsDownload(v, "Audiobook", null, null, null, 0.0, 0.0, emptyList())
++            } else if (v is org.json.JSONObject) {
++                val id = v.optString("id")
++                if (id.isEmpty()) continue
++                val tracks = mutableListOf<Triple<String, Double, Double>>()
++                v.optJSONArray("tracks")?.let { ts ->
++                    for (j in 0 until ts.length()) {
++                        val t = ts.getJSONObject(j)
++                        tracks.add(Triple(t.optString("filename"), t.optDouble("startOffset", 0.0), t.optDouble("duration", 0.0)))
++                    }
++                }
++                out[id] = AbsDownload(
++                    id,
++                    v.optString("title", "Audiobook"),
++                    v.optString("author").ifEmpty { null },
++                    v.optString("folder").ifEmpty { null },
++                    v.optString("coverPath").ifEmpty { null },
++                    v.optDouble("currentTime", 0.0),
++                    v.optDouble("duration", 0.0),
++                    tracks
+                 )
++            }
++        }
++        return out
++    }
++
 +    private fun absRefreshDownloaded() {
 +        absDownloads = try {
 +            val raw = absReadMirror("auto_downloads.json")
@@ -804,36 +882,9 @@ index b495b5a..ae90618 100644
 +                // mid-swap — keep the last good map either way.
 +                absDownloads
 +            } else {
-+                val arr = org.json.JSONArray(raw)
-+                val out = HashMap<String, AbsDownload>()
-+                for (i in 0 until arr.length()) {
-+                    val v = arr.opt(i)
-+                    if (v is String) {
-+                        // Legacy format: bare item id (badge only, no offline play).
-+                        out[v] = AbsDownload(v, "Audiobook", null, null, null, 0.0, 0.0, emptyList())
-+                    } else if (v is org.json.JSONObject) {
-+                        val id = v.optString("id")
-+                        if (id.isEmpty()) continue
-+                        val tracks = mutableListOf<Triple<String, Double, Double>>()
-+                        v.optJSONArray("tracks")?.let { ts ->
-+                            for (j in 0 until ts.length()) {
-+                                val t = ts.getJSONObject(j)
-+                                tracks.add(Triple(t.optString("filename"), t.optDouble("startOffset", 0.0), t.optDouble("duration", 0.0)))
-+                            }
-+                        }
-+                        out[id] = AbsDownload(
-+                            id,
-+                            v.optString("title", "Audiobook"),
-+                            v.optString("author").ifEmpty { null },
-+                            v.optString("folder").ifEmpty { null },
-+                            v.optString("coverPath").ifEmpty { null },
-+                            v.optDouble("currentTime", 0.0),
-+                            v.optDouble("duration", 0.0),
-+                            tracks
-+                        )
-+                    }
-+                }
-+                out
++                // JSONArray(raw) can throw on a torn read — inside the try so the
++                // catch below preserves the last good map.
++                parseAutoDownloads(org.json.JSONArray(raw))
 +            }
 +        } catch (e: Exception) {
 +            // JS rewrites this file every ~15s while a downloaded book plays;
@@ -965,9 +1016,6 @@ index b495b5a..ae90618 100644
 +        absArtCache[itemId]?.let { return it }
 +        val cover = absDownloads[itemId]?.coverPath ?: return null
 +        val path = cover.removePrefix("file://")
-+        // Only filesystem paths are decodable here; http(s)://, content://
-+        // and other non-local URIs are left to the regular artwork loader.
-+        if (!path.startsWith("/")) return null
 +        return try {
 +            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
 +            android.graphics.BitmapFactory.decodeFile(path, bounds)
@@ -1347,15 +1395,7 @@ index b495b5a..ae90618 100644
 +                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MediaItem>>): Boolean =
 +                    size > 30
 +            }
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +
 +    private fun absSearch(query: String): List<MediaItem> {
 +        val libsBody = absGet("/api/libraries") ?: return emptyList()
@@ -1460,7 +1500,7 @@ index b495b5a..ae90618 100644
 +            return when (parentId) {
 +                "__ROOT__" -> listOf(
 +                    absBrowsableItem("__DOWNLOADS__", "Downloads", "Available offline", iconRes = "aa_downloads")
-                 )
++                )
 +                "__DOWNLOADS__" -> absDownloadsCategory()
 +                else -> absDownloadsCategory()
 +            }
@@ -1686,7 +1726,7 @@ index b495b5a..ae90618 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1576,77 @@ class MusicService : HeadlessJsMediaService() {
+@@ -206,11 +1616,77 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1766,7 +1806,7 @@ index b495b5a..ae90618 100644
          observeEvents()
      }
  
-@@ -293,9 +1729,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1769,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1778,7 +1818,7 @@ index b495b5a..ae90618 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1742,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1782,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -1840,7 +1880,7 @@ index b495b5a..ae90618 100644
          }
      }
  
-@@ -395,6 +1865,246 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,6 +1905,266 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -1918,6 +1958,26 @@ index b495b5a..ae90618 100644
 +        Timber.i("ABS sleep timer cancelled")
 +    }
 +
++    // Linear ease-out over the final fadeSecs: full volume until remainingSecs
++    // drops below the fade window, then remainingSecs/fadeSecs clamped to [0,1].
++    // Callers pass an already-guarded fadeSecs (absSetSleepTimer stores
++    // `if (fadeSeconds > 0) fadeSeconds else 60`), so fadeSecs is always > 0 here.
++    private fun sleepFadeVolume(remainingSecs: Double, fadeSecs: Int): Float {
++        return if (remainingSecs >= fadeSecs) 1.0f
++               else (remainingSecs / fadeSecs).coerceIn(0.0, 1.0).toFloat()
++    }
++
++    // Shake detection: normalize the accelerometer sample by g, take the vector
++    // magnitude, and treat >= 2.2g as a shake. Mirrors the source's strict
++    // `if (force < 2.2f) return` — a magnitude exactly at the 2.2f threshold is
++    // NOT below it, so it counts as a shake.
++    private fun isShake(values: FloatArray): Boolean {
++        val g = 9.80665f
++        val x = values[0] / g; val y = values[1] / g; val z = values[2] / g
++        val force = kotlin.math.sqrt(x * x + y * y + z * z)
++        return force >= 2.2f
++    }
++
 +    private val absSleepTick = object : Runnable {
 +        override fun run() {
 +            if (!absSleepActive) { absSleepTickPosted = false; return }
@@ -1928,8 +1988,7 @@ index b495b5a..ae90618 100644
 +                val remaining = absSleepRemainingNow()
 +                if (playing) {
 +                    // Fade the last absSleepFadeSecs down so playback eases out.
-+                    val vol = if (remaining >= absSleepFadeSecs) 1.0f
-+                              else (remaining / absSleepFadeSecs).coerceIn(0.0, 1.0).toFloat()
++                    val vol = sleepFadeVolume(remaining, absSleepFadeSecs)
 +                    player.volume = vol
 +                    if (remaining <= 0.0) {
 +                        absSleepActive = false
@@ -1960,10 +2019,7 @@ index b495b5a..ae90618 100644
 +            val listener = object : android.hardware.SensorEventListener {
 +                override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) {}
 +                override fun onSensorChanged(event: android.hardware.SensorEvent) {
-+                    val g = 9.80665f
-+                    val x = event.values[0] / g; val y = event.values[1] / g; val z = event.values[2] / g
-+                    val force = kotlin.math.sqrt(x * x + y * y + z * z)
-+                    if (force < 2.2f) return
++                    if (!isShake(event.values)) return
 +                    val now = absSleepNow()
 +                    if (now - absLastShakeMs < 1500) return
 +                    absLastShakeMs = now
@@ -2011,10 +2067,14 @@ index b495b5a..ae90618 100644
 +    private var absVoiceBoostSessionId = C.AUDIO_SESSION_ID_UNSET
 +    private var absVoiceBoostListener: androidx.media3.exoplayer.analytics.AnalyticsListener? = null
 +
++    // Clamp the requested LoudnessEnhancer gain to a non-negative millibel value.
++    // No upper bound today — a positive request passes through unchanged.
++    private fun clampVoiceGain(gainMb: Int): Int = if (gainMb > 0) gainMb else 0
++
 +    @MainThread
 +    fun absSetVoiceBoost(enabled: Boolean, gainMb: Int) {
 +        absVoiceBoostEnabled = enabled
-+        absVoiceBoostGainMb = if (gainMb > 0) gainMb else 0
++        absVoiceBoostGainMb = clampVoiceGain(gainMb)
 +        absEnsureVoiceBoostSessionListener()
 +        absApplyVoiceBoost()
 +    }
@@ -2087,7 +2147,7 @@ index b495b5a..ae90618 100644
      @MainThread
      fun stop() {
          player.stop()
-@@ -449,6 +2159,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +2219,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -2098,7 +2158,7 @@ index b495b5a..ae90618 100644
      }
  
      @MainThread
-@@ -515,6 +2229,229 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2289,237 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2173,6 +2233,15 @@ index b495b5a..ae90618 100644
 +        if (finalFlush && wasRunning) absPersistTickOnce(finalFlush = true)
 +    }
 +
++    // Anti-over-report clamp for the per-tick listened delta: the wall-clock
++    // seconds elapsed since the previous tick, but 0 on the first tick
++    // (prevWallMs < 0), on a non-positive delta (backwards clock / zero delta),
++    // or on a delta larger than maxStep (a stall / doze between ticks).
++    private fun bankedListenSeconds(prevWallMs: Long, nowWallMs: Long, maxStep: Double): Double {
++        return if (prevWallMs < 0L) 0.0
++            else ((nowWallMs - prevWallMs) / 1000.0).let { if (it > 0.0 && it <= maxStep) it else 0.0 }
++    }
++
 +    // One persist tick: snapshot the live absolute position on the main thread,
 +    // then offload the server sync + local mirror write to the browse pool.
 +    @MainThread
@@ -2189,9 +2258,9 @@ index b495b5a..ae90618 100644
 +        // resolve hasn't refreshed the snapshot yet — persisting then would POST
 +        // book A's offset+session with book B's live position. Parse the live
 +        // item's identity and abort unless it matches the snapshot.
-+        val raw = mid.removePrefix("play:").substringBefore("@@")
-+        val liveItemId = raw.substringBefore("::")
-+        val liveEpisodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++        val parsed = parsePlayMediaId(mid)
++        val liveItemId = parsed.itemId
++        val liveEpisodeId = parsed.episodeId
 +        if (liveItemId != absColdStartItemId) return
 +        if (liveEpisodeId != absColdStartEpisodeId) return
 +        val relMs = fakePlayer.currentPosition.coerceAtLeast(0L)
@@ -2218,8 +2287,7 @@ index b495b5a..ae90618 100644
 +        val nowWall = android.os.SystemClock.elapsedRealtime()
 +        val prevWall = absPersistLastWallMs
 +        val maxStep = (ABS_PERSIST_INTERVAL_MS / 1000.0) * 4
-+        val listened = if (prevWall < 0L) 0.0
-+            else ((nowWall - prevWall) / 1000.0).let { if (it > 0.0 && it <= maxStep) it else 0.0 }
++        val listened = bankedListenSeconds(prevWall, nowWall, maxStep)
 +        absPersistLastWallMs = nowWall
 +        absPersistLastSyncedSec = absSec
 +        val task = Runnable {
@@ -2328,7 +2396,7 @@ index b495b5a..ae90618 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2654,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2722,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2337,7 +2405,7 @@ index b495b5a..ae90618 100644
              return
          }
  
-@@ -780,8 +2717,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2785,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2353,7 +2421,7 @@ index b495b5a..ae90618 100644
          return mediaSession
      }
  
-@@ -792,13 +2735,49 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2803,49 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2405,7 +2473,7 @@ index b495b5a..ae90618 100644
          super.onDestroy()
      }
  
-@@ -905,24 +2884,250 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2952,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2489,7 +2557,7 @@ index b495b5a..ae90618 100644
 +                    future.set(LibraryResult.ofItem(absBrowsableItem(mediaId, mediaId), null))
 +                }) {
 +                    try {
-+                        val itemId = mediaId.removePrefix("play:").substringBefore("@@").substringBefore("::")
++                        val itemId = parsePlayMediaId(mediaId).itemId
 +                        val dl = absDownloads[itemId]
 +                        future.set(
 +                            LibraryResult.ofItem(
@@ -2527,10 +2595,7 @@ index b495b5a..ae90618 100644
 +                // every page made paginating head units append the same rows
 +                // repeatedly (duplicate entries). Slice to [page*pageSize, end);
 +                // a page past the end yields an empty list (not out-of-range).
-+                val from = (page.toLong() * pageSize.toLong())
-+                    .coerceIn(0L, children.size.toLong()).toInt()
-+                val to = (from.toLong() + pageSize.toLong())
-+                    .coerceIn(from.toLong(), children.size.toLong()).toInt()
++                val (from, to) = absPageWindow(children.size, page, pageSize)
 +                val window = children.subList(from, to)
 +                future.set(LibraryResult.ofItemList(ImmutableList.copyOf(window), params))
 +            }
@@ -2583,10 +2648,7 @@ index b495b5a..ae90618 100644
 +            // units append the same rows repeatedly (duplicate entries) and
 +            // risked the same TransactionTooLargeException. Slice to
 +            // [page*pageSize, end); a page past the end yields an empty list.
-+            val from = (page.toLong() * pageSize.toLong())
-+                .coerceIn(0L, results.size.toLong()).toInt()
-+            val to = (from.toLong() + pageSize.toLong())
-+                .coerceIn(from.toLong(), results.size.toLong()).toInt()
++            val (from, to) = absPageWindow(results.size, page, pageSize)
 +            val window = results.subList(from, to)
 +            return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(window), params))
 +        }
@@ -2613,12 +2675,11 @@ index b495b5a..ae90618 100644
 +            absSubmitBrowse(onReject = {
 +                future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
 +            }) {
-+                val id = playItem.mediaId.removePrefix("play:")
-+                val raw = id.substringBefore("@@")
++                val parsed = parsePlayMediaId(playItem.mediaId)
++                val itemId = parsed.itemId
++                val episodeId = parsed.episodeId
 +                // Bookmark ids carry an absolute-seconds override after "@@".
-+                val overrideSec = id.substringAfter("@@", "").toDoubleOrNull()
-+                val itemId = raw.substringBefore("::")
-+                val episodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++                val overrideSec = parsed.bookmarkSeconds
 +                val resolved = try {
 +                    absResolvePlayResumable(itemId, episodeId, overrideSec)
 +                } catch (e: Exception) {
@@ -2660,9 +2721,9 @@ index b495b5a..ae90618 100644
 +                    val id = item.mediaId
 +                    if (id.startsWith("play:")) {
 +                        // Strip any "@@<bookmarkTime>" suffix before resolving the URL.
-+                        val raw = id.removePrefix("play:").substringBefore("@@")
-+                        val itemId = raw.substringBefore("::")
-+                        val episodeId = if (raw.contains("::")) raw.substringAfter("::") else null
++                        val parsed = parsePlayMediaId(id)
++                        val itemId = parsed.itemId
++                        val episodeId = parsed.episodeId
 +                        val url = try { absResolvePlayUrl(itemId, episodeId) } catch (e: Exception) { null }
 +                        if (url != null) item.buildUpon().setUri(url).build() else item
 +                    } else item
@@ -2673,7 +2734,7 @@ index b495b5a..ae90618 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3136,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3197,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2703,7 +2764,7 @@ index b495b5a..ae90618 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3168,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3229,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2719,7 +2780,7 @@ index b495b5a..ae90618 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3184,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3245,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
