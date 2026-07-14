@@ -43,6 +43,7 @@ import { useDownloadStore } from "../store/useDownloadStore";
 import WavyProgress from "./WavyProgress";
 import Confetti from "./Confetti";
 import { showAppDialog } from "../store/useDialogStore";
+import { showSnackbar } from "../store/useSnackbarStore";
 import { resolveEbookTarget, readingFractionForAudioPosition, canJumpToFraction } from "../utils/formatSwitch";
 import { haptic } from "../utils/haptics";
 import { computePlayerLayout } from "../utils/playerLayout";
@@ -434,6 +435,9 @@ export default function PlayerBottomSheet() {
   const [showSleepTimer, setShowSleepTimer] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showOverflow, setShowOverflow] = useState(false);
+  // Guards the manual "Sync position from server" row against a double-tap while
+  // its (up-to-3s) request is still in flight.
+  const syncBusyRef = useRef(false);
 
   const playProgress = useSharedValue(isPlaying ? 1 : 0);
 
@@ -1909,6 +1913,31 @@ export default function PlayerBottomSheet() {
           }
         }}
         onReadFromHere={readFromHere}
+        onSyncFromServer={() => {
+          if (syncBusyRef.current) return;
+          syncBusyRef.current = true;
+          usePlaybackStore
+            .getState()
+            .syncPositionFromServer()
+            .then((r) => {
+              // "no-session" means the session ended (or switched) during the
+              // fetch — the network was fine, so don't cry network failure;
+              // just say nothing.
+              if (r.status === "no-session") return;
+              showSnackbar({
+                message:
+                  r.status === "adopted"
+                    ? "Jumped to your latest position"
+                    : r.status === "up-to-date"
+                    ? "Already at the latest position"
+                    : "Couldn't reach the server",
+              });
+            })
+            .catch(() => showSnackbar({ message: "Couldn't reach the server" }))
+            .finally(() => {
+              syncBusyRef.current = false;
+            });
+        }}
         onStopClose={() => {
           setPlayerExpanded(false);
           closePlayback().catch(() => {});

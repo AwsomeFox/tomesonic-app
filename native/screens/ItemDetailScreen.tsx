@@ -409,6 +409,48 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     });
   };
 
+  // Manual "Sync position from server" (issue #55 follow-up): pull the latest
+  // cross-device progress on demand. When THIS item is the live playback
+  // session, jump the player to the server position (the automatic pre-resume
+  // check does this too, but the button gives an explicit "catch me up now").
+  // Otherwise just refresh the displayed progress from the server so the
+  // Continue button / badge reflect where another device left off.
+  const syncBusyRef = React.useRef(false);
+  const handleSyncFromServer = async () => {
+    if (!item?.id || syncBusyRef.current) return;
+    syncBusyRef.current = true;
+    try {
+      const live = usePlaybackStore.getState().currentSession;
+      const liveItemId = live?.libraryItemId || live?.libraryItem?.id;
+      if (liveItemId && liveItemId === item.id) {
+        const r = await usePlaybackStore.getState().syncPositionFromServer();
+        // "no-session" means the live session ended between the tap and here —
+        // the network was fine, so stay silent rather than cry a network error.
+        if (r.status === "no-session") return;
+        showSnackbar({
+          message:
+            r.status === "adopted"
+              ? "Jumped to your latest position"
+              : r.status === "up-to-date"
+              ? "Already at the latest position"
+              : "Couldn't reach the server",
+        });
+        return;
+      }
+      // Not the live session — refresh the displayed progress from the server so
+      // the Continue button / badge reflect where another device left off. Await
+      // BOTH the progress load and the item refetch before confirming, so the
+      // snackbar can't claim success ahead of the data it depends on.
+      await useUserStore.getState().loadMediaProgress();
+      await refetchItem();
+      showSnackbar({ message: "Progress refreshed from server" });
+    } catch {
+      showSnackbar({ message: "Couldn't reach the server" });
+    } finally {
+      syncBusyRef.current = false;
+    }
+  };
+
   // Per-episode finished toggle. Episode progress is ITS OWN entry, keyed
   // `${itemId}-${episodeId}` (the /api/me convention) and PATCHed to the
   // episode-scoped endpoint — an item-level write would pollute the map with a
@@ -3026,6 +3068,21 @@ export default function ItemDetailScreen({ route, navigation }: any) {
             onPress={() => {
               setOverflowVisible(false);
               setFeedEntity({ kind: "item", id: itemId, title: metadata.title || "this item" });
+            }}
+          />
+        ) : null}
+        {/* Manual cross-device position sync (issue #55 follow-up) — audio books
+            only. Item-level podcast progress isn't meaningful (episodes track
+            their own), so this is hidden for podcasts. */}
+        {hasAudioMedia && !isPodcastItem ? (
+          <RowBase
+            icon="cloud-sync"
+            title="Sync position from server"
+            subtitle="Catch up to your other devices"
+            colors={colors}
+            onPress={() => {
+              setOverflowVisible(false);
+              handleSyncFromServer();
             }}
           />
         ) : null}
