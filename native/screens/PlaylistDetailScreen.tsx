@@ -140,6 +140,12 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
       return !(mediaProgress[key] || i.userMediaProgress)?.isFinished;
     }) || items.find((i) => i.episode || !isEbookOnly(i.libraryItem));
 
+  // "Play all" needs at least one thing that can actually play. A playlist of
+  // only ebook-only books has nothing to start — handlePlayAll would no-op on
+  // an undefined item, leaving a dead button. Gate the button on this (mirrors
+  // CollectionDetailScreen, which hides its play button the same way).
+  const hasPlayableItem = items.some((i) => i.episode || !isEbookOnly(i.libraryItem));
+
   const startItem = async (item: any) => {
     const libraryItemId = item?.libraryItemId || item?.libraryItem?.id;
     if (!libraryItemId || starting) return;
@@ -349,7 +355,7 @@ export default function PlaylistDetailScreen({ route, navigation }: any) {
                 {items.length} {items.length === 1 ? "item" : "items"}
                 {totalDuration ? `  ·  ${elapsedPretty(totalDuration)}` : ""}
               </Text>
-              {items.length > 0 ? (
+              {hasPlayableItem ? (
                 <Pressable
                   onPress={handlePlayAll}
                   disabled={starting}

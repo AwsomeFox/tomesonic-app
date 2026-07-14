@@ -451,5 +451,37 @@ describe("LibraryScreen", () => {
         { timeout: 5000 }
       );
     });
+
+    it("reports a zero scroll offset to the hub when the list resets on re-seed", async () => {
+      // Regression: emptying `data` snaps the FlatList to the top but fires no
+      // onScroll(0), so the hub kept the previous offset and the scroll-to-top
+      // FAB lingered after a filter/sort change. The reset must notify the hub.
+      mockItemsPage([audioItem]);
+      const onScroll = jest.fn();
+      const navigation = makeNavigation();
+      const { rerender } = await render(
+        <LibraryScreen
+          embedded
+          route={{ params: { orderBy: "title", descending: false } }}
+          navigation={navigation}
+          onScroll={onScroll}
+        />
+      );
+      await screen.findByText("Audio Book One");
+      onScroll.mockClear();
+
+      // A re-seed (sort change) resets the list → the hub must hear offset 0.
+      await act(async () => {
+        rerender(
+          <LibraryScreen
+            embedded
+            route={{ params: { orderBy: "addedAt", descending: true } }}
+            navigation={navigation}
+            onScroll={onScroll}
+          />
+        );
+      });
+      await waitFor(() => expect(onScroll).toHaveBeenCalledWith(0));
+    });
   });
 });

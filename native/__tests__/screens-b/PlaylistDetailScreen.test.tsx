@@ -199,6 +199,66 @@ describe("PlaylistDetailScreen", () => {
     expect(startPlayback).toHaveBeenCalledWith("li2", "ep1");
   });
 
+  it("hides Play all when every item is ebook-only (nothing playable)", async () => {
+    // Regression: the button gated on items.length > 0, so an all-ebook playlist
+    // showed a "Play all" that no-op'd (handlePlayAll finds no playable item).
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        id: "pl1",
+        name: "Ebooks Only",
+        items: [
+          {
+            id: "pi1",
+            libraryItemId: "li1",
+            libraryItem: {
+              id: "li1",
+              mediaType: "book",
+              media: { ebookFormat: "epub", metadata: { title: "Ebook One", authorName: "Author A" } },
+            },
+          },
+        ],
+      },
+    });
+    await renderPlaylist();
+    await screen.findByText("Ebook One");
+    expect(screen.queryByText("Play all")).toBeNull();
+  });
+
+  it("shows Play all when at least one item is playable among ebook-only entries", async () => {
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        id: "pl1",
+        name: "Mixed",
+        items: [
+          {
+            id: "pi1",
+            libraryItemId: "li1",
+            libraryItem: {
+              id: "li1",
+              mediaType: "book",
+              media: { ebookFormat: "epub", metadata: { title: "Ebook One" } },
+            },
+          },
+          {
+            id: "pi2",
+            libraryItemId: "li2",
+            libraryItem: {
+              id: "li2",
+              mediaType: "book",
+              media: { metadata: { title: "Audiobook Two" }, duration: 3600, numTracks: 2 },
+            },
+          },
+        ],
+      },
+    });
+    await renderPlaylist();
+    await screen.findByText("Audiobook Two");
+    expect(screen.getByText("Play all")).toBeTruthy();
+    // Play all skips the ebook-only entry and starts the audiobook.
+    await fireEvent.press(screen.getByText("Play all"));
+    expect(startPlayback).toHaveBeenCalledWith("li2", undefined);
+  });
+
   it("row tap opens the item detail for the underlying library item", async () => {
     const navigation = await renderPlaylist();
     await screen.findByText("Episode One");

@@ -270,6 +270,29 @@ describe("SearchContent — states", () => {
     });
     expect(screen.getByText("Search your library")).toBeTruthy();
   });
+
+  it("clearing the query after a FAILED search drops the error screen (not pinned)", async () => {
+    // Regression: the "Search failed" screen renders on `loadError && !hasResults`,
+    // which ignores hasSearched — emptying the box reset hasSearched but left
+    // loadError set, pinning the error state over the now-empty query.
+    useUiStore.setState({ searchQuery: "boom" } as any);
+    apiGet.mockRejectedValue(Object.assign(new Error("500"), { response: { status: 500 } }));
+    const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { navigation } = makeNav();
+    await render(<SearchContent navigation={navigation} />);
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+    expect(screen.getByText("Search failed")).toBeTruthy();
+
+    // Emptying the search box must return to the idle prompt, not stay on the error.
+    await act(async () => {
+      useUiStore.setState({ searchQuery: "" } as any);
+    });
+    expect(screen.queryByText("Search failed")).toBeNull();
+    expect(screen.getByText("Search your library")).toBeTruthy();
+    consoleSpy.mockRestore();
+  });
 });
 
 describe("SearchContent — RMAB 'Not in your library' on the no-results screen", () => {

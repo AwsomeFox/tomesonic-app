@@ -82,6 +82,10 @@ export default function SearchContent({ navigation }: { navigation: any }) {
         setResults(null);
         setHasSearched(false);
         setLoading(false);
+        // Clear a prior failure — the "Search failed" screen renders on
+        // `loadError && !hasResults` (independent of hasSearched), so leaving
+        // it set would pin the error state over an emptied/invalid query.
+        setLoadError(false);
         return;
       }
 
@@ -126,6 +130,9 @@ export default function SearchContent({ navigation }: { navigation: any }) {
       setResults(null);
       setHasSearched(false);
       setLoading(false);
+      // Emptying the box must drop a prior "Search failed" screen too — its
+      // render guard (loadError && !hasResults) ignores hasSearched.
+      setLoadError(false);
       return;
     }
 
