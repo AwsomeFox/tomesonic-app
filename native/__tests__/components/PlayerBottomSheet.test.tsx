@@ -362,6 +362,41 @@ describe("PlayerBottomSheet — flanking time labels (classic layout)", () => {
     // Labels snap back to the live position once the drag ends.
     expect(screen.getAllByText("1:40", { includeHiddenElements: true }).length).toBe(2);
   });
+
+  it("release seeks against the chapter captured at drag START, not a chapter changed mid-gesture", async () => {
+    // Regression: chapterBoundsRef is rewritten every render from the LIVE
+    // chapter, so a ~1s tick crossing a boundary mid-drag would retarget the
+    // seek. Snapshot at grant; release must ignore the live change.
+    seedPlayer({ isPlayerExpanded: true }); // position 700, Ch 2 (600–1200)
+    await render(<PlayerBottomSheet />);
+    const scrubber = screen.getAllByLabelText("Chapter position")[0];
+    await fireEvent(scrubber, "layout", { nativeEvent: { layout: { width: 200 } } });
+    const touchHistory = {
+      touchBank: [],
+      numberActiveTouches: 0,
+      indexOfSingleActiveTouch: -1,
+      mostRecentTimeStamp: 1,
+    };
+    // Grab the scrubber while inside Ch 2 → snapshot bounds {600, span 600}.
+    await fireEvent(scrubber, "responderGrant", {
+      nativeEvent: { locationX: 150 }, // frac 0.75
+      touchHistory,
+    });
+
+    // A live tick advances playback into Ch 3 (1200–3600) mid-drag.
+    await act(async () => {
+      usePlaybackStore.setState({ position: 1300, currentChapterIndex: 2 } as any);
+    });
+
+    await fireEvent(scrubber, "responderRelease", {
+      nativeEvent: { locationX: 150 },
+      touchHistory,
+    });
+    // Uses the DRAG-START chapter (Ch 2): 600 + 0.75*600 = 1050 — NOT Ch 3
+    // (which would be 1200 + 0.75*2400 = 3000).
+    expect(store().seek).toHaveBeenCalledWith(1050);
+    expect(store().seek).not.toHaveBeenCalledWith(3000);
+  });
 });
 
 describe("PlayerBottomSheet — transport controls", () => {

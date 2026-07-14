@@ -281,7 +281,13 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
           !!((b as any).isLocal || (b as any).localLibraryItem);
         const recency = (b: SeriesBook) =>
           b.addedAt || Number((b.media?.metadata as any)?.publishedYear) || 0;
-        const repScore = (b: SeriesBook) => (hasProgress(b) ? 2 : 0) + (isDownloaded(b) ? 1 : 0);
+        // Playability outranks everything: a collapsed sequence must keep the
+        // PLAYABLE (audio) edition, not an ebook-only re-release — otherwise the
+        // row routes to the Reader and, under "Hide non-audiobooks", the whole
+        // entry vanishes even though the user owns the audiobook. Progress and
+        // downloaded still order editions of the same playability.
+        const repScore = (b: SeriesBook) =>
+          (!isEbookOnly(b) ? 4 : 0) + (hasProgress(b) ? 2 : 0) + (isDownloaded(b) ? 1 : 0);
         const seqKey = (b: SeriesBook): string | null => {
           const raw = String(b.sequence ?? "").trim();
           if (!raw) return null; // blank → keep un-collapsed
@@ -364,6 +370,11 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
 
   // First unfinished book in sequence order — what the header button starts.
   const nextUnfinished = books.find((b) => !progressOf(b)?.isFinished) || books[0];
+  // handlePlay routes an ebook-only next book to the Reader, so the hero button
+  // must present as "Read" (book icon) in that case — a play icon + "Play all"
+  // that silently opens the Reader is a mismatched affordance (mirrors the
+  // per-row treatment).
+  const nextIsEbook = nextUnfinished ? isEbookOnly(nextUnfinished) : false;
 
   // Batch progress over the whole series, via the batch progress endpoint whose
   // body is a BARE ARRAY of progress payloads (one PATCH for N books). Managing
@@ -671,7 +682,13 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
               accessibilityRole="button"
               accessibilityState={{ disabled: !!startingId, busy: !!startingId }}
               accessibilityLabel={
-                startingId ? "Starting playback" : anyProgress ? "Continue" : "Play all"
+                startingId
+                  ? "Starting playback"
+                  : nextIsEbook
+                  ? "Read"
+                  : anyProgress
+                  ? "Continue"
+                  : "Play all"
               }
               style={{
                 flexDirection: "row",
@@ -690,9 +707,9 @@ export default function SeriesDetailScreen({ route, navigation }: any) {
                 <ActivityIndicator size="small" color={colors.onPrimary} />
               ) : (
                 <>
-                  <Icon name="play" size={20} color={colors.onPrimary} />
+                  <Icon name={nextIsEbook ? "book" : "play"} size={nextIsEbook ? 18 : 20} color={colors.onPrimary} />
                   <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600", marginLeft: 6 }}>
-                    {anyProgress ? "Continue" : "Play all"}
+                    {nextIsEbook ? "Read" : anyProgress ? "Continue" : "Play all"}
                   </Text>
                 </>
               )}

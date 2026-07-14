@@ -148,8 +148,25 @@ export default function YearInReviewScreen({ navigation, route }: any) {
   // Under an hour, "0 hours" reads as "nothing listened" and buries a real
   // (if light) year. Surface the minutes as the headline instead.
   const heroUnderHour = totalHours < 1;
-  const heroValue = heroUnderHour ? totalMinutes : totalHours;
-  const heroUnit = heroUnderHour
+  // Under a minute, "0 minutes" headlines a real (if tiny) year as nothing —
+  // drop to seconds so a non-empty year never reads as empty.
+  const heroUnderMinute = heroUnderHour && totalMinutes < 1 && totalTime > 0;
+  // totalListeningTime is a float (fractional wall-clock seconds summed
+  // server-side), so floor the seconds hero the same way minutes/hours are —
+  // otherwise a light year headlines a fractional "1.4 seconds". Clamp to at
+  // least 1 for a non-empty year: a sub-1s total would otherwise floor to 0 and
+  // headline "0 seconds", defeating this branch's "never reads as empty" intent.
+  const totalSeconds = totalTime > 0 ? Math.max(1, Math.floor(totalTime)) : 0;
+  const heroValue = heroUnderMinute
+    ? totalSeconds
+    : heroUnderHour
+    ? totalMinutes
+    : totalHours;
+  const heroUnit = heroUnderMinute
+    ? totalSeconds === 1
+      ? 'second'
+      : 'seconds'
+    : heroUnderHour
     ? totalMinutes === 1
       ? 'minute'
       : 'minutes'

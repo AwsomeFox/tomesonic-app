@@ -372,6 +372,16 @@ describe("playbackService remote events", () => {
       emit("playback-state", { state: State.Buffering });
       expect(usePlaybackStore.getState().isBuffering).toBe(false);
     });
+
+    it("entering a cast session clears a stuck isBuffering (the state listener can no longer)", () => {
+      // If a local stream is buffering when Cast starts, the PlaybackState
+      // listener early-returns during casting and can never clear isBuffering —
+      // the spinner would pin over the transport for the whole session.
+      usePlaybackStore.setState({ isBuffering: true, isCasting: false } as any);
+      usePlaybackStore.getState().setCastState({ id: "receiver" } as any);
+      expect(usePlaybackStore.getState().isCasting).toBe(true);
+      expect(usePlaybackStore.getState().isBuffering).toBe(false);
+    });
   });
 
   describe("RemotePlayId (Android Auto browse / bookmarks)", () => {

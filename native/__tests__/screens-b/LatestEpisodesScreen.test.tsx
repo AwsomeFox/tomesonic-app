@@ -153,6 +153,25 @@ describe("LatestEpisodesScreen", () => {
     expect(screen.getByText("15m")).toBeTruthy();
   });
 
+  it("renders both rows when two podcasts share an episode id (composite list key, no collision)", async () => {
+    // Episode ids are NOT unique across podcasts. A bare-id key would collide
+    // between these two rows; the composite item+episode key keeps them distinct.
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        episodes: [
+          { id: "e1", libraryItemId: "podA", title: "Alpha Ep", duration: 600, podcast: { metadata: { title: "Show A" } } },
+          { id: "e1", libraryItemId: "podB", title: "Beta Ep", duration: 600, podcast: { metadata: { title: "Show B" } } },
+        ],
+      },
+    });
+    await renderEpisodes();
+    await screen.findByText("Alpha Ep");
+    // Both rows survive reconciliation despite the shared episode id.
+    expect(screen.getByText("Beta Ep")).toBeTruthy();
+    expect(screen.getByText("Show A")).toBeTruthy();
+    expect(screen.getByText("Show B")).toBeTruthy();
+  });
+
   it("episode play button starts playback with the episode id", async () => {
     await renderEpisodes();
     await screen.findByText("Fresh Episode");

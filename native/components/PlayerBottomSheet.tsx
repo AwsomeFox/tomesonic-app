@@ -633,6 +633,13 @@ export default function PlayerBottomSheet() {
   const [dragFrac, setDragFrac] = useState<number | null>(null);
   const chapterBarWidthRef = useRef(0);
   const chapterBoundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
+  // Chapter bounds captured at the MOMENT the drag begins. chapterBoundsRef is
+  // rewritten every render from the LIVE current chapter, so a ~1s position
+  // tick that crosses a chapter boundary mid-drag would otherwise move the
+  // seek target out from under the user (or, at a chapter gap / book end,
+  // collapse to whole-book bounds). Snapshot on grant, seek against the
+  // snapshot on release.
+  const dragStartBoundsRef = useRef({ start: 0, end: 0, span: 0, duration: 0 });
 
   // Draggable chapter scrubber PanResponder
   const chapterScrubPanResponder = useRef(
@@ -642,6 +649,9 @@ export default function PlayerBottomSheet() {
       onPanResponderGrant: (e) => {
         const w = chapterBarWidthRef.current;
         if (!w) return;
+        // Freeze the chapter the user is dragging within — the release seek maps
+        // against THESE bounds, immune to live ticks during the gesture.
+        dragStartBoundsRef.current = { ...chapterBoundsRef.current };
         haptic();
         setDragFrac(Math.max(0, Math.min(1, e.nativeEvent.locationX / w)));
       },
@@ -658,7 +668,9 @@ export default function PlayerBottomSheet() {
           // runs once, so a closed-over `duration` captured the FIRST render's
           // value (0 — mounted before any session), making this fallback dead
           // and silently discarding drags on a zero-span (malformed) chapter.
-          const { start, span, duration: dur } = chapterBoundsRef.current;
+          // Use the drag-START snapshot (not the live ref) so a chapter change
+          // mid-gesture can't retarget the seek to the wrong chapter/whole book.
+          const { start, span, duration: dur } = dragStartBoundsRef.current;
           if (span > 0) seek(start + frac * span);
           else if (dur > 0) seek(frac * dur);
         }

@@ -115,6 +115,40 @@ describe("native sleep timer bridge (absSetSleepTimer / absCancelSleepTimer)", (
     // The JS countdown still runs for the receiver.
     expect(usePlaybackStore.getState().sleepTimer?.remaining).toBe(600);
   });
+
+  it("End-of-chapter arms native in WALL-clock seconds (book-seconds / rate), not book-seconds", () => {
+    // The native enforcer counts wall-clock; an EOC timer's `remaining` is
+    // book-seconds (chapter end − position). At rate ≠ 1x the two diverge, so
+    // under doze native would fire at the wrong point. Arm converts to wall.
+    const { absSetSleepTimer } = injectNative();
+    usePlaybackStore.setState({
+      chapters: [
+        { id: 0, title: "Ch1", start: 0, end: 100 },
+        { id: 1, title: "Ch2", start: 100, end: 300 },
+      ],
+      currentChapterIndex: 0,
+      position: 10, // 90 book-seconds left in chapter 0
+      playbackSpeed: 1.5, // → 60 wall-seconds
+    } as any);
+    usePlaybackStore.getState().setSleepTimer(0, true);
+    // Display remaining stays BOOK-seconds (what the user reads).
+    expect(usePlaybackStore.getState().sleepTimer?.remaining).toBe(90);
+    // Native gets the WALL-clock deadline: 90 / 1.5 = 60.
+    expect(absSetSleepTimer).toHaveBeenCalledTimes(1);
+    expect(absSetSleepTimer.mock.calls[0][0]).toBeCloseTo(60, 5);
+  });
+
+  it("End-of-chapter at 1x arms native with the book-seconds unchanged", () => {
+    const { absSetSleepTimer } = injectNative();
+    usePlaybackStore.setState({
+      chapters: [{ id: 0, title: "Ch1", start: 0, end: 100 }],
+      currentChapterIndex: 0,
+      position: 25, // 75 left
+      playbackSpeed: 1,
+    } as any);
+    usePlaybackStore.getState().setSleepTimer(0, true);
+    expect(absSetSleepTimer.mock.calls[0][0]).toBeCloseTo(75, 5);
+  });
 });
 
 // ---------------------------------------------------------------------------
