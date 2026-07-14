@@ -21,6 +21,8 @@ import { withAlpha } from "../theme/palette";
 import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
+import { SelectRow } from "../components/SettingsRows";
+import SettingSelectModal from "../components/SettingSelectModal";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
 import { useServerCapabilities } from "../utils/abs/capabilities";
@@ -40,12 +42,18 @@ import {
  *
  * - Details: full metadata form; Save PATCHes /api/items/:id/media with ONLY
  *   the dirty fields (a whole-object PATCH would clobber concurrent web edits).
+ *   Podcasts get a podcast-shaped form (author as a plain string, feed URL,
+ *   iTunes ID, episodic/serial type, release date — no authors-array/narrators/
+ *   series/ISBN/ASIN), and buildDirtyPatch has a matching podcast branch.
  * - Cover: set-by-URL, upload-from-device-gallery (expo-image-picker →
  *   multipart POST /cover, issue #61), and a provider cover search grid; the
  *   whole tab is gated on canUploadCover (the server's cover route needs the
- *   `upload` permission, not just `update`).
+ *   `upload` permission, not just `update`). Already podcast-aware (the cover
+ *   search passes podcast: true).
  * - Match: provider search → pick a candidate → choose-fields diff (defaults
  *   to fill-missing-only) → apply as a media PATCH (+ cover POST when chosen).
+ *   HIDDEN for podcasts in this cut: podcast match rides the podcast search
+ *   endpoint and is deferred to keep the patch-builder change minimal.
  *
  * Entry is capability-gated from ItemDetail, but the screen still renders a
  * read-only lock state for users without `update` (deep links, stale caps).
@@ -107,17 +115,29 @@ interface FormState {
   asin: string;
   explicit: boolean;
   abridged: boolean;
+  // Podcast-only fields (books leave them at their seeded values, so they can
+  // never dirty a book form or leak into a book patch).
+  feedUrl: string;
+  itunesId: string;
+  /** "episodic" | "serial" — podcast metadata.type. */
+  podcastType: string;
+  releaseDate: string;
 }
 
 function seedFromItem(it: any): FormState {
   const md = it?.media?.metadata || {};
+  const isPodcast = it?.mediaType === "podcast";
   return {
     title: md.title || "",
     subtitle: md.subtitle || "",
-    authors: (md.authors || [])
-      .map((a: any) => a?.name)
-      .filter(Boolean)
-      .join(", "),
+    // Podcast author is a plain STRING (metadata.author); books carry an
+    // authors ARRAY of {id, name}. The form field is shared.
+    authors: isPodcast
+      ? md.author || ""
+      : (md.authors || [])
+          .map((a: any) => a?.name)
+          .filter(Boolean)
+          .join(", "),
     narrators: (md.narrators || []).join(", "),
     seriesName: md.series?.[0]?.name || "",
     seriesSequence: md.series?.[0]?.sequence ? String(md.series[0].sequence) : "",
@@ -131,6 +151,12 @@ function seedFromItem(it: any): FormState {
     asin: md.asin || "",
     explicit: !!md.explicit,
     abridged: !!md.abridged,
+    feedUrl: md.feedUrl || "",
+    itunesId: md.itunesId != null ? String(md.itunesId) : "",
+    // The server leaves type unset on some feeds; seeding the default keeps
+    // the field clean (no patch) until the user actually changes it.
+    podcastType: md.type === "serial" ? "serial" : "episodic",
+    releaseDate: md.releaseDate || "",
   };
 }
 
@@ -142,16 +168,40 @@ function seedFromItem(it: any): FormState {
  * edits series[0], so a series patch is [edited head, ...untouched tail].
  * Without it a book in 2+ series would have every other series DROPPED
  * server-side (the PATCH replaces the whole array).
+ *
+ * `isPodcast` switches to the podcast metadata shape: author is a plain
+ * string (not an authors array), type/feedUrl/itunesId/releaseDate exist, and
+ * the book-only fields (subtitle/narrators/series/publisher/ISBN/ASIN/
+ * abridged/publishedYear) are never emitted. Same patch envelope either way:
+ * { metadata: {…changed keys…}, tags? }.
  * Exported for direct unit assertion.
  */
 export function buildDirtyPatch(
   form: FormState,
   seed: FormState,
-  originalSeries: any[] = []
+  originalSeries: any[] = [],
+  isPodcast: boolean = false
 ): any {
   const md: any = {};
   const patch: any = {};
   const changed = (k: keyof FormState) => form[k] !== seed[k];
+
+  if (isPodcast) {
+    if (changed("title")) md.title = form.title.trim();
+    if (changed("authors")) md.author = form.authors.trim() || null;
+    if (changed("description")) md.description = form.description.trim() || null;
+    if (changed("genres")) md.genres = splitList(form.genres);
+    if (changed("feedUrl")) md.feedUrl = form.feedUrl.trim() || null;
+    if (changed("itunesId")) md.itunesId = form.itunesId.trim() || null;
+    if (changed("language")) md.language = form.language.trim() || null;
+    if (changed("explicit")) md.explicit = form.explicit;
+    if (changed("podcastType")) md.type = form.podcastType;
+    if (changed("releaseDate")) md.releaseDate = form.releaseDate.trim() || null;
+
+    if (Object.keys(md).length > 0) patch.metadata = md;
+    if (changed("tags")) patch.tags = splitList(form.tags);
+    return patch;
+  }
 
   if (changed("title")) md.title = form.title.trim();
   if (changed("subtitle")) md.subtitle = form.subtitle.trim() || null;
@@ -495,6 +545,8 @@ export default function EditMetadataScreen({ route, navigation }: any) {
   const [form, setForm] = useState<FormState>(seedFromItem(null));
   const [seed, setSeed] = useState<FormState>(seedFromItem(null));
   const [saving, setSaving] = useState(false);
+  // Podcast Details: episodic/serial type picker sheet.
+  const [typePickerOpen, setTypePickerOpen] = useState(false);
 
   // Cover tab
   const [coverUrlInput, setCoverUrlInput] = useState("");
@@ -558,12 +610,12 @@ export default function EditMetadataScreen({ route, navigation }: any) {
   }, [libraryItemId, retryTick]);
 
   const originalSeries: any[] = item?.media?.metadata?.series || [];
+  const isPodcast = item?.mediaType === "podcast";
   const patch = useMemo(
-    () => buildDirtyPatch(form, seed, item?.media?.metadata?.series || []),
-    [form, seed, item]
+    () => buildDirtyPatch(form, seed, item?.media?.metadata?.series || [], isPodcast),
+    [form, seed, item, isPodcast]
   );
   const dirty = Object.keys(patch).length > 0;
-  const isPodcast = item?.mediaType === "podcast";
 
   // Unsaved-changes guard (ChapterEditor pattern): intercept ANY navigation
   // that would remove this screen while the form is dirty — hardware back
@@ -594,7 +646,8 @@ export default function EditMetadataScreen({ route, navigation }: any) {
 
   // returnKeyType="next" focus chain through the Details form (Description is
   // multiline — return inserts a newline there, so it's not in the chain).
-  const DETAILS_FOCUS_ORDER = [
+  // Podcasts chain through the podcast-shaped field set instead.
+  const BOOK_FOCUS_ORDER: readonly (keyof FormState)[] = [
     "title",
     "subtitle",
     "authors",
@@ -608,9 +661,20 @@ export default function EditMetadataScreen({ route, navigation }: any) {
     "language",
     "isbn",
     "asin",
-  ] as const;
+  ];
+  const PODCAST_FOCUS_ORDER: readonly (keyof FormState)[] = [
+    "title",
+    "authors",
+    "genres",
+    "tags",
+    "feedUrl",
+    "itunesId",
+    "language",
+    "releaseDate",
+  ];
+  const DETAILS_FOCUS_ORDER = isPodcast ? PODCAST_FOCUS_ORDER : BOOK_FOCUS_ORDER;
   const detailInputsRef = useRef<Record<string, TextInput | null>>({});
-  const chainProps = (key: (typeof DETAILS_FOCUS_ORDER)[number]) => {
+  const chainProps = (key: keyof FormState) => {
     const idx = DETAILS_FOCUS_ORDER.indexOf(key);
     const next = DETAILS_FOCUS_ORDER[idx + 1];
     return {
@@ -926,6 +990,97 @@ export default function EditMetadataScreen({ route, navigation }: any) {
       </Pressable>
     );
   };
+
+  // Podcast-shaped Details form: author is a plain string, feed/iTunes/type/
+  // release-date fields exist, and the book-only fields (narrators, series,
+  // ISBN/ASIN, publisher…) are absent.
+  const renderPodcastDetails = () => (
+    <>
+      <Field
+        label="Title"
+        value={form.title}
+        onChangeText={(t) => setField("title", t)}
+        autoCapitalize="words"
+        colors={colors}
+        {...chainProps("title")}
+      />
+      <Field
+        label="Author"
+        value={form.authors}
+        onChangeText={(t) => setField("authors", t)}
+        autoCapitalize="words"
+        colors={colors}
+        {...chainProps("authors")}
+      />
+      <Field
+        label="Description"
+        multiline
+        value={form.description}
+        onChangeText={(t) => setField("description", t)}
+        colors={colors}
+      />
+      <Field
+        label="Genres"
+        helper="Separate with commas"
+        value={form.genres}
+        onChangeText={(t) => setField("genres", t)}
+        colors={colors}
+        {...chainProps("genres")}
+      />
+      <Field
+        label="Tags"
+        helper="Separate with commas"
+        value={form.tags}
+        onChangeText={(t) => setField("tags", t)}
+        colors={colors}
+        {...chainProps("tags")}
+      />
+      <Field
+        label="Feed URL"
+        helper="The RSS feed the server checks for new episodes"
+        value={form.feedUrl}
+        onChangeText={(t) => setField("feedUrl", t)}
+        keyboardType="url"
+        colors={colors}
+        {...chainProps("feedUrl")}
+      />
+      <Field
+        label="iTunes ID"
+        value={form.itunesId}
+        onChangeText={(t) => setField("itunesId", t)}
+        keyboardType="number-pad"
+        colors={colors}
+        {...chainProps("itunesId")}
+      />
+      <Field
+        label="Language"
+        value={form.language}
+        onChangeText={(t) => setField("language", t)}
+        colors={colors}
+        {...chainProps("language")}
+      />
+      <Field
+        label="Release date"
+        value={form.releaseDate}
+        onChangeText={(t) => setField("releaseDate", t)}
+        colors={colors}
+        {...chainProps("releaseDate")}
+      />
+      <ToggleField
+        label="Explicit"
+        value={form.explicit}
+        onValueChange={(v) => setField("explicit", v)}
+        colors={colors}
+      />
+      <SelectRow
+        icon="podcast"
+        title="Podcast type"
+        subtitle={form.podcastType === "serial" ? "Serial" : "Episodic"}
+        onPress={() => setTypePickerOpen(true)}
+        colors={colors}
+      />
+    </>
+  );
 
   const renderDetails = () => (
     <>
@@ -1474,17 +1629,37 @@ export default function EditMetadataScreen({ route, navigation }: any) {
           <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 12 }}>
             <TabChip value="details" label="Details" />
             <TabChip value="cover" label="Cover" />
-            <TabChip value="match" label="Match" />
+            {/* Podcast match rides the podcast search endpoint; deferred to
+                keep the patch-builder change minimal — hide the tab for now. */}
+            {!isPodcast ? <TabChip value="match" label="Match" /> : null}
           </View>
           <ScrollView
             style={{ flex: 1 }}
             contentContainerStyle={{ paddingBottom: 48 }}
             keyboardShouldPersistTaps="handled"
           >
-            {tab === "details" ? renderDetails() : tab === "cover" ? renderCover() : renderMatch()}
+            {tab === "details"
+              ? isPodcast
+                ? renderPodcastDetails()
+                : renderDetails()
+              : tab === "cover"
+              ? renderCover()
+              : renderMatch()}
           </ScrollView>
         </>
       )}
+
+      <SettingSelectModal
+        visible={typePickerOpen}
+        title="Podcast type"
+        options={[
+          { label: "Episodic", value: "episodic" },
+          { label: "Serial", value: "serial" },
+        ]}
+        selected={form.podcastType}
+        onSelect={(v) => setField("podcastType", v)}
+        onClose={() => setTypePickerOpen(false)}
+      />
     </SafeAreaView>
   );
 }

@@ -8,7 +8,10 @@
  *  - the match flow searches the chosen provider, defaults its choose-fields
  *    step to fill-missing-only, confirms before overwriting, and applies as a
  *    minimal media PATCH (+ cover POST when picked);
- *  - non-privileged users get a read-only lock state, never an editable form.
+ *  - non-privileged users get a read-only lock state, never an editable form;
+ *  - podcasts get the podcast-shaped Details form (feed URL / iTunes ID /
+ *    episodic-serial type; no series/ISBN/narrators), the same dirty-only
+ *    PATCH envelope, and NO Match tab (deferred for podcasts in this cut).
  */
 jest.mock("../../utils/api", () => ({
   api: { get: jest.fn(), post: jest.fn(), patch: jest.fn(), delete: jest.fn() },
@@ -71,6 +74,29 @@ const ITEM = {
       asin: "",
       explicit: false,
       abridged: false,
+    },
+  },
+};
+
+const PODCAST_ITEM = {
+  id: "pod1",
+  mediaType: "podcast",
+  media: {
+    id: "podcast-media-1",
+    coverPath: "/covers/pod1.jpg",
+    tags: ["News"],
+    metadata: {
+      title: "Daily Tech",
+      author: "Jane Doe",
+      description: "Tech news, daily.",
+      releaseDate: "2020-01-01",
+      genres: ["Technology"],
+      feedUrl: "https://feeds.example/dailytech",
+      imageUrl: "https://img.example/dt.jpg",
+      itunesId: 123,
+      explicit: false,
+      language: "en",
+      type: "episodic",
     },
   },
 };
@@ -894,5 +920,162 @@ describe("EditMetadataScreen — match flow", () => {
       await dialog.buttons.find((b: any) => b.text === "Apply match").onPress();
     });
     await waitFor(() => expect(updateItemMedia).toHaveBeenCalled());
+  });
+});
+
+describe("EditMetadataScreen — podcast items (issue #56 P2)", () => {
+  const renderPodcast = async () => {
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.startsWith("/api/items/pod1")) {
+        return Promise.resolve({ data: JSON.parse(JSON.stringify(PODCAST_ITEM)) });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    return renderScreen({ libraryItemId: "pod1" });
+  };
+
+  it("renders the podcast-shaped Details form — feed fields present, book-only fields absent", async () => {
+    await renderPodcast();
+
+    expect((await screen.findByLabelText("Title")).props.value).toBe("Daily Tech");
+    // Podcast author is a plain string field.
+    expect(screen.getByLabelText("Author").props.value).toBe("Jane Doe");
+    expect(screen.getByLabelText("Feed URL").props.value).toBe(
+      "https://feeds.example/dailytech"
+    );
+    expect(screen.getByLabelText("iTunes ID").props.value).toBe("123");
+    expect(screen.getByLabelText("Release date").props.value).toBe("2020-01-01");
+    expect(screen.getByLabelText("Genres").props.value).toBe("Technology");
+    expect(screen.getByLabelText("Tags").props.value).toBe("News");
+    // Type renders as a select row seeded from metadata.type.
+    expect(screen.getByLabelText("Podcast type, Episodic")).toBeTruthy();
+
+    // Book-only fields must NOT exist on a podcast.
+    expect(screen.queryByLabelText("ISBN")).toBeNull();
+    expect(screen.queryByLabelText("ASIN")).toBeNull();
+    expect(screen.queryByLabelText("Series")).toBeNull();
+    expect(screen.queryByLabelText("Series sequence")).toBeNull();
+    expect(screen.queryByLabelText("Narrators")).toBeNull();
+    expect(screen.queryByLabelText("Publisher")).toBeNull();
+    expect(screen.queryByLabelText("Abridged")).toBeNull();
+  });
+
+  it("editing feedUrl + podcast type PATCHes exactly { metadata: { feedUrl, type } }", async () => {
+    await renderPodcast();
+    await screen.findByLabelText("Title");
+
+    await fireEvent.changeText(
+      screen.getByLabelText("Feed URL"),
+      "https://feeds.example/new-home"
+    );
+    // episodic → serial through the select row's sheet.
+    await fireEvent.press(screen.getByLabelText("Podcast type, Episodic"));
+    await fireEvent.press(await screen.findByLabelText("Serial"));
+
+    await fireEvent.press(screen.getByLabelText("Save details"));
+    await waitFor(() => expect(updateItemMedia).toHaveBeenCalled());
+    // EXACT payload: podcast keys only, nothing book-shaped rides along.
+    expect((updateItemMedia as jest.Mock).mock.calls[0][1]).toEqual({
+      metadata: { feedUrl: "https://feeds.example/new-home", type: "serial" },
+    });
+  });
+
+  it("a podcast author edit PATCHes metadata.author as a plain STRING (not an authors array)", async () => {
+    await renderPodcast();
+    await screen.findByLabelText("Title");
+    await fireEvent.changeText(screen.getByLabelText("Author"), "New Host");
+    await fireEvent.press(screen.getByLabelText("Save details"));
+
+    await waitFor(() => expect(updateItemMedia).toHaveBeenCalled());
+    expect((updateItemMedia as jest.Mock).mock.calls[0][1]).toEqual({
+      metadata: { author: "New Host" },
+    });
+  });
+
+  it("a podcast tags-only edit stays top-level { tags } with no metadata key", async () => {
+    await renderPodcast();
+    await screen.findByLabelText("Title");
+    await fireEvent.changeText(screen.getByLabelText("Tags"), "News, Keepers");
+    await fireEvent.press(screen.getByLabelText("Save details"));
+
+    await waitFor(() => expect(updateItemMedia).toHaveBeenCalled());
+    expect((updateItemMedia as jest.Mock).mock.calls[0][1]).toEqual({
+      tags: ["News", "Keepers"],
+    });
+  });
+
+  it("hides the Match tab for podcasts and keeps it for books (regression)", async () => {
+    await renderPodcast();
+    await screen.findByLabelText("Title");
+    expect(screen.queryByLabelText("Match tab")).toBeNull();
+    // Details and Cover remain.
+    expect(screen.getByLabelText("Details tab")).toBeTruthy();
+    expect(screen.getByLabelText("Cover tab")).toBeTruthy();
+
+    screen.unmount();
+
+    // Book regression: the Match tab is still offered. Restore the book item
+    // mock (renderPodcast replaced the beforeEach implementation).
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url.startsWith("/api/items/item1")) {
+        return Promise.resolve({ data: JSON.parse(JSON.stringify(ITEM)) });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    await renderScreen();
+    await screen.findByLabelText("Title");
+    expect(screen.getByLabelText("Match tab")).toBeTruthy();
+  });
+
+  it("buildDirtyPatch podcast branch: clean form → {}; cleared fields null out; book keys never emitted", () => {
+    const seed: any = {
+      title: "T",
+      subtitle: "",
+      authors: "Host",
+      narrators: "",
+      seriesName: "",
+      seriesSequence: "",
+      genres: "News",
+      tags: "",
+      description: "D",
+      publisher: "",
+      publishedYear: "",
+      language: "en",
+      isbn: "",
+      asin: "",
+      explicit: false,
+      abridged: false,
+      feedUrl: "https://f",
+      itunesId: "1",
+      podcastType: "episodic",
+      releaseDate: "2020-01-01",
+    };
+    expect(buildDirtyPatch(seed, seed, [], true)).toEqual({});
+    expect(
+      buildDirtyPatch(
+        { ...seed, authors: "", feedUrl: "", itunesId: "", releaseDate: "" },
+        seed,
+        [],
+        true
+      )
+    ).toEqual({
+      metadata: { author: null, feedUrl: null, itunesId: null, releaseDate: null },
+    });
+    // Book-shaped edits (series/ISBN/…) can never leak into a podcast patch.
+    expect(
+      buildDirtyPatch({ ...seed, seriesName: "S", isbn: "999", abridged: true }, seed, [], true)
+    ).toEqual({});
+    // explicit + type + genres + tags land in the shared envelope.
+    expect(
+      buildDirtyPatch(
+        { ...seed, explicit: true, podcastType: "serial", genres: "News, Tech", tags: "a, b" },
+        seed,
+        [],
+        true
+      )
+    ).toEqual({
+      metadata: { explicit: true, type: "serial", genres: ["News", "Tech"] },
+      tags: ["a", "b"],
+    });
   });
 });
