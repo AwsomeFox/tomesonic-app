@@ -2481,12 +2481,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           // item's MediaMetadata; when Media3 bundles the whole Timeline to
           // Android Auto the payload blows past the ~1MB Binder limit
           // (TransactionTooLargeException) → the queue drops / the controller
-          // crashes. Bytes live on the ACTIVE chapter item ONLY, moved there by
-          // applyNowPlayingChapter on each chapter change. An EMPTY-STRING
-          // localArtwork (not undefined) blocks the toMediaItem
-          // `localArtwork ?: artwork` fallback so a LOCAL artwork URI can't
-          // inline bytes on the inactive items either.
+          // crashes. The LARGE bytes live on the ACTIVE chapter item ONLY,
+          // moved there by applyNowPlayingChapter on each chapter change. An
+          // EMPTY-STRING localArtwork (not undefined) blocks the toMediaItem
+          // `localArtwork ?: artwork` LARGE-byte fallback so a LOCAL artwork URI
+          // can't inline large bytes on the inactive items either.
           t.localArtwork = "";
+          // TINY (≈128px) bytes on EVERY item so ALL Android Auto queue rows
+          // render a downloaded book's cover — media3's legacy queue makes each
+          // row icon from THAT item's own artworkData (a local URI is
+          // unreliable across head units). ~4KB × N stays under the Binder cap.
+          if (carArtworkLocal) t.localArtworkSmall = carArtworkLocal;
           return t;
         });
       } else {
@@ -2511,20 +2516,24 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           };
           if (artworkUrl) t.artwork = artworkUrl;
           if (audioTracks.length > 1) {
-            // MULTI-FILE: NO inline bytes at build time (mirrors the
+            // MULTI-FILE: NO LARGE inline bytes at build time (mirrors the
             // chapter-queue branch). A downloaded book split into many per-file
             // items would otherwise inline the ~40KB cover into EACH item's
             // MediaMetadata; Media3 bundling the whole Timeline to Android Auto
             // then blows past the ~1MB Binder limit (TransactionTooLargeException)
-            // → the queue drops / the controller crashes. Bytes live on the
-            // ACTIVE file item only, moved there per file boundary by
+            // → the queue drops / the controller crashes. The LARGE bytes live
+            // on the ACTIVE file item only, moved there per file boundary by
             // applyNowPlayingChapter. Empty-string (not undefined) also blocks
-            // toMediaItem's `localArtwork ?: artwork` fallback so a LOCAL
-            // artwork URI can't inline bytes on the inactive file items.
+            // toMediaItem's `localArtwork ?: artwork` LARGE-byte fallback so a
+            // LOCAL artwork URI can't inline large bytes on the inactive items.
             t.localArtwork = "";
+            // TINY (≈128px) bytes on EVERY file item so ALL Android Auto queue
+            // rows render the cover — see the chapter-queue branch. ~4KB × N
+            // stays under the Binder cap.
+            if (carArtworkLocal) t.localArtworkSmall = carArtworkLocal;
           } else if (carArtworkLocal) {
-            // SINGLE FILE: only one queue item, so carrying the bytes at build
-            // is safe (no Timeline to overflow) — behavior unchanged.
+            // SINGLE FILE: only one queue item, so carrying the LARGE bytes at
+            // build is safe (no Timeline to overflow) — behavior unchanged.
             t.localArtwork = carArtworkLocal;
           }
           return t;

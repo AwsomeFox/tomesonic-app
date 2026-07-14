@@ -1,8 +1,8 @@
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-index 5a1b2bf..1b159b4 100644
+index 5a1b2bf..93032a9 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-@@ -14,7 +14,18 @@ open class AudioItem(
+@@ -14,7 +14,29 @@ open class AudioItem(
      open val artwork: String? = null,
      open val duration: Long? = null,
      open val options: AudioItemOptions? = null,
@@ -18,11 +18,22 @@ index 5a1b2bf..1b159b4 100644
 +    // artworkUri can stay a car-loadable http(s) URL — the car process cannot
 +    // read this app's private storage — while the compact card still gets
 +    // bytes. Falls back to `artwork` when null (single-source callers).
-+    open val localArtwork: String? = null
++    // Carries the LARGE (≈512px) inline cover, used by the now-playing/compact
++    // card and the full player — set on the ACTIVE queue item only.
++    open val localArtwork: String? = null,
++    // A LOCAL cover file inlined as a TINY (≈128px) artworkData bitmap on EVERY
++    // queue item, so Android Auto's per-row queue icons render for a downloaded
++    // book (the car process can't read the private file:// path, and media3's
++    // legacy queue only makes a row icon from that item's own artworkData bytes
++    // — a content:// iconUri is unreliable across head units for local covers).
++    // Kept small so a 100+ chapter book's whole Timeline stays under Android
++    // Auto's ~1MB Binder limit. The active item's LARGE `localArtwork` wins over
++    // this when both are set (see toMediaItem).
++    open val localArtworkSmall: String? = null
  ) {
      fun toMediaItem(): MediaItem {
          val extras = Bundle().apply {
-@@ -30,24 +41,142 @@ open class AudioItem(
+@@ -30,24 +52,163 @@ open class AudioItem(
              putString("type", type.toString())
              putString("uri", audioUrl)
          }
@@ -48,13 +59,22 @@ index 5a1b2bf..1b159b4 100644
 +            mdBuilder.setArtworkUri(Uri.parse(artUri))
 +        }
 +        // Android Auto's QUEUE rows and the COMPACT now-playing card build their
-+        // icon ONLY from inline artworkData (media3's legacy stub never loads
-+        // artworkUri for those, and the car process can't read app-private
-+        // file:// paths anyway). Inline bytes from the dedicated local cover
-+        // (preferred) or, for single-source callers, from `artwork` itself when
-+        // it's a local path. An http `artwork` keeps only the URI — which the
-+        // full now-playing card resolves in the car process.
-+        localArtworkBytes(localArtwork ?: artwork)?.let {
++        // icon from inline artworkData bytes — media3's legacy bridge decodes
++        // THIS item's artworkData into the queue row's MediaDescription
++        // iconBitmap and the now-playing MediaMetadataCompat ALBUM_ART, and the
++        // car process can't read app-private file:// paths (so a URI is
++        // unreliable for local covers across head units). Two tiers:
++        //  - LARGE (≈512px) from `localArtwork` on the ACTIVE item — keeps the
++        //    full player + compact card sharp.
++        //  - TINY (≈128px) from `localArtworkSmall` on EVERY item — lights up all
++        //    queue rows while a 100+ chapter Timeline stays under the ~1MB Binder
++        //    limit (512px on every item would overflow → queue drop / crash).
++        // `localArtwork ?: artwork` preserves single-source callers; the LARGE
++        // bytes win when present, else fall back to the TINY per-item bytes.
++        val bigSource = (localArtwork ?: artwork)?.ifEmpty { null }
++        val bytes = localArtworkBytes(bigSource, 512)
++            ?: localArtworkBytes(localArtworkSmall?.ifEmpty { null }, 128)
++        bytes?.let {
 +            mdBuilder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
 +        }
 +        val mediaMetadata = mdBuilder.build()
@@ -137,31 +157,43 @@ index 5a1b2bf..1b159b4 100644
 +        }
 +
 +        // One book cover backs every chapter queue item, so cache the encoded
-+        // bytes by path — a whole queue costs a single decode.
++        // bytes by path+size — a whole queue costs a single decode per tier.
 +        private val artByteCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 +
-+        private fun localArtworkBytes(artwork: String?): ByteArray? {
++        /**
++         * Decode a LOCAL cover file to JPEG bytes downscaled so its longest edge
++         * is ~maxPx. Used at two sizes: 512px (LARGE, active item / full player)
++         * and 128px (TINY, every queue row — small enough that a long book's
++         * whole Timeline stays under Android Auto's ~1MB Binder limit). http/
++         * content URIs return null (they stay artworkUri). Cached by path+size.
++         */
++        private fun localArtworkBytes(artwork: String?, maxPx: Int): ByteArray? {
 +            if (artwork.isNullOrEmpty()) return null
 +            val path = when {
 +                artwork.startsWith("file://") -> Uri.parse(artwork).path ?: return null
 +                artwork.startsWith("/") -> artwork
 +                else -> return null // http(s)/content: leave as artworkUri
 +            }
-+            artByteCache[path]?.let { return it }
++            val cacheKey = "$path@$maxPx"
++            artByteCache[cacheKey]?.let { return it }
 +            return try {
 +                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
 +                android.graphics.BitmapFactory.decodeFile(path, bounds)
 +                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 +                var sample = 1
-+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 512) sample *= 2
++                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxPx) sample *= 2
 +                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
 +                val bmp = android.graphics.BitmapFactory.decodeFile(path, opts) ?: return null
++                // Tighter JPEG for the tiny per-row tier keeps 100+ rows well
++                // under the Binder cap; the large tier stays crisp.
++                val quality = if (maxPx <= 128) 60 else 82
 +                val out = java.io.ByteArrayOutputStream()
-+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out)
++                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, out)
 +                bmp.recycle()
 +                val bytes = out.toByteArray()
-+                if (artByteCache.size >= 4) artByteCache.clear()
-+                artByteCache[path] = bytes
++                // Two paths (book + episode) × two tiers → keep a handful.
++                if (artByteCache.size >= 8) artByteCache.clear()
++                artByteCache[cacheKey] = bytes
 +                bytes
 +            } catch (e: Exception) {
 +                null
@@ -211,10 +243,10 @@ index f8b9ca1..30df26d 100644
  
      private fun createDashSource(mediaItem: MediaItem, factory: DataSource.Factory?): MediaSource {
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
-index 6527258..325e717 100644
+index 6527258..a5b6c97 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/Track.kt
-@@ -25,9 +25,22 @@ class Track
+@@ -25,9 +25,30 @@ class Track
      var originalItem: Bundle
      var headers: HashMap<String, String>? = null
      val queueId: Long
@@ -225,6 +257,11 @@ index 6527258..325e717 100644
 +    // artworkData for Android Auto's compact card / queue rows, kept separate
 +    // from the (possibly http) `artwork` URI shown on the full now-playing card.
 +    var localArtwork: String? = null
++    // Optional LOCAL cover path inlined as a TINY artworkData bitmap on EVERY
++    // queue item so Android Auto's per-row queue icons render for a downloaded
++    // book (see AudioItem.localArtworkSmall). Distinct from `localArtwork`,
++    // which carries the LARGE cover on the active item only.
++    var localArtworkSmall: String? = null
  
      override fun setMetadata(context: Context, bundle: Bundle?, ratingType: Int) {
          super.setMetadata(context, bundle, ratingType)
@@ -234,10 +271,13 @@ index 6527258..325e717 100644
 +        if (bundle?.containsKey("localArtwork") == true) {
 +            localArtwork = bundle.getString("localArtwork")
 +        }
++        if (bundle?.containsKey("localArtworkSmall") == true) {
++            localArtworkSmall = bundle.getString("localArtworkSmall")
++        }
          originalItem.putAll(bundle)
      }
  
-@@ -42,7 +55,10 @@ class Track
+@@ -42,7 +63,11 @@ class Track
              artwork = artwork.toString(),
              duration = duration,
              options = AudioItemOptions(headers, userAgent, resourceId),
@@ -245,11 +285,12 @@ index 6527258..325e717 100644
 +            mediaId = mediaId,
 +            clipStartMs = clipStartMs,
 +            clipEndMs = clipEndMs,
-+            localArtwork = localArtwork
++            localArtwork = localArtwork,
++            localArtworkSmall = localArtworkSmall
          )
      }
  
-@@ -74,6 +90,8 @@ class Track
+@@ -74,6 +99,8 @@ class Track
                  headers!![header] = httpHeaders.getString(header)!!
              }
          }
@@ -259,10 +300,10 @@ index 6527258..325e717 100644
          queueId = System.currentTimeMillis()
      }
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
-index d6e3483..7c8675f 100644
+index d6e3483..5c2efa8 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/TrackAudioItem.kt
-@@ -14,5 +14,8 @@ data class TrackAudioItem(
+@@ -14,5 +14,9 @@ data class TrackAudioItem(
      override val artwork: String? = null,
      override val duration: Long? = null,
      override val options: AudioItemOptions? = null,
@@ -272,8 +313,9 @@ index d6e3483..7c8675f 100644
 +    override val mediaId: String? = null,
 +    override val clipStartMs: Long? = null,
 +    override val clipEndMs: Long? = null,
-+    override val localArtwork: String? = null
-+): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork)
++    override val localArtwork: String? = null,
++    override val localArtworkSmall: String? = null
++): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork, localArtworkSmall)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 index 13a6c60..a46fe7f 100644

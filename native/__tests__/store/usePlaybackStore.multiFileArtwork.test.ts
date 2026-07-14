@@ -136,17 +136,20 @@ describe("multi-file artwork: bytes on the ACTIVE file item only", () => {
     jest.useRealTimers();
   });
 
-  it("builds a file queue with NO inline bytes on any item (empty-string localArtwork)", async () => {
+  it("builds a file queue with no LARGE bytes but a TINY per-row cover on every item", async () => {
     await prepareMultiFileBook();
 
     // Multiple files → file queue, NOT a chapter queue.
     expect(usePlaybackStore.getState().chapterQueue).toBe(false);
     const tracks = addedTracks();
     expect(tracks).toHaveLength(2);
-    // No file item carries the cover bytes at build time — that is what blew
-    // the Binder limit on many-file books. Empty string, not the cover.
     for (const t of tracks) {
+      // No LARGE bytes at build — that is what blew the Binder limit on
+      // many-file books. Empty string, not the cover.
       expect(t.localArtwork).toBe("");
+      // TINY (≈128px) per-row bytes on EVERY file item so all Android Auto
+      // queue rows render the cover.
+      expect(t.localArtworkSmall).toBe(COVER);
       expect(t.artwork).toBe(COVER); // full-card URI is fine on every item
     }
     // The bytes source is still available on the session for the active item.
