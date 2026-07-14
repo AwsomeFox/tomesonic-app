@@ -74,6 +74,7 @@ export type IconName =
   | "copy"
   | "trash"
   | "refresh"
+  | "restore"
   | "edit"
   | "calendar"
   | "info"
@@ -174,6 +175,7 @@ const MAP: Record<IconName, [Family, string]> = {
   copy: ["mi", "content-copy"],
   trash: ["mi", "delete-outline"],
   refresh: ["mi", "refresh"],
+  restore: ["mi", "settings-backup-restore"],
   edit: ["mi", "edit"],
   calendar: ["mi", "calendar-today"],
   info: ["mi", "info-outline"],

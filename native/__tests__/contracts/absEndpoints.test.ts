@@ -120,6 +120,7 @@ const CONTRACT: Array<{
   { name: "getBackups", invoke: () => server.getBackups(), method: "get", path: "/api/backups" },
   { name: "createBackup", invoke: () => server.createBackup(), method: "post", path: "/api/backups" },
   { name: "deleteBackup", invoke: () => server.deleteBackup("BAK"), method: "delete", path: "/api/backups/BAK" },
+  { name: "applyBackup (side-effecting GET!)", invoke: () => server.applyBackup("BAK"), method: "get", path: "/api/backups/BAK/apply" },
   { name: "getServerLogs (REST log surface)", invoke: () => server.getServerLogs(), method: "get", path: "/api/logger-data" },
   { name: "purgeCache", invoke: () => server.purgeCache(), method: "post", path: "/api/cache/purge" },
   { name: "purgeItemsCache", invoke: () => server.purgeItemsCache(), method: "post", path: "/api/cache/items/purge" },

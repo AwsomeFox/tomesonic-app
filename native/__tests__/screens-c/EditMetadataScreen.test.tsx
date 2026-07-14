@@ -24,12 +24,17 @@ jest.mock("../../utils/abs/items", () => ({
   searchBookMetadata: jest.fn(),
   searchCovers: jest.fn(),
   setCoverFromUrl: jest.fn(),
+  uploadCoverFile: jest.fn(),
 }));
 
 import React from "react";
-import { AccessibilityInfo } from "react-native";
+import { AccessibilityInfo, Linking } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react-native";
-import EditMetadataScreen, { buildDirtyPatch } from "../../screens/EditMetadataScreen";
+import EditMetadataScreen, {
+  buildDirtyPatch,
+  assetToCoverFile,
+} from "../../screens/EditMetadataScreen";
 import { api } from "../../utils/api";
 import { showAppDialog } from "../../store/useDialogStore";
 import { showSnackbar } from "../../store/useSnackbarStore";
@@ -38,6 +43,7 @@ import {
   searchBookMetadata,
   searchCovers,
   setCoverFromUrl,
+  uploadCoverFile,
 } from "../../utils/abs/items";
 import { useUserStore } from "../../store/useUserStore";
 
@@ -118,6 +124,7 @@ beforeEach(() => {
   });
   (updateItemMedia as jest.Mock).mockResolvedValue({ updated: true });
   (setCoverFromUrl as jest.Mock).mockResolvedValue({ success: true, cover: "/covers/new.jpg" });
+  (uploadCoverFile as jest.Mock).mockResolvedValue({ success: true, cover: "/covers/new.jpg" });
 });
 
 describe("EditMetadataScreen — details form", () => {
@@ -501,6 +508,229 @@ describe("EditMetadataScreen — cover tab", () => {
     await fireEvent.press(screen.getByLabelText("Cover tab"));
     await screen.findByText("Permission needed");
     expect(screen.queryByLabelText("Cover image URL")).toBeNull();
+  });
+});
+
+describe("EditMetadataScreen — cover upload from gallery (issue #61)", () => {
+  const openCoverTab = async () => {
+    await renderScreen();
+    await screen.findByLabelText("Title");
+    await fireEvent.press(screen.getByLabelText("Cover tab"));
+  };
+
+  it("picks an image and uploads it as a multipart cover file", async () => {
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockResolvedValueOnce({
+      canceled: false,
+      assets: [{ uri: "file:///pick/pick.png", fileName: "pick.png", mimeType: "image/png" }],
+    });
+    await openCoverTab();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+
+    // NO pre-flight permission request: the system Photo Picker (Android) /
+    // PHPicker (iOS) needs no media-library permission on SDK 57.
+    expect(ImagePicker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+    // SDK 57 string-array mediaTypes (MediaTypeOptions is deprecated).
+    expect(ImagePicker.launchImageLibraryAsync).toHaveBeenCalledWith({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+    await waitFor(() =>
+      expect(uploadCoverFile).toHaveBeenCalledWith("item1", {
+        uri: "file:///pick/pick.png",
+        name: "pick.png",
+        type: "image/png",
+      })
+    );
+    // Exact copy parity with set-by-URL and the search grid.
+    expect(showSnackbar).toHaveBeenCalledWith({ message: "Cover updated" });
+    expect(showAppDialog).not.toHaveBeenCalled();
+  });
+
+  it("derives name from the uri and type from the extension when the picker omits them", async () => {
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockResolvedValueOnce({
+      canceled: false,
+      assets: [{ uri: "file:///DCIM/Camera/abc.webp", fileName: null }],
+    });
+    await openCoverTab();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+
+    await waitFor(() =>
+      expect(uploadCoverFile).toHaveBeenCalledWith("item1", {
+        uri: "file:///DCIM/Camera/abc.webp",
+        name: "abc.webp",
+        type: "image/webp",
+      })
+    );
+  });
+
+  it("assetToCoverFile: fileName/mimeType win; falls back per-extension, then to cover.jpg/image/jpeg", () => {
+    // Picker-provided metadata passes through untouched.
+    expect(
+      assetToCoverFile({ uri: "file:///a/b.png", fileName: "chosen.png", mimeType: "image/png" })
+    ).toEqual({ uri: "file:///a/b.png", name: "chosen.png", type: "image/png" });
+    // Extension inference: png / webp / jpg / unknown.
+    expect(assetToCoverFile({ uri: "file:///x/y.PNG" }).type).toBe("image/png");
+    expect(assetToCoverFile({ uri: "file:///x/y.webp" }).type).toBe("image/webp");
+    expect(assetToCoverFile({ uri: "file:///x/y.jpeg" }).type).toBe("image/jpeg");
+    expect(assetToCoverFile({ uri: "file:///x/y.bin" }).type).toBe("image/jpeg");
+    // No usable last segment at all → bare cover.jpg / image/jpeg fallback.
+    expect(assetToCoverFile({ uri: "content://media/" })).toEqual({
+      uri: "content://media/",
+      name: "cover.jpg",
+      type: "image/jpeg",
+    });
+  });
+
+  it("launches the picker directly — no pre-flight permission request; a permission-ish picker rejection falls back to the settings dialog", async () => {
+    // SDK 57 uses the system Photo Picker (Android PickVisualMedia) / PHPicker
+    // (iOS) — neither needs the media-library permission, so the pre-flight
+    // gate is gone. If some OEM's picker still rejects with a permission
+    // error, THAT is what routes to the settings dialog.
+    const openSettingsSpy = jest
+      .spyOn(Linking, "openSettings")
+      .mockResolvedValue(undefined as any);
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockRejectedValueOnce(
+      new Error("User rejected permissions")
+    );
+    await openCoverTab();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+
+    expect(ImagePicker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+    expect(ImagePicker.launchImageLibraryAsync).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Photos permission needed" })
+      )
+    );
+    expect(uploadCoverFile).not.toHaveBeenCalled();
+
+    // The dialog's escape hatch routes to the system settings.
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    expect(dialog.buttons.find((b: any) => b.style === "cancel")).toBeTruthy();
+    await act(async () => {
+      dialog.buttons.find((b: any) => b.text === "Open settings").onPress();
+    });
+    expect(openSettingsSpy).toHaveBeenCalled();
+
+    // Busy released — the flow is retryable.
+    const btn = screen.getByLabelText("Upload from gallery");
+    expect(btn.props.accessibilityState?.busy).toBe(false);
+  });
+
+  it("a non-permission picker rejection surfaces the cover error dialog and releases busy", async () => {
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockRejectedValueOnce(
+      new Error("Failed to parse PhotoPicker result")
+    );
+    await openCoverTab();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't update cover",
+          message: expect.stringContaining("PhotoPicker"),
+        })
+      )
+    );
+    // NOT the settings dialog — this isn't a permission problem.
+    expect(showAppDialog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Photos permission needed" })
+    );
+    expect(uploadCoverFile).not.toHaveBeenCalled();
+    expect(showSnackbar).not.toHaveBeenCalled();
+    const btn = screen.getByLabelText("Upload from gallery");
+    expect(btn.props.accessibilityState?.busy).toBe(false);
+    expect(btn.props.accessibilityState?.disabled).toBe(false);
+  });
+
+  it("holds busy across the whole picker window — a double-tap launches only ONE picker", async () => {
+    let resolvePick!: (v: any) => void;
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePick = resolve;
+      })
+    );
+    await openCoverTab();
+
+    const btn = screen.getByLabelText("Upload from gallery");
+    await act(async () => {
+      fireEvent.press(btn);
+    });
+    // Busy is held while the system picker is open (this is also what keeps
+    // Set-cover-from-URL from interleaving mid-pick).
+    expect(
+      screen.getByLabelText("Upload from gallery").props.accessibilityState?.busy
+    ).toBe(true);
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+    expect(ImagePicker.launchImageLibraryAsync).toHaveBeenCalledTimes(1);
+
+    // The user backs out — busy releases and nothing uploads.
+    await act(async () => {
+      resolvePick({ canceled: true, assets: null });
+    });
+    expect(uploadCoverFile).not.toHaveBeenCalled();
+    expect(
+      screen.getByLabelText("Upload from gallery").props.accessibilityState?.busy
+    ).toBe(false);
+  });
+
+  it("cancelling the picker is silent — no upload, no snackbar, no dialog", async () => {
+    // jest.setup default: launchImageLibraryAsync resolves { canceled: true }.
+    await openCoverTab();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+
+    expect(ImagePicker.launchImageLibraryAsync).toHaveBeenCalled();
+    expect(uploadCoverFile).not.toHaveBeenCalled();
+    expect(showSnackbar).not.toHaveBeenCalled();
+    expect(showAppDialog).not.toHaveBeenCalled();
+  });
+
+  it("upload failure surfaces the cover error dialog and releases the busy state", async () => {
+    (ImagePicker.launchImageLibraryAsync as jest.Mock).mockResolvedValueOnce({
+      canceled: false,
+      assets: [{ uri: "file:///pick/pick.jpg", fileName: "pick.jpg", mimeType: "image/jpeg" }],
+    });
+    (uploadCoverFile as jest.Mock).mockRejectedValue(
+      Object.assign(new Error("boom"), { kind: "server" })
+    );
+    await openCoverTab();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Upload from gallery"));
+    });
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Couldn't update cover",
+          message: expect.stringContaining("boom"),
+        })
+      )
+    );
+    expect(showSnackbar).not.toHaveBeenCalled();
+    // Busy released — the button is pressable again for a retry.
+    const btn = screen.getByLabelText("Upload from gallery");
+    expect(btn.props.accessibilityState?.busy).toBe(false);
+    expect(btn.props.accessibilityState?.disabled).toBe(false);
   });
 });
 

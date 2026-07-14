@@ -5,6 +5,7 @@
  *   GET    /api/backups                → { backups, backupLocation, backupPathEnvSet }
  *   POST   /api/backups                → { backups } (synchronous create)
  *   DELETE /api/backups/:id            → { backups }
+ *   GET    /api/backups/:id/apply      SIDE-EFFECTING: restores the backup
  *   GET    /api/backups/:id/download?token=   (URL builder below)
  *   GET    /api/logger-data            → { currentDailyLogs }   ← see getServerLogs note
  *   POST   /api/cache/purge
@@ -49,6 +50,27 @@ export async function createBackup(): Promise<{ backups: AbsBackup[] }> {
 
 export async function deleteBackup(backupId: string): Promise<{ backups: AbsBackup[] }> {
   return absRequest(() => api.delete(`/api/backups/${backupId}`));
+}
+
+/**
+ * Apply (RESTORE) a backup — GET /api/backups/:id/apply.
+ *
+ * DANGER: despite the GET verb, this is a heavily SIDE-EFFECTING call
+ * (verified against the ABS v2.35.1 BackupController.apply): the server
+ * unzips the backup over its live database, REPLACING ALL SERVER DATA —
+ * users, listening progress, libraries — and re-initializes itself. Every
+ * session (including the caller's) may be invalidated, and the HTTP response
+ * often never arrives because the connection drops mid-swap. Callers MUST
+ * treat a network-level failure as "probably restoring anyway" and MUST
+ * NEVER auto-retry this request.
+ */
+export async function applyBackup(backupId: string): Promise<void> {
+  // 404 here is a REAL miss (the backup row we just listed was deleted from
+  // under us — e.g. rotation or another admin), not a too-old server; the
+  // default "unsupported / needs an update" copy would mislead.
+  await absRequest(() => api.get(`/api/backups/${backupId}/apply`), {
+    404: { kind: "unknown", message: "That backup no longer exists on the server." },
+  });
 }
 
 /**

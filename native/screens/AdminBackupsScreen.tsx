@@ -1,5 +1,13 @@
-import React, { useEffect, useState } from "react";
-import { View, Text, ScrollView, ActivityIndicator, RefreshControl, Linking } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  ScrollView,
+  ActivityIndicator,
+  RefreshControl,
+  Linking,
+  AccessibilityInfo,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useThemeColors } from "../theme/useThemeColors";
 import { withAlpha } from "../theme/palette";
@@ -10,8 +18,17 @@ import EmptyState from "../components/EmptyState";
 import { SectionHeader, RowBase, Divider } from "../components/SettingsRows";
 import { showAppDialog } from "../store/useDialogStore";
 import { showSnackbar } from "../store/useSnackbarStore";
-import { getBackups, createBackup, deleteBackup, buildBackupDownloadUrl } from "../utils/abs/server";
+import {
+  getBackups,
+  createBackup,
+  deleteBackup,
+  applyBackup,
+  buildBackupDownloadUrl,
+} from "../utils/abs/server";
 import { absErrorToErrorStateProps, absErrorToActionMessage } from "../utils/abs/errors";
+import { refreshCapabilities, useServerCapabilities } from "../utils/abs/capabilities";
+import { waitForServerUp } from "../utils/serverLiveness";
+import { storageHelper } from "../utils/storage";
 import { formatBytes } from "../utils/format";
 import type { AbsBackup } from "../utils/abs/types";
 
@@ -20,15 +37,50 @@ import type { AbsBackup } from "../utils/abs/types";
  *
  * Route: "AdminBackups" (no params)
  *
- * Scope (deliberate): list, create ("Back up now"), delete. APPLYING/RESTORING
- * a backup is intentionally NOT offered from the app — a restore replaces all
- * server data and restarts the server, and shipping that button without the
- * full restart/re-login choreography reads as data loss or a crash. Tracked in
- * GitHub issue #60; until then the screen points restores at the web UI.
+ * Scope: list, create ("Back up now"), download, delete, and RESTORE (apply)
+ * — issue #60. Applying a backup replaces ALL server data and drops every
+ * session (including ours), so the restore flow runs a small state machine
+ * instead of a fire-and-forget call:
+ *
+ *   idle → applying → verifying ────────────────→ idle (success snackbar)
+ *             │            │ (API up, DB not yet)
+ *             │ (offline/  ▼
+ *             │  auth)  reconnecting ── /ping up ─→ verifying
+ *             │            │
+ *             └────────────┴─ deadline passed ───→ timeout (guidance view)
+ *
+ * A REAL server refusal (403/404/5xx/unknown) from the apply call surfaces a
+ * failure dialog and returns to idle — it is never auto-retried, because
+ * /apply is a side-effecting GET.
  *
  * All utils/abs calls THROW AbsError, so the catch blocks switch on `kind`
  * (offline / forbidden / unsupported / ...) instead of sniffing axios shapes.
  */
+
+/** How long each reconnect episode watches for the server (5 minutes). */
+const RESTORE_WAIT_MS = 5 * 60_000;
+
+/**
+ * Leading delay before the first /ping when a VERIFY attempt bounces back to
+ * reconnecting: the API just answered (so the HTTP layer is demonstrably up)
+ * — without this the ping-up → verify-fail → ping-up cycle would spin hot.
+ */
+const REBOUNCE_DELAY_MS = 3000;
+
+/**
+ * How long the verifying spinner may sit on an auth failure before falling to
+ * the timeout view: the api interceptor's forceLogout normally swaps the
+ * navigator away, but if it doesn't (refresh path recovered, logout stalled)
+ * the admin must not hang on a spinner forever.
+ */
+const VERIFY_AUTH_FALLBACK_MS = 10_000;
+
+type RestorePhase = "idle" | "applying" | "reconnecting" | "verifying" | "timeout";
+interface RestoreState {
+  phase: RestorePhase;
+  backup?: AbsBackup;
+  deadlineAt?: number;
+}
 
 // Map a normalized AbsError to full-screen ErrorState props via the shared
 // engine — including the mapper's SEMANTIC icon (offline → cloud-off, etc.),
@@ -75,8 +127,19 @@ function describeCron(cron: string): string {
 const actionErrorMessage = (e: any) =>
   absErrorToActionMessage(e, { forbidden: "Only server admins can manage backups." });
 
+// Screen-reader announcement on entry to each restore phase — the full-screen
+// phase views swap silently otherwise (same pattern as EditMetadataScreen's
+// cover-search result announcement).
+const PHASE_ANNOUNCEMENTS: Partial<Record<RestorePhase, string>> = {
+  applying: "Restoring backup",
+  reconnecting: "Waiting for the server",
+  verifying: "Checking the server",
+  timeout: "Still waiting — the restore may still be running",
+};
+
 export default function AdminBackupsScreen({ navigation }: any) {
   const colors = useThemeColors();
+  const caps = useServerCapabilities();
 
   const [backups, setBackups] = useState<AbsBackup[]>([]);
   const [backupLocation, setBackupLocation] = useState<string>("");
@@ -92,6 +155,50 @@ export default function AdminBackupsScreen({ navigation }: any) {
   const [creating, setCreating] = useState(false);
   // Backup id currently being deleted (dims its row, guards double-taps).
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Restore (apply) state machine — see the header diagram.
+  const [restore, setRestore] = useState<RestoreState>({ phase: "idle" });
+  // Unmount guard for the long-running restore choreography: waitForServerUp
+  // and the verify round-trip outlive any single render, so EVERY setRestore
+  // goes through setRestoreSafe. restorePhaseRef mirrors the phase
+  // synchronously — dialog onPress closures outlive the tap that created
+  // them, so the re-entrancy checks can't trust the render-time state.
+  const restoreCancelledRef = useRef(false);
+  const restorePhaseRef = useRef<RestorePhase>("idle");
+  // Armed by runVerify's auth branch (see there); ANY phase transition or the
+  // unmount cleanup disarms it.
+  const verifyFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearVerifyFallback = () => {
+    if (verifyFallbackTimerRef.current != null) {
+      clearTimeout(verifyFallbackTimerRef.current);
+      verifyFallbackTimerRef.current = null;
+    }
+  };
+  const setRestoreSafe = (next: RestoreState) => {
+    clearVerifyFallback();
+    const prevPhase = restorePhaseRef.current;
+    restorePhaseRef.current = next.phase;
+    if (!restoreCancelledRef.current) {
+      setRestore(next);
+      if (next.phase !== prevPhase) {
+        const announcement = PHASE_ANNOUNCEMENTS[next.phase];
+        if (announcement) AccessibilityInfo.announceForAccessibility(announcement);
+      }
+    }
+  };
+  useEffect(() => {
+    return () => {
+      restoreCancelledRef.current = true;
+      clearVerifyFallback();
+    };
+  }, []);
+
+  // Belt-and-braces for cold-restored thin sessions ({ id, username } only):
+  // hydrate the full user so caps.isRoot below is accurate. refreshCapabilities
+  // never throws, but the catch keeps a future refactor from surprising us.
+  useEffect(() => {
+    refreshCapabilities().catch(() => {});
+  }, []);
 
   // Seed list + automatic-backup summary from a GET /api/backups payload. The
   // schedule fields ride along on the same response (typed loosely because the
@@ -238,6 +345,160 @@ export default function AdminBackupsScreen({ navigation }: any) {
     });
   };
 
+  // ---- Restore (apply) flow — issue #60 -----------------------------------
+
+  // APPLYING: fire the one-and-only apply request for this episode.
+  const startApply = async (backup: AbsBackup) => {
+    // Re-entrancy: the dialog host holds onPress closures after the phase has
+    // moved on — a second confirm press must NOT fire a second apply.
+    if (restorePhaseRef.current !== "idle") return;
+    setRestoreSafe({ phase: "applying", backup });
+    try {
+      await applyBackup(backup.id);
+      if (restoreCancelledRef.current) return;
+      // The server answered before dropping us — verify our session survived.
+      runVerify(backup, Date.now() + RESTORE_WAIT_MS);
+    } catch (e: any) {
+      if (restoreCancelledRef.current) return;
+      const kind = e?.kind;
+      if (kind === "offline" || kind === "auth") {
+        // EXPECTED failure modes while the server swaps its database under
+        // us: the socket drops mid-restore (no response → "offline"), the api
+        // singleton's 20s timeout fires, or the restored database invalidates
+        // our token ("auth"). The restore is almost certainly RUNNING — start
+        // watching for the server to come back. The deadline is set ONCE per
+        // apply episode; verify→reconnect bounces reuse it.
+        runReconnect(backup, Date.now() + RESTORE_WAIT_MS);
+      } else {
+        // forbidden / unsupported / server / unknown: the server REFUSED the
+        // apply — a real failure. NEVER auto-retry: /apply is a side-effecting
+        // GET, and a blind retry could kick off a second restore on top of a
+        // half-finished one.
+        showAppDialog({ title: "Couldn't restore backup", message: actionErrorMessage(e) });
+        setRestoreSafe({ phase: "idle" });
+      }
+    }
+  };
+
+  // RECONNECTING: raw unauthenticated /ping polling (see utils/serverLiveness
+  // for why NOT the api singleton) until the server answers or the deadline
+  // passes.
+  const runReconnect = async (
+    backup: AbsBackup,
+    deadlineAt: number,
+    opts?: { initialDelayMs?: number }
+  ) => {
+    setRestoreSafe({ phase: "reconnecting", backup, deadlineAt });
+    // Same server-config source the download-URL builder reads.
+    const address = storageHelper.getServerConfig()?.address;
+    if (!address) {
+      // Nothing to probe (session config gone mid-restore) — show the
+      // guidance view rather than spinning forever.
+      setRestoreSafe({ phase: "timeout", backup, deadlineAt });
+      return;
+    }
+    const result = await waitForServerUp(address, {
+      deadlineAt,
+      initialDelayMs: opts?.initialDelayMs,
+      isCancelled: () => restoreCancelledRef.current,
+    });
+    if (result === "cancelled") return; // unmounted — stop watching silently
+    if (result === "up") {
+      runVerify(backup, deadlineAt);
+    } else {
+      setRestoreSafe({ phase: "timeout", backup, deadlineAt });
+    }
+  };
+
+  // VERIFYING: one authenticated round-trip through the api singleton —
+  // proves both that the API answers and that our session survived the
+  // restored database, and refreshes the list in the same breath.
+  const runVerify = async (backup: AbsBackup, deadlineAt: number) => {
+    setRestoreSafe({ phase: "verifying", backup, deadlineAt });
+    try {
+      const data = await getBackups();
+      if (restoreCancelledRef.current) return;
+      applySnapshot(data);
+      setError(null);
+      showSnackbar({ message: "Server is back — backup restored" });
+      setRestoreSafe({ phase: "idle" });
+    } catch (e: any) {
+      if (restoreCancelledRef.current) return;
+      const kind = e?.kind;
+      if (kind === "auth") {
+        // The restored database rejected our token — the api interceptor's
+        // forceLogout path is normally already swapping the navigator to the
+        // connect screen, so don't touch state here. But if that swap never
+        // happens (token refresh recovered, logout stalled), the admin would
+        // hang on the verifying spinner forever — arm a fallback that drops
+        // to the timeout view (its copy already guides re-login vs waiting).
+        // Disarmed by any phase transition and by unmount.
+        clearVerifyFallback();
+        verifyFallbackTimerRef.current = setTimeout(() => {
+          verifyFallbackTimerRef.current = null;
+          if (!restoreCancelledRef.current && restorePhaseRef.current === "verifying") {
+            setRestoreSafe({ phase: "timeout", backup, deadlineAt });
+          }
+        }, VERIFY_AUTH_FALLBACK_MS);
+        return;
+      }
+      if (kind === "forbidden" || kind === "unsupported") {
+        // TERMINAL: the server answered and REFUSED us — more waiting can't
+        // fix a permission problem, and re-bouncing would ping+verify forever.
+        showAppDialog({
+          title: "Couldn't verify the restore",
+          message:
+            "Server is back, but this account couldn't verify the restore — you may need to " +
+            "sign in again or check permissions on the web dashboard.",
+        });
+        setRestoreSafe({ phase: "idle" });
+        return;
+      }
+      // offline / server / unknown: the HTTP layer is up but the database may
+      // still be swapping — keep waiting on the SAME episode deadline, with a
+      // leading delay so the ping-up → verify-fail cycle can never run hot.
+      runReconnect(backup, deadlineAt, { initialDelayMs: REBOUNCE_DELAY_MS });
+    }
+  };
+
+  // Dialog 1 (typed confirm) → dialog 2 (last chance) → startApply.
+  const confirmRestore = (backup: AbsBackup) => {
+    // Ignore taps while a restore episode is running, a backup is being
+    // created, or ANY row is deleting — a restore mid-create/mid-delete would
+    // race the very list it's about to replace.
+    if (restorePhaseRef.current !== "idle" || creating || deletingId != null) return;
+    const label = backup.datePretty || backup.filename || backup.id;
+    showAppDialog({
+      title: "Restore this backup?",
+      message:
+        `Restoring replaces ALL server data — users, listening progress, and libraries — ` +
+        `with the backup from ${label}. Everyone is signed out, INCLUDING YOU — you may ` +
+        `need to log in again. Any changes made since ${label} are lost.`,
+      confirmInput: { placeholder: "RESTORE", requiredText: "RESTORE" },
+      buttons: [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Restore",
+          style: "destructive",
+          onPress: () => {
+            showAppDialog({
+              title: "Replace all server data?",
+              message: "Last chance — this cannot be undone from the app.",
+              buttons: [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Replace server data",
+                  style: "destructive",
+                  onPress: () => startApply(backup),
+                },
+              ],
+            });
+          },
+        },
+      ],
+    });
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surface }} edges={["top", "left", "right"]}>
       {/* Settings-family header */}
@@ -269,7 +530,122 @@ export default function AdminBackupsScreen({ navigation }: any) {
         </Text>
       </View>
 
-      {loading ? (
+      {restore.phase === "applying" ||
+      restore.phase === "reconnecting" ||
+      restore.phase === "verifying" ? (
+        // Restore in progress — a full-screen phase view in the loading/error
+        // slot. "applying" is the brief request window; "reconnecting" and
+        // "verifying" both read as "waiting for the server" to the admin.
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text
+            style={{
+              color: colors.onSurface,
+              fontSize: 16,
+              fontWeight: "600",
+              marginTop: 16,
+              textAlign: "center",
+            }}
+          >
+            {restore.phase === "applying" ? "Restoring backup…" : "Waiting for the server…"}
+          </Text>
+          <Text
+            style={{
+              color: colors.onSurfaceVariant,
+              fontSize: 13,
+              marginTop: 8,
+              textAlign: "center",
+              lineHeight: 19,
+            }}
+          >
+            {restore.phase === "applying"
+              ? "Sending the restore request to the server. Leaving this screen only stops " +
+                "watching — the restore continues on the server."
+              : "The restore is running; this can take a few minutes. Leaving this screen only " +
+                "stops watching — the restore continues on the server."}
+          </Text>
+        </View>
+      ) : restore.phase === "timeout" ? (
+        // Deadline passed without the server answering — guidance, not panic.
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32 }}>
+          <Icon name="warning" size={40} color={colors.onSurfaceVariant} />
+          <Text
+            style={{
+              color: colors.onSurface,
+              fontSize: 16,
+              fontWeight: "600",
+              marginTop: 16,
+              textAlign: "center",
+            }}
+          >
+            Still waiting on the server
+          </Text>
+          <Text
+            style={{
+              color: colors.onSurfaceVariant,
+              fontSize: 13,
+              marginTop: 8,
+              textAlign: "center",
+              lineHeight: 19,
+            }}
+          >
+            The restore may still be running. Check the server console. Don't restore the same
+            backup again until you've confirmed what happened.
+          </Text>
+          <HintPressable
+            onPress={() => {
+              // Re-entrancy: a double-tap races the phase transition — the
+              // second press must not start a SECOND polling loop.
+              if (restorePhaseRef.current !== "timeout") return;
+              // Re-arm a FRESH 5-minute watch window for the same episode.
+              const backup = restore.backup;
+              if (backup) runReconnect(backup, Date.now() + RESTORE_WAIT_MS);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Keep waiting"
+            android_ripple={{ color: withAlpha(colors.onPrimary, 0.16) }}
+            style={{
+              marginTop: 20,
+              height: 44,
+              paddingHorizontal: 24,
+              borderRadius: 22,
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+              backgroundColor: colors.primary,
+            }}
+          >
+            <Text style={{ color: colors.onPrimary, fontSize: 14, fontWeight: "700" }}>
+              Keep waiting
+            </Text>
+          </HintPressable>
+          <HintPressable
+            onPress={() => {
+              // Same double-tap guard as Keep waiting: a second press after
+              // the phase moved on must not reload or clobber state again.
+              if (restorePhaseRef.current !== "timeout") return;
+              // Back to the list with one fresh load — the admin decides what
+              // to do from there.
+              setRestoreSafe({ phase: "idle" });
+              setRetryTick((t) => t + 1);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Done"
+            android_ripple={{ color: withAlpha(colors.onSurface, 0.12) }}
+            style={{
+              marginTop: 10,
+              height: 44,
+              paddingHorizontal: 24,
+              borderRadius: 22,
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+            }}
+          >
+            <Text style={{ color: colors.primary, fontSize: 14, fontWeight: "700" }}>Done</Text>
+          </HintPressable>
+        </View>
+      ) : loading ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
@@ -319,26 +695,6 @@ export default function AdminBackupsScreen({ navigation }: any) {
               </>
             )}
           </HintPressable>
-
-          {/* Restore-from-web note — Apply/Restore is deliberately not offered
-              in the app (see header comment / issue #60). */}
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              marginHorizontal: 16,
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 12,
-              backgroundColor: colors.secondaryContainer,
-            }}
-          >
-            <Icon name="info" size={18} color={colors.onSecondaryContainer} style={{ marginRight: 10 }} />
-            <Text style={{ color: colors.onSecondaryContainer, fontSize: 13, flex: 1 }}>
-              Restoring a backup isn't available in the app — restoring replaces all server data and
-              restarts the server. Use the web dashboard to restore.
-            </Text>
-          </View>
 
           {/* Automatic-backup summary (read-only): the server's cron schedule,
               rotation count, and target location — so an admin can tell at a
@@ -403,6 +759,26 @@ export default function AdminBackupsScreen({ navigation }: any) {
                     colors={colors}
                     trailing={
                       <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        {/* Restore (apply) — issue #60. The server accepts
+                            /apply from any admin, but the app deliberately
+                            NARROWS this to root: replacing every user's data
+                            from a phone is the most destructive action in the
+                            product, and root is the only role we can be sure
+                            still exists (and can log back in) after the
+                            restored database lands. */}
+                        {caps.isRoot ? (
+                          <HintPressable
+                            onPress={() => confirmRestore(backup)}
+                            disabled={deletingId === backup.id}
+                            style={{ width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", marginRight: 4 }}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Restore backup ${backup.datePretty || backup.filename || backup.id}`}
+                            android_ripple={{ color: withAlpha(colors.onSurface, 0.12), borderless: true, radius: 22 }}
+                          >
+                            <Icon name="restore" size={22} color={colors.onSurfaceVariant} />
+                          </HintPressable>
+                        ) : null}
                         <HintPressable
                           onPress={() => handleDownload(backup)}
                           disabled={deletingId === backup.id}
