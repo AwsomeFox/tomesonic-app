@@ -681,13 +681,18 @@ async function checkIsConnectedWithTimeout(): Promise<boolean> {
   return isConnected;
 }
 
-// Freshest-wins predicate shared by loadLastSession, the resume-time
-// cross-device catch-up in play(), and the manual "sync from server" action.
-// The server position wins ONLY when its progress timestamp is meaningfully
-// newer (10s margin absorbs clock skew and in-flight sync races) AND the two
-// positions actually differ (>2s) — so a server that is merely equal, or barely
-// newer, never triggers a pointless seek, and unsynced local progress (offline
-// listening whose syncs are still queued) is never clobbered.
+// Freshest-wins predicate shared by loadLastSession, preparePlaybackSession's
+// server-adoption pass, the resume-time cross-device catch-up in play(), and the
+// manual "sync from server" action. The server position wins ONLY when:
+//   - we have a KNOWN local timestamp (localUpdatedAt > 0). Without one we can't
+//     prove the server is genuinely fresher — any real server timestamp beats 0,
+//     so an ancient server row (e.g. a legacy/upgraded save with no updatedAt)
+//     would "win" and jump the listener BACKWARD;
+//   - its progress timestamp is meaningfully newer (10s margin absorbs clock
+//     skew and in-flight sync races); AND
+//   - the two positions actually differ (>2s) — so an equal or barely-newer
+//     server never triggers a pointless seek, and unsynced local progress
+//     (offline listening whose syncs are still queued) is never clobbered.
 const SERVER_FRESHNESS_MARGIN_MS = 10000;
 const POSITION_EPSILON_S = 2;
 // A resume is only preceded by a live server-progress check when the session
@@ -703,6 +708,7 @@ function isServerProgressFresher(
 ): boolean {
   return (
     typeof serverTime === "number" &&
+    localUpdatedAt > 0 &&
     serverUpdatedAt > localUpdatedAt + SERVER_FRESHNESS_MARGIN_MS &&
     Math.abs(serverTime - localTime) > POSITION_EPSILON_S
   );
@@ -3033,9 +3039,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     );
     // Offline, unreachable, timed out, or no server-side row — nothing to adopt.
     if (!server) return { status: "unavailable" };
-    // A closePlayback / book switch may have landed during the fetch above.
+    // A closePlayback / book switch — or, within one podcast, an episode switch
+    // (A→B share the same libraryItemId) — may have landed during the fetch
+    // above. Re-check BOTH the item id AND the episode id so we never seek the
+    // new target to the OLD one's server position.
     const live = get().currentSession;
-    if (!live || (live.libraryItemId || live.libraryItem?.id) !== itemId) {
+    if (
+      !live ||
+      (live.libraryItemId || live.libraryItem?.id) !== itemId ||
+      (live.episodeId || null) !== (session.episodeId || null)
+    ) {
       return { status: "no-session" };
     }
     const livePos = await getLiveAbsolutePosition(get);

@@ -209,6 +209,27 @@ describe("usePlaybackStore server-position sync", () => {
       expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
     });
 
+    it("bails to no-session when the podcast EPISODE switches during the fetch (same item id)", async () => {
+      setupLocal({ currentSession: { id: "s", libraryItemId: "item1", episodeId: "epA" } });
+      storageHelper.setLastPlaybackSession({
+        libraryItemId: "item1",
+        episodeId: "epA",
+        updatedAt: BASE - 60_000,
+      });
+      // The item id is unchanged (epA→epB share item1); only the episode moved.
+      mockGet.mockImplementation(async () => {
+        usePlaybackStore.setState({
+          currentSession: { id: "s2", libraryItemId: "item1", episodeId: "epB" },
+        } as any);
+        return { data: { currentTime: 500, lastUpdate: BASE } } as any;
+      });
+
+      const r = await usePlaybackStore.getState().syncPositionFromServer();
+
+      expect(r.status).toBe("no-session");
+      expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
+    });
+
     it("does not issue the GET when the connectivity pre-check reports offline", async () => {
       setupLocal();
       storageHelper.setLastPlaybackSession({ libraryItemId: "item1", updatedAt: BASE - 60_000 });
