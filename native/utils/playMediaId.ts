@@ -49,14 +49,23 @@ export function parsePlayMediaId(
   if (opts?.hasPrefix && raw.startsWith("play:")) {
     raw = raw.slice("play:".length);
   }
-  // Split the optional "@@<seconds>" bookmark/position suffix off first, so the
+  // FIRST-occurrence splits, mirroring the Kotlin parser exactly (its
+  // substringBefore/substringAfter both cut at the FIRST delimiter): everything
+  // after the first "@@" is the bookmark suffix, everything after the first "::"
+  // is the episode id. String.split() would instead cut at EVERY occurrence and
+  // diverge from Kotlin on an id carrying a repeated delimiter
+  // (e.g. "a@@1@@2" → suffix "1@@2" here vs "1" under split; "a::e::x" →
+  // episode "e::x" here vs "e" under split).
+  // Take the "@@<seconds>" bookmark/position suffix off first, so the
   // "::episodeId" split never sees it.
-  const [main, bookmarkStr] = raw.split("@@");
-  const segments = main.split("::");
-  const itemId = segments[0];
+  const atIdx = raw.indexOf("@@");
+  const main = atIdx === -1 ? raw : raw.slice(0, atIdx);
+  const bookmarkStr = atIdx === -1 ? undefined : raw.slice(atIdx + 2);
+  const colonIdx = main.indexOf("::");
+  const itemId = colonIdx === -1 ? main : main.slice(0, colonIdx);
   // Empty ("a::") or missing episode segment both collapse to undefined, which
   // is the shape startPlayback expects (no episode).
-  const episodeId = segments[1] || undefined;
+  const episodeId = colonIdx === -1 ? undefined : main.slice(colonIdx + 2) || undefined;
   const bookmarkSeconds = bookmarkStr !== undefined ? Number(bookmarkStr) : undefined;
   return { itemId, episodeId, bookmarkSeconds };
 }

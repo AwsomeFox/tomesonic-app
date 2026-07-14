@@ -81,6 +81,22 @@ describe("parsePlayMediaId — stripped form (hasPrefix: false, from RemotePlayI
   });
 });
 
+describe("parsePlayMediaId — first-occurrence splits (aligned with the Kotlin parser)", () => {
+  it('"a@@1@@2" → suffix is everything after the FIRST "@@" ("1@@2" → NaN), not "1"', () => {
+    // Kotlin: body.substringAfter("@@") = "1@@2" → toDoubleOrNull() = null.
+    // A naive split("@@") would wrongly yield bookmarkSeconds 1.
+    const parsed = parsePlayMediaId("a@@1@@2");
+    expect(parsed.itemId).toBe("a");
+    expect(Number.isNaN(parsed.bookmarkSeconds)).toBe(true);
+  });
+
+  it('"a::e::x" → episode is everything after the FIRST "::" ("e::x"), not "e"', () => {
+    // Kotlin: raw.substringAfter("::") = "e::x". A naive split("::") would
+    // wrongly yield episodeId "e".
+    expect(parsePlayMediaId("a::e::x")).toEqual({ itemId: "a", episodeId: "e::x" });
+  });
+});
+
 describe("parsePlayMediaId — bare/edge inputs", () => {
   it("an empty string → empty itemId, nothing else", () => {
     expect(parsePlayMediaId("")).toEqual({ itemId: "" });
