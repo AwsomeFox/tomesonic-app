@@ -714,6 +714,12 @@ function isServerProgressFresher(
 // server never hangs a resume or the app. Returns null when offline, on
 // timeout, or when the server has no usable progress row, so every caller
 // simply keeps the local position on failure.
+//
+// timeoutMs is the WHOLE-call budget and should be passed comfortably above the
+// connectivity pre-check's own fixed ~1s cap (both live callers use 3000ms):
+// the pre-check runs first and its elapsed time is charged against the budget,
+// so if it exhausts the budget we bail rather than issue a GET that would push
+// total latency past timeoutMs.
 async function fetchServerProgress(
   itemId: string,
   episodeId: string | null | undefined,
@@ -723,7 +729,11 @@ async function fetchServerProgress(
     const budgetStart = Date.now();
     const isConnected = await checkIsConnectedWithTimeout();
     if (!isConnected) return null;
-    const remainingBudget = Math.max(500, timeoutMs - (Date.now() - budgetStart));
+    // Strictly honor timeoutMs: the GET gets exactly what's left after the
+    // pre-check, and if nothing is left we don't issue it (no Math.max floor
+    // that could stretch total latency past the caller's budget).
+    const remainingBudget = timeoutMs - (Date.now() - budgetStart);
+    if (remainingBudget <= 0) return null;
     // Podcast progress is keyed per EPISODE server-side — the item-level GET
     // returns nothing useful for an episode session.
     const progressPath = episodeId
