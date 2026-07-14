@@ -280,10 +280,14 @@ export default function UploadMediaScreen({ navigation, route }: any) {
       showAppDialog({ title: "Upload failed", message });
     } finally {
       busyRef.current = false;
-      setBusy(false);
-      setUploading(false);
-      setProgress(0);
       handleRef.current = null;
+      // Only touch state while mounted — an upload can settle after the screen
+      // is gone (it runs on in the background), same guard as the dialogs above.
+      if (mountedRef.current) {
+        setBusy(false);
+        setUploading(false);
+        setProgress(0);
+      }
     }
   };
 
@@ -322,9 +326,11 @@ export default function UploadMediaScreen({ navigation, route }: any) {
         <View style={{ paddingHorizontal: 16 }}>
           <Pressable
             testID="choose-files"
-            onPress={pickFiles}
+            onPress={uploading ? undefined : pickFiles}
+            disabled={uploading}
             accessibilityRole="button"
             accessibilityLabel="Choose files"
+            accessibilityState={{ disabled: uploading }}
             android_ripple={{ color: withAlpha(colors.onSecondaryContainer, 0.14) }}
             style={{
               flexDirection: "row",
@@ -334,6 +340,7 @@ export default function UploadMediaScreen({ navigation, route }: any) {
               borderRadius: 22,
               overflow: "hidden",
               backgroundColor: colors.secondaryContainer,
+              opacity: uploading ? 0.5 : 1,
             }}
           >
             <Icon name="add" size={20} color={colors.onSecondaryContainer} />
@@ -415,20 +422,24 @@ export default function UploadMediaScreen({ navigation, route }: any) {
             </Text>
           </Pressable>
         ) : null}
-        <SelectRow
-          icon="library"
-          title="Library"
-          subtitle={selectedLibrary?.name || "Choose a library"}
-          onPress={() => setLibraryPickerOpen(true)}
-          colors={colors}
-        />
-        <SelectRow
-          icon="folder"
-          title="Folder"
-          subtitle={selectedFolder?.fullPath || "Choose a folder"}
-          onPress={() => setFolderPickerOpen(true)}
-          colors={colors}
-        />
+        {/* Destination is frozen during an upload — changing it wouldn't affect
+            the in-flight request, only mislead about where files are going. */}
+        <View style={{ opacity: uploading ? 0.5 : 1 }}>
+          <SelectRow
+            icon="library"
+            title="Library"
+            subtitle={selectedLibrary?.name || "Choose a library"}
+            onPress={uploading ? undefined : () => setLibraryPickerOpen(true)}
+            colors={colors}
+          />
+          <SelectRow
+            icon="folder"
+            title="Folder"
+            subtitle={selectedFolder?.fullPath || "Choose a folder"}
+            onPress={uploading ? undefined : () => setFolderPickerOpen(true)}
+            colors={colors}
+          />
+        </View>
         <View style={{ paddingHorizontal: 16, paddingVertical: 6 }}>
           <Text style={{ color: colors.onSurfaceVariant, fontSize: 12 }}>
             {selectedFolder

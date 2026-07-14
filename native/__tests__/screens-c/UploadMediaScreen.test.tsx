@@ -331,8 +331,10 @@ describe("UploadMediaScreen — upload", () => {
     await chooseFiles([ASSET]);
     await confirmUpload();
 
-    // Uploading UI is up.
+    // Uploading UI is up, and the file picker is frozen so the shown selection
+    // can't drift from the in-flight request.
     expect(screen.getByTestId("upload-progress")).toBeTruthy();
+    expect(screen.getByTestId("choose-files").props.accessibilityState?.disabled).toBe(true);
 
     await act(async () => {
       capturedOnProgress!(50, 100);
