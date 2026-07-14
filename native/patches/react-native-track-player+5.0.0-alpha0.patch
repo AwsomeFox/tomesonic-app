@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-index 5a1b2bf..d9b4e7a 100644
+index 5a1b2bf..1b159b4 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 @@ -14,7 +14,18 @@ open class AudioItem(
@@ -22,7 +22,7 @@ index 5a1b2bf..d9b4e7a 100644
  ) {
      fun toMediaItem(): MediaItem {
          val extras = Bundle().apply {
-@@ -30,24 +41,138 @@ open class AudioItem(
+@@ -30,24 +41,142 @@ open class AudioItem(
              putString("type", type.toString())
              putString("uri", audioUrl)
          }
@@ -31,18 +31,22 @@ index 5a1b2bf..d9b4e7a 100644
              .setTitle(title)
              .setArtist(artist)
 -            .setArtworkUri(Uri.parse(artwork))
-+            // Media3 copies this artworkUri string VERBATIM into the legacy
-+            // MediaMetadataCompat *_ART_URI keys, and the Android Auto launcher
-+            // mini-player loads THAT uri in the car's own process. A downloaded
-+            // book's cover is a private file:// path the car process cannot read
-+            // (different UID) → blank mini-player tile, even though the in-process
-+            // full player renders it fine from the same file. Re-expose a local
-+            // cover through the app's FileProvider as a cross-process-readable
-+            // content:// uri so the car can load it (http covers pass through).
-+            .setArtworkUri(Uri.parse(carReadableArtworkUri(artwork) ?: artwork))
              .setExtras(extras)
 -            .build()
 -        return MediaItem.Builder()
++        // Media3 copies this artworkUri string VERBATIM into the legacy
++        // MediaMetadataCompat *_ART_URI keys, and the Android Auto launcher
++        // mini-player loads THAT uri in the car's own process. A downloaded
++        // book's cover is a private file:// path the car process cannot read
++        // (different UID) → blank mini-player tile, even though the in-process
++        // full player renders it fine from the same file. Re-expose a local
++        // cover through the app's FileProvider as a cross-process-readable
++        // content:// uri so the car can load it (http covers pass through).
++        // Guard the parse: `artwork` is nullable, and Uri.parse(null) crashes.
++        val artUri = carReadableArtworkUri(artwork) ?: artwork
++        if (!artUri.isNullOrEmpty()) {
++            mdBuilder.setArtworkUri(Uri.parse(artUri))
++        }
 +        // Android Auto's QUEUE rows and the COMPACT now-playing card build their
 +        // icon ONLY from inline artworkData (media3's legacy stub never loads
 +        // artworkUri for those, and the car process can't read app-private
