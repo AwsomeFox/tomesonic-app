@@ -265,6 +265,21 @@ describe("uploadMediaFiles — cancel", () => {
     expect(notifications.clear).not.toHaveBeenCalled();
   });
 
+  it("a settle during the retry backoff drops the pending retry (no second POST)", async () => {
+    jest.useFakeTimers();
+    const handle = uploadMediaFiles(params(), { notifyId: "up1", notifyTitle: "T" });
+    const xhr1 = FakeXHR.latest();
+
+    xhr1.networkFail(); // schedules the retry timer
+    // A terminal path settles the promise BEFORE the timer fires.
+    xhr1.succeed(200, "{}");
+    await expect(handle.promise).resolves.toEqual({});
+
+    jest.advanceTimersByTime(5000);
+    // The retry was cleared on settle — no second request was ever constructed.
+    expect(FakeXHR.instances.length).toBe(1);
+  });
+
   it("a synchronous throw in the retry's send() settles the promise (no leak)", async () => {
     jest.useFakeTimers();
     const handle = uploadMediaFiles(params(), { notifyId: "up1", notifyTitle: "T" });

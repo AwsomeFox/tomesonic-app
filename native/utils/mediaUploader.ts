@@ -109,9 +109,18 @@ export function uploadMediaFiles(
     return form;
   };
 
+  // Drop a scheduled retry so it can't fire a second POST after a terminal path.
+  const clearRetry = () => {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+
   const finishOk = (data: any) => {
     if (settled) return;
     settled = true;
+    clearRetry();
     if (notifyId) downloadNotifications.complete(notifyId, notifyTitle || "");
     resolvePromise(data);
   };
@@ -119,6 +128,7 @@ export function uploadMediaFiles(
   const finishErr = (err: Error) => {
     if (settled) return;
     settled = true;
+    clearRetry();
     clearNotif();
     rejectPromise(err);
   };
@@ -167,12 +177,14 @@ export function uploadMediaFiles(
     // re-issuing the whole request (/api/upload is not resumable — the retry
     // re-sends the entire body). A second network failure is fatal.
     const onNetworkFail = () => {
-      if (cancelled) return;
+      // settled too: a late onload could have already resolved before this fires.
+      if (cancelled || settled) return;
       if (!retried) {
         retried = true;
         retryTimer = setTimeout(() => {
           retryTimer = null;
-          if (cancelled) return;
+          // Re-check both: the promise may have settled during the backoff.
+          if (cancelled || settled) return;
           // A synchronous throw in the retry's send() would otherwise escape
           // asynchronously (unhandled) and leave the promise unsettled.
           try {
