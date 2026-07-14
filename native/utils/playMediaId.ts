@@ -13,12 +13,13 @@
  *     live position, so the @@seconds suffix is parsed but ignored by that
  *     caller (adoption never seeks).
  *
- *   - the RemotePlayId handler (playbackService) receives the id with the
- *     "play:" prefix ALREADY STRIPPED by the native side
- *     (`mid.removePrefix("play:").substringBefore("@@")` gives it itemId, and a
- *     separate "@@<seconds>" suffix is forwarded), i.e. grammar
- *     "<itemId>[::episodeId][@@seconds]" (hasPrefix: false). It seeks to
- *     bookmarkSeconds when present and > 0.
+ *   - the RemotePlayId handler (playbackService) receives the id with ONLY the
+ *     "play:" prefix stripped by the native side (`mediaId.removePrefix("play:")`
+ *     in onAddMediaItems / the cold-start handoff) — the "::episodeId" and any
+ *     "@@<seconds>" stay INLINE in the single forwarded "id" string, i.e.
+ *     grammar "<itemId>[::episodeId][@@seconds]" (hasPrefix: false). This parser
+ *     does the "@@" and "::" splits, and the caller seeks to bookmarkSeconds
+ *     when present and > 0.
  *
  * The grammar contract is pinned in
  * __tests__/contracts/nativeBridgeShapes.test.ts (two-sided with the patch) and
