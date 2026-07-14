@@ -127,6 +127,11 @@ describe("episode downloads", () => {
     expect(api.get).toHaveBeenLastCalledWith("/api/podcasts/p1/checknew", {
       params: { limit: 5 },
     });
+    // 0 is a valid limit and must be sent (not dropped as falsy).
+    await checkNewEpisodes("p1", 0);
+    expect(api.get).toHaveBeenLastCalledWith("/api/podcasts/p1/checknew", {
+      params: { limit: 0 },
+    });
   });
 
   it("downloadPodcastEpisodes → POST with the BARE ARRAY as the body", async () => {

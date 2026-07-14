@@ -95,7 +95,10 @@ export async function createPodcastsFromOpml(params: {
 export async function checkNewEpisodes(itemId: string, limit?: number): Promise<any> {
   return absRequest(() =>
     api.get(`/api/podcasts/${encodeURIComponent(itemId)}/checknew`, {
-      params: { ...(limit ? { limit } : {}) },
+      // Send limit whenever it's provided — including 0 (a valid
+      // maxNewEpisodesToDownload). A truthiness check would drop 0 and let the
+      // server silently fall back to its default.
+      params: { ...(typeof limit === "number" ? { limit } : {}) },
     })
   );
 }

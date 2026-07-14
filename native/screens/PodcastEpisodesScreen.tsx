@@ -73,7 +73,13 @@ function isEpisodeOnServer(feedEp: AbsPodcastFeedEpisode, serverEpisodes: any[])
 
 /** Stable selection key for a feed episode (no server id exists yet). */
 function feedEpisodeKey(ep: AbsPodcastFeedEpisode, index: number): string {
-  return ep?.enclosure?.url || ep?.guid || (ep?.title ? `title:${ep.title}` : `idx:${index}`);
+  // enclosure.url and guid are real per-episode identities. The title fallback
+  // (for feeds that regenerate enclosure URLs) can collide when two episodes
+  // share a title, which would break selection state and FlatList keys — so
+  // disambiguate it with the stable feed index.
+  return (
+    ep?.enclosure?.url || ep?.guid || (ep?.title ? `title:${index}:${ep.title}` : `idx:${index}`)
+  );
 }
 
 function formatPubDate(ep: any): string {
