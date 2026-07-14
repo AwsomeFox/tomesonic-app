@@ -44,6 +44,8 @@ jest.mock("../../utils/downloader", () => ({
     abortBookParts: jest.fn().mockResolvedValue(undefined),
     sweepOrphanFolders: jest.fn().mockResolvedValue(undefined),
   },
+  // In-app zip download (issue #68) — tests hand back a controllable handle.
+  downloadFileByUrl: jest.fn(),
 }));
 jest.mock("../../store/useDialogStore", () => ({
   showAppDialog: jest.fn(),
@@ -65,7 +67,7 @@ jest.mock("../../utils/abs/items", () => ({
   embedMetadata: jest.fn(),
   createShareLink: jest.fn(),
   deleteShareLink: jest.fn(),
-  buildItemZipDownloadUrl: jest.fn(),
+  getItemZipDownloadTarget: jest.fn(),
 }));
 jest.mock("../../utils/abs/tasks", () => ({
   startTaskWatch: jest.fn(),
@@ -84,7 +86,7 @@ import {
   embedMetadata,
   createShareLink,
   deleteShareLink,
-  buildItemZipDownloadUrl,
+  getItemZipDownloadTarget,
 } from "../../utils/abs/items";
 import { startTaskWatch, subscribeTasks, getTasksSnapshot } from "../../utils/abs/tasks";
 import {
@@ -93,7 +95,7 @@ import {
   syncBothProgressFraction,
   reconcileLinkedProgress,
 } from "../../utils/progressSync";
-import { downloader } from "../../utils/downloader";
+import { downloader, downloadFileByUrl } from "../../utils/downloader";
 import { useUserStore } from "../../store/useUserStore";
 import { useFavoritesStore } from "../../store/useFavoritesStore";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
@@ -1468,12 +1470,49 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     expect(navigation.navigate).toHaveBeenCalledWith("ItemHistory", { libraryItemId: "item1" });
   });
 
-  it("zip download: confirm dialog → URL builder → OS handoff (never axios)", async () => {
-    setAdmin();
-    (buildItemZipDownloadUrl as jest.Mock).mockReturnValue(
-      "https://abs.test/api/items/item1/download?token=tok"
+  // --- In-app zip download (issue #68) ---------------------------------------
+
+  const ZIP_TARGET = { url: "https://abs.test/api/items/item1/download", token: "tok" };
+
+  /** Controllable FileDownloadHandle for the mocked downloadFileByUrl. */
+  const makeZipHandle = () => {
+    let resolve!: (v: { uri: string } | null) => void;
+    let reject!: (e: any) => void;
+    const promise = new Promise<{ uri: string } | null>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return {
+      handle: { promise, cancel: jest.fn().mockResolvedValue(undefined) },
+      resolve,
+      reject,
+    };
+  };
+
+  /** Render, open the overflow, press the zip row and confirm the dialog. */
+  const startZip = async () => {
+    routeApi(bothFormatItem);
+    await render(
+      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
     );
+    await openOverflow();
+    await fireEvent.press(screen.getByText("Download all (zip)"));
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      dialog.buttons.find((b: any) => b.text === "Download").onPress();
+    });
+    return dialog;
+  };
+
+  it("zip download: confirm → in-app streaming download with progress banner (no browser handoff)", async () => {
+    setAdmin();
+    (getItemZipDownloadTarget as jest.Mock).mockReturnValue(ZIP_TARGET);
+    const { handle, resolve } = makeZipHandle();
+    (downloadFileByUrl as jest.Mock).mockReturnValue(handle);
     const openSpy = jest.spyOn(Linking, "openURL").mockResolvedValue(true as any);
+    const Sharing = require("expo-sharing");
+    (Sharing.isAvailableAsync as jest.Mock).mockResolvedValue(true);
+
     routeApi(bothFormatItem);
     await render(
       <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
@@ -1481,20 +1520,121 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     await openOverflow();
 
     await fireEvent.press(screen.getByText("Download all (zip)"));
-    expect(buildItemZipDownloadUrl).toHaveBeenCalledWith("item1");
-    // Informational confirm first (size + download-manager handoff note).
+    expect(getItemZipDownloadTarget).toHaveBeenCalledWith("item1");
+    // Informational confirm first (size + in-app download copy).
     const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
     expect(dialog.title).toBe("Download all files");
     expect(dialog.message).toContain("118 MB"); // fixture size, surfaced pre-confirm
-    expect(openSpy).not.toHaveBeenCalled();
+    expect(downloadFileByUrl).not.toHaveBeenCalled();
 
     await act(async () => {
       dialog.buttons.find((b: any) => b.text === "Download").onPress();
     });
-    expect(openSpy).toHaveBeenCalledWith("https://abs.test/api/items/item1/download?token=tok");
-    expect(showSnackbar).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("download") })
+
+    // The download streams in-app: token as a separate field (Authorization
+    // header downstream), NEVER a tokened url handed to the browser.
+    expect(downloadFileByUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://abs.test/api/items/item1/download",
+        token: "tok",
+        filename: "the-hobbit.zip",
+        expectedBytes: 123456789,
+        notification: { id: "zip_item1", title: "The Hobbit" },
+      })
     );
+    expect(openSpy).not.toHaveBeenCalled();
+
+    // Progress banner starts at 0% and follows the captured onProgress.
+    expect(screen.getByText("Downloading zip… 0% of 118 MB")).toBeTruthy();
+    const opts = (downloadFileByUrl as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      opts.onProgress(Math.round(0.42 * 123456789), 123456789);
+    });
+    expect(screen.getByText("Downloading zip… 42% of 118 MB")).toBeTruthy();
+
+    // Success: share sheet with the finished file, then the cache staging
+    // file is disposed. Still no browser handoff.
+    await act(async () => {
+      resolve({ uri: "file:///test-cache/the-hobbit.zip" });
+    });
+    await waitFor(() =>
+      expect(Sharing.shareAsync).toHaveBeenCalledWith("file:///test-cache/the-hobbit.zip", {
+        dialogTitle: "The Hobbit",
+        mimeType: "application/zip",
+        UTI: "public.zip-archive",
+      })
+    );
+    const FileSystem = require("expo-file-system/legacy");
+    await waitFor(() =>
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///test-cache/the-hobbit.zip", {
+        idempotent: true,
+      })
+    );
+    expect(openSpy).not.toHaveBeenCalled();
+    // Banner cleared once the download settled.
+    expect(screen.queryByText(/Downloading zip/)).toBeNull();
+
+    (Sharing.isAvailableAsync as jest.Mock).mockResolvedValue(false); // restore the setup default
+    openSpy.mockRestore();
+  });
+
+  it("zip download: banner cancel aborts the handle, disabled row can't double-start, snackbar on cancel", async () => {
+    setAdmin();
+    (getItemZipDownloadTarget as jest.Mock).mockReturnValue(ZIP_TARGET);
+    const { handle, resolve } = makeZipHandle();
+    (downloadFileByUrl as jest.Mock).mockReturnValue(handle);
+
+    await startZip();
+    expect(downloadFileByUrl).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Cancel zip download")).toBeTruthy();
+
+    // The overflow row is disabled + relabeled while the zip streams —
+    // pressing it again must not open a second confirm dialog. (Confirming
+    // closed the sheet, so reopen it first.)
+    await fireEvent.press(screen.getByLabelText("More actions"));
+    expect(screen.getByText("Downloading… 0%")).toBeTruthy();
+    (showAppDialog as jest.Mock).mockClear();
+    await fireEvent.press(screen.getByText("Download all (zip)"));
+    expect(showAppDialog).not.toHaveBeenCalled();
+    expect(downloadFileByUrl).toHaveBeenCalledTimes(1);
+
+    await fireEvent.press(screen.getByLabelText("Cancel zip download"));
+    expect(handle.cancel).toHaveBeenCalledTimes(1);
+
+    // The handle resolves null on cancel: banner goes, cancellation reported.
+    await act(async () => {
+      resolve(null);
+    });
+    expect(showSnackbar).toHaveBeenCalledWith({ message: "Download cancelled" });
+    expect(screen.queryByLabelText("Cancel zip download")).toBeNull();
+  });
+
+  it("zip download: sharing unavailable → 'Open in browser' fallback uses the legacy tokened url", async () => {
+    setAdmin();
+    (getItemZipDownloadTarget as jest.Mock).mockReturnValue(ZIP_TARGET);
+    const { handle, resolve } = makeZipHandle();
+    (downloadFileByUrl as jest.Mock).mockReturnValue(handle);
+    const openSpy = jest.spyOn(Linking, "openURL").mockResolvedValue(true as any);
+    const Sharing = require("expo-sharing");
+    (Sharing.isAvailableAsync as jest.Mock).mockResolvedValue(false);
+
+    await startZip();
+    await act(async () => {
+      resolve({ uri: "file:///test-cache/the-hobbit.zip" });
+    });
+
+    await waitFor(() =>
+      expect(showAppDialog).toHaveBeenCalledWith(expect.objectContaining({ title: "Downloaded" }))
+    );
+    expect(Sharing.shareAsync).not.toHaveBeenCalled();
+
+    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    await act(async () => {
+      dialog.buttons.find((b: any) => b.text === "Open in browser").onPress();
+    });
+    // The ONE deliberate tokened-url exception: an explicit user-chosen
+    // browser handoff (the browser can't send our Authorization header).
+    expect(openSpy).toHaveBeenCalledWith("https://abs.test/api/items/item1/download?token=tok");
     openSpy.mockRestore();
   });
 
@@ -1673,37 +1813,31 @@ describe("ItemDetailScreen — overflow (More actions)", () => {
     expect(slugifyTitle("")).toBe("");
   });
 
-  it("zip download: OS handoff FAILURE shows a dialog, not the success snackbar", async () => {
+  it("zip download FAILURE shows a 'Couldn't download' dialog with the error message", async () => {
     setAdmin();
-    (buildItemZipDownloadUrl as jest.Mock).mockReturnValue(
-      "https://abs.test/api/items/item1/download?token=tok"
-    );
-    // No browser on the device — openURL rejects.
-    const openSpy = jest.spyOn(Linking, "openURL").mockRejectedValue(new Error("no handler"));
-    routeApi(bothFormatItem);
-    await render(
-      <ItemDetailScreen route={{ params: { itemId: "item1" } }} navigation={makeNavigation()} />
-    );
-    await openOverflow();
-    await fireEvent.press(screen.getByText("Download all (zip)"));
+    (getItemZipDownloadTarget as jest.Mock).mockReturnValue(ZIP_TARGET);
+    const { handle, reject } = makeZipHandle();
+    (downloadFileByUrl as jest.Mock).mockReturnValue(handle);
+    const Sharing = require("expo-sharing");
 
-    const dialog = (showAppDialog as jest.Mock).mock.calls.at(-1)![0];
+    await startZip();
+    // The server 404s the zip (downloadFileByUrl surfaces describeHttpFailure).
     await act(async () => {
-      dialog.buttons.find((b: any) => b.text === "Download").onPress();
+      reject(new Error('"the-hobbit.zip" was not found on the server'));
     });
+
     await waitFor(() =>
       expect(showAppDialog).toHaveBeenCalledWith(
         expect.objectContaining({
           title: "Couldn't download",
-          message: expect.stringContaining("Couldn't open a browser for the download"),
+          message: '"the-hobbit.zip" was not found on the server',
         })
       )
     );
-    // The success snackbar must NOT fire when the handoff never happened.
-    expect(showSnackbar).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("handed to your browser") })
-    );
-    openSpy.mockRestore();
+    // No share sheet, no cancelled snackbar, and the banner is gone.
+    expect(Sharing.shareAsync).not.toHaveBeenCalled();
+    expect(showSnackbar).not.toHaveBeenCalledWith({ message: "Download cancelled" });
+    expect(screen.queryByText(/Downloading zip/)).toBeNull();
   });
 
   it("INFERRED completion (task vanished from a snapshot) reads as generic success", async () => {

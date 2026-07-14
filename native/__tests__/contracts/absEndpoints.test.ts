@@ -203,7 +203,7 @@ describe("utils/abs endpoint table (fn → method + literal path)", () => {
     // module must be added to the table above (URL builders + pure helpers
     // are exempt — they never hit the network).
     const exempt = new Set([
-      "buildItemZipDownloadUrl",
+      "getItemZipDownloadTarget",
       "buildBackupDownloadUrl",
       "narratorNameToId",
       // utils/abs/tasks — poller/watch machinery around the one pinned

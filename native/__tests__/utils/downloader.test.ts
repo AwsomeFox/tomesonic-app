@@ -1,5 +1,5 @@
 import * as FileSystem from "expo-file-system/legacy";
-import { downloader, autoDownloadNextAfterFinish } from "../../utils/downloader";
+import { downloader, autoDownloadNextAfterFinish, downloadFileByUrl } from "../../utils/downloader";
 import { downloadNotifications } from "../../utils/downloadNotifications";
 import { api } from "../../utils/api";
 import { useDownloadStore } from "../../store/useDownloadStore";
@@ -1011,6 +1011,112 @@ describe("auto-download next in series (on finish)", () => {
     markBook1Downloaded();
     mockedApiGet.mockRejectedValue(new Error("series fetch broke"));
     await expect(autoDownloadNextAfterFinish("s-book1")).resolves.toBeUndefined();
+  });
+});
+
+describe("downloadFileByUrl — one-off in-app file download (issue #68)", () => {
+  const ZIP_URL = "http://abs.local/api/items/i1/download";
+
+  it("streams to the cache dir with a Bearer header and NO token in the url", async () => {
+    const handle = downloadFileByUrl({ url: ZIP_URL, token: TOKEN, filename: "my-book.zip" });
+    await expect(handle.promise).resolves.toEqual({ uri: "file:///test-cache/my-book.zip" });
+
+    expect(resumables).toHaveLength(1);
+    expect(resumables[0].url).toBe(ZIP_URL);
+    expect(resumables[0].url).not.toContain("token=");
+    expect(resumables[0].dest).toBe("file:///test-cache/my-book.zip");
+    expect(resumables[0].options).toEqual({ headers: { Authorization: `Bearer ${TOKEN}` } });
+  });
+
+  it("wires onProgress + the notification through the captured native callback", async () => {
+    const gate = deferred<any>();
+    downloadImpl = () => gate.promise;
+    const onProgress = jest.fn();
+
+    const handle = downloadFileByUrl({
+      url: ZIP_URL,
+      token: TOKEN,
+      filename: "f.zip",
+      onProgress,
+      notification: { id: "zip_i1", title: "My Book" },
+    });
+    await until(() => resumables.length === 1);
+    expect(notifications.start).toHaveBeenCalledWith("zip_i1", "My Book");
+
+    resumables[0].callback({ totalBytesWritten: 50, totalBytesExpectedToWrite: 100 });
+    expect(onProgress).toHaveBeenCalledWith(50, 100);
+    expect(notifications.progress).toHaveBeenCalledWith("zip_i1", "My Book", 0.5);
+
+    gate.resolve({ uri: "x", status: 200 });
+    await handle.promise;
+  });
+
+  it("resolves { uri } on success and completes the notification", async () => {
+    const handle = downloadFileByUrl({
+      url: ZIP_URL,
+      token: TOKEN,
+      filename: "ok.zip",
+      notification: { id: "zip_i1", title: "My Book" },
+    });
+    await expect(handle.promise).resolves.toEqual({ uri: "file:///test-cache/ok.zip" });
+    expect(notifications.complete).toHaveBeenCalledWith("zip_i1", "My Book");
+    expect(notifications.clear).not.toHaveBeenCalled();
+    // Success never deletes the downloaded file.
+    expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+  });
+
+  it("non-2xx: deletes the garbage body file and throws the describeHttpFailure message", async () => {
+    downloadImpl = async () => ({ uri: "x", status: 404 });
+    const handle = downloadFileByUrl({
+      url: ZIP_URL,
+      token: TOKEN,
+      filename: "gone.zip",
+      notification: { id: "zip_i1", title: "My Book" },
+    });
+    await expect(handle.promise).rejects.toThrow('"gone.zip" was not found on the server');
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///test-cache/gone.zip", {
+      idempotent: true,
+    });
+    expect(notifications.clear).toHaveBeenCalledWith("zip_i1");
+    expect(notifications.complete).not.toHaveBeenCalled();
+  });
+
+  it("cancel(): aborts the native task, resolves null, deletes the partial and clears the notification", async () => {
+    const gate = deferred<any>();
+    downloadImpl = () => gate.promise;
+
+    const handle = downloadFileByUrl({
+      url: ZIP_URL,
+      token: TOKEN,
+      filename: "part.zip",
+      notification: { id: "zip_i1", title: "My Book" },
+    });
+    await until(() => resumables.length === 1);
+
+    await handle.cancel();
+    expect(resumables[0].cancelAsync).toHaveBeenCalledTimes(1);
+
+    // cancelAsync makes the native downloadAsync resolve undefined.
+    gate.resolve(undefined);
+    await expect(handle.promise).resolves.toBeNull();
+
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith("file:///test-cache/part.zip", {
+      idempotent: true,
+    });
+    expect(notifications.clear).toHaveBeenCalledWith("zip_i1");
+    expect(notifications.complete).not.toHaveBeenCalled();
+  });
+
+  it("free-space preflight rejects BEFORE any native task is created", async () => {
+    (FileSystem.getFreeDiskStorageAsync as jest.Mock).mockResolvedValue(10 * 1024 * 1024);
+    const handle = downloadFileByUrl({
+      url: ZIP_URL,
+      token: TOKEN,
+      filename: "big.zip",
+      expectedBytes: 500 * 1024 * 1024,
+    });
+    await expect(handle.promise).rejects.toThrow(/Not enough free space/);
+    expect(resumables).toHaveLength(0); // never started writing
   });
 });
 

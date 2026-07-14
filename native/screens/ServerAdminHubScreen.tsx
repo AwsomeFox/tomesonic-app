@@ -5,6 +5,7 @@ import { useThemeColors } from "../theme/useThemeColors";
 import Icon, { IconName } from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import TaskActivityCard from "../components/TaskActivityCard";
+import TasksSheet from "../components/TasksSheet";
 import { SectionHeader, Divider, NavRow } from "../components/SettingsRows";
 import { refreshCapabilities, useServerCapabilities } from "../utils/abs/capabilities";
 import { getTasksSnapshot, subscribeTasks } from "../utils/abs/tasks";
@@ -90,6 +91,10 @@ export default function ServerAdminHubScreen({ navigation }: any) {
   // "blur"/"focus" events drop/retake it so a pushed admin sub-screen doesn't
   // keep this screen's subscription alive underneath it.
   const [tasks, setTasks] = useState<AbsTask[]>(() => getTasksSnapshot());
+  // Full-activity TasksSheet (issue #64) — opened from the task card's
+  // "View all" footer; it renders the same live `tasks` snapshot, so rows
+  // keep updating while the sheet is open.
+  const [tasksSheetVisible, setTasksSheetVisible] = useState(false);
   useEffect(() => {
     if (!caps.isAdmin) return;
     let unsub: (() => void) | null = subscribeTasks(setTasks);
@@ -292,6 +297,7 @@ export default function ServerAdminHubScreen({ navigation }: any) {
   let body: React.ReactNode;
   if (caps.isAdmin) {
     body = (
+      <>
       <ScrollView
         testID="admin-hub-scroll"
         style={{ flex: 1 }}
@@ -321,7 +327,7 @@ export default function ServerAdminHubScreen({ navigation }: any) {
             </Text>
           </View>
         ) : null}
-        <TaskActivityCard tasks={tasks} />
+        <TaskActivityCard tasks={tasks} onViewAll={() => setTasksSheetVisible(true)} />
         {groups.map((group) => {
           const rows = group.rows.filter((r) => !r.hidden);
           if (!rows.length) return null;
@@ -344,6 +350,12 @@ export default function ServerAdminHubScreen({ navigation }: any) {
           );
         })}
       </ScrollView>
+      <TasksSheet
+        visible={tasksSheetVisible}
+        tasks={tasks}
+        onClose={() => setTasksSheetVisible(false)}
+      />
+      </>
     );
   } else if (!refreshDone) {
     // Thin cold-restore user: wait for /api/authorize before judging access.

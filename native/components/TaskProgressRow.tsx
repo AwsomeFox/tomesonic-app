@@ -52,9 +52,12 @@ function formatElapsed(ms: number): string {
 export default function TaskProgressRow({
   task,
   onPress,
+  showDescription,
 }: {
   task: AbsTask;
   onPress?: () => void;
+  /** Append task.description as a secondary line (TasksSheet's roomier rows). */
+  showDescription?: boolean;
 }) {
   const colors = useThemeColors();
   const reduceMotion = useReducedMotion();
@@ -125,6 +128,14 @@ export default function TaskProgressRow({
         >
           {sublabel}
         </Text>
+        {showDescription && task.description ? (
+          <Text
+            style={{ color: colors.onSurfaceVariant, fontSize: 13, marginTop: 2 }}
+            numberOfLines={2}
+          >
+            {task.description}
+          </Text>
+        ) : null}
       </View>
       {task.isFailed ? (
         <Icon name="warning" size={22} color={colors.error} />

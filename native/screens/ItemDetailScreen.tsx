@@ -29,7 +29,7 @@ import Icon from "../components/Icon";
 import ErrorState from "../components/ErrorState";
 import EmptyState from "../components/EmptyState";
 import { useDownloadStore, episodeDownloadKey } from "../store/useDownloadStore";
-import { downloader } from "../utils/downloader";
+import { downloader, downloadFileByUrl, type FileDownloadHandle } from "../utils/downloader";
 import { storage } from "../utils/storage";
 import { encodeFilterValue } from "../components/FilterModal";
 import TopAppBar from "../components/TopAppBar";
@@ -50,11 +50,23 @@ import {
   embedMetadata,
   createShareLink,
   deleteShareLink,
-  buildItemZipDownloadUrl,
+  getItemZipDownloadTarget,
 } from "../utils/abs/items";
 import { startTaskWatch, subscribeTasks, getTasksSnapshot } from "../utils/abs/tasks";
 import { batchUpdateProgress } from "../utils/abs/me";
 import type { AbsTask } from "../utils/abs/types";
+// The classic filesystem API lives on the /legacy entry point (SDK 54+) —
+// used here only to dispose of the shared zip staging file from the cache.
+import * as FileSystem from "expo-file-system/legacy";
+
+// expo-sharing is optional at runtime (same lazy require as ReaderScreen's
+// openExternally) — a build without it falls back to the browser dialog.
+let Sharing: any = null;
+try {
+  Sharing = require("expo-sharing");
+} catch {
+  Sharing = null;
+}
 
 // Share-link expiry presets (ms). 0 = never (the server expects numeric
 // expiresAt with 0 for "no expiry" — never null).
@@ -128,6 +140,21 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   const [shareLink, setShareLink] = useState<any>(null);
   // Open-RSS-feed flow (admin-only) — null when the sheet is closed.
   const [feedEntity, setFeedEntity] = useState<OpenFeedEntity | null>(null);
+  // In-app zip download (issue #68): whole-percent progress + a cancel hook
+  // for the banner. Null when idle. The live handle rides a ref so the
+  // unmount cleanup can cancel without re-running the effect per percent.
+  const [zipDownload, setZipDownload] = useState<null | {
+    pct: number;
+    cancel: () => Promise<void>;
+  }>(null);
+  const zipHandleRef = React.useRef<FileDownloadHandle | null>(null);
+  React.useEffect(() => {
+    return () => {
+      // Cancel an in-flight zip on unmount — the handle's own cancel path
+      // clears the notification and deletes the partial file from cache.
+      zipHandleRef.current?.cancel();
+    };
+  }, []);
   const capabilities = useServerCapabilities();
   const [sendToVisible, setSendToVisible] = useState(false);
   const [sendingTo, setSendingTo] = useState<string | null>(null);
@@ -711,10 +738,106 @@ export default function ItemDetailScreen({ route, navigation }: any) {
   // history. Entries are capability-gated (utils/abs/capabilities) — the
   // server would 403 anyway, but a dead row is worse than a hidden one.
 
+  // Kicks off the in-app streaming zip download (issue #68): the token rides
+  // the Authorization header (never the url), progress paints the banner in
+  // whole percents, and the finished file is offered via the share sheet.
+  const startZipDownload = (target: { url: string; token: string }) => {
+    const title = metadata.title || "Download";
+    const filename = `${slugifyTitle(metadata.title || "") || itemId}.zip`;
+    // Whole-percent throttle: a multi-GB zip fires the native progress
+    // callback constantly — re-rendering the screen per callback would jank.
+    let lastPct = -1;
+    const handle = downloadFileByUrl({
+      url: target.url,
+      token: target.token,
+      filename,
+      expectedBytes: sizeBytes > 0 ? sizeBytes : undefined,
+      notification: { id: `zip_${itemId}`, title },
+      onProgress: (bytesWritten, bytesExpected) => {
+        // Servers may stream the zip without Content-Length — fall back to
+        // the item's metadata size for the fraction.
+        const total = bytesExpected > 0 ? bytesExpected : sizeBytes;
+        if (!(total > 0)) return;
+        const pct = Math.max(0, Math.min(100, Math.round((bytesWritten / total) * 100)));
+        if (pct === lastPct) return;
+        lastPct = pct;
+        setZipDownload((cur) => (cur ? { ...cur, pct } : cur));
+      },
+    });
+    zipHandleRef.current = handle;
+    setZipDownload({ pct: 0, cancel: handle.cancel });
+
+    handle.promise
+      .then(async (res) => {
+        zipHandleRef.current = null;
+        if (!aliveRef.current) return;
+        setZipDownload(null);
+        if (!res) {
+          // Cancelled (banner X / unmount race) — the handle already cleaned
+          // up the partial file and notification.
+          showSnackbar({ message: "Download cancelled" });
+          return;
+        }
+        let shared = false;
+        try {
+          if (Sharing && (await Sharing.isAvailableAsync())) {
+            await Sharing.shareAsync(res.uri, {
+              dialogTitle: title,
+              mimeType: "application/zip",
+              UTI: "public.zip-archive",
+            });
+            shared = true;
+          }
+        } catch (e) {
+          console.warn("[ItemDetail] Zip share failed:", e);
+          shared = true; // downloaded + share attempted — don't fall through to the browser dialog
+        } finally {
+          if (shared) {
+            // The zip lives in cache purely as share-sheet staging — dispose
+            // of it so multi-GB temp files don't pile up. Best-effort.
+            try {
+              await FileSystem.deleteAsync(res.uri, { idempotent: true });
+            } catch {}
+          }
+        }
+        if (shared) return;
+        // No share sheet on this device: offer the legacy browser handoff.
+        showAppDialog({
+          title: "Downloaded",
+          message:
+            "The zip finished downloading, but this device can't open a save/share dialog for it. " +
+            "You can hand the download to your browser instead.",
+          buttons: [
+            { text: "Close", style: "cancel" },
+            {
+              text: "Open in browser",
+              onPress: () => {
+                // FALLBACK ONLY: a browser can't send our Authorization
+                // header, so this reconstructs the legacy tokened-URL form —
+                // the one deliberate, user-chosen exception to the
+                // header-only token rule (#68).
+                Linking.openURL(`${target.url}?token=${target.token}`).catch(() => {});
+              },
+            },
+          ],
+        });
+      })
+      .catch((err: any) => {
+        zipHandleRef.current = null;
+        if (!aliveRef.current) return;
+        setZipDownload(null);
+        showAppDialog({
+          title: "Couldn't download",
+          message: err?.message || "Something went wrong. Please try again.",
+        });
+      });
+  };
+
   const handleZipDownload = () => {
-    const url = buildItemZipDownloadUrl(itemId);
+    if (zipDownload) return; // one zip at a time (the row is disabled too)
+    const target = getItemZipDownloadTarget(itemId);
     setOverflowVisible(false);
-    if (!url) {
+    if (!target) {
       showAppDialog({
         title: "Can't download",
         message: "No server session available. Reconnect and try again.",
@@ -727,28 +850,12 @@ export default function ItemDetailScreen({ route, navigation }: any) {
         `Download this item's folder as a single zip${
           sizeBytes > 0 ? ` (~${formatBytes(sizeBytes)})` : ""
         }? ` +
-        "It's handed to your browser's download manager, so large files stream straight to storage.",
+        "It downloads right here in the app with progress, and you can save or share the file when it's done.",
       buttons: [
         { text: "Cancel", style: "cancel" },
         {
           text: "Download",
-          onPress: () => {
-            // Deliberately NOT axios and NOT the in-app downloads store: a
-            // multi-GB zip must stream via the OS download manager, and it
-            // isn't a playable in-app download. Success feedback only once
-            // the OS actually took the URL — a device with no browser lands
-            // in the catch, which must not claim the handoff happened.
-            Linking.openURL(url)
-              .then(() => {
-                showSnackbar({ message: "Zip download handed to your browser" });
-              })
-              .catch(() => {
-                showAppDialog({
-                  title: "Couldn't download",
-                  message: "Couldn't open a browser for the download.",
-                });
-              });
-          },
+          onPress: () => startZipDownload(target),
         },
       ],
     });
@@ -1553,6 +1660,68 @@ export default function ItemDetailScreen({ route, navigation }: any) {
                 >
                   {encodeTaskRunning ? "Encoding in progress…" : "Embedding metadata…"}
                 </Text>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Persistent in-app zip download banner (issue #68) — mirrors the
+              encode/embed banner above, plus a thin determinate bar and a
+              cancel affordance (the download survives leaving this scroll
+              position, so a transient snackbar wouldn't do). */}
+          {zipDownload ? (
+            <View style={{ paddingHorizontal: 20, marginTop: 16 }} accessibilityLiveRegion="polite">
+              <View
+                style={{
+                  backgroundColor: colors.tertiaryContainer,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Text
+                    style={{
+                      flex: 1,
+                      color: colors.onTertiaryContainer,
+                      fontSize: 14,
+                      fontWeight: "600",
+                    }}
+                  >
+                    {`Downloading zip… ${zipDownload.pct}%${
+                      sizeBytes > 0 ? ` of ${formatBytes(sizeBytes)}` : ""
+                    }`}
+                  </Text>
+                  <Pressable
+                    onPress={() => {
+                      zipDownload.cancel();
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel zip download"
+                    hitSlop={8}
+                    style={{ marginLeft: 10 }}
+                  >
+                    <Icon name="close" size={18} color={colors.onTertiaryContainer} />
+                  </Pressable>
+                </View>
+                <View
+                  style={{
+                    height: 4,
+                    borderRadius: 2,
+                    marginTop: 8,
+                    overflow: "hidden",
+                    backgroundColor: withAlpha(colors.onTertiaryContainer, 0.2),
+                  }}
+                >
+                  <View
+                    testID="zip-progress-fill"
+                    style={{
+                      width: `${zipDownload.pct}%`,
+                      height: 4,
+                      borderRadius: 2,
+                      backgroundColor: colors.onTertiaryContainer,
+                    }}
+                  />
+                </View>
               </View>
             </View>
           ) : null}
@@ -2749,13 +2918,24 @@ export default function ItemDetailScreen({ route, navigation }: any) {
           />
         ) : null}
         {capabilities.canDownload ? (
-          <RowBase
-            icon="download"
-            title="Download all (zip)"
-            subtitle={sizeBytes > 0 ? `~${formatBytes(sizeBytes)}` : undefined}
-            colors={colors}
-            onPress={handleZipDownload}
-          />
+          // Disabled (dimmed + guarded in handleZipDownload) while a zip is
+          // already streaming — one zip download per item at a time.
+          <View style={{ opacity: zipDownload ? 0.5 : 1 }}>
+            <RowBase
+              icon="download"
+              title="Download all (zip)"
+              subtitle={
+                zipDownload
+                  ? `Downloading… ${zipDownload.pct}%`
+                  : sizeBytes > 0
+                  ? `~${formatBytes(sizeBytes)}`
+                  : undefined
+              }
+              colors={colors}
+              accessibilityState={{ disabled: !!zipDownload } as any}
+              onPress={handleZipDownload}
+            />
+          </View>
         ) : null}
         {capabilities.isAdmin && capabilities.supportsShareLinks && !isPodcastItem ? (
           <RowBase

@@ -13,7 +13,7 @@
  *   POST   /api/tools/item/:id/encode-m4b?bitrate=&codec=&channels=   (admin)
  *   DELETE /api/tools/item/:id/encode-m4b        (admin)
  *   POST   /api/tools/item/:id/embed-metadata?forceEmbedChapters=1&backup=1 (admin)
- *   GET    /api/items/:id/download               (zip; `download` perm — URL builder below)
+ *   GET    /api/items/:id/download               (zip; `download` perm — auth-target builder below)
  *   POST   /api/share/mediaitem                  (admin; mediaItemId is the MEDIA id, not libraryItemId)
  *   DELETE /api/share/mediaitem/:id
  *
@@ -154,20 +154,21 @@ export async function embedMetadata(
 }
 
 /**
- * Tokened URL for the item zip download (GET /api/items/:id/download) — for
- * the OS download manager / share sheet, which can't send our auth header.
- * Null when the session is missing pieces (mirrors utils/urls.coverUrl).
+ * Auth target for the item zip download (GET /api/items/:id/download):
+ * the plain URL plus the session token for the caller to send as an
+ * Authorization: Bearer header on an in-app streaming download
+ * (utils/downloader.downloadFileByUrl). Null when the session is missing
+ * pieces (mirrors utils/urls.coverUrl).
  *
- * SECURITY: the session JWT rides in the query string, so it lands in
- * browser / download-manager history (and potentially server access logs).
- * An in-app streaming download that keeps the token in headers is tracked
- * in issue #68.
+ * SECURITY (#68 — resolved for items): the token now travels in the
+ * Authorization header, never the query string, so it can't land in
+ * browser / download-manager history (or server access logs).
  */
-export function buildItemZipDownloadUrl(itemId: string): string | null {
+export function getItemZipDownloadTarget(itemId: string): { url: string; token: string } | null {
   const cfg = storageHelper.getServerConfig();
   if (!cfg?.address || !cfg?.token || !itemId) return null;
   const host = cfg.address.replace(/\/$/, "");
-  return `${host}/api/items/${itemId}/download?token=${cfg.token}`;
+  return { url: `${host}/api/items/${itemId}/download`, token: cfg.token };
 }
 
 /**
