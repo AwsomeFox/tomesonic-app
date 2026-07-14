@@ -135,14 +135,18 @@ jobs:
           # ubuntu-latest no longer preinstalls ffmpeg.
           sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
           # Author/Series/Book folder layout so ABS derives a series too.
-          # Two 90s sine-tone tracks (2 chapters — the sleep-timer flow needs
-          # a chaptered book).
+          # Two 7-minute sine-tone tracks (2 chapters — the sleep-timer flow
+          # needs a chaptered book). The 14-minute total must comfortably exceed
+          # BOTH doze windows: playback must still be running past the 3-min
+          # playback-survival sleep AND past the 5-min sleep-timer preset that
+          # fires inside the 6-min sleep-timer window — a shorter book would end
+          # first and neither assertion could be proven.
           mkdir -p "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
           cd "$PWD/e2e-media/Test Author/Test Series/1 - The Test Book"
-          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=90" \
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=420" \
             -metadata title="Chapter 1" -metadata artist="Test Author" \
             -metadata album="The Test Book" track1.mp3
-          ffmpeg -loglevel error -f lavfi -i "sine=frequency=550:duration=90" \
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=550:duration=420" \
             -metadata title="Chapter 2" -metadata artist="Test Author" \
             -metadata album="The Test Book" track2.mp3
           # Ebook-only item so the seeded library matches the smoke fixture

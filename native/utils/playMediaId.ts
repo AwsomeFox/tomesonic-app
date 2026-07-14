@@ -28,7 +28,15 @@ export interface ParsedPlayMediaId {
   itemId: string;
   /** undefined when there is no "::episodeId" segment (or it is empty). */
   episodeId?: string;
-  /** Number parse of the "@@<seconds>" suffix; undefined when absent. */
+  /**
+   * Raw Number() parse of the "@@<seconds>" suffix:
+   *   - undefined when the "@@" suffix is absent,
+   *   - NaN when the suffix is non-numeric (e.g. "@@later"),
+   *   - 0 for an empty suffix ("@@").
+   * It is deliberately NOT normalised here — every seek caller already guards
+   * with `!isNaN(bookmarkSeconds) && bookmarkSeconds > 0`, so a malformed suffix
+   * simply skips the seek rather than being silently coerced to a valid number.
+   */
   bookmarkSeconds?: number;
 }
 
