@@ -71,6 +71,12 @@
           }
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "TomeSonic uses your photo library to upload custom book covers."
+        }
+      ],
       "expo-secure-store",
       "expo-image",
       "@sentry/react-native"

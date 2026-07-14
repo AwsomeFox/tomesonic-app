@@ -7,9 +7,11 @@ import {
   Pressable,
   ActivityIndicator,
   AccessibilityInfo,
+  Linking,
   type KeyboardTypeOptions,
   type ReturnKeyTypeOptions,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../utils/api";
@@ -28,6 +30,7 @@ import {
   searchBookMetadata,
   searchCovers,
   setCoverFromUrl,
+  uploadCoverFile,
 } from "../utils/abs/items";
 
 /**
@@ -37,10 +40,10 @@ import {
  *
  * - Details: full metadata form; Save PATCHes /api/items/:id/media with ONLY
  *   the dirty fields (a whole-object PATCH would clobber concurrent web edits).
- * - Cover: set-by-URL + provider cover search grid. Gallery upload is
- *   deliberately absent (no image-picker dependency — tracked in issue #61);
- *   the whole tab is gated on canUploadCover (the server's cover route needs
- *   the `upload` permission, not just `update`).
+ * - Cover: set-by-URL, upload-from-device-gallery (expo-image-picker →
+ *   multipart POST /cover, issue #61), and a provider cover search grid; the
+ *   whole tab is gated on canUploadCover (the server's cover route needs the
+ *   `upload` permission, not just `update`).
  * - Match: provider search → pick a candidate → choose-fields diff (defaults
  *   to fill-missing-only) → apply as a media PATCH (+ cover POST when chosen).
  *
@@ -56,6 +59,28 @@ const PROVIDERS: { id: string; label: string }[] = [
   { id: "itunes", label: "iTunes" },
   { id: "openlibrary", label: "Open Library" },
 ];
+
+/**
+ * Map a picked gallery asset to the { uri, name, type } shape uploadCoverFile
+ * appends as the multipart `cover` part. Pickers don't reliably provide
+ * fileName/mimeType (Android in particular), so both fall back: the name to
+ * the uri's last path segment, the type to the extension (jpeg by default).
+ * Exported for direct unit assertion.
+ */
+export function assetToCoverFile(asset: { uri: string; fileName?: string | null; mimeType?: string }): {
+  uri: string;
+  name: string;
+  type: string;
+} {
+  const uri = asset?.uri || "";
+  const name = asset?.fileName || uri.split("/").pop() || "cover.jpg";
+  let type = asset?.mimeType;
+  if (!type) {
+    const ext = (name.split(".").pop() || "").toLowerCase();
+    type = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  }
+  return { uri, name, type };
+}
 
 /** Comma-splitter for list fields: "a, b, , c" → ["a", "b", "c"]. */
 export function splitList(s: string): string[] {
@@ -682,6 +707,44 @@ export default function EditMetadataScreen({ route, navigation }: any) {
   // the two cover paths must not sit on different confirmation tiers.
   const pickCoverResult = (url: string) => applyCover(url, "Cover updated");
 
+  // Gallery upload (issue #61): pick a local image → multipart POST /cover.
+  // Same Tier-1 apply + snackbar/dialog copy as the other cover paths.
+  const handleUploadFromGallery = async () => {
+    if (coverBusy) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      showAppDialog({
+        title: "Photos permission needed",
+        message:
+          "TomeSonic needs access to your photo library to upload a cover. You can allow it in the system settings.",
+        buttons: [
+          { text: "Cancel", style: "cancel" },
+          { text: "Open settings", onPress: () => Linking.openSettings() },
+        ],
+      });
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+    if (result.canceled || !result.assets?.[0]) return; // user backed out — no noise
+    setCoverBusy(true);
+    try {
+      await uploadCoverFile(libraryItemId, assetToCoverFile(result.assets[0]));
+      setCoverBust((n) => n + 1);
+      showSnackbar({ message: "Cover updated" });
+    } catch (e: any) {
+      showAppDialog({
+        title: "Couldn't update cover",
+        message: e?.message || "Something went wrong. Please try again.",
+      });
+    } finally {
+      setCoverBusy(false);
+    }
+  };
+
   // --- Match flow ---------------------------------------------------------------
 
   const handleMatchSearch = async () => {
@@ -1015,6 +1078,13 @@ export default function EditMetadataScreen({ route, navigation }: any) {
             )}
           </View>
         </View>
+
+        <Pill
+          label="Upload from gallery"
+          onPress={handleUploadFromGallery}
+          busy={coverBusy}
+          colors={colors}
+        />
 
         <Field
           label="Cover image URL"

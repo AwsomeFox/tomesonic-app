@@ -222,6 +222,13 @@ jest.mock("expo-clipboard", () => ({
   getStringAsync: jest.fn().mockResolvedValue(""),
 }));
 
+jest.mock("expo-image-picker", () => ({
+  requestMediaLibraryPermissionsAsync: jest
+    .fn()
+    .mockResolvedValue({ status: "granted", granted: true, canAskAgain: true }),
+  launchImageLibraryAsync: jest.fn().mockResolvedValue({ canceled: true, assets: null }),
+}));
+
 jest.mock("expo-crypto", () => ({
   getRandomBytes: jest.fn((n: number) => new Uint8Array(n).fill(7)),
   getRandomBytesAsync: jest.fn(async (n: number) => new Uint8Array(n).fill(7)),
