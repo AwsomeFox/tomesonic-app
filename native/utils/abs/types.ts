@@ -321,8 +321,12 @@ export interface AbsPodcastFeed {
 export interface AbsEpisodeDownload {
   id?: string;
   episodeDisplayTitle?: string;
+  /** The parent show's title — shown as the queue row's subtitle. */
+  podcastTitle?: string;
   podcastId?: string;
   libraryItemId?: string;
+  /** Epoch ms; present on the actively-downloading row (progress anchor). */
+  startedAt?: number;
   [key: string]: any;
 }
 
