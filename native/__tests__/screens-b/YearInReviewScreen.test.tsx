@@ -210,6 +210,32 @@ describe("YearInReviewScreen", () => {
     expect(screen.queryByText(/no listening/i)).toBeNull();
   });
 
+  it("clamps a sub-1-second non-empty year to '1 second' (never '0 seconds')", async () => {
+    // A fractional total below 1s floors to 0; a non-empty year must still not
+    // headline "0 seconds", which would defeat the under-minute branch's intent.
+    (api.get as jest.Mock).mockResolvedValue({
+      data: {
+        numBooksFinished: 0,
+        totalListeningTime: 0.4,
+        totalListeningSessions: 1,
+        numBooksListened: 1,
+        topAuthors: [],
+        topGenres: [],
+        finishedBooksWithCovers: [],
+      },
+    });
+    await renderYear({ year: 2025 });
+    await screen.findByText("Books Finished");
+
+    // Singular "second" unit only renders when the (clamped) value is exactly 1
+    // — proof the sub-1s total was raised to 1 rather than floored to 0.
+    expect(screen.getByText("second listened")).toBeTruthy();
+    expect(screen.queryByText("seconds listened")).toBeNull();
+    // The hero's accessible label carries "1 second listened", not "0".
+    expect(screen.getByLabelText(/^1 second listened/)).toBeTruthy();
+    expect(screen.queryByText(/no listening/i)).toBeNull();
+  });
+
   it("uses the singular 'hour' when the total is exactly one hour", async () => {
     (api.get as jest.Mock).mockResolvedValue({
       data: {
