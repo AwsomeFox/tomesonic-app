@@ -518,30 +518,37 @@ export default function PodcastEpisodesScreen({ navigation, route }: any) {
     const checked = !!selected?.has(row.key);
     const title = row.ep?.title || "Untitled episode";
     const sub = rowSubtitle(row.ep);
+    // Only episodes with a real server id are deletable — confirmDelete filters
+    // on ep.id, so a row keyed by the sidx:* fallback would enable the button
+    // yet delete nothing. Make those rows non-selectable outright.
+    const selectable = !!row.ep?.id;
     return (
       <Pressable
-        onPress={selectionMode ? () => toggleSelected(row.key) : undefined}
-        onLongPress={() => enterSelectionWith(row.key)}
-        accessibilityRole={selectionMode ? "checkbox" : undefined}
-        accessibilityState={selectionMode ? { checked } : undefined}
+        onPress={selectionMode && selectable ? () => toggleSelected(row.key) : undefined}
+        onLongPress={selectable ? () => enterSelectionWith(row.key) : undefined}
+        accessibilityRole={selectionMode && selectable ? "checkbox" : undefined}
+        accessibilityState={selectionMode && selectable ? { checked } : undefined}
         accessibilityLabel={`Episode: ${title}`}
-        accessibilityHint={!selectionMode ? "Long press to select episodes to delete" : undefined}
+        accessibilityHint={
+          !selectionMode && selectable ? "Long press to select episodes to delete" : undefined
+        }
         accessibilityActions={
-          !selectionMode ? [{ name: "longpress", label: "Select episode" }] : undefined
+          !selectionMode && selectable ? [{ name: "longpress", label: "Select episode" }] : undefined
         }
         onAccessibilityAction={(e) => {
-          if (e.nativeEvent.actionName === "longpress") enterSelectionWith(row.key);
+          if (e.nativeEvent.actionName === "longpress" && selectable) enterSelectionWith(row.key);
         }}
-        android_ripple={{ color: withAlpha(colors.onSurfaceVariant, 0.08) }}
+        android_ripple={selectable ? { color: withAlpha(colors.onSurfaceVariant, 0.08) } : undefined}
         style={{
           flexDirection: "row",
           alignItems: "center",
           paddingHorizontal: 16,
           paddingVertical: 12,
           backgroundColor: checked ? withAlpha(colors.primary, 0.08) : "transparent",
+          opacity: selectionMode && !selectable ? 0.5 : 1,
         }}
       >
-        {selectionMode ? (
+        {selectionMode && selectable ? (
           <View
             style={{
               width: 22,

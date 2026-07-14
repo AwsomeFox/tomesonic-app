@@ -147,6 +147,22 @@ describe("PodcastFeedPreviewScreen — feed load", () => {
       (api.post as jest.Mock).mock.calls.filter(([url]) => url === "/api/podcasts/feed")
     ).toHaveLength(2); // initial failed fetch + the retry's refetch
   });
+
+  it("a libraries failure is NOT reported as a feed error — feed renders + inline retry", async () => {
+    // Feed POST still succeeds (from beforeEach); only /api/libraries fails.
+    (api.get as jest.Mock).mockImplementation((url: string) => {
+      if (url === "/api/libraries")
+        return Promise.reject(Object.assign(new Error("boom"), { response: { status: 500 } }));
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    await renderScreen();
+
+    // The feed header renders — NOT the feed/offline error state…
+    expect(await screen.findByText("My Show: Extra!")).toBeTruthy();
+    expect(screen.queryByText("You're offline")).toBeNull();
+    // …and the destination section owns its own libraries retry.
+    expect(screen.getByText("Couldn't load your libraries. Tap to retry.")).toBeTruthy();
+  });
 });
 
 describe("PodcastFeedPreviewScreen — destination", () => {

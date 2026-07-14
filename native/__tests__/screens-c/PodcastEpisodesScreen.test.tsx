@@ -159,6 +159,34 @@ describe("PodcastEpisodesScreen", () => {
     expect(screen.queryByText("1 selected")).toBeNull();
   });
 
+  it("server episodes without an id are not selectable (delete would no-op)", async () => {
+    const item = {
+      ...ITEM,
+      media: {
+        ...ITEM.media,
+        episodes: [
+          { title: "Has id", id: "ep-x", enclosure: { url: "https://cdn.example.com/x.mp3" } },
+          { title: "No id episode", enclosure: { url: "https://cdn.example.com/y.mp3" } }, // no id
+        ],
+      },
+    };
+    mockApi({ item });
+    await renderScreen();
+    await screen.findByText("Episode A");
+
+    fireEvent.press(screen.getByLabelText("Segment: On server"));
+    await screen.findByText("No id episode");
+
+    // The id-less row can't be selected (confirmDelete filters ep.id, so it
+    // would enable the button yet delete nothing).
+    fireEvent(screen.getByLabelText("Episode: No id episode"), "longPress");
+    expect(screen.queryByText("1 selected")).toBeNull();
+
+    // A row WITH an id still enters selection.
+    fireEvent(screen.getByLabelText("Episode: Has id"), "longPress");
+    expect(await screen.findByText("1 selected")).toBeTruthy();
+  });
+
   it("multi-select download POSTs the BARE ARRAY of raw feed episode objects and re-diffs on task completion", async () => {
     await renderScreen();
     await screen.findByText("Episode A");

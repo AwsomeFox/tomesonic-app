@@ -60,6 +60,10 @@ export default function PodcastFeedPreviewScreen({ navigation, route }: any) {
   const [libraries, setLibraries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<AbsError | null>(null);
+  // Libraries load independently of the feed; its failure is non-fatal (it just
+  // leaves the destination pickers empty) and must NOT masquerade as a feed
+  // error. Tracked separately so the messaging matches the failing call.
+  const [librariesError, setLibrariesError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
 
   const [selectedLibraryId, setSelectedLibraryId] = useState<string | undefined>(
@@ -88,24 +92,33 @@ export default function PodcastFeedPreviewScreen({ navigation, route }: any) {
     (async () => {
       setLoading(true);
       setError(null);
-      try {
-        // The feed parse is the gating fetch; libraries ride along so the
-        // destination pickers are ready when the form appears.
-        const [feedRes, libsRes] = await Promise.all([
-          getPodcastFeed(feedUrl),
-          api.get("/api/libraries"),
-        ]);
-        if (cancelled) return;
-        setFeed(feedRes || {});
-        const raw = libsRes.data?.libraries || libsRes.data || [];
+      setLibrariesError(false);
+      // The feed parse is the GATING fetch; libraries ride along so the
+      // destination pickers are ready when the form appears, but they fail
+      // INDEPENDENTLY — allSettled keeps a libraries error from being reported
+      // as "couldn't read the feed".
+      const [feedRes, libsRes] = await Promise.allSettled([
+        getPodcastFeed(feedUrl),
+        api.get("/api/libraries"),
+      ]);
+      if (cancelled) return;
+      if (feedRes.status === "rejected") {
+        setError(normalizeAbsError(feedRes.reason));
+        setLoading(false);
+        return;
+      }
+      setFeed(feedRes.value || {});
+      if (libsRes.status === "fulfilled") {
+        const raw = libsRes.value.data?.libraries || libsRes.value.data || [];
         setLibraries(
           Array.isArray(raw) ? raw.filter((l: any) => l && typeof l === "object" && l.id) : []
         );
-      } catch (e) {
-        if (!cancelled) setError(normalizeAbsError(e));
-      } finally {
-        if (!cancelled) setLoading(false);
+      } else {
+        // Non-fatal: the feed preview still renders; the destination section
+        // shows its own retry instead of masquerading as a feed failure.
+        setLibrariesError(true);
       }
+      setLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -318,6 +331,18 @@ export default function PodcastFeedPreviewScreen({ navigation, route }: any) {
           </View>
 
           <SectionHeader label="Destination" colors={colors} />
+          {librariesError ? (
+            <Pressable
+              onPress={() => setRetryTick((t) => t + 1)}
+              accessibilityRole="button"
+              accessibilityLabel="Couldn't load libraries. Tap to retry."
+              style={{ paddingHorizontal: 16, paddingVertical: 10 }}
+            >
+              <Text style={{ color: colors.error, fontSize: 13 }}>
+                Couldn't load your libraries. Tap to retry.
+              </Text>
+            </Pressable>
+          ) : null}
           <SelectRow
             icon="library"
             title="Library"
