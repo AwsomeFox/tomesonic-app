@@ -278,6 +278,23 @@ export default function PlayerBottomSheet() {
   const screenHeight = measured?.h ?? win.height;
   const isLandscape = screenWidth > screenHeight;
 
+  // Fixed full-screen frame for the sheet's inner content wrappers. The sheet
+  // container animates its `height` every frame of the open/close spring; when
+  // its children used StyleSheet.absoluteFill (bottom:0), their resolved height
+  // was tied to that animated height, so Yoga re-laid-out the ENTIRE full-player
+  // subtree 60–120×/second — the dominant source of the open/close stutter (bad
+  // on 120Hz devices where the per-frame budget is 8.33ms). Giving the wrappers
+  // an explicit fixed height decouples them: the container's overflow:"hidden"
+  // still clips them to the animated height, so the visual "card grows" effect
+  // is pixel-identical, but the children lay out ONCE instead of every frame.
+  const fullBleed = {
+    position: "absolute" as const,
+    top: 0,
+    left: 0,
+    width: screenWidth,
+    height: screenHeight,
+  };
+
 
   // Select only the slices this component actually renders. The old
   // selector-less usePlaybackStore() re-rendered the whole player on EVERY store
@@ -1084,7 +1101,7 @@ export default function PlayerBottomSheet() {
             display:none rather than unmounting, because conditionally unmounting
             Reanimated views leaves ghost native views on rotation (New Arch). */}
         <View
-          style={[StyleSheet.absoluteFill, { display: isLandscape ? "none" : "flex" }]}
+          style={[fullBleed, { display: isLandscape ? "none" : "flex" }]}
           pointerEvents={isLandscape ? "none" : "box-none"}
         >
         {/* --- FULL PLAYER LAYOUT (OPACITY FADED IN) --- */}
@@ -1096,7 +1113,7 @@ export default function PlayerBottomSheet() {
           accessibilityElementsHidden={!isPlayerExpanded}
           importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
           style={[
-            StyleSheet.absoluteFill,
+            fullBleed,
             { paddingTop: insets.top, paddingBottom: insets.bottom },
             animatedFullPlayerStyle,
           ]}
@@ -1651,7 +1668,7 @@ export default function PlayerBottomSheet() {
         </View>
 
         <View
-          style={[StyleSheet.absoluteFill, { display: isLandscape ? "flex" : "none" }]}
+          style={[fullBleed, { display: isLandscape ? "flex" : "none" }]}
           pointerEvents={isLandscape ? "box-none" : "none"}
         >
           {/* ===== LANDSCAPE: collapsed mini bar + two-pane expanded ===== */}
@@ -1710,7 +1727,7 @@ export default function PlayerBottomSheet() {
             accessibilityElementsHidden={!isPlayerExpanded}
             importantForAccessibility={isPlayerExpanded ? "auto" : "no-hide-descendants"}
             style={[
-              StyleSheet.absoluteFill,
+              fullBleed,
               // Bottom budget: safe area + the "Chapters & Up Next" peek
               // handle (enabled in landscape too) so the pill/transport never
               // sit underneath the drawer.
