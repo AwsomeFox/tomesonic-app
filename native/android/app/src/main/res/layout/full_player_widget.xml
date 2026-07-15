@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/full_open"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="14dp"
+    android:background="@drawable/mini_player_widget_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <ImageView
+            android:id="@+id/full_cover"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginEnd="14dp"
+            android:scaleType="centerCrop"
+            android:src="@mipmap/ic_launcher" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView android:id="@+id/full_title"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:maxLines="1" android:ellipsize="end"
+                android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold"
+                android:text="TomeSonic" />
+
+            <TextView android:id="@+id/full_author"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:maxLines="1" android:ellipsize="end"
+                android:textColor="#CFEDE4" android:textSize="12sp"
+                android:text="Tap to resume listening" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/full_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="6dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="#FFFFFF"
+        android:progressBackgroundTint="#4CFFFFFF" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center">
+
+        <ImageView android:id="@+id/full_chapter_prev"
+            android:layout_width="40dp" android:layout_height="40dp" android:padding="8dp"
+            android:contentDescription="Previous chapter" android:src="@drawable/ic_widget_prev" />
+        <ImageView android:id="@+id/full_jump_back"
+            android:layout_width="40dp" android:layout_height="40dp" android:padding="8dp"
+            android:layout_marginStart="10dp"
+            android:contentDescription="Jump back" android:src="@drawable/ic_widget_rewind" />
+        <ImageView android:id="@+id/full_play_pause"
+            android:layout_width="48dp" android:layout_height="48dp" android:padding="8dp"
+            android:layout_marginStart="10dp" android:layout_marginEnd="10dp"
+            android:src="@drawable/ic_widget_play" />
+        <ImageView android:id="@+id/full_jump_fwd"
+            android:layout_width="40dp" android:layout_height="40dp" android:padding="8dp"
+            android:contentDescription="Jump forward" android:src="@drawable/ic_widget_forward" />
+        <ImageView android:id="@+id/full_chapter_next"
+            android:layout_width="40dp" android:layout_height="40dp" android:padding="8dp"
+            android:layout_marginStart="10dp"
+            android:contentDescription="Next chapter" android:src="@drawable/ic_widget_next" />
+    </LinearLayout>
+</LinearLayout>

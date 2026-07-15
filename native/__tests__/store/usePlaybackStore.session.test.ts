@@ -106,6 +106,8 @@ describe("usePlaybackStore sessions", () => {
         itemId: "item1",
         isPlaying: false,
         coverPath: undefined,
+        position: 0,
+        duration: 300,
       });
     });
 

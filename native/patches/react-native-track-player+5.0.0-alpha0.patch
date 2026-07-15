@@ -353,7 +353,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..edc803b 100644
+index b495b5a..0398436 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -1853,7 +1853,27 @@ index b495b5a..edc803b 100644
      }
  
      enum class AppKilledPlaybackBehavior(val string: String) {
-@@ -206,11 +1625,77 @@ class MusicService : HeadlessJsMediaService() {
+@@ -166,6 +1585,19 @@ class MusicService : HeadlessJsMediaService() {
+     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+         onStartCommandIntentValid = intent != null
+         Timber.d("onStartCommand: ${intent?.action}, ${intent?.`package`}")
++        // Full-player home-screen widget chapter buttons. The media-button
++        // NEXT/PREVIOUS keys are remapped to jump (car steering wheel), so the
++        // widget's chapter controls send these explicit service actions instead.
++        // Route them to JS chapter navigation via the same BUTTON_SKIP events the
++        // Android Auto on-screen chapter buttons use. (emit no-ops if JS is
++        // asleep — the widget only shows chapter controls for an active session.)
++        // Match by SUFFIX so it's applicationId-agnostic: the widget builds the
++        // action from context.packageName, which carries any applicationIdSuffix
++        // (e.g. ".debug") the base package here would not.
++        intent?.action?.let { act ->
++            if (act.endsWith(".WIDGET_CHAPTER_NEXT")) emit(MusicEvents.BUTTON_SKIP_NEXT)
++            else if (act.endsWith(".WIDGET_CHAPTER_PREV")) emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
++        }
+         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+             // HACK: this is not supposed to be here. I definitely screwed up. but Why?
+             onMediaKeyEvent(intent)
+@@ -206,11 +1638,77 @@ class MusicService : HeadlessJsMediaService() {
              handleAudioFocus = playerOptions?.getBoolean(AUTO_HANDLE_INTERRUPTIONS) ?: true,
              interceptPlayerActionsTriggeredExternally = true,
              skipSilence = playerOptions?.getBoolean(SKIP_SILENCE) ?: false,
@@ -1933,7 +1953,7 @@ index b495b5a..edc803b 100644
          observeEvents()
      }
  
-@@ -293,9 +1778,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -293,9 +1791,10 @@ class MusicService : HeadlessJsMediaService() {
                  else -> {}
              }
          }
@@ -1945,7 +1965,7 @@ index b495b5a..edc803b 100644
          val sessionCommandsBuilder =
              MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
          customLayout.forEach { v ->
-@@ -305,17 +1791,50 @@ class MusicService : HeadlessJsMediaService() {
+@@ -305,17 +1804,50 @@ class MusicService : HeadlessJsMediaService() {
          sessionCommands = sessionCommandsBuilder.build()
          playerCommands = playerCommandsBuilder.build()
  
@@ -2007,7 +2027,7 @@ index b495b5a..edc803b 100644
          }
      }
  
-@@ -395,6 +1914,266 @@ class MusicService : HeadlessJsMediaService() {
+@@ -395,6 +1927,266 @@ class MusicService : HeadlessJsMediaService() {
          player.pause()
      }
  
@@ -2274,7 +2294,7 @@ index b495b5a..edc803b 100644
      @MainThread
      fun stop() {
          player.stop()
-@@ -449,6 +2228,10 @@ class MusicService : HeadlessJsMediaService() {
+@@ -449,6 +2241,10 @@ class MusicService : HeadlessJsMediaService() {
      @MainThread
      fun setRate(value: Float) {
          player.playbackSpeed = value
@@ -2285,7 +2305,7 @@ index b495b5a..edc803b 100644
      }
  
      @MainThread
-@@ -515,6 +2298,237 @@ class MusicService : HeadlessJsMediaService() {
+@@ -515,6 +2311,237 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2523,7 +2543,7 @@ index b495b5a..edc803b 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2731,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2744,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2532,7 +2552,7 @@ index b495b5a..edc803b 100644
              return
          }
  
-@@ -780,8 +2794,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2807,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2548,7 +2568,7 @@ index b495b5a..edc803b 100644
          return mediaSession
      }
  
-@@ -792,13 +2812,49 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2825,49 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2600,7 +2620,7 @@ index b495b5a..edc803b 100644
          super.onDestroy()
      }
  
-@@ -831,24 +2887,44 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +2900,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
@@ -2661,7 +2681,7 @@ index b495b5a..edc803b 100644
                  }
  
                  else -> null
-@@ -905,24 +2981,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2994,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2922,7 +2942,7 @@ index b495b5a..edc803b 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3226,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3239,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2952,7 +2972,7 @@ index b495b5a..edc803b 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3258,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3271,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2968,7 +2988,7 @@ index b495b5a..edc803b 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3274,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3287,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
