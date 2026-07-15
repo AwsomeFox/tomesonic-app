@@ -59,6 +59,7 @@ interface RmabState {
   // Flag the current session as expired (fired from rmab.ts when the refresh
   // token is rejected). Keeps serverUrl/authProvider so re-login is one tap.
   markSessionExpired: () => void;
+  clearConnectError: () => void;
   disconnect: () => void;
   requestBook: (book: RmabBook) => Promise<{ ok: boolean; message?: string }>;
   // Requester self-cancel: withdraw one of the user's OWN pending requests
@@ -341,6 +342,12 @@ export const useRmabStore = create<RmabState>((set, get) => ({
     // fresh/disconnected store into an expired state, and don't re-notify.
     if (!get().configured || get().sessionExpired) return;
     set({ sessionExpired: true, pendingApprovalCount: 0 });
+  },
+
+  // Clear a stale connect error so a freshly-reopened connect sheet doesn't
+  // show the previous attempt's failure banner.
+  clearConnectError: () => {
+    if (get().connectError !== null) set({ connectError: null });
   },
 
   disconnect: () => {

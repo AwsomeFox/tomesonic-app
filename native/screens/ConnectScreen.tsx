@@ -226,7 +226,12 @@ export default function ConnectScreen() {
       // those fail outright (or sent credentials in the clear when the server
       // answered on both).
       const trimmed = address.trim().replace(/\/+$/, "");
-      const hasScheme = trimmed.startsWith("http://") || trimmed.startsWith("https://");
+      // Case-INSENSITIVE scheme check (matches useUserStore.updateServerAddress):
+      // a pasted "HTTPS://host" (password managers/notes preserve case; the url
+      // keyboard's autoCapitalize only suppresses typing, not paste) would
+      // otherwise be treated as scheme-less and double-prefixed into
+      // "https://HTTPS://host", failing with a misleading "verify the URL".
+      const hasScheme = /^https?:\/\//i.test(trimmed);
       const candidates = hasScheme ? [trimmed] : [`https://${trimmed}`, `http://${trimmed}`];
 
       // Verify this is a reachable Audiobookshelf server and discover which

@@ -132,6 +132,18 @@ describe("ConnectScreen", () => {
     expect(screen.getByText(/unencrypted HTTP/)).toBeTruthy();
   });
 
+  it("recognizes an UPPERCASE pasted scheme (case-insensitive, no double-prefix)", async () => {
+    // Pasting "HTTPS://host" (password managers preserve case) used to be read
+    // as scheme-less and double-prefixed into https://HTTPS://host, failing.
+    mockedGet.mockResolvedValue(absStatus());
+    await render(<ConnectScreen />);
+    await connect("HTTPS://abs.example.com");
+
+    await screen.findByPlaceholderText("Username");
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+    expect(mockedGet).toHaveBeenCalledWith("HTTPS://abs.example.com/status", { timeout: 10000 });
+  });
+
   it("rejects a server that is not Audiobookshelf", async () => {
     mockedGet.mockResolvedValue({ data: { app: "something-else" } });
     await render(<ConnectScreen />);

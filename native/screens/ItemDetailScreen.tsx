@@ -1046,7 +1046,11 @@ export default function ItemDetailScreen({ route, navigation }: any) {
     if (shareBusy) return;
     // Share links key on the MEDIA id (book.id), NOT the libraryItemId.
     const mediaItemId = item?.media?.id;
-    const slug = shareSlug.trim();
+    // Slugify the typed value (matches the auto-filled default at open): a raw
+    // slug with spaces or reserved characters produced a broken public /share
+    // URL while the UI reported success. slugifyTitle → empty falls into the
+    // "Enter a slug" guard below.
+    const slug = slugifyTitle(shareSlug);
     if (!mediaItemId || !slug) {
       showAppDialog({
         title: "Couldn't create link",

@@ -269,12 +269,20 @@ export async function playbackService() {
   TrackPlayer.addEventListener(Event.RemoteJumpForward, (event) => {
     console.log(`[PlaybackService] RemoteJumpForward by ${event.interval}s`);
     // Route through the store so chapter-queue absolute positioning is honored.
-    usePlaybackStore.getState().seekForward(event.interval || 10).catch(() => {});
+    // Hardware/Bluetooth/steering-wheel FF/skip keys emit no interval (only the
+    // notification/on-screen buttons carry one), so fall back to the user's
+    // CONFIGURED jump increment before the hardcoded default — otherwise car
+    // and BT remotes always jumped 10s regardless of the Settings value.
+    // require() inline (like the rest of this headless service) to avoid a
+    // module-load circular dep with useUserStore.
+    const fwd = require("./useUserStore").useUserStore.getState().settings?.jumpForwardTime || 10;
+    usePlaybackStore.getState().seekForward(event.interval || fwd).catch(() => {});
   });
 
   TrackPlayer.addEventListener(Event.RemoteJumpBackward, (event) => {
     console.log(`[PlaybackService] RemoteJumpBackward by ${event.interval}s`);
-    usePlaybackStore.getState().seekBackward(event.interval || 10).catch(() => {});
+    const back = require("./useUserStore").useUserStore.getState().settings?.jumpBackwardTime || 10;
+    usePlaybackStore.getState().seekBackward(event.interval || back).catch(() => {});
   });
 
   // Notification/Auto seekbar. Route through the store (not TrackPlayer

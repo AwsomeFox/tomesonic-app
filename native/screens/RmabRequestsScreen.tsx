@@ -396,8 +396,31 @@ export default function RmabRequestsScreen({ navigation }: any) {
               title={error ? "Couldn't load requests" : "No requests yet"}
               message={
                 error
-                  ? "Pull to retry."
+                  ? "Check your connection and try again."
                   : "Request missing books from search, series, or author pages."
+              }
+              action={
+                error ? (
+                  // Pull-to-refresh alone is unreachable for TalkBack/VoiceOver —
+                  // give the hard-failure state a focusable, labelled retry.
+                  <Pressable
+                    onPress={() => load()}
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry"
+                    android_ripple={{ color: withAlpha(colors.onPrimary, 0.2) }}
+                    style={{
+                      paddingHorizontal: 24,
+                      paddingVertical: 10,
+                      borderRadius: 24,
+                      overflow: "hidden",
+                      backgroundColor: colors.primary,
+                    }}
+                  >
+                    <Text style={{ color: colors.onPrimary, fontSize: 15, fontWeight: "600" }}>
+                      Retry
+                    </Text>
+                  </Pressable>
+                ) : undefined
               }
             />
           }

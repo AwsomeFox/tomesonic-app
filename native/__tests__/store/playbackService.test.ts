@@ -186,6 +186,38 @@ describe("playbackService remote events", () => {
     expect(a.closePlayback).toHaveBeenCalledTimes(1);
   });
 
+  describe("RemoteJumpForward / RemoteJumpBackward — configured increment", () => {
+    const setJumps = (fwd: number, back: number) =>
+      useUserStore.setState({
+        settings: { ...useUserStore.getState().settings, jumpForwardTime: fwd, jumpBackwardTime: back },
+      } as any);
+
+    it("uses the event interval when the notification/on-screen button provides one", () => {
+      const a = spyActions();
+      setJumps(45, 20);
+      emit("remote-jump-forward", { interval: 30 });
+      expect(a.seekForward).toHaveBeenCalledWith(30);
+    });
+
+    it("falls back to the CONFIGURED increment for hardware/BT/steering-wheel keys (no interval)", () => {
+      const a = spyActions();
+      setJumps(45, 20);
+      emit("remote-jump-forward", {});
+      expect(a.seekForward).toHaveBeenCalledWith(45);
+      emit("remote-jump-backward", {});
+      expect(a.seekBackward).toHaveBeenCalledWith(20);
+    });
+
+    it("falls back to 10 only when neither an interval nor a configured value exists", () => {
+      const a = spyActions();
+      setJumps(0, 0);
+      emit("remote-jump-forward", {});
+      expect(a.seekForward).toHaveBeenCalledWith(10);
+      emit("remote-jump-backward", {});
+      expect(a.seekBackward).toHaveBeenCalledWith(10);
+    });
+  });
+
   describe("RemoteNext / RemotePrevious", () => {
     it("maps to chapter navigation when the book has chapters", () => {
       const a = spyActions();

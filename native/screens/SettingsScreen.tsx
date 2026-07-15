@@ -130,7 +130,13 @@ export default function SettingsScreen({ navigation, route }: any) {
   // into a later open — but without wiping an error the deep-link below sets
   // while opening (a clear-on-open effect would race and erase it).
   React.useEffect(() => {
-    if (!rmabSheetOpen) setRmabSsoError(null);
+    if (!rmabSheetOpen) {
+      setRmabSsoError(null);
+      // Also clear the STORE's connectError — the banner shows
+      // `rmabSsoError || rmabError`, so clearing only the local one left a
+      // stale store error to reappear on the next open of the connect sheet.
+      useRmabStore.getState().clearConnectError();
+    }
   }, [rmabSheetOpen]);
 
   // Deep-link from the session-expired banner on Requests/Discover: open the
