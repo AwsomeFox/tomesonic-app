@@ -87,7 +87,7 @@ const PAUSE_STRAGGLER_WINDOW_MS = 2000;
 // applyNowPlayingChapter, so the compact card / now-playing is never blank.
 // Rows past the cap show text only (rare — most books are well under 64
 // chapters/files).
-const MAX_CAR_TILE_ITEMS = 64;
+export const MAX_CAR_TILE_ITEMS = 64;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
 function autoRewindSeconds(pausedForMs: number): number {

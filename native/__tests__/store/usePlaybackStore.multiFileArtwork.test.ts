@@ -42,7 +42,7 @@ jest.mock("../../utils/downloader", () => ({
 
 import TrackPlayer, { State } from "react-native-track-player";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
-import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { usePlaybackStore, MAX_CAR_TILE_ITEMS } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 
@@ -154,6 +154,66 @@ describe("multi-file artwork: bytes on the ACTIVE file item only", () => {
     }
     // The bytes source is still available on the session for the active item.
     expect(usePlaybackStore.getState().currentSession.carArtworkLocal).toBe(COVER);
+  });
+
+  it("CAPS the tiny per-row bytes at MAX_CAR_TILE_ITEMS so a many-file book can't overflow the Binder limit", async () => {
+    // Same regression as the chapter-queue crash, on the file-queue branch: a
+    // book split into many per-chapter FILES built one queue item per file, and
+    // the tiny bytes on EVERY file item made the timeline bundle scale with file
+    // count → overflow the ~1MB Binder cap on a skip re-bundle → the playback
+    // session crashed. The tiny tier is now bounded to the first
+    // MAX_CAR_TILE_ITEMS file items.
+    const total = MAX_CAR_TILE_ITEMS + 6;
+    const parts: any[] = [
+      { id: "cover", filename: "cover.jpg", localFilePath: COVER, completed: true },
+    ];
+    const tracksMeta: any[] = [];
+    const audioTracks: any[] = [];
+    for (let i = 0; i < total; i++) {
+      parts.push({
+        id: `track_${i}`,
+        filename: `track_${i}.mp3`,
+        localFilePath: `file:///docs/downloads/item1_book/track_${i}.mp3`,
+        completed: true,
+      });
+      tracksMeta.push({ index: i, filename: `track_${i}.mp3`, duration: 150, startOffset: i * 150 });
+      audioTracks.push({ index: i, contentUrl: `/f${i}.mp3`, duration: 150, startOffset: i * 150 });
+    }
+    useDownloadStore.setState({
+      completedDownloads: {
+        item1: {
+          id: "item1",
+          title: "The Hobbit",
+          author: "Tolkien",
+          status: "completed",
+          localFolderPath: "file:///docs/downloads/item1_book/",
+          parts,
+          meta: { duration: total * 150, chapters: [], tracks: tracksMeta },
+        } as any,
+      },
+    });
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sess1",
+        libraryItemId: "item1",
+        displayTitle: "The Hobbit",
+        displayAuthor: "Tolkien",
+        duration: total * 150,
+        currentTime: 0,
+        chapters: [],
+        audioTracks,
+      },
+      false
+    );
+
+    // Multiple files → file queue, NOT a chapter queue.
+    expect(usePlaybackStore.getState().chapterQueue).toBe(false);
+    const tracks = addedTracks();
+    expect(tracks).toHaveLength(total);
+    // First MAX_CAR_TILE_ITEMS file items carry the tiny cover...
+    for (let i = 0; i < MAX_CAR_TILE_ITEMS; i++) expect(tracks[i].localArtworkSmall).toBe(COVER);
+    // ...the rest carry NONE (bounded payload).
+    for (let i = MAX_CAR_TILE_ITEMS; i < total; i++) expect(tracks[i].localArtworkSmall).toBeUndefined();
   });
 
   it("stamps bytes onto the ACTIVE file item on the first tick", async () => {

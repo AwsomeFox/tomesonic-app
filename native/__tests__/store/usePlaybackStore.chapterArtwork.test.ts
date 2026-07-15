@@ -38,7 +38,7 @@ jest.mock("../../utils/downloader", () => ({
 
 import TrackPlayer, { State } from "react-native-track-player";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
-import { usePlaybackStore } from "../../store/usePlaybackStore";
+import { usePlaybackStore, MAX_CAR_TILE_ITEMS } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 
@@ -143,12 +143,13 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     expect(usePlaybackStore.getState().currentSession.carArtworkLocal).toBe(COVER);
   });
 
-  it("CAPS the tiny per-row bytes at 64 items so a long book can't overflow the Binder limit", async () => {
+  it("CAPS the tiny per-row bytes at MAX_CAR_TILE_ITEMS so a long book can't overflow the Binder limit", async () => {
     // Regression for the Android Auto skip crash: bytes on EVERY item made the
     // timeline bundle scale with book length and overflow the ~1MB Binder cap on
     // a skip re-bundle → the playback session crashed. The tiny tier is now
-    // bounded to the first 64 items.
-    const manyChapters = Array.from({ length: 70 }, (_, i) => ({
+    // bounded to the first MAX_CAR_TILE_ITEMS items.
+    const total = MAX_CAR_TILE_ITEMS + 6;
+    const manyChapters = Array.from({ length: total }, (_, i) => ({
       id: i,
       title: `Chapter ${i + 1}`,
       start: i * 100,
@@ -165,7 +166,7 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
             { id: "cover", filename: "cover.jpg", localFilePath: COVER, completed: true },
             { id: "track_0", filename: "track_0.mp3", localFilePath: "file:///docs/downloads/item1_book/track_0.mp3", completed: true },
           ],
-          meta: { duration: 7000, chapters: manyChapters, tracks: [{ index: 0, filename: "track_0.mp3", duration: 7000, startOffset: 0 }] },
+          meta: { duration: total * 100, chapters: manyChapters, tracks: [{ index: 0, filename: "track_0.mp3", duration: total * 100, startOffset: 0 }] },
         } as any,
       },
     });
@@ -175,20 +176,20 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
         libraryItemId: "item1",
         displayTitle: "The Hobbit",
         displayAuthor: "Tolkien",
-        duration: 7000,
+        duration: total * 100,
         currentTime: 0,
         chapters: manyChapters,
-        audioTracks: [{ index: 0, contentUrl: "/f0.mp3", duration: 7000, startOffset: 0 }],
+        audioTracks: [{ index: 0, contentUrl: "/f0.mp3", duration: total * 100, startOffset: 0 }],
       },
       false
     );
 
     const tracks = addedTracks();
-    expect(tracks).toHaveLength(70);
-    // First 64 carry the tiny cover...
-    for (let i = 0; i < 64; i++) expect(tracks[i].localArtworkSmall).toBe(COVER);
+    expect(tracks).toHaveLength(total);
+    // First MAX_CAR_TILE_ITEMS carry the tiny cover...
+    for (let i = 0; i < MAX_CAR_TILE_ITEMS; i++) expect(tracks[i].localArtworkSmall).toBe(COVER);
     // ...the rest carry NONE (bounded payload).
-    for (let i = 64; i < 70; i++) expect(tracks[i].localArtworkSmall).toBeUndefined();
+    for (let i = MAX_CAR_TILE_ITEMS; i < total; i++) expect(tracks[i].localArtworkSmall).toBeUndefined();
   });
 
   it("stamps bytes onto the ACTIVE chapter item on the first tick", async () => {
