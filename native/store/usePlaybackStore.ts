@@ -3632,8 +3632,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
 }
 
 // Keep the home-screen player widgets (mini + full) fresh in near-real-time.
-// The widgets read widget_state.json; after each write we call refreshWidgets()
-// so the native WidgetRefresh module pushes an immediate redraw (progress bar +
+// The widgets read widget_state.json; after each write we call
+// refreshPlayerWidgets() so the native WidgetRefresh module pushes an immediate
+// redraw of the PLAYER widgets only (progress bar +
 // play/pause glyph) instead of waiting for Android's ~30-min tick. We write on
 // (a) any book / play-state / cover change, and (b) a ~2s throttle while playing
 // so the progress bar advances live without rewriting the file every second.

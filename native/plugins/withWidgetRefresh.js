@@ -9,10 +9,12 @@ const path = require("path");
 // Adds a tiny native module (WidgetRefresh) that lets JS push an IMMEDIATE
 // redraw of the home-screen widgets — the mini/full player widgets' progress bar
 // and play/pause glyph then update in near-real-time while the app runs, instead
-// of only on Android's ~30-minute widget tick. JS (usePlaybackStore) writes the
-// fresh widget_state.json and calls WidgetRefresh.refresh(), which broadcasts
-// APPWIDGET_UPDATE to each widget provider (and pokes the home-row list). It is
-// deliberately isolated from the media/track-player service.
+// of only on Android's ~30-minute widget tick. It exposes two methods, split so
+// the ~2s playback cadence never touches the home-row widget's network fetches:
+// refreshPlayers() (mini/full/resume — usePlaybackStore calls this after each
+// widget_state.json write) and refreshHomeRows() (home-row broadcast + list
+// invalidation — homeRowsMirror calls this after home_rows_state.json changes).
+// Deliberately isolated from the media/track-player service.
 const PACKAGE = "com.tomesonic.app";
 
 const MODULE_KT = `package ${PACKAGE}.widget
