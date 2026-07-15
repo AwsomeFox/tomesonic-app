@@ -3639,7 +3639,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const s = state.currentSession;
     if (!s) return;
     const itemId = s.libraryItemId || s.libraryItem?.id || "";
-    const key = `${itemId}:${state.isPlaying}:${s.carArtworkLocal || ""}`;
+    // Include episodeId: podcast episodes share the show's itemId (and often the
+    // same cover), so an episode switch would otherwise leave the key unchanged
+    // and the widget stuck on the previous episode's title/author.
+    const key = `${itemId}:${s.episodeId || ""}:${state.isPlaying}:${s.carArtworkLocal || ""}`;
     if (key === _lastWidgetKey) return;
     _lastWidgetKey = key;
     writeWidgetState({

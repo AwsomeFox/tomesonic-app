@@ -18,6 +18,7 @@ const PROVIDER = join(
   "android/app/src/main/java/com/tomesonic/app/widget/MiniPlayerWidgetProvider.kt"
 );
 const LAYOUT = join(ROOT, "android/app/src/main/res/layout/mini_player_widget.xml");
+const MANIFEST = join(ROOT, "android/app/src/main/AndroidManifest.xml");
 
 const norm = (s: string) => s.replace(/\s+/g, " ");
 
@@ -53,5 +54,16 @@ describe("withPlayerWidget plugin ↔ committed mini-player provider stay in syn
       expect(layout).toContain(`@+id/${id}`);
       expect(provider).toContain(`R.id.${id}`);
     }
+  });
+
+  it("the committed manifest registers the provider as a widget receiver (and the plugin adds it)", () => {
+    const manifest = norm(readFileSync(MANIFEST, "utf8"));
+    expect(manifest).toContain(
+      `com.tomesonic.app.widget.MiniPlayerWidgetProvider`
+    );
+    expect(manifest).toContain(`@xml/mini_player_widget_info`);
+    // The plugin's manifest mutator wires the same receiver name + info resource.
+    expect(plugin).toContain(`widget.MiniPlayerWidgetProvider`);
+    expect(plugin).toContain(`@xml/mini_player_widget_info`);
   });
 });
