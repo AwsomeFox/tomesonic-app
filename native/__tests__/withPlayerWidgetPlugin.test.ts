@@ -130,13 +130,19 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     const miniInfo = norm(readFileSync(join(ROOT2, "android/app/src/main/res/xml/mini_player_widget_info.xml"), "utf8"));
     const fullInfo = norm(readFileSync(join(ROOT2, "android/app/src/main/res/xml/full_player_widget_info.xml"), "utf8"));
     const fullLayout = norm(readFileSync(join(ROOT2, "android/app/src/main/res/layout/full_player_widget.xml"), "utf8"));
+    // Pin the styling in BOTH the committed resources and the plugin template
+    // (the source of truth on prebuild), so a template regression is caught
+    // without running prebuild.
     expect(miniInfo).toContain(`android:previewLayout="@layout/mini_player_widget"`);
     expect(fullInfo).toContain(`android:previewLayout="@layout/full_player_widget"`);
+    expect(plugin).toContain(`android:previewLayout="@layout/mini_player_widget"`);
+    expect(plugin).toContain(`android:previewLayout="@layout/full_player_widget"`);
     // Rounded covers (API 31+) present in the plugin templates.
     expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.mini_cover`);
     expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
-    // Full-player progress tinted to the app accent (primary teal).
+    // Full-player progress tinted to the app accent (primary teal) — committed + template.
     expect(fullLayout).toContain(`android:progressTint="#86D6BF"`);
+    expect(plugin).toContain(`android:progressTint="#86D6BF"`);
   });
 
   it("the RNTP patch routes the WIDGET_CHAPTER_* actions to chapter navigation events (by applicationId-agnostic suffix)", () => {
