@@ -276,20 +276,21 @@ export async function playbackService() {
     // on-screen buttons carry one, so fall back to the user's CONFIGURED jump
     // increment before the hardcoded default (otherwise car/BT remotes always
     // jumped 10s regardless of the Settings value).
-    const interval = event?.interval;
-    console.log(`[PlaybackService] RemoteJumpForward by ${interval}s`);
     // require() inline (like the rest of this headless service) to avoid a
     // module-load circular dep with useUserStore.
     const fwd = require("./useUserStore").useUserStore.getState().settings?.jumpForwardTime || 10;
-    usePlaybackStore.getState().seekForward(interval || fwd).catch(() => {});
+    // Compute the effective seek ONCE so the log matches what actually happens.
+    const seconds = event?.interval || fwd;
+    console.log(`[PlaybackService] RemoteJumpForward by ${seconds}s`);
+    usePlaybackStore.getState().seekForward(seconds).catch(() => {});
   });
 
   TrackPlayer.addEventListener(Event.RemoteJumpBackward, (event) => {
     // Same payload-less-hardware-key crash guard as RemoteJumpForward above.
-    const interval = event?.interval;
-    console.log(`[PlaybackService] RemoteJumpBackward by ${interval}s`);
     const back = require("./useUserStore").useUserStore.getState().settings?.jumpBackwardTime || 10;
-    usePlaybackStore.getState().seekBackward(interval || back).catch(() => {});
+    const seconds = event?.interval || back;
+    console.log(`[PlaybackService] RemoteJumpBackward by ${seconds}s`);
+    usePlaybackStore.getState().seekBackward(seconds).catch(() => {});
   });
 
   // Notification/Auto seekbar. Route through the store (not TrackPlayer

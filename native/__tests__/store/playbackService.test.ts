@@ -73,8 +73,8 @@ beforeEach(() => {
   usePlaybackStore.setState(initial, true);
   // Reset the configured jump increments between tests — they live in
   // useUserStore (not usePlaybackStore) and would otherwise leak across
-  // describes by run order, making the "falls back to default" tests depend on
-  // whichever test set them last.
+  // describe blocks by run order, making the "falls back to default" tests
+  // depend on whichever test set them last.
   useUserStore.setState({
     settings: { ...useUserStore.getState().settings, jumpForwardTime: undefined, jumpBackwardTime: undefined },
   } as any);
