@@ -87,10 +87,18 @@ export function buildHomeRows(
 }
 
 // Signature of the mirrored rows so we only rewrite the file when the visible
-// content actually changes (shelves reload often with identical data).
+// content actually changes (shelves reload often with identical data). Includes
+// coverUrl (which embeds the access token) so a token refresh — which rotates
+// the token without reloading shelves — is detected and the file is rewritten
+// with fresh URLs instead of leaving the widget's cover fetches to 401.
 function rowsSignature(rows: HomeRow[]): string {
   return rows
-    .map((r) => `${r.id}:${r.items.map((i) => i.id).join(",")}`)
+    .map(
+      (r) =>
+        `${r.id}:${r.label}:${r.items
+          .map((i) => `${i.id}~${i.title}~${i.author || ""}~${i.coverUrl || ""}`)
+          .join(",")}`
+    )
     .join("|");
 }
 
@@ -117,6 +125,47 @@ export function mirrorHomeRows(): void {
   } catch {
     // Ignore — mirroring is best-effort.
   }
+}
+
+let installed = false;
+
+// Installs the store subscriptions that keep the widget's mirror fresh. Called
+// once from App.tsx (not at module scope) to avoid a require cycle — useUserStore
+// imports useLibraryStore at module load. Re-mirrors when:
+//   - the personalized shelves or active library change (new content), OR
+//   - the server config token/address change (a 401 token refresh rotates the
+//     token embedded in every coverUrl; without this the widget keeps stale URLs
+//     that 401 until the next shelf reload).
+export function installHomeRowsMirror(): void {
+  if (installed) return;
+  installed = true;
+  try {
+    const { useLibraryStore } = require("../store/useLibraryStore");
+    useLibraryStore.subscribe((state: any, prev: any) => {
+      if (
+        state.personalizedShelves !== prev.personalizedShelves ||
+        state.currentLibraryId !== prev.currentLibraryId
+      ) {
+        mirrorHomeRows();
+      }
+    });
+  } catch {
+    // Best-effort — never let install break app startup.
+  }
+  try {
+    const { useUserStore } = require("../store/useUserStore");
+    useUserStore.subscribe((state: any, prev: any) => {
+      const a = state.serverConnectionConfig;
+      const b = prev.serverConnectionConfig;
+      if ((a?.token || "") !== (b?.token || "") || (a?.address || "") !== (b?.address || "")) {
+        mirrorHomeRows();
+      }
+    });
+  } catch {
+    // Best-effort.
+  }
+  // Seed once in case shelves already loaded before this ran.
+  mirrorHomeRows();
 }
 
 // Test-only: reset the dedupe cache between cases.

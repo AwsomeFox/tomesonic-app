@@ -22,6 +22,7 @@ import { usePlaybackStore, recoverPlaybackIfNeeded, reconcileWithNativePlayer } 
 import { flushPendingSyncs } from "./utils/progressSync";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import { handleWidgetUrl } from "./utils/widgetLaunch";
+import { installHomeRowsMirror } from "./utils/homeRowsMirror";
 
 function AppShell() {
   const colors = useThemeColors();
@@ -109,6 +110,8 @@ export default function App() {
   // getInitialURL, warm via the 'url' event) opens that book's detail screen
   // WITHOUT auto-playing. Non-item URLs are ignored (handleWidgetUrl no-ops).
   useEffect(() => {
+    // Keep the home-row widget's mirror fresh (shelves/library + token refresh).
+    installHomeRowsMirror();
     Linking.getInitialURL()
       .then((url) => handleWidgetUrl(url))
       .catch(() => {});

@@ -364,7 +364,7 @@ const LAYOUT_XML = `<?xml version="1.0" encoding="utf-8"?>
         android:gravity="center"
         android:textColor="#CFEDE4"
         android:textSize="13sp"
-        android:text="Tap to resume listening" />
+        android:text="No books to show yet — open TomeSonic to load your library" />
 </LinearLayout>
 `;
 
