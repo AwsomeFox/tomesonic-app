@@ -2761,6 +2761,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         author: bookAuthor,
         itemId: libraryItemId || undefined,
         episodeId: session.episodeId || undefined,
+        isPlaying: get().isPlaying,
+        coverPath: carArtworkLocal || undefined,
       });
 
       // If the now-playing cover is a REMOTE url (streaming, or a downloaded
@@ -3623,5 +3625,33 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       _lastJump = key;
       if (usePlaybackStore.getState().isInitialized) applyJumpOptions();
     }
+  });
+}
+
+// Keep the home-screen mini-player widget's play/pause glyph, cover and title
+// fresh. The widget re-reads widget_state.json on Android's periodic update
+// (there's no live push yet), so re-mirror it whenever the play state, the
+// current book, or the cached cover changes — deduped so ordinary progress
+// ticks don't rewrite the file.
+{
+  let _lastWidgetKey = "";
+  usePlaybackStore.subscribe((state) => {
+    const s = state.currentSession;
+    if (!s) return;
+    const itemId = s.libraryItemId || s.libraryItem?.id || "";
+    // Include episodeId: podcast episodes share the show's itemId (and often the
+    // same cover), so an episode switch would otherwise leave the key unchanged
+    // and the widget stuck on the previous episode's title/author.
+    const key = `${itemId}:${s.episodeId || ""}:${state.isPlaying}:${s.carArtworkLocal || ""}`;
+    if (key === _lastWidgetKey) return;
+    _lastWidgetKey = key;
+    writeWidgetState({
+      title: s.displayTitle || "TomeSonic",
+      author: s.displayAuthor || "",
+      itemId: itemId || undefined,
+      episodeId: s.episodeId || undefined,
+      isPlaying: state.isPlaying,
+      coverPath: s.carArtworkLocal || undefined,
+    });
   });
 }

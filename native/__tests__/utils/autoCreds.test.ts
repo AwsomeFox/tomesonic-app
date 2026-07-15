@@ -256,6 +256,23 @@ describe("writeWidgetState", () => {
     });
   });
 
+  it("includes isPlaying and coverPath for the mini-player widget", async () => {
+    await writeWidgetState({
+      title: "Dune",
+      author: "Frank Herbert",
+      itemId: "li_123",
+      isPlaying: true,
+      coverPath: "file:///docs/nowplaying/cover_li_123.jpg",
+    });
+    expect(lastWrittenJson()).toEqual({
+      title: "Dune",
+      author: "Frank Herbert",
+      itemId: "li_123",
+      isPlaying: true,
+      coverPath: "file:///docs/nowplaying/cover_li_123.jpg",
+    });
+  });
+
   it("deletes the state file for null or title-less state", async () => {
     await writeWidgetState(null);
     expect(del).toHaveBeenCalledWith(WIDGET_PATH, { idempotent: true });
