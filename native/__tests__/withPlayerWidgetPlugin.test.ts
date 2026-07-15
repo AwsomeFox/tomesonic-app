@@ -137,9 +137,16 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     expect(fullInfo).toContain(`android:previewLayout="@layout/full_player_widget"`);
     expect(plugin).toContain(`android:previewLayout="@layout/mini_player_widget"`);
     expect(plugin).toContain(`android:previewLayout="@layout/full_player_widget"`);
-    // Rounded covers (API 31+) present in the plugin templates.
+    // Rounded covers (API 31+) — in the plugin templates AND the committed
+    // providers that actually ship (they can drift until the next prebuild).
+    const miniProvider = norm(readFileSync(PROVIDER, "utf8"));
+    const fullProvider = norm(
+      readFileSync(join(ROOT2, "android/app/src/main/java/com/tomesonic/app/widget/FullPlayerWidgetProvider.kt"), "utf8")
+    );
     expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.mini_cover`);
     expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
+    expect(miniProvider).toContain(`setViewOutlinePreferredRadius(R.id.mini_cover`);
+    expect(fullProvider).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
     // Full-player progress tinted to the app accent (primary teal) — committed + template.
     expect(fullLayout).toContain(`android:progressTint="#86D6BF"`);
     expect(plugin).toContain(`android:progressTint="#86D6BF"`);
