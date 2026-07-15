@@ -899,20 +899,32 @@ describe("bookmark deletion queue", () => {
     expect(bookmarkDeleteKeys()).toHaveLength(0);
   });
 
-  it("ages a deletion out after repeated non-404 server failures (permanent 5xx)", async () => {
+  it("drops a deletion on a PERMANENT rejection (400/422), not on transient/auth/5xx", async () => {
+    // 400/422 = the server will always reject → drop immediately.
     queueBookmarkDeletion("li1", 42);
-    mockedDelete.mockRejectedValue({ response: { status: 500 } });
-    for (let i = 0; i < 7; i++) await flushPendingSyncs();
-    expect(bookmarkDeleteKeys()).toHaveLength(1); // survives the first few
-    await flushPendingSyncs(); // 8th → dropped, no infinite retry
+    mockedDelete.mockRejectedValue({ response: { status: 400 } });
+    await flushPendingSyncs();
     expect(bookmarkDeleteKeys()).toHaveLength(0);
+
+    // 401/403 (token rotation), 429 (rate-limit), 5xx = transient → keep queued
+    // so an idempotent delete isn't lost before the user can re-auth / recover.
+    for (const status of [401, 403, 429, 500, 503]) {
+      queueBookmarkDeletion("li2", 7);
+      mockedDelete.mockRejectedValue({ response: { status } });
+      for (let i = 0; i < 5; i++) await flushPendingSyncs();
+      expect(pendingBookmarkDeletionsFor("li2")).toEqual([7]);
+      // Connectivity/auth recovers → it lands.
+      mockedDelete.mockResolvedValue({ data: {} } as any);
+      await flushPendingSyncs();
+      expect(pendingBookmarkDeletionsFor("li2")).toEqual([]);
+    }
   });
 
-  it("a network error does NOT count toward the deletion attempt cap", async () => {
+  it("keeps a deletion queued through a network error (waits for connectivity)", async () => {
     queueBookmarkDeletion("li1", 42);
     mockedDelete.mockRejectedValue(errNetwork());
     for (let i = 0; i < 20; i++) await flushPendingSyncs();
-    expect(pendingBookmarkDeletionsFor("li1")).toEqual([42]); // waits for connectivity
+    expect(pendingBookmarkDeletionsFor("li1")).toEqual([42]);
   });
 
   it("flushes deletions BEFORE creations so a re-added bookmark at the same time survives", async () => {
@@ -938,20 +950,31 @@ describe("bookmark deletion queue", () => {
     expect(bookmarkKeys()).toHaveLength(0);
   });
 
-  it("ages a CREATE out after repeated non-404 server failures (e.g. persistent 400)", async () => {
+  it("drops a CREATE on a PERMANENT rejection (400/422), not on transient/auth/5xx", async () => {
+    // 400 (bad time/title the server always rejects) → drop immediately, no
+    // phantom pending bookmark that re-POSTs forever.
     queueBookmark("li1", 42, "note");
     mockedPost.mockRejectedValue({ response: { status: 400 } });
-    for (let i = 0; i < 7; i++) await flushPendingSyncs();
-    expect(bookmarkKeys()).toHaveLength(1); // survives the first few
-    await flushPendingSyncs(); // 8th → dropped, no phantom pending bookmark forever
+    await flushPendingSyncs();
     expect(bookmarkKeys()).toHaveLength(0);
+
+    // Transient/auth/5xx keep the create queued so it isn't lost.
+    for (const status of [401, 403, 429, 500, 503]) {
+      queueBookmark("li2", 7, "keep");
+      mockedPost.mockRejectedValue({ response: { status } });
+      for (let i = 0; i < 5; i++) await flushPendingSyncs();
+      expect(bookmarkKeys()).toHaveLength(1);
+      mockedPost.mockResolvedValue({ data: {} } as any);
+      await flushPendingSyncs();
+      expect(bookmarkKeys()).toHaveLength(0);
+    }
   });
 
-  it("a network error does NOT count toward the CREATE attempt cap", async () => {
+  it("keeps a CREATE queued through a network error (waits for connectivity)", async () => {
     queueBookmark("li1", 42, "note");
     mockedPost.mockRejectedValue(errNetwork());
     for (let i = 0; i < 20; i++) await flushPendingSyncs();
-    expect(bookmarkKeys()).toHaveLength(1); // waits for connectivity
+    expect(bookmarkKeys()).toHaveLength(1);
   });
 });
 
@@ -1045,16 +1068,19 @@ describe("bookmark rename queue", () => {
     ]);
   });
 
-  it("ages a rename out after repeated non-404 server failures (permanent 5xx)", async () => {
-    const err500 = () => ({ response: { status: 500 } });
+  it("drops a rename on a PERMANENT rejection (400/422), keeps transient/5xx queued", async () => {
+    // 400/422 the server always rejects → drop. 5xx/401/429 are transient — the
+    // idempotent PATCH stays queued so the user's new title isn't silently
+    // reverted before the server recovers.
     queueBookmarkRename("li1", 42, "renamed");
-    mockedPatch.mockRejectedValue(err500());
-    // A real server error increments attempts; the entry survives the first few
-    // flushes but is dropped once it hits the attempt cap (8).
-    for (let i = 0; i < 7; i++) await flushPendingSyncs();
-    expect(bookmarkRenameKeys()).toHaveLength(1);
-    await flushPendingSyncs(); // 8th attempt → dropped
+    mockedPatch.mockRejectedValue({ response: { status: 422 } });
+    await flushPendingSyncs();
     expect(bookmarkRenameKeys()).toHaveLength(0);
+
+    queueBookmarkRename("li2", 7, "keep");
+    mockedPatch.mockRejectedValue({ response: { status: 500 } });
+    for (let i = 0; i < 8; i++) await flushPendingSyncs();
+    expect(pendingBookmarkRenamesFor("li2")).toEqual([{ libraryItemId: "li2", time: 7, title: "keep" }]);
   });
 
   it("a network error does NOT count toward the rename attempt cap", async () => {

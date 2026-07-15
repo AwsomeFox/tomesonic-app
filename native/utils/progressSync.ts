@@ -297,6 +297,16 @@ export function clearPendingWritesFor(libraryItemId: string) {
 // state — gone on unmount. Queue them here and flush with everything else.
 const BOOKMARK_PREFIX = "pendingBookmark_";
 
+// A server response the bookmark flushers treat as PERMANENT — the request can
+// never succeed on retry, so drop the queued entry. Mirrors the local-session
+// flusher's classification: 401/403 (token mid-rotation), 408/425/429
+// (rate-limit/proxy), and 5xx are TRANSIENT and stay queued (a bookmark
+// create/delete/rename is idempotent, so re-sending costs nothing and never
+// loses the user's bookmark). A network error (no `.response` → status
+// undefined) is likewise transient.
+const isPermanentBookmarkReject = (status?: number): boolean =>
+  status === 400 || status === 404 || status === 422;
+
 export function queueBookmark(libraryItemId: string, time: number, title: string) {
   try {
     if (!libraryItemId || !Number.isFinite(time) || time < 0) return;
@@ -397,23 +407,12 @@ async function flushPendingBookmarkDeletions(): Promise<void> {
       await api.delete(`/api/me/item/${b.libraryItemId}/bookmark/${b.time}`);
       storage.remove(key);
     } catch (e: any) {
-      // Already gone server-side (or item deleted) — done either way.
-      if (e?.response?.status === 404) {
-        storage.remove(key);
-      } else if (e?.response?.status) {
-        // A persistent non-404 (e.g. 5xx) never lands — age it out after a few
-        // attempts instead of retrying forever. Network errors (no `.response`)
-        // stay queued for a genuine offline retry. Mirrors the rename flusher.
-        const attempts = (Number(b.attempts) || 0) + 1;
-        if (attempts >= BOOKMARK_RENAME_MAX_ATTEMPTS) {
-          storage.remove(key);
-        } else {
-          try {
-            storage.set(key, JSON.stringify({ ...b, attempts }));
-          } catch {}
-        }
-      }
-      // Otherwise still offline — keep it queued.
+      // Drop ONLY on a permanent rejection (404 already gone; 400/422 bad
+      // request). 401/403/408/425/429/5xx are transient (token rotation /
+      // rate-limit / server hiccup) — a delete is idempotent, so keep it queued
+      // rather than lose it before the user can re-auth or the server recovers.
+      if (isPermanentBookmarkReject(e?.response?.status)) storage.remove(key);
+      // Otherwise transient/offline — keep it queued.
     }
   }
 }
@@ -423,9 +422,6 @@ async function flushPendingBookmarkDeletions(): Promise<void> {
 // A rename that failed offline was swallowed — the new title silently reverted
 // to the server copy on the next load. Mirrors the create/delete queues.
 const BOOKMARK_RENAME_PREFIX = "pendingBookmarkRename_";
-// A rename that keeps failing with a real server response (non-404) is dropped
-// after this many attempts so a permanent 4xx/5xx can't retry forever.
-const BOOKMARK_RENAME_MAX_ATTEMPTS = 8;
 
 export function queueBookmarkRename(libraryItemId: string, time: number, title: string) {
   try {
@@ -501,24 +497,12 @@ async function flushPendingBookmarkRenames(): Promise<void> {
       });
       storage.remove(key);
     } catch (e: any) {
-      // Item/bookmark gone server-side — the rename can never land.
-      if (e?.response?.status === 404) {
-        storage.remove(key);
-      } else if (e?.response?.status) {
-        // A server response other than 404 (e.g. a persistent 4xx/5xx) will
-        // never succeed on retry — age the entry out after a few attempts so it
-        // can't be retried forever. A network error (no `.response`) leaves
-        // `attempts` untouched so genuine offline retries aren't burned.
-        const attempts = (Number(b.attempts) || 0) + 1;
-        if (attempts >= BOOKMARK_RENAME_MAX_ATTEMPTS) {
-          storage.remove(key);
-        } else {
-          try {
-            storage.set(key, JSON.stringify({ ...b, attempts }));
-          } catch {}
-        }
-      }
-      // No `.response` at all → offline/transient — keep it queued unchanged.
+      // Drop ONLY on a permanent rejection (404 gone; 400/422 bad request).
+      // 401/403/408/425/429/5xx are transient (token rotation / rate-limit /
+      // server hiccup) — the PATCH is idempotent, so keep it queued rather than
+      // silently revert the user's new title. Network errors stay queued too.
+      if (isPermanentBookmarkReject(e?.response?.status)) storage.remove(key);
+      // Otherwise transient/offline — keep it queued unchanged.
     }
   }
 }
@@ -545,26 +529,14 @@ async function flushPendingBookmarks(): Promise<void> {
       });
       storage.remove(key);
     } catch (e: any) {
-      // Item deleted server-side — the bookmark can never land.
-      if (e?.response?.status === 404) {
-        storage.remove(key);
-      } else if (e?.response?.status) {
-        // A persistent non-404 server response (e.g. 400 for a bad time/title,
-        // or a 5xx) will never succeed on retry — age it out after a few
-        // attempts so it can't re-POST forever AND show as a phantom "pending"
-        // bookmark in the UI. A network error (no `.response`) leaves `attempts`
-        // untouched so genuine offline retries aren't burned. Mirrors the rename
-        // flusher.
-        const attempts = (Number(b.attempts) || 0) + 1;
-        if (attempts >= BOOKMARK_RENAME_MAX_ATTEMPTS) {
-          storage.remove(key);
-        } else {
-          try {
-            storage.set(key, JSON.stringify({ ...b, attempts }));
-          } catch {}
-        }
-      }
-      // No `.response` at all → offline/transient — keep it queued unchanged.
+      // Drop ONLY on a permanent rejection: 404 (item deleted) or 400/422 (bad
+      // time/title the server will always reject) — these never land AND would
+      // otherwise re-POST forever + show as a phantom "pending" bookmark.
+      // 401/403 (token mid-rotation), 408/425/429 (rate-limit), and 5xx are
+      // transient: a create is idempotent, so keep it queued for a retry rather
+      // than lose the user's bookmark. Network errors stay queued too.
+      if (isPermanentBookmarkReject(e?.response?.status)) storage.remove(key);
+      // Otherwise transient/offline — keep it queued unchanged.
     }
   }
 }
