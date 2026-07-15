@@ -1,6 +1,6 @@
 import "./global.css";
 import React, { useEffect } from "react";
-import { View, AppState } from "react-native";
+import { View, AppState, Linking } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as ScreenOrientation from "expo-screen-orientation";
@@ -21,6 +21,8 @@ import { useDownloadStore } from "./store/useDownloadStore";
 import { usePlaybackStore, recoverPlaybackIfNeeded, reconcileWithNativePlayer } from "./store/usePlaybackStore";
 import { flushPendingSyncs } from "./utils/progressSync";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
+import { handleWidgetUrl } from "./utils/widgetLaunch";
+import { installHomeRowsMirror } from "./utils/homeRowsMirror";
 
 function AppShell() {
   const colors = useThemeColors();
@@ -101,6 +103,19 @@ export default function App() {
         reconcileWithNativePlayer().catch(() => {});
       }
     });
+    return () => sub.remove();
+  }, []);
+
+  // Home-row widget deep links: a tomesonic://item/<id> URL (cold launch via
+  // getInitialURL, warm via the 'url' event) opens that book's detail screen
+  // WITHOUT auto-playing. Non-item URLs are ignored (handleWidgetUrl no-ops).
+  useEffect(() => {
+    // Keep the home-row widget's mirror fresh (shelves/library + token refresh).
+    installHomeRowsMirror();
+    Linking.getInitialURL()
+      .then((url) => handleWidgetUrl(url))
+      .catch(() => {});
+    const sub = Linking.addEventListener("url", ({ url }) => handleWidgetUrl(url));
     return () => sub.remove();
   }, []);
 

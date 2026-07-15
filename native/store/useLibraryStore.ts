@@ -308,3 +308,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     });
   },
 }));
+
+// The home-row widget's state mirror subscribes to this store (and to the user
+// store for token/address changes) via installHomeRowsMirror(), called once from
+// App.tsx — not here — to avoid a require cycle (useUserStore imports this store).

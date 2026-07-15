@@ -61,6 +61,7 @@
       "./plugins/withAndroidAuto",
       "./plugins/withResumeWidget",
       "./plugins/withPlayerWidget",
+      "./plugins/withHomeRowWidget",
       "./plugins/withRotationCrossfade",
       "./plugins/withSecureBackupRules",
       "./plugins/withMedia3NotificationIcon",
