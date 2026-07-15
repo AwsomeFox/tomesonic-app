@@ -125,13 +125,14 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     expect(plugin).toContain(`@xml/full_player_widget_info`);
   });
 
-  it("the RNTP patch routes the WIDGET_CHAPTER_* actions to chapter navigation events", () => {
+  it("the RNTP patch routes the WIDGET_CHAPTER_* actions to chapter navigation events (by applicationId-agnostic suffix)", () => {
     const patch = readFileSync(
       join(ROOT, "patches/react-native-track-player+5.0.0-alpha0.patch"),
       "utf8"
     );
-    expect(patch).toContain(`com.tomesonic.app.WIDGET_CHAPTER_NEXT`);
-    expect(patch).toContain(`com.tomesonic.app.WIDGET_CHAPTER_PREV`);
+    // Suffix match so the action works under any applicationIdSuffix.
+    expect(patch).toContain(`endsWith(".WIDGET_CHAPTER_NEXT")`);
+    expect(patch).toContain(`endsWith(".WIDGET_CHAPTER_PREV")`);
     expect(patch).toContain(`BUTTON_SKIP_NEXT`);
     expect(patch).toContain(`BUTTON_SKIP_PREVIOUS`);
   });

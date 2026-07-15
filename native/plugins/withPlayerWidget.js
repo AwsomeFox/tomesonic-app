@@ -314,8 +314,8 @@ class FullPlayerWidgetProvider : AppWidgetProvider() {
         views.setOnClickPendingIntent(R.id.full_play_pause, mediaKeyPI(context, 1, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
         views.setOnClickPendingIntent(R.id.full_jump_back, mediaKeyPI(context, 2, KeyEvent.KEYCODE_MEDIA_REWIND))
         views.setOnClickPendingIntent(R.id.full_jump_fwd, mediaKeyPI(context, 3, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))
-        views.setOnClickPendingIntent(R.id.full_chapter_prev, actionPI(context, 4, "${PACKAGE}.WIDGET_CHAPTER_PREV"))
-        views.setOnClickPendingIntent(R.id.full_chapter_next, actionPI(context, 5, "${PACKAGE}.WIDGET_CHAPTER_NEXT"))
+        views.setOnClickPendingIntent(R.id.full_chapter_prev, actionPI(context, 4, "\${context.packageName}.WIDGET_CHAPTER_PREV"))
+        views.setOnClickPendingIntent(R.id.full_chapter_next, actionPI(context, 5, "\${context.packageName}.WIDGET_CHAPTER_NEXT"))
 
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
