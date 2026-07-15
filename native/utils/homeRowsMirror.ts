@@ -122,9 +122,12 @@ export function mirrorHomeRows(): void {
     const sig = rowsSignature(rows);
     if (sig === lastSignature) return;
     lastSignature = sig;
-    // Push a home-row widget redraw once the new file is on disk — this is the
-    // dedicated home-row refresh path (NOT the ~2s playback cadence), so its
+    // Push a home-row widget redraw after the write ATTEMPT completes — this is
+    // the dedicated home-row refresh path (NOT the ~2s playback cadence), so its
     // network cover fetches only run when the shelves/creds actually change.
+    // writeHomeRowsState catches its own errors and still resolves, so on a rare
+    // failed write the redraw just re-reads the prior state; best-effort by
+    // design (mirrors the widget_state.json mirror in usePlaybackStore).
     writeHomeRowsState(rows)
       .then(() => refreshHomeRowWidget())
       .catch(() => {});
