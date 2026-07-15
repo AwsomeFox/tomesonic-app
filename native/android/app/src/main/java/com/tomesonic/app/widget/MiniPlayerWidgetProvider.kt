@@ -69,11 +69,13 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
         }
         if (!coverSet) views.setImageViewResource(R.id.mini_cover, R.mipmap.ic_launcher)
 
-        // Play/pause glyph reflects the last-known state.
+        // Play/pause glyph reflects the last-known state; keep an accessible
+        // label in sync so TalkBack announces the current action.
         views.setImageViewResource(
             R.id.mini_play_pause,
             if (isPlaying) R.drawable.ic_widget_pause else R.drawable.ic_widget_play
         )
+        views.setContentDescription(R.id.mini_play_pause, if (isPlaying) "Pause" else "Play")
 
         // Play/pause button → MEDIA_BUTTON to the MusicService (the same surface
         // hardware/BT play-pause keys use; headless-safe — resumes the last
