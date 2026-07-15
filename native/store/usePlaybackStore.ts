@@ -2763,6 +2763,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         episodeId: session.episodeId || undefined,
         isPlaying: get().isPlaying,
         coverPath: carArtworkLocal || undefined,
+        position: Math.round(get().position || 0),
+        duration: Math.round(get().duration || session.duration || 0),
       });
 
       // If the now-playing cover is a REMOTE url (streaming, or a downloaded
@@ -3652,6 +3654,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       episodeId: s.episodeId || undefined,
       isPlaying: state.isPlaying,
       coverPath: s.carArtworkLocal || undefined,
+      // Position/duration feed the full-player widget's progress bar. Not in the
+      // dedupe key (they change every second) — the widget re-reads on Android's
+      // periodic tick anyway, so this snapshots the value at each state change.
+      position: Math.round(state.position || 0),
+      duration: Math.round(state.duration || 0),
     });
   });
 }

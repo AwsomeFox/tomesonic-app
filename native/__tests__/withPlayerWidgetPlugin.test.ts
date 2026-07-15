@@ -63,7 +63,76 @@ describe("withPlayerWidget plugin ↔ committed mini-player provider stay in syn
     );
     expect(manifest).toContain(`@xml/mini_player_widget_info`);
     // The plugin's manifest mutator wires the same receiver name + info resource.
-    expect(plugin).toContain(`widget.MiniPlayerWidgetProvider`);
+    expect(plugin).toContain(`MiniPlayerWidgetProvider`);
     expect(plugin).toContain(`@xml/mini_player_widget_info`);
+  });
+});
+
+describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in sync", () => {
+  const FULL_PROVIDER = join(
+    ROOT,
+    "android/app/src/main/java/com/tomesonic/app/widget/FullPlayerWidgetProvider.kt"
+  );
+  const FULL_LAYOUT = join(ROOT, "android/app/src/main/res/layout/full_player_widget.xml");
+  const plugin = norm(readFileSync(PLUGIN, "utf8"));
+  const provider = norm(readFileSync(FULL_PROVIDER, "utf8"));
+  const layout = norm(readFileSync(FULL_LAYOUT, "utf8"));
+
+  it("reads widget_state.json with the .tmp fallback and renders a progress bar from position/duration", () => {
+    for (const src of [plugin, provider]) {
+      expect(src).toContain(READS_STATE_FILE);
+      expect(src).toContain(TMP_FALLBACK);
+      expect(src).toContain(`setProgressBar(R.id.full_progress`);
+    }
+  });
+
+  it("wires play/pause + jumps via MEDIA_BUTTON and chapter prev/next via WIDGET_CHAPTER_* service actions", () => {
+    // The plugin template uses ${PACKAGE}.WIDGET_CHAPTER_*, the committed
+    // provider the resolved com.tomesonic.app.WIDGET_CHAPTER_* — check the
+    // package-independent suffix so both match.
+    for (const src of [plugin, provider]) {
+      expect(src).toContain(MEDIA_BUTTON);
+      expect(src).toContain(`KeyEvent.KEYCODE_MEDIA_REWIND`);
+      expect(src).toContain(`KeyEvent.KEYCODE_MEDIA_FAST_FORWARD`);
+      expect(src).toContain(`WIDGET_CHAPTER_PREV`);
+      expect(src).toContain(`WIDGET_CHAPTER_NEXT`);
+    }
+  });
+
+  it("the committed full-player layout has every transport view the provider references", () => {
+    for (const id of [
+      "full_open",
+      "full_cover",
+      "full_title",
+      "full_author",
+      "full_progress",
+      "full_chapter_prev",
+      "full_jump_back",
+      "full_play_pause",
+      "full_jump_fwd",
+      "full_chapter_next",
+    ]) {
+      expect(layout).toContain(`@+id/${id}`);
+      expect(provider).toContain(`R.id.${id}`);
+    }
+  });
+
+  it("the committed manifest + plugin register the full-player receiver", () => {
+    const manifest = norm(readFileSync(MANIFEST, "utf8"));
+    expect(manifest).toContain(`com.tomesonic.app.widget.FullPlayerWidgetProvider`);
+    expect(manifest).toContain(`@xml/full_player_widget_info`);
+    expect(plugin).toContain(`FullPlayerWidgetProvider`);
+    expect(plugin).toContain(`@xml/full_player_widget_info`);
+  });
+
+  it("the RNTP patch routes the WIDGET_CHAPTER_* actions to chapter navigation events", () => {
+    const patch = readFileSync(
+      join(ROOT, "patches/react-native-track-player+5.0.0-alpha0.patch"),
+      "utf8"
+    );
+    expect(patch).toContain(`com.tomesonic.app.WIDGET_CHAPTER_NEXT`);
+    expect(patch).toContain(`com.tomesonic.app.WIDGET_CHAPTER_PREV`);
+    expect(patch).toContain(`BUTTON_SKIP_NEXT`);
+    expect(patch).toContain(`BUTTON_SKIP_PREVIOUS`);
   });
 });

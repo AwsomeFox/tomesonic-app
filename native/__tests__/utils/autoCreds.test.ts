@@ -256,13 +256,15 @@ describe("writeWidgetState", () => {
     });
   });
 
-  it("includes isPlaying and coverPath for the mini-player widget", async () => {
+  it("includes isPlaying, coverPath, position and duration for the player widgets", async () => {
     await writeWidgetState({
       title: "Dune",
       author: "Frank Herbert",
       itemId: "li_123",
       isPlaying: true,
       coverPath: "file:///docs/nowplaying/cover_li_123.jpg",
+      position: 1234,
+      duration: 44000,
     });
     expect(lastWrittenJson()).toEqual({
       title: "Dune",
@@ -270,6 +272,8 @@ describe("writeWidgetState", () => {
       itemId: "li_123",
       isPlaying: true,
       coverPath: "file:///docs/nowplaying/cover_li_123.jpg",
+      position: 1234,
+      duration: 44000,
     });
   });
 

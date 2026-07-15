@@ -41,7 +41,8 @@ export async function writeWidgetState(
   // isPlaying + coverPath are read by the mini-player home-screen widget
   // (MiniPlayerWidgetProvider) to render the play/pause glyph and the cover.
   // coverPath is the locally-cached cover file (session.carArtworkLocal) — a
-  // file:// URI or bare path the widget decodes to a bitmap. Both are optional;
+  // file:// URI or bare path the widget decodes to a bitmap. position + duration
+  // (whole seconds) drive the full-player widget's progress bar. All optional;
   // the resume widget ignores them.
   state:
     | {
@@ -51,6 +52,8 @@ export async function writeWidgetState(
         episodeId?: string;
         isPlaying?: boolean;
         coverPath?: string;
+        position?: number;
+        duration?: number;
       }
     | null
 ) {
