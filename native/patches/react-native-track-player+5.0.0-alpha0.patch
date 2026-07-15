@@ -353,7 +353,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..6af4234 100644
+index b495b5a..edc803b 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -523,7 +523,15 @@ index b495b5a..6af4234 100644
 +            0,
 +            openAppIntent,
 +            getPendingIntentFlags()
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +        var built: MediaLibrarySession? = null
 +        for (attempt in 1..5) {
 +            val id = "rntp.session." + android.os.Process.myPid() + "." + java.util.UUID.randomUUID().toString()
@@ -981,7 +989,7 @@ index b495b5a..6af4234 100644
 +                    v.optDouble("currentTime", 0.0),
 +                    v.optDouble("duration", 0.0),
 +                    tracks
-+                )
+                 )
 +            }
 +        }
 +        return out
@@ -1404,15 +1412,7 @@ index b495b5a..6af4234 100644
 +            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
 +            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
 +            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +    }
 +
 +    // Continue Series: one browsable folder per series you're ACTIVE in —
@@ -1627,7 +1627,7 @@ index b495b5a..6af4234 100644
 +            return when (parentId) {
 +                "__ROOT__" -> listOf(
 +                    absBrowsableItem("__DOWNLOADS__", "Downloads", "Available offline", iconRes = "aa_downloads")
-                 )
++                )
 +                "__DOWNLOADS__" -> absDownloadsCategory()
 +                else -> absDownloadsCategory()
 +            }
@@ -2600,7 +2600,7 @@ index b495b5a..6af4234 100644
          super.onDestroy()
      }
  
-@@ -831,23 +2887,35 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +2887,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
@@ -2616,6 +2616,7 @@ index b495b5a..6af4234 100644
 -
 -                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
 -                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
+-                    true
 +                // The car steering-wheel / console FF/RW / next+previous transport
 +                // keys seek by the user's configured jump increment, NOT to the
 +                // next/previous CHAPTER. Chapter navigation stays available via
@@ -2636,21 +2637,31 @@ index b495b5a..6af4234 100644
 +                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
 +                KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
 +                KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
-+                    if (::player.isInitialized) player.forwardingPlayer.seekForward()
-                     true
++                    // Only CONSUME the key once we can act on it. Before the
++                    // player exists (early lifecycle / browse-only session) fall
++                    // through (null) to the framework's default handling instead
++                    // of swallowing the press as a silent no-op.
++                    if (::player.isInitialized) {
++                        player.forwardingPlayer.seekForward()
++                        true
++                    } else null
                  }
  
 -                KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
 -                    emit(MusicEvents.BUTTON_JUMP_BACKWARD)
+-                    true
 +                KeyEvent.KEYCODE_MEDIA_PREVIOUS,
 +                KeyEvent.KEYCODE_MEDIA_REWIND,
 +                KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD,
 +                KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
-+                    if (::player.isInitialized) player.forwardingPlayer.seekBack()
-                     true
++                    if (::player.isInitialized) {
++                        player.forwardingPlayer.seekBack()
++                        true
++                    } else null
                  }
  
-@@ -905,24 +2973,243 @@ class MusicService : HeadlessJsMediaService() {
+                 else -> null
+@@ -905,24 +2981,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2710,7 +2721,7 @@ index b495b5a..6af4234 100644
 +                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
 +                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
 +                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
-+            }
+             }
 +            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
 +            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
 +        }
@@ -2870,7 +2881,7 @@ index b495b5a..6af4234 100644
 +                } else {
 +                    future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
 +                }
-             }
++            }
 +            return future
 +        }
 +
@@ -2911,7 +2922,7 @@ index b495b5a..6af4234 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3218,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3226,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2941,7 +2952,7 @@ index b495b5a..6af4234 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3250,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3258,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2957,7 +2968,7 @@ index b495b5a..6af4234 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3266,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3274,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
