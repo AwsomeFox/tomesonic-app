@@ -51,7 +51,7 @@
         android:layout_marginBottom="6dp"
         android:max="100"
         android:progress="0"
-        android:progressTint="#FFFFFF"
+        android:progressTint="#86D6BF"
         android:progressBackgroundTint="#4CFFFFFF" />
 
     <LinearLayout

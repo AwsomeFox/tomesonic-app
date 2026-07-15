@@ -5,6 +5,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import android.util.TypedValue
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import org.json.JSONArray
@@ -78,6 +80,13 @@ class HomeRowRemoteViewsFactory(
         val bmp = loadCover(it.optString("coverUrl"))
         if (bmp != null) views.setImageViewBitmap(R.id.homerow_item_cover, bmp)
         else views.setImageViewResource(R.id.homerow_item_cover, R.mipmap.ic_launcher)
+        // Rounded cover corners to match the app's book art (API 31+; older
+        // devices show square covers, a harmless degradation). clipToOutline must
+        // be enabled or the preferred radius doesn't actually clip the bitmap.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setBoolean(R.id.homerow_item_cover, "setClipToOutline", true)
+            views.setViewOutlinePreferredRadius(R.id.homerow_item_cover, 8f, TypedValue.COMPLEX_UNIT_DIP)
+        }
 
         val fill = Intent()
         fill.data = Uri.parse("tomesonic://item/" + id)

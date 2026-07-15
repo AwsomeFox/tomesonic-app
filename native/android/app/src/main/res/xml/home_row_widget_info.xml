@@ -4,6 +4,7 @@
     android:minHeight="180dp"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/home_row_widget"
+    android:previewLayout="@layout/home_row_widget"
     android:previewImage="@mipmap/ic_launcher"
     android:resizeMode="horizontal|vertical"
     android:configure="com.tomesonic.app.widget.HomeRowWidgetConfigActivity"

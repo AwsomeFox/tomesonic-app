@@ -146,4 +146,22 @@ describe("committed manifest + plugin register all three home-row components", (
     const info = read(join(ROOT, "android/app/src/main/res/xml/home_row_widget_info.xml"));
     expect(info).toContain(`android:configure="com.tomesonic.app.widget.HomeRowWidgetConfigActivity"`);
   });
+
+  it("the picker shows a real preview and covers are rounded to match the app", () => {
+    const info = read(join(ROOT, "android/app/src/main/res/xml/home_row_widget_info.xml"));
+    const pluginSrc = read(PLUGIN);
+    // Assert in BOTH the plugin template (source of truth on prebuild) and the
+    // committed resources, so a template regression is caught without prebuild.
+    expect(info).toContain(`android:previewLayout="@layout/home_row_widget"`);
+    expect(pluginSrc).toContain(`android:previewLayout="@layout/home_row_widget"`);
+    // Rounded item covers (API 31+) — in both the plugin template and the factory.
+    // Rounding only clips when clipToOutline is enabled — pin that too.
+    expect(pluginSrc).toContain(`setViewOutlinePreferredRadius(R.id.homerow_item_cover`);
+    expect(read(FACTORY)).toContain(`setViewOutlinePreferredRadius(R.id.homerow_item_cover`);
+    expect(pluginSrc).toContain(`setBoolean(R.id.homerow_item_cover, "setClipToOutline", true)`);
+    expect(read(FACTORY)).toContain(`setBoolean(R.id.homerow_item_cover, "setClipToOutline", true)`);
+    // App player-card teal background — plugin template + committed drawable.
+    expect(pluginSrc).toContain(`#334C44`);
+    expect(read(join(ROOT, "android/app/src/main/res/drawable/home_row_widget_bg.xml"))).toContain(`#334C44`);
+  });
 });

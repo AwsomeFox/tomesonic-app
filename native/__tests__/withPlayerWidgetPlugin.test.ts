@@ -125,6 +125,38 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     expect(plugin).toContain(`@xml/full_player_widget_info`);
   });
 
+  it("both widgets show a real preview, rounded covers, and the app accent progress", () => {
+    const ROOT2 = join(__dirname, "..");
+    const miniInfo = norm(readFileSync(join(ROOT2, "android/app/src/main/res/xml/mini_player_widget_info.xml"), "utf8"));
+    const fullInfo = norm(readFileSync(join(ROOT2, "android/app/src/main/res/xml/full_player_widget_info.xml"), "utf8"));
+    const fullLayout = norm(readFileSync(join(ROOT2, "android/app/src/main/res/layout/full_player_widget.xml"), "utf8"));
+    // Pin the styling in BOTH the committed resources and the plugin template
+    // (the source of truth on prebuild), so a template regression is caught
+    // without running prebuild.
+    expect(miniInfo).toContain(`android:previewLayout="@layout/mini_player_widget"`);
+    expect(fullInfo).toContain(`android:previewLayout="@layout/full_player_widget"`);
+    expect(plugin).toContain(`android:previewLayout="@layout/mini_player_widget"`);
+    expect(plugin).toContain(`android:previewLayout="@layout/full_player_widget"`);
+    // Rounded covers (API 31+) — in the plugin templates AND the committed
+    // providers that actually ship (they can drift until the next prebuild).
+    const miniProvider = norm(readFileSync(PROVIDER, "utf8"));
+    const fullProvider = norm(
+      readFileSync(join(ROOT2, "android/app/src/main/java/com/tomesonic/app/widget/FullPlayerWidgetProvider.kt"), "utf8")
+    );
+    expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.mini_cover`);
+    expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
+    expect(miniProvider).toContain(`setViewOutlinePreferredRadius(R.id.mini_cover`);
+    expect(fullProvider).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
+    // Rounding only clips when clipToOutline is enabled — pin that too.
+    expect(plugin).toContain(`setBoolean(R.id.mini_cover, "setClipToOutline", true)`);
+    expect(plugin).toContain(`setBoolean(R.id.full_cover, "setClipToOutline", true)`);
+    expect(miniProvider).toContain(`setBoolean(R.id.mini_cover, "setClipToOutline", true)`);
+    expect(fullProvider).toContain(`setBoolean(R.id.full_cover, "setClipToOutline", true)`);
+    // Full-player progress tinted to the app accent (primary teal) — committed + template.
+    expect(fullLayout).toContain(`android:progressTint="#86D6BF"`);
+    expect(plugin).toContain(`android:progressTint="#86D6BF"`);
+  });
+
   it("the RNTP patch routes the WIDGET_CHAPTER_* actions to chapter navigation events (by applicationId-agnostic suffix)", () => {
     const patch = readFileSync(
       join(ROOT, "patches/react-native-track-player+5.0.0-alpha0.patch"),

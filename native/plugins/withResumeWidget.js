@@ -107,7 +107,7 @@ const LAYOUT_XML = `<?xml version="1.0" encoding="utf-8"?>
 
 const BG_XML = `<?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#0D6B58" />
+    <solid android:color="#334C44" />
     <corners android:radius="20dp" />
 </shape>
 `;
@@ -118,6 +118,7 @@ const INFO_XML = `<?xml version="1.0" encoding="utf-8"?>
     android:minHeight="72dp"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/resume_widget"
+    android:previewLayout="@layout/resume_widget"
     android:previewImage="@mipmap/ic_launcher"
     android:resizeMode="horizontal"
     android:widgetCategory="home_screen" />
