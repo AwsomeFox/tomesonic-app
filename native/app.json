@@ -60,6 +60,7 @@
       ],
       "./plugins/withAndroidAuto",
       "./plugins/withResumeWidget",
+      "./plugins/withPlayerWidget",
       "./plugins/withRotationCrossfade",
       "./plugins/withSecureBackupRules",
       "./plugins/withMedia3NotificationIcon",

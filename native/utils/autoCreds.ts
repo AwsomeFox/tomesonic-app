@@ -37,7 +37,22 @@ export async function writeWidgetState(
   // the native media3 onPlaybackResumption path (AA resume card / BT / headset
   // resume) reads it back so a podcast resumes the right episode
   // (/play/{episode}) instead of the item as a whole.
-  state: { title?: string; author?: string; itemId?: string; episodeId?: string } | null
+  //
+  // isPlaying + coverPath are read by the mini-player home-screen widget
+  // (MiniPlayerWidgetProvider) to render the play/pause glyph and the cover.
+  // coverPath is the locally-cached cover file (session.carArtworkLocal) — a
+  // file:// URI or bare path the widget decodes to a bitmap. Both are optional;
+  // the resume widget ignores them.
+  state:
+    | {
+        title?: string;
+        author?: string;
+        itemId?: string;
+        episodeId?: string;
+        isPlaying?: boolean;
+        coverPath?: string;
+      }
+    | null
 ) {
   try {
     if (state && state.title) {
