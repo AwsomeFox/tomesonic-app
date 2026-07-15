@@ -74,6 +74,20 @@ const MAX_TICK_DELTA_S = 2;
 // accrue listening time / flip isPlaying back to true on a book the user just
 // paused (poisoning freshest-wins). See _lastPausedAt.
 const PAUSE_STRAGGLER_WINDOW_MS = 2000;
+// Hard cap on how many queue items carry the tiny inline car-cover bytes
+// (localArtworkSmall). Media3 serializes the WHOLE timeline (every item's
+// artworkData) to the Android Auto host over Binder, and the LARGEST bundle the
+// app ever emits is a chapter-boundary SKIP (applyNowPlayingChapter's
+// set-new-then-strip-old briefly stamps TWO large items on top of the per-item
+// tiny bytes). Putting the tiny bytes on EVERY item made that bundle scale with
+// book length and overflow the ~1MB Binder limit on long books →
+// TransactionTooLargeException tore down the playback session on skip. Capping
+// the tiny tier bounds the bundle to O(1) (~64×4KB + 2×40KB ≈ 340KB, safe on
+// any head unit) for ANY book length; the ACTIVE item still gets full art via
+// applyNowPlayingChapter, so the compact card / now-playing is never blank.
+// Rows past the cap show text only (rare — most books are well under 64
+// chapters/files).
+const MAX_CAR_TILE_ITEMS = 64;
 // How many seconds before the sleep timer fires we start fading the volume out.
 const SLEEP_FADE_SECONDS = 20;
 function autoRewindSeconds(pausedForMs: number): number {
@@ -2487,11 +2501,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           // `localArtwork ?: artwork` LARGE-byte fallback so a LOCAL artwork URI
           // can't inline large bytes on the inactive items either.
           t.localArtwork = "";
-          // TINY (≈128px) bytes on EVERY item so ALL Android Auto queue rows
-          // render a downloaded book's cover — media3's legacy queue makes each
-          // row icon from THAT item's own artworkData (a local URI is
-          // unreliable across head units). ~4KB × N stays under the Binder cap.
-          if (carArtworkLocal) t.localArtworkSmall = carArtworkLocal;
+          // TINY (≈128px) bytes on the first MAX_CAR_TILE_ITEMS items so Android
+          // Auto queue rows render a downloaded book's cover — media3's legacy
+          // queue makes each row icon from THAT item's own artworkData (a local
+          // URI is unreliable across head units). CAPPED by count: bytes on
+          // EVERY item made the Timeline bundle scale with book length and
+          // overflow the ~1MB Binder limit on a skip re-bundle (session crash).
+          if (carArtworkLocal && i < MAX_CAR_TILE_ITEMS) t.localArtworkSmall = carArtworkLocal;
           return t;
         });
       } else {
@@ -2527,10 +2543,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
             // toMediaItem's `localArtwork ?: artwork` LARGE-byte fallback so a
             // LOCAL artwork URI can't inline large bytes on the inactive items.
             t.localArtwork = "";
-            // TINY (≈128px) bytes on EVERY file item so ALL Android Auto queue
-            // rows render the cover — see the chapter-queue branch. ~4KB × N
-            // stays under the Binder cap.
-            if (carArtworkLocal) t.localArtworkSmall = carArtworkLocal;
+            // TINY (≈128px) bytes on the first MAX_CAR_TILE_ITEMS file items so
+            // Android Auto queue rows render the cover — see the chapter-queue
+            // branch. CAPPED by count: bytes on EVERY item overflowed the ~1MB
+            // Binder limit on a skip re-bundle for long/many-file books.
+            if (carArtworkLocal && idx < MAX_CAR_TILE_ITEMS) t.localArtworkSmall = carArtworkLocal;
           } else if (carArtworkLocal) {
             // SINGLE FILE: only one queue item, so carrying the LARGE bytes at
             // build is safe (no Timeline to overflow) — behavior unchanged.

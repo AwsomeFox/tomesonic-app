@@ -143,6 +143,54 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     expect(usePlaybackStore.getState().currentSession.carArtworkLocal).toBe(COVER);
   });
 
+  it("CAPS the tiny per-row bytes at 64 items so a long book can't overflow the Binder limit", async () => {
+    // Regression for the Android Auto skip crash: bytes on EVERY item made the
+    // timeline bundle scale with book length and overflow the ~1MB Binder cap on
+    // a skip re-bundle → the playback session crashed. The tiny tier is now
+    // bounded to the first 64 items.
+    const manyChapters = Array.from({ length: 70 }, (_, i) => ({
+      id: i,
+      title: `Chapter ${i + 1}`,
+      start: i * 100,
+      end: (i + 1) * 100,
+    }));
+    useDownloadStore.setState({
+      completedDownloads: {
+        item1: {
+          id: "item1",
+          title: "The Hobbit",
+          status: "completed",
+          localFolderPath: "file:///docs/downloads/item1_book/",
+          parts: [
+            { id: "cover", filename: "cover.jpg", localFilePath: COVER, completed: true },
+            { id: "track_0", filename: "track_0.mp3", localFilePath: "file:///docs/downloads/item1_book/track_0.mp3", completed: true },
+          ],
+          meta: { duration: 7000, chapters: manyChapters, tracks: [{ index: 0, filename: "track_0.mp3", duration: 7000, startOffset: 0 }] },
+        } as any,
+      },
+    });
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sess1",
+        libraryItemId: "item1",
+        displayTitle: "The Hobbit",
+        displayAuthor: "Tolkien",
+        duration: 7000,
+        currentTime: 0,
+        chapters: manyChapters,
+        audioTracks: [{ index: 0, contentUrl: "/f0.mp3", duration: 7000, startOffset: 0 }],
+      },
+      false
+    );
+
+    const tracks = addedTracks();
+    expect(tracks).toHaveLength(70);
+    // First 64 carry the tiny cover...
+    for (let i = 0; i < 64; i++) expect(tracks[i].localArtworkSmall).toBe(COVER);
+    // ...the rest carry NONE (bounded payload).
+    for (let i = 64; i < 70; i++) expect(tracks[i].localArtworkSmall).toBeUndefined();
+  });
+
   it("stamps bytes onto the ACTIVE chapter item on the first tick", async () => {
     await prepareChapterBook();
     jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
