@@ -50,12 +50,15 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
         views.setTextViewText(R.id.mini_author, author)
 
         // Cover: decode the locally-cached cover file (app-private, same UID) to
-        // a bitmap. Thumbnails are well under the RemoteViews Binder limit.
+        // a DOWNSAMPLED bitmap sized for the widget. Decoding the full-size
+        // original (covers can be 800px+) risks a huge main-thread allocation
+        // AND a RemoteViews TransactionTooLargeException when the bitmap is
+        // serialized over Binder to the launcher.
         var coverSet = false
         if (coverPath.isNotEmpty()) {
             try {
                 val p = if (coverPath.startsWith("file://")) coverPath.substring(7) else coverPath
-                val bmp = BitmapFactory.decodeFile(p)
+                val bmp = decodeSampledCover(p, 256)
                 if (bmp != null) {
                     views.setImageViewBitmap(R.id.mini_cover, bmp)
                     coverSet = true
@@ -100,5 +103,19 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.mini_root, pi)
         }
         mgr.updateAppWidget(id, views)
+    }
+
+    // Decode the cover downsampled so its longest side is ~reqPx — bounds-only
+    // first to pick a power-of-two inSampleSize, then the real decode. Keeps the
+    // bitmap small enough for RemoteViews' Binder transaction and cheap to alloc.
+    private fun decodeSampledCover(path: String, reqPx: Int): android.graphics.Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        val larger = maxOf(bounds.outWidth, bounds.outHeight)
+        while (larger / sample > reqPx) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeFile(path, opts)
     }
 }
