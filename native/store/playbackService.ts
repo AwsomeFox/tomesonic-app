@@ -267,22 +267,30 @@ export async function playbackService() {
   });
 
   TrackPlayer.addEventListener(Event.RemoteJumpForward, (event) => {
-    console.log(`[PlaybackService] RemoteJumpForward by ${event.interval}s`);
-    // Route through the store so chapter-queue absolute positioning is honored.
-    // Hardware/Bluetooth/steering-wheel FF/skip keys emit no interval (only the
-    // notification/on-screen buttons carry one), so fall back to the user's
-    // CONFIGURED jump increment before the hardcoded default — otherwise car
-    // and BT remotes always jumped 10s regardless of the Settings value.
+    // CRASH FIX: hardware/steering-wheel FF/RW keys emit this event with NO
+    // payload (the native onMediaKeyEvent path emits it bundle-less), so `event`
+    // is null. Reading `event.interval` synchronously here threw an UNCAUGHT
+    // TypeError — thrown OUTSIDE the promise, so the `.catch` below never
+    // applied — which was fatal and tore down the whole playback service on
+    // Android Auto. Read the interval null-safely; only the notification /
+    // on-screen buttons carry one, so fall back to the user's CONFIGURED jump
+    // increment before the hardcoded default (otherwise car/BT remotes always
+    // jumped 10s regardless of the Settings value).
     // require() inline (like the rest of this headless service) to avoid a
     // module-load circular dep with useUserStore.
     const fwd = require("./useUserStore").useUserStore.getState().settings?.jumpForwardTime || 10;
-    usePlaybackStore.getState().seekForward(event.interval || fwd).catch(() => {});
+    // Compute the effective seek ONCE so the log matches what actually happens.
+    const seconds = event?.interval || fwd;
+    console.log(`[PlaybackService] RemoteJumpForward by ${seconds}s`);
+    usePlaybackStore.getState().seekForward(seconds).catch(() => {});
   });
 
   TrackPlayer.addEventListener(Event.RemoteJumpBackward, (event) => {
-    console.log(`[PlaybackService] RemoteJumpBackward by ${event.interval}s`);
+    // Same payload-less-hardware-key crash guard as RemoteJumpForward above.
     const back = require("./useUserStore").useUserStore.getState().settings?.jumpBackwardTime || 10;
-    usePlaybackStore.getState().seekBackward(event.interval || back).catch(() => {});
+    const seconds = event?.interval || back;
+    console.log(`[PlaybackService] RemoteJumpBackward by ${seconds}s`);
+    usePlaybackStore.getState().seekBackward(seconds).catch(() => {});
   });
 
   // Notification/Auto seekbar. Route through the store (not TrackPlayer

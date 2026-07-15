@@ -71,6 +71,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   usePlaybackStore.setState(initial, true);
+  // Reset the configured jump increments between tests — they live in
+  // useUserStore (not usePlaybackStore) and would otherwise leak across
+  // describe blocks by run order, making the "falls back to default" tests
+  // depend on whichever test set them last.
+  useUserStore.setState({
+    settings: { ...useUserStore.getState().settings, jumpForwardTime: undefined, jumpBackwardTime: undefined },
+  } as any);
   // clearMocks resets calls but NOT implementations, so a mockResolvedValue set
   // by another test/file could leak in and make the tests that rely on the
   // default getActiveTrackIndex order-dependent — pin a deterministic default.
@@ -215,6 +222,30 @@ describe("playbackService remote events", () => {
       expect(a.seekForward).toHaveBeenCalledWith(10);
       emit("remote-jump-backward", {});
       expect(a.seekBackward).toHaveBeenCalledWith(10);
+    });
+
+    // CRASH REGRESSION: physical steering-wheel / car FF-RW keys deliver this
+    // event with a NULL payload (the native onMediaKeyEvent path emitted it
+    // bundle-less). Reading event.interval synchronously threw an uncaught
+    // TypeError that was fatal and tore down the Android Auto playback service.
+    // The handler must survive a null/undefined event and still fall back to the
+    // configured increment.
+    it("does NOT throw on a payload-less (null) event — hardware key crash guard", () => {
+      const a = spyActions();
+      setJumps(45, 20);
+      expect(() => emit("remote-jump-forward", null)).not.toThrow();
+      expect(a.seekForward).toHaveBeenCalledWith(45);
+      expect(() => emit("remote-jump-backward", null)).not.toThrow();
+      expect(a.seekBackward).toHaveBeenCalledWith(20);
+    });
+
+    it("does NOT throw on an undefined event either", () => {
+      const a = spyActions();
+      setJumps(45, 20);
+      expect(() => emit("remote-jump-forward", undefined)).not.toThrow();
+      expect(a.seekForward).toHaveBeenCalledWith(45);
+      expect(() => emit("remote-jump-backward", undefined)).not.toThrow();
+      expect(a.seekBackward).toHaveBeenCalledWith(20);
     });
   });
 
