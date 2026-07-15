@@ -1190,7 +1190,25 @@ export default function ReaderScreen({ route, navigation }: any) {
   // page state so the footer prev/next buttons (a11y: PDF page turns are
   // otherwise scroll-only) can drive it and an in-place book change re-seeds it.
   const pdfPageKey = `pdfPage_${itemId}`;
-  const [pdfPage, setPdfPage] = useState<number>(() => Math.max(1, storage.getNumber(pdfPageKey) || 1));
+  // PDF resume: prefer the FRESHER of the local page vs the server ebookLocation
+  // (a page number for PDFs), mirroring the epub freshest-wins restore below.
+  // Without reading the server value back, reading ahead on another device was
+  // silently lost — the local page always won even when stale (the onPageChanged
+  // handler PATCHes ebookLocation up, but nothing ever consulted it on open).
+  const readInitialPdfPage = (): number => {
+    const localPage = storage.getNumber(pdfPageKey) || 0;
+    const localPageAt = storage.getNumber(`${pdfPageKey}_at`) || 0;
+    const sp = useUserStore.getState().mediaProgress[itemId];
+    const serverPage = Number(sp?.ebookLocation);
+    const serverPageAt = Number(sp?.lastUpdate || sp?.updatedAt || 0);
+    const useServer =
+      Number.isFinite(serverPage) &&
+      serverPage > 0 &&
+      serverPage !== localPage &&
+      serverPageAt > localPageAt;
+    return Math.max(1, useServer ? serverPage : localPage || serverPage || 1);
+  };
+  const [pdfPage, setPdfPage] = useState<number>(() => readInitialPdfPage());
   const [pdfProgress, setPdfProgress] = useState<{ page: number; pages: number } | null>(null);
   // The last PDF position, flushed on unmount like latestProgressRef does for
   // epub — the debounced onPageChanged sync alone is cancelled by the cleanup
@@ -1592,7 +1610,7 @@ export default function ReaderScreen({ route, navigation }: any) {
       readerReseededRef.current = true;
       return;
     }
-    setPdfPage(Math.max(1, storage.getNumber(pdfPageKey) || 1));
+    setPdfPage(readInitialPdfPage());
     latestPdfProgressRef.current = null;
     pendingJumpRef.current =
       typeof initialFraction === "number" && Number.isFinite(initialFraction)
@@ -2437,8 +2455,11 @@ export default function ReaderScreen({ route, navigation }: any) {
           // Keep the controlled page in sync with scroll (no-op jump when the
           // prop already equals the current page).
           setPdfPage((prev) => (prev !== page ? page : prev));
-          // Remember where the user left off so reopening resumes here.
+          // Remember where the user left off so reopening resumes here. Stamp
+          // the save time too so readInitialPdfPage can pick the fresher of this
+          // local page vs a newer server page read on another device.
           storage.set(pdfPageKey, page);
+          storage.set(`${pdfPageKey}_at`, Date.now());
           // PDFs get the SAME server sync the epub path has (ebook fields
           // only, matching the ABS web PDF reader: ebookLocation = page
           // number) — without it PDF progress never left the device: no

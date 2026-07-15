@@ -3186,9 +3186,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       return;
     }
     // Derive the chapter from the LIVE position — the snapshot index can be
-    // minutes stale in the background (throttled interval).
+    // minutes stale in the background (throttled interval). This applies while
+    // casting too: the receiver auto-advances via native progress events that
+    // update `position` but NOT currentChapterIndex (only the throttled 1s JS
+    // tick does), so getLiveAbsolutePosition — which returns the fresh cast
+    // mirror while casting — is the authoritative source in both modes.
     let idx = currentChapterIndex;
-    if (!isCasting && chapters?.length) {
+    if (chapters?.length) {
       const position = await getLiveAbsolutePosition(get);
       const liveIdx = chapters.findIndex(
         (c: any) => position >= (c.start || 0) && position < (c.end || 0)
@@ -3220,9 +3224,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       return;
     }
     // Derive the chapter from the LIVE position too — currentChapterIndex is
-    // written by the same throttled interval as the position snapshot.
+    // written by the same throttled interval as the position snapshot. While
+    // casting `position` above is already the fresh receiver mirror (the native
+    // progress events advance it while the 1s tick that updates
+    // currentChapterIndex is throttled), so derive from it in the cast path too.
     let idx = currentChapterIndex;
-    if (!isCasting && chapters?.length) {
+    if (chapters?.length) {
       const liveIdx = chapters.findIndex(
         (c: any) => position >= (c.start || 0) && position < (c.end || 0)
       );

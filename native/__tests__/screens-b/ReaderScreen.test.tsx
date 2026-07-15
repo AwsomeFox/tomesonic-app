@@ -817,6 +817,39 @@ describe("ReaderScreen (pdf)", () => {
     });
   });
 
+  it("restores from the SERVER page when it is fresher than the local page (cross-device resume)", async () => {
+    // REGRESSION: PDF onPageChanged PATCHed ebookLocation up but nothing ever
+    // read it back — the local page always won, so reading ahead on another
+    // device was lost. Device B: local page 3 saved long ago, server says 50
+    // more recently.
+    storage.set(`pdfPage_${PDF_ITEM}`, 3);
+    storage.set(`pdfPage_${PDF_ITEM}_at`, 1000);
+    useUserStore.setState({
+      mediaProgress: {
+        [PDF_ITEM]: { libraryItemId: PDF_ITEM, ebookLocation: "50", lastUpdate: 5000 },
+      },
+    } as any);
+    await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF" });
+
+    await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
+    expect((global as any).__pdfProps.page).toBe(50);
+  });
+
+  it("keeps the LOCAL page when it is fresher than the server page", async () => {
+    // Same device read further than the last server sync — local wins.
+    storage.set(`pdfPage_${PDF_ITEM}`, 80);
+    storage.set(`pdfPage_${PDF_ITEM}_at`, 9000);
+    useUserStore.setState({
+      mediaProgress: {
+        [PDF_ITEM]: { libraryItemId: PDF_ITEM, ebookLocation: "50", lastUpdate: 5000 },
+      },
+    } as any);
+    await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF" });
+
+    await waitFor(() => expect((global as any).__pdfProps).toBeTruthy());
+    expect((global as any).__pdfProps.page).toBe(80);
+  });
+
   it("flushes the last PDF page to the server on unmount (debounce cancelled)", async () => {
     storage.set(`pdfPage_${PDF_ITEM}`, 1);
     const { unmount } = await renderReader({ itemId: PDF_ITEM, ebookFormat: "pdf", title: "My PDF" });

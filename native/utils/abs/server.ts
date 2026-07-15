@@ -45,7 +45,12 @@ export async function getBackups(): Promise<{
 
 /** Create a backup NOW (synchronous server-side — can take a while on big libraries). */
 export async function createBackup(): Promise<{ backups: AbsBackup[] }> {
-  return absRequest(() => api.post("/api/backups"));
+  // Zipping a big library synchronously can easily exceed the 20s global
+  // timeout; when it did, axios aborted with ECONNABORTED (mapped to "offline"),
+  // so the admin saw "Couldn't create backup — you're offline" even though the
+  // server finished, and a retry produced a duplicate. Disable the timeout here,
+  // mirroring uploadMedia.
+  return absRequest(() => api.post("/api/backups", undefined, { timeout: 0 }));
 }
 
 export async function deleteBackup(backupId: string): Promise<{ backups: AbsBackup[] }> {

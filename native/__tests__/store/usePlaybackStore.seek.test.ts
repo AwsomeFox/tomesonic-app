@@ -446,4 +446,55 @@ describe("usePlaybackStore seek + chapter navigation", () => {
       expect(TrackPlayer.seekTo).not.toHaveBeenCalled();
     });
   });
+
+  // REGRESSION: while casting with the phone backgrounded, the receiver
+  // auto-advances via native progress events that update `position` (the fresh
+  // mirror) but NOT currentChapterIndex — only the throttled 1s JS tick does
+  // that, and Android freezes it with the screen off. next/previousChapter used
+  // to read the STALE currentChapterIndex on the cast path (the live-position
+  // derivation was gated behind !isCasting), so a notification Next/Previous
+  // jumped relative to a frozen index — landing on an already-heard chapter.
+  describe("chapter nav while CASTING derives the chapter from the live mirror position", () => {
+    function setupCasting(over: Record<string, any> = {}) {
+      const castSeekAbs = jest.fn().mockResolvedValue(undefined);
+      setupLocal({
+        isCasting: true,
+        castClient: makeCastClient(),
+        castSeekAbs,
+        currentChapterIndex: 0, // STALE snapshot (frozen while backgrounded)
+        ...over,
+      });
+      return castSeekAbs;
+    }
+
+    it("nextChapter advances from the fresh mirror chapter, not the stale index", async () => {
+      // Mirror position 150 → really in chapter 1; snapshot still says 0.
+      const castSeekAbs = setupCasting({ position: 150 });
+      await usePlaybackStore.getState().nextChapter();
+      // idx derived as 1 → next is chapter 2 (start 200), NOT chapter 1 (start
+      // 100) that the stale index-0 would have produced.
+      expect(castSeekAbs).toHaveBeenCalledWith(200);
+      expect(usePlaybackStore.getState().currentChapterIndex).toBe(2);
+    });
+
+    it("previousChapter goes to the chapter before the fresh mirror chapter, not a chapter already heard", async () => {
+      // Mirror position 201 → 1s into chapter 2; snapshot still says 0.
+      const castSeekAbs = setupCasting({ position: 201 });
+      await usePlaybackStore.getState().previousChapter();
+      // Within 3s of chapter 2's start → previous chapter is chapter 1 (start
+      // 100). The stale index-0 path would have measured 201s "into chapter 0"
+      // and restarted chapter 0 (start 0) — a big jump backward.
+      expect(castSeekAbs).toHaveBeenCalledWith(100);
+      expect(usePlaybackStore.getState().currentChapterIndex).toBe(1);
+    });
+
+    it("previousChapter restarts the CURRENT mirror chapter when >3s in", async () => {
+      // Mirror position 250 → 50s into chapter 2; snapshot still says 0.
+      const castSeekAbs = setupCasting({ position: 250 });
+      await usePlaybackStore.getState().previousChapter();
+      // >3s into chapter 2 → restart chapter 2 (start 200), not chapter 0.
+      expect(castSeekAbs).toHaveBeenCalledWith(200);
+      expect(usePlaybackStore.getState().currentChapterIndex).toBe(2);
+    });
+  });
 });
