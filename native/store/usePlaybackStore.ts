@@ -3644,6 +3644,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const s = state.currentSession;
     if (!s) return;
     const itemId = s.libraryItemId || s.libraryItem?.id || "";
+    // writeWidgetState is async (atomic temp-then-rename); only ask the widgets
+    // to redraw AFTER the new snapshot is on disk, or the broadcast can race the
+    // write and providers re-read the stale JSON. writeWidgetState never rejects
+    // (it catches internally), so this always fires once the file settles.
     writeWidgetState({
       title: s.displayTitle || "TomeSonic",
       author: s.displayAuthor || "",
@@ -3653,8 +3657,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       coverPath: s.carArtworkLocal || undefined,
       position: Math.round(state.position || 0),
       duration: Math.round(state.duration || 0),
-    });
-    refreshWidgets();
+    })
+      .then(() => refreshWidgets())
+      .catch(() => {});
   };
   usePlaybackStore.subscribe((state) => {
     const s = state.currentSession;
