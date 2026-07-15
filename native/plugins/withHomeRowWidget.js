@@ -123,6 +123,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import android.util.TypedValue
 import android.widget.RemoteViews
 import android.widget.RemoteViewsService
 import org.json.JSONArray
@@ -196,6 +198,11 @@ class HomeRowRemoteViewsFactory(
         val bmp = loadCover(it.optString("coverUrl"))
         if (bmp != null) views.setImageViewBitmap(R.id.homerow_item_cover, bmp)
         else views.setImageViewResource(R.id.homerow_item_cover, R.mipmap.ic_launcher)
+        // Rounded cover corners to match the app's book art (API 31+; older
+        // devices show square covers, a harmless degradation).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setViewOutlinePreferredRadius(R.id.homerow_item_cover, 8f, TypedValue.COMPLEX_UNIT_DIP)
+        }
 
         val fill = Intent()
         fill.data = Uri.parse("tomesonic://item/" + id)
@@ -415,7 +422,7 @@ const ITEM_XML = `<?xml version="1.0" encoding="utf-8"?>
 
 const BG_XML = `<?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#0D6B58" />
+    <solid android:color="#334C44" />
     <corners android:radius="20dp" />
 </shape>
 `;
@@ -426,6 +433,7 @@ const INFO_XML = `<?xml version="1.0" encoding="utf-8"?>
     android:minHeight="180dp"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/home_row_widget"
+    android:previewLayout="@layout/home_row_widget"
     android:previewImage="@mipmap/ic_launcher"
     android:resizeMode="horizontal|vertical"
     android:configure="${PACKAGE}.widget.HomeRowWidgetConfigActivity"

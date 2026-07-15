@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.util.TypedValue
 import android.view.KeyEvent
 import android.widget.RemoteViews
 import org.json.JSONObject
@@ -58,6 +59,10 @@ class FullPlayerWidgetProvider : AppWidgetProvider() {
             } catch (e: Exception) {}
         }
         if (!coverSet) views.setImageViewResource(R.id.full_cover, R.mipmap.ic_launcher)
+        // Rounded cover corners to match the app's book art (API 31+).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setViewOutlinePreferredRadius(R.id.full_cover, 12f, TypedValue.COMPLEX_UNIT_DIP)
+        }
 
         // Progress bar (whole seconds); clamp so a position past/without a known
         // duration can't render an out-of-range bar.

@@ -24,6 +24,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.util.TypedValue
 import android.view.KeyEvent
 import android.widget.RemoteViews
 import org.json.JSONObject
@@ -84,6 +85,10 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
             }
         }
         if (!coverSet) views.setImageViewResource(R.id.mini_cover, R.mipmap.ic_launcher)
+        // Rounded cover corners to match the app's book art (API 31+).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setViewOutlinePreferredRadius(R.id.mini_cover, 10f, TypedValue.COMPLEX_UNIT_DIP)
+        }
 
         // Play/pause glyph reflects the last-known state; keep an accessible
         // label in sync so TalkBack announces the current action.
@@ -197,7 +202,7 @@ const LAYOUT_XML = `<?xml version="1.0" encoding="utf-8"?>
 
 const BG_XML = `<?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#0D6B58" />
+    <solid android:color="#334C44" />
     <corners android:radius="20dp" />
 </shape>
 `;
@@ -224,6 +229,7 @@ const INFO_XML = `<?xml version="1.0" encoding="utf-8"?>
     android:minHeight="48dp"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/mini_player_widget"
+    android:previewLayout="@layout/mini_player_widget"
     android:previewImage="@mipmap/ic_launcher"
     android:resizeMode="horizontal"
     android:widgetCategory="home_screen" />
@@ -247,6 +253,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.util.TypedValue
 import android.view.KeyEvent
 import android.widget.RemoteViews
 import org.json.JSONObject
@@ -297,6 +304,10 @@ class FullPlayerWidgetProvider : AppWidgetProvider() {
             } catch (e: Exception) {}
         }
         if (!coverSet) views.setImageViewResource(R.id.full_cover, R.mipmap.ic_launcher)
+        // Rounded cover corners to match the app's book art (API 31+).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setViewOutlinePreferredRadius(R.id.full_cover, 12f, TypedValue.COMPLEX_UNIT_DIP)
+        }
 
         // Progress bar (whole seconds); clamp so a position past/without a known
         // duration can't render an out-of-range bar.
@@ -410,7 +421,7 @@ const FULL_LAYOUT_XML = `<?xml version="1.0" encoding="utf-8"?>
         android:layout_marginBottom="6dp"
         android:max="100"
         android:progress="0"
-        android:progressTint="#FFFFFF"
+        android:progressTint="#86D6BF"
         android:progressBackgroundTint="#4CFFFFFF" />
 
     <LinearLayout
@@ -468,6 +479,7 @@ const FULL_INFO_XML = `<?xml version="1.0" encoding="utf-8"?>
     android:minHeight="110dp"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/full_player_widget"
+    android:previewLayout="@layout/full_player_widget"
     android:previewImage="@mipmap/ic_launcher"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen" />

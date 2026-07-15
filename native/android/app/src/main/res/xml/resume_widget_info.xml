@@ -4,6 +4,7 @@
     android:minHeight="72dp"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/resume_widget"
+    android:previewLayout="@layout/resume_widget"
     android:previewImage="@mipmap/ic_launcher"
     android:resizeMode="horizontal"
     android:widgetCategory="home_screen" />

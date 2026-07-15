@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.util.TypedValue
 import android.view.KeyEvent
 import android.widget.RemoteViews
 import org.json.JSONObject
@@ -68,6 +69,10 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
             }
         }
         if (!coverSet) views.setImageViewResource(R.id.mini_cover, R.mipmap.ic_launcher)
+        // Rounded cover corners to match the app's book art (API 31+).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setViewOutlinePreferredRadius(R.id.mini_cover, 10f, TypedValue.COMPLEX_UNIT_DIP)
+        }
 
         // Play/pause glyph reflects the last-known state; keep an accessible
         // label in sync so TalkBack announces the current action.

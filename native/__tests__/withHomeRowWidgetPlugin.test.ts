@@ -146,4 +146,14 @@ describe("committed manifest + plugin register all three home-row components", (
     const info = read(join(ROOT, "android/app/src/main/res/xml/home_row_widget_info.xml"));
     expect(info).toContain(`android:configure="com.tomesonic.app.widget.HomeRowWidgetConfigActivity"`);
   });
+
+  it("the picker shows a real preview and covers are rounded to match the app", () => {
+    const info = read(join(ROOT, "android/app/src/main/res/xml/home_row_widget_info.xml"));
+    expect(info).toContain(`android:previewLayout="@layout/home_row_widget"`);
+    // Rounded item covers (API 31+) — in both the plugin template and the factory.
+    expect(read(PLUGIN)).toContain(`setViewOutlinePreferredRadius(R.id.homerow_item_cover`);
+    expect(read(FACTORY)).toContain(`setViewOutlinePreferredRadius(R.id.homerow_item_cover`);
+    // App player-card teal background.
+    expect(read(join(ROOT, "android/app/src/main/res/drawable/home_row_widget_bg.xml"))).toContain(`#334C44`);
+  });
 });

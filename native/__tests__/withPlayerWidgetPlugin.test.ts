@@ -125,6 +125,20 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     expect(plugin).toContain(`@xml/full_player_widget_info`);
   });
 
+  it("both widgets show a real preview, rounded covers, and the app accent progress", () => {
+    const ROOT2 = join(__dirname, "..");
+    const miniInfo = norm(readFileSync(join(ROOT2, "android/app/src/main/res/xml/mini_player_widget_info.xml"), "utf8"));
+    const fullInfo = norm(readFileSync(join(ROOT2, "android/app/src/main/res/xml/full_player_widget_info.xml"), "utf8"));
+    const fullLayout = norm(readFileSync(join(ROOT2, "android/app/src/main/res/layout/full_player_widget.xml"), "utf8"));
+    expect(miniInfo).toContain(`android:previewLayout="@layout/mini_player_widget"`);
+    expect(fullInfo).toContain(`android:previewLayout="@layout/full_player_widget"`);
+    // Rounded covers (API 31+) present in the plugin templates.
+    expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.mini_cover`);
+    expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
+    // Full-player progress tinted to the app accent (primary teal).
+    expect(fullLayout).toContain(`android:progressTint="#86D6BF"`);
+  });
+
   it("the RNTP patch routes the WIDGET_CHAPTER_* actions to chapter navigation events (by applicationId-agnostic suffix)", () => {
     const patch = readFileSync(
       join(ROOT, "patches/react-native-track-player+5.0.0-alpha0.patch"),
