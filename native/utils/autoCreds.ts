@@ -80,6 +80,42 @@ export async function writeAutoDownloads(entries: AutoDownloadEntry[]) {
   }
 }
 
+// Mirrors the current library's personalized home shelves for the configurable
+// home-row home-screen widget (HomeRowWidgetProvider + its RemoteViewsService).
+// Each widget instance is configured (in its placement screen) to show ONE of
+// these rows as a scrollable list; tapping an item deep-links into that book.
+// Native reads `filesDir/home_rows_state.json`.
+const HOME_ROWS_PATH = `${FileSystem.documentDirectory}home_rows_state.json`;
+
+export interface HomeRowItem {
+  id: string;
+  title: string;
+  author?: string;
+  /** Full cover URL WITH token — the widget factory fetches + downsamples it. */
+  coverUrl?: string;
+}
+export interface HomeRow {
+  /** Stable shelf id (the personalized shelf's id) the config screen persists. */
+  id: string;
+  label: string;
+  items: HomeRowItem[];
+}
+
+export async function writeHomeRowsState(rows: HomeRow[]) {
+  try {
+    if (rows && rows.length > 0) {
+      await atomicWrite(HOME_ROWS_PATH, JSON.stringify({ rows }));
+    } else {
+      // No rows (signed out / empty) — clear so a stale row can't linger. Drop
+      // the temp too (native readers fall back to it mid-swap).
+      await FileSystem.deleteAsync(HOME_ROWS_PATH, { idempotent: true });
+      await FileSystem.deleteAsync(`${HOME_ROWS_PATH}.tmp`, { idempotent: true }).catch(() => {});
+    }
+  } catch (e) {
+    console.warn("[Widget] home rows write failed", e);
+  }
+}
+
 // Temp-then-rename write. These files are read by the NATIVE Android Auto
 // service on its own schedule (auto_downloads on every uncached browse,
 // widget_state on resumption) while JS rewrites them — auto_downloads every

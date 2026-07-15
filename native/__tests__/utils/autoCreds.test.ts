@@ -4,11 +4,13 @@ import {
   writeAutoCreds,
   writeAutoDownloads,
   writeWidgetState,
+  writeHomeRowsState,
 } from "../../utils/autoCreds";
 
 const CREDS_PATH = "file:///test-documents/auto_creds.json";
 const DOWNLOADS_PATH = "file:///test-documents/auto_downloads.json";
 const WIDGET_PATH = "file:///test-documents/widget_state.json";
+const HOME_ROWS_PATH = "file:///test-documents/home_rows_state.json";
 
 const getInfo = FileSystem.getInfoAsync as jest.Mock;
 const readStr = FileSystem.readAsStringAsync as jest.Mock;
@@ -294,5 +296,37 @@ describe("writeWidgetState", () => {
     writeStr.mockRejectedValue(new Error("io"));
     await expect(writeWidgetState({ title: "T" })).resolves.toBeUndefined();
     expect(console.warn).toHaveBeenCalledWith("[Widget] state write failed", expect.any(Error));
+  });
+});
+
+describe("writeHomeRowsState", () => {
+  const rows = [
+    {
+      id: "continue-listening",
+      label: "Continue Listening",
+      items: [{ id: "li_1", title: "Dune", author: "Frank Herbert", coverUrl: "https://x/c.jpg" }],
+    },
+  ];
+
+  it("atomically writes the rows wrapped under a { rows } key", async () => {
+    await writeHomeRowsState(rows as any);
+    expect(writeStr).toHaveBeenCalledWith(`${HOME_ROWS_PATH}.tmp`, JSON.stringify({ rows }));
+    expect(FileSystem.moveAsync).toHaveBeenCalledWith({
+      from: `${HOME_ROWS_PATH}.tmp`,
+      to: HOME_ROWS_PATH,
+    });
+  });
+
+  it("clears the file (and stale temp) for empty rows", async () => {
+    await writeHomeRowsState([]);
+    expect(del).toHaveBeenCalledWith(HOME_ROWS_PATH, { idempotent: true });
+    expect(del).toHaveBeenCalledWith(`${HOME_ROWS_PATH}.tmp`, { idempotent: true });
+    expect(writeStr).not.toHaveBeenCalled();
+  });
+
+  it("swallows failures with a warning", async () => {
+    writeStr.mockRejectedValue(new Error("io"));
+    await expect(writeHomeRowsState(rows as any)).resolves.toBeUndefined();
+    expect(console.warn).toHaveBeenCalledWith("[Widget] home rows write failed", expect.any(Error));
   });
 });

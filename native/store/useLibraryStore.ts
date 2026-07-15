@@ -308,3 +308,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     });
   },
 }));
+
+// Mirror the personalized shelves into home_rows_state.json for the configurable
+// home-row home-screen widget whenever the shelves or the active library change.
+// Deduped by content signature inside mirrorHomeRows (shelves reload often with
+// identical data). Kept out of the render path — a plain store subscription.
+useLibraryStore.subscribe((state, prev) => {
+  if (
+    state.personalizedShelves !== prev.personalizedShelves ||
+    state.currentLibraryId !== prev.currentLibraryId
+  ) {
+    try {
+      require("../utils/homeRowsMirror").mirrorHomeRows();
+    } catch {
+      // Best-effort mirror; never let it break a store update.
+    }
+  }
+});
