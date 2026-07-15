@@ -353,7 +353,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..1069c94 100644
+index b495b5a..6af4234 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -1404,7 +1404,15 @@ index b495b5a..1069c94 100644
 +            absBrowsableItem("collections:$libId", "Collections", iconRes = "aa_collections", childBrowsableStyle = STYLE_CATEGORY_LIST),
 +            absBrowsableItem("listenagain:$libId", "Listen Again", iconRes = "aa_replay", childPlayableStyle = STYLE_GRID),
 +            absBrowsableItem("allbooks:$libId", "All Books", iconRes = "aa_books", childPlayableStyle = STYLE_GRID)
-+        )
+         )
+-            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
+-            // https://github.com/androidx/media/issues/1218
+-            .setSessionActivity(
+-                PendingIntent.getActivity(
+-                    this,
+-                    0,
+-                    openAppIntent,
+-                    getPendingIntentFlags()
 +    }
 +
 +    // Continue Series: one browsable folder per series you're ACTIVE in —
@@ -1514,15 +1522,7 @@ index b495b5a..1069c94 100644
 +                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MediaItem>>): Boolean =
 +                    size > 30
 +            }
-         )
--            .setBitmapLoader(CacheBitmapLoader(CoilBitmapLoader(this)))
--            // https://github.com/androidx/media/issues/1218
--            .setSessionActivity(
--                PendingIntent.getActivity(
--                    this,
--                    0,
--                    openAppIntent,
--                    getPendingIntentFlags()
++        )
 +
 +    private fun absSearch(query: String): List<MediaItem> {
 +        val libsBody = absGet("/api/libraries") ?: return emptyList()
@@ -2600,28 +2600,57 @@ index b495b5a..1069c94 100644
          super.onDestroy()
      }
  
-@@ -831,13 +2887,18 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,23 +2887,35 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
-+                // The car steering-wheel / console next+previous transport keys
-+                // seek by the user's configured jump increment, NOT to the
+-                KeyEvent.KEYCODE_MEDIA_NEXT -> {
+-                    emit(MusicEvents.BUTTON_SKIP_NEXT)
+-                    true
+-                }
+-
+-                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+-                    emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
+-                    true
+-                }
+-
+-                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
+-                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
++                // The car steering-wheel / console FF/RW / next+previous transport
++                // keys seek by the user's configured jump increment, NOT to the
 +                // next/previous CHAPTER. Chapter navigation stays available via
 +                // the dedicated on-screen NEXT/PREVIOUS buttons in the Android
 +                // Auto now-playing layout (the JUMP buttons already seek there).
-                 KeyEvent.KEYCODE_MEDIA_NEXT -> {
--                    emit(MusicEvents.BUTTON_SKIP_NEXT)
-+                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
++                //
++                // CRASH FIX: these used to emit(BUTTON_JUMP_FORWARD) with NO
++                // payload bundle. That reached JS as a null event, and the
++                // remote-jump listener's synchronous `event.interval` read threw
++                // an uncaught TypeError that tore down the whole playback service
++                // (physical FF/RW crashed AA; the on-screen ± buttons never did,
++                // because they carry an interval payload). Route through the SAME
++                // path the on-screen ± buttons use — forwardingPlayer.seekForward()
++                // re-emits BUTTON_JUMP_FORWARD WITH the interval bundle, on the
++                // main thread — so the key press behaves identically and can't
++                // deliver a null payload. Guard the lateinit like onCustomCommand.
++                KeyEvent.KEYCODE_MEDIA_NEXT,
++                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
++                KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD,
++                KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
++                    if (::player.isInitialized) player.forwardingPlayer.seekForward()
                      true
                  }
  
-                 KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
--                    emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
-+                    emit(MusicEvents.BUTTON_JUMP_BACKWARD)
+-                KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
+-                    emit(MusicEvents.BUTTON_JUMP_BACKWARD)
++                KeyEvent.KEYCODE_MEDIA_PREVIOUS,
++                KeyEvent.KEYCODE_MEDIA_REWIND,
++                KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD,
++                KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
++                    if (::player.isInitialized) player.forwardingPlayer.seekBack()
                      true
                  }
  
-@@ -905,24 +2966,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -905,24 +2973,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2681,7 +2710,7 @@ index b495b5a..1069c94 100644
 +                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
 +                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
 +                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
-             }
++            }
 +            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
 +            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
 +        }
@@ -2841,7 +2870,7 @@ index b495b5a..1069c94 100644
 +                } else {
 +                    future.set(MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
 +                }
-+            }
+             }
 +            return future
 +        }
 +
@@ -2882,7 +2911,7 @@ index b495b5a..1069c94 100644
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3211,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3218,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2912,7 +2941,7 @@ index b495b5a..1069c94 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3243,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3250,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -2928,7 +2957,7 @@ index b495b5a..1069c94 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3259,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3266,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
