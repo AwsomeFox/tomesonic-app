@@ -3644,10 +3644,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const s = state.currentSession;
     if (!s) return;
     const itemId = s.libraryItemId || s.libraryItem?.id || "";
-    // writeWidgetState is async (atomic temp-then-rename); only ask the widgets
-    // to redraw AFTER the new snapshot is on disk, or the broadcast can race the
-    // write and providers re-read the stale JSON. writeWidgetState never rejects
-    // (it catches internally), so this always fires once the file settles.
+    // writeWidgetState is async (atomic temp-then-rename); chain the redraw so
+    // the broadcast fires AFTER the write ATTEMPT completes rather than racing
+    // it — otherwise providers can re-read the previous JSON. writeWidgetState
+    // catches its own errors and still resolves, so on a (rare) failed write the
+    // refresh still runs and providers re-read the prior state; the next tick
+    // re-attempts both, so it self-heals. Best-effort by design.
     writeWidgetState({
       title: s.displayTitle || "TomeSonic",
       author: s.displayAuthor || "",
