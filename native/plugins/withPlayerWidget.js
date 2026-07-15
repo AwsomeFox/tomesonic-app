@@ -298,8 +298,10 @@ class FullPlayerWidgetProvider : AppWidgetProvider() {
         }
         if (!coverSet) views.setImageViewResource(R.id.full_cover, R.mipmap.ic_launcher)
 
-        // Progress bar (whole seconds).
-        views.setProgressBar(R.id.full_progress, if (duration > 0) duration else 100, position, false)
+        // Progress bar (whole seconds); clamp so a position past/without a known
+        // duration can't render an out-of-range bar.
+        val progMax = if (duration > 0) duration else 100
+        views.setProgressBar(R.id.full_progress, progMax, position.coerceIn(0, progMax), false)
 
         views.setImageViewResource(
             R.id.full_play_pause,
