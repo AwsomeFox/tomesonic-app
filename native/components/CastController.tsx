@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
+import { Platform, ToastAndroid } from "react-native";
 import TrackPlayer from "react-native-track-player";
-import { useRemoteMediaClient } from "react-native-google-cast";
+import { useRemoteMediaClient, CastContext } from "react-native-google-cast";
 import {
   usePlaybackStore,
   restoreLocalNowPlayingMeta,
@@ -230,6 +231,28 @@ export default function CastController() {
       return;
     }
     if (!client) return;
+    // A downloaded/offline session (id "local_*") plays from on-device file://
+    // paths the Chromecast can't fetch. abs() below would prefix the server
+    // address onto those paths, producing unreachable URLs; loadMedia then
+    // rejects AFTER we've already paused local playback, leaving the app
+    // silently stuck (isCasting true, local paused, receiver empty, no
+    // recovery). Don't attempt it: keep local playback running, tell the user,
+    // and end the cast session so we don't sit in a broken casting state.
+    if (String(currentSession.id || "").startsWith("local_")) {
+      loadedKeyRef.current = null;
+      if (Platform.OS === "android") {
+        ToastAndroid.show(
+          "Can't cast a downloaded book — connect to your server to cast.",
+          ToastAndroid.LONG
+        );
+      }
+      // Wrap in Promise.resolve so a sync-throwing OR void-returning cast
+      // implementation is handled the same as the documented Promise<void>.
+      Promise.resolve()
+        .then(() => CastContext.getSessionManager().endCurrentSession(true))
+        .catch((e: any) => console.warn("[Cast] end local session", e));
+      return;
+    }
     const itemId = currentSession.libraryItemId || currentSession.libraryItem?.id;
     const key = `${itemId}@${currentSession.episodeId || ""}`;
     if (loadedKeyRef.current === key) return;

@@ -59,10 +59,10 @@ describe("backups", () => {
     expect(api.get).toHaveBeenCalledWith("/api/backups");
   });
 
-  it("createBackup → POST /api/backups", async () => {
+  it("createBackup → POST /api/backups with timeout DISABLED (a big-library zip exceeds the 20s default, and the ECONNABORTED would be misreported as 'offline')", async () => {
     jest.mocked(api.post).mockResolvedValue(ok({ backups: [{ id: "b1" }] }));
     await expect(createBackup()).resolves.toEqual({ backups: [{ id: "b1" }] });
-    expect(api.post).toHaveBeenCalledWith("/api/backups");
+    expect(api.post).toHaveBeenCalledWith("/api/backups", undefined, { timeout: 0 });
   });
 
   it("deleteBackup → DELETE /api/backups/:id", async () => {

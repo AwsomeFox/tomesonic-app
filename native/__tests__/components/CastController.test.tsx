@@ -12,7 +12,7 @@
  */
 import { render, act } from "@testing-library/react-native";
 import TrackPlayer from "react-native-track-player";
-import { useRemoteMediaClient } from "react-native-google-cast";
+import { useRemoteMediaClient, CastContext } from "react-native-google-cast";
 import CastController from "../../components/CastController";
 import { usePlaybackStore } from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
@@ -91,6 +91,34 @@ describe("CastController — no client", () => {
     // Client registered for transport routing, but nothing loaded.
     expect(usePlaybackStore.getState().isCasting).toBe(true);
     expect(fake.client.loadMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("CastController — downloaded/offline session can't cast", () => {
+  it("does NOT build server URLs or pause local for a local_* session; ends the cast session instead", async () => {
+    // REGRESSION: an offline session (id "local_*") plays from on-device
+    // file:// paths. abs() would prefix the server address onto them, producing
+    // unreachable URLs; loadMedia then rejected AFTER local was paused, leaving
+    // the app silently stuck (isCasting true, local paused, receiver empty).
+    const endCurrentSession = jest.fn().mockResolvedValue(undefined);
+    jest.mocked(CastContext.getSessionManager).mockReturnValue({ endCurrentSession } as any);
+    const localSession = {
+      ...session,
+      id: "local_item1",
+      audioTracks: [
+        { startOffset: 0, duration: 1000, contentUrl: "file:///docs/downloads/item1/t1.mp3" },
+      ],
+    };
+    usePlaybackStore.setState({ currentSession: localSession, position: 100, isPlaying: true } as any);
+    const fake = makeFakeClient();
+    await mountWithClient(fake);
+
+    // No bogus server URLs built, no receiver load...
+    expect(fake.client.loadMedia).not.toHaveBeenCalled();
+    // ...local playback is NOT paused into silence...
+    expect(TrackPlayer.pause).not.toHaveBeenCalled();
+    // ...and the cast session is ended so we don't sit in a broken state.
+    expect(endCurrentSession).toHaveBeenCalled();
   });
 });
 

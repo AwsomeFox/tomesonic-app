@@ -192,7 +192,11 @@ describe("AdminBackupsScreen", () => {
 
     fireEvent.press(screen.getByLabelText("Back up now"));
 
-    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/api/backups"));
+    // timeout:0 — a big-library zip can exceed the 20s default, and the
+    // ECONNABORTED would be misreported as "offline" (see utils/abs/server).
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/api/backups", undefined, { timeout: 0 })
+    );
     // The POST response IS the refreshed list — the new backup appears without
     // a follow-up GET.
     expect(await screen.findByText("Jul 13, 2026, 9:00 AM")).toBeTruthy();
