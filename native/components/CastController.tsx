@@ -246,13 +246,11 @@ export default function CastController() {
           ToastAndroid.LONG
         );
       }
-      try {
-        CastContext.getSessionManager()
-          .endCurrentSession(true)
-          .catch((e: any) => console.warn("[Cast] end local session", e));
-      } catch (e) {
-        console.warn("[Cast] end local session", e);
-      }
+      // Wrap in Promise.resolve so a sync-throwing OR void-returning cast
+      // implementation is handled the same as the documented Promise<void>.
+      Promise.resolve()
+        .then(() => CastContext.getSessionManager().endCurrentSession(true))
+        .catch((e: any) => console.warn("[Cast] end local session", e));
       return;
     }
     const itemId = currentSession.libraryItemId || currentSession.libraryItem?.id;
