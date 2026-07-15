@@ -59,8 +59,10 @@ class FullPlayerWidgetProvider : AppWidgetProvider() {
             } catch (e: Exception) {}
         }
         if (!coverSet) views.setImageViewResource(R.id.full_cover, R.mipmap.ic_launcher)
-        // Rounded cover corners to match the app's book art (API 31+).
+        // Rounded cover corners to match the app's book art (API 31+). clipToOutline
+        // must be enabled or the preferred radius doesn't actually clip the bitmap.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setBoolean(R.id.full_cover, "setClipToOutline", true)
             views.setViewOutlinePreferredRadius(R.id.full_cover, 12f, TypedValue.COMPLEX_UNIT_DIP)
         }
 

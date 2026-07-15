@@ -69,8 +69,10 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
             }
         }
         if (!coverSet) views.setImageViewResource(R.id.mini_cover, R.mipmap.ic_launcher)
-        // Rounded cover corners to match the app's book art (API 31+).
+        // Rounded cover corners to match the app's book art (API 31+). clipToOutline
+        // must be enabled or the preferred radius doesn't actually clip the bitmap.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setBoolean(R.id.mini_cover, "setClipToOutline", true)
             views.setViewOutlinePreferredRadius(R.id.mini_cover, 10f, TypedValue.COMPLEX_UNIT_DIP)
         }
 

@@ -155,8 +155,11 @@ describe("committed manifest + plugin register all three home-row components", (
     expect(info).toContain(`android:previewLayout="@layout/home_row_widget"`);
     expect(pluginSrc).toContain(`android:previewLayout="@layout/home_row_widget"`);
     // Rounded item covers (API 31+) — in both the plugin template and the factory.
+    // Rounding only clips when clipToOutline is enabled — pin that too.
     expect(pluginSrc).toContain(`setViewOutlinePreferredRadius(R.id.homerow_item_cover`);
     expect(read(FACTORY)).toContain(`setViewOutlinePreferredRadius(R.id.homerow_item_cover`);
+    expect(pluginSrc).toContain(`setBoolean(R.id.homerow_item_cover, "setClipToOutline", true)`);
+    expect(read(FACTORY)).toContain(`setBoolean(R.id.homerow_item_cover, "setClipToOutline", true)`);
     // App player-card teal background — plugin template + committed drawable.
     expect(pluginSrc).toContain(`#334C44`);
     expect(read(join(ROOT, "android/app/src/main/res/drawable/home_row_widget_bg.xml"))).toContain(`#334C44`);

@@ -147,6 +147,11 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     expect(plugin).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
     expect(miniProvider).toContain(`setViewOutlinePreferredRadius(R.id.mini_cover`);
     expect(fullProvider).toContain(`setViewOutlinePreferredRadius(R.id.full_cover`);
+    // Rounding only clips when clipToOutline is enabled — pin that too.
+    expect(plugin).toContain(`setBoolean(R.id.mini_cover, "setClipToOutline", true)`);
+    expect(plugin).toContain(`setBoolean(R.id.full_cover, "setClipToOutline", true)`);
+    expect(miniProvider).toContain(`setBoolean(R.id.mini_cover, "setClipToOutline", true)`);
+    expect(fullProvider).toContain(`setBoolean(R.id.full_cover, "setClipToOutline", true)`);
     // Full-player progress tinted to the app accent (primary teal) — committed + template.
     expect(fullLayout).toContain(`android:progressTint="#86D6BF"`);
     expect(plugin).toContain(`android:progressTint="#86D6BF"`);

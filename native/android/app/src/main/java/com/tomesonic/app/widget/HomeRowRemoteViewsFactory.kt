@@ -81,8 +81,10 @@ class HomeRowRemoteViewsFactory(
         if (bmp != null) views.setImageViewBitmap(R.id.homerow_item_cover, bmp)
         else views.setImageViewResource(R.id.homerow_item_cover, R.mipmap.ic_launcher)
         // Rounded cover corners to match the app's book art (API 31+; older
-        // devices show square covers, a harmless degradation).
+        // devices show square covers, a harmless degradation). clipToOutline must
+        // be enabled or the preferred radius doesn't actually clip the bitmap.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            views.setBoolean(R.id.homerow_item_cover, "setClipToOutline", true)
             views.setViewOutlinePreferredRadius(R.id.homerow_item_cover, 8f, TypedValue.COMPLEX_UNIT_DIP)
         }
 
