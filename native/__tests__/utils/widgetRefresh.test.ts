@@ -1,33 +1,46 @@
 import { NativeModules } from "react-native";
-import { refreshWidgets } from "../../utils/widgetRefresh";
+import { refreshPlayerWidgets, refreshHomeRowWidget } from "../../utils/widgetRefresh";
 
-describe("refreshWidgets", () => {
+describe("widget refresh helpers", () => {
   afterEach(() => {
     delete (NativeModules as any).WidgetRefresh;
   });
 
-  it("no-ops (without throwing) when the native module isn't present", () => {
-    expect(() => refreshWidgets()).not.toThrow();
+  it("no-op (without throwing) when the native module isn't present", () => {
+    expect(() => refreshPlayerWidgets()).not.toThrow();
+    expect(() => refreshHomeRowWidget()).not.toThrow();
   });
 
-  it("calls the native module's refresh when available", () => {
-    const refresh = jest.fn();
-    (NativeModules as any).WidgetRefresh = { refresh };
-    refreshWidgets();
-    expect(refresh).toHaveBeenCalledTimes(1);
+  it("refreshPlayerWidgets calls ONLY refreshPlayers (never the home-row path)", () => {
+    const refreshPlayers = jest.fn();
+    const refreshHomeRows = jest.fn();
+    (NativeModules as any).WidgetRefresh = { refreshPlayers, refreshHomeRows };
+    refreshPlayerWidgets();
+    expect(refreshPlayers).toHaveBeenCalledTimes(1);
+    expect(refreshHomeRows).not.toHaveBeenCalled();
   });
 
-  it("swallows a throwing native module", () => {
+  it("refreshHomeRowWidget calls ONLY refreshHomeRows", () => {
+    const refreshPlayers = jest.fn();
+    const refreshHomeRows = jest.fn();
+    (NativeModules as any).WidgetRefresh = { refreshPlayers, refreshHomeRows };
+    refreshHomeRowWidget();
+    expect(refreshHomeRows).toHaveBeenCalledTimes(1);
+    expect(refreshPlayers).not.toHaveBeenCalled();
+  });
+
+  it("swallows a throwing native method", () => {
     (NativeModules as any).WidgetRefresh = {
-      refresh: () => {
+      refreshPlayers: () => {
         throw new Error("boom");
       },
     };
-    expect(() => refreshWidgets()).not.toThrow();
+    expect(() => refreshPlayerWidgets()).not.toThrow();
   });
 
-  it("ignores a module missing the refresh method", () => {
+  it("ignores a module missing the requested method", () => {
     (NativeModules as any).WidgetRefresh = {};
-    expect(() => refreshWidgets()).not.toThrow();
+    expect(() => refreshPlayerWidgets()).not.toThrow();
+    expect(() => refreshHomeRowWidget()).not.toThrow();
   });
 });

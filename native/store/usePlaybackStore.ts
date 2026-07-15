@@ -5,7 +5,7 @@ import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
 import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
 import { writeWidgetState } from "../utils/autoCreds";
-import { refreshWidgets } from "../utils/widgetRefresh";
+import { refreshPlayerWidgets } from "../utils/widgetRefresh";
 import { upNextAddItem, upNextRemoveItem, upNextListItems } from "../utils/upNext";
 import { chapterIndexAt, absolutePositionFor } from "../utils/chapterMath";
 import { parsePlayMediaId } from "../utils/playMediaId";
@@ -3658,7 +3658,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       position: Math.round(state.position || 0),
       duration: Math.round(state.duration || 0),
     })
-      .then(() => refreshWidgets())
+      .then(() => refreshPlayerWidgets())
       .catch(() => {});
   };
   usePlaybackStore.subscribe((state) => {

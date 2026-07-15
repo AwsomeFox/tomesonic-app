@@ -20,14 +20,32 @@ const read = (p: string) => readFileSync(p, "utf8");
 describe("withWidgetRefresh plugin ↔ committed native module stay in sync", () => {
   const plugin = read(PLUGIN);
 
-  it("the module exposes a 'WidgetRefresh' native module with a refresh() method", () => {
+  it("exposes a 'WidgetRefresh' module split into player vs home-row refresh", () => {
     for (const src of [plugin, read(MODULE)]) {
       expect(src).toContain(`class WidgetRefreshModule`);
       expect(src).toContain(`override fun getName(): String = "WidgetRefresh"`);
-      expect(src).toContain(`fun refresh()`);
-      // Broadcasts an APPWIDGET_UPDATE to each provider so it re-reads the file.
+      // The playback cadence only touches the player widgets...
+      expect(src).toContain(`fun refreshPlayers()`);
+      // ...while the home-row widget (network cover fetches) refreshes separately.
+      expect(src).toContain(`fun refreshHomeRows()`);
       expect(src).toContain(`AppWidgetManager.ACTION_APPWIDGET_UPDATE`);
+      // notifyAppWidgetViewDataChanged lives ONLY in the home-row path.
       expect(src).toContain(`notifyAppWidgetViewDataChanged`);
+    }
+  });
+
+  it("keeps the home-row list invalidation out of the player refresh path", () => {
+    // refreshPlayers broadcasts to the player providers but must not touch the
+    // home-row list, so a ~2s live refresh never triggers cover fetches.
+    for (const src of [plugin, read(MODULE)]) {
+      const playersBody = src.slice(
+        src.indexOf("fun refreshPlayers()"),
+        src.indexOf("fun refreshHomeRows()")
+      );
+      expect(playersBody).toContain(`MiniPlayerWidgetProvider`);
+      expect(playersBody).toContain(`FullPlayerWidgetProvider`);
+      expect(playersBody).not.toContain(`HomeRowWidgetProvider`);
+      expect(playersBody).not.toContain(`notifyAppWidgetViewDataChanged`);
     }
   });
 
