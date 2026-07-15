@@ -62,6 +62,7 @@
       "./plugins/withResumeWidget",
       "./plugins/withPlayerWidget",
       "./plugins/withHomeRowWidget",
+      "./plugins/withWidgetRefresh",
       "./plugins/withRotationCrossfade",
       "./plugins/withSecureBackupRules",
       "./plugins/withMedia3NotificationIcon",

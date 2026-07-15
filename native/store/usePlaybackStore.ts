@@ -5,6 +5,7 @@ import { api } from "../utils/api";
 import { useUserStore } from "./useUserStore";
 import { syncProgress, closeSession, queueProgressPatch, reconcileLinkedProgress } from "../utils/progressSync";
 import { writeWidgetState } from "../utils/autoCreds";
+import { refreshPlayerWidgets } from "../utils/widgetRefresh";
 import { upNextAddItem, upNextRemoveItem, upNextListItems } from "../utils/upNext";
 import { chapterIndexAt, absolutePositionFor } from "../utils/chapterMath";
 import { parsePlayMediaId } from "../utils/playMediaId";
@@ -3630,13 +3631,39 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   });
 }
 
-// Keep the home-screen mini-player widget's play/pause glyph, cover and title
-// fresh. The widget re-reads widget_state.json on Android's periodic update
-// (there's no live push yet), so re-mirror it whenever the play state, the
-// current book, or the cached cover changes — deduped so ordinary progress
-// ticks don't rewrite the file.
+// Keep the home-screen player widgets (mini + full) fresh in near-real-time.
+// The widgets read widget_state.json; after each write we call
+// refreshPlayerWidgets() so the native WidgetRefresh module pushes an immediate
+// redraw of the PLAYER widgets only (progress bar +
+// play/pause glyph) instead of waiting for Android's ~30-min tick. We write on
+// (a) any book / play-state / cover change, and (b) a ~2s throttle while playing
+// so the progress bar advances live without rewriting the file every second.
 {
   let _lastWidgetKey = "";
+  let _lastWidgetLive = 0;
+  const writeSnapshot = (state: PlaybackState) => {
+    const s = state.currentSession;
+    if (!s) return;
+    const itemId = s.libraryItemId || s.libraryItem?.id || "";
+    // writeWidgetState is async (atomic temp-then-rename); chain the redraw so
+    // the broadcast fires AFTER the write ATTEMPT completes rather than racing
+    // it — otherwise providers can re-read the previous JSON. writeWidgetState
+    // catches its own errors and still resolves, so on a (rare) failed write the
+    // refresh still runs and providers re-read the prior state; the next tick
+    // re-attempts both, so it self-heals. Best-effort by design.
+    writeWidgetState({
+      title: s.displayTitle || "TomeSonic",
+      author: s.displayAuthor || "",
+      itemId: itemId || undefined,
+      episodeId: s.episodeId || undefined,
+      isPlaying: state.isPlaying,
+      coverPath: s.carArtworkLocal || undefined,
+      position: Math.round(state.position || 0),
+      duration: Math.round(state.duration || 0),
+    })
+      .then(() => refreshPlayerWidgets())
+      .catch(() => {});
+  };
   usePlaybackStore.subscribe((state) => {
     const s = state.currentSession;
     if (!s) return;
@@ -3645,20 +3672,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // same cover), so an episode switch would otherwise leave the key unchanged
     // and the widget stuck on the previous episode's title/author.
     const key = `${itemId}:${s.episodeId || ""}:${state.isPlaying}:${s.carArtworkLocal || ""}`;
-    if (key === _lastWidgetKey) return;
-    _lastWidgetKey = key;
-    writeWidgetState({
-      title: s.displayTitle || "TomeSonic",
-      author: s.displayAuthor || "",
-      itemId: itemId || undefined,
-      episodeId: s.episodeId || undefined,
-      isPlaying: state.isPlaying,
-      coverPath: s.carArtworkLocal || undefined,
-      // Position/duration feed the full-player widget's progress bar. Not in the
-      // dedupe key (they change every second) — the widget re-reads on Android's
-      // periodic tick anyway, so this snapshots the value at each state change.
-      position: Math.round(state.position || 0),
-      duration: Math.round(state.duration || 0),
-    });
+    const keyChanged = key !== _lastWidgetKey;
+    // Live progress: the ~1s progress tick sets position, firing this
+    // subscription — throttle the live-position writes to ~every 2s.
+    const now = Date.now();
+    const liveDue = state.isPlaying && now - _lastWidgetLive >= 2000;
+    if (!keyChanged && !liveDue) return;
+    if (keyChanged) _lastWidgetKey = key;
+    _lastWidgetLive = now;
+    writeSnapshot(state);
   });
 }

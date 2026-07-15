@@ -1,4 +1,5 @@
 import { HomeRow, HomeRowItem, writeHomeRowsState } from "./autoCreds";
+import { refreshHomeRowWidget } from "./widgetRefresh";
 
 // Personalized-shelf types whose entities are NOT directly-openable library
 // items (series/author/genre groupings). The home-row widget opens a book on
@@ -121,7 +122,15 @@ export function mirrorHomeRows(): void {
     const sig = rowsSignature(rows);
     if (sig === lastSignature) return;
     lastSignature = sig;
-    writeHomeRowsState(rows).catch(() => {});
+    // Push a home-row widget redraw after the write ATTEMPT completes — this is
+    // the dedicated home-row refresh path (NOT the ~2s playback cadence), so its
+    // network cover fetches only run when the shelves/creds actually change.
+    // writeHomeRowsState catches its own errors and still resolves, so on a rare
+    // failed write the redraw just re-reads the prior state; best-effort by
+    // design (mirrors the widget_state.json mirror in usePlaybackStore).
+    writeHomeRowsState(rows)
+      .then(() => refreshHomeRowWidget())
+      .catch(() => {});
   } catch {
     // Ignore — mirroring is best-effort.
   }
