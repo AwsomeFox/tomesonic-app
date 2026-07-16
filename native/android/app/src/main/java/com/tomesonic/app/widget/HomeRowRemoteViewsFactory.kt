@@ -82,7 +82,10 @@ class HomeRowRemoteViewsFactory(
         // items, which stay hidden — matching the app's Continue-listening rows).
         val progress = it.optInt("progress", 0)
         val timeLeft = it.optString("timeLeftLabel")
-        if (progress in 1..100) {
+        // Contract: progress is 1..99 for in-progress books; 0/absent or a
+        // finished (100) item hides the bar (JS clamps to 99, so 100 only
+        // appears if a stale value slips in — defend against it here too).
+        if (progress in 1..99) {
             views.setProgressBar(R.id.homerow_item_progress, 100, progress, false)
             views.setViewVisibility(R.id.homerow_item_progress, android.view.View.VISIBLE)
         } else {
