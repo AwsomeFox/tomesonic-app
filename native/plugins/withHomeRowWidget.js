@@ -195,6 +195,27 @@ class HomeRowRemoteViewsFactory(
         views.setTextViewText(R.id.homerow_item_author, author)
         views.setContentDescription(R.id.homerow_item_cover, title)
 
+        // Progress + "Xh Ym left" for in-progress books (JS writes progress 1..99
+        // and a preformatted label; both are absent/0 for unstarted or finished
+        // items, which stay hidden — matching the app's Continue-listening rows).
+        val progress = it.optInt("progress", 0)
+        val timeLeft = it.optString("timeLeftLabel")
+        // Contract: progress is 1..99 for in-progress books; 0/absent or a
+        // finished (100) item hides the bar (JS clamps to 99, so 100 only
+        // appears if a stale value slips in — defend against it here too).
+        if (progress in 1..99) {
+            views.setProgressBar(R.id.homerow_item_progress, 100, progress, false)
+            views.setViewVisibility(R.id.homerow_item_progress, android.view.View.VISIBLE)
+        } else {
+            views.setViewVisibility(R.id.homerow_item_progress, android.view.View.GONE)
+        }
+        if (timeLeft.isNotEmpty()) {
+            views.setTextViewText(R.id.homerow_item_timeleft, timeLeft)
+            views.setViewVisibility(R.id.homerow_item_timeleft, android.view.View.VISIBLE)
+        } else {
+            views.setViewVisibility(R.id.homerow_item_timeleft, android.view.View.GONE)
+        }
+
         val bmp = loadCover(it.optString("coverUrl"))
         if (bmp != null) views.setImageViewBitmap(R.id.homerow_item_cover, bmp)
         else views.setImageViewResource(R.id.homerow_item_cover, R.mipmap.ic_launcher)
@@ -418,6 +439,28 @@ const ITEM_XML = `<?xml version="1.0" encoding="utf-8"?>
             android:ellipsize="end"
             android:textColor="#CFEDE4"
             android:textSize="12sp" />
+
+        <ProgressBar
+            android:id="@+id/homerow_item_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="5dp"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="#86D6BF"
+            android:progressBackgroundTint="#4CFFFFFF"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/homerow_item_timeleft"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:maxLines="1"
+            android:textColor="#86D6BF"
+            android:textSize="11sp"
+            android:visibility="gone" />
     </LinearLayout>
 </LinearLayout>
 `;

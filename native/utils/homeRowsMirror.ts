@@ -50,13 +50,55 @@ function authorOf(entity: any): string {
   return entity?.author || "";
 }
 
+// Audio progress as a clamped 0..1 fraction — prefers the server `progress`
+// field, falls back to currentTime/duration, never yields NaN/Infinity. Mirrors
+// BookProgressBadge.audioProgressFraction so the widget agrees with the app.
+function audioFraction(
+  progress: number | null | undefined,
+  currentTime: number,
+  duration: number
+): number {
+  const raw = Number(progress ?? (duration > 0 ? currentTime / duration : 0));
+  if (!Number.isFinite(raw)) return 0;
+  return Math.max(Math.min(1, raw), 0);
+}
+
+// Compact remaining time ("3h 20m" / "12m"), matching the book badge's format.
+function remainingPretty(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 60) return "";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Derive the widget's per-item progress bar (1..99) and "… left" label from the
+// user's cached media progress. Returns nothing for unstarted/finished books so
+// their row stays clean (bar + label hidden), like the app's shelves.
+function progressFieldsFor(
+  itemId: string,
+  mediaProgress: Record<string, any> | undefined
+): { progress?: number; timeLeftLabel?: string } {
+  const p = mediaProgress?.[itemId];
+  if (!p || p.isFinished) return {};
+  const duration = Number(p.duration || 0);
+  const currentTime = Number(p.currentTime || 0);
+  const fraction = audioFraction(p.progress, currentTime, duration);
+  if (fraction <= 0 || fraction >= 1) return {};
+  const pct = Math.min(99, Math.max(1, Math.round(fraction * 100)));
+  const left = duration > 0 ? remainingPretty(duration * (1 - fraction)) : "";
+  return { progress: pct, timeLeftLabel: left ? `${left} left` : undefined };
+}
+
 // Pure mapper: personalized shelves + server creds -> home-row widget rows.
 // Keeps only book-like shelves that have a stable id, a label, and at least one
-// openable item. Exported for unit testing.
+// openable item. Exported for unit testing. `mediaProgress` (keyed by item id)
+// drives the per-item progress bar + time-left label.
 export function buildHomeRows(
   shelves: any[],
   serverAddress: string,
-  token: string
+  token: string,
+  mediaProgress?: Record<string, any>
 ): HomeRow[] {
   if (!Array.isArray(shelves)) return [];
   const server = (serverAddress || "").replace(/\/$/, "");
@@ -79,6 +121,7 @@ export function buildHomeRows(
         title,
         author: authorOf(e),
         coverUrl: coverUrlFor(e, server, token),
+        ...progressFieldsFor(itemId, mediaProgress),
       });
     }
     if (items.length === 0) continue;
@@ -97,7 +140,12 @@ function rowsSignature(rows: HomeRow[]): string {
     .map(
       (r) =>
         `${r.id}:${r.label}:${r.items
-          .map((i) => `${i.id}~${i.title}~${i.author || ""}~${i.coverUrl || ""}`)
+          .map(
+            (i) =>
+              `${i.id}~${i.title}~${i.author || ""}~${i.coverUrl || ""}~${
+                i.progress || 0
+              }~${i.timeLeftLabel || ""}`
+          )
           .join(",")}`
     )
     .join("|");
@@ -117,7 +165,13 @@ export function mirrorHomeRows(): void {
 
     const { storageHelper } = require("./storage");
     const cfg = storageHelper.getServerConfig?.();
-    const rows = buildHomeRows(shelves, cfg?.address || "", cfg?.token || "");
+    // Per-item progress from the user's cached media progress drives the widget's
+    // progress bar + "… left" label. Read lazily (avoids a module-load cycle).
+    const {
+      useUserStore,
+    } = require("../store/useUserStore") as typeof import("../store/useUserStore");
+    const mediaProgress = useUserStore.getState().mediaProgress || {};
+    const rows = buildHomeRows(shelves, cfg?.address || "", cfg?.token || "", mediaProgress);
 
     const sig = rowsSignature(rows);
     if (sig === lastSignature) return;

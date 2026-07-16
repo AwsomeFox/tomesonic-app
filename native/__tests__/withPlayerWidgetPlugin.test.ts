@@ -25,8 +25,6 @@ const norm = (s: string) => s.replace(/\s+/g, " ");
 // Load-bearing lines the widget's behavior depends on.
 const READS_STATE_FILE = `File(context.filesDir, "widget_state.json")`;
 const TMP_FALLBACK = `if (!f.exists()) f = File(context.filesDir, "widget_state.json.tmp")`;
-const MEDIA_BUTTON = `Intent(Intent.ACTION_MEDIA_BUTTON)`;
-const PLAY_PAUSE_KEY = `KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE`;
 const MUSIC_SERVICE = `com.doublesymmetry.trackplayer.service.MusicService`;
 
 describe("withPlayerWidget plugin ↔ committed mini-player provider stay in sync", () => {
@@ -41,18 +39,25 @@ describe("withPlayerWidget plugin ↔ committed mini-player provider stay in syn
     }
   });
 
-  it("both wire the play/pause button to a MEDIA_BUTTON intent for the MusicService", () => {
+  it("both wire the play/pause button to a WIDGET_PLAY_PAUSE service action for the MusicService", () => {
+    // Media-button intents to a background service are ignored on Android 13+,
+    // so the button fires an explicit service action routed to the Media3 player.
     for (const src of [plugin, provider]) {
-      expect(src).toContain(MEDIA_BUTTON);
-      expect(src).toContain(PLAY_PAUSE_KEY);
+      expect(src).toContain(`WIDGET_PLAY_PAUSE`);
       expect(src).toContain(MUSIC_SERVICE);
+      // The dead-on-13+ media-button path must be gone.
+      expect(src).not.toContain(`Intent(Intent.ACTION_MEDIA_BUTTON)`);
     }
   });
 
-  it("the layout referenced by the provider is committed and has the cover/title/play-pause views", () => {
-    for (const id of ["mini_root", "mini_cover", "mini_title", "mini_author", "mini_play_pause"]) {
+  it("the layout referenced by the provider is committed and has the cover/title/play-pause/progress views", () => {
+    for (const id of ["mini_root", "mini_cover", "mini_title", "mini_author", "mini_play_pause", "mini_progress"]) {
       expect(layout).toContain(`@+id/${id}`);
       expect(provider).toContain(`R.id.${id}`);
+    }
+    // The mini card carries a real progress line driven by position/duration.
+    for (const src of [plugin, provider]) {
+      expect(src).toContain(`setProgressBar(R.id.mini_progress`);
     }
   });
 
@@ -86,16 +91,17 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     }
   });
 
-  it("wires play/pause + jumps via MEDIA_BUTTON and chapter prev/next via WIDGET_CHAPTER_* service actions", () => {
-    // The plugin template uses ${PACKAGE}.WIDGET_CHAPTER_*, the committed
-    // provider the resolved com.tomesonic.app.WIDGET_CHAPTER_* — check the
-    // package-independent suffix so both match.
+  it("wires every transport control via explicit WIDGET_* service actions (no dead media-button intents)", () => {
+    // All five transport buttons fire package-suffixed service actions that
+    // MusicService routes straight to the Media3 player / chapter navigation —
+    // the media-button-to-background-service path is dead on Android 13+.
     for (const src of [plugin, provider]) {
-      expect(src).toContain(MEDIA_BUTTON);
-      expect(src).toContain(`KeyEvent.KEYCODE_MEDIA_REWIND`);
-      expect(src).toContain(`KeyEvent.KEYCODE_MEDIA_FAST_FORWARD`);
+      expect(src).toContain(`WIDGET_PLAY_PAUSE`);
+      expect(src).toContain(`WIDGET_JUMP_BACK`);
+      expect(src).toContain(`WIDGET_JUMP_FORWARD`);
       expect(src).toContain(`WIDGET_CHAPTER_PREV`);
       expect(src).toContain(`WIDGET_CHAPTER_NEXT`);
+      expect(src).not.toContain(`Intent(Intent.ACTION_MEDIA_BUTTON)`);
     }
   });
 
@@ -106,6 +112,8 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
       "full_title",
       "full_author",
       "full_progress",
+      "full_elapsed",
+      "full_remaining",
       "full_chapter_prev",
       "full_jump_back",
       "full_play_pause",
@@ -114,6 +122,11 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     ]) {
       expect(layout).toContain(`@+id/${id}`);
       expect(provider).toContain(`R.id.${id}`);
+    }
+    // Elapsed / -remaining clock labels match the in-app player's scrubber.
+    for (const src of [plugin, provider]) {
+      expect(src).toContain(`setTextViewText(R.id.full_elapsed, formatClock(position))`);
+      expect(src).toContain(`formatClock((duration - position)`);
     }
   });
 
@@ -157,7 +170,7 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     expect(plugin).toContain(`android:progressTint="#86D6BF"`);
   });
 
-  it("the RNTP patch routes the WIDGET_CHAPTER_* actions to chapter navigation events (by applicationId-agnostic suffix)", () => {
+  it("the RNTP patch routes the WIDGET_* actions to the Media3 player / chapter nav (by applicationId-agnostic suffix)", () => {
     const patch = readFileSync(
       join(ROOT, "patches/react-native-track-player+5.0.0-alpha0.patch"),
       "utf8"
@@ -167,5 +180,12 @@ describe("withPlayerWidget plugin ↔ committed FULL-player provider stay in syn
     expect(patch).toContain(`endsWith(".WIDGET_CHAPTER_PREV")`);
     expect(patch).toContain(`BUTTON_SKIP_NEXT`);
     expect(patch).toContain(`BUTTON_SKIP_PREVIOUS`);
+    // Transport buttons go straight to the player (works on Android 13+, unlike
+    // the media-button intents the widget used to send).
+    expect(patch).toContain(`endsWith(".WIDGET_PLAY_PAUSE")`);
+    expect(patch).toContain(`endsWith(".WIDGET_JUMP_FORWARD")`);
+    expect(patch).toContain(`endsWith(".WIDGET_JUMP_BACK")`);
+    expect(patch).toContain(`player.forwardingPlayer.seekForward()`);
+    expect(patch).toContain(`player.forwardingPlayer.seekBack()`);
   });
 });

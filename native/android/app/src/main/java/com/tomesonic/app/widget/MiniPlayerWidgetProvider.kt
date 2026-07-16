@@ -9,7 +9,6 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.TypedValue
-import android.view.KeyEvent
 import android.widget.RemoteViews
 import org.json.JSONObject
 import java.io.File
@@ -17,8 +16,8 @@ import com.tomesonic.app.R
 
 // Mini-player home-screen widget. onUpdate reads the current book from
 // filesDir/widget_state.json (cover/title/isPlaying), renders the compact card,
-// wires the play/pause button to a MEDIA_BUTTON intent for the MusicService,
-// and a card tap to launch the app.
+// wires the play/pause button to a WIDGET_PLAY_PAUSE service action routed to
+// the Media3 player, and a card tap to launch the app.
 class MiniPlayerWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         for (id in ids) updateWidget(context, mgr, id)
@@ -30,6 +29,8 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
         var author = "Tap to resume listening"
         var isPlaying = false
         var coverPath = ""
+        var position = 0
+        var duration = 0
         try {
             // JS swaps this file via delete-then-rename — if a widget update
             // lands in that gap, the fully-written .tmp still holds the state.
@@ -43,12 +44,18 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
                 if (a.isNotEmpty()) author = a
                 isPlaying = o.optBoolean("isPlaying", false)
                 coverPath = o.optString("coverPath")
+                position = o.optInt("position", 0)
+                duration = o.optInt("duration", 0)
             }
         } catch (e: Exception) {
             // Fall back to defaults.
         }
         views.setTextViewText(R.id.mini_title, title)
         views.setTextViewText(R.id.mini_author, author)
+
+        // Thin progress line under the card (clamped like the full widget).
+        val progMax = if (duration > 0) duration else 100
+        views.setProgressBar(R.id.mini_progress, progMax, position.coerceIn(0, progMax), false)
 
         // Cover: decode the locally-cached cover file (app-private, same UID) to
         // a DOWNSAMPLED bitmap sized for the widget. Decoding the full-size
@@ -84,24 +91,21 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
         )
         views.setContentDescription(R.id.mini_play_pause, if (isPlaying) "Pause" else "Play")
 
-        // Play/pause button → MEDIA_BUTTON to the MusicService (the same surface
-        // hardware/BT play-pause keys use; headless-safe — resumes the last
-        // session if nothing is loaded).
+        // Play/pause button → explicit WIDGET_PLAY_PAUSE service action, which
+        // MusicService routes straight to the Media3 player in onStartCommand. A
+        // MEDIA_BUTTON intent to a background service is ignored on Android 13+
+        // (and blocked by FGS-start rules), which is why the old button was dead.
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        val mediaIntent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+        val ppIntent = Intent("${context.packageName}.WIDGET_PLAY_PAUSE").apply {
             component = ComponentName(
                 context.packageName,
                 "com.doublesymmetry.trackplayer.service.MusicService"
             )
-            putExtra(
-                Intent.EXTRA_KEY_EVENT,
-                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
-            )
         }
         val playPausePi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.getForegroundService(context, 1, mediaIntent, flags)
+            PendingIntent.getForegroundService(context, 1, ppIntent, flags)
         } else {
-            PendingIntent.getService(context, 1, mediaIntent, flags)
+            PendingIntent.getService(context, 1, ppIntent, flags)
         }
         views.setOnClickPendingIntent(R.id.mini_play_pause, playPausePi)
 

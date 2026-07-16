@@ -9,7 +9,6 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.TypedValue
-import android.view.KeyEvent
 import android.widget.RemoteViews
 import org.json.JSONObject
 import java.io.File
@@ -71,17 +70,27 @@ class FullPlayerWidgetProvider : AppWidgetProvider() {
         val progMax = if (duration > 0) duration else 100
         views.setProgressBar(R.id.full_progress, progMax, position.coerceIn(0, progMax), false)
 
+        // Elapsed (left) / -remaining (right) time labels, matching the in-app
+        // player's scrubber labels. Remaining is blank until a duration is known.
+        views.setTextViewText(R.id.full_elapsed, formatClock(position))
+        views.setTextViewText(
+            R.id.full_remaining,
+            if (duration > 0) "-" + formatClock((duration - position).coerceAtLeast(0)) else ""
+        )
+
         views.setImageViewResource(
             R.id.full_play_pause,
             if (isPlaying) R.drawable.ic_widget_pause else R.drawable.ic_widget_play
         )
         views.setContentDescription(R.id.full_play_pause, if (isPlaying) "Pause" else "Play")
 
-        // play/pause + jumps → MEDIA_BUTTON to the service (same surface hardware
-        // keys use). Chapter prev/next → explicit WIDGET_CHAPTER_* service actions.
-        views.setOnClickPendingIntent(R.id.full_play_pause, mediaKeyPI(context, 1, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
-        views.setOnClickPendingIntent(R.id.full_jump_back, mediaKeyPI(context, 2, KeyEvent.KEYCODE_MEDIA_REWIND))
-        views.setOnClickPendingIntent(R.id.full_jump_fwd, mediaKeyPI(context, 3, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))
+        // All transport → explicit WIDGET_* service actions, which MusicService
+        // routes straight to the Media3 player in onStartCommand. (MEDIA_BUTTON
+        // intents to a background service are ignored on Android 13+ and blocked
+        // by FGS-start rules, which is why the old buttons did nothing.)
+        views.setOnClickPendingIntent(R.id.full_play_pause, actionPI(context, 1, "${context.packageName}.WIDGET_PLAY_PAUSE"))
+        views.setOnClickPendingIntent(R.id.full_jump_back, actionPI(context, 2, "${context.packageName}.WIDGET_JUMP_BACK"))
+        views.setOnClickPendingIntent(R.id.full_jump_fwd, actionPI(context, 3, "${context.packageName}.WIDGET_JUMP_FORWARD"))
         views.setOnClickPendingIntent(R.id.full_chapter_prev, actionPI(context, 4, "${context.packageName}.WIDGET_CHAPTER_PREV"))
         views.setOnClickPendingIntent(R.id.full_chapter_next, actionPI(context, 5, "${context.packageName}.WIDGET_CHAPTER_NEXT"))
 
@@ -93,23 +102,23 @@ class FullPlayerWidgetProvider : AppWidgetProvider() {
         mgr.updateAppWidget(id, views)
     }
 
-    private fun mediaKeyPI(context: Context, req: Int, keyCode: Int): PendingIntent {
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        val intent = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
-            component = ComponentName(context.packageName, SERVICE)
-            putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-        }
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            PendingIntent.getForegroundService(context, req, intent, flags)
-        else PendingIntent.getService(context, req, intent, flags)
-    }
-
     private fun actionPI(context: Context, req: Int, action: String): PendingIntent {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val intent = Intent(action).apply { component = ComponentName(context.packageName, SERVICE) }
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             PendingIntent.getForegroundService(context, req, intent, flags)
         else PendingIntent.getService(context, req, intent, flags)
+    }
+
+    // Seconds -> H:MM:SS (or M:SS under an hour), matching the in-app player's
+    // secondsToTimestamp so the widget's clock reads identically.
+    private fun formatClock(totalSeconds: Int): String {
+        val s = if (totalSeconds < 0) 0 else totalSeconds
+        val h = s / 3600
+        val m = (s % 3600) / 60
+        val sec = s % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, sec)
+        else String.format("%d:%02d", m, sec)
     }
 
     private fun decodeSampledCover(path: String, reqPx: Int): android.graphics.Bitmap? {
