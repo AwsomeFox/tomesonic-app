@@ -112,4 +112,52 @@ describe("buildHomeRows", () => {
       `https://abs.example.com/api/items/b1/cover?width=400&format=webp&token=${TOKEN}`
     );
   });
+
+  describe("per-item progress + time-left", () => {
+    const shelf = [
+      { id: "cl", label: "Continue Listening", type: "book", entities: [bookEntity("b1", "T")] },
+    ];
+
+    it("emits progress percent + a compact '… left' label for an in-progress book", () => {
+      // 25% through a 4h (14400s) book → 3h 0m left.
+      const mp = { b1: { progress: 0.25, duration: 14400, currentTime: 3600 } };
+      const item = buildHomeRows(shelf, SERVER, TOKEN, mp)[0].items[0];
+      expect(item.progress).toBe(25);
+      expect(item.timeLeftLabel).toBe("3h 0m left");
+    });
+
+    it("falls back to currentTime/duration when the server progress field is absent", () => {
+      const mp = { b1: { duration: 3600, currentTime: 1800 } }; // 50%, 30m left
+      const item = buildHomeRows(shelf, SERVER, TOKEN, mp)[0].items[0];
+      expect(item.progress).toBe(50);
+      expect(item.timeLeftLabel).toBe("30m left");
+    });
+
+    it("omits progress/label for unstarted, finished, or unknown books", () => {
+      for (const mp of [
+        undefined,
+        {},
+        { b1: { progress: 0, duration: 3600 } },
+        { b1: { progress: 1, duration: 3600 } },
+        { b1: { isFinished: true, progress: 0.5, duration: 3600 } },
+      ]) {
+        const item = buildHomeRows(shelf, SERVER, TOKEN, mp as any)[0].items[0];
+        expect(item.progress).toBeUndefined();
+        expect(item.timeLeftLabel).toBeUndefined();
+      }
+    });
+
+    it("clamps a just-started book to 1% (never 0, which hides the bar)", () => {
+      const mp = { b1: { progress: 0.001, duration: 36000, currentTime: 36 } };
+      const item = buildHomeRows(shelf, SERVER, TOKEN, mp)[0].items[0];
+      expect(item.progress).toBe(1);
+    });
+
+    it("drops the label (but keeps the bar) when duration is unknown", () => {
+      const mp = { b1: { progress: 0.4 } };
+      const item = buildHomeRows(shelf, SERVER, TOKEN, mp)[0].items[0];
+      expect(item.progress).toBe(40);
+      expect(item.timeLeftLabel).toBeUndefined();
+    });
+  });
 });

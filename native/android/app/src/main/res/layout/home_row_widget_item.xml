@@ -39,5 +39,27 @@
             android:ellipsize="end"
             android:textColor="#CFEDE4"
             android:textSize="12sp" />
+
+        <ProgressBar
+            android:id="@+id/homerow_item_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="5dp"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="#86D6BF"
+            android:progressBackgroundTint="#4CFFFFFF"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/homerow_item_timeleft"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:maxLines="1"
+            android:textColor="#86D6BF"
+            android:textSize="11sp"
+            android:visibility="gone" />
     </LinearLayout>
 </LinearLayout>

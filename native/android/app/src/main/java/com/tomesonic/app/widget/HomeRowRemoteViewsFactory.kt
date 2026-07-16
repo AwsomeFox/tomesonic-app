@@ -77,6 +77,24 @@ class HomeRowRemoteViewsFactory(
         views.setTextViewText(R.id.homerow_item_author, author)
         views.setContentDescription(R.id.homerow_item_cover, title)
 
+        // Progress + "Xh Ym left" for in-progress books (JS writes progress 1..99
+        // and a preformatted label; both are absent/0 for unstarted or finished
+        // items, which stay hidden — matching the app's Continue-listening rows).
+        val progress = it.optInt("progress", 0)
+        val timeLeft = it.optString("timeLeftLabel")
+        if (progress in 1..100) {
+            views.setProgressBar(R.id.homerow_item_progress, 100, progress, false)
+            views.setViewVisibility(R.id.homerow_item_progress, android.view.View.VISIBLE)
+        } else {
+            views.setViewVisibility(R.id.homerow_item_progress, android.view.View.GONE)
+        }
+        if (timeLeft.isNotEmpty()) {
+            views.setTextViewText(R.id.homerow_item_timeleft, timeLeft)
+            views.setViewVisibility(R.id.homerow_item_timeleft, android.view.View.VISIBLE)
+        } else {
+            views.setViewVisibility(R.id.homerow_item_timeleft, android.view.View.GONE)
+        }
+
         val bmp = loadCover(it.optString("coverUrl"))
         if (bmp != null) views.setImageViewBitmap(R.id.homerow_item_cover, bmp)
         else views.setImageViewResource(R.id.homerow_item_cover, R.mipmap.ic_launcher)

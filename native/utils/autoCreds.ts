@@ -93,6 +93,10 @@ export interface HomeRowItem {
   author?: string;
   /** Full cover URL WITH token — the widget factory fetches + downsamples it. */
   coverUrl?: string;
+  /** In-progress percent 1..99 (absent/0 = unstarted or finished → no bar). */
+  progress?: number;
+  /** Preformatted remaining time, e.g. "3h 20m left" (absent → no label). */
+  timeLeftLabel?: string;
 }
 export interface HomeRow {
   /** Stable shelf id (the personalized shelf's id) the config screen persists. */

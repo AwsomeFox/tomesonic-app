@@ -109,10 +109,24 @@ describe("committed home-row layouts have every view the providers reference", (
     }
   });
 
-  it("the item layout has root/cover/title/author views", () => {
-    for (const id of ["homerow_item_root", "homerow_item_cover", "homerow_item_title", "homerow_item_author"]) {
+  it("the item layout has root/cover/title/author/progress/time-left views", () => {
+    for (const id of [
+      "homerow_item_root",
+      "homerow_item_cover",
+      "homerow_item_title",
+      "homerow_item_author",
+      "homerow_item_progress",
+      "homerow_item_timeleft",
+    ]) {
       expect(item).toContain(`@+id/${id}`);
       expect(factory).toContain(`R.id.${id}`);
+    }
+    // The factory drives the progress bar + label from the item's progress /
+    // timeLeftLabel fields (the app's Continue-listening rows show time left).
+    const pluginSrc = read(PLUGIN);
+    for (const src of [pluginSrc, factory]) {
+      expect(src).toContain(`setProgressBar(R.id.homerow_item_progress`);
+      expect(src).toContain(`optString("timeLeftLabel")`);
     }
   });
 });
