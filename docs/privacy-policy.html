@@ -157,14 +157,17 @@
     <h2>3. Data stored on your device</h2>
     <div class="no-collect-list">
         <ul>
-            <li><strong>Encrypted (OS keystore–backed):</strong> your server address, username, and access/refresh tokens; any RMAB configuration.</li>
+            <li><strong>Encrypted at rest (normally OS keystore–backed):</strong> your server address, username, and access/refresh tokens, and any RMAB configuration. If the device keystore is unavailable, the app falls back to unencrypted app-private storage so it still launches.</li>
             <li><strong>Unencrypted app storage:</strong> app settings, UI state, and a cache of your listening progress.</li>
-            <li><strong>App files:</strong> audiobooks you download and cached cover art, in the app's private storage — removed when you uninstall.</li>
+            <li><strong>App files:</strong> audiobooks you download and cached cover art, in the app's private storage.</li>
         </ul>
     </div>
-    <p>On-device data is cleared when you log out. Diagnostic logs are stored
-    locally with secrets (tokens/credentials) redacted, and are not transmitted
-    unless crash reporting is enabled.</p>
+    <p>When you log out, your credentials and session are cleared and your
+    downloads stop being shown. <strong>Downloaded audiobooks and cached cover art
+    remain in the app's private storage</strong> until you remove them in the app
+    or uninstall it. Diagnostic logs are stored locally with secrets
+    (tokens/credentials) redacted, and are not transmitted unless crash reporting
+    is enabled.</p>
 
     <h2>4. App permissions</h2>
     <div class="permission-item">
