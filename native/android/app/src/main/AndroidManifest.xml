@@ -1,7 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:replace="android:maxSdkVersion"/>
-  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <!-- SYSTEM_ALERT_WINDOW (draw-over-other-apps) is contributed by React
+       Native's dev overlay and is NOT used by any app code (the only
+       WindowManager reference is a rotation-animation LayoutParams constant, not
+       an overlay window). Overlay permissions draw extra Play review scrutiny,
+       so strip it from the merged release manifest. -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" tools:node="remove"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:replace="android:maxSdkVersion"/>
   <!-- expo-sensors' library manifest contributes ACTIVITY_RECOGNITION for its
