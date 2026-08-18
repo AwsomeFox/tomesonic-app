@@ -192,7 +192,7 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     for (let i = MAX_CAR_TILE_ITEMS; i < total; i++) expect(tracks[i].localArtworkSmall).toBeUndefined();
   });
 
-  it("stamps bytes onto the ACTIVE chapter item on the first tick", async () => {
+  it("stamps bytes onto the ACTIVE chapter item AND pre-stamps the NEXT one on the first tick", async () => {
     await prepareChapterBook();
     jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
     usePlaybackStore.setState({ isPlaying: true });
@@ -205,13 +205,20 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
       0,
       expect.objectContaining({ localArtwork: COVER })
     );
+    // LOOK-AHEAD: chapter 1 is pre-stamped with the same bytes (and its own
+    // intrinsic title) so the auto-advance transition lands on an item that
+    // already looks right — the now-playing artwork never flaps at a boundary.
+    expect(TrackPlayer.updateMetadataForTrack).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ localArtwork: COVER, title: "Chapter 2" })
+    );
   });
 
-  it("MOVES the bytes on chapter change: clears the old item, stamps the new one", async () => {
+  it("slides the byte window on chapter change: strips the old item, pre-stamps the upcoming one, does NOT rewrite the new active item", async () => {
     await prepareChapterBook();
     usePlaybackStore.setState({ isPlaying: true });
 
-    // Tick on chapter 0 first so the persister marks index 0 as the byte holder.
+    // Tick on chapter 0 first so the window is {0 active, 1 pre-stamped}.
     jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
     await jest.advanceTimersByTimeAsync(1000);
 
@@ -226,9 +233,50 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     const clear = calls.find((c) => c[0] === 0);
     expect(clear).toBeDefined();
     expect((clear![1] as any).localArtwork).toBe("");
-    // New active item (1) got the bytes.
-    const set = calls.find((c) => c[0] === 1);
-    expect(set).toBeDefined();
-    expect((set![1] as any).localArtwork).toBe(COVER);
+    // The NEW active item (1) was pre-stamped on the previous tick and is NOT
+    // rewritten at the boundary — that rewrite was one of the two per-chapter
+    // queue re-broadcasts implicated in Bluetooth-stack crashes in cars.
+    expect(calls.find((c) => c[0] === 1)).toBeUndefined();
+    // The upcoming chapter (2) is pre-stamped with the bytes instead.
+    const next = calls.find((c) => c[0] === 2);
+    expect(next).toBeDefined();
+    expect((next![1] as any).localArtwork).toBe(COVER);
+  });
+
+  it("does NO metadata writes at chapter changes for a STREAMING chapter-queue book (no local bytes)", async () => {
+    // A streaming book has no local cover file at prepare (carArtworkLocal is
+    // only populated later by cacheNowPlayingCoverLocally) — the queue items
+    // already carry their intrinsic chapter titles and the artworkUri, so a
+    // chapter change has NOTHING to rewrite. The old code re-wrote identical
+    // metadata twice per chapter anyway (two full queue re-broadcasts to
+    // Android Auto + Bluetooth AVRCP, for nothing).
+    useDownloadStore.setState({ completedDownloads: {} });
+    // Keep the fire-and-forget cover cache from minting a local file — this
+    // test is about the window BEFORE any local bytes exist.
+    const FileSystem = require("expo-file-system/legacy");
+    jest.mocked(FileSystem.downloadAsync).mockRejectedValueOnce(new Error("offline"));
+    await usePlaybackStore.getState().preparePlaybackSession(
+      {
+        id: "sess1",
+        libraryItemId: "item1",
+        displayTitle: "The Hobbit",
+        displayAuthor: "Tolkien",
+        duration: 300,
+        currentTime: 0,
+        chapters: CHAPTERS,
+        audioTracks: [{ index: 0, contentUrl: "/f0.mp3", duration: 300, startOffset: 0 }],
+      },
+      false
+    );
+    expect(usePlaybackStore.getState().chapterQueue).toBe(true);
+    usePlaybackStore.setState({ isPlaying: true });
+    jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
+
+    jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
+    await jest.advanceTimersByTimeAsync(1000);
+    jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(1);
+    await jest.advanceTimersByTimeAsync(1000);
+
+    expect(TrackPlayer.updateMetadataForTrack).not.toHaveBeenCalled();
   });
 });

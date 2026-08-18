@@ -435,6 +435,16 @@ export default function SettingsScreen({ navigation, route }: any) {
         <Divider colors={colors} />
 
         <ToggleRow
+          icon="car"
+          title="Car compatibility mode"
+          subtitle="If Bluetooth cuts out in your car while listening, this plays books with simpler metadata (no chapter list or chapter titles in the car). Takes effect the next time a book starts."
+          value={!!settings.carCompatibilityMode}
+          onValueChange={(v) => set({ carCompatibilityMode: v })}
+          colors={colors}
+        />
+        <Divider colors={colors} />
+
+        <ToggleRow
           icon="auto-stories"
           title="Show book progress bar"
           subtitle="Display full book progress bar in the player"

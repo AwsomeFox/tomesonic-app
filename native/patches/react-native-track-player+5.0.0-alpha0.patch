@@ -1,5 +1,5 @@
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
-index 5a1b2bf..93032a9 100644
+index 5a1b2bf..0066850 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/models/AudioItem.kt
 @@ -14,7 +14,29 @@ open class AudioItem(
@@ -33,7 +33,7 @@ index 5a1b2bf..93032a9 100644
  ) {
      fun toMediaItem(): MediaItem {
          val extras = Bundle().apply {
-@@ -30,24 +52,163 @@ open class AudioItem(
+@@ -30,24 +52,182 @@ open class AudioItem(
              putString("type", type.toString())
              putString("uri", audioUrl)
          }
@@ -72,8 +72,17 @@ index 5a1b2bf..93032a9 100644
 +        // `localArtwork ?: artwork` preserves single-source callers; the LARGE
 +        // bytes win when present, else fall back to the TINY per-item bytes.
 +        val bigSource = (localArtwork ?: artwork)?.ifEmpty { null }
++        // TINY per-row bytes exist ONLY for Android Auto's queue-row icons —
++        // no other surface reads an inactive item's artworkData. Until a car
++        // UI controller actually connects (carControllerSeen, latched by
++        // MusicService.onConnect), inlining them just fattens every queue
++        // item that the Bluetooth AVRCP service must mirror to a plain-BT car
++        // head unit, for zero visible benefit. When Android Auto connects
++        // mid-session, JS re-stamps the rows (see the connector-connected
++        // handler in the app's playbackService).
++        val smallSource = if (carControllerSeen) localArtworkSmall?.ifEmpty { null } else null
 +        val bytes = localArtworkBytes(bigSource, 512)
-+            ?: localArtworkBytes(localArtworkSmall?.ifEmpty { null }, 128)
++            ?: localArtworkBytes(smallSource, 128)
 +        bytes?.let {
 +            mdBuilder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
 +        }
@@ -105,6 +114,16 @@ index 5a1b2bf..93032a9 100644
 +        @Volatile
 +        @JvmStatic
 +        var appContext: android.content.Context? = null
++
++        // True once ANY car UI controller (Android Auto / Automotive) has
++        // connected to the media session this process — latched by
++        // MusicService.onConnect, never cleared (AA rebind churn). Gates the
++        // TINY per-row artworkData tier in toMediaItem: phone-only and
++        // plain-Bluetooth sessions keep queue items byte-free so the AVRCP
++        // mirror of the queue stays lean.
++        @Volatile
++        @JvmStatic
++        var carControllerSeen: Boolean = false
 +
 +        // content:// uris resolved for a local path, cached so a chaptered book
 +        // (one cover, many queue items) does a single FileProvider round-trip.
@@ -202,6 +221,57 @@ index 5a1b2bf..93032a9 100644
      }
  }
  
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/QueuedAudioPlayer.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/QueuedAudioPlayer.kt
+index dd4bd40..f869b5a 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/QueuedAudioPlayer.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/QueuedAudioPlayer.kt
+@@ -237,6 +237,46 @@ class QueuedAudioPlayer(
+         exoPlayer.replaceMediaItem(index, mediaItem)
+     }
+ 
++    /**
++     * Replace several items in as FEW ExoPlayer timeline updates as possible.
++     * Every timeline update re-broadcasts the whole legacy queue to external
++     * controllers — Android Auto rebuilds its now-playing template, and the
++     * Bluetooth stack's AVRCP service invalidates its Now Playing list (some
++     * head units then re-fetch every item). A chapter boundary needs TWO item
++     * rewrites (stamp the new byte holder, strip the old one); issued as
++     * separate replaceMediaItem calls that was two full queue re-broadcasts
++     * per chapter. Group the updates instead: indices within a small gap are
++     * merged into ONE replaceMediaItems range, re-using the exact existing
++     * MediaItem instance for untouched gap items (identical instances update
++     * in place without interrupting playback — this is safe even when the gap
++     * item is the one currently playing).
++     */
++    fun replaceItems(replacements: List<Pair<Int, AudioItem>>) {
++        if (replacements.isEmpty()) return
++        val sorted = replacements
++            .filter { it.first >= 0 && it.first < queue.size }
++            .sortedBy { it.first }
++        if (sorted.isEmpty()) return
++        // Bridge at most this many untouched items to keep two updates in one
++        // range. 2 covers the chapter-boundary shapes (strip N-1 / stamp N+1
++        // around an untouched active N) without ever rebuilding long runs.
++        val maxGap = 2
++        var i = 0
++        while (i < sorted.size) {
++            var j = i
++            while (j + 1 < sorted.size && sorted[j + 1].first - sorted[j].first <= maxGap + 1) j++
++            val start = sorted[i].first
++            val end = sorted[j].first
++            val byIndex = sorted.subList(i, j + 1).associate { it.first to it.second }
++            val items = (start..end).map { idx ->
++                byIndex[idx]?.toMediaItem() ?: queue[idx]
++            }
++            items.forEachIndexed { k, item -> queue[start + k] = item }
++            exoPlayer.replaceMediaItems(start, end + 1, items)
++            i = j + 1
++        }
++    }
++
+     /**
+      * Removes all the upcoming items, if any (the ones returned by [next]).
+      */
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt
 index f8b9ca1..30df26d 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/kotlinaudio/players/components/MediaFactory.kt
@@ -318,10 +388,43 @@ index d6e3483..5c2efa8 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork, localArtworkSmall)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-index 13a6c60..a46fe7f 100644
+index 13a6c60..7fd825e 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-@@ -433,6 +433,30 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
+@@ -323,6 +323,32 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
+         callback.resolve(null)
+     }
+ 
++    // Batched metadata rewrite: [{index, metadata}, ...] applied through ONE
++    // native call and as few ExoPlayer timeline updates as possible (see
++    // MusicService.updateMetadataForTracks). Out-of-range indices are skipped
++    // rather than rejected — a batch is typically stamped from a 1s progress
++    // tick racing queue rebuilds, and failing the whole batch for one stale
++    // index would strand the valid rewrites in it.
++    override fun updateMetadataForTracks(updates: ReadableArray?, callback: Promise) = launchInScope {
++        if (verifyServiceBoundOrReject(callback)) return@launchInScope
++
++        val list = mutableListOf<Pair<Int, Bundle>>()
++        val size = updates?.size() ?: 0
++        for (i in 0 until size) {
++            val entry = updates?.getMap(i) ?: continue
++            if (!entry.hasKey("index") || entry.isNull("index")) continue
++            val index = entry.getInt("index")
++            if (index < 0 || index >= musicService.tracks.size) continue
++            val meta = entry.getMap("metadata") ?: continue
++            Arguments.toBundle(meta)?.let { list.add(index to it) }
++        }
++        if (list.isNotEmpty()) {
++            musicService.updateMetadataForTracks(list)
++        }
++
++        callback.resolve(null)
++    }
++
+     override fun updateNowPlayingMetadata(map: ReadableMap?, callback: Promise) = launchInScope {
+         if (verifyServiceBoundOrReject(callback)) return@launchInScope
+ 
+@@ -433,6 +459,30 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
          callback.resolve(null)
      }
  
@@ -353,7 +456,7 @@ index 13a6c60..a46fe7f 100644
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index b495b5a..74cd936 100644
+index b495b5a..ee3046f 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 @@ -14,11 +14,13 @@ import android.view.KeyEvent
@@ -2326,7 +2429,32 @@ index b495b5a..74cd936 100644
      }
  
      @MainThread
-@@ -515,6 +2332,237 @@ class MusicService : HeadlessJsMediaService() {
+@@ -495,6 +2312,24 @@ class MusicService : HeadlessJsMediaService() {
+         }
+     }
+ 
++    @MainThread
++    fun updateMetadataForTracks(updates: List<Pair<Int, Bundle>>) {
++        // Batched variant of updateMetadataForTrack: all rewrites land through
++        // ONE QueuedAudioPlayer.replaceItems call, which merges neighbouring
++        // indices into a single ExoPlayer timeline update. Each timeline
++        // update re-broadcasts the whole legacy queue to Android Auto AND the
++        // Bluetooth AVRCP service — per-chapter stamp+strip as two separate
++        // calls doubled that broadcast storm (implicated in Bluetooth-stack
++        // crashes on some car head units).
++        val replacements = updates.mapNotNull { (index, bundle) ->
++            tracks.getOrNull(index)?.let { track ->
++                track.setMetadata(reactContext, bundle, 0)
++                index to track.toAudioItem()
++            }
++        }
++        player.replaceItems(replacements)
++    }
++
+     @MainThread
+     fun updateNowPlayingMetadata(bundle: Bundle) {
+         updateMetadataForTrack(player.currentIndex, bundle)
+@@ -515,6 +2350,237 @@ class MusicService : HeadlessJsMediaService() {
              }
          }
          emit(MusicEvents.PLAYBACK_ACTIVE_TRACK_CHANGED, bundle)
@@ -2564,7 +2692,7 @@ index b495b5a..74cd936 100644
      }
  
      private fun emitQueueEndedEvent() {
-@@ -717,7 +2765,7 @@ class MusicService : HeadlessJsMediaService() {
+@@ -717,7 +2783,7 @@ class MusicService : HeadlessJsMediaService() {
          onUnbind(rootIntent)
          Timber.d("isInitialized = ${::player.isInitialized}, appKilledPlaybackBehavior = $appKilledPlaybackBehavior")
          if (!::player.isInitialized) {
@@ -2573,7 +2701,7 @@ index b495b5a..74cd936 100644
              return
          }
  
-@@ -780,8 +2828,14 @@ class MusicService : HeadlessJsMediaService() {
+@@ -780,8 +2846,14 @@ class MusicService : HeadlessJsMediaService() {
          return false
      }
  
@@ -2589,7 +2717,7 @@ index b495b5a..74cd936 100644
          return mediaSession
      }
  
-@@ -792,13 +2846,49 @@ class MusicService : HeadlessJsMediaService() {
+@@ -792,13 +2864,49 @@ class MusicService : HeadlessJsMediaService() {
  
      @MainThread
      override fun onDestroy() {
@@ -2641,7 +2769,7 @@ index b495b5a..74cd936 100644
          super.onDestroy()
      }
  
-@@ -831,24 +2921,44 @@ class MusicService : HeadlessJsMediaService() {
+@@ -831,24 +2939,44 @@ class MusicService : HeadlessJsMediaService() {
                      true
                  }
  
@@ -2652,11 +2780,6 @@ index b495b5a..74cd936 100644
 -
 -                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
 -                    emit(MusicEvents.BUTTON_SKIP_PREVIOUS)
--                    true
--                }
--
--                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
--                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
 -                    true
 +                // The car steering-wheel / console FF/RW / next+previous transport
 +                // keys seek by the user's configured jump increment, NOT to the
@@ -2688,6 +2811,11 @@ index b495b5a..74cd936 100644
 +                    } else null
                  }
  
+-                KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD, KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
+-                    emit(MusicEvents.BUTTON_JUMP_FORWARD)
+-                    true
+-                }
+-
 -                KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD, KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
 -                    emit(MusicEvents.BUTTON_JUMP_BACKWARD)
 -                    true
@@ -2702,7 +2830,28 @@ index b495b5a..74cd936 100644
                  }
  
                  else -> null
-@@ -905,24 +3015,243 @@ class MusicService : HeadlessJsMediaService() {
+@@ -886,6 +3014,20 @@ class MusicService : HeadlessJsMediaService() {
+             val isMediaNotificationController = session.isMediaNotificationController(controller)
+             val isAutomotiveController = session.isAutomotiveController(controller)
+             val isAutoCompanionController = session.isAutoCompanionController(controller)
++            // Latch "a car UI has connected" for the whole process lifetime.
++            // AudioItem.toMediaItem only inlines the TINY per-row artworkData
++            // bytes (Android Auto queue-row icons) while this is set — a
++            // phone-only or plain-Bluetooth session (the car speaks AVRCP via
++            // com.android.bluetooth, which is NOT a car controller here) keeps
++            // every queue item lean, so the Bluetooth stack never has to carry
++            // per-item image payloads it can't display anyway. Latched (never
++            // cleared) because Android Auto rebinds churn and a mid-session
++            // flag flip must not strand a half-built queue.
++            if (isAutomotiveController || isAutoCompanionController ||
++                controller.packageName == "com.google.android.projection.gearhead"
++            ) {
++                AudioItem.carControllerSeen = true
++            }
+             emit(MusicEvents.CONNECTOR_CONNECTED, Bundle().apply {
+                 putString("package", controller.packageName)
+                 putBoolean("isMediaNotificationController", isMediaNotificationController)
+@@ -905,24 +3047,243 @@ class MusicService : HeadlessJsMediaService() {
                      onStartCommand(null, 0, 0)
                  }
              }
@@ -2762,7 +2911,7 @@ index b495b5a..74cd936 100644
 +                putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true)
 +                putInt("android.media.browse.CONTENT_STYLE_PLAYABLE_HINT", STYLE_GRID)
 +                putInt("android.media.browse.CONTENT_STYLE_BROWSABLE_HINT", STYLE_CATEGORY_LIST)
-             }
++            }
 +            val rootParams = MediaLibraryService.LibraryParams.Builder().setExtras(rootExtras).build()
 +            return Futures.immediateFuture(LibraryResult.ofItem(absBrowsableItem("__ROOT__", "TomeSonic"), rootParams))
 +        }
@@ -2958,12 +3107,12 @@ index b495b5a..74cd936 100644
 +                    } else item
 +                }.toMutableList()
 +                future.set(resolved)
-+            }
+             }
 +            return future
          }
  
          override fun onCustomCommand(
-@@ -931,12 +3260,27 @@ class MusicService : HeadlessJsMediaService() {
+@@ -931,12 +3292,27 @@ class MusicService : HeadlessJsMediaService() {
              command: SessionCommand,
              args: Bundle
          ): ListenableFuture<SessionResult> {
@@ -2993,7 +3142,7 @@ index b495b5a..74cd936 100644
                  }
              }
              return super.onCustomCommand(session, controller, command, args)
-@@ -948,6 +3292,15 @@ class MusicService : HeadlessJsMediaService() {
+@@ -948,6 +3324,15 @@ class MusicService : HeadlessJsMediaService() {
              controllerInfo: MediaSession.ControllerInfo,
              intent: Intent
          ): Boolean {
@@ -3009,7 +3158,7 @@ index b495b5a..74cd936 100644
              return onMediaKeyEvent(intent) ?: super.onMediaButtonEvent(
                  session,
                  controllerInfo,
-@@ -955,14 +3308,90 @@ class MusicService : HeadlessJsMediaService() {
+@@ -955,14 +3340,90 @@ class MusicService : HeadlessJsMediaService() {
              )
          }
  
@@ -3126,7 +3275,7 @@ index d85e2c7..db6b437 100644
      }
  
 diff --git a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
-index a5dcd75..226080a 100644
+index a5dcd75..84e8e15 100644
 --- a/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
 +++ b/node_modules/react-native-track-player/src/NativeTrackPlayer.ts
 @@ -6,6 +6,15 @@ export interface Spec extends TurboModule {
@@ -3145,3 +3294,15 @@ index a5dcd75..226080a 100644
    // player api
    load(track: UnsafeObject): Promise<number | void>;
    reset(): Promise<void>;
+@@ -39,6 +48,11 @@ export interface Spec extends TurboModule {
+     trackIndex: number,
+     metadata: UnsafeObject
+   ): Promise<void>;
++  // ABS batched metadata rewrite: [{index, metadata}, ...] applied in ONE
++  // native call and as few ExoPlayer timeline updates as possible, so a
++  // chapter boundary's stamp+strip pair doesn't re-broadcast the legacy queue
++  // (Android Auto + Bluetooth AVRCP) twice (Android only).
++  updateMetadataForTracks(updates: UnsafeObject[]): Promise<void>;
+   updateNowPlayingMetadata(metadata: UnsafeObject): Promise<void>;
+   setQueue(tracks: UnsafeObject[]): Promise<void>;
+   getQueue(): Promise<UnsafeObject[]>;

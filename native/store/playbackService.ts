@@ -5,6 +5,7 @@ import {
   onNativeProgressSample,
   onPlaybackError,
   recoverPlaybackIfNeeded,
+  onCarControllerConnected,
 } from "./usePlaybackStore";
 import { parsePlayMediaId } from "../utils/playMediaId";
 
@@ -133,6 +134,21 @@ export async function playbackService() {
     ) {
       if (st.isPlaying) usePlaybackStore.setState({ isPlaying: false });
     }
+  });
+
+  // A car UI (Android Auto / Automotive) connected to the media session.
+  // Queue items are built without the tiny per-row artwork bytes until a car
+  // controller has been seen (plain-Bluetooth/phone sessions keep the AVRCP
+  // queue mirror lean) — restamp them now so the car's queue rows get icons.
+  TrackPlayer.addEventListener(Event.AndroidConnectorConnected, (event: any) => {
+    const pkg = String(event?.package || "");
+    const isCar =
+      event?.isAutomotiveController === true ||
+      event?.isAutoCompanionController === true ||
+      pkg === "com.google.android.projection.gearhead";
+    if (!isCar) return;
+    console.log(`[PlaybackService] Car controller connected: ${pkg}`);
+    onCarControllerConnected().catch(() => {});
   });
 
   // End of the book with the screen off: native playback stops, native

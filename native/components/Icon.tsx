@@ -102,6 +102,7 @@ export type IconName =
   | "mic"
   | "books"
   | "bell"
+  | "car"
   // Generic in-progress/activity glyph (server task rows).
   | "activity";
 
@@ -203,6 +204,7 @@ const MAP: Record<IconName, [Family, string]> = {
   mic: ["mi", "mic"],
   books: ["mi", "library-books"],
   bell: ["mi", "notifications"],
+  car: ["mi", "directions-car"],
   activity: ["mci", "pulse"],
 };
 
