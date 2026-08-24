@@ -1,4 +1,5 @@
 import * as FileSystem from "expo-file-system/legacy";
+import { pushWearCreds, clearWearCreds } from "./wearCreds";
 
 // Mirrors the server address + token into the app's files dir so the native
 // Android Auto browse service (a Media3 MediaLibraryService) can fetch the
@@ -297,8 +298,12 @@ async function writeAutoCredsImpl(
         await FileSystem.writeAsStringAsync(CREDS_PATH, payload);
         await FileSystem.deleteAsync(tmpPath, { idempotent: true }).catch(() => {});
       }
+      // Same choke point, second mirror: the paired Wear OS watch (access token
+      // only, never the refresh token). Guarded no-op without the module.
+      pushWearCreds({ server, token: creds.token });
     } else {
       await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
+      clearWearCreds();
     }
   } catch (e) {
     console.warn("[AutoCreds] write failed", e);
