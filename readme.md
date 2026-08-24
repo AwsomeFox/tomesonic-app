@@ -42,6 +42,15 @@ Cast your audiobooks to any ChromeCast-enabled device:
 - Single notification with chapter-aware titles, speed and chapter controls
 - Control playback from your phone
 
+### ⌚ Wear OS
+A native watch app — leave the phone at home:
+- Browse your libraries and Continue Listening from the wrist
+- Stream straight from your server, or download books to the watch
+- Phone-free playback of downloaded books on runs, walks and commutes
+- Progress syncs to your server and queues while the watch is offline
+- Installs from the same Play Store listing — open the Play Store on your watch
+- Sign in once on the phone; the watch picks up the connection over Bluetooth
+
 ### 🔄 Perfect Sync
 Your progress stays synchronized across all devices:
 - Real-time progress sync with your AudiobookShelf server

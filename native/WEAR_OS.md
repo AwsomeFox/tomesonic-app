@@ -4,6 +4,11 @@ Goal: a watch app for **basic browsing, playback, and downloads** — pick a boo
 watch, stream it or play a downloaded copy phone-free (runs, commutes, chores), with
 progress syncing through the ABS server like every other client.
 
+This file is the plan and the why. The **implementation contract** is
+`native/wear/ARCHITECTURE.md` — where it and this plan disagree, the contract wins.
+The **release runbook** (Play Console form factor, wear screenshots, review, how the
+two AABs ship together) is `PLAY_STORE_WEAR.md` at the repo root.
+
 ## What already works today (no code)
 
 Wear OS bridges the phone's media notification: while the phone app is playing, a
@@ -170,8 +175,19 @@ v1 (phases 1–4) ≈ **4–5 focused weeks**; a stream-only demo (1–3) in ~2.
 ## Status
 
 - [x] Exploration / this plan
-- [ ] Phase 1 — `native/wear/` scaffold + `withWearApp.js` + CI wear AAB
-- [ ] Phase 2 — creds over Data Layer (access token only; no refresh-token sharing)
-- [ ] Phase 3 — browse + streaming playback + progress sync
-- [ ] Phase 4 — downloads + offline
-- [ ] Phase 5 — polish + Play form-factor enrollment
+- [x] Phase 1 — `native/wear/` scaffold + `withWearApp.js` + CI (wear AAB in
+      `deploy-playstore.yml`, wear APK in `build-apk.yml` / `github-releases.yml`,
+      `:wear:testDebugUnitTest` in `android-unit-tests.yml`)
+- [x] Phase 2 — creds over Data Layer (access token only; no refresh-token sharing):
+      phone `WearBridgeModule` + watch `DataLayerListenerService`/`CredsRepository`
+- [x] Core data — `AbsClient` / `AbsApi` / `Models` / `ChapterMath` + JVM tests
+- [ ] Phase 3 — browse + streaming playback + progress sync — **this PR**
+- [ ] Phase 4 — downloads + offline — **this PR**
+- [ ] Phase 4A — Wear Compose UI (home / item / player / downloads / settings /
+      connect) — **this PR**
+- [ ] Phase 5 — polish + Play form-factor enrollment — not started. Console steps
+      are written up in `PLAY_STORE_WEAR.md`; nothing has been submitted to Play yet.
+
+Reality check on the phasing table above: the version stamping worked out simpler
+than planned — `native/wear/build.gradle` derives its versionCode/versionName from
+`android/app/build.gradle` at configure time, so `sync-version` needed no change.
