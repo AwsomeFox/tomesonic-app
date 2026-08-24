@@ -189,6 +189,22 @@ jobs:
             -PMYAPP_UPLOAD_KEY_ALIAS="${{ secrets.UPLOAD_KEY_ALIAS }}" \
             -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.UPLOAD_KEY_PASSWORD }}"
 
+      - name: Verify both AABs exist
+        # The upload step lists BOTH bundles in releaseFiles. If :wear ever fell
+        # out of settings.gradle (a prebuild without the config plugin), an
+        # unscoped bundleRelease would "succeed" phone-only and the failure
+        # would surface as a cryptic missing-file error inside the upload
+        # action. Fail here instead, with a message that names the cause.
+        run: |
+          for f in \
+            native/android/app/build/outputs/bundle/release/app-release.aab \
+            native/wear/build/outputs/bundle/release/wear-release.aab; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f missing after bundleRelease — if it's the wear one, check that settings.gradle still includes ':wear' (plugins/withWearApp.js re-injects it on prebuild)."
+              exit 1
+            fi
+          done
+
       - name: Prepare Play Store release notes
         id: notes
         # Passed via env (not inline ${{ }}) so notes containing quotes/backticks
