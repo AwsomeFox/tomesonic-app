@@ -1,0 +1,141 @@
+package com.tomesonic.app.wear.ui
+
+import com.tomesonic.app.wear.data.ItemSummary
+import com.tomesonic.app.wear.data.LastItem
+import com.tomesonic.app.wear.data.LibrarySummary
+import com.tomesonic.app.wear.downloads.DownloadEntry
+
+/**
+ * The one thing the resume card needs to draw itself and start playing, from
+ * whichever of the three sources answered first — the download index, the
+ * in-progress list, or an expanded fetch.
+ *
+ * `coverPath` is an on-disk absolute path (a downloaded cover) or null, in which
+ * case the screen falls back to the server's cover URL. Keeping it a String
+ * rather than a File is what lets this whole file stay JVM-pure.
+ */
+data class ResumeTarget(
+    val itemId: String,
+    val episodeId: String?,
+    val title: String,
+    val author: String?,
+    val progress: Double?,
+    val downloaded: Boolean,
+    val coverPath: String?
+)
+
+/** One row of the home list, in the order [HomeSections.build] emits them. */
+sealed interface HomeRow {
+    data class Resume(val target: ResumeTarget) : HomeRow
+    data object ContinueHeader : HomeRow
+    data class Continue(val item: ItemSummary) : HomeRow
+    data object Offline : HomeRow
+    data class Downloads(val count: Int) : HomeRow
+    data class Library(val library: LibrarySummary) : HomeRow
+    data object Settings : HomeRow
+}
+
+/**
+ * Home, assembled from whatever the watch actually has. Pure on purpose: the
+ * screen's whole behaviour — what resume points at, what "offline" hides, what
+ * order the chips land in — is decided here and pinned by JVM tests, leaving the
+ * composable to draw a list it is handed.
+ */
+object HomeSections {
+
+    /** Continue Listening on a watch is a glance, not a backlog. */
+    const val MAX_CONTINUE = 8
+
+    /**
+     * The resume card's subject: the last thing THIS WATCH played
+     * (`last_item_id`), described by the richest source that knows it.
+     *
+     * Downloads win over the server list — a downloaded book is the one that
+     * plays with no network, and its title/cover are already on disk. Falling
+     * back to the first in-progress item is the contract's rule for a watch that
+     * has never played anything itself.
+     *
+     * Returns null when the last item is known but nothing local describes it;
+     * the caller then has one expanded fetch to make (see HomeViewModel).
+     */
+    fun resume(
+        last: LastItem?,
+        downloads: List<DownloadEntry>,
+        inProgress: List<ItemSummary>
+    ): ResumeTarget? {
+        val lastId = last?.itemId
+        if (lastId != null) {
+            val row = inProgress.firstOrNull { it.id == lastId }
+            downloads.firstOrNull { it.id == lastId }?.let { entry ->
+                return ResumeTarget(
+                    itemId = entry.id,
+                    episodeId = last.episodeId,
+                    title = entry.title,
+                    author = entry.author,
+                    progress = row?.progress,
+                    downloaded = true,
+                    coverPath = entry.coverPath
+                )
+            }
+            if (row != null) return fromSummary(row, last.episodeId, downloads)
+            return null
+        }
+        val first = inProgress.firstOrNull() ?: return null
+        return fromSummary(first, first.episodeId, downloads)
+    }
+
+    /** An in-progress row promoted to a resume target, download state folded in. */
+    fun fromSummary(
+        item: ItemSummary,
+        episodeId: String?,
+        downloads: List<DownloadEntry>
+    ): ResumeTarget {
+        val entry = downloads.firstOrNull { it.id == item.id }
+        return ResumeTarget(
+            itemId = item.id,
+            episodeId = episodeId ?: item.episodeId,
+            title = item.title,
+            author = item.authorName,
+            progress = item.progress,
+            downloaded = entry != null,
+            coverPath = entry?.coverPath
+        )
+    }
+
+    /**
+     * The whole screen, in order: resume, Continue Listening, then the chips.
+     *
+     * The resume item is REMOVED from Continue Listening — it is already the
+     * biggest thing on the screen, and a watch list that shows the same book
+     * twice in the first two rows looks broken.
+     *
+     * [offline] adds one quiet line instead of replacing the screen: Downloads,
+     * Settings and the resume card all work with no server, so an error wall
+     * would hide three working things to report one broken one. The library
+     * chips simply aren't there, because the list they came from is empty.
+     */
+    fun build(
+        resume: ResumeTarget?,
+        inProgress: List<ItemSummary>,
+        libraries: List<LibrarySummary>,
+        downloadCount: Int,
+        offline: Boolean
+    ): List<HomeRow> {
+        val rows = ArrayList<HomeRow>()
+        resume?.let { rows.add(HomeRow.Resume(it)) }
+
+        val rest = inProgress
+            .filter { it.id != resume?.itemId }
+            .take(MAX_CONTINUE)
+        if (rest.isNotEmpty()) {
+            rows.add(HomeRow.ContinueHeader)
+            rest.forEach { rows.add(HomeRow.Continue(it)) }
+        }
+
+        if (offline) rows.add(HomeRow.Offline)
+        rows.add(HomeRow.Downloads(downloadCount))
+        libraries.forEach { rows.add(HomeRow.Library(it)) }
+        rows.add(HomeRow.Settings)
+        return rows
+    }
+}

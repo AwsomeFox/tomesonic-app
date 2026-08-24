@@ -204,9 +204,12 @@ Wear Compose **Material 3**, `SwipeDismissableNavHost`. Routes: `home`,
   Download/Delete with size, podcast → recent episodes list (play-only,
   downloads are book-only in v1).
 - `player`: cover backdrop, chapter title + book title, play/pause,
-  −30s/+30s, prev/next chapter, speed chip (0.75–2.5 in the same steps the
-  phone offers), volume via rotary + a volume screen (output switching hint).
-  Ongoing Activity while playing.
+  −30s/+30s, prev/next chapter, speed chip (as built: 0.75–2.0, the phone's
+  actual quick-pick steps from PlaybackSpeedModal — mirror the phone, not this
+  doc), volume via rotary crown + always-present −/+ buttons.
+  Ongoing Activity is DEFERRED (polish): it must attach to the media
+  notification PlaybackService posts, i.e. a custom MediaNotification.Provider
+  in playback/, not a UI change.
 - Theme: port `native/theme/palette.ts` dark roles into a wear M3 ColorScheme
   (brand seed `#1E5F50`); typography defaults; screens must render on round.
 

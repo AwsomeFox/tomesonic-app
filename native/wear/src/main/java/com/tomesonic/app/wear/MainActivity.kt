@@ -3,28 +3,20 @@ package com.tomesonic.app.wear
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.Text
+import com.tomesonic.app.wear.ui.WearApp
 
-// Placeholder shell — Wave 4A replaces the body with WearApp() and its
-// SwipeDismissableNavHost. Only here so :wear has a launchable entry point.
+/**
+ * The whole watch UI is [WearApp]; this class exists to host it.
+ *
+ * Nothing is constructed here on purpose. The two things that must outlive a
+ * screen — the MediaController wrapper and Coil's ImageLoader — belong to
+ * `RootViewModel`, which is scoped to this Activity's ViewModelStore: that
+ * survives configuration changes (which an Activity does not) and releases the
+ * controller in `onCleared`, after the last screen is gone.
+ */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { PlaceholderApp() }
-    }
-}
-
-@Composable
-private fun PlaceholderApp() {
-    MaterialTheme {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = "TomeSonic")
-        }
+        setContent { WearApp() }
     }
 }
