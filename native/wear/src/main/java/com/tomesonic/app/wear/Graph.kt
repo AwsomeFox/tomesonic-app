@@ -4,6 +4,7 @@ import android.content.Context
 import com.tomesonic.app.wear.data.AbsApi
 import com.tomesonic.app.wear.data.AbsClient
 import com.tomesonic.app.wear.data.CredsRepository
+import com.tomesonic.app.wear.downloads.DownloadRepository
 
 /**
  * The whole dependency graph: lazy singletons behind an application Context.
@@ -58,6 +59,13 @@ object Graph {
     }
 
     val absApi: AbsApi by lazy { AbsApi(absClient, credsRepository, versionName) }
+
+    /**
+     * On-watch downloads: the index file plus `filesDir/downloads`. Lazy like
+     * everything else here — DownloadWorker resolves it in whatever process
+     * WorkManager starts it in, and nothing reads the index until asked.
+     */
+    val downloadRepository: DownloadRepository by lazy { DownloadRepository.create(context) }
 
     private const val FALLBACK_VERSION = "0"
 }
