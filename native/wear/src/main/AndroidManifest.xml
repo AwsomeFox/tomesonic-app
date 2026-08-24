@@ -40,6 +40,25 @@
              land (an unimplemented <service> fails lintVitalRelease with
              MissingClass). -->
 
+        <!-- Phone -> watch credential delivery. exported=true is REQUIRED: the
+             Data Layer is Google Play services binding into this app from
+             outside it, and an un-exported service is simply never called. The
+             data filter (scheme wear, host *, the /tomesonic prefix) is what
+             narrows that exposure — only our own DataItems reach it, and the
+             Data Layer already refuses to pair apps that don't share this app's
+             package name AND signature. -->
+        <service
+            android:name="com.tomesonic.app.wear.data.DataLayerListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/tomesonic"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
         <activity
             android:name="com.tomesonic.app.wear.MainActivity"
             android:exported="true"
