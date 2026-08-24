@@ -155,11 +155,12 @@ native/wear/src/main/java/com/tomesonic/app/wear/
     CredsRepository.kt  DataLayerListenerService.kt  DeviceIds.kt
     AbsClient.kt        AbsApi.kt   Models.kt   ChapterMath.kt
   playback/             // Wave 3A
-    PlaybackService.kt  // MediaSessionService + ExoPlayer (offload-friendly)
+    PlaybackService.kt  // MediaSessionService + ExoPlayer (audio offload ENABLED)
     SessionManager.kt   // start/stop ABS session, build MediaItems local-or-stream
     ProgressSyncer.kt   // 15s tick, pause/stop flush, offline queue append
-    OfflineSessionQueue.kt
+    OfflineProgressQueue.kt // both offline queues + local resume markers
     PlayerConnection.kt // UI-facing MediaController wrapper + state flows
+    DownloadsLocalSource.kt // the ONE file bridging playback -> downloads
   downloads/            // Wave 3B
     DownloadEntry.kt    // {id,title,author,duration,coverPath?,tracks:[{filename,startOffset,duration,contentUrl?}],bytes}
     DownloadIndex.kt    // atomic json file persistence + Flow<List<DownloadEntry>>
@@ -179,6 +180,18 @@ Cross-wave interfaces (FROZEN — talk through these, not into each other's file
   `{isPlaying, itemId?, episodeId?, title, author, chapterTitle?, positionMs,
   durationMs, chapterIndex, chapterCount, speed, coverUri?}`.
 - `CredsRepository.creds: Flow<Creds?>` (null when not configured).
+
+As built, two additions to that surface: `DownloadRepository.warm()` +
+`entryForNow(itemId)` (non-suspending index read — playback's `localBook`
+resolution cannot suspend, so MainApplication warms the index at startup and
+installs `PlaybackWiring.localSource = DownloadsLocalSource(...)`), and
+`DownloadRepository.status(itemId): Flow<DownloadStatus>` for the UI.
+
+Known gap (v1): media3's default BitmapLoader fetches notification artwork
+without the Authorization header, so STREAMED books may show no artwork in the
+media notification (downloaded books use file:// covers and are fine). Fix is a
+custom BitmapLoader over the shared OkHttp client; in-app covers go through
+Coil with the authorized client and are unaffected.
 
 ## UI (Wave 4A)
 

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Marks this APK/AAB as the watch artifact of the com.tomesonic.app Play
          listing — Play only serves it to Wear OS devices. -->
@@ -40,6 +41,22 @@
              land (an unimplemented <service> fails lintVitalRelease with
              MissingClass). -->
 
+        <!-- Playback. exported=true is REQUIRED for a MediaSessionService: the
+             system media controls, Bluetooth/AVRCP media keys and the watch's
+             own transport all bind in from OUTSIDE this app, and the
+             androidx.media3.session.MediaSessionService action is what a
+             SessionToken resolves to. mediaPlayback matches the
+             FOREGROUND_SERVICE_MEDIA_PLAYBACK permission declared above; media3
+             promotes the service itself once playback starts. -->
+        <service
+            android:name="com.tomesonic.app.wear.playback.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
         <!-- Phone -> watch credential delivery. exported=true is REQUIRED: the
              Data Layer is Google Play services binding into this app from
              outside it, and an un-exported service is simply never called. The
@@ -58,6 +75,17 @@
                     android:scheme="wear" />
             </intent-filter>
         </service>
+
+        <!-- WorkManager's own foreground service declares NO foregroundServiceType
+             in the library manifest, and with targetSdk 34+ the system refuses
+             the promotion without one — the DownloadWorker's "Downloading…"
+             notification would silently never appear. tools:node="merge" adds
+             the type onto the library's declaration instead of replacing it.
+             (FOREGROUND_SERVICE_DATA_SYNC is declared above.) -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <activity
             android:name="com.tomesonic.app.wear.MainActivity"
