@@ -66,26 +66,29 @@ jobs:
         # snippet resolves its script path via `node --print require.resolve`,
         # which needs native/node_modules reachable from the working directory.
         # The Android SDK is preinstalled on ubuntu-latest (same assumption
-        # build-apk relies on). Scoped to :app so autolinked library modules
-        # don't drag their own (untended) test tasks into this job.
+        # build-apk relies on). Scoped to :app and :wear so autolinked library
+        # modules don't drag their own (untended) test tasks into this job.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
-        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+        run: ./gradlew :app:testDebugUnitTest :wear:testDebugUnitTest --no-daemon --stacktrace
 
       - name: fail if no tests ran
-        # :app:testDebugUnitTest PASSES with zero compiled test sources, so a
+        # testDebugUnitTest PASSES with zero compiled test sources, so a
         # packaging or gitignore mistake that drops the test files would turn
         # this required check green with nothing under test. Require at least
-        # one executed <testcase> in the JUnit XML results.
+        # one executed <testcase> in EACH module's JUnit XML results.
         run: |
-          results="native/android/app/build/test-results/testDebugUnitTest"
-          count=$(grep -rho '<testcase' "$results" --include='*.xml' 2>/dev/null | wc -l)
-          echo "executed test cases: $count"
-          if [ "$count" -eq 0 ]; then
-            echo "::error::No JUnit test cases executed (empty or missing $results) — test sources dropped from the build?"
-            exit 1
-          fi
+          for results in \
+            native/android/app/build/test-results/testDebugUnitTest \
+            native/wear/build/test-results/testDebugUnitTest; do
+            count=$(grep -rho '<testcase' "$results" --include='*.xml' 2>/dev/null | wc -l)
+            echo "executed test cases in $results: $count"
+            if [ "$count" -eq 0 ]; then
+              echo "::error::No JUnit test cases executed (empty or missing $results) — test sources dropped from the build?"
+              exit 1
+            fi
+          done
 
       - name: upload test reports
         if: failure()
@@ -95,3 +98,5 @@ jobs:
           path: |
             native/android/app/build/reports/tests/
             native/android/app/build/test-results/
+            native/wear/build/reports/tests/
+            native/wear/build/test-results/

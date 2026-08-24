@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Marks this APK/AAB as the watch artifact of the com.tomesonic.app Play
+         listing — Play only serves it to Wear OS devices. -->
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Component names are FULLY QUALIFIED on purpose: applicationId
+         (com.tomesonic.app) differs from the namespace
+         (com.tomesonic.app.wear), so a leading-dot name is the one thing that
+         reads wrong here. -->
+    <!-- allowBackup=false: Wave 2 keeps the ABS access token in DataStore, and
+         a token must never ride an auto-backup onto another device. The watch
+         re-hydrates everything it needs from the phone's Data Layer item. -->
+    <application
+        android:name="com.tomesonic.app.wear.MainApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault"
+        android:usesCleartextTraffic="true">
+
+        <!-- false: v1 gets its server + token from the paired phone app over the
+             Wearable Data Layer, so the watch app is useless on its own. -->
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="false" />
+
+        <!-- Later waves declare their own services next to the classes that
+             land (an unimplemented <service> fails lintVitalRelease with
+             MissingClass). -->
+
+        <activity
+            android:name="com.tomesonic.app.wear.MainActivity"
+            android:exported="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

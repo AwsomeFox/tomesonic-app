@@ -66,6 +66,8 @@
       "./plugins/withRotationCrossfade",
       "./plugins/withSecureBackupRules",
       "./plugins/withMedia3NotificationIcon",
+      "./plugins/withWearApp",
+      "./plugins/withWearBridge",
       [
         "expo-build-properties",
         {

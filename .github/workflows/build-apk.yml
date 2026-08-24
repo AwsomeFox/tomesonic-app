@@ -77,6 +77,8 @@ jobs:
         # arm64-v8a covers every phone from ~2015 on; x86_64 covers emulators.
         # The New Architecture CMake-compiles all native libs per ABI, so
         # dropping the dead 32-bit ABIs halves the native compile time.
+        # Unscoped, so this also builds the :wear module (Wear OS app,
+        # native/wear) — no separate task needed.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
@@ -93,4 +95,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: audiobookshelf-apk
-          path: native/android/app/build/outputs/apk/debug/*.apk
+          # wear-debug.apk is the watch app — same applicationId, so install it
+          # to the watch only (adb -s <watch>), never over the phone build.
+          path: |
+            native/android/app/build/outputs/apk/debug/*.apk
+            native/wear/build/outputs/apk/debug/*.apk

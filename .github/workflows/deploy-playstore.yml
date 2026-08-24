@@ -177,6 +177,8 @@ jobs:
         # which needs native/node_modules reachable from the working directory.
         # SENTRY_DISABLE_AUTO_UPLOAD skips source-map upload until Sentry
         # org/project/auth-token secrets are configured.
+        # Unscoped, so this also builds the :wear module's AAB (Wear OS app,
+        # native/wear), signed with the same upload key from the -P props.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
@@ -217,7 +219,13 @@ jobs:
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
           packageName: com.tomesonic.app
-          releaseFiles: native/android/app/build/outputs/bundle/release/app-release.aab
+          # Phone + watch AABs go up in the SAME release: same packageName, and
+          # Play routes the wear one by its android.hardware.type.watch
+          # uses-feature. :wear derives its versionCode from app/build.gradle
+          # (+1_000_000) at configure time, so the bump above covers both.
+          releaseFiles: |
+            native/android/app/build/outputs/bundle/release/app-release.aab
+            native/wear/build/outputs/bundle/release/wear-release.aab
           track: ${{ github.event.inputs.track || 'alpha' }}
           status: completed
           inAppUpdatePriority: 2
