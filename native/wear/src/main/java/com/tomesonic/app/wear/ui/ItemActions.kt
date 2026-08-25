@@ -66,12 +66,17 @@ object ItemActions {
             secondary = DownloadOption("Download now", DownloadCommand.EnqueueNow)
         )
 
-        is DownloadStatus.Downloading -> DownloadUi(
-            headline = "Downloading ${status.progress}%",
-            progress = status.progress.coerceIn(0, 100),
-            primary = DownloadOption("Cancel", DownloadCommand.Cancel),
-            secondary = null
-        )
+        is DownloadStatus.Downloading -> {
+            // Clamp ONCE and reuse: a worker reporting a lying 140% must not
+            // put "Downloading 140%" next to a bar pinned at 100.
+            val progress = status.progress.coerceIn(0, 100)
+            DownloadUi(
+                headline = "Downloading $progress%",
+                progress = progress,
+                primary = DownloadOption("Cancel", DownloadCommand.Cancel),
+                secondary = null
+            )
+        }
 
         DownloadStatus.Downloaded -> DownloadUi(
             headline = bytes?.takeIf { it > 0L }?.let { "Downloaded · ${UiFormat.bytes(it)}" }

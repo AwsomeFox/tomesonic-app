@@ -55,6 +55,10 @@ class ItemActionsTest {
     fun aProgressOutsideZeroToOneHundredStillDrawsABar() {
         assertEquals(100, ItemActions.forStatus(DownloadStatus.Downloading(140), null).progress)
         assertEquals(0, ItemActions.forStatus(DownloadStatus.Downloading(-5), null).progress)
+        // The HEADLINE clamps too — "Downloading 140%" next to a bar pinned at
+        // 100 is the inconsistency this test exists to keep out.
+        assertEquals("Downloading 100%", ItemActions.forStatus(DownloadStatus.Downloading(140), null).headline)
+        assertEquals("Downloading 0%", ItemActions.forStatus(DownloadStatus.Downloading(-5), null).headline)
     }
 
     @Test

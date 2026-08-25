@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.navigation.NavOptions
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
@@ -74,7 +75,15 @@ fun WearApp() {
                         // session in the background (see PlayerConnection), so
                         // the player screen opens immediately and fills in.
                         root.player.playItem(itemId, episodeId)
-                        navController.navigate(Routes.PLAYER)
+                        // singleTop: every Play/Resume converges on ONE player
+                        // entry — a plain navigate stacked a duplicate per tap,
+                        // and swipe-dismiss then unwound through stale players.
+                        // NavOptions.Builder (not the ktx builder lambda) so the
+                        // call compiles against navigation-runtime alone.
+                        navController.navigate(
+                            Routes.PLAYER,
+                            NavOptions.Builder().setLaunchSingleTop(true).build()
+                        )
                     }
 
                     // Screenshot/dev rig, DEBUG BUILDS ONLY: MainActivity is the
