@@ -38,7 +38,11 @@ jest.mock("../../utils/downloader", () => ({
 
 import TrackPlayer, { State } from "react-native-track-player";
 import { storage, storageHelper, secureStorage } from "../../utils/storage";
-import { usePlaybackStore, MAX_CAR_TILE_ITEMS } from "../../store/usePlaybackStore";
+import {
+  usePlaybackStore,
+  MAX_CAR_TILE_ITEMS,
+  onCarControllerConnected,
+} from "../../store/usePlaybackStore";
 import { useUserStore } from "../../store/useUserStore";
 import { useDownloadStore } from "../../store/useDownloadStore";
 
@@ -278,5 +282,26 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     await jest.advanceTimersByTimeAsync(1000);
 
     expect(TrackPlayer.updateMetadataForTrack).not.toHaveBeenCalled();
+  });
+
+  it("car-connect restamp PRESERVES each row's existing metadata alongside the tiny bytes", async () => {
+    // The native setMetadata is replacement-style for the standard fields: a
+    // restamp bundle carrying ONLY localArtworkSmall would null every row's
+    // title/artist/mediaId (blank queue rows in Android Auto). The restamp
+    // must echo the row's existing metadata back with the bytes.
+    await prepareChapterBook();
+    jest.mocked(TrackPlayer.getQueue).mockResolvedValue(addedTracks() as any);
+    jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
+
+    await onCarControllerConnected();
+
+    const restamps = jest
+      .mocked(TrackPlayer.updateMetadataForTrack)
+      .mock.calls.filter((c) => (c[1] as any).localArtworkSmall === COVER);
+    expect(restamps.map((c) => c[0])).toEqual([0, 1, 2]);
+    for (const [index, meta] of restamps as any[]) {
+      expect(meta.title).toBe(`Chapter ${index + 1}`);
+      expect(meta.artwork).toBe(COVER);
+    }
   });
 });

@@ -1031,7 +1031,14 @@ export async function onCarControllerConnected() {
         const n = Math.min(queue.length, MAX_CAR_TILE_ITEMS);
         const updates = [];
         for (let i = 0; i < n; i++) {
-          updates.push({ index: i, metadata: { localArtworkSmall: localArt } });
+          // The native setMetadata is replacement-style for the standard
+          // fields — a bundle carrying only localArtworkSmall would null the
+          // row's title/artist/mediaId — so echo the row's existing metadata
+          // back alongside the added tiny-artwork path.
+          updates.push({
+            index: i,
+            metadata: { ...(queue[i] as any), localArtworkSmall: localArt },
+          });
         }
         await updateTrackMetadataBatch(updates);
       }
