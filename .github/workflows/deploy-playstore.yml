@@ -177,6 +177,8 @@ jobs:
         # which needs native/node_modules reachable from the working directory.
         # SENTRY_DISABLE_AUTO_UPLOAD skips source-map upload until Sentry
         # org/project/auth-token secrets are configured.
+        # Unscoped, so this also builds the :wear module's AAB (Wear OS app,
+        # native/wear), signed with the same upload key from the -P props.
         working-directory: native/android
         env:
           SENTRY_DISABLE_AUTO_UPLOAD: "true"
@@ -186,6 +188,22 @@ jobs:
             -PMYAPP_UPLOAD_STORE_PASSWORD="${{ secrets.UPLOAD_STORE_PASSWORD }}" \
             -PMYAPP_UPLOAD_KEY_ALIAS="${{ secrets.UPLOAD_KEY_ALIAS }}" \
             -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.UPLOAD_KEY_PASSWORD }}"
+
+      - name: Verify both AABs exist
+        # The upload step lists BOTH bundles in releaseFiles. If :wear ever fell
+        # out of settings.gradle (a prebuild without the config plugin), an
+        # unscoped bundleRelease would "succeed" phone-only and the failure
+        # would surface as a cryptic missing-file error inside the upload
+        # action. Fail here instead, with a message that names the cause.
+        run: |
+          for f in \
+            native/android/app/build/outputs/bundle/release/app-release.aab \
+            native/wear/build/outputs/bundle/release/wear-release.aab; do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f missing after bundleRelease — if it's the wear one, check that settings.gradle still includes ':wear' (plugins/withWearApp.js re-injects it on prebuild)."
+              exit 1
+            fi
+          done
 
       - name: Prepare Play Store release notes
         id: notes
@@ -217,7 +235,13 @@ jobs:
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
           packageName: com.tomesonic.app
-          releaseFiles: native/android/app/build/outputs/bundle/release/app-release.aab
+          # Phone + watch AABs go up in the SAME release: same packageName, and
+          # Play routes the wear one by its android.hardware.type.watch
+          # uses-feature. :wear derives its versionCode from app/build.gradle
+          # (+1_000_000) at configure time, so the bump above covers both.
+          releaseFiles: |
+            native/android/app/build/outputs/bundle/release/app-release.aab
+            native/wear/build/outputs/bundle/release/wear-release.aab
           track: ${{ github.event.inputs.track || 'alpha' }}
           status: completed
           inAppUpdatePriority: 2

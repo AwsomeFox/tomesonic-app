@@ -37,3 +37,10 @@ expoAutolinking.useExpoVersionCatalog()
 
 include ':app'
 includeBuild(expoAutolinking.reactNativeGradlePlugin)
+
+// Native Wear OS app. It lives OUTSIDE this directory because
+// `expo prebuild --clean` deletes and regenerates native/android; these two
+// lines are committed AND re-injected by plugins/withWearApp.js, so either
+// survives a prebuild.
+include ':wear'
+project(':wear').projectDir = new File(rootDir, '../wear')

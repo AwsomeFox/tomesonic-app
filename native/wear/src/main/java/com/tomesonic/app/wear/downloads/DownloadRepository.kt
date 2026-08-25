@@ -1,0 +1,267 @@
+package com.tomesonic.app.wear.downloads
+
+import android.content.Context
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/**
+ * What the UI can say about one item. Additive to the frozen cross-wave
+ * interface — Wave 4A renders it, nothing else depends on it.
+ */
+sealed class DownloadStatus {
+    data object NotDownloaded : DownloadStatus()
+
+    /** Enqueued and waiting on its constraints (the charger, unmetered WiFi). */
+    data object Queued : DownloadStatus()
+
+    /** 0..100 across the whole book, as the worker reports it. */
+    data class Downloading(val progress: Int) : DownloadStatus()
+
+    data object Downloaded : DownloadStatus()
+    data object Failed : DownloadStatus()
+}
+
+/**
+ * The downloads API every other wave talks to: the frozen surface from
+ * native/wear/ARCHITECTURE.md ("Cross-wave interfaces") plus [status] and
+ * [cancel], which are additive.
+ *
+ * It owns two things and nothing else — the [index] (what is downloaded) and the
+ * folder tree under [root] (the bytes). The transfer itself belongs to
+ * [DownloadWorker]; this class only enqueues, cancels and cleans up, which is
+ * what keeps it callable from a UI thread's coroutine.
+ *
+ * Constructed with its collaborators so tests can point it at a temp dir;
+ * production goes through [create] behind Graph's lazy singleton — same shape as
+ * CredsRepository.
+ */
+class DownloadRepository(
+    private val context: Context,
+    /** Public for [DownloadWorker], which writes the finished entry. */
+    val index: DownloadIndex,
+    /** `filesDir/downloads` — one subfolder per item id. */
+    val root: File
+) {
+
+    /** Frozen: the downloaded library, cold until someone collects it. */
+    val entries: Flow<List<DownloadEntry>> = index.entries
+
+    /** Frozen: null when the item isn't downloaded. */
+    suspend fun entryFor(itemId: String): DownloadEntry? = index.get(itemId)
+
+    /**
+     * Additive: read the index into memory once, so [entryForNow] can answer
+     * without suspending. Cheap and idempotent — call it at startup.
+     */
+    suspend fun warm() {
+        index.warm()
+    }
+
+    /**
+     * Additive, non-suspending sibling of [entryFor]. Wave 3A's
+     * `LocalPlaybackSource.localBook(itemId)` is a plain function, and a
+     * downloaded book must resolve there without a round trip to a coroutine.
+     *
+     * Returns null before the index has been warmed, which reads as "not
+     * downloaded" and would silently stream a book that is on the watch — so
+     * [warm] belongs in the same startup path that installs the plug.
+     */
+    fun entryForNow(itemId: String): DownloadEntry? =
+        index.snapshot().firstOrNull { it.id == itemId }
+
+    /**
+     * Frozen: the local file for a track (or the cover), or null when it isn't
+     * there. Deliberately NOT suspending — Wave 3A resolves these while building
+     * media3 items on a callback thread that cannot suspend, and the cost is one
+     * stat() per track.
+     */
+    fun localFile(itemId: String, filename: String): File? {
+        val dir = DownloadWorker.resolveInside(root, itemId) ?: return null
+        val file = DownloadWorker.resolveInside(dir, filename) ?: return null
+        return file.takeIf { it.isFile && it.length() > 0L }
+    }
+
+    /** `filesDir/downloads/{itemId}` — the contract's layout, created by the worker. */
+    fun itemDir(itemId: String): File = File(root, itemId)
+
+    /**
+     * Frozen: queue [itemId] for download.
+     *
+     * Default constraints are the ones WEAR_OS.md argues for: **unmetered
+     * network + on the charger**. A watch pulling a gigabyte over a BT-proxied
+     * link on battery is slow, hot and pointless.
+     *
+     * [force] is "download it now": the charging requirement goes, and the
+     * network requirement relaxes to CONNECTED rather than disappearing — an LTE
+     * watch with no WiFi is precisely who needs to force, and a download with no
+     * network constraint at all would just fail instead of waiting.
+     *
+     * Non-forced enqueues KEEP an existing job (a double tap must not restart a
+     * transfer). A forced one REPLACEs it, because the whole point is to drop
+     * constraints the queued job still carries — keeping it would silently do
+     * nothing. A replaced worker's cancellation cleans its own `.part` files and
+     * the new run resumes from the whole tracks.
+     */
+    suspend fun enqueue(itemId: String, force: Boolean = false) {
+        if (!DownloadWorker.isSafeName(itemId)) return
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(DownloadWorker.KEY_ITEM_ID to itemId))
+            .setConstraints(constraints(force))
+            .addTag(TAG_ALL)
+            .addTag(itemTag(itemId))
+            .build()
+        val policy = if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
+        withContext(Dispatchers.IO) {
+            try {
+                workManager().enqueueUniqueWork(
+                    DownloadWorker.uniqueWorkName(itemId),
+                    policy,
+                    request
+                )
+            } catch (t: Throwable) {
+                // WorkManager unavailable (an uninitialised process). Nothing to
+                // roll back — no bytes and no index entry exist yet.
+            }
+        }
+    }
+
+    /**
+     * Stop an in-flight or queued download without touching what it already
+     * fetched. The worker cleans its own partials when it observes the
+     * cancellation; this sweep covers the job that never started, or one the
+     * system killed before it could.
+     */
+    suspend fun cancel(itemId: String) {
+        if (!DownloadWorker.isSafeName(itemId)) return
+        cancelWork(itemId)
+        withContext(Dispatchers.IO) { DownloadWorker.deletePartials(itemDir(itemId)) }
+    }
+
+    /**
+     * Frozen: forget the item entirely — cancel its job, delete its folder, drop
+     * its index entry. The order matters: cancelling first stops a running
+     * worker from re-creating files behind the delete, and the index entry goes
+     * last so a crash mid-delete leaves an entry pointing at missing files
+     * (which [localFile] reports as absent) rather than files nothing owns.
+     */
+    suspend fun delete(itemId: String) {
+        if (!DownloadWorker.isSafeName(itemId)) return
+        cancelWork(itemId)
+        withContext(Dispatchers.IO) { itemDir(itemId).deleteRecursively() }
+        index.remove(itemId)
+    }
+
+    /**
+     * Frozen: bytes held by all downloads. SUSPEND — the index seeds itself from
+     * disk on first read, and doing that on a UI thread is the one thing this
+     * class must not make easy.
+     */
+    suspend fun totalBytes(): Long = index.totalBytes()
+
+    /**
+     * Additive: one item's state for the UI, folded from WorkManager's live job
+     * and the index. Live work reports itself (a re-run over an existing entry
+     * really is downloading); everything else defers to the index, because
+     * WorkManager prunes finished jobs and their absence must never un-download
+     * a book that is sitting on the watch.
+     */
+    fun status(itemId: String): Flow<DownloadStatus> =
+        combine(index.entries, workInfos(itemId)) { stored, infos ->
+            val active = activeInfo(infos)
+            statusFrom(
+                hasEntry = stored.any { it.id == itemId },
+                state = active?.state,
+                progress = active?.progress?.getInt(DownloadWorker.KEY_PROGRESS, 0) ?: 0
+            )
+        }.distinctUntilChanged()
+
+    private fun workManager(): WorkManager = WorkManager.getInstance(context)
+
+    private fun workInfos(itemId: String): Flow<List<WorkInfo>> = flow {
+        val upstream = try {
+            workManager().getWorkInfosForUniqueWorkFlow(DownloadWorker.uniqueWorkName(itemId))
+        } catch (t: Throwable) {
+            // WorkManager not initialised in this process — the index alone
+            // still answers downloaded-or-not, which is what the UI routes on.
+            flowOf(emptyList())
+        }
+        emitAll(upstream)
+    }
+
+    private fun cancelWork(itemId: String) {
+        try {
+            workManager().cancelUniqueWork(DownloadWorker.uniqueWorkName(itemId))
+        } catch (t: Throwable) {
+            // Best effort: the files and the index entry must go regardless of
+            // whether there was a job to stop.
+        }
+    }
+
+    private fun constraints(force: Boolean): Constraints = Constraints.Builder()
+        .setRequiredNetworkType(if (force) NetworkType.CONNECTED else NetworkType.UNMETERED)
+        .setRequiresCharging(!force)
+        .build()
+
+    companion object {
+
+        const val INDEX_FILENAME = "downloads_index.json"
+        const val DOWNLOADS_DIRNAME = "downloads"
+
+        /** Tags, so a future "cancel everything" doesn't need the id list. */
+        const val TAG_ALL = "tomesonic_download"
+
+        fun itemTag(itemId: String): String = "$TAG_ALL:$itemId"
+
+        fun create(context: Context): DownloadRepository {
+            val app = context.applicationContext
+            return DownloadRepository(
+                app,
+                DownloadIndex(File(app.filesDir, INDEX_FILENAME)),
+                File(app.filesDir, DOWNLOADS_DIRNAME)
+            )
+        }
+
+        /**
+         * The job that describes the item right now: the first unfinished one,
+         * else the most recent finished one. A unique work name normally has
+         * exactly one, but a REPLACE leaves the cancelled predecessor visible
+         * for a moment.
+         */
+        fun activeInfo(infos: List<WorkInfo>): WorkInfo? =
+            infos.firstOrNull { !it.state.isFinished } ?: infos.lastOrNull()
+
+        /**
+         * The pure fold behind [status], kept separate so the table of cases is
+         * pinned by a plain JVM test instead of by a live WorkManager.
+         */
+        fun statusFrom(hasEntry: Boolean, state: WorkInfo.State?, progress: Int): DownloadStatus {
+            when (state) {
+                WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> return DownloadStatus.Queued
+                WorkInfo.State.RUNNING ->
+                    return DownloadStatus.Downloading(progress.coerceIn(0, 100))
+                else -> Unit
+            }
+            if (hasEntry) return DownloadStatus.Downloaded
+            return when (state) {
+                WorkInfo.State.FAILED -> DownloadStatus.Failed
+                // SUCCEEDED with no entry means the entry has since been
+                // deleted; CANCELLED and "no job at all" are the same nothing.
+                else -> DownloadStatus.NotDownloaded
+            }
+        }
+    }
+}

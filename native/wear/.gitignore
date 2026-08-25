@@ -1,0 +1,7 @@
+# Gradle build output for this module (native/wear sits outside
+# native/android, so native/android/.gitignore does not cover it).
+build/
+.gradle/
+.kotlin/
+local.properties
+*.iml

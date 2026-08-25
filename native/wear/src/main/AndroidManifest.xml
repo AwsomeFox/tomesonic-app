@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Marks this APK/AAB as the watch artifact of the com.tomesonic.app Play
+         listing — Play only serves it to Wear OS devices. -->
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Component names are FULLY QUALIFIED on purpose: applicationId
+         (com.tomesonic.app) differs from the namespace
+         (com.tomesonic.app.wear), so a leading-dot name is the one thing that
+         reads wrong here. -->
+    <!-- allowBackup=false: Wave 2 keeps the ABS access token in DataStore, and
+         a token must never ride an auto-backup onto another device. The watch
+         re-hydrates everything it needs from the phone's Data Layer item. -->
+    <application
+        android:name="com.tomesonic.app.wear.MainApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault"
+        android:usesCleartextTraffic="true">
+
+        <!-- false: v1 gets its server + token from the paired phone app over the
+             Wearable Data Layer, so the watch app is useless on its own. -->
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="false" />
+
+        <!-- Later waves declare their own services next to the classes that
+             land (an unimplemented <service> fails lintVitalRelease with
+             MissingClass). -->
+
+        <!-- Playback. exported=true is REQUIRED for a MediaSessionService: the
+             system media controls, Bluetooth/AVRCP media keys and the watch's
+             own transport all bind in from OUTSIDE this app, and the
+             androidx.media3.session.MediaSessionService action is what a
+             SessionToken resolves to. mediaPlayback matches the
+             FOREGROUND_SERVICE_MEDIA_PLAYBACK permission declared above; media3
+             promotes the service itself once playback starts. -->
+        <service
+            android:name="com.tomesonic.app.wear.playback.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+        <!-- Phone -> watch credential delivery. exported=true is REQUIRED: the
+             Data Layer is Google Play services binding into this app from
+             outside it, and an un-exported service is simply never called. The
+             data filter (scheme wear, host *, the /tomesonic prefix) is what
+             narrows that exposure — only our own DataItems reach it, and the
+             Data Layer already refuses to pair apps that don't share this app's
+             package name AND signature. -->
+        <service
+            android:name="com.tomesonic.app.wear.data.DataLayerListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/tomesonic"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
+        <!-- WorkManager's own foreground service declares NO foregroundServiceType
+             in the library manifest, and with targetSdk 34+ the system refuses
+             the promotion without one — the DownloadWorker's "Downloading…"
+             notification would silently never appear. tools:node="merge" adds
+             the type onto the library's declaration instead of replacing it.
+             (FOREGROUND_SERVICE_DATA_SYNC is declared above.) -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <activity
+            android:name="com.tomesonic.app.wear.MainActivity"
+            android:exported="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

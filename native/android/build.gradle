@@ -14,6 +14,9 @@ buildscript {
     classpath('com.android.tools.build:gradle')
     classpath('com.facebook.react:react-native-gradle-plugin')
     classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+    // :wear applies org.jetbrains.kotlin.plugin.compose — the version MUST
+    // track RN's kotlin pin (node_modules/react-native/gradle/libs.versions.toml).
+    classpath('org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.1.20')
   }
 }
 
