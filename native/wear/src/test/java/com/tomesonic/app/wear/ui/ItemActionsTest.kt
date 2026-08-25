@@ -122,6 +122,45 @@ class ItemActionsTest {
         )
     }
 
+    // A podcast's ITEM-level track list is legitimately empty (audio lives on
+    // the episode rows), so episode taps must never be judged by trackCount —
+    // the original table rejected every episode with NoTracks.
+
+    @Test
+    fun anEpisodeWithZeroItemTracksIsOk() {
+        assertEquals(
+            PlayResult.Ok,
+            ItemActions.precheck(
+                hasCreds = true, downloaded = false, detailLoaded = true,
+                trackCount = 0, isEpisode = true
+            )
+        )
+    }
+
+    @Test
+    fun anEpisodeWithoutCredsStillNeedsThePhone() {
+        assertEquals(
+            PlayResult.NotConfigured,
+            ItemActions.precheck(
+                hasCreds = false, downloaded = false, detailLoaded = true,
+                trackCount = 0, isEpisode = true
+            )
+        )
+    }
+
+    @Test
+    fun anEpisodeIgnoresTheItemsDownloadedState() {
+        // Episodes always stream in v1 — a downloaded ITEM must not make an
+        // episode tap read as playable-offline (SessionManager streams it).
+        assertEquals(
+            PlayResult.NotConfigured,
+            ItemActions.precheck(
+                hasCreds = false, downloaded = true, detailLoaded = true,
+                trackCount = 0, isEpisode = true
+            )
+        )
+    }
+
     @Test
     fun everyFailureHasExactlyOneSentenceAndSuccessHasNone() {
         assertNull(ItemActions.message(PlayResult.Ok))

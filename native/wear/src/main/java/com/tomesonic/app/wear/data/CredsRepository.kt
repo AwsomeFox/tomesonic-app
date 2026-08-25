@@ -69,7 +69,27 @@ class CredsRepository(private val store: DataStore<Preferences>) {
 
     suspend fun set(server: String, token: String, userId: String, username: String) {
         store.edit { p ->
-            p[KEY_SERVER] = normalizeServer(server)
+            val newServer = normalizeServer(server)
+            val oldServer = p[KEY_SERVER]
+            val oldUser = p[KEY_USER_ID].orEmpty()
+            // A different server — or a different KNOWN user on the same server —
+            // is a different account world: the resume pointer and the offline
+            // progress queue are meaningless there, and the queue is worse than
+            // meaningless — OfflineProgressQueue flushes it under whatever token
+            // is current, which would post account A's listening as account B's.
+            // (The phone guards its own offline queues by session identity for
+            // exactly this reason — utils/progressSync.ts `sid`.) The userId leg
+            // only fires when BOTH sides are non-blank: the phone bridge sends
+            // "" today, and a blank must never read as "changed".
+            val identityChanged =
+                (oldServer != null && oldServer != newServer) ||
+                    (oldUser.isNotBlank() && userId.isNotBlank() && oldUser != userId)
+            if (identityChanged) {
+                p.remove(KEY_LAST_ITEM)
+                p.remove(KEY_LAST_EPISODE)
+                p.remove(KEY_OFFLINE_SESSIONS)
+            }
+            p[KEY_SERVER] = newServer
             p[KEY_TOKEN] = token.trim()
             p[KEY_USER_ID] = userId
             p[KEY_USERNAME] = username
@@ -77,9 +97,12 @@ class CredsRepository(private val store: DataStore<Preferences>) {
     }
 
     /**
-     * Logged out. Drops the creds AND the resume pointer (both are USER-scoped —
-     * surfacing the previous account's book would be a leak), but keeps
-     * `device_id` and `playback_speed`, which belong to the watch, not the user.
+     * Logged out. Drops the creds, the resume pointer AND the offline progress
+     * queue (all USER-scoped — surfacing the previous account's book would be a
+     * leak, and a queue that survived a logout would flush under whichever
+     * account logs in next). Keeps `device_id` and `playback_speed`, which
+     * belong to the watch, not the user. Unflushed offline listening dies with
+     * the logout — same trade the phone makes with its sid-guarded queues.
      */
     suspend fun clear() {
         store.edit { p ->
@@ -89,6 +112,7 @@ class CredsRepository(private val store: DataStore<Preferences>) {
             p.remove(KEY_USERNAME)
             p.remove(KEY_LAST_ITEM)
             p.remove(KEY_LAST_EPISODE)
+            p.remove(KEY_OFFLINE_SESSIONS)
         }
     }
 

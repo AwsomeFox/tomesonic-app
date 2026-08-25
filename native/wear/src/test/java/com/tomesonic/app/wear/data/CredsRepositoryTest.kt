@@ -203,4 +203,70 @@ class CredsRepositoryTest {
         repo.setOfflineSessions("""[{"id":"wear-local_li_1_2026-01-01"}]""")
         assertEquals("""[{"id":"wear-local_li_1_2026-01-01"}]""", repo.offlineSessions.first())
     }
+
+    // ---- identity changes must not leak user-scoped state -------------------
+    // The offline queue flushes under whatever token is CURRENT, so a queue
+    // that outlives an account switch posts account A's listening as B's.
+
+    @Test
+    fun serverChangeWipesResumePointerAndOfflineQueue() = runBlocking {
+        repo.set("http://abs-a.local", "tokA", "", "")
+        repo.setLastItem("li_a", null)
+        repo.setOfflineSessions("""{"days":{"wear-local_li_a_2026-01-01":{}}}""")
+
+        repo.set("http://abs-b.local", "tokB", "", "")
+
+        assertNull(repo.lastItem.first())
+        assertNull(repo.offlineSessions.first())
+        assertEquals("http://abs-b.local", repo.creds.first()?.server)
+    }
+
+    @Test
+    fun sameServerTokenRefreshKeepsResumePointerAndOfflineQueue() = runBlocking {
+        repo.set("http://abs.local", "tok1", "u1", "tony")
+        repo.setLastItem("li_1", null)
+        repo.setOfflineSessions("""{"days":{}}""")
+
+        // The common case: the phone re-pushes after a token refresh.
+        repo.set("http://abs.local", "tok2", "u1", "tony")
+
+        assertEquals("li_1", repo.lastItem.first()?.itemId)
+        assertEquals("""{"days":{}}""", repo.offlineSessions.first())
+    }
+
+    @Test
+    fun knownUserChangeOnSameServerWipes() = runBlocking {
+        repo.set("http://abs.local", "tokA", "userA", "a")
+        repo.setOfflineSessions("""{"days":{}}""")
+
+        repo.set("http://abs.local", "tokB", "userB", "b")
+
+        assertNull(repo.offlineSessions.first())
+    }
+
+    @Test
+    fun blankUserIdsNeverReadAsAChangedIdentity() = runBlocking {
+        // The phone bridge sends "" for userId today; "" -> "u1" (or the
+        // reverse) is LEARNING the identity, not changing it.
+        repo.set("http://abs.local", "tok1", "", "")
+        repo.setOfflineSessions("""{"days":{}}""")
+
+        repo.set("http://abs.local", "tok2", "u1", "tony")
+        assertEquals("""{"days":{}}""", repo.offlineSessions.first())
+
+        repo.set("http://abs.local", "tok3", "", "")
+        assertEquals("""{"days":{}}""", repo.offlineSessions.first())
+    }
+
+    @Test
+    fun clearDropsTheOfflineQueue() = runBlocking {
+        repo.set("http://abs.local", "tok", "u1", "tony")
+        repo.setOfflineSessions("""{"days":{}}""")
+
+        repo.clear()
+
+        // A queue that survived a logout would flush under whichever account
+        // logs in next.
+        assertNull(repo.offlineSessions.first())
+    }
 }

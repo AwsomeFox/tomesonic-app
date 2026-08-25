@@ -108,8 +108,17 @@ object ItemActions {
         hasCreds: Boolean,
         downloaded: Boolean,
         detailLoaded: Boolean,
-        trackCount: Int
+        trackCount: Int,
+        isEpisode: Boolean = false
     ): PlayResult = when {
+        // A podcast EPISODE never consults the item facts: its audio lives on
+        // the episode row, not the item's track list (a podcast's item-level
+        // trackCount is legitimately 0), and episodes always stream in v1
+        // (downloads are book-only), so `downloaded` must not short-circuit to
+        // Ok either — SessionManager streams episodes even when the item has a
+        // download. The only thing streaming needs up front is credentials.
+        isEpisode && !hasCreds -> PlayResult.NotConfigured
+        isEpisode -> PlayResult.Ok
         // A downloaded book plays with no network and no token at all.
         downloaded -> PlayResult.Ok
         !hasCreds -> PlayResult.NotConfigured

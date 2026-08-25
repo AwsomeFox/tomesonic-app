@@ -59,7 +59,10 @@ fun ItemScreen(
             hasCreds = state.hasCreds,
             downloaded = state.downloaded,
             detailLoaded = state.detailLoaded,
-            trackCount = state.trackCount
+            trackCount = state.trackCount,
+            // Episode taps must not be judged by the ITEM's track list — a
+            // podcast's is legitimately empty (see precheck).
+            isEpisode = episodeId != null
         )
         val message = ItemActions.message(result)
         if (message == null) {
