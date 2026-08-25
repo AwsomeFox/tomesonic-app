@@ -44,10 +44,22 @@ object DebugLaunch {
             server?.let { s -> token?.let { t -> s to t } }
     }
 
-    /** The route to open INSTEAD of the computed start destination. */
+    /**
+     * The route to open INSTEAD of the computed start destination — STATIC
+     * routes only. An argument-carrying route (contains '/') goes through
+     * [consumeNavigateRoute] instead: handing `item/li_book_1` to the NavHost
+     * as a start destination matched the template but the screen read an EMPTY
+     * id on-device (the first emulator run fetched `/api/items/?expanded=1`),
+     * while `navigate()` against the built graph is the exact path every real
+     * tap uses.
+     */
     @Volatile
     var route: String? = null
         private set
+
+    /** An argument-carrying route to navigate to once the graph exists. */
+    @Volatile
+    private var navigateRoute: String? = null
 
     /** An item to start playing once the app is connected. Read once, by design. */
     @Volatile
@@ -68,8 +80,20 @@ object DebugLaunch {
      * clear a route left behind by the previous capture rather than reopen it.
      */
     fun apply(args: Args) {
-        route = args.route
+        route = args.route?.takeUnless { it.contains('/') }
+        navigateRoute = args.route?.takeIf { it.contains('/') }
         playItemId = args.playItemId
+    }
+
+    /**
+     * One navigation per launch, same consume-once shape as the play command:
+     * the UI re-runs its effects when the connected line is crossed, and
+     * re-navigating there would stack a duplicate screen mid-screenshot.
+     */
+    fun consumeNavigateRoute(): String? {
+        val r = navigateRoute
+        navigateRoute = null
+        return r
     }
 
     /**

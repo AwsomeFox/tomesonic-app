@@ -85,7 +85,10 @@ fun WearApp() {
                     if (connected) {
                         LaunchedEffect(Unit) {
                             // Consumed rather than observed — the rig asks for
-                            // one book, once, on the launch that named it.
+                            // one screen and one book, once, on the launch that
+                            // named them. navigate() rather than a start
+                            // destination for arg routes: see DebugLaunch.route.
+                            DebugLaunch.consumeNavigateRoute()?.let { navController.navigate(it) }
                             DebugLaunch.consumePlayItemId()?.let { root.player.playItem(it) }
                         }
                     }

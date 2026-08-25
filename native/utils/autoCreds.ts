@@ -302,8 +302,11 @@ async function writeAutoCredsImpl(
       // only, never the refresh token). Guarded no-op without the module.
       pushWearCreds({ server, token: creds.token });
     } else {
-      await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
+      // Watch clear FIRST: deleteAsync can throw on a transient FS error and
+      // jump to the outer catch, and that path must not strand the watch
+      // thinking it is still connected after a phone-side logout.
       clearWearCreds();
+      await FileSystem.deleteAsync(CREDS_PATH, { idempotent: true });
     }
   } catch (e) {
     console.warn("[AutoCreds] write failed", e);

@@ -31,9 +31,9 @@ BOOK_ID="li_book_1"
 # Seconds to wait after a launch before the shutter. The long one covers a cold
 # start plus the ABS round trip plus Coil fetching and decoding a cover; the
 # player also has to bind the media service and open a play session.
-SETTLE=10
-PLAYER_SETTLE=12
-CONNECT_SETTLE=8
+SETTLE=12
+PLAYER_SETTLE=14
+CONNECT_SETTLE=14
 
 echo "== devices =="
 adb devices
@@ -79,15 +79,15 @@ launch() {
   adb shell am force-stop "$PKG"
   if [ -n "$play_item" ]; then
     adb shell am start -n "$ACTIVITY" \
-      -e debug_abs_server "'$SERVER'" \
-      -e debug_abs_token "'$TOKEN'" \
-      -e debug_route "'$route'" \
-      -e debug_play_item "'$play_item'"
+      -e debug_abs_server "$SERVER" \
+      -e debug_abs_token "$TOKEN" \
+      -e debug_route "$route" \
+      -e debug_play_item "$play_item"
   else
     adb shell am start -n "$ACTIVITY" \
-      -e debug_abs_server "'$SERVER'" \
-      -e debug_abs_token "'$TOKEN'" \
-      -e debug_route "'$route'"
+      -e debug_abs_server "$SERVER" \
+      -e debug_abs_token "$TOKEN" \
+      -e debug_route "$route"
   fi
 }
 
@@ -101,6 +101,13 @@ adb shell am force-stop "$PKG"
 adb shell am start -n "$ACTIVITY"
 sleep "$CONNECT_SETTLE"
 shoot connect
+
+# Warm-up, not photographed: the FIRST credentialed launch races its own
+# fire-and-forget DataStore write (home.png caught "Starting…" on run one).
+# After this, creds are persisted and every captured launch starts configured.
+echo "== warm-up (credentials land, caches warm) =="
+launch "home"
+sleep 10
 
 # Routes are Routes.kt's own strings (home / library/{id} / item/{id} /
 # downloads / settings) with ids from the mock server.

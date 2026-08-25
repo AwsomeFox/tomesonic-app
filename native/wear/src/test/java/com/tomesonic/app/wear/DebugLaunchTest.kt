@@ -80,8 +80,21 @@ class DebugLaunchTest {
                 DebugLaunch.EXTRA_PLAY_ITEM to "li_book_1"
             )
         )
-        assertEquals("item/li_book_1", DebugLaunch.route)
+        // An ARG route is a navigation, not a start destination: handing it to
+        // the NavHost as a start matched the template but the screen read an
+        // empty id on-device (run one fetched /api/items/?expanded=1).
+        assertNull(DebugLaunch.route)
+        assertEquals("item/li_book_1", DebugLaunch.consumeNavigateRoute())
+        // Consume-once, same shape as the play command.
+        assertNull(DebugLaunch.consumeNavigateRoute())
         assertEquals("li_book_1", DebugLaunch.playItemId)
+    }
+
+    @Test
+    fun aStaticRouteStaysAStartDestination() {
+        DebugLaunch.apply(parse(DebugLaunch.EXTRA_ROUTE to "downloads"))
+        assertEquals("downloads", DebugLaunch.route)
+        assertNull(DebugLaunch.consumeNavigateRoute())
     }
 
     @Test
