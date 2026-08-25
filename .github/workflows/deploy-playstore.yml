@@ -9,7 +9,9 @@ name: Deploy to Play Store
 #     version file (build.gradle versionName+versionCode, app.json,
 #     package.json) via native/scripts/set-version.mjs, commits that bump back
 #     to the branch you dispatched on, tags it v<version>, builds the signed
-#     AAB, and uploads. versionCode defaults to current+1 — pass it explicitly
+#     AABs (phone + wear), and uploads each to its track — the wear AAB goes
+#     to the DEDICATED form-factor track ("wear:" + the chosen track name).
+#     versionCode defaults to current+1 — pass it explicitly
 #     the FIRST time (it must exceed the highest code ever uploaded to Play,
 #     including the old Vue app's).
 #
@@ -49,6 +51,11 @@ on:
         description: 'Release notes shown on the Play Store "What''s new" (en-US, max 500 chars). Optional — leave blank to keep the previous release''s notes.'
         required: false
         type: string
+      changesNotSentForReview:
+        description: 'Set true ONLY if Play rejects the commit telling you changes must be sent for review manually (a first release on a new form-factor track sometimes demands this).'
+        required: false
+        default: false
+        type: boolean
 
 # Never run two releases at once, and never cancel one mid-upload.
 concurrency:
@@ -190,7 +197,7 @@ jobs:
             -PMYAPP_UPLOAD_KEY_PASSWORD="${{ secrets.UPLOAD_KEY_PASSWORD }}"
 
       - name: Verify both AABs exist
-        # The upload step lists BOTH bundles in releaseFiles. If :wear ever fell
+        # Each upload step below names its bundle. If :wear ever fell
         # out of settings.gradle (a prebuild without the config plugin), an
         # unscoped bundleRelease would "succeed" phone-only and the failure
         # would surface as a cryptic missing-file error inside the upload
@@ -230,25 +237,47 @@ jobs:
             echo "No release notes supplied — the previous release's notes are kept."
           fi
 
-      - name: Upload to Play Store
+      # TWO upload steps, not one release with two bundles: form-factor
+      # artifacts live on DEDICATED tracks in the Play API ("wear:internal",
+      # "wear:production", …). Putting the wear AAB inside the main track's
+      # release uploads fine but the final edits.commit comes back with an
+      # opaque 500 "Internal error encountered" (run 32809119310: both
+      # artifacts uploaded, commit rejected). Phone goes FIRST so a missing
+      # wear track can never block the phone release.
+      - name: Upload phone AAB to Play Store
         uses: r0adkll/upload-google-play@v1.1.3
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
           packageName: com.tomesonic.app
-          # Phone + watch AABs go up in the SAME release: same packageName, and
-          # Play routes the wear one by its android.hardware.type.watch
-          # uses-feature. :wear derives its versionCode from app/build.gradle
-          # (+1_000_000) at configure time, so the bump above covers both.
-          # COMMA-separated on one line: upload-google-play v1.1.3 splits
-          # releaseFiles on commas only — the newline form was passed through
-          # as ONE pattern and matched nothing (run 32805392503).
-          releaseFiles: native/android/app/build/outputs/bundle/release/app-release.aab,native/wear/build/outputs/bundle/release/wear-release.aab
+          releaseFiles: native/android/app/build/outputs/bundle/release/app-release.aab
           track: ${{ github.event.inputs.track || 'alpha' }}
           status: completed
           inAppUpdatePriority: 2
           # Empty string when no notes were supplied → the action skips the
           # "what's new" update and Play keeps the prior release's notes.
           whatsNewDirectory: ${{ steps.notes.outputs.hasNotes == 'true' && 'distribution/whatsnew' || '' }}
+          # The == 'true' comparison keeps this a literal 'true'/'false' even
+          # on tag pushes, where the dispatch input doesn't exist at all.
+          changesNotSentForReview: ${{ github.event.inputs.changesNotSentForReview == 'true' }}
+
+      - name: Upload wear AAB to Play Store (Wear OS track)
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          packageName: com.tomesonic.app
+          # Same packageName, same signing key; :wear derives its versionCode
+          # from app/build.gradle (+1_000_000) at configure time, so the bump
+          # above covers both artifacts.
+          releaseFiles: native/wear/build/outputs/bundle/release/wear-release.aab
+          # Same track NAME with the "wear:" form-factor prefix. These tracks
+          # only exist after the one-time Wear OS opt-in in Play Console
+          # (Test and release → Advanced settings → Form factors) — before
+          # that, this step fails fast at "Validating track" and the phone
+          # release above has already gone out.
+          track: wear:${{ github.event.inputs.track || 'alpha' }}
+          status: completed
+          whatsNewDirectory: ${{ steps.notes.outputs.hasNotes == 'true' && 'distribution/whatsnew' || '' }}
+          changesNotSentForReview: ${{ github.event.inputs.changesNotSentForReview == 'true' }}
 
       - name: Clean up keystore
         if: always()

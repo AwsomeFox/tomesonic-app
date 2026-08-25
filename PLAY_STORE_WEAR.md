@@ -41,11 +41,14 @@ signature (that's how credentials reach the watch at all).
 
 `.github/workflows/deploy-playstore.yml` builds unscoped `bundleRelease` from
 `native/android`, so one Gradle invocation produces both AABs and signs both with
-the upload key from the `-PMYAPP_UPLOAD_*` props. Both paths are then listed in
-`releaseFiles` of the `r0adkll/upload-google-play` step, so **both AABs go up in
-the same Play release**. Play serves the wear one only to Wear OS devices,
-because of the `android.hardware.type.watch` `uses-feature` — that declaration is
-the routing mechanism, not the form-factor opt-in
+the upload key from the `-PMYAPP_UPLOAD_*` props. The workflow then uploads them
+in **two steps**: the phone AAB to the chosen track, the wear AAB to the
+dedicated Wear OS form-factor track (`wear:` + the same track name) — Play
+manages form-factor releases on their own tracks, which come into existence with
+the form-factor opt-in
+([form-factor tracks](https://support.google.com/googleplay/android-developer/answer/13295490)).
+On a watch, Play offers the wear artifact by its `android.hardware.type.watch`
+`uses-feature` declaration
 ([packaging & distribution](https://developer.android.com/training/wearables/packaging)).
 
 Play App Signing re-signs both artifacts with the one app signing key, so a
@@ -243,37 +246,46 @@ No new workflow, no new secrets, no extra step. Exactly the flow in
    the first watch release. `releaseNotes` — optional, en-US, 500 chars max;
    blank keeps the previous release's notes.
 3. The workflow stamps the version files, commits and tags, builds **both** AABs,
-   and uploads them as one Play release.
+   and uploads them as **two Play releases**: the phone AAB to the chosen track,
+   and the wear AAB to that track's dedicated Wear OS form-factor track
+   (`wear:internal`, `wear:production`, …). The wear tracks exist only after the
+   one-time form-factor opt-in (§1 above) — until then the wear upload step
+   fails at "Validating track", after the phone release has already gone out.
 4. Alternatively `git tag v2.8.17 && git push origin v2.8.17` releases to the
    **alpha** track — that is the fallback in `deploy-playstore.yml`
    (`track: ${{ github.event.inputs.track || 'alpha' }}`).
    `PLAY_STORE_DEPLOYMENT.md` still says tags go to `internal`; the workflow is
    the truth.
 
-Then, in the console: **Test and release → Releases** → open the release → it
-lists **two app bundles** (e.g. 20148 and 1020148). If only one is there, the
-wear build didn't happen — check the `:wear` include in
-`native/android/settings.gradle` and the build log.
+Then, in the console: **Test and release → Releases** → there are **two
+releases**: the main track's (phone bundle, e.g. 20148) and the Wear OS track's
+(wear bundle, e.g. 1020148 — the console groups form-factor tracks under their
+own heading once the opt-in is done). If the wear release is missing, check the
+deploy run's "Upload wear AAB" step and the `:wear` include in
+`native/android/settings.gradle`.
 
 ### First-time gotchas
 
-- The wear AAB does **not** get its own release, its own track, or its own "what's
-  new". It is a second artifact inside the same release. (Play does support
-  dedicated form-factor tracks; this repo does not use them, and adopting them
-  would mean changing `deploy-playstore.yml`.)
+- The wear AAB gets its **own release on a dedicated form-factor track**
+  (`wear:` + the track name). It cannot ride inside the main track's release:
+  the upload itself succeeds, but the Play API then rejects the final commit
+  with an opaque 500 `Internal error encountered` (deploy run 32809119310 is
+  the receipt — "Successfully uploaded 2 artifacts", then the commit died).
+  `deploy-playstore.yml` therefore uploads in two steps, phone first.
 - Form-factor review runs **asynchronously after** you submit a release
   containing the wear artifact. Opting in on Monday does not mean watches see the
   app on Monday. Review status shows in the console under the Wear OS section of
   Advanced settings / the app-content area.
-- Rollout percentage is a property of the **release**, not of an artifact. Halting
-  or staging a rollout affects the phone and the watch together — there is no way
-  to roll back only the watch app while leaving the phone release live. If a watch
-  bug needs pulling, you are pulling the whole release.
+- Because phone and watch are **separate releases on separate tracks**, they can
+  be halted independently in the console: a watch-only bug means halting the
+  Wear OS track's release while the phone release stays live. What stays shared:
+  the listing, the package name, and the version-bump commit that produced both.
 - Repo sharp edge: `deploy-playstore.yml` uploads with `status: completed`, i.e.
   a full rollout, and does not pass a `userFraction`. Staged rollouts have to be
   set up in the console after the fact (or the workflow has to be changed).
   Consider that before pointing a first watch release at `production`.
-- `inAppUpdatePriority: 2` is set for the whole release. Nothing watch-specific.
+- `inAppUpdatePriority: 2` is set on the **phone** release only — in-app updates
+  aren't a wear mechanism, so the wear upload step doesn't pass one.
 - The release build does **not** skip lint: `bundleRelease` drags
   `lintVitalRelease` in for `:wear` too, so a lint-vital error in the watch module
   fails the release job (a manifest `<service>` pointing at a class that doesn't
