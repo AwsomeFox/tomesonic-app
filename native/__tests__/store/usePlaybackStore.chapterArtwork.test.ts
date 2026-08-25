@@ -284,6 +284,27 @@ describe("chapter-queue artwork: bytes on the ACTIVE item only", () => {
     expect(TrackPlayer.updateMetadataForTrack).not.toHaveBeenCalled();
   });
 
+  it("re-stamps when session.coverUrl changes even though chapter and active index did not move", async () => {
+    // A token refresh swaps session.coverUrl without moving the chapter or the
+    // active item — the dedupe must not swallow it, or the stale artworkUri
+    // sits in the MediaSession until the next chapter change.
+    await prepareChapterBook();
+    usePlaybackStore.setState({ isPlaying: true });
+    jest.mocked(TrackPlayer.getActiveTrackIndex).mockResolvedValue(0);
+    await jest.advanceTimersByTimeAsync(1000);
+    jest.mocked(TrackPlayer.updateMetadataForTrack).mockClear();
+
+    const s = usePlaybackStore.getState().currentSession;
+    const freshUrl = "https://abs.example.com/cover.jpg?token=fresh";
+    usePlaybackStore.setState({ currentSession: { ...s, coverUrl: freshUrl } });
+    await jest.advanceTimersByTimeAsync(1000);
+
+    expect(TrackPlayer.updateMetadataForTrack).toHaveBeenCalledWith(
+      0,
+      expect.objectContaining({ artwork: freshUrl })
+    );
+  });
+
   it("car-connect restamp PRESERVES each row's existing metadata alongside the tiny bytes", async () => {
     // The native setMetadata is replacement-style for the standard fields: a
     // restamp bundle carrying ONLY localArtworkSmall would null every row's

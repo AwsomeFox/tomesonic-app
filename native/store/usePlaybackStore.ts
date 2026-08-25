@@ -619,11 +619,20 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
     // boundaries WITHOUT the chapter index necessarily changing (a chapterless
     // multi-file book keeps chapterIndex=-1 across every file). Keying the
     // dedup on chapterIndex alone stranded the bytes on file 0.
-    if (effChapterIndex === _lastMetaChapter && activeIndex === _lastActiveIndex) return;
+    // ... and a third key: the artworkUri. A token refresh swaps
+    // session.coverUrl without moving the chapter OR the active index, so the
+    // dedupe must not swallow it — the stale URI would sit in the MediaSession
+    // until the next chapter change.
+    const coverUrl: string = session.coverUrl || "";
+    if (
+      effChapterIndex === _lastMetaChapter &&
+      activeIndex === _lastActiveIndex &&
+      coverUrl === _metaCoverUrl
+    )
+      return;
     const book = session.displayTitle || "Audiobook";
     const author = session.displayAuthor || "";
     const joined = [book, author].filter(Boolean).join(" • ");
-    const coverUrl: string = session.coverUrl || "";
     const artworkChanged = coverUrl !== _metaCoverUrl;
     // LARGE bytes live on the ACTIVE queue item (+ the pre-stamped NEXT one) —
     // if they lingered on every item the ~40KB cover on each of a long book's

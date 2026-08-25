@@ -388,10 +388,10 @@ index d6e3483..5c2efa8 100644
 +): AudioItem(audioUrl, type, artist, title, albumTitle, artwork, duration, options, mediaId, clipStartMs, clipEndMs, localArtwork, localArtworkSmall)
 \ No newline at end of file
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-index 13a6c60..7fd825e 100644
+index 13a6c60..249abb4 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-@@ -323,6 +323,32 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
+@@ -323,6 +323,33 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
          callback.resolve(null)
      }
  
@@ -411,6 +411,7 @@ index 13a6c60..7fd825e 100644
 +            if (!entry.hasKey("index") || entry.isNull("index")) continue
 +            val index = entry.getInt("index")
 +            if (index < 0 || index >= musicService.tracks.size) continue
++            if (!entry.hasKey("metadata") || entry.isNull("metadata")) continue
 +            val meta = entry.getMap("metadata") ?: continue
 +            Arguments.toBundle(meta)?.let { list.add(index to it) }
 +        }
@@ -424,7 +425,7 @@ index 13a6c60..7fd825e 100644
      override fun updateNowPlayingMetadata(map: ReadableMap?, callback: Promise) = launchInScope {
          if (verifyServiceBoundOrReject(callback)) return@launchInScope
  
-@@ -433,6 +459,30 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
+@@ -433,6 +460,30 @@ class MusicModule(reactContext: ReactApplicationContext) : NativeTrackPlayerSpec
          callback.resolve(null)
      }
  
