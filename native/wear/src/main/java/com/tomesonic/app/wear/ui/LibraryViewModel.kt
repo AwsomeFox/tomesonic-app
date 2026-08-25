@@ -58,14 +58,20 @@ class LibraryViewModel : ViewModel() {
         viewModelScope.launch {
             val incoming = Graph.absApi.libraryItems(id, page = page, limit = Pagination.PAGE_SIZE)
             val latest = _state.value
+            if (incoming == null) {
+                // The REQUEST failed (offline, 401). Not end-of-list: leave the
+                // cursor and endReached alone so the load-more trigger keeps
+                // retrying when it scrolls back into view — marking the end here
+                // stuck the list until the screen was re-entered.
+                _state.value = latest.copy(loading = false)
+                return@launch
+            }
             _state.value = latest.copy(
                 items = Pagination.append(latest.items, incoming),
                 loading = false,
+                // The server ANSWERED, so a short or empty page is a real end.
                 endReached = Pagination.isEnd(incoming, Pagination.PAGE_SIZE),
-                // Only a page that actually arrived advances the cursor: an
-                // offline fetch returns empty, and treating that as consumed
-                // would skip a real page once the link comes back.
-                page = if (incoming.isEmpty()) latest.page else page
+                page = page
             )
         }
     }

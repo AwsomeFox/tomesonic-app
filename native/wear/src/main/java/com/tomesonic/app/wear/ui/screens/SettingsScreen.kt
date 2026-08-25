@@ -63,8 +63,11 @@ fun SettingsScreen() {
         item {
             TomeChip(
                 label = if (state.syncing) "Syncing…" else "Sync now",
-                secondaryLabel = "Send offline progress",
-                enabled = !state.syncing,
+                // Disabled while disconnected: a flush without a server or with
+                // a rejected token can only fail, and the failure message would
+                // just restate what the connection row above already says.
+                secondaryLabel = if (state.connected) "Send offline progress" else "Connect to sync",
+                enabled = !state.syncing && state.connected,
                 onClick = { viewModel.syncNow() },
                 icon = { RefreshGlyph(tint = MaterialTheme.colorScheme.primary) }
             )

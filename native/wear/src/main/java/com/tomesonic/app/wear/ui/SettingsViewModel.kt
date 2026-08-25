@@ -56,13 +56,16 @@ class SettingsViewModel : ViewModel() {
             }
         }
         viewModelScope.launch {
-            _state.value = _state.value.copy(
-                storageBytes = try {
-                    Graph.downloadRepository.totalBytes()
-                } catch (t: Throwable) {
-                    0L
+            // Live, not a one-shot totalBytes(): a download finishing or a
+            // delete while this screen is open must move the number — same
+            // source of truth the Downloads screen renders from.
+            try {
+                Graph.downloadRepository.entries.collect { entries ->
+                    _state.value = _state.value.copy(storageBytes = entries.sumOf { it.bytes })
                 }
-            )
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(storageBytes = 0L)
+            }
         }
     }
 

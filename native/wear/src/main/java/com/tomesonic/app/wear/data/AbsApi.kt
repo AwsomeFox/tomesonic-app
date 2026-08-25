@@ -30,11 +30,19 @@ class AbsApi(
         return out
     }
 
-    /** `page` is ZERO-based, matching ABS. Sorted by title so paging is stable. */
-    suspend fun libraryItems(libraryId: String, page: Int = 0, limit: Int = 50): List<ItemSummary> {
+    /**
+     * `page` is ZERO-based, matching ABS. Sorted by title so paging is stable.
+     *
+     * NULL means the REQUEST failed (offline, 401, malformed body); an empty
+     * list means the server answered and the page is genuinely empty. Paging
+     * needs the difference: a transient failure must stay retryable, while a
+     * real empty page is end-of-list. (The other list calls collapse both to
+     * empty on purpose — their screens re-fetch wholesale.)
+     */
+    suspend fun libraryItems(libraryId: String, page: Int = 0, limit: Int = 50): List<ItemSummary>? {
         val path = "/api/libraries/${enc(libraryId)}/items" +
             "?limit=$limit&page=$page&minified=1&sort=media.metadata.title"
-        val root = parseObject(client.get(path)) ?: return emptyList()
+        val root = parseObject(client.get(path)) ?: return null
         return summaries(root.optJSONArray("results"))
     }
 
