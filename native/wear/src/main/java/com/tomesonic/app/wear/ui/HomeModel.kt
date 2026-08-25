@@ -68,8 +68,13 @@ object HomeSections {
             val row = inProgress.firstOrNull { it.id == lastId }
             // isFor, not an id compare: a downloaded EPISODE's entry id is the
             // composite key, and the resume pointer holds the podcast's item id
-            // plus the episode id. Books match exactly as before.
-            downloads.firstOrNull { it.isFor(lastId, last.episodeId) }?.let { entry ->
+            // plus the episode id. Books match exactly as before. The fallback
+            // keeps v1's rule: an episode resume whose PODCAST has an item-level
+            // entry still gets its card described off the index (title, cover,
+            // offline) — the episode itself streams, exactly as it always did.
+            val entry = downloads.firstOrNull { it.isFor(lastId, last.episodeId) }
+                ?: last.episodeId?.let { downloads.firstOrNull { e -> e.isFor(lastId, null) } }
+            if (entry != null) {
                 return ResumeTarget(
                     // The ITEM id — an episode entry's own id is a folder key,
                     // not something the server or the player should ever see.
@@ -96,11 +101,11 @@ object HomeSections {
         downloads: List<DownloadEntry>
     ): ResumeTarget {
         val resolvedEpisode = episodeId ?: item.episodeId
-        // The row's download marker must describe what the card will PLAY: the
-        // episode's own entry when the target is an episode, the book's
-        // otherwise. A podcast with some OTHER episode downloaded is not
-        // "downloaded" for this card.
+        // The episode's own entry wins; an item-level entry (a v1-style podcast
+        // download) still describes the card. Some OTHER episode's entry never
+        // matches either arm — episode entries carry their episodeId.
         val entry = downloads.firstOrNull { it.isFor(item.id, resolvedEpisode) }
+            ?: resolvedEpisode?.let { downloads.firstOrNull { e -> e.isFor(item.id, null) } }
         return ResumeTarget(
             itemId = item.id,
             episodeId = resolvedEpisode,
