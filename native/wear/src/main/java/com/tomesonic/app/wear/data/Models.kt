@@ -42,8 +42,19 @@ data class Creds(
     val username: String
 )
 
-/** `last_item_id` + `last_episode_id` as one value — the home screen's resume card. */
-data class LastItem(val itemId: String, val episodeId: String?)
+/**
+ * `last_item_id` + `last_episode_id` (+ display fields) as one value — the home
+ * screen's resume card, and since v2 the Continue Listening tile, which renders
+ * OUTSIDE the app process and cannot fetch a title from the server on its
+ * render path. Title/author are best-effort: rows written by v1 builds have
+ * neither, and every consumer must render without them.
+ */
+data class LastItem(
+    val itemId: String,
+    val episodeId: String?,
+    val title: String? = null,
+    val author: String? = null
+)
 
 data class LibrarySummary(
     val id: String,

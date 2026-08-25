@@ -61,7 +61,12 @@ class CredsRepository(private val store: DataStore<Preferences>) {
 
     val lastItem: Flow<LastItem?> = prefs.map { p ->
         val id = p[KEY_LAST_ITEM]?.takeIf { it.isNotBlank() }
-        if (id == null) null else LastItem(id, p[KEY_LAST_EPISODE]?.takeIf { it.isNotBlank() })
+        if (id == null) null else LastItem(
+            id,
+            p[KEY_LAST_EPISODE]?.takeIf { it.isNotBlank() },
+            p[KEY_LAST_TITLE]?.takeIf { it.isNotBlank() },
+            p[KEY_LAST_AUTHOR]?.takeIf { it.isNotBlank() }
+        )
     }.distinctUntilChanged()
 
     /** Wave 3A's OfflineSessionQueue blob — stored here so the key table has one owner. */
@@ -87,6 +92,8 @@ class CredsRepository(private val store: DataStore<Preferences>) {
             if (identityChanged) {
                 p.remove(KEY_LAST_ITEM)
                 p.remove(KEY_LAST_EPISODE)
+                p.remove(KEY_LAST_TITLE)
+                p.remove(KEY_LAST_AUTHOR)
                 p.remove(KEY_OFFLINE_SESSIONS)
             }
             p[KEY_SERVER] = newServer
@@ -112,6 +119,8 @@ class CredsRepository(private val store: DataStore<Preferences>) {
             p.remove(KEY_USERNAME)
             p.remove(KEY_LAST_ITEM)
             p.remove(KEY_LAST_EPISODE)
+            p.remove(KEY_LAST_TITLE)
+            p.remove(KEY_LAST_AUTHOR)
             p.remove(KEY_OFFLINE_SESSIONS)
         }
     }
@@ -140,15 +149,29 @@ class CredsRepository(private val store: DataStore<Preferences>) {
         store.edit { it[KEY_SPEED] = speed }
     }
 
-    suspend fun setLastItem(itemId: String?, episodeId: String?) {
+    suspend fun setLastItem(
+        itemId: String?,
+        episodeId: String?,
+        title: String? = null,
+        author: String? = null
+    ) {
         store.edit { p ->
             if (itemId.isNullOrBlank()) {
                 p.remove(KEY_LAST_ITEM)
                 p.remove(KEY_LAST_EPISODE)
+                p.remove(KEY_LAST_TITLE)
+                p.remove(KEY_LAST_AUTHOR)
             } else {
                 p[KEY_LAST_ITEM] = itemId
                 if (episodeId.isNullOrBlank()) p.remove(KEY_LAST_EPISODE)
                 else p[KEY_LAST_EPISODE] = episodeId
+                // Display fields for renderers that live outside the app process
+                // (the tile). Blank clears rather than writes, so a caller
+                // without a title can't erase a good one with "".
+                if (title.isNullOrBlank()) p.remove(KEY_LAST_TITLE)
+                else p[KEY_LAST_TITLE] = title
+                if (author.isNullOrBlank()) p.remove(KEY_LAST_AUTHOR)
+                else p[KEY_LAST_AUTHOR] = author
             }
         }
     }
@@ -250,6 +273,8 @@ class CredsRepository(private val store: DataStore<Preferences>) {
         private val KEY_SPEED = floatPreferencesKey("playback_speed")
         private val KEY_LAST_ITEM = stringPreferencesKey("last_item_id")
         private val KEY_LAST_EPISODE = stringPreferencesKey("last_episode_id")
+        private val KEY_LAST_TITLE = stringPreferencesKey("last_item_title")
+        private val KEY_LAST_AUTHOR = stringPreferencesKey("last_item_author")
         private val KEY_OFFLINE_SESSIONS = stringPreferencesKey("offline_sessions")
 
         /**

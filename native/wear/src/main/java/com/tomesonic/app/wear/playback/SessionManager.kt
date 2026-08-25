@@ -255,7 +255,7 @@ class SessionManager(
         PlaybackState.set(ready.session)
         // The home screen's resume card reads this; write it only once the queue
         // is actually loaded so a failed play can't repoint it.
-        credsRepository.setLastItem(itemId, episodeId)
+        credsRepository.setLastItem(itemId, episodeId, ready.session.title, ready.session.author)
         return PlayResult.Ok
     }
 
