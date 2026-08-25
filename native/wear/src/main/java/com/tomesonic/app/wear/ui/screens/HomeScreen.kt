@@ -21,6 +21,7 @@ import androidx.wear.compose.material3.Text
 import com.tomesonic.app.wear.ui.HomeRow
 import com.tomesonic.app.wear.ui.HomeViewModel
 import com.tomesonic.app.wear.ui.ResumeTarget
+import com.tomesonic.app.wear.ui.SearchLogic
 import com.tomesonic.app.wear.ui.UiFormat
 import com.tomesonic.app.wear.ui.components.BookGlyph
 import com.tomesonic.app.wear.ui.components.CoverImage
@@ -32,6 +33,7 @@ import com.tomesonic.app.wear.ui.components.PlayGlyph
 import com.tomesonic.app.wear.ui.components.PodcastGlyph
 import com.tomesonic.app.wear.ui.components.ScreenTitle
 import com.tomesonic.app.wear.ui.components.ScrollScreen
+import com.tomesonic.app.wear.ui.components.SearchGlyph
 import com.tomesonic.app.wear.ui.components.SectionHeader
 import com.tomesonic.app.wear.ui.components.SettingsGlyph
 import com.tomesonic.app.wear.ui.components.TomeCard
@@ -51,6 +53,7 @@ import com.tomesonic.app.wear.ui.components.coverModel
 fun HomeScreen(
     onPlay: (String, String?) -> Unit,
     onOpenLibrary: (String) -> Unit,
+    onOpenSearch: (String) -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
@@ -60,6 +63,13 @@ fun HomeScreen(
     // Re-entering home (back from the player, from settings) re-reads the
     // resume pointer, which the player has probably just moved.
     LaunchedEffect(Unit) { viewModel.refresh() }
+
+    // Home's Search chip belongs to no library in particular, so it takes one
+    // from the library chips the screen is already showing (SearchLogic owns
+    // which); null hides the chip rather than searching a guess.
+    val searchLibraryId = SearchLogic.defaultLibraryId(
+        state.rows.mapNotNull { (it as? HomeRow.Library)?.library }
+    )
 
     ScrollScreen {
         item { ScreenTitle("TomeSonic") }
@@ -117,6 +127,19 @@ fun HomeScreen(
                     label = "Settings",
                     onClick = onOpenSettings,
                     icon = { SettingsGlyph(tint = MaterialTheme.colorScheme.primary) }
+                )
+            }
+        }
+
+        searchLibraryId?.let { id ->
+            item {
+                // Last of the navigation chips rather than slotted among them:
+                // HomeSections owns the row order and ends it with Settings, and
+                // splitting that list here would put the order in two places.
+                TomeChip(
+                    label = "Search",
+                    onClick = { onOpenSearch(id) },
+                    icon = { SearchGlyph(tint = MaterialTheme.colorScheme.primary) }
                 )
             }
         }

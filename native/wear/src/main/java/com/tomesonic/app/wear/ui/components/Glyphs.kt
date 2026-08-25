@@ -231,6 +231,22 @@ fun RefreshGlyph(tint: Color, modifier: Modifier = Modifier, dim: Dp = 20.dp) {
     }
 }
 
+/** A magnifier — the Search chip on home and on every library screen. */
+@Composable
+fun SearchGlyph(tint: Color, modifier: Modifier = Modifier, dim: Dp = 20.dp) {
+    Canvas(modifier.size(dim)) {
+        drawCircle(
+            color = tint,
+            radius = size.width * 0.28f,
+            center = at(0.42f, 0.42f),
+            style = Stroke(width = weight(0.1f), cap = StrokeCap.Round)
+        )
+        // The handle starts just clear of the rim: drawn from the centre it
+        // would show through the glass at small sizes.
+        polyline(tint, 0.1f, 0.63f to 0.63f, 0.86f to 0.86f)
+    }
+}
+
 /**
  * The TomeSonic mark: the phone's launcher icon — an open book with a play
  * triangle in the fold — rebuilt from the same primitives as everything else.

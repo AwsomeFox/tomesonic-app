@@ -20,12 +20,15 @@ object Routes {
     /** Templates — the `{}` names are what [android.os.Bundle.getString] reads back. */
     const val LIBRARY_TEMPLATE = "library/{id}"
     const val ITEM_TEMPLATE = "item/{id}"
+    const val SEARCH_TEMPLATE = "search/{id}"
 
     const val ARG_ID = "id"
 
     fun library(libraryId: String): String = "library/$libraryId"
 
     fun item(itemId: String): String = "item/$itemId"
+
+    fun search(libraryId: String): String = "search/$libraryId"
 
     /**
      * Where the app opens.

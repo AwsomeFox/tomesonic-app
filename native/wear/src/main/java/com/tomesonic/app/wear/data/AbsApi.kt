@@ -46,6 +46,23 @@ class AbsApi(
         return summaries(root.optJSONArray("results"))
     }
 
+    /**
+     * One library's search. `book` results then `podcast` results, server order,
+     * capped at [limit] — a watch list is a glance, not a result page.
+     *
+     * NULL means the REQUEST failed, exactly as in [libraryItems]; an empty list
+     * means the server answered and nothing matched. The search screen spends
+     * that difference on a retry chip rather than on "No matches".
+     */
+    suspend fun search(
+        libraryId: String,
+        query: String,
+        limit: Int = SEARCH_LIMIT
+    ): List<ItemSummary>? {
+        val path = "/api/libraries/${enc(libraryId)}/search?q=${enc(query)}&limit=$limit"
+        return parseSearch(client.get(path), limit)
+    }
+
     /** Continue Listening. Podcast rows carry `recentEpisode` -> ItemSummary.episodeId. */
     suspend fun itemsInProgress(limit: Int = 15): List<ItemSummary> {
         val root = parseObject(client.get("/api/me/items-in-progress?limit=$limit"))
@@ -131,6 +148,37 @@ class AbsApi(
     companion object {
         const val CLIENT_NAME = "TomeSonic Wear"
         const val MEDIA_PLAYER = "exo-player"
+
+        /** One screenful of results, per the contract's `limit=12`. */
+        const val SEARCH_LIMIT = 12
+
+        /** Books first, then podcasts — the merge order IS the contract. */
+        private val SEARCH_SECTIONS = listOf("book", "podcast")
+
+        /**
+         * `/search` answers `{book:[{libraryItem,…}], podcast:[{libraryItem,…}]}` —
+         * the wrapper shape native/utils/formatSwitch.ts already consumes, and
+         * the reason these rows can't go through [summaries]. Podcast rows carry
+         * no `recentEpisode` here, so their episodeId stays null.
+         *
+         * A row that isn't that shape costs its row; a body that isn't JSON
+         * costs the whole call (null). Internal so the merge order and the cap
+         * are pinned by a test rather than by a live server.
+         */
+        internal fun parseSearch(raw: String?, limit: Int): List<ItemSummary>? {
+            val root = parseObject(raw) ?: return null
+            if (limit <= 0) return emptyList()
+            val out = ArrayList<ItemSummary>(limit)
+            for (section in SEARCH_SECTIONS) {
+                val arr = root.optJSONArray(section) ?: continue
+                for (i in 0 until arr.length()) {
+                    if (out.size >= limit) return out
+                    val row = arr.optJSONObject(i) ?: continue
+                    ItemSummary.fromJson(row.optJSONObject("libraryItem"))?.let { out.add(it) }
+                }
+            }
+            return out
+        }
 
         /**
          * Verbatim from store/usePlaybackStore.ts. Telling the server what we can

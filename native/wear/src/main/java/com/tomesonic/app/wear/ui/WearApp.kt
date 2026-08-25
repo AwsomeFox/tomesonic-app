@@ -27,6 +27,7 @@ import com.tomesonic.app.wear.ui.screens.HomeScreen
 import com.tomesonic.app.wear.ui.screens.ItemScreen
 import com.tomesonic.app.wear.ui.screens.LibraryScreen
 import com.tomesonic.app.wear.ui.screens.PlayerScreen
+import com.tomesonic.app.wear.ui.screens.SearchScreen
 import com.tomesonic.app.wear.ui.screens.SettingsScreen
 import com.tomesonic.app.wear.ui.theme.TomeSonicWearTheme
 
@@ -121,6 +122,7 @@ fun WearApp() {
                             HomeScreen(
                                 onPlay = openPlayer,
                                 onOpenLibrary = { navController.navigate(Routes.library(it)) },
+                                onOpenSearch = { navController.navigate(Routes.search(it)) },
                                 onOpenDownloads = { navController.navigate(Routes.DOWNLOADS) },
                                 onOpenSettings = { navController.navigate(Routes.SETTINGS) }
                             )
@@ -128,6 +130,14 @@ fun WearApp() {
 
                         composable(Routes.LIBRARY_TEMPLATE) { entry ->
                             LibraryScreen(
+                                libraryId = entry.arguments?.getString(Routes.ARG_ID).orEmpty(),
+                                onOpenItem = { navController.navigate(Routes.item(it)) },
+                                onOpenSearch = { navController.navigate(Routes.search(it)) }
+                            )
+                        }
+
+                        composable(Routes.SEARCH_TEMPLATE) { entry ->
+                            SearchScreen(
                                 libraryId = entry.arguments?.getString(Routes.ARG_ID).orEmpty(),
                                 onOpenItem = { navController.navigate(Routes.item(it)) }
                             )
