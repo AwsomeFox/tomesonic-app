@@ -570,10 +570,16 @@ export async function updateTrackMetadataBatch(
   if (!updates.length) return;
   try {
     const RN = require("react-native");
-    const m = RN.NativeModules?.TrackPlayer;
-    if (RN.Platform?.OS === "android" && m?.updateMetadataForTracks) {
-      await m.updateMetadataForTracks(updates);
-      return;
+    if (RN.Platform?.OS === "android") {
+      // Prefer the TurboModule binding (how the library itself reaches the
+      // native module under the New Architecture); NativeModules is the
+      // legacy-bridge fallback.
+      const m =
+        RN.TurboModuleRegistry?.get?.("TrackPlayer") ?? RN.NativeModules?.TrackPlayer;
+      if (m?.updateMetadataForTracks) {
+        await m.updateMetadataForTracks(updates);
+        return;
+      }
     }
   } catch {}
   for (const u of updates) {
