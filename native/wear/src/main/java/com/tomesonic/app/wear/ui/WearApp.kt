@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -16,6 +17,7 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
+import com.tomesonic.app.wear.DebugLaunch
 import com.tomesonic.app.wear.ui.components.AppMarkGlyph
 import com.tomesonic.app.wear.ui.components.LocalCoverLoader
 import com.tomesonic.app.wear.ui.screens.ConnectScreen
@@ -75,9 +77,22 @@ fun WearApp() {
                         navController.navigate(Routes.PLAYER)
                     }
 
+                    // Screenshot/dev rig, DEBUG BUILDS ONLY: MainActivity is the
+                    // only writer of these holders and only behind a
+                    // FLAG_DEBUGGABLE check, so both are null in a release build
+                    // and the two lines below take their normal branch. See
+                    // DebugLaunch and .github/workflows/wear-screenshots.yml.
+                    if (connected) {
+                        LaunchedEffect(Unit) {
+                            // Consumed rather than observed — the rig asks for
+                            // one book, once, on the launch that named it.
+                            DebugLaunch.consumePlayItemId()?.let { root.player.playItem(it) }
+                        }
+                    }
+
                     SwipeDismissableNavHost(
                         navController = navController,
-                        startDestination = Routes.startDestination(
+                        startDestination = DebugLaunch.route ?: Routes.startDestination(
                             hasCreds = state.creds != null,
                             authFailed = state.authFailed
                         ),

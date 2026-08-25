@@ -1,0 +1,188 @@
+name: Wear Screenshots
+
+# Store assets, generated instead of hand-shot: boot a round Wear OS emulator,
+# install the wear debug APK, point it at a fake AudiobookShelf server running
+# on the runner, and photograph every screen. The PNGs are committed back into
+# screenshots/wear/ (see PLAY_STORE_WEAR.md § Store assets for the watch).
+#
+# The three moving parts:
+#   native/wear/screenshots/mock_abs.py  — stdlib-only ABS stand-in on :3333
+#   native/wear/screenshots/capture.sh   — what runs inside the emulator
+#   DebugLaunch.kt                       — the debug-only intent extras that let
+#                                          a workflow set credentials and open a
+#                                          route without a paired phone
+#
+# NOT a required check and deliberately narrow triggers: this job costs ~25
+# emulator minutes and produces binaries, so it runs when the rig itself changes
+# or when a human asks for a fresh set.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/wear-screenshots.yml'
+      - 'native/wear/screenshots/**'
+
+# Pushing the PNGs back needs write access to the branch.
+permissions:
+  contents: write
+
+# One at a time per branch, and NEVER cancelled mid-flight: a run that is
+# interrupted between `git commit` and `git push` leaves the branch in a state
+# the next run has to guess at.
+concurrency:
+  group: wear-screenshots-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  screenshots:
+    name: wear-screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      # Same reclaim e2e-smoke does: the gradle build, the emulator system image
+      # and the AVD together outgrow the runner's default free space.
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift \
+            "$AGENT_TOOLSDIRECTORY"/Ruby "$AGENT_TOOLSDIRECTORY"/PyPy || true
+          df -h /
+
+      - name: checkout sources
+        uses: actions/checkout@v4
+        with:
+          # A push event checks out a detached SHA; the commit step at the end
+          # has to be ON the branch to push back to it.
+          ref: ${{ github.ref_name }}
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # REQUIRED before gradle: :wear itself has no JS, but configuring the
+      # build evaluates native/android, whose expo/RN gradle plugins resolve
+      # their scripts out of native/node_modules.
+      - name: install dependencies
+        run: npm ci --prefix native
+
+      - name: build wear debug APK
+        # Run from native/android for the same reason build-apk.yml does — the
+        # Sentry snippet resolves its path with `node --print require.resolve`.
+        working-directory: native/android
+        env:
+          SENTRY_DISABLE_AUTO_UPLOAD: "true"
+        run: ./gradlew :wear:assembleDebug --no-daemon --stacktrace
+
+      - name: generate the audio fixture
+        # 600 seconds of silence at 32 kbps ≈ 2.4 MB. Every mock track is
+        # exactly this long (TRACK_SECONDS in mock_abs.py): declaring a track
+        # longer than the file is what makes a mid-book seek land past EOF.
+        # ubuntu-latest no longer preinstalls ffmpeg (see e2e-smoke.yml).
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+          ffmpeg -loglevel error -f lavfi -i anullsrc=r=44100:cl=mono -t 600 \
+            -b:a 32k native/wear/screenshots/silence.mp3
+          ls -l native/wear/screenshots/silence.mp3
+
+      - name: start the mock AudiobookShelf server
+        # From the directory holding silence.mp3 — the server looks it up in the
+        # working directory. nohup + a log file so it outlives this step.
+        working-directory: native/wear/screenshots
+        run: |
+          nohup python3 mock_abs.py > "$GITHUB_WORKSPACE/mock-abs.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3333/api/libraries > /dev/null && break
+            sleep 1
+          done
+          echo "--- /api/libraries ---"
+          curl -sf http://127.0.0.1:3333/api/libraries || exit 1
+          echo
+          echo "--- cover bytes ---"
+          curl -sf "http://127.0.0.1:3333/api/items/li_book_1/cover?width=240&format=webp" \
+            -o /tmp/cover-probe.png && file /tmp/cover-probe.png
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: capture screens on a Wear OS emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          # Wear OS 5. FALLBACK: if the image download 404s, swap this pair for
+          #   api-level: 33      # Wear OS 4
+          # (same target/arch/profile) — the wear system images are published
+          # per platform version and not every API level has an x86_64 one.
+          api-level: 34
+          target: android-wear
+          arch: x86_64
+          # A round watch at 454x454 — above Play's 384x384 screenshot floor,
+          # so the captures double as store-listing candidates. FALLBACK: if
+          # avdmanager doesn't know this device definition, swap for the legacy
+          # `wear_round` (320x320 — too small for the store, fine for smoke).
+          # The "report capture sizes" step below prints the real dimensions.
+          profile: wearos_large_round
+          disable-animations: true
+          # A wear image boots slower than a phone image, and this job's own
+          # 35-minute cap is the real backstop.
+          emulator-boot-timeout: 900
+          # The action's own defaults, spelled out. -noaudio is kept: a runner
+          # has no sound server, and playback state (title, chapter, position)
+          # comes from the ABS session rather than from an audio device.
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # ONE command: the action runs each line of an inline script in its
+          # own shell (see e2e-smoke.yml), which no multi-step capture survives.
+          script: bash native/wear/screenshots/capture.sh
+
+      - name: report capture sizes
+        if: always()
+        run: |
+          ls -l shots || true
+          # Play requires 1:1 and >= 384x384 for a Wear screenshot — `file`
+          # prints the real pixel size of each capture.
+          file shots/*.png || true
+          echo "--- mock server log (tail) ---"
+          tail -n 40 mock-abs.log || true
+
+      - name: commit screenshots
+        run: |
+          mkdir -p screenshots/wear
+          cp shots/*.png screenshots/wear/ 2>/dev/null || true
+          # PNGs only: logcat.txt is debugging evidence and ships as an
+          # artifact, not as a repo file.
+          git add screenshots/wear
+          if git diff --cached --quiet; then
+            echo "no screenshot changes to commit"
+            exit 0
+          fi
+          # [skip ci] so a commit of PNGs doesn't re-trigger build-apk, the unit
+          # tests, e2e — or this workflow.
+          git -c user.name='github-actions[bot]' \
+              -c user.email='github-actions[bot]@users.noreply.github.com' \
+              commit -m 'chore(wear): emulator screenshots [skip ci]'
+          git push
+
+      - name: upload screenshots and logs
+        # always(): a failed run's logcat and mock-server log are the only
+        # evidence of WHY a screen came back blank.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wear-screenshots
+          path: |
+            shots/
+            mock-abs.log
+          if-no-files-found: warn

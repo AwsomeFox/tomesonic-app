@@ -185,6 +185,12 @@ Store them beside the phone galleries in `screenshots/` so the next release can
 retake them from the same list; the phone assets and generation notes live in
 [`PLAY_STORE_GRAPHICS_GUIDE.md`](PLAY_STORE_GRAPHICS_GUIDE.md).
 
+Or let CI take them: running
+[`.github/workflows/wear-screenshots.yml`](.github/workflows/wear-screenshots.yml)
+(workflow_dispatch) boots a round Wear OS emulator against a mock server and
+commits the whole set — connect, home, library, item, downloads, player — into
+`screenshots/wear/`.
+
 ### 4. Data safety and privacy
 
 Expect **no changes**. Play's Data safety declaration is per *app*, not per
