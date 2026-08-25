@@ -539,85 +539,189 @@ let _lastMetaChapter = -2;
 // cast disconnect can restore that item's true chapter title (while casting the
 // paused LOCAL item gets rewritten to whatever chapter the RECEIVER is in).
 let _metaAppliedIndex = -1;
+// Look-ahead index pre-stamped with the LARGE inline cover bytes (the item
+// AFTER the active one), so an auto-advance lands on an item that ALREADY
+// carries its bytes — the now-playing ALBUM_ART never flaps at a chapter/file
+// boundary. -1 when nothing is pre-stamped.
+let _metaNextIndex = -1;
+// Active queue index applyNowPlayingChapter last SAW (stamped or not) — the
+// dedupe key. Distinct from _metaAppliedIndex, which only tracks indices that
+// actually HOLD a stamp (so strips never target untouched items).
+let _lastActiveIndex = -1;
+// The artworkUri last written (or built) into the queue items — a token
+// refresh swaps session.coverUrl, and the mismatch forces a re-stamp even
+// when chapter/index didn't move.
+let _metaCoverUrl = "";
 // Dedupe rapid duplicate startPlayback calls (Android Auto double-dispatch).
 let _lastStartKey = "";
 let _lastStartAt = 0;
+
+// Applies a set of per-index metadata rewrites in ONE native call. The
+// patched native module merges neighbouring indices into a single ExoPlayer
+// timeline update — every timeline update re-broadcasts the whole legacy
+// queue to Android Auto AND the Bluetooth AVRCP service (implicated in
+// Bluetooth-stack crashes on some car head units), so a chapter boundary's
+// stamp+strip pair must not cost two. Falls back to sequential
+// updateMetadataForTrack calls when the batch method isn't bound (iOS,
+// tests, a stale native binary).
+export async function updateTrackMetadataBatch(
+  updates: { index: number; metadata: any }[]
+) {
+  if (!updates.length) return;
+  try {
+    const RN = require("react-native");
+    if (RN.Platform?.OS === "android") {
+      // Prefer the TurboModule binding (how the library itself reaches the
+      // native module under the New Architecture); NativeModules is the
+      // legacy-bridge fallback.
+      const m =
+        RN.TurboModuleRegistry?.get?.("TrackPlayer") ?? RN.NativeModules?.TrackPlayer;
+      if (m?.updateMetadataForTracks) {
+        await m.updateMetadataForTracks(updates);
+        return;
+      }
+    }
+  } catch {}
+  for (const u of updates) {
+    await TrackPlayer.updateMetadataForTrack(u.index, u.metadata);
+  }
+}
+
 async function applyNowPlayingChapter(session: any, chapters: any[], chapterIndex: number) {
   if (!session) return;
   try {
-    const isChapterQueue = usePlaybackStore.getState().chapterQueue;
+    const st = usePlaybackStore.getState();
+    const isChapterQueue = st.chapterQueue;
+    const casting = st.isCasting;
+    // Car compatibility mode (quiet MediaSession): suppress the per-chapter
+    // TITLE rewrites — the notification/car shows the book title — so the
+    // only rewrites left are the rare real FILE transitions that must move
+    // the cover bytes. Casting is unrelated to the car; the receiver keeps
+    // the normal chapter-tracking behavior.
+    const compat = st.carCompatActive && !casting;
     // Only a MULTI-FILE queue (one RNTP item per file) needs a native round-trip
     // to learn the active FILE index. The common cases are derivable without the
     // per-second bridge call: a chapter-queue's active item IS the current
     // chapter, and a single-item session is always index 0. Casting can remap
     // the local queue, so ask natively there too.
     const trackCount = (session?.audioTracks || session?.tracks || []).length;
-    const needsNativeIndex = trackCount > 1 || usePlaybackStore.getState().isCasting;
+    const needsNativeIndex = trackCount > 1 || casting;
     const activeIndex = needsNativeIndex
       ? await TrackPlayer.getActiveTrackIndex()
       : isChapterQueue && chapterIndex >= 0
       ? chapterIndex
       : 0;
     if (activeIndex == null) return;
+    const effChapterIndex = compat ? -1 : chapterIndex;
     // Dedup native work when NOTHING moved. We must re-apply on a change to
     // EITHER the chapter OR the active queue item: a MULTI-FILE book moves the
     // inline cover bytes onto the active FILE item, whose index changes at file
     // boundaries WITHOUT the chapter index necessarily changing (a chapterless
     // multi-file book keeps chapterIndex=-1 across every file). Keying the
     // dedup on chapterIndex alone stranded the bytes on file 0.
-    if (chapterIndex === _lastMetaChapter && activeIndex === _metaAppliedIndex) return;
+    // ... and a third key: the artworkUri. A token refresh swaps
+    // session.coverUrl without moving the chapter OR the active index, so the
+    // dedupe must not swallow it — the stale URI would sit in the MediaSession
+    // until the next chapter change.
+    const coverUrl: string = session.coverUrl || "";
+    if (
+      effChapterIndex === _lastMetaChapter &&
+      activeIndex === _lastActiveIndex &&
+      coverUrl === _metaCoverUrl
+    )
+      return;
     const book = session.displayTitle || "Audiobook";
     const author = session.displayAuthor || "";
-    // Bytes live on the ACTIVE queue item ONLY — a chapter-queue item per
-    // chapter, a file item per file. If they lingered on every item the ~40KB
-    // cover on each of a long book's items would blow past Android Auto's ~1MB
-    // Binder limit when Media3 bundles the whole Timeline
-    // (TransactionTooLargeException → queue drops / controller crash). So on
-    // each chapter/file change we MOVE them: stamp the newly-active item, then
-    // strip the previously-active one. Empty-string localArtwork (not
+    const joined = [book, author].filter(Boolean).join(" • ");
+    const artworkChanged = coverUrl !== _metaCoverUrl;
+    // LARGE bytes live on the ACTIVE queue item (+ the pre-stamped NEXT one) —
+    // if they lingered on every item the ~40KB cover on each of a long book's
+    // items would blow past Android Auto's ~1MB Binder limit when Media3
+    // bundles the whole Timeline (TransactionTooLargeException → queue drops /
+    // controller crash). As playback advances the window slides: stamp the
+    // incoming item, strip the one that left. Empty-string localArtwork (not
     // undefined) also blocks toMediaItem's `localArtwork ?: artwork` byte
     // fallback so a LOCAL artwork URI can't re-inline bytes on the stripped
     // item.
-    //
-    // SET-NEW-THEN-STRIP-OLD: stamping the new active item BEFORE clearing the
-    // old one leaves a momentary 2-item byte overlap (trivially under the
-    // Binder limit) instead of a window with zero bytes, which briefly blanked
-    // the compact card on every chapter/track change.
-    const ch = chapters?.[chapterIndex];
-    const title = ch?.title || book;
-    const subtitle = ch ? [book, author].filter(Boolean).join(" • ") : author;
-    const meta: any = { title, artist: subtitle };
-    // artwork = the full card's artworkUri (unchanged). localArtwork = the
-    // LOCAL cover file whose bytes the native layer inlines as artworkData for
-    // the compact card — kept separate so the artworkUri is never disturbed.
-    if (session.coverUrl) meta.artwork = session.coverUrl;
     const localArt =
       session.carArtworkLocal ||
-      (session.coverUrl && !session.coverUrl.startsWith("http") ? session.coverUrl : undefined);
-    if (localArt) meta.localArtwork = localArt;
-    await TrackPlayer.updateMetadataForTrack(activeIndex, meta);
-    // Strip the previously-active item's bytes (both queue modes). A
-    // chapter-queue item's intrinsic title is its chapter; a file item's is the
-    // book title (that is how the file items were built at prepare).
-    if (_metaAppliedIndex >= 0 && _metaAppliedIndex !== activeIndex) {
-      try {
-        const prevTitle = isChapterQueue
-          ? chapters?.[_metaAppliedIndex]?.title || book
-          : book;
-        const clearMeta: any = {
-          title: prevTitle,
-          artist: [book, author].filter(Boolean).join(" • "),
-          localArtwork: "",
-        };
-        if (session.coverUrl) clearMeta.artwork = session.coverUrl;
-        await TrackPlayer.updateMetadataForTrack(_metaAppliedIndex, clearMeta);
-      } catch {}
+      (coverUrl && !coverUrl.startsWith("http") ? coverUrl : undefined);
+    const queueLen = isChapterQueue ? chapters?.length || 0 : trackCount || 1;
+
+    const ch = compat ? undefined : chapters?.[effChapterIndex];
+    const title = ch?.title || book;
+    const subtitle = ch ? joined : author;
+
+    // Does the ACTIVE item need a rewrite at all?
+    //  - a file/single-item queue tracks the chapter TITLE on the active item
+    //    (the item's intrinsic title is the book), and casting rewrites the
+    //    paused local item to the RECEIVER's chapter — always stamp;
+    //  - a chapter-queue item already titles itself, so it only needs a write
+    //    when the artworkUri went stale (token refresh) or when it wasn't
+    //    pre-stamped with the bytes by the look-ahead below. A chapter-queue
+    //    with no local bytes needs NOTHING — a streaming book used to burn two
+    //    full queue re-broadcasts per chapter re-writing identical metadata.
+    let activeNeedsStamp: boolean;
+    if (!isChapterQueue || casting) activeNeedsStamp = true;
+    else if (artworkChanged) activeNeedsStamp = true;
+    else if (!localArt) activeNeedsStamp = false;
+    else activeNeedsStamp = activeIndex !== _metaNextIndex;
+
+    const updates: { index: number; metadata: any }[] = [];
+    if (activeNeedsStamp) {
+      const meta: any = { title, artist: subtitle };
+      // artwork = the full card's artworkUri (unchanged). localArtwork = the
+      // LOCAL cover file whose bytes the native layer inlines as artworkData
+      // for the compact card — kept separate so the artworkUri is never
+      // disturbed.
+      if (coverUrl) meta.artwork = coverUrl;
+      if (localArt) meta.localArtwork = localArt;
+      updates.push({ index: activeIndex, metadata: meta });
     }
+
+    // LOOK-AHEAD: pre-stamp the NEXT item with its intrinsic title and the
+    // SAME cover bytes, so the auto-advance transition publishes an item that
+    // already looks right — no tiny→large artwork flap, and (chapter queues)
+    // no post-transition rewrite of the newly-active item at all.
+    const nextIndex = activeIndex + 1;
+    const lookAhead = !compat && !casting && !!localArt && nextIndex < queueLen;
+    if (lookAhead && (nextIndex !== _metaNextIndex || artworkChanged)) {
+      const nextMeta: any = {
+        title: isChapterQueue ? chapters?.[nextIndex]?.title || book : book,
+        artist: isChapterQueue ? joined : author,
+        localArtwork: localArt,
+      };
+      if (coverUrl) nextMeta.artwork = coverUrl;
+      updates.push({ index: nextIndex, metadata: nextMeta });
+    }
+
+    // Strip every previously-stamped item that left the {active, next}
+    // window, restoring its intrinsic title (a chapter-queue item's is its
+    // chapter; a file item's is the book title, as built at prepare).
+    const newWindow = [activeIndex, lookAhead ? nextIndex : -1];
+    for (const idx of [_metaAppliedIndex, _metaNextIndex]) {
+      if (idx < 0 || newWindow.includes(idx)) continue;
+      if (updates.some((u) => u.index === idx)) continue;
+      const clearMeta: any = {
+        title: isChapterQueue ? chapters?.[idx]?.title || book : book,
+        artist: joined,
+        localArtwork: "",
+      };
+      if (coverUrl) clearMeta.artwork = coverUrl;
+      updates.push({ index: idx, metadata: clearMeta });
+    }
+
+    await updateTrackMetadataBatch(updates);
     // Mark applied only AFTER the native call succeeds — marking up front
     // meant a throw here (track not ready yet) was never retried, leaving the
     // previous chapter's title stuck for the whole chapter.
-    _lastMetaChapter = chapterIndex;
-    _metaAppliedIndex = activeIndex;
+    _lastMetaChapter = effChapterIndex;
+    _lastActiveIndex = activeIndex;
+    if (activeNeedsStamp || activeIndex === _metaNextIndex) {
+      _metaAppliedIndex = activeIndex;
+    }
+    _metaNextIndex = lookAhead ? nextIndex : -1;
+    _metaCoverUrl = coverUrl;
   } catch (e) {
     // Track not ready yet — the progress loop retries on the next tick.
   }
@@ -631,8 +735,10 @@ async function applyNowPlayingChapter(session: any, chapters: any[], chapterInde
 export async function restoreLocalNowPlayingMeta() {
   const st = usePlaybackStore.getState();
   _lastMetaChapter = -2; // single-track fallback: progress loop re-applies next tick
+  _lastActiveIndex = -1;
   const idx = _metaAppliedIndex;
   _metaAppliedIndex = -1;
+  _metaNextIndex = -1; // any pre-stamped look-ahead bytes are re-windowed next tick
   if (idx < 0 || !st.chapterQueue) return;
   const s = st.currentSession;
   const ch = st.chapters?.[idx];
@@ -907,6 +1013,52 @@ export async function cacheNowPlayingCoverLocally(itemId: string, url: string, g
       usePlaybackStore.getState().currentSession,
       st.chapters,
       usePlaybackStore.getState().currentChapterIndex
+    );
+  } catch {}
+}
+
+// A car UI controller (Android Auto / Automotive) just connected to the media
+// session. Queue items are built WITHOUT the tiny per-row artworkData bytes
+// until a car controller has been seen (they only feed Android Auto's
+// queue-row icons, and inlining them for phone-only / plain-Bluetooth
+// sessions fattens every item the Bluetooth AVRCP service mirrors to the
+// car) — so a queue built BEFORE the car connected has no row icons. Restamp
+// the tiny tier onto the first MAX_CAR_TILE_ITEMS items now (one contiguous
+// batch = one native timeline update, at the exact moment Android Auto is
+// fetching everything anyway) and re-apply the active item's large bytes.
+export async function onCarControllerConnected() {
+  const st = usePlaybackStore.getState();
+  const s = st.currentSession;
+  if (!s) return;
+  try {
+    const localArt =
+      s.carArtworkLocal ||
+      (s.coverUrl && !s.coverUrl.startsWith("http") ? s.coverUrl : undefined);
+    if (localArt) {
+      const queue = await TrackPlayer.getQueue();
+      if ((queue?.length || 0) > 1) {
+        const n = Math.min(queue.length, MAX_CAR_TILE_ITEMS);
+        const updates = [];
+        for (let i = 0; i < n; i++) {
+          // The native setMetadata is replacement-style for the standard
+          // fields — a bundle carrying only localArtworkSmall would null the
+          // row's title/artist/mediaId — so echo the row's existing metadata
+          // back alongside the added tiny-artwork path.
+          updates.push({
+            index: i,
+            metadata: { ...(queue[i] as any), localArtworkSmall: localArt },
+          });
+        }
+        await updateTrackMetadataBatch(updates);
+      }
+    }
+    // Force the next now-playing application through (it re-stamps the active
+    // item's LARGE bytes + look-ahead window under the now-latched car flag).
+    _lastMetaChapter = -2;
+    await applyNowPlayingChapter(
+      usePlaybackStore.getState().currentSession,
+      st.chapters,
+      st.currentChapterIndex
     );
   } catch {}
 }
@@ -1483,6 +1635,12 @@ interface PlaybackState {
   // chapter) so Android Auto shows a real chapter queue. `position`/`duration`
   // remain absolute book seconds regardless.
   chapterQueue: boolean;
+  // Frozen at prepare from settings.carCompatibilityMode: this session was
+  // built as a quiet, plain-music-app-style MediaSession (flat queue, no
+  // per-chapter metadata rewrites) for car head units whose Bluetooth stack
+  // chokes on chapter-queue churn. Per-session so a mid-book settings toggle
+  // can't half-apply to a queue built the other way.
+  carCompatActive: boolean;
 
   // Chromecast — when a session is active, transport routes to the cast client.
   isCasting: boolean;
@@ -1585,6 +1743,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   chapters: [],
   currentChapterIndex: -1,
   chapterQueue: false,
+  carCompatActive: false,
   isCasting: false,
   castClient: null,
   sleepTimer: null,
@@ -2465,7 +2624,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       // clipped RNTP item per chapter so Android Auto shows the chapters as the
       // queue and each chapter is its own now-playing title. Multi-file books
       // fall back to a file-per-item queue (a chapter can straddle files).
-      const chapterQueue = chapters.length > 1 && audioTracks.length === 1;
+      //
+      // Car compatibility mode opts OUT of the chapter queue: some car head
+      // units' Bluetooth stacks crash on the churn a 100+ item queue with
+      // per-chapter "track changes" produces over AVRCP (the phone's Bluetooth
+      // toggles off/on mid-drive). A flat queue + static metadata behaves like
+      // a plain music app, which those head units handle fine. Frozen into
+      // carCompatActive for this session below.
+      const carCompat = !!useUserStore.getState().settings.carCompatibilityMode;
+      const chapterQueue = chapters.length > 1 && audioTracks.length === 1 && !carCompat;
 
       let tracksToLoad: any[];
       const trackOffsets: number[] = [];
@@ -2667,6 +2834,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       clearErrorRecovery();
       _lastMetaChapter = -2; // force a now-playing metadata refresh for the new book
       _metaAppliedIndex = -1; // no prior chapter item to strip bytes from
+      _metaNextIndex = -1; // ...nor a pre-stamped look-ahead item
+      _lastActiveIndex = -1;
+      // The fresh queue is built with THIS artworkUri — a matching stamp-time
+      // record means the first tick doesn't rewrite identical artwork.
+      _metaCoverUrl = artworkUrl || session.coverUrl || "";
       // A sleep timer from the previous book must not run against the new one
       // (end-of-chapter timers would pause the new book almost immediately).
       get().cancelSleepTimer();
@@ -2743,6 +2915,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         playbackSpeed,
         chapters,
         chapterQueue,
+        carCompatActive: carCompat,
         duration: bookDurationS,
         position: startAbs,
         currentChapterIndex: startChapterIdx,
@@ -2805,6 +2978,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           position: 0,
           chapters: [],
           chapterQueue: false,
+          carCompatActive: false,
           currentChapterIndex: -1,
         });
       }
@@ -3610,6 +3784,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       position: 0,
       chapters: [],
       chapterQueue: false,
+      carCompatActive: false,
       currentChapterIndex: -1,
       sleepTimer: null,
       // The cast seek handler closes over the CLOSED book's track offsets —

@@ -108,6 +108,8 @@ jest.mock("react-native-track-player", () => {
       PlaybackActiveTrackChanged: "playback-active-track-changed",
       PlaybackQueueEnded: "playback-queue-ended",
       PlaybackError: "playback-error",
+      PlaybackProgressUpdated: "playback-progress-updated",
+      AndroidConnectorConnected: "android-controller-connected",
     },
     State: {
       None: "none",

@@ -48,6 +48,13 @@ interface UserSettings {
   // (ExoPlayer volume is clamped to [0,1] and can't boost). See usePlaybackStore.
   skipSilence: boolean;
   voiceBoost: boolean;
+  // Car compatibility mode — default OFF. Some car head units' Bluetooth
+  // stacks crash on the metadata churn of a chapter-per-item queue (the
+  // phone's Bluetooth toggles off/on mid-drive). When on, books play as a
+  // flat queue with static, plain-music-app-style metadata: no chapter queue
+  // and no per-chapter title rewrites (the notification/car shows the book
+  // title). Applies to sessions prepared AFTER the toggle.
+  carCompatibilityMode: boolean;
 }
 
 interface UserState {
@@ -120,6 +127,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   showPlayerChapterProgress: true,
   skipSilence: false,
   voiceBoost: false,
+  carCompatibilityMode: false,
 };
 
 export const useUserStore = create<UserState>((set, get) => ({
