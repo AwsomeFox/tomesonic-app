@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -48,6 +50,14 @@ class AbsClient(
     @Volatile
     private var snapshot: Creds? = null
 
+    // The server origin, parsed once per creds change. The token-attach decision
+    // compares scheme/host/port STRUCTURALLY against this — never by string
+    // prefix: "http://abs.local" string-prefixes "http://abs.local.attacker.com"
+    // and "http://10.0.0.5" prefixes "http://10.0.0.50", either of which would
+    // hand the Bearer token to the wrong host.
+    @Volatile
+    private var serverUrl: HttpUrl? = null
+
     private val _authFailed = MutableStateFlow(false)
 
     /** True once the server has rejected our token. Reset by any 2xx and by a creds change. */
@@ -68,12 +78,24 @@ class AbsClient(
         scope.launch {
             credsRepository.creds.collect { c ->
                 snapshot = c
+                serverUrl = c?.server?.toHttpUrlOrNull()
                 // New credentials (or a logout) invalidate a previous rejection —
                 // otherwise reconnecting from the phone leaves the watch stuck on
                 // the "reconnect" screen forever.
                 _authFailed.value = false
             }
         }
+    }
+
+    /**
+     * True only when [url] is OUR server: same scheme, same host
+     * (case-insensitive, per DNS), same effective port. HttpUrl.port already
+     * substitutes the scheme default (80/443), so "http://abs.local" and
+     * "http://abs.local:80/x" compare equal while ":8080" does not.
+     */
+    private fun isOurServer(url: HttpUrl): Boolean {
+        val server = serverUrl ?: return false
+        return sameOrigin(url, server)
     }
 
     /** The current server origin, or null when the watch is not configured. */
@@ -89,11 +111,19 @@ class AbsClient(
      * A ready-to-execute authorized request. For consumers that build their own
      * calls (a download stream, a datasource) but must not re-derive the auth.
      * Throws only on a malformed URL — pass something [resolve] produced.
+     * The token is attached only when the URL's ORIGIN is our server (see
+     * [isOurServer]) — a server-supplied absolute URL to any other host goes
+     * out bare.
      */
     fun authorizedRequest(url: String): Request {
         val builder = Request.Builder().url(url).header("User-Agent", userAgent)
-        snapshot?.let { builder.header("Authorization", "Bearer ${it.token}") }
-        return builder.build()
+        val request = builder.build()
+        val creds = snapshot
+        return if (creds != null && isOurServer(request.url)) {
+            request.newBuilder().header("Authorization", "Bearer ${creds.token}").build()
+        } else {
+            request
+        }
     }
 
     /**
@@ -108,7 +138,7 @@ class AbsClient(
             val builder = original.newBuilder().header("User-Agent", userAgent)
             if (creds != null &&
                 original.header("Authorization") == null &&
-                original.url.toString().startsWith(creds.server)
+                isOurServer(original.url)
             ) {
                 builder.header("Authorization", "Bearer ${creds.token}")
             }
@@ -145,11 +175,21 @@ class AbsClient(
         }
         return withContext(Dispatchers.IO) {
             try {
-                val request = Request.Builder()
+                var request = Request.Builder()
                     .url(url)
-                    .header("Authorization", "Bearer ${creds.token}")
                     .method(method, body)
                     .build()
+                // Origin-checked even here: every AbsApi path is a relative
+                // constant today, but an absolute `path` passes straight through
+                // the joiner above, and the token must never ride to another host.
+                // Checked against THIS call's creds (not the async snapshot) so a
+                // cold-start call never goes out bare and 401s spuriously.
+                val server = creds.server.toHttpUrlOrNull()
+                if (server != null && sameOrigin(request.url, server)) {
+                    request = request.newBuilder()
+                        .header("Authorization", "Bearer ${creds.token}")
+                        .build()
+                }
                 client.newCall(request).execute().use { response ->
                     // A 2xx with an empty body (session close, batch update) is a
                     // success — "" not null, so callers can test for null alone.
@@ -166,5 +206,15 @@ class AbsClient(
     companion object {
         const val DEFAULT_USER_AGENT = "TomeSonic-Wear"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        /**
+         * Origin equality: scheme + host (case-insensitive) + effective port.
+         * Internal so tests can pin the exact semantics the token-attach
+         * decision rides on.
+         */
+        internal fun sameOrigin(a: HttpUrl, b: HttpUrl): Boolean =
+            a.scheme == b.scheme &&
+                a.host.equals(b.host, ignoreCase = true) &&
+                a.port == b.port
     }
 }
