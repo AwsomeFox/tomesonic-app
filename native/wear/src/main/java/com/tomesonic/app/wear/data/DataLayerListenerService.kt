@@ -13,10 +13,11 @@ import kotlinx.coroutines.runBlocking
  * DataItem at `/tomesonic/creds`; this turns it into stored credentials.
  *
  * Logout arrives as the SAME path with empty server/token (deliberately not a
- * deleteDataItems — deletion events are unreliable across reconnects), which
- * CredsRepository.applyFromDataLayer reads as clear(). Both directions go
- * through that one function so the listener and the app-open refresh can't
- * disagree about what "no creds" looks like.
+ * deleteDataItems — deletion events are unreliable across reconnects). Both
+ * directions go through CredsRepository.applyFromDataLayer so the listener and
+ * the app-open refresh can't disagree about what "no creds" looks like — and so
+ * the v2 precedence rule has ONE owner: phone credentials always win, a phone
+ * logout ends a phone-sourced session only, and a watch-owned login survives it.
  */
 class DataLayerListenerService : WearableListenerService() {
 

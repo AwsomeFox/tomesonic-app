@@ -19,8 +19,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * What the UI can say about one item. Additive to the frozen cross-wave
- * interface — Wave 4A renders it, nothing else depends on it.
+ * What the UI can say about one entry — a book or one episode. Additive to the
+ * frozen cross-wave interface — Wave 4A renders it, nothing else depends on it.
  */
 sealed class DownloadStatus {
     data object NotDownloaded : DownloadStatus()
@@ -45,6 +45,12 @@ sealed class DownloadStatus {
  * [DownloadWorker]; this class only enqueues, cancels and cleans up, which is
  * what keeps it callable from a UI thread's coroutine.
  *
+ * Every method that names an item takes an OPTIONAL episode id beside it, and
+ * the pair resolves to one [DownloadEntry.entryId] — the index key, the folder
+ * name, the unique work name and the notification id, all the same string. The
+ * single-argument v1 signatures delegate with a null episode, so they keep
+ * meaning exactly "the book" and nothing else.
+ *
  * Constructed with its collaborators so tests can point it at a temp dir;
  * production goes through [create] behind Graph's lazy singleton — same shape as
  * CredsRepository.
@@ -53,15 +59,23 @@ class DownloadRepository(
     private val context: Context,
     /** Public for [DownloadWorker], which writes the finished entry. */
     val index: DownloadIndex,
-    /** `filesDir/downloads` — one subfolder per item id. */
+    /** `filesDir/downloads` — one subfolder per ENTRY id (see [DownloadEntry.entryId]). */
     val root: File
 ) {
 
     /** Frozen: the downloaded library, cold until someone collects it. */
     val entries: Flow<List<DownloadEntry>> = index.entries
 
-    /** Frozen: null when the item isn't downloaded. */
-    suspend fun entryFor(itemId: String): DownloadEntry? = index.get(itemId)
+    /** Frozen: the BOOK entry, or null when the item isn't downloaded. */
+    suspend fun entryFor(itemId: String): DownloadEntry? = entryFor(itemId, null)
+
+    /**
+     * Additive: one entry by what it downloaded. A null (or blank) [episodeId]
+     * asks for the item's BOOK entry — the frozen behaviour above, which a
+     * downloaded episode of the same item must never satisfy.
+     */
+    suspend fun entryFor(itemId: String, episodeId: String?): DownloadEntry? =
+        index.get(DownloadEntry.entryId(itemId, episodeId))?.takeIf { it.isFor(itemId, episodeId) }
 
     /**
      * Additive: read the index into memory once, so [entryForNow] can answer
@@ -80,23 +94,29 @@ class DownloadRepository(
      * downloaded" and would silently stream a book that is on the watch — so
      * [warm] belongs in the same startup path that installs the plug.
      */
-    fun entryForNow(itemId: String): DownloadEntry? =
-        index.snapshot().firstOrNull { it.id == itemId }
+    fun entryForNow(itemId: String): DownloadEntry? = entryForNow(itemId, null)
+
+    /** Additive: [entryForNow] for one episode. Same non-suspending contract. */
+    fun entryForNow(itemId: String, episodeId: String?): DownloadEntry? {
+        val key = DownloadEntry.entryId(itemId, episodeId)
+        return index.snapshot().firstOrNull { it.id == key && it.isFor(itemId, episodeId) }
+    }
 
     /**
      * Frozen: the local file for a track (or the cover), or null when it isn't
-     * there. Deliberately NOT suspending — Wave 3A resolves these while building
-     * media3 items on a callback thread that cannot suspend, and the cost is one
-     * stat() per track.
+     * there. Keyed by the ENTRY id, which IS the folder name — for a book that
+     * is the item id, exactly as before. Deliberately NOT suspending — Wave 3A
+     * resolves these while building media3 items on a callback thread that
+     * cannot suspend, and the cost is one stat() per track.
      */
-    fun localFile(itemId: String, filename: String): File? {
-        val dir = DownloadWorker.resolveInside(root, itemId) ?: return null
+    fun localFile(entryId: String, filename: String): File? {
+        val dir = DownloadWorker.resolveInside(root, entryId) ?: return null
         val file = DownloadWorker.resolveInside(dir, filename) ?: return null
         return file.takeIf { it.isFile && it.length() > 0L }
     }
 
-    /** `filesDir/downloads/{itemId}` — the contract's layout, created by the worker. */
-    fun itemDir(itemId: String): File = File(root, itemId)
+    /** `filesDir/downloads/{entryId}` — the contract's layout, created by the worker. */
+    fun itemDir(entryId: String): File = File(root, entryId)
 
     /**
      * Frozen: queue [itemId] for download.
@@ -116,19 +136,39 @@ class DownloadRepository(
      * nothing. A replaced worker's cancellation cleans its own `.part` files and
      * the new run resumes from the whole tracks.
      */
-    suspend fun enqueue(itemId: String, force: Boolean = false) {
+    suspend fun enqueue(itemId: String, force: Boolean = false) = enqueue(itemId, null, force)
+
+    /**
+     * Additive: [enqueue] for ONE podcast episode (a null [episodeId] is the
+     * book above). Constraints, force semantics and the KEEP/REPLACE policy are
+     * identical — the only difference is the unique work name, which carries the
+     * episode discriminator so a podcast's book job and two of its episodes'
+     * jobs are three jobs rather than one that keeps replacing itself.
+     */
+    suspend fun enqueue(itemId: String, episodeId: String?, force: Boolean = false) {
         if (!DownloadWorker.isSafeName(itemId)) return
+        val entryId = DownloadEntry.entryId(itemId, episodeId)
+        if (!DownloadWorker.isSafeName(entryId)) return
+        val episode = episodeId?.takeIf { it.isNotBlank() }
+        val input = if (episode == null) {
+            workDataOf(DownloadWorker.KEY_ITEM_ID to itemId)
+        } else {
+            workDataOf(
+                DownloadWorker.KEY_ITEM_ID to itemId,
+                DownloadWorker.KEY_EPISODE_ID to episode
+            )
+        }
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(DownloadWorker.KEY_ITEM_ID to itemId))
+            .setInputData(input)
             .setConstraints(constraints(force))
             .addTag(TAG_ALL)
-            .addTag(itemTag(itemId))
+            .addTag(itemTag(entryId))
             .build()
         val policy = if (force) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP
         withContext(Dispatchers.IO) {
             try {
                 workManager().enqueueUniqueWork(
-                    DownloadWorker.uniqueWorkName(itemId),
+                    DownloadWorker.uniqueWorkName(entryId),
                     policy,
                     request
                 )
@@ -145,24 +185,40 @@ class DownloadRepository(
      * cancellation; this sweep covers the job that never started, or one the
      * system killed before it could.
      */
-    suspend fun cancel(itemId: String) {
+    suspend fun cancel(itemId: String) = cancel(itemId, null)
+
+    /** Additive: [cancel] for one episode's job and its own folder. */
+    suspend fun cancel(itemId: String, episodeId: String?) {
         if (!DownloadWorker.isSafeName(itemId)) return
-        cancelWork(itemId)
-        withContext(Dispatchers.IO) { DownloadWorker.deletePartials(itemDir(itemId)) }
+        val entryId = DownloadEntry.entryId(itemId, episodeId)
+        if (!DownloadWorker.isSafeName(entryId)) return
+        cancelWork(entryId)
+        withContext(Dispatchers.IO) { DownloadWorker.deletePartials(itemDir(entryId)) }
     }
 
     /**
-     * Frozen: forget the item entirely — cancel its job, delete its folder, drop
+     * Frozen: forget the BOOK entirely — cancel its job, delete its folder, drop
      * its index entry. The order matters: cancelling first stops a running
      * worker from re-creating files behind the delete, and the index entry goes
      * last so a crash mid-delete leaves an entry pointing at missing files
      * (which [localFile] reports as absent) rather than files nothing owns.
      */
-    suspend fun delete(itemId: String) {
+    suspend fun delete(itemId: String) = delete(itemId, null)
+
+    /**
+     * Additive: [delete] for one entry. A null [episodeId] deletes the BOOK
+     * entry and NOTHING else — a podcast's episodes are separate entries with
+     * separate folders, so evicting them is a per-episode act. Nothing here
+     * reaches outside `downloads/{entryId}/`, which is what makes deleting an
+     * episode unable to take the book's cover (or the reverse).
+     */
+    suspend fun delete(itemId: String, episodeId: String?) {
         if (!DownloadWorker.isSafeName(itemId)) return
-        cancelWork(itemId)
-        withContext(Dispatchers.IO) { itemDir(itemId).deleteRecursively() }
-        index.remove(itemId)
+        val entryId = DownloadEntry.entryId(itemId, episodeId)
+        if (!DownloadWorker.isSafeName(entryId)) return
+        cancelWork(entryId)
+        withContext(Dispatchers.IO) { itemDir(entryId).deleteRecursively() }
+        index.remove(entryId)
     }
 
     /**
@@ -179,21 +235,26 @@ class DownloadRepository(
      * WorkManager prunes finished jobs and their absence must never un-download
      * a book that is sitting on the watch.
      */
-    fun status(itemId: String): Flow<DownloadStatus> =
-        combine(index.entries, workInfos(itemId)) { stored, infos ->
+    fun status(itemId: String): Flow<DownloadStatus> = status(itemId, null)
+
+    /** Additive: [status] for one episode (null [episodeId] = the book above). */
+    fun status(itemId: String, episodeId: String?): Flow<DownloadStatus> {
+        val entryId = DownloadEntry.entryId(itemId, episodeId)
+        return combine(index.entries, workInfos(entryId)) { stored, infos ->
             val active = activeInfo(infos)
             statusFrom(
-                hasEntry = stored.any { it.id == itemId },
+                hasEntry = stored.any { it.id == entryId && it.isFor(itemId, episodeId) },
                 state = active?.state,
                 progress = active?.progress?.getInt(DownloadWorker.KEY_PROGRESS, 0) ?: 0
             )
         }.distinctUntilChanged()
+    }
 
     private fun workManager(): WorkManager = WorkManager.getInstance(context)
 
-    private fun workInfos(itemId: String): Flow<List<WorkInfo>> = flow {
+    private fun workInfos(entryId: String): Flow<List<WorkInfo>> = flow {
         val upstream = try {
-            workManager().getWorkInfosForUniqueWorkFlow(DownloadWorker.uniqueWorkName(itemId))
+            workManager().getWorkInfosForUniqueWorkFlow(DownloadWorker.uniqueWorkName(entryId))
         } catch (t: Throwable) {
             // WorkManager not initialised in this process — the index alone
             // still answers downloaded-or-not, which is what the UI routes on.
@@ -202,9 +263,9 @@ class DownloadRepository(
         emitAll(upstream)
     }
 
-    private fun cancelWork(itemId: String) {
+    private fun cancelWork(entryId: String) {
         try {
-            workManager().cancelUniqueWork(DownloadWorker.uniqueWorkName(itemId))
+            workManager().cancelUniqueWork(DownloadWorker.uniqueWorkName(entryId))
         } catch (t: Throwable) {
             // Best effort: the files and the index entry must go regardless of
             // whether there was a job to stop.
@@ -224,7 +285,8 @@ class DownloadRepository(
         /** Tags, so a future "cancel everything" doesn't need the id list. */
         const val TAG_ALL = "tomesonic_download"
 
-        fun itemTag(itemId: String): String = "$TAG_ALL:$itemId"
+        /** Per ENTRY, like every other key here — the item id for a book. */
+        fun itemTag(entryId: String): String = "$TAG_ALL:$entryId"
 
         fun create(context: Context): DownloadRepository {
             val app = context.applicationContext

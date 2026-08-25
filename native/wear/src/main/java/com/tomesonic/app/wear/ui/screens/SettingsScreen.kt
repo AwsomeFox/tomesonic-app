@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -14,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
+import com.tomesonic.app.wear.data.CredsSource
 import com.tomesonic.app.wear.ui.SettingsViewModel
 import com.tomesonic.app.wear.ui.UiFormat
 import com.tomesonic.app.wear.ui.components.Note
@@ -25,17 +29,21 @@ import com.tomesonic.app.wear.ui.components.TomeCard
 import com.tomesonic.app.wear.ui.components.TomeChip
 
 /**
- * Everything the watch can tell you about itself, and the one thing it can do
- * about it.
+ * Everything the watch can tell you about itself, and the things it can do about
+ * it.
  *
- * No "disconnect" row: the phone owns the session (it puts empty credentials on
- * the Data Layer to log out), so a watch-side disconnect would leave the two
- * disagreeing about whether they are paired. A documented v1 non-goal.
+ * The sign-out row appears for a WATCH login only. A phone-mirrored session is
+ * the phone's to end — the phone would push the same credentials straight back
+ * over the Data Layer, so the row would read as broken. Which source is active
+ * is therefore shown either way: it is what explains the row's absence.
  */
 @Composable
 fun SettingsScreen() {
     val viewModel: SettingsViewModel = viewModel()
     val state by viewModel.state.collectAsState()
+
+    // Two taps for a destructive verb, same shape as the item screen's delete.
+    var confirmSignOut by remember { mutableStateOf(false) }
 
     ScrollScreen {
         item { ScreenTitle("Settings") }
@@ -54,6 +62,18 @@ fun SettingsScreen() {
 
         state.username?.let { username ->
             item { InfoCard(label = "Signed in as", value = username) }
+        }
+
+        state.source?.let { source ->
+            item {
+                InfoCard(
+                    label = "Signed in from",
+                    value = when (source) {
+                        CredsSource.PHONE -> "Phone"
+                        CredsSource.WATCH -> "Watch"
+                    }
+                )
+            }
         }
 
         item { InfoCard(label = "Storage used", value = UiFormat.bytes(state.storageBytes)) }
@@ -83,6 +103,42 @@ fun SettingsScreen() {
                         MaterialTheme.colorScheme.error
                     }
                 )
+            }
+        }
+
+        if (state.source == CredsSource.WATCH) {
+            if (confirmSignOut) {
+                item {
+                    Note(
+                        // The queue goes with the login (CredsRepository.clear),
+                        // and a user who has been out of range deserves to know
+                        // that before the tap, not after.
+                        text = "Sign out? Unsent progress is dropped.",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                item {
+                    TomeChip(
+                        label = "Sign out",
+                        onClick = {
+                            confirmSignOut = false
+                            viewModel.signOut()
+                        },
+                        background = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+                item {
+                    TomeChip(label = "Stay signed in", onClick = { confirmSignOut = false })
+                }
+            } else {
+                item {
+                    TomeChip(
+                        label = "Sign out",
+                        secondaryLabel = "This watch's own sign-in",
+                        onClick = { confirmSignOut = true }
+                    )
+                }
             }
         }
     }

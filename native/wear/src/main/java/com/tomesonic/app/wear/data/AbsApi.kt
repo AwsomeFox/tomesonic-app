@@ -6,17 +6,83 @@ import org.json.JSONObject
 import java.net.URLEncoder
 
 /**
+ * `user.accessToken ?: user.token` — new servers answer the first, older ones
+ * only the second, and the phone reads exactly this pair
+ * (screens/ConnectScreen.tsx `finishLogin`). `/login` and `/auth/refresh`
+ * answer in the same envelope, which is why this sits outside both parsers.
+ */
+internal fun absAccessToken(user: JSONObject?): String? =
+    absStr(user, "accessToken") ?: absStr(user, "token")
+
+/**
+ * What a watch login attempt answered — the CASE, never the sentence. The
+ * strings a user reads live in the UI layer (ui/WatchLogin.kt) with the rest of
+ * the copy; this type exists so the mapping is one `when` instead of a decision
+ * spread over a network call.
+ */
+sealed interface LoginResult {
+
+    data class Success(
+        val server: String,
+        val token: String,
+        val refreshToken: String?,
+        val userId: String,
+        val username: String
+    ) : LoginResult
+
+    /** 401/403 — and, per the phone, every other 4xx that isn't 429. */
+    data object BadCredentials : LoginResult
+
+    data object RateLimited : LoginResult
+
+    /** 5xx, and a 200 whose body carried no token at all. */
+    data object ServerError : LoginResult
+
+    /** NO response: offline, DNS, TLS, a timeout, an address that isn't one. */
+    data object Unreachable : LoginResult
+}
+
+/**
  * Typed wrappers over the exact ABS endpoints in native/wear/ARCHITECTURE.md's
  * "ABS API surface" section. Nothing here throws and nothing here reports an
  * error: a failure is an empty list, a null model, or `false`. Distinguishing
  * "offline" from "empty library" is [AbsClient.authFailed]'s job, and the only
  * distinction the watch UI can act on is "reconnect from phone".
+ *
+ * [login] is the one exception, and has to be: a sign-in screen that answered
+ * every failure with silence would be unusable. It is also the one call that
+ * runs WITHOUT credentials, against a server the user is still typing.
  */
 class AbsApi(
     private val client: AbsClient,
     private val credsRepository: CredsRepository,
     private val clientVersion: String = "0"
 ) {
+
+    /**
+     * The watch's own sign-in. `POST {server}/login`, exactly as the phone does
+     * it (screens/ConnectScreen.tsx `handleLogin`).
+     *
+     * Rides AbsClient's BARE client: there is no token yet, and [server] may be
+     * a different origin than any stored credentials — the one request in this
+     * module a Bearer header must never touch.
+     *
+     * [password] is read here and nowhere else: it is not stored, not logged,
+     * and not part of the result.
+     */
+    suspend fun login(server: String, username: String, password: String): LoginResult {
+        val normalized = CredsRepository.normalizeServer(server)
+        if (normalized.isEmpty()) return LoginResult.Unreachable
+        val body = JSONObject()
+            .put("username", username.trim())
+            .put("password", password)
+        val response = client.postBare(
+            normalized + AbsClient.LOGIN_PATH,
+            body,
+            AbsClient.LOGIN_TIMEOUT_SECONDS
+        )
+        return parseLogin(normalized, response.code, response.body)
+    }
 
     /** Book and podcast libraries only — the watch can't do anything with the rest. */
     suspend fun libraries(): List<LibrarySummary> {
@@ -178,6 +244,48 @@ class AbsApi(
                 }
             }
             return out
+        }
+
+        /**
+         * `POST /login` reduced to a case. [code] is null when there was NO
+         * response at all — the distinction between "the server said no" and
+         * "there was no server" is the whole difference between two very
+         * different instructions to the user.
+         *
+         * The order and the buckets are the phone's ConnectScreen mapping,
+         * including its fallback: any other non-2xx reads as a credentials
+         * problem, because nothing else the watch could say would be truer.
+         *
+         * Internal so both success shapes and all four failures are pinned by
+         * fixtures rather than by a live server.
+         */
+        internal fun parseLogin(server: String, code: Int?, raw: String?): LoginResult {
+            val status = code ?: return LoginResult.Unreachable
+            return when {
+                status == 401 || status == 403 -> LoginResult.BadCredentials
+                status == 429 -> LoginResult.RateLimited
+                status >= 500 -> LoginResult.ServerError
+                status == 200 -> loginSuccess(server, raw)
+                else -> LoginResult.BadCredentials
+            }
+        }
+
+        private fun loginSuccess(server: String, raw: String?): LoginResult {
+            val user = parseObject(raw)?.optJSONObject("user")
+            // A 200 with no token is not an authentication answer: a proxy in
+            // front of ABS that rewrote the body, or an interstitial page from
+            // one the request never got past. Calling it bad credentials would
+            // send the user to change a password that was never wrong.
+            val token = absAccessToken(user) ?: return LoginResult.ServerError
+            return LoginResult.Success(
+                server = server,
+                token = token,
+                // Absent on servers with refresh disabled. The watch login then
+                // simply has no refresh path and its 401s stay terminal.
+                refreshToken = absStr(user, "refreshToken"),
+                userId = absStr(user, "id").orEmpty(),
+                username = absStr(user, "username").orEmpty()
+            )
         }
 
         /**

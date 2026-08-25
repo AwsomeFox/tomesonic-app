@@ -23,10 +23,12 @@ import com.tomesonic.app.wear.ui.ItemViewModel
 import com.tomesonic.app.wear.ui.UiFormat
 import com.tomesonic.app.wear.ui.components.CoverImage
 import com.tomesonic.app.wear.ui.components.DownloadGlyph
+import com.tomesonic.app.wear.ui.components.DownloadedGlyph
 import com.tomesonic.app.wear.ui.components.LinearProgress
 import com.tomesonic.app.wear.ui.components.Note
 import com.tomesonic.app.wear.ui.components.PlayGlyph
 import com.tomesonic.app.wear.ui.components.PrimaryChip
+import com.tomesonic.app.wear.ui.components.RoundIconButton
 import com.tomesonic.app.wear.ui.components.ScreenTitle
 import com.tomesonic.app.wear.ui.components.ScrollScreen
 import com.tomesonic.app.wear.ui.components.SectionHeader
@@ -37,9 +39,11 @@ import com.tomesonic.app.wear.ui.components.coverModel
 /**
  * One book (or podcast), with the two verbs that matter: play it, keep it.
  *
- * Podcasts get an episode list and NO download affordance — episode downloads
- * are an explicit v1 non-goal (see ARCHITECTURE.md), and a Download chip that
- * downloads the wrong thing is worse than no chip.
+ * A podcast's downloads are PER EPISODE — the item itself has no audio — so the
+ * book's download section is replaced by one compact affordance on each episode
+ * row: the row plays, a small trailing button runs whatever ItemActions.forStatus
+ * offers for THAT episode, and the state line lives in the row's second line so
+ * a list of ten episodes doesn't become a list of thirty rows.
  */
 @Composable
 fun ItemScreen(
@@ -53,6 +57,10 @@ fun ItemScreen(
 
     var playMessage by remember(itemId) { mutableStateOf<String?>(null) }
     var confirmDelete by remember(itemId) { mutableStateOf(false) }
+    // At most one episode is ever mid-confirm: the second tap has to be on the
+    // chip the first tap raised, and two open confirmations would be two ways to
+    // delete the wrong thing.
+    var confirmEpisode by remember(itemId) { mutableStateOf<String?>(null) }
 
     val play: (String?) -> Unit = { episodeId ->
         val result = ItemActions.precheck(
@@ -62,7 +70,8 @@ fun ItemScreen(
             trackCount = state.trackCount,
             // Episode taps must not be judged by the ITEM's track list — a
             // podcast's is legitimately empty (see precheck).
-            isEpisode = episodeId != null
+            isEpisode = episodeId != null,
+            episodeDownloaded = state.episodeDownloaded(episodeId)
         )
         val message = ItemActions.message(result)
         if (message == null) {
@@ -127,18 +136,72 @@ fun ItemScreen(
             item { Note(message, color = MaterialTheme.colorScheme.error) }
         }
 
-        // --- podcast: recent episodes, play-only -----------------------------
+        // --- podcast: recent episodes, each with its own download ------------
         if (state.isPodcast) {
             if (state.episodes.isNotEmpty()) {
                 item { SectionHeader("Recent episodes") }
-                items(state.episodes.size) { index ->
-                    val episode = state.episodes[index]
-                    TomeChip(
-                        label = episode.title,
-                        secondaryLabel = episode.duration?.let { UiFormat.durationWords(it) },
-                        onClick = { play(episode.id) },
-                        trailing = { PlayGlyph(tint = MaterialTheme.colorScheme.primary, dim = 14.dp) }
-                    )
+                state.episodes.forEach { episode ->
+                    val download = state.episodeDownload(episode.id)
+                    val ui = ItemActions.forStatus(download.status, download.bytes)
+                    item {
+                        TomeChip(
+                            label = episode.title,
+                            // Duration and download state share the one line the
+                            // row already has: "42m · Downloading 30%".
+                            secondaryLabel = listOfNotNull(
+                                episode.duration
+                                    ?.let { UiFormat.durationWords(it) }
+                                    ?.takeIf { it.isNotEmpty() },
+                                ui.headline
+                            ).joinToString(" · ").takeIf { it.isNotEmpty() },
+                            onClick = { play(episode.id) },
+                            icon = { PlayGlyph(tint = MaterialTheme.colorScheme.primary, dim = 14.dp) },
+                            trailing = {
+                                // Its own tap target inside the row: the row
+                                // plays, this runs the download command. Compose
+                                // hands the tap to the innermost clickable, so
+                                // the two never fire together.
+                                ui.primary?.let { option ->
+                                    RoundIconButton(
+                                        onClick = {
+                                            if (option.command == DownloadCommand.Delete) {
+                                                confirmEpisode = episode.id
+                                            } else {
+                                                confirmEpisode = null
+                                                viewModel.runCommand(option.command, episode.id)
+                                            }
+                                        },
+                                        diameter = 34.dp
+                                    ) {
+                                        EpisodeDownloadGlyph(option.command)
+                                    }
+                                }
+                            }
+                        )
+                    }
+                    // The book's two-tap confirm, inline under the row that
+                    // raised it — nothing else on the screen moves.
+                    if (confirmEpisode == episode.id) {
+                        item { Note("Delete this episode?", color = MaterialTheme.colorScheme.error) }
+                        item {
+                            TomeChip(
+                                label = "Delete",
+                                onClick = {
+                                    confirmEpisode = null
+                                    viewModel.runCommand(DownloadCommand.Delete, episode.id)
+                                },
+                                background = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                icon = {
+                                    TrashGlyph(
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        dim = 16.dp
+                                    )
+                                }
+                            )
+                        }
+                        item { TomeChip(label = "Keep", onClick = { confirmEpisode = null }) }
+                    }
                 }
             } else if (!state.loading) {
                 item { Note("No episodes — open this podcast on your phone.") }
@@ -218,5 +281,25 @@ fun ItemScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * The episode row's trailing glyph: what the download IS, while the tap does
+ * what [ItemActions.forStatus] offers. Queued and downloading share the plain
+ * download mark in the muted tint — the row's second line is already carrying
+ * "Waiting for charger + Wi-Fi" or a percentage, and a third symbol for a state
+ * that is about to change reads as clutter at 34dp.
+ */
+@Composable
+private fun EpisodeDownloadGlyph(command: DownloadCommand) {
+    when (command) {
+        DownloadCommand.Delete ->
+            DownloadedGlyph(tint = MaterialTheme.colorScheme.primary, dim = 16.dp)
+
+        DownloadCommand.Cancel ->
+            DownloadGlyph(tint = MaterialTheme.colorScheme.onSurfaceVariant, dim = 16.dp)
+
+        else -> DownloadGlyph(tint = MaterialTheme.colorScheme.primary, dim = 16.dp)
     }
 }

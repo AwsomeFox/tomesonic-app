@@ -154,13 +154,64 @@ class ItemActionsTest {
 
     @Test
     fun anEpisodeIgnoresTheItemsDownloadedState() {
-        // Episodes always stream in v1 — a downloaded ITEM must not make an
-        // episode tap read as playable-offline (SessionManager streams it).
+        // The ITEM's download says nothing about THIS episode — they are
+        // separate entries, and SessionManager resolves the episode's own.
         assertEquals(
             PlayResult.NotConfigured,
             ItemActions.precheck(
                 hasCreds = false, downloaded = true, detailLoaded = true,
                 trackCount = 0, isEpisode = true
+            )
+        )
+    }
+
+    @Test
+    fun aDownloadedEpisodePlaysWithNoServerAndNoToken() {
+        // The book rule, for episodes: SessionManager plays the entry off the
+        // watch before it looks at credentials, so the screen must not refuse
+        // first. This is the row that made `episodeDownloaded` exist.
+        assertEquals(
+            PlayResult.Ok,
+            ItemActions.precheck(
+                hasCreds = false, downloaded = false, detailLoaded = false,
+                trackCount = 0, isEpisode = true, episodeDownloaded = true
+            )
+        )
+    }
+
+    @Test
+    fun aDownloadedEpisodeIsOkWhateverTheItemLooksLike() {
+        assertEquals(
+            PlayResult.Ok,
+            ItemActions.precheck(
+                hasCreds = true, downloaded = false, detailLoaded = true,
+                trackCount = 0, isEpisode = true, episodeDownloaded = true
+            )
+        )
+    }
+
+    @Test
+    fun aDownloadedEpisodeSaysNothingAboutTheBook() {
+        // `episodeDownloaded` is per-EPISODE state and must never leak into the
+        // item's own play decision (a podcast is not playable as a book).
+        assertEquals(
+            PlayResult.NotConfigured,
+            ItemActions.precheck(
+                hasCreds = false, downloaded = false, detailLoaded = true,
+                trackCount = 3, isEpisode = false, episodeDownloaded = true
+            )
+        )
+    }
+
+    @Test
+    fun anEpisodeThatIsNotDownloadedStillNeedsThePhone() {
+        // The default keeps every existing caller (and every other episode row)
+        // on the streaming rule.
+        assertEquals(
+            PlayResult.NotConfigured,
+            ItemActions.precheck(
+                hasCreds = false, downloaded = false, detailLoaded = true,
+                trackCount = 0, isEpisode = true, episodeDownloaded = false
             )
         )
     }

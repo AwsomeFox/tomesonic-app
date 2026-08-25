@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -23,6 +24,14 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
+ * A response reduced to what the two token-free calls decide on: the status
+ * code and the body. A NULL code means there was no response at all — offline,
+ * DNS, TLS, a hung server — which is a different answer from any the server
+ * could have given, and both callers branch on it.
+ */
+internal data class BareResponse(val code: Int?, val body: String?)
+
+/**
  * The watch's ONE HTTP client, and the only place a Bearer token is attached.
  *
  * Ported from the phone's native ABS client (the patched RNTP MusicService):
@@ -31,8 +40,11 @@ import java.util.concurrent.TimeUnit
  * strictly worse than an empty screen. Two things deliberately differ:
  *  - OkHttp instead of HttpURLConnection, so media3's OkHttp datasource and
  *    Coil share this exact client (and therefore the auth + the 401 tracking).
- *  - No token refresh. v1 never holds a refresh token — a 401 is terminal and
- *    surfaces as [authFailed], which the UI renders as "reconnect from phone".
+ *  - A 401 is terminal for PHONE-mirrored credentials, exactly as in v1: the
+ *    Data Layer carries the access token alone, so there is nothing to refresh
+ *    with and [authFailed] is the honest answer ("reconnect from phone"). A
+ *    WATCH login holds a refresh token and answers its own 401 instead — one
+ *    single-flight refresh, then one retry, per [RefreshPolicy].
  *
  * Timeouts are longer than the car client's (15s/30s vs 5s/10s): there is no
  * stale browse cache to fall back on here, and a watch on a weak BT/WiFi link
@@ -73,6 +85,32 @@ class AbsClient(
         .readTimeout(30, TimeUnit.SECONDS)
         .addInterceptor(authInterceptor())
         .build()
+
+    /**
+     * A SECOND client, with no interceptor and therefore no token and no 401
+     * handling of its own. Both requests that ride it are requests the main
+     * client structurally cannot make:
+     *  - the REFRESH exchanges a token the server has just rejected. Sent
+     *    through the interceptor it would carry that dead token, and its own
+     *    401 would re-enter the refresh already running — the recursion is the
+     *    trap this client exists to remove.
+     *  - the watch LOGIN happens before any token exists, and may target a
+     *    different origin than the stored credentials — precisely the request a
+     *    Bearer header must never decorate.
+     *
+     * Two clients, not three: the socket timeouts here are per-phase ceilings,
+     * and each call additionally caps its TOTAL (the contract's 15s login / 20s
+     * refresh) with `Call.timeout()` so a slow connect plus a slow read cannot
+     * add up past it. One client means one connection pool and one dispatcher.
+     */
+    private val bareClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(BARE_CONNECT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(BARE_READ_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(BARE_READ_SECONDS, TimeUnit.SECONDS)
+        .build()
+
+    /** Serialises refreshes. Held across the network call — see [refreshBlocking]. */
+    private val refreshLock = Any()
 
     init {
         scope.launch {
@@ -130,26 +168,154 @@ class AbsClient(
      * The auth decoration, as an Interceptor so anything sharing [client] gets it.
      * Only OUR server is decorated: one client serves covers, media and API calls,
      * and a Bearer token must never ride a request to some other host.
+     *
+     * Also the 401 handler for everything on this client — covers, media
+     * streams, downloads — which is why the refresh below is gated on the URL's
+     * ORIGIN rather than on who attached the header: a download or a datasource
+     * arrives here already authorized ([authorizedRequest]) and must renew too.
      */
     fun authInterceptor(): Interceptor = object : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
             val original = chain.request()
             val creds = snapshot
+            val ours = isOurServer(original.url)
             val builder = original.newBuilder().header("User-Agent", userAgent)
             if (creds != null &&
                 original.header("Authorization") == null &&
-                isOurServer(original.url)
+                ours
             ) {
                 builder.header("Authorization", "Bearer ${creds.token}")
             }
-            val response = chain.proceed(builder.build())
+            var response = chain.proceed(builder.build())
+
+            var refreshAttempted = false
+            if (response.code == 401 && ours && creds != null &&
+                RefreshPolicy.onUnauthorized(creds) == RefreshPolicy.Action.REFRESH
+            ) {
+                refreshAttempted = true
+                if (refreshBlocking(creds)) {
+                    // Closed only once the retry is CERTAIN: the 401's body is
+                    // an error page and its connection cannot be reused until it
+                    // is released, but a refresh that fails must hand the caller
+                    // a readable response rather than a consumed one.
+                    response.close()
+                    val token = currentTokenBlocking() ?: creds.token
+                    response = chain.proceed(
+                        builder.header("Authorization", "Bearer $token").build()
+                    )
+                    // A token minted a second ago and rejected anyway is not
+                    // staleness — nothing another refresh could fix.
+                    if (response.code == 401) _authFailed.value = true
+                }
+                // A refresh that failed already applied the definitive-vs-
+                // transient rule; a transient one must leave the flag alone so
+                // the next request retries.
+            }
+
             when {
-                response.code == 401 -> _authFailed.value = true
                 response.isSuccessful -> _authFailed.value = false
+                // v1's rule, unchanged wherever no refresh was possible.
+                response.code == 401 && !refreshAttempted -> _authFailed.value = true
             }
             return response
         }
     }
+
+    /**
+     * Trades the refresh token for a new access token. Returns true when the
+     * caller may retry — either this call renewed the session, or another
+     * thread already had.
+     *
+     * Blocking on purpose: the interceptor runs on OkHttp's own threads, which
+     * have no coroutine to suspend in and exist to block on I/O anyway. The
+     * DataStore hops go through runBlocking for the same reason; the suspend
+     * path reaches this through [refresh], which puts it on Dispatchers.IO
+     * first, so there is ONE implementation of the rule.
+     *
+     * Single-flight: a screenful of covers plus a progress sync can 401
+     * together. The lock serialises them and the re-read INSIDE it makes the
+     * losers free — the token they were rejected with is already gone, so there
+     * is nothing left to refresh. That re-read comes from the STORE, never from
+     * [snapshot]: the collector filling the mirror runs on its own coroutine and
+     * can still be holding the dead token, and a second refresh would spend a
+     * refresh token ABS may have already rotated away — a 401 that would kill a
+     * session which is perfectly alive.
+     */
+    private fun refreshBlocking(creds: Creds): Boolean =
+        synchronized(refreshLock) { refreshLocked(creds) }
+
+    /** [refreshBlocking]'s body, with the lock held — split only so it can return plainly. */
+    private fun refreshLocked(creds: Creds): Boolean {
+        val current = currentCredsBlocking() ?: return false
+        if (current.token != creds.token) return true
+        val refreshToken = current.refreshToken?.takeIf { it.isNotBlank() } ?: return false
+
+        val response = postBareSync(
+            url = current.server + REFRESH_PATH,
+            body = JSONObject(),
+            timeoutSeconds = REFRESH_TIMEOUT_SECONDS,
+            headers = mapOf(HEADER_REFRESH_TOKEN to refreshToken)
+        )
+        val user = AbsApi.parseObject(response.body)?.optJSONObject("user")
+        val access = absAccessToken(user)
+        val outcome = RefreshPolicy.classify(response.code, access)
+        if (outcome == RefreshPolicy.Outcome.SUCCESS && access != null) {
+            // An ABSENT rotation means the token just used still works —
+            // updateAccessToken keeps it rather than clearing it.
+            runBlocking { credsRepository.updateAccessToken(access, absStr(user, "refreshToken")) }
+            return true
+        }
+        if (RefreshPolicy.isAuthFailure(outcome)) _authFailed.value = true
+        return false
+    }
+
+    /** [refreshBlocking] from a coroutine. One implementation; this only picks the thread. */
+    private suspend fun refresh(creds: Creds): Boolean =
+        withContext(Dispatchers.IO) { refreshBlocking(creds) }
+
+    // Authoritative reads, not the async mirror: after a refresh persists, the
+    // collector that fills `snapshot` has not necessarily run yet.
+    private fun currentCredsBlocking(): Creds? = runBlocking { credsRepository.creds.first() }
+
+    private fun currentTokenBlocking(): String? = currentCredsBlocking()?.token
+
+    /** The mirror the interceptor reads is empty, so it can only have passed a 401 through. */
+    private fun interceptorWasBlind(): Boolean = snapshot == null || serverUrl == null
+
+    /**
+     * A JSON POST carrying NO credentials, on [bareClient] — the one HTTP path
+     * for the two token-free calls. [AbsApi] owns their endpoints and their
+     * parsing; the sockets stay here, with the module's other sockets.
+     *
+     * Never throws: a null [BareResponse.code] IS the "no response at all" case
+     * both callers must tell apart from an answer they didn't like.
+     */
+    private fun postBareSync(
+        url: String,
+        body: JSONObject,
+        timeoutSeconds: Long,
+        headers: Map<String, String> = emptyMap()
+    ): BareResponse = try {
+        val builder = Request.Builder()
+            .url(url)
+            .header("User-Agent", userAgent)
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+        headers.forEach { (name, value) -> builder.header(name, value) }
+        val call = bareClient.newCall(builder.build())
+        // The whole-call budget, so a redirect or a retry cannot multiply it.
+        call.timeout().timeout(timeoutSeconds, TimeUnit.SECONDS)
+        call.execute().use { response ->
+            // Read on EVERY code: the failures carry a reason and the success
+            // carries the token.
+            BareResponse(response.code, response.body?.string())
+        }
+    } catch (t: Throwable) {
+        BareResponse(null, null)
+    }
+
+    /** [postBareSync] from a coroutine — the login path. */
+    internal suspend fun postBare(url: String, body: JSONObject, timeoutSeconds: Long): BareResponse =
+        withContext(Dispatchers.IO) { postBareSync(url, body, timeoutSeconds) }
 
     suspend fun get(path: String): String? = execute("GET", path, null)
 
@@ -175,25 +341,38 @@ class AbsClient(
         }
         return withContext(Dispatchers.IO) {
             try {
-                var request = Request.Builder()
-                    .url(url)
-                    .method(method, body)
-                    .build()
+                val target = url.toHttpUrlOrNull() ?: return@withContext null
                 // Origin-checked even here: every AbsApi path is a relative
                 // constant today, but an absolute `path` passes straight through
                 // the joiner above, and the token must never ride to another host.
                 // Checked against THIS call's creds (not the async snapshot) so a
                 // cold-start call never goes out bare and 401s spuriously.
                 val server = creds.server.toHttpUrlOrNull()
-                if (server != null && sameOrigin(request.url, server)) {
-                    request = request.newBuilder()
-                        .header("Authorization", "Bearer ${creds.token}")
-                        .build()
+                val authorize = server != null && sameOrigin(target, server)
+
+                var response = client
+                    .newCall(request(target, method, body, if (authorize) creds.token else null))
+                    .execute()
+                // The interceptor answers a 401 for every request on this client.
+                // It cannot answer one fired before the credential mirror has
+                // filled (cold start) — the single window where it sees no creds
+                // and this path already holds them, because it read them through
+                // the flow. Same policy, same single-flight core; the mirror
+                // check is what keeps the two from BOTH refreshing one 401,
+                // which against a hanging server would double the wait.
+                if (response.code == 401 && authorize && interceptorWasBlind() &&
+                    RefreshPolicy.onUnauthorized(creds) == RefreshPolicy.Action.REFRESH
+                ) {
+                    if (refresh(creds)) {
+                        response.close()
+                        val token = credsRepository.creds.first()?.token ?: creds.token
+                        response = client.newCall(request(target, method, body, token)).execute()
+                    }
                 }
-                client.newCall(request).execute().use { response ->
+                response.use { r ->
                     // A 2xx with an empty body (session close, batch update) is a
                     // success — "" not null, so callers can test for null alone.
-                    if (response.isSuccessful) response.body?.string() ?: "" else null
+                    if (r.isSuccessful) r.body?.string() ?: "" else null
                 }
             } catch (t: Throwable) {
                 // Offline, DNS, TLS, a malformed server address — all the same
@@ -203,9 +382,35 @@ class AbsClient(
         }
     }
 
+    /**
+     * One request, optionally authorized. [body] is always byte-array backed
+     * (AbsApi builds it from a JSON string), which is what makes the retry above
+     * legal — a streaming body could not be sent twice.
+     */
+    private fun request(url: HttpUrl, method: String, body: RequestBody?, token: String?): Request {
+        val builder = Request.Builder().url(url).method(method, body)
+        if (token != null) builder.header("Authorization", "Bearer $token")
+        return builder.build()
+    }
+
     companion object {
         const val DEFAULT_USER_AGENT = "TomeSonic-Wear"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        /** Contract endpoints. Neither is under `/api` — both sit at the root. */
+        private const val REFRESH_PATH = "/auth/refresh"
+        internal const val LOGIN_PATH = "/login"
+
+        /** The refresh token travels in its OWN header, never as a Bearer. */
+        private const val HEADER_REFRESH_TOKEN = "x-refresh-token"
+
+        /** Whole-call budgets from the contract. */
+        internal const val LOGIN_TIMEOUT_SECONDS = 15L
+        private const val REFRESH_TIMEOUT_SECONDS = 20L
+
+        /** Per-phase ceilings under them, so neither phase can hang on its own. */
+        private const val BARE_CONNECT_SECONDS = 15L
+        private const val BARE_READ_SECONDS = 20L
 
         /**
          * Origin equality: scheme + host (case-insensitive) + effective port.

@@ -56,8 +56,11 @@ class RootViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         viewModelScope.launch {
-            // Terminal for v1: the watch never refreshes a token, so a 401 can
-            // only be answered from the phone (see AbsClient).
+            // Raised only for a DEAD session: a phone-mirrored 401 (nothing to
+            // refresh with), or a watch login whose refresh was definitively
+            // rejected — transient refresh failures never land here (see
+            // AbsClient / RefreshPolicy). The connect screen offers both fixes:
+            // reconnect from the phone, or sign in again on the watch.
             Graph.absClient.authFailed.collect { failed ->
                 _state.value = _state.value.copy(authFailed = failed)
             }

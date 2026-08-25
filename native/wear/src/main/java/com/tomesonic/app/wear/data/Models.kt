@@ -34,12 +34,34 @@ internal fun absLong(o: JSONObject?, key: String): Long? {
 /** Non-finite values would throw out of JSONObject.put — clamp them at the edge. */
 internal fun absFinite(v: Double): Double = if (v.isNaN() || v.isInfinite()) 0.0 else v
 
-/** The ABS credentials mirrored from the phone. Never persisted anywhere else. */
+/**
+ * Which device owns the session behind the stored credentials. The DataStore
+ * marker is written only for a watch login, so every row from a v1 build — and
+ * every phone mirror — reads back as [PHONE] with no migration.
+ *
+ * The distinction is not cosmetic: it decides whether a 401 can be answered
+ * on-wrist (a watch login holds a refresh token; a phone mirror carries the
+ * ACCESS token alone, per the Data Layer contract) and whether a phone logout
+ * may end the session.
+ */
+enum class CredsSource { PHONE, WATCH }
+
+/**
+ * The ABS credentials in use, from either source. Never persisted anywhere but
+ * the watch's DataStore.
+ *
+ * [refreshToken] is meaningful for [CredsSource.WATCH] alone: the phone mirrors
+ * an access token and nothing else, and a refresh token that outlived the login
+ * that minted it would refresh a session these credentials no longer belong to.
+ * Both fields default so every v1 construction still compiles to the v1 meaning.
+ */
 data class Creds(
     val server: String,
     val token: String,
     val userId: String,
-    val username: String
+    val username: String,
+    val source: CredsSource = CredsSource.PHONE,
+    val refreshToken: String? = null
 )
 
 /**
@@ -206,24 +228,54 @@ data class AudioTrack(
     }
 }
 
+/**
+ * One podcast episode. The three download fields are optional and default to
+ * absent, so a caller that only wants a row to play keeps constructing one.
+ *
+ * ABS puts an episode's audio in two places: `audioTrack` (the play-ready shape,
+ * carrying a server-relative `contentUrl`) and `audioFile` (the scanned file,
+ * carrying the `ino` and the byte size). utils/downloader.ts reads BOTH and
+ * prefers the track's contentUrl; so does this. Neither present means the
+ * episode has no downloadable audio — see DownloadWorker.episodeUrl.
+ */
 data class PodcastEpisode(
     val id: String,
     val title: String,
     val publishedAt: Long?,
-    val duration: Double?
+    val duration: Double?,
+    /** The audio file's inode id — the `/api/items/{itemId}/file/{ino}` fallback. */
+    val ino: String? = null,
+    /** Server-relative direct-play url when the server exposes one. */
+    val contentUrl: String? = null,
+    /** Bytes on the server, when its metadata records them; never 0. */
+    val size: Long? = null
 ) {
     companion object {
         fun fromJson(o: JSONObject?): PodcastEpisode? {
             val obj = o ?: return null
             return try {
                 val id = absStr(obj, "id") ?: return null
+                val track = obj.optJSONObject("audioTrack")
+                val file = obj.optJSONObject("audioFile")
                 PodcastEpisode(
                     id = id,
                     title = absStr(obj, "title") ?: "Episode",
                     publishedAt = absLong(obj, "publishedAt"),
                     // Episodes carry the duration on the episode or on its audioFile.
                     duration = absDouble(obj, "duration")
-                        ?: absDouble(obj.optJSONObject("audioFile"), "duration")
+                        ?: absDouble(file, "duration")
+                        ?: absDouble(track, "duration"),
+                    ino = absStr(file, "ino") ?: absStr(track, "ino") ?: absStr(obj, "ino"),
+                    contentUrl = absStr(track, "contentUrl") ?: absStr(obj, "contentUrl"),
+                    // A recorded 0 is "unknown", not "empty file" — the phone's
+                    // `||` chain skips it the same way, and a 0 handed to the
+                    // downloader as an expected length would fail every re-run.
+                    size = listOf(
+                        absLong(track?.optJSONObject("metadata"), "size"),
+                        absLong(file?.optJSONObject("metadata"), "size"),
+                        absLong(file, "size"),
+                        absLong(file, "fileSize")
+                    ).firstOrNull { it != null && it > 0L }
                 )
             } catch (t: Throwable) {
                 null

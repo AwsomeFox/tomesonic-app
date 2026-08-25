@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -47,7 +48,22 @@ class DownloadIndexTest {
         tracks = listOf(DownloadTrack("track_0.mp3", 0.0, 3600.0, "/api/items/li_book1/file/9001")),
         bytes = 700L
     )
-    private val ubik = dune.copy(id = "li_book2", title = "Ubik", bytes = 300L)
+    // copy() does NOT re-run `libraryItemId = id`'s default — a book's two ids
+    // are the same string, so say both.
+    private val ubik = dune.copy(id = "li_book2", libraryItemId = "li_book2", title = "Ubik", bytes = 300L)
+
+    private val episode = DownloadEntry(
+        id = "li_pod-ep-ep_42",
+        title = "The Show",
+        author = "Host Person",
+        duration = 1800.0,
+        coverPath = "/files/downloads/li_pod-ep-ep_42/cover.jpg",
+        tracks = listOf(DownloadTrack("track_0.mp3", 0.0, 1800.0, "/api/items/li_pod/file/7001")),
+        bytes = 500L,
+        libraryItemId = "li_pod",
+        episodeId = "ep_42",
+        episodeTitle = "Episode 42"
+    )
 
     @Before
     fun setUp() {
@@ -80,6 +96,33 @@ class DownloadIndexTest {
         assertEquals(listOf(dune, ubik), reopened.all())
         assertEquals(dune, reopened.get("li_book1"))
         assertEquals(1000L, reopened.totalBytes())
+    }
+
+    @Test
+    fun booksAndEpisodesShareOneFileAndOneKeyspace() = runBlocking {
+        // One json array, as the contract says — the entry id is the only key,
+        // and an episode's is simply a longer one.
+        index.upsert(dune)
+        index.upsert(episode)
+
+        val reopened = DownloadIndex(file)
+        assertEquals(listOf(dune, episode), reopened.all())
+        assertEquals(episode, reopened.get("li_pod-ep-ep_42"))
+        // The podcast itself was never downloaded, and its episode must not
+        // answer for it.
+        assertNull(reopened.get("li_pod"))
+        assertEquals(1200L, reopened.totalBytes())
+    }
+
+    @Test
+    fun removingAnEpisodeLeavesEveryOtherEntryAlone() = runBlocking {
+        index.upsert(episode)
+        index.upsert(episode.copy(id = "li_pod-ep-ep_43", episodeId = "ep_43", bytes = 400L))
+        index.upsert(dune)
+
+        index.remove("li_pod-ep-ep_42")
+
+        assertEquals(listOf("li_pod-ep-ep_43", "li_book1"), DownloadIndex(file).all().map { it.id })
     }
 
     @Test

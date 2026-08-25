@@ -3,6 +3,7 @@ package com.tomesonic.app.wear.downloads
 import android.app.Application
 import com.tomesonic.app.wear.data.AudioTrack
 import com.tomesonic.app.wear.data.ItemDetail
+import com.tomesonic.app.wear.data.PodcastEpisode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -38,6 +39,26 @@ class DownloadPlanTest {
     val tempFolder = TemporaryFolder()
 
     private val dir: File get() = File(tempFolder.root, "li_book1")
+
+    /** An episode entry's own folder — never the podcast's (see buildEpisodePlan). */
+    private val episodeDir: File get() = File(tempFolder.root, "li_pod-ep-ep_42")
+
+    private fun episode(
+        id: String = "ep_42",
+        title: String = "Episode 42",
+        duration: Double? = 1800.0,
+        ino: String? = null,
+        contentUrl: String? = null,
+        size: Long? = null
+    ) = PodcastEpisode(
+        id = id,
+        title = title,
+        publishedAt = 1700000000000L,
+        duration = duration,
+        ino = ino,
+        contentUrl = contentUrl,
+        size = size
+    )
 
     private fun track(
         index: Int,
@@ -121,7 +142,8 @@ class DownloadPlanTest {
 
     @Test
     fun anItemWithNoTracksHasNothingToDownload() {
-        // A podcast, in practice: episode downloads are a documented v1 non-goal.
+        // A podcast, in practice: its audio lives on its episodes, which are
+        // planned by buildEpisodePlan and downloaded one entry each.
         assertNull(DownloadWorker.buildPlan(item(emptyList()), dir, "http://abs.local/cover"))
     }
 
@@ -150,6 +172,110 @@ class DownloadPlanTest {
         assertNull(DownloadWorker.buildPlan(item(listOf(track(0, filename = "sub/track.mp3"))), dir, null))
         assertNull(DownloadWorker.buildPlan(item(listOf(track(0, filename = ".."))), dir, null))
         assertNull(DownloadWorker.buildPlan(item(listOf(track(0, filename = ""))), dir, null))
+    }
+
+    // ---- the episode plan --------------------------------------------------
+
+    @Test
+    fun anEpisodePlansItsOneFileAndItsOwnCover() {
+        val plan = DownloadWorker.buildEpisodePlan(
+            "li_pod",
+            episode(contentUrl = "/api/items/li_pod/file/7001", size = 24_000_000L),
+            episodeDir,
+            "http://abs.local/api/items/li_pod/cover?width=240&format=webp"
+        )!!
+
+        assertEquals(1, plan.tracks.size)
+        assertEquals("/api/items/li_pod/file/7001", plan.tracks[0].download.url)
+        assertEquals(File(episodeDir, "track_0.mp3"), plan.tracks[0].download.target)
+        assertEquals(24_000_000L, plan.tracks[0].download.expectedBytes)
+        // The ownership rule: the cover lands in the EPISODE's folder, so
+        // deleting the episode can never take the book's artwork (or the
+        // reverse) and no entry needs a refcount.
+        assertEquals(File(episodeDir, "cover.jpg"), plan.cover!!.target)
+        assertEquals(episodeDir, plan.dir)
+    }
+
+    @Test
+    fun anEpisodeCarriesTheTrackMetadataItsIndexEntryNeeds() {
+        val plan = DownloadWorker.buildEpisodePlan(
+            "li_pod",
+            episode(duration = 1800.0, ino = "7001"),
+            episodeDir,
+            null
+        )!!
+        val track = plan.tracks[0].track
+        assertEquals(0, track.index)
+        assertEquals(0.0, track.startOffset, 1e-9)
+        assertEquals(1800.0, track.duration, 1e-9)
+        assertEquals("Episode 42", track.title)
+        assertEquals("track_0.mp3", track.filename)
+    }
+
+    @Test
+    fun anEpisodePrefersItsContentUrlAndFallsBackToTheInoEndpoint() {
+        // utils/downloader.ts's order exactly: the direct-play url the server
+        // exposes, else the file endpoint built from the ino.
+        assertEquals(
+            "/api/items/li_pod/file/7001",
+            DownloadWorker.episodeUrl("li_pod", episode(contentUrl = "/api/items/li_pod/file/7001"))
+        )
+        assertEquals(
+            "/s/item/li_pod/ep.m4a",
+            DownloadWorker.episodeUrl(
+                "li_pod",
+                episode(contentUrl = "/s/item/li_pod/ep.m4a", ino = "7001")
+            )
+        )
+        assertEquals(
+            "/api/items/li_pod/file/7001",
+            DownloadWorker.episodeUrl("li_pod", episode(ino = "7001"))
+        )
+    }
+
+    @Test
+    fun anEpisodeWithNoAudioAtAllHasNoPlan() {
+        // Neither a contentUrl nor an ino: the fallback would be the empty-ino
+        // `/file/` endpoint, which 404s an url that looks valid — the same bail
+        // the phone's downloadEpisode makes.
+        assertNull(DownloadWorker.episodeUrl("li_pod", episode()))
+        assertNull(
+            DownloadWorker.episodeUrl("li_pod", episode(contentUrl = "/api/items/li_pod/file/"))
+        )
+        assertNull(DownloadWorker.buildEpisodePlan("li_pod", episode(), episodeDir, "http://abs.local/cover"))
+    }
+
+    @Test
+    fun anEpisodeFilenameTakesAPlausibleExtensionAndDefaultsToMp3() {
+        // ABS's `/file/{ino}` endpoint names no format; a `/s/item/…` url does.
+        assertEquals("track_0.mp3", DownloadWorker.episodeFilename("/api/items/li_pod/file/7001"))
+        assertEquals("track_0.m4a", DownloadWorker.episodeFilename("/s/item/li_pod/ep.m4a"))
+        assertEquals("track_0.m4a", DownloadWorker.episodeFilename("/s/item/li_pod/ep.M4A?token=x"))
+        assertEquals("track_0.mp3", DownloadWorker.episodeFilename(null))
+        assertEquals("track_0.mp3", DownloadWorker.episodeFilename(""))
+        // Anything that isn't a short alphanumeric extension is not one: a
+        // filename may never pick up a separator from a mangled url.
+        assertEquals("track_0.mp3", DownloadWorker.episodeFilename("/s/item/li_pod/ep.something"))
+        assertEquals("track_0.mp3", DownloadWorker.episodeFilename("/s/item/li_pod/2026.01.01/audio"))
+        assertTrue(DownloadWorker.isSafeName(DownloadWorker.episodeFilename("/s/item/x/a.b%2Fc")))
+    }
+
+    @Test
+    fun anEpisodeUniqueWorkNameIsNotItsPodcastsAndNotItsSiblings() {
+        // A book download and two episode downloads of the same item have to be
+        // able to coexist — one shared name would KEEP or REPLACE the wrong job.
+        val book = DownloadWorker.uniqueWorkName(DownloadEntry.entryId("li_pod", null))
+        val first = DownloadWorker.uniqueWorkName(DownloadEntry.entryId("li_pod", "ep_42"))
+        val second = DownloadWorker.uniqueWorkName(DownloadEntry.entryId("li_pod", "ep_43"))
+        assertEquals("download_li_pod", book)
+        assertEquals("download_li_pod-ep-ep_42", first)
+        assertNotEquals(book, first)
+        assertNotEquals(first, second)
+        // ...and so do their notifications.
+        assertNotEquals(
+            DownloadWorker.notificationId("li_pod"),
+            DownloadWorker.notificationId("li_pod-ep-ep_42")
+        )
     }
 
     // ---- name safety -------------------------------------------------------

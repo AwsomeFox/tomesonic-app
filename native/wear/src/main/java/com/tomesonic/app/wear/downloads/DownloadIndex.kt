@@ -11,8 +11,10 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * `filesDir/downloads_index.json` — the list of downloaded items, held in memory
- * and written through on every change.
+ * `filesDir/downloads_index.json` — the list of downloaded entries (books and
+ * single podcast episodes alike, keyed by [DownloadEntry.id]), held in memory
+ * and written through on every change. ONE array file for both: an entry id is
+ * an entry id, and a second file would be a second thing to keep atomic.
  *
  * DataStore owns every other persisted value on the watch (see CredsRepository);
  * this one is a plain file on purpose. It is read by a WORKER process path and a
@@ -63,7 +65,8 @@ class DownloadIndex(private val file: File) {
         state.value
     }
 
-    suspend fun get(itemId: String): DownloadEntry? = all().firstOrNull { it.id == itemId }
+    /** By ENTRY id — the item id for a book, the composite key for an episode. */
+    suspend fun get(entryId: String): DownloadEntry? = all().firstOrNull { it.id == entryId }
 
     /** Seeds from disk if that hasn't happened yet. Pairs with [snapshot]. */
     suspend fun warm() {
@@ -87,8 +90,8 @@ class DownloadIndex(private val file: File) {
     }
 
     /** Drops the entry if present. Writes through even when nothing matched. */
-    suspend fun remove(itemId: String) {
-        mutate { list -> list.filterNot { it.id == itemId } }
+    suspend fun remove(entryId: String) {
+        mutate { list -> list.filterNot { it.id == entryId } }
     }
 
     private suspend fun mutate(transform: (List<DownloadEntry>) -> List<DownloadEntry>) {

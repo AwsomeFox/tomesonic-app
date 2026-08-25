@@ -66,11 +66,16 @@ object HomeSections {
         val lastId = last?.itemId
         if (lastId != null) {
             val row = inProgress.firstOrNull { it.id == lastId }
-            downloads.firstOrNull { it.id == lastId }?.let { entry ->
+            // isFor, not an id compare: a downloaded EPISODE's entry id is the
+            // composite key, and the resume pointer holds the podcast's item id
+            // plus the episode id. Books match exactly as before.
+            downloads.firstOrNull { it.isFor(lastId, last.episodeId) }?.let { entry ->
                 return ResumeTarget(
-                    itemId = entry.id,
+                    // The ITEM id — an episode entry's own id is a folder key,
+                    // not something the server or the player should ever see.
+                    itemId = entry.libraryItemId,
                     episodeId = last.episodeId,
-                    title = entry.title,
+                    title = entry.episodeTitle?.takeIf { it.isNotBlank() } ?: entry.title,
                     author = entry.author,
                     progress = row?.progress,
                     downloaded = true,
@@ -90,10 +95,15 @@ object HomeSections {
         episodeId: String?,
         downloads: List<DownloadEntry>
     ): ResumeTarget {
-        val entry = downloads.firstOrNull { it.id == item.id }
+        val resolvedEpisode = episodeId ?: item.episodeId
+        // The row's download marker must describe what the card will PLAY: the
+        // episode's own entry when the target is an episode, the book's
+        // otherwise. A podcast with some OTHER episode downloaded is not
+        // "downloaded" for this card.
+        val entry = downloads.firstOrNull { it.isFor(item.id, resolvedEpisode) }
         return ResumeTarget(
             itemId = item.id,
-            episodeId = episodeId ?: item.episodeId,
+            episodeId = resolvedEpisode,
             title = item.title,
             author = item.authorName,
             progress = item.progress,

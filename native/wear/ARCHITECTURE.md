@@ -405,6 +405,20 @@ need wired and do not edit those files (exceptions named per lane).
   visible only when source == WATCH (calls `clear()`).
 - Manifest `standalone` flip to `true` is INTEGRATION-owned (done with docs).
 
+## v2 as built (addenda)
+
+- Episode entry FOLDER OWNERSHIP: every entry owns `downloads/{entryId}/`
+  entirely, its own `cover.jpg` included — an episode re-fetches the podcast
+  cover into its own folder rather than sharing the book entry's, so delete is
+  always one recursive folder remove that cannot touch another entry.
+- `LocalPlaybackSource` stays a `fun interface`: `localEpisode` has a default
+  body (null), so v1 SAM lambdas keep meaning books-only.
+- Login lives in `AbsApi.login` (endpoint + parsing) over `AbsClient.postBare`
+  (the bare socket the refresh also uses); `RefreshPolicy` is the pure 401
+  decision table. Only a DEFINITIVE refresh rejection (401/403 from
+  `/auth/refresh`) raises `authFailed`.
+- `standalone=true` shipped with the watch login (manifest + Play docs updated).
+
 ## v2 testing
 
 Same rules as v1. New tables that MUST be tests: search parsing (book+podcast

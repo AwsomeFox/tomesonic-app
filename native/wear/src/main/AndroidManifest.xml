@@ -31,11 +31,13 @@
         android:theme="@android:style/Theme.DeviceDefault"
         android:usesCleartextTraffic="true">
 
-        <!-- false: v1 gets its server + token from the paired phone app over the
-             Wearable Data Layer, so the watch app is useless on its own. -->
+        <!-- true since v2: the watch can sign in on its own (ConnectScreen's
+             RemoteInput flow + watch-owned refresh token), so it is fully
+             functional untethered — which is exactly what this flag promises
+             Play. The phone mirror remains the primary, zero-typing path. -->
         <meta-data
             android:name="com.google.android.wearable.standalone"
-            android:value="false" />
+            android:value="true" />
 
         <!-- Later waves declare their own services next to the classes that
              land (an unimplemented <service> fails lintVitalRelease with
