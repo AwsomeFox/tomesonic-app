@@ -99,7 +99,11 @@ fun ItemScreen(
             if (line.isNotEmpty()) Note(line)
         }
 
-        if (state.progress != null) {
+        // > 0, not != null: a never-started book can carry an explicit server
+        // position of 0.0, and UiFormat.percent already reads <= 0 as "no
+        // progress" — an empty bar under a missing label is just noise. Same
+        // rule MediaRow and the home resume card apply.
+        if ((state.progress ?: 0.0) > 0.0) {
             item {
                 LinearProgress(
                     fraction = (state.progress ?: 0.0).toFloat(),
