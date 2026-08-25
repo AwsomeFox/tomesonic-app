@@ -5,6 +5,7 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.WearableListenerService
 import com.tomesonic.app.wear.Graph
+import com.tomesonic.app.wear.tile.TileRefresh
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -42,6 +43,10 @@ class DataLayerListenerService : WearableListenerService() {
                         map.getString(CredsRepository.DL_KEY_USERNAME)
                     )
                 }
+                // The Continue Listening tile renders creds + resume pointer,
+                // and BOTH can change here (logout clears the pointer, an
+                // account switch wipes it). Failures are swallowed inside.
+                TileRefresh.requestUpdate(applicationContext)
             } catch (t: Throwable) {
                 // One malformed event must not abort the rest of the buffer, and
                 // must never crash the app the user is listening on.

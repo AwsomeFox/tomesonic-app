@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The TomeSonic mark as a DRAWABLE: an open book with a play triangle in the
+  fold. Identical geometry to ui/components/Glyphs.kt's AppMarkGlyph — the same
+  fractions of a unit square, multiplied by the 24 viewport — because the tile
+  and the complication render outside Compose and cannot call that composable.
+
+  Solid white, no tint: a complication's SMALL_IMAGE/ICON is recoloured by the
+  watch face, and the tile applies its own brand tint through a ColorFilter. A
+  drawable that arrived pre-coloured would fight both.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- left page -->
+    <path
+        android:pathData="M12,6.24 L6.72,3.6 L1.68,4.32 L1.68,18.72 L6.72,18 L12,20.64"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- right page -->
+    <path
+        android:pathData="M12,6.24 L17.28,3.6 L22.32,4.32 L22.32,18.72 L17.28,18 L12,20.64"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- play triangle in the fold -->
+    <path
+        android:pathData="M9.6,9.12 L15.84,12.72 L9.6,16.32 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

@@ -1,5 +1,6 @@
 package com.tomesonic.app.wear
 
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -23,7 +24,38 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyDebugLaunchExtras()
+        applyLaunchRequests(intent)
         setContent { WearApp() }
+    }
+
+    /**
+     * A tile or complication tap can reach a LIVE activity as easily as a cold
+     * one, and which of the two is not ours to choose: the manifest declares no
+     * launchMode (standard, taskAffinity ""), so whether the system delivers the
+     * intent by constructing this activity or by handing it to an existing
+     * instance depends on what is already on the task stack. Parsing in BOTH
+     * places is the only way a Resume tap cannot be silently dropped.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // getIntent() has to report the launch the app is about to act on —
+        // it is still the source [applyDebugLaunchExtras] would read.
+        setIntent(intent)
+        applyLaunchRequests(intent)
+    }
+
+    /**
+     * Tile/complication taps -> [LaunchRequests], for the composition to consume
+     * once. See [LaunchRequests]; unlike [DebugLaunch] there is no debuggable
+     * gate, because the senders ship in every build.
+     */
+    private fun applyLaunchRequests(intent: Intent?) {
+        LaunchRequests.apply(
+            LaunchRequests.parse(
+                boolExtra = { key -> intent?.getBooleanExtra(key, false) ?: false },
+                stringExtra = { key -> intent?.getStringExtra(key) }
+            )
+        )
     }
 
     /**

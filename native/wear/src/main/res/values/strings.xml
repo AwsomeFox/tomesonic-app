@@ -1,3 +1,12 @@
 <resources>
   <string name="app_name">TomeSonic</string>
+
+  <!-- Tile picker entry. Names what the tile DOES, not what the app is called:
+       the picker groups entries under the app name already. -->
+  <string name="tile_label">Continue listening</string>
+
+  <!-- Complication chooser entry. Named for the app, not the action: a watch
+       face's chooser lists these next to every other app's, where "Resume"
+       alone says nothing about whose Resume it is. -->
+  <string name="complication_label">TomeSonic</string>
 </resources>

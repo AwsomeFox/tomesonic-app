@@ -187,11 +187,12 @@ resolution cannot suspend, so MainApplication warms the index at startup and
 installs `PlaybackWiring.localSource = DownloadsLocalSource(...)`), and
 `DownloadRepository.status(itemId): Flow<DownloadStatus>` for the UI.
 
-Known gap (v1): media3's default BitmapLoader fetches notification artwork
-without the Authorization header, so STREAMED books may show no artwork in the
-media notification (downloaded books use file:// covers and are fine). Fix is a
-custom BitmapLoader over the shared OkHttp client; in-app covers go through
-Coil with the authorized client and are unaffected.
+Known gap (v1), CLOSED in v2: media3's default BitmapLoader fetched
+notification artwork without the Authorization header, so streamed books showed
+none. PlaybackService now installs `CacheBitmapLoader(DataSourceBitmapLoader)`
+over the module's one authorized DataSource stack (which also serves `file://`
+covers for downloads); in-app covers were always fine (Coil on the authorized
+client).
 
 ## UI (Wave 4A)
 
@@ -264,7 +265,8 @@ need wired and do not edit those files (exceptions named per lane).
   carrying ONE `RemoteInput` (key `search_query`, label "Search"); the platform
   offers voice + keyboard on its own. Results land in the activity result's
   `RemoteInput.getResultsFromIntent`.
-- UI: `SearchScreen(libraryId?)` — chip launches input, then a results list
+- UI: `SearchScreen(libraryId)` (non-null — home resolves the id before
+  navigating) — the input opens on arrival, then a results list
   reusing the library row composable + `Cover`; empty-result and failed states
   get one line each. Entry points: a Search chip on HOME (searches the first
   book library, or the only library) and on each LIBRARY screen (scoped to it).
@@ -284,7 +286,8 @@ need wired and do not edit those files (exceptions named per lane).
   "Resume" action.
 - Colors: literal ARGB from `ui/theme/Color.kt`'s dark scheme (tile renderers
   don't see Compose themes); protolayout-material `Text`/`Chip`/`CompactChip`.
-- Tap actions: `LoadAction` launching `MainActivity` with extras
+- Tap actions: `ActionBuilders.LaunchAction` (a LoadAction only re-requests the
+  tile — it cannot start an Activity) launching `MainActivity` with extras
   `extra_open_player=true` + `extra_play_item`/`extra_play_episode` (resume) or
   no extras (open). MainActivity (A3 MAY edit it — sole wave-A owner) parses
   the extras into a NEW one-shot holder `LaunchRequests` (production-safe
@@ -302,8 +305,9 @@ need wired and do not edit those files (exceptions named per lane).
 - Manifest (integration adds): tile service with
   `androidx.wear.tiles.action.BIND_TILE_PROVIDER` intent-filter +
   `BIND_TILE_PROVIDER` permission + `androidx.wear.tiles.PREVIEW` meta-data
-  (A3 supplies `res/drawable/tile_preview.png` 400×400ish and
-  `res/values/strings.xml` additions `tile_label`, `complication_label`);
+  (as built: `res/drawable-nodpi/tile_preview.png`, 400×400 — nodpi so the
+  fixed-size asset never upscales; plus `res/values/strings.xml` additions
+  `tile_label`, `complication_label`);
   complication service with
   `android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST`
   filter, `BIND_COMPLICATION_PROVIDER` permission, SUPPORTED_TYPES

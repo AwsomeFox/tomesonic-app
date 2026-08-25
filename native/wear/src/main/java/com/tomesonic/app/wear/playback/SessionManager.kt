@@ -12,6 +12,7 @@ import com.tomesonic.app.wear.data.Chapter
 import com.tomesonic.app.wear.data.ChapterMath
 import com.tomesonic.app.wear.data.CredsRepository
 import com.tomesonic.app.wear.data.PlaySession
+import com.tomesonic.app.wear.tile.TileRefresh
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -256,6 +257,8 @@ class SessionManager(
         // The home screen's resume card reads this; write it only once the queue
         // is actually loaded so a failed play can't repoint it.
         credsRepository.setLastItem(itemId, episodeId, ready.session.title, ready.session.author)
+        // The Continue Listening tile shows exactly what was just written.
+        TileRefresh.requestUpdate(Graph.applicationContext)
         return PlayResult.Ok
     }
 
