@@ -239,9 +239,10 @@ jobs:
           # Play routes the wear one by its android.hardware.type.watch
           # uses-feature. :wear derives its versionCode from app/build.gradle
           # (+1_000_000) at configure time, so the bump above covers both.
-          releaseFiles: |
-            native/android/app/build/outputs/bundle/release/app-release.aab
-            native/wear/build/outputs/bundle/release/wear-release.aab
+          # COMMA-separated on one line: upload-google-play v1.1.3 splits
+          # releaseFiles on commas only — the newline form was passed through
+          # as ONE pattern and matched nothing (run 32805392503).
+          releaseFiles: native/android/app/build/outputs/bundle/release/app-release.aab,native/wear/build/outputs/bundle/release/wear-release.aab
           track: ${{ github.event.inputs.track || 'alpha' }}
           status: completed
           inAppUpdatePriority: 2
