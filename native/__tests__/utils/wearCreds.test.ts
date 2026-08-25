@@ -27,6 +27,9 @@ beforeEach(() => {
 afterEach(() => {
   (Platform as any).OS = origOS;
   delete (NativeModules as any).WearBridge;
+  // Restore the console spy so a leaked mock can't swallow warnings in other
+  // test files that share this worker.
+  jest.restoreAllMocks();
 });
 
 describe("pushWearCreds / clearWearCreds", () => {

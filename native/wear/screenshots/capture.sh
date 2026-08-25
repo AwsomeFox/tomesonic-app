@@ -96,11 +96,11 @@ launch() {
 # credentials into DataStore, and DataStore outlives a force-stop. Once any of
 # them has run, the connect screen no longer exists to photograph.
 # ---------------------------------------------------------------------------
-echo "== connect (no credentials) =="
-adb shell am force-stop "$PKG"
-adb shell am start -n "$ACTIVITY"
-sleep "$CONNECT_SETTLE"
-shoot connect
+# (connect is captured LAST, not here: the FIRST launch on a freshly booted
+# emulator waits out the Data Layer query against cold Play services and
+# photographs the app's "Starting…" boot state — run two proved 14s isn't
+# enough. At the END, GMS is warm and `pm clear` brings the unconfigured
+# state back.)
 
 # Warm-up, not photographed: the FIRST credentialed launch races its own
 # fire-and-forget DataStore write (home.png caught "Starting…" on run one).
@@ -132,6 +132,15 @@ echo "== player (playing $BOOK_ID) =="
 launch player "$BOOK_ID"
 sleep "$PLAYER_SETTLE"
 shoot player
+
+# connect LAST (see the note at the top of the sequence): pm clear resets
+# DataStore so the unconfigured state exists again, and Play services are warm
+# by now, so the app resolves past its boot state quickly.
+echo "== connect (no credentials, cleared app) =="
+adb shell pm clear "$PKG" || true
+adb shell am start -n "$ACTIVITY"
+sleep "$CONNECT_SETTLE"
+shoot connect
 
 echo "== logcat =="
 adb logcat -d -t 500 > "$SHOTS/logcat.txt" 2>&1 || true
